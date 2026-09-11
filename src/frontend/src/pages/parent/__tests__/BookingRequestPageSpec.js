@@ -165,6 +165,28 @@ describe('BookingRequestPage.vue — slot/timezone regression (deferred-108 AC2)
     expect(wrapper.vm.batchAtMax).toBe(false)
   })
 
+  // skillars-deferred-109 AC6 — slotRows drops slots with an unparseable startDatetime
+  // (deferred-work.md:1874-1878).
+  it('AC6 — a slot with a missing/blank startDatetime is dropped, not rendered with key="slot-undefined"', async () => {
+    const { wrapper } = await mountPage({
+      computedSlots: [
+        SLOT,
+        { startDatetime: undefined, endDatetime: undefined },
+        { startDatetime: '', endDatetime: '' },
+        { startDatetime: 'not-a-date', endDatetime: 'not-a-date' },
+      ],
+      coachTimezone: 'America/New_York',
+    })
+
+    const available = wrapper.vm.slotRows.filter((r) => r.type === 'available')
+    expect(available).toHaveLength(1)
+    expect(available[0].slot).toEqual(SLOT)
+    expect(wrapper.vm.slotRows.every((r) => !Number.isNaN(r.sortKey))).toBe(true)
+    expect(wrapper.vm.slotRows.some((r) => r.key === 'slot-undefined')).toBe(false)
+    // Mutation: remove the `.filter((slot) => !Number.isNaN(Date.parse(slot.startDatetime)))` →
+    // the three bad slots return as rows with sortKey NaN and key "slot-undefined" → RED.
+  })
+
   it('the own-booking week window is bounded in the coach timezone, not UTC', async () => {
     // A booking 2 h before the browser/UTC week start but before the NY week start too.
     const edgeBooking = {

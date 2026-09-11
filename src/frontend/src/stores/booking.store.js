@@ -392,6 +392,26 @@ export const useBookingStore = defineStore('booking', () => {
     try {
       const res = await getCoachBookingRequests()
       if (requestId !== coachRequestsSequence) return true
+      // skillars-deferred-109 AC5.2: `?? []` below guards a MISSING property, not a null `res`. A
+      // 204, or an interceptor unwrapping an empty body to undefined, makes `res.singleBookings`
+      // throw a TypeError that the catch then files into coachRequestsError as though it were an
+      // HTTP failure. A bare `?? {}` would be worse — it would blank the list, prune every batch
+      // result, and still return true (success), so the deferred-31 AC1 stale-list warnings stay
+      // silent while the coach's whole request list disappears. There is no documented 204 here;
+      // treat a nullish body as an error: stop the TypeError, preserve the stale-list warning, do
+      // not blank or prune.
+      // skillars-deferred-109 code review: `res == null` alone misses the shape a 204 actually
+      // produces. boot/axios.js resolves every response to `response.data`, and axios's
+      // transformResponse returns an empty body VERBATIM as '' (its JSON.parse is gated on
+      // `data && utils.isString(data)`, so '' short-circuits). '' is not == null, so the guard
+      // would not fire, `''.singleBookings` is undefined, and the `?? []` path below blanks the
+      // list, prunes every batch result and still returns true — precisely the outcome the
+      // comment above calls "worse". Same hole covers a proxy's HTML error page served with 200.
+      // Require an object.
+      if (res == null || typeof res !== 'object') {
+        coachRequestsError.value = new Error('empty response from getCoachBookingRequests')
+        return false
+      }
       coachBookingRequests.value = res.singleBookings ?? []
       coachBatchGroups.value = res.batchGroups ?? []
       // skillars-deferred-37: batchAcceptResultsByBatch accumulates one entry per handleAcceptAllBatch
@@ -602,6 +622,16 @@ export const useBookingStore = defineStore('booking', () => {
     batchAcceptResultsByBatch.value = next
   }
 
+  // skillars-deferred-109 AC5.1: targeted removal of one batchId entry, copy-on-write to match
+  // setBatchAcceptResult's style. Used only on the handleAcceptAllBatch failure path, where
+  // loadCoachBookingRequests() (the only pruner) never runs.
+  function deleteBatchAcceptResult(batchId) {
+    if (!(batchId in batchAcceptResultsByBatch.value)) return
+    const next = { ...batchAcceptResultsByBatch.value }
+    delete next[batchId]
+    batchAcceptResultsByBatch.value = next
+  }
+
   async function handleAcceptAllBatch(batchId) {
     batchAcceptLoading.value = true
     batchAcceptError.value = null
@@ -623,6 +653,12 @@ export const useBookingStore = defineStore('booking', () => {
       return { refreshed, results }
     } catch (e) {
       batchAcceptError.value = e
+      // skillars-deferred-109 AC5.1: the setBatchAcceptResult(batchId, null) seed at the top of this
+      // function exists to clear the PREVIOUS attempt's result. On failure loadCoachBookingRequests()
+      // — the only pruner of batchAcceptResultsByBatch — is never reached, so that `batchId → null`
+      // entry leaks until MAX_BATCH_ACCEPT_RESULTS evicts it. Remove it here. The rethrow stays:
+      // callers read { refreshed, results } from the resolved value and depend on it.
+      deleteBatchAcceptResult(batchId)
       throw e
     } finally {
       batchAcceptLoading.value = false

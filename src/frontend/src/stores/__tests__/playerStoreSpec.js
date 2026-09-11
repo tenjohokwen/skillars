@@ -12,10 +12,12 @@
 // guard on the write at playerStore.js:39 → the "cached ref stays null after resetSelfPlayerId"
 // test fails (the superseded request's id lands in selfPlayerId.value).
 //
-// The "superseded call's returned promise" test is a CHARACTERIZATION test: playerStore.js:46
-// returns `profile.id` unconditionally, so the promise still resolves with the other account's
-// id even when the cached-ref write is suppressed. That residual is filed as a new ledger bullet
-// under `## Deferred from: skillars-deferred-108` (AC10) — not fixed here.
+// skillars-deferred-109 AC4.1: the "superseded call's returned promise" residual is now FIXED —
+// the return is generation-gated (return null when superseded), and the former characterization
+// test below is flipped to assert `null` while driving the B-repopulates-the-ref sequence so it
+// also catches a `return selfPlayerId.value` regression.
+// AC4.2 adds a real getMyProfile() rejection case (the documented 404) — previously every failure
+// path went through `{ id: null }`, which takes the .then-throws branch, not a rejected promise.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
@@ -99,20 +101,47 @@ describe('playerStore — self player-id cache (deferred-108 AC4)', () => {
     expect(store.selfPlayerId).toBe(5)
   })
 
-  it('cross-account residual (returned promise): a superseded call still resolves with the other id', async () => {
-    // Characterization only — playerStore.js:46 returns profile.id unconditionally. Filed as a new
-    // ledger bullet by AC10; NOT fixed here.
+  it('cross-account guard (returned promise): a superseded call resolves with exactly null (deferred-109 AC4.1)', async () => {
     const store = usePlayerStore()
     const d1 = deferred()
-    getMyProfile.mockReturnValueOnce(d1.promise)
+    const d2 = deferred()
+    getMyProfile.mockReturnValueOnce(d1.promise).mockReturnValueOnce(d2.promise)
 
-    const p1 = store.fetchSelfPlayerId()
-    store.resetSelfPlayerId()
+    const p1 = store.fetchSelfPlayerId() // account A's call, generation captured
+    store.resetSelfPlayerId() // account A logs out → generation bumped
+
+    // Account B logs in and resolves FIRST, repopulating selfPlayerId.value with B's id.
+    const p2 = store.fetchSelfPlayerId()
+    d2.resolve({ id: 5 })
+    await p2
+    expect(store.selfPlayerId).toBe(5)
+
+    // Now account A's slow chain finally settles. It must NOT resolve with 999 (A's stale id) and
+    // must NOT resolve with 5 (B's id, which `return selfPlayerId.value` would leak) — only null.
     d1.resolve({ id: 999 })
+    await expect(p1).resolves.toBeNull()
+    expect(store.selfPlayerId).toBe(5) // B's write is untouched
+    // Mutation: restore `return profile.id` → p1 resolves to 999 → RED.
+    // Mutation: change the fix to `: selfPlayerId.value` → p1 resolves to 5 → RED.
+  })
 
-    // Only the return value is characterized here — by design this assertion holds with or
-    // without the generation guard (the guard gates the cached-ref write, not the return).
-    await expect(p1).resolves.toBe(999)
+  it('reject path: a real getMyProfile() rejection rejects fetchSelfPlayerId and clears the in-flight ref (deferred-109 AC4.2)', async () => {
+    const store = usePlayerStore()
+    // A genuine rejection (network error / 404) — skips .then entirely, only .finally runs.
+    getMyProfile.mockRejectedValueOnce(
+      Object.assign(new Error('not found'), { response: { status: 404 } }),
+    )
+
+    await expect(store.fetchSelfPlayerId()).rejects.toThrow(/not found/i)
+    expect(store.selfPlayerId).toBeNull()
+
+    // The .finally must have cleared selfPlayerIdRequest, so the next call issues a FRESH request
+    // rather than returning the rejected promise forever.
+    getMyProfile.mockResolvedValueOnce({ id: 8 })
+    expect(await store.fetchSelfPlayerId()).toBe(8)
+    expect(getMyProfile).toHaveBeenCalledTimes(2)
+    // Mutation: delete `if (selfPlayerIdRequest === request) selfPlayerIdRequest = null` at
+    // playerStore.js:53 → the rejected promise stays pinned, the retry never fires → RED.
   })
 
   it('finally-reference safety: a stale request settling does not null the newer in-flight request', async () => {

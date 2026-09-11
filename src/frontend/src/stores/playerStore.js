@@ -42,7 +42,16 @@ export const usePlayerStore = defineStore('player', () => {
           if (profile?.id == null) {
             throw new Error('Player profile response has no id')
           }
-          return profile.id
+          // skillars-deferred-109 AC4.1: gate the RETURN on the generation too, not just the ref
+          // write above. Returning profile.id unconditionally lets a fetchSelfPlayerId() call that
+          // resetSelfPlayerId() superseded mid-flight still resolve with the prior account's id —
+          // BookingRequestPage.vue feeds that straight into the booking submit payload
+          // (cross-account misattribution). Return literal null (NOT selfPlayerId.value: a newer
+          // generation's call may already have written the ref, which would hand this superseded
+          // caller a DIFFERENT account's id). null is safe downstream — BookingRequestPage.vue
+          // gates canSubmit on !!playerId.value and re-checks before submit; MainLayout guards the
+          // nav link with `selfPlayerId.value ? … : null`.
+          return requestGeneration === selfPlayerIdGeneration ? profile.id : null
         })
         .finally(() => {
           // Only clear the module-scoped reference if it still points at this

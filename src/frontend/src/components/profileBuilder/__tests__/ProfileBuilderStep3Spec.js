@@ -87,4 +87,98 @@ describe('ProfileBuilderStep3.vue — duration select (deferred-108 AC2)', () =>
     wrapper.vm.submit()
     expect(wrapper.emitted('submit')).toBeUndefined()
   })
+
+  // -------------------------------------------------------------------------
+  // skillars-deferred-109 AC8 (deferred-work.md:1884-1890).
+  // -------------------------------------------------------------------------
+  describe('AC8.1 — a touched-but-invalid pack row blocks submit instead of being silently dropped', () => {
+    const cases = [
+      ['sessionCount only', { sessionCount: 5, totalPrice: null, label: '' }],
+      ['sessionCount with zero price', { sessionCount: 5, totalPrice: 0, label: '' }],
+      ['negative sessionCount', { sessionCount: -1, totalPrice: 20, label: '' }],
+      ['label only', { sessionCount: null, totalPrice: null, label: 'Starter' }],
+    ]
+    for (const [name, row] of cases) {
+      it(`blocks and shows a message: ${name}`, () => {
+        const wrapper = mountStep3()
+        wrapper.vm.form.perSessionPrice = 40
+        wrapper.vm.form.sessionPacks = [row]
+
+        wrapper.vm.submit()
+
+        expect(wrapper.emitted('submit')).toBeUndefined()
+        expect(wrapper.vm.packError).toBe('auth.coach.step3PackInvalid')
+      })
+    }
+
+    // skillars-deferred-109 code review: `v-model.number` on a cleared type="number" input yields
+    // '' — not null — so the original `!= null` test counted a visually EMPTY row as touched and
+    // blocked submit with no way to recover by editing.
+    it.each([
+      [
+        'sessionCount cleared to an empty string',
+        { sessionCount: '', totalPrice: null, label: '' },
+      ],
+      ['totalPrice cleared to an empty string', { sessionCount: null, totalPrice: '', label: '' }],
+      ['both cleared to empty strings', { sessionCount: '', totalPrice: '', label: '' }],
+    ])('a row whose numeric fields were cleared is NOT touched: %s', (_name, row) => {
+      const wrapper = mountStep3()
+      wrapper.vm.form.perSessionPrice = 40
+      wrapper.vm.form.sessionPacks = [{ sessionCount: 5, totalPrice: 180, label: 'Starter' }, row]
+
+      wrapper.vm.submit()
+
+      expect(wrapper.emitted('submit')).toBeDefined()
+      expect(wrapper.vm.packError).toBe('')
+      // Mutation: revert packRowTouched to `p.sessionCount != null || p.totalPrice != null` → '' is
+      // counted as touched, submit is blocked and packError is set → RED.
+    })
+
+    it('removePack clears a standing packError', () => {
+      const wrapper = mountStep3()
+      wrapper.vm.form.perSessionPrice = 40
+      wrapper.vm.form.sessionPacks = [{ sessionCount: 5, totalPrice: null, label: '' }]
+
+      wrapper.vm.submit()
+      expect(wrapper.vm.packError).toBe('auth.coach.step3PackInvalid')
+
+      wrapper.vm.removePack(0)
+
+      expect(wrapper.vm.packError).toBe('')
+      // Mutation: drop `packError.value = ''` from removePack → the message survives the removal of
+      // the only offending row → RED.
+    })
+
+    it('a fully-empty row alongside a valid one is filtered silently — submit still emits', () => {
+      const wrapper = mountStep3()
+      wrapper.vm.form.perSessionPrice = 40
+      wrapper.vm.form.sessionPacks = [
+        { sessionCount: 5, totalPrice: 180, label: 'Starter' },
+        { sessionCount: null, totalPrice: null, label: '' },
+      ]
+
+      wrapper.vm.submit()
+
+      const emitted = wrapper.emitted('submit')
+      expect(emitted).toHaveLength(1)
+      expect(emitted[0][0].sessionPacks).toEqual([
+        { sessionCount: 5, totalPrice: 180, label: 'Starter' },
+      ])
+    })
+    // Mutation: remove the `if (hasTouchedInvalidPack.value) { … return }` guard from submit() →
+    // the four touched-but-invalid cases emit with the rows silently absent → RED.
+  })
+
+  it('AC8.2 — durationOptions coerces a string current value: no duplicate synthetic 60', async () => {
+    const wrapper = mountStep3()
+    wrapper.vm.form.sessionDurationMinutes = '60' // e.g. a hypothetical future hydration path
+    await wrapper.vm.$nextTick()
+
+    const sixties = wrapper.vm.durationOptions.filter((o) => o.value === 60 || o.value === '60')
+    expect(sixties).toHaveLength(1)
+    expect(sixties[0].value).toBe(60) // the canonical numeric choice, not a synthetic '60'
+    // Mutation: revert `const current = Number(form.sessionDurationMinutes)` to the raw value →
+    // `!DURATION_CHOICES.includes('60')` is true, a `{ value: '60', label: '60' }` synthetic is
+    // appended, and this assertion sees two 60-ish options → RED.
+  })
 })

@@ -604,6 +604,30 @@ needs its opt-out, the item is not closed.
 
 ---
 
+## Pre-production release gate: queued webhook events
+
+**Owner:** whoever prepares the first production deploy. **Trigger:** before that deploy, not after.
+
+`skillars-deferred-100` AC5 removed `PROCESSING→READY` from `VideoLifecycleService.VALID_TRANSITIONS`
+and converted the plain transition path from `log.warn` to `throw TerminalStateViolationException`
++ `meterRegistry.counter("video.moderation.bypass").increment()`
+(`VideoLifecycleService.java:77-83`). This is an **accepted cutover risk** (owner decision,
+`skillars-deferred-109` AC14): no grace path or config-gated allowance will be built.
+
+Before the first production deploy, **drain or discard any queued / replayed `encoding.success`
+(and sibling `encoding.*`) webhook events**. After cutover, such an event driving `PROCESSING→READY`
+on the plain lifecycle path dead-letters the event **and** trips a false `video.moderation.bypass`
+alarm. The producer (`WebhookEventProcessorScheduler`) is already gone at HEAD and dead-lettered
+events are re-drivable, so the exposure is a one-time cutover concern, not an ongoing one.
+
+`VideoLifecycleService.reconcileToReady()` is the only legitimate `PROCESSING→READY` path
+post-cutover.
+
+Revisit this gate only if a production deploy is planned with queued legacy events that cannot be
+drained.
+
+---
+
 ## Repository cleanup safety
 
 **skillars-deferred-102 AC6:** the git checkout now lives at `/opt/skillars/app`, a **sibling** of the

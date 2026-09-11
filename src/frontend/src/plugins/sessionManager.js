@@ -149,9 +149,12 @@ function computeTimeUntilExpiry() {
  * same reactive state and only tick() enforces its invariants, so a direct assignment here could
  * leave timeUntilExpiry negative with the warning dialog stuck open until the next 30s tick.
  * Called by boot/axios.js after every API response, so an in-flight extension shows immediately.
+ * @returns {boolean} tick()'s "already expired" result — see tick(). Most callers ignore it;
+ *   refreshSession() uses it to skip its post-refresh advance-check when the session is already
+ *   torn down.
  */
 export function refreshExpiryState() {
-  tick()
+  return tick()
 }
 
 /**
@@ -256,12 +259,45 @@ export async function refreshSession() {
     // so on the no-'rint' fallback path a *successful* refresh would otherwise be evaluated
     // against a stale lastActivityTime and could fire 'session:expired' on its own success.
     recordActivity()
+    // Captured BEFORE the call: the post-refresh advance-check below compares this server-written
+    // deadline against the new one, so the client clock cancels out of the comparison entirely.
+    const expiryBeforeRefresh = readSessionExpiryFromCookie()
     await sessionApi.refresh()
     // The response set a fresh 'rint'. Re-evaluate and let tick() clear the warning, so its
     // warning-edge handling also stops the 1s countdown interval. Assigning showWarning=false
     // directly here would destroy that edge and leak the interval for the rest of the session.
     recordActivity()
-    refreshExpiryState()
+    const expired = refreshExpiryState()
+    // skillars-deferred-109 AC2.2: a refresh that returns 200 but does NOT actually re-issue an
+    // absolute 'rint' (a proxy stripped Set-Cookie on GET /refresh, or the response simply did not
+    // advance the deadline) must not be treated as a successful extension — otherwise "Continue
+    // session" re-enables, the countdown keeps ticking, and the user is silently logged out at
+    // 0:00. deferred-90 AC4 fixed that UX only for the thrown-error case; this closes the
+    // resolved-but-ineffective case. Guards:
+    //   - hasSeenRintThisTab(): a build that never issues an absolute 'rint' legitimately leaves
+    //     readSessionExpiryFromCookie() null on a successful refresh — do not flag it.
+    //   - run AFTER refreshExpiryState() and only if it did not already tear the session down:
+    //     tick() clears refreshFailed on its warning-exit edge (:184) and cleanup() clears it, so
+    //     setting the flag before refreshExpiryState() would silently lose it.
+    //   - expiryBeforeRefresh !== null: with nothing to compare against we cannot tell an
+    //     ineffective refresh from a legitimate one, so say nothing.
+    //
+    // skillars-deferred-109 code review: this compares the NEW server-written deadline against the
+    // PRE-CALL one. It deliberately does NOT measure "expiresAt - Date.now() > WARNING_THRESHOLD"
+    // as it first did — that subtracted a client instant from a server instant and then compared
+    // the result to a client-side constant, silently re-coupling the frontend to
+    // SecurityConstants.JWT_TTL. SecurityConstants.java:68-79 forbids exactly that ("No copy of
+    // JWT_TTL is needed on the client; the contract is time-based… It is not immune to client clock
+    // drift"). Concretely it broke twice: a client clock more than JWT_TTL - WARNING_THRESHOLD
+    // (10 min) fast turned every successful refresh into a permanent "we couldn't extend your
+    // session" banner, and lowering the backend JWT_TTL to <= 5 min would have done the same for
+    // everyone. Both sides here are server-issued 'rint' values, so client skew cancels out.
+    // (Residual, accepted: if a sibling tab refreshes in the same millisecond the deadline may not
+    // move and we show the banner — visible and recoverable, unlike a silent logout at 0:00.)
+    if (!expired && hasSeenRintThisTab() && expiryBeforeRefresh !== null) {
+      const expiresAt = readSessionExpiryFromCookie()
+      if (expiresAt === null || expiresAt <= expiryBeforeRefresh) refreshFailed.value = true
+    }
   } catch (e) {
     // skillars-deferred-90 AC4: surface the failure. Without this the catch only logs, isRefreshing
     // returns to false so "Continue session" re-enables as though it worked, the countdown keeps

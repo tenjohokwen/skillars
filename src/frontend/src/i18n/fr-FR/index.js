@@ -233,6 +233,8 @@ export default {
       step3PackPrice: 'Prix (EUR)',
       step3PackLabel: 'Libellé',
       step3RemovePack: 'Supprimer le pack',
+      step3PackInvalid:
+        'Chaque pack de séances doit avoir un nombre de séances et un prix supérieurs à 0, ou supprimez la ligne.',
       step4Title: 'Disponibilité',
       step4Short: 'Disponibilité',
       step4AvailabilityWindows: 'Créneaux de disponibilité',
@@ -994,6 +996,8 @@ export default {
       addCardCta: 'Ajouter une carte',
       save: 'Enregistrer la carte',
       saveError: "Impossible d'enregistrer votre carte. Veuillez réessayer.",
+      savedRefreshFailed:
+        "Votre carte a été enregistrée, mais l'affichage n'a pas pu être actualisé. Rechargez la page pour la voir.",
       unavailable: 'Les paiements par carte ne sont pas disponibles pour le moment',
     },
   },

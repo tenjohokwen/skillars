@@ -124,6 +124,8 @@ export default {
       step3PackPrice: 'Price (EUR)',
       step3PackLabel: 'Label',
       step3RemovePack: 'Remove pack',
+      step3PackInvalid:
+        'Each session pack needs a session count and a price above 0, or remove the row.',
       step4Title: 'Availability',
       step4Short: 'Availability',
       step4AvailabilityWindows: 'Availability Windows',
@@ -1227,6 +1229,8 @@ export default {
       addCardCta: 'Add card',
       save: 'Save card',
       saveError: 'Could not save your card. Please try again.',
+      savedRefreshFailed:
+        'Your card was saved, but we could not refresh the view. Reload to see it.',
       unavailable: 'Card payments are unavailable right now',
     },
   },

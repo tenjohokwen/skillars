@@ -195,13 +195,33 @@ public final class ConfigBounds {
     // segments are hand-listed on purpose. Deriving them by iterating CoachSubscriptionTier
     // (marketplace.contract) / VideoType (video.contract) would give this `config` module a compile
     // dependency on two business modules it otherwise never touches. ConfigBoundsEnumCoverageTest
-    // is the drift guard: it iterates enum.values() and fails the build when a NEW constant lands
-    // (or is renamed) without a matching bound here. It does NOT catch a REMOVED constant leaving a
-    // stale segment below — harmless (a bound nothing reads), so the guard is one-directional.
-    // Segments mirror QuotaConfigService.resolveTierKey (CoachSubscriptionTier lower-cased + the
-    // "athlete" player fallback) and VideoTypeConstraints.configKey (VideoType camel-cased).
+    // is the drift guard: it iterates enum.values() and fails the build when a NEW enum constant
+    // lands (or is renamed) without a matching bound here.
+    //
+    // What the guard does NOT catch (both harmless / handled elsewhere):
+    //   - a hand-list that is INCOMPLETE — a key seeded in the DB whose segment is simply not in
+    //     the list below is unbounded, not flagged (this is exactly how video.quota.semiPro.* /
+    //     .pro.* — seeded live by V53 — went unchecked until skillars-deferred-109 AC10 added them);
+    //   - a REMOVED enum constant leaving a stale segment below — a bound that nothing reads.
+    // There is no third enum in the runtime key derivation. `semiPro` / `pro` correspond to
+    // PlayerSubscriptionTierBilling values, but QuotaConfigService.resolveTierKey does not (yet)
+    // map any player to them — it falls through to "athlete" for every player. That entitlement gap
+    // is filed as its own ledger bullet (skillars-deferred-109 AC10.6); the bounds below are
+    // deliberately one release ahead of that mapping.
+    //
+    // Segments mirror QuotaConfigService.resolveTierKey (a hand-written exhaustive switch over
+    // CoachSubscriptionTier, plus the "athlete" player fallback) and VideoTypeConstraints.configKey
+    // (likewise a hand-written switch over VideoType), plus the two seeded-but-unmapped player
+    // tiers. skillars-deferred-109 code review: NEITHER runtime derivation is mechanical — both are
+    // literal switches — so ConfigBoundsEnumCoverageTest mirrors them with exhaustive switches of
+    // its own rather than deriving segments from enum.name(). Adding an enum constant therefore
+    // breaks compilation in that test, which forces whoever adds it to copy the literal the runtime
+    // actually uses. Do not re-introduce a mechanical name-transform here or there: the previous
+    // camelCase helper assumed a convention the runtime does not enforce, which would have let a
+    // multi-word constant ship a bound nothing reads beside a key nothing bounds.
 
-    static final List<String> VIDEO_QUOTA_TIER_SEGMENTS = List.of("scout", "instructor", "academy", "athlete");
+    static final List<String> VIDEO_QUOTA_TIER_SEGMENTS =
+        List.of("scout", "instructor", "academy", "athlete", "semiPro", "pro");
     static final List<String> VIDEO_TYPE_SEGMENTS = List.of("homework", "drillDemo", "coachReview");
 
     /**

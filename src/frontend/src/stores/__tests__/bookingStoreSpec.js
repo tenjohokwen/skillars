@@ -231,6 +231,99 @@ describe('booking.store — coach-request ordering + batch-accept guards (deferr
     })
   })
 
+  // -------------------------------------------------------------------------
+  // skillars-deferred-109 AC5 — accept-all null-LRU-leak + null-response guard
+  // (deferred-work.md:1864-1873).
+  // -------------------------------------------------------------------------
+  describe('handleAcceptAllBatch failure does not leak a batchId entry (deferred-109 AC5.1)', () => {
+    it('a rejected accept-all leaves no key for that batch in batchAcceptResultsByBatch', async () => {
+      const store = useBookingStore()
+      const id = uuid(1)
+
+      // First: a successful accept-all seeds a real result and keeps the batch visible.
+      acceptAllBatch.mockResolvedValueOnce(['ok'])
+      getCoachBookingRequests.mockResolvedValueOnce({
+        singleBookings: [],
+        batchGroups: [{ batchId: id }],
+      })
+      await store.handleAcceptAllBatch(id)
+      expect(id in store.batchAcceptResultsByBatch).toBe(true)
+
+      // Second attempt for the same batch fails at acceptAllBatch — loadCoachBookingRequests
+      // (the only pruner) is never reached.
+      acceptAllBatch.mockRejectedValueOnce(new Error('accept-all 500'))
+
+      await expect(store.handleAcceptAllBatch(id)).rejects.toThrow(/accept-all 500/)
+
+      expect(id in store.batchAcceptResultsByBatch).toBe(false)
+      expect(store.batchAcceptError).toBeInstanceOf(Error)
+      // Mutation: remove `deleteBatchAcceptResult(batchId)` from the catch → the entry is left as
+      // `{ [id]: null }`, `id in …` is true → RED.
+    })
+  })
+
+  describe('loadCoachBookingRequests classifies a nullish response as an error (deferred-109 AC5.2)', () => {
+    it('a null response sets a distinguishable error, returns false, and does not blank or prune', async () => {
+      const store = useBookingStore()
+      const id = uuid(2)
+
+      // Seed a real list + one batch-accept result.
+      acceptAllBatch.mockResolvedValueOnce(['seed'])
+      getCoachBookingRequests.mockResolvedValueOnce({
+        singleBookings: ['req-1'],
+        batchGroups: [{ batchId: id }],
+      })
+      await store.handleAcceptAllBatch(id)
+      expect(store.coachBookingRequests).toEqual(['req-1'])
+      expect(id in store.batchAcceptResultsByBatch).toBe(true)
+
+      // Now the endpoint returns a nullish body (204 / interceptor-unwrapped empty).
+      getCoachBookingRequests.mockResolvedValueOnce(null)
+      const refreshed = await store.loadCoachBookingRequests()
+
+      expect(refreshed).toBe(false)
+      expect(store.coachRequestsError).toBeInstanceOf(Error)
+      expect(store.coachRequestsError.message).toMatch(/empty response/i)
+      // Not blanked, not pruned.
+      expect(store.coachBookingRequests).toEqual(['req-1'])
+      expect(id in store.batchAcceptResultsByBatch).toBe(true)
+      // Mutation: remove the `if (res == null)` guard → `res.singleBookings` throws a TypeError that
+      // lands in coachRequestsError; its message no longer matches /empty response/ → RED.
+    })
+
+    // skillars-deferred-109 code review: `res == null` missed the shape a 204 ACTUALLY produces.
+    // boot/axios.js resolves to `response.data`, and axios returns an empty body verbatim as '' —
+    // which is not == null, so the nullish guard never fired for the very case its comment names.
+    // A non-object body (a proxy's HTML error page served with 200) has the same effect.
+    it.each([
+      ['an empty-string body (what axios yields for a 204)', ''],
+      ['a non-object body (proxy HTML served with 200)', '<html>502</html>'],
+      ['an undefined body', undefined],
+    ])('%s is classified as an error, not as an empty list', async (_label, body) => {
+      const store = useBookingStore()
+      const id = uuid(3)
+
+      acceptAllBatch.mockResolvedValueOnce(['seed'])
+      getCoachBookingRequests.mockResolvedValueOnce({
+        singleBookings: ['req-1'],
+        batchGroups: [{ batchId: id }],
+      })
+      await store.handleAcceptAllBatch(id)
+
+      getCoachBookingRequests.mockResolvedValueOnce(body)
+      const refreshed = await store.loadCoachBookingRequests()
+
+      expect(refreshed).toBe(false)
+      expect(store.coachRequestsError.message).toMatch(/empty response/i)
+      // The whole point: the coach's list must NOT silently disappear behind a "success".
+      expect(store.coachBookingRequests).toEqual(['req-1'])
+      expect(id in store.batchAcceptResultsByBatch).toBe(true)
+      // Mutation: narrow the guard back to `if (res == null)` → '' and the HTML string fall
+      // through, singleBookings is undefined, the list blanks, every batch result is pruned and
+      // the call returns true → RED on all four assertions.
+    })
+  })
+
   // skillars-deferred-108 code review decision 1a -- see the header note.
   describe('batch basket -> wire payload (deferred-17/-18 store half)', () => {
     // Both slots carry a stale `.startTime`/`.endTime` decoy holding the PRE-rename (wrong) value,

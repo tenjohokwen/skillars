@@ -74,11 +74,13 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useQuasar } from 'quasar'
 import { loadStripe } from '@stripe/stripe-js'
 import { usePaymentStore } from 'src/stores/payment.store'
 import { createSetupIntent, savePaymentMethod, confirmCardSetup } from 'src/api/payment.api'
 
 const { t } = useI18n()
+const $q = useQuasar()
 const paymentStore = usePaymentStore()
 const emit = defineEmits(['saved'])
 
@@ -173,7 +175,12 @@ function cancelEditing() {
 // a failed refetch re-raises stripeUnavailable so the affordance stays put.
 async function loadStripeConfig({ isRetry = false } = {}) {
   if (isRetry) retrying.value = true
-  stripeUnavailable.value = false
+  // skillars-deferred-109 AC1.1: do NOT clear stripeUnavailable here. Clearing it before the
+  // fetches resolve flips showForm true synchronously, which queues the watch(showForm) job; that
+  // job runs mid-await, ensureStripeReady reads the still-null publishableKey, re-raises
+  // stripeUnavailable, and the "Try again" click no-ops (showForm is false again by :end, so
+  // Elements never mounts — the user has to click twice). Decide stripeUnavailable from the
+  // fetch OUTCOME instead, once the data is actually in.
   try {
     await Promise.all([paymentStore.fetchStripeConfig(), paymentStore.fetchSavedPaymentMethod()])
   } catch {
@@ -183,6 +190,24 @@ async function loadStripeConfig({ isRetry = false } = {}) {
     loadingInitial.value = false
     retrying.value = false
   }
+  // fetchStripeConfig / fetchSavedPaymentMethod swallow their errors and resolve (store
+  // swallow-and-resolve contract), so the catch above is effectively dead — read the store's error
+  // keys instead. A failed config refetch must re-raise stripeUnavailable (and NOT fall through to
+  // mountCardElement, which would call loadStripe with a stale publishableKey left over from an
+  // earlier success).
+  //
+  // skillars-deferred-109 code review: gate on error.stripeConfig ONLY. A failed
+  // fetchSavedPaymentMethod says nothing about whether Stripe is usable — the two endpoints even
+  // carry different authorities (GET /stripe/config is IS_AUTHENTICATED, GET /payment/payment-method
+  // is HAS_PARENT_PLAYER_OR_COACH_ROLE), so they can legitimately disagree per role. ORing it in
+  // rendered payment.card.unavailable and withheld the add-card form from users whose card payments
+  // were perfectly available. A missing saved card is already the correct "no card yet" state:
+  // savedCard?.hasCard stays falsy and showForm shows the entry form.
+  if (paymentStore.error.stripeConfig) {
+    stripeUnavailable.value = true
+    return
+  }
+  stripeUnavailable.value = false
   if (showForm.value) await mountCardElement()
 }
 
@@ -203,6 +228,13 @@ async function submit() {
       await paymentStore.fetchSavedPaymentMethod()
     } catch {
       // Card was already saved server-side; a refresh failure here is not a save failure.
+    }
+    // skillars-deferred-109 AC1.2: fetchSavedPaymentMethod swallows and resolves, so the catch
+    // above never fires. If the post-save refresh failed, savedPaymentMethod stays stale/null and
+    // showForm keeps the entry form mounted even though the card saved. Surface a non-blocking
+    // notice (the save DID succeed) rather than silently leaving the form up.
+    if (paymentStore.error.savedPaymentMethod) {
+      $q.notify({ type: 'warning', message: t('payment.card.savedRefreshFailed') })
     }
     editing.value = false
     emit('saved')

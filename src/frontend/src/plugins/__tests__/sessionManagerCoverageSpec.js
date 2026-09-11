@@ -184,6 +184,126 @@ describe('sessionManager — deferred-90 "torn down" branch (deferred-108 AC5)',
   })
 })
 
+// ---------------------------------------------------------------------------
+// skillars-deferred-109 AC2.1 — the clock-skew cross-check has regression protection.
+// computeTimeUntilExpiry()'s `if (remaining <= 0 && localEstimate > 0) return localEstimate`
+// (sessionManager.js:140) is the whole defence between a fast client clock and an unrecoverable
+// logout loop. Every deferred-108 fixture uses `Date.now() + N`, so the line was never exercised.
+// Spec-only — no production change here.
+// ---------------------------------------------------------------------------
+describe('sessionManager — clock-skew cross-check (deferred-109 AC2.1)', () => {
+  it('a past-due rint with a still-positive local estimate reports the local estimate, not expiry', () => {
+    // Client clock is "fast": the server-issued rint reads as a few seconds in the past.
+    setCookie(RINT_COOKIE_NAME, String(Date.now() - 8 * 1000))
+    sm.startSessionMonitoring() // recordActivity() → localEstimate ≈ LEGACY_SESSION_TTL, positive
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+
+    sm.refreshExpiryState()
+
+    expect(sm.timeUntilExpiry.value).toBeGreaterThan(0)
+    expect(sm.timeUntilExpiry.value).toBeLessThanOrEqual(LEGACY_SESSION_TTL)
+    expect(expiredDispatched(dispatchSpy)).toBe(false)
+    // Mutation: delete `if (remaining <= 0 && localEstimate > 0) return localEstimate` at
+    // sessionManager.js:140 → computeTimeUntilExpiry returns the negative `remaining`, tick()
+    // dispatches session:expired and runs cleanup() → both assertions go RED.
+  })
+
+  it('boundary: rint exactly WARNING_THRESHOLD out → showWarning is true (<=, not <)', () => {
+    const { warningThresholdSeconds } = sm
+    const thresholdMs = warningThresholdSeconds.value * 1000
+    setCookie(RINT_COOKIE_NAME, String(Date.now() + thresholdMs))
+    sm.startSessionMonitoring()
+
+    sm.refreshExpiryState()
+
+    expect(sm.timeUntilExpiry.value).toBeLessThanOrEqual(thresholdMs)
+    expect(sm.showWarning.value).toBe(true)
+  })
+
+  it('boundary: rint exactly now AND no local cushion → session expires', () => {
+    sm.startSessionMonitoring() // records activity at T0
+    vi.setSystemTime(new Date(T0.getTime() + LEGACY_SESSION_TTL)) // localEstimate now == 0
+    setCookie(RINT_COOKIE_NAME, String(Date.now())) // remaining == 0
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+
+    sm.refreshExpiryState()
+
+    // remaining <= 0 but localEstimate is NOT > 0, so the skew guard does not fire: real expiry.
+    expect(expiredDispatched(dispatchSpy)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// skillars-deferred-109 AC2.2 — a refresh that returns 200 without advancing 'rint' is not
+// treated as success (sessionManager.js refreshSession success path).
+// ---------------------------------------------------------------------------
+describe('sessionManager — ineffective refresh (deferred-109 AC2.2)', () => {
+  it('200 without a fresh rint, on the absolute-rint contract → refreshFailed is set', async () => {
+    // A read of a valid rint sets the rintSeen marker (markRintSeen), so this tab is "on contract".
+    setCookie(RINT_COOKIE_NAME, String(Date.now() + 4 * 60 * 1000)) // inside the warning band
+    sm.refreshExpiryState()
+    expect(sessionStorage.getItem(RINT_SEEN_STORAGE_KEY)).toBe('1')
+
+    // The refresh resolves but does NOT re-issue rint (proxy stripped Set-Cookie / no advance).
+    sessionApi.refresh.mockResolvedValue(undefined)
+
+    await sm.refreshSession()
+
+    expect(sm.refreshFailed.value).toBe(true)
+    expect(sm.isRefreshing.value).toBe(false)
+    // Mutation: remove the whole post-refresh advance-check block → refreshFailed stays false → RED.
+  })
+
+  it('legacy path: 200, no rint ever seen this tab → refreshFailed stays false', async () => {
+    // No rint has ever been set in this fresh module, so hasSeenRintThisTab() is false.
+    expect(sessionStorage.getItem(RINT_SEEN_STORAGE_KEY)).toBeNull()
+    sessionApi.refresh.mockResolvedValue(undefined)
+
+    await sm.refreshSession()
+
+    expect(sm.refreshFailed.value).toBe(false)
+    // Mutation: drop the `hasSeenRintThisTab()` condition from the guard → a legacy refresh with no
+    // rint is wrongly flagged (advanced === false) and refreshFailed goes true → RED.
+  })
+
+  // skillars-deferred-109 code review: the AC2.2 block shipped with no coverage of a refresh that
+  // genuinely WORKS, so an inverted or mis-thresholded predicate was invisible here.
+  it('200 that advances rint → refreshFailed stays false', async () => {
+    setCookie(RINT_COOKIE_NAME, String(Date.now() + 4 * 60 * 1000))
+    sm.refreshExpiryState()
+    sessionApi.refresh.mockImplementation(async () => {
+      setCookie(RINT_COOKIE_NAME, String(Date.now() + 15 * 60 * 1000))
+    })
+
+    await sm.refreshSession()
+
+    expect(sm.refreshFailed.value).toBe(false)
+    // Mutation: invert the comparison to `expiresAt >= expiryBeforeRefresh` → a real extension is
+    // flagged as failed → RED.
+  })
+
+  // The regression this replaced: the original predicate was
+  // `expiresAt - Date.now() > WARNING_THRESHOLD`, i.e. a client instant subtracted from a server
+  // instant and compared to a client-side constant — a silent re-coupling to JWT_TTL that
+  // SecurityConstants.java:68-79 forbids. Here the deadline advances by a real 2 minutes but lands
+  // INSIDE the 5-minute warning band, which is exactly what a >10-min-fast client clock (or a
+  // backend JWT_TTL <= WARNING_THRESHOLD) produces. It is a successful extension and must not be
+  // flagged.
+  it('an advance that lands inside the warning band is still an advance', async () => {
+    setCookie(RINT_COOKIE_NAME, String(Date.now() + 2 * 60 * 1000))
+    sm.refreshExpiryState()
+    sessionApi.refresh.mockImplementation(async () => {
+      setCookie(RINT_COOKIE_NAME, String(Date.now() + 4 * 60 * 1000))
+    })
+
+    await sm.refreshSession()
+
+    expect(sm.refreshFailed.value).toBe(false)
+    // Mutation: restore `expiresAt - Date.now() > WARNING_THRESHOLD` → 4 min is not > 5 min, the
+    // successful extension is reported as a failure and the red banner shows → RED.
+  })
+})
+
 describe('sessionManager — multi-tab extension (deferred-108 AC5)', () => {
   it('a sibling tab advancing rint past LEGACY_SESSION_TTL extends this tab with no clamp', () => {
     setCookie(RINT_COOKIE_NAME, String(Date.now() + 2 * 60 * 1000)) // 2 min → warning

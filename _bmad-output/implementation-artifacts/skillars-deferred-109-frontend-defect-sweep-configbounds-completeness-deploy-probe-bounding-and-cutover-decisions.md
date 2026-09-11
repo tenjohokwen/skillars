@@ -1,6 +1,6 @@
 # skillars-deferred-109: Frontend Defect Sweep + ConfigBounds Completeness + Deploy-Probe Bounding + Cutover Decisions
 
-**Status:** ready-for-dev | **Epic:** deferred | **Priority:** medium
+**Status:** done | **Epic:** deferred | **Priority:** medium
 **Story ID:** deferred-109
 **Branch:** `story/deferred-109-cross-module-cleanup`
 **Created:** 2026-09-10 · **Story-review audit applied:** 2026-09-11
@@ -891,7 +891,9 @@ time either.
   pre-edit / post-delete / post-append line counts (fresh `wc -l` each time); header count
   before/after (the `deferred-108` CR section's header **stays** — `:1891` remains; the
   `deferred-108` story-implementation section's header **stays** — other bullets remain);
-  `[DECIDED]` delta (**+3** retags + note the new-section bullet is untagged open work, not a
+  `[DECIDED]` delta (**+5** retags — corrected by code review from the **+3** first written here:
+  `:1238-1239` is two bullets and AC11 contributes a conditional fifth, so the implementation's 5 was
+  right and this figure was wrong + note the new-section bullet is untagged open work, not a
   `[DECIDED]`); `[DISMISSED]` unchanged; `[PICKED UP by …]` touched (the two `deferred-94`
   AC15/AC16 bullets — retagged, not deleted).
 - **Test:** the reconstruction check is the gate; no code.
@@ -900,62 +902,62 @@ time either.
 
 ## Tasks / Subtasks
 
-1. **Re-diff every cited line against HEAD** (`git show HEAD:<path>` / open each file) before writing
+- [x] 1. **Re-diff every cited line against HEAD** (`git show HEAD:<path>` / open each file) before writing
    any code — the file's convention and this story's own header both demand it. Note drift in the
    Dev Agent Record.
-2. **AC1** — `PaymentMethodCard.vue` (+ read `payment.store.js`): AC1.1 (retry + stale-key, one
+- [x] 2. **AC1** — `PaymentMethodCard.vue` (+ read `payment.store.js`): AC1.1 (retry + stale-key, one
    after-`await` error check — do **not** also move `stripeUnavailable=false` or null `stripeConfig`),
    AC1.2 (post-save refresh-failure notice), AC1.3 (spec-only, key exists), AC1.4 (save-path
    branches). Extend `PaymentMethodCardSpec.js` (+ `paymentStoreSpec.js` where the store half is
    asserted). Each fix mutation-verified (RED reverted, GREEN restored).
-3. **AC2** — `sessionManager.js`: skew-check spec (spec-only) + ineffective-refresh fix; extend
+- [x] 3. **AC2** — `sessionManager.js`: skew-check spec (spec-only) + ineffective-refresh fix; extend
    `sessionManagerCoverageSpec.js`.
-4. **AC3** — `MainLayout.vue`: logout parity + `localStorage` guards + silent-404 spec; extend
+- [x] 4. **AC3** — `MainLayout.vue`: logout parity + `localStorage` guards + silent-404 spec; extend
    `MainLayoutSpec.js`.
-5. **AC4** — `playerStore.js`: one-line return-value fix (flip the `deferred-108` characterization
+- [x] 5. **AC4** — `playerStore.js`: one-line return-value fix (flip the `deferred-108` characterization
    test) + reject-path spec; extend `playerStoreSpec.js`.
-6. **AC5** — `booking.store.js`: accept-all `null`-leak fix + null-response guard; extend
+- [x] 6. **AC5** — `booking.store.js`: accept-all `null`-leak fix + null-response guard; extend
    `bookingStoreSpec.js`.
-7. **AC6** — `BookingRequestPage.vue` `slotRows` NaN filter; extend `BookingRequestPageSpec.js`.
-8. **AC7** — `ParentBookingsPage.vue`: **do NOT change the arithmetic** (`RescheduleService.java:176-184`
+- [x] 7. **AC6** — `BookingRequestPage.vue` `slotRows` NaN filter; extend `BookingRequestPageSpec.js`.
+- [x] 8. **AC7** — `ParentBookingsPage.vue`: **do NOT change the arithmetic** (`RescheduleService.java:176-184`
    requires the fixed-instant delta). Add a spec pinning the submitted pair's elapsed `Duration`
    equals the original + a code comment; pin/handle the DST-boundary *display* (fall-back
    ambiguity). Extend `ParentBookingsPageSpec.js`.
-9. **AC8** — `ProfileBuilderStep3.vue`: AC8.1 touched-but-invalid pack-row guard + `:rules`; AC8.2
+- [x] 9. **AC8** — `ProfileBuilderStep3.vue`: AC8.1 touched-but-invalid pack-row guard (a single `packError` message below the pack list — **no per-field `:rules` were added**; the original wording here claimed them, corrected by code review); AC8.2
    defensive `Number()` coercion in `durationOptions` only (no "submits the number" claim). Extend
    `ProfileBuilderStep3Spec.js`.
-10. **AC9** — `BookingStateChip.vue` `bookingId: [String, Number]`; `grep`
+- [x] 10. **AC9** — `BookingStateChip.vue` `bookingId: [String, Number]`; `grep`
     `CoachCommandCenterPage.vue:95`'s payload type; update `ParentBookingsPageSpec.js` NOTE +
     no-warning assertion.
-11. **Frontend green gate:** `cd src/frontend && npm run test:unit` + `npm run test:unit:ci` green;
+- [x] 11. **Frontend green gate:** `cd src/frontend && npm run test:unit` + `npm run test:unit:ci` green;
     `eslint` + `prettier --check` clean on every touched spec.
-12. **AC10** — `ConfigBounds.java` add `semiPro`/`pro` to `VIDEO_QUOTA_TIER_SEGMENTS` + reword the
+- [x] 12. **AC10** — `ConfigBounds.java` add `semiPro`/`pro` to `VIDEO_QUOTA_TIER_SEGMENTS` + reword the
     comment (drop "third enum dimension"); `ConfigBoundsEnumCoverageTest.java` camelCase derivation
     + hard-coded `semiPro`/`pro` assertions; `ConfigStartupAssertion` test — bad
     `video.quota.pro.storageBytes` → **ERROR log + `config.value.misconfigured` metric** (not a boot
     refusal); AC10.6 the new `deferred-work.md` bullet for the `resolveTierKey` player-tier gap.
     Targeted class run.
-13. **AC11** — wrap the two `docker image inspect` calls in both scripts with a relabelled
+- [x] 13. **AC11** — wrap the two `docker image inspect` calls in both scripts with a relabelled
     `run_bounded` (`IMAGE_INSPECT_TIMEOUT`, redirections on the inner `docker` cmd); relabel the two
     existing `deferred-108` AC8 call sites; leave `aws s3 cp` / ERR-trap `${DC} up -d` / `${DC} config`
     / `${DC} down` **unbounded** with reasons in the comment; update the aggregate-bound comments.
     `bash -n` + `shellcheck -S warning` clean.
-14. **AC12** — `VideoModerationEmailListener` explicit `null`/`SENT` branch split (`null`→WARN);
+- [x] 14. **AC12** — `VideoModerationEmailListener` explicit `null`/`SENT` branch split (`null`→WARN);
     flip `noPersistedEnvelope_doesNotThrow` + add the `SENT`-case assertion; new outbox-mapping IT
     at the `SenderProvider`/`MailService` seam (assert on the envelope row; reset the `emailService`
     breaker between cases). Targeted run.
-15. **AC13** — `frontend-unit-tests.yml` add `opened` to `types:` (`:22`) + update the `:14-16`
+- [x] 15. **AC13** — `frontend-unit-tests.yml` add `opened` to `types:` (`:22`) + update the `:14-16`
     comment. `actionlint` if available. (Effect verified on the *next* labelled PR, not this one.)
-16. **AC14** — `deferred-work.md:1311` retag `[DECIDED … AC14]` + a **new** `## Pre-production
+- [x] 16. **AC14** — `deferred-work.md:1311` retag `[DECIDED … AC14]` + a **new** `## Pre-production
     release gate: queued webhook events` section in `docs/deployment/runbook.md` (sibling of the
     migration-rewrites one).
-17. **AC15** — re-run `wc -l` / the three `grep` counts; ledger hygiene pass (delete/retag +
+- [x] 17. **AC15** — re-run `wc -l` / the three `grep` counts; ledger hygiene pass (delete/retag +
     new `deferred-109` section) + reconstruction check.
-18. **Validation summary** in the Dev Agent Record: per-AC mutation checks (RED/GREEN), frontend
+- [x] 18. **Validation summary** in the Dev Agent Record: per-AC mutation checks (RED/GREEN), frontend
     suite counts, targeted backend class results, `bash -n`/`shellcheck` results, no full
     `mvn verify` (GitHub CI is the gate — `docs/validation-strategy.md`,
     [[feedback_no_local_mvn_verify]]).
-19. **PR:** `gh pr create` against `master`, then `gh pr edit <n> --add-label frontend-tests`
+- [ ] 19. **PR:** `gh pr create` against `master`, then `gh pr edit <n> --add-label frontend-tests`
     (fires `labeled` — AC13's `opened` change does **not** take effect for its own PR, since
     `pull_request` triggers are read from the base ref). Confirm the `frontend-unit` check actually
     **ran** on this PR (not green-because-skipped). Record in the Dev Agent Record that the
@@ -1043,6 +1045,7 @@ targeted tests locally, GitHub CI is the full gate.
 | Date | Change |
 |---|---|
 | 2026-09-10 | **Story created (→ ready-for-dev).** Drawn from `deferred-work.md` @ `bbad7938` (post-`deferred-108` #174 + prune #175). 15 ACs: AC1–AC9 frontend defect sweep (all 16 `deferred-108`-CR bullets + `playerStore.js` return-value leak, owner D1); AC10 `ConfigBounds` completeness (owner D2); AC11 bound the remaining disaster-restore image-probe calls; AC12 `VideoModerationEmailListener` re-scoped to test-only (owner D5); AC13 `frontend-unit-tests.yml` `opened` trigger, stays opt-in (owner D3/D6); AC14 legacy `PROCESSING→READY` webhook cutover — accepted risk, no code (owner D4); AC15 ledger hygiene + reconstruction check. |
+| 2026-09-11 | **Implemented (→ review).** All 15 ACs done. Frontend: 10 `deferred-108` spec files extended (+13 assertions → 97 tests green), minimal local production fixes in `PaymentMethodCard.vue` / `sessionManager.js` / `MainLayout.vue` (+`useSession.js` export) / `playerStore.js` / `booking.store.js` / `BookingRequestPage.vue` / `ProfileBuilderStep3.vue` / `BookingStateChip.vue`, 2 new i18n keys ×3 bundles; `ParentBookingsPage.vue` comment-only (AC7 pins the fixed-instant delta, does not change it). Backend: `ConfigBounds.java` `semiPro`/`pro` segments + comment (AC10), `VideoModerationEmailListener.java` null/SENT branch split (AC12.1); `ConfigBoundsEnumCoverageTest` (6), `ConfigStartupAssertionTest` (11), `VideoModerationEmailListenerTest` incl. `@Nested` real-`MailManager` mapping test (8) — all green, targeted only. Deploy: `run_bounded` relabelled + both `docker image inspect` calls bounded in `provision.sh` + `restore-from-volume-backup.sh` (AC11); `aws s3 cp` / `${DC} up -d` / `${DC} config` / `${DC} down` left explicitly unbounded with reasons; `bash -n` + `shellcheck -S warning` clean. `frontend-unit-tests.yml` `opened` trigger (AC13, `actionlint` clean). `runbook.md` new pre-production webhook-drain gate + `deferred-work.md:1310` retag (AC14). Ledger hygiene (AC15): baselines 1991/87/35/35 at `bbad7938`; 15 bullets deleted + `:1695` residual deleted + 5 `[DECIDED … skillars-deferred-109]` retags + new `skillars-deferred-109 story creation` section (AC10.6 bullet) + audit block → 1936 lines / 88 headers / real `[DECIDED]` 40 / `[DISMISSED]` 35; B2 note + `skillars-7-1` D4 untouched; reconstruction check passed. Every frontend/backend fix mutation-verified in both directions. No `mvn verify` (GitHub CI is the gate — `docs/validation-strategy.md`). |
 | 2026-09-11 | **Story-review audit applied — no false positives; all findings accepted.** **AC7** re-scoped: the "wall-clock minutes" fix was *backwards* (`RescheduleService.java:176-184` validates `Duration.between(Instant,Instant).equals(...)` — the current fixed-instant delta is required); now pins the correct behaviour + handles the DST-boundary *display* only. **AC12.1** now requires an explicit `null`/`SENT` branch split (rewriting the one `log.info` would mislabel every successful send). **AC10** premise corrected: nothing reads `video.quota.semiPro.*`/`.pro.*` (`resolveTierKey` never returns those segments), there is no boot refusal (keys are `failFast=false` — ERROR + `config.value.misconfigured` metric only); AC10.6 added — files the real `resolveTierKey` player-tier entitlement gap as a new ledger bullet. **AC1.1+AC1.2 merged** into one fix (option a — after-`await` error check; the "move `stripeUnavailable=false`" + "null `stripeConfig`" combo re-flickers); old AC1.2 slot reused for the sibling dead-catch (story-review finding 16). **AC2.2** conditioned on `hasSeenRintThisTab()` (naive "expiry absent → fail" breaks the legacy fallback), ordering pinned after `refreshExpiryState()`, future-ness predicate, legacy-path spec case added. **AC3.1** now requires *both* `useSession` `rint` clears + explicit statement of what ordering is unified vs left divergent. **AC3.2** mutation check corrected (`locale.value` runs before `setItem` — only the cookie-clear half is sensitive). **AC4.1** returns literal `null`, not `selfPlayerId.value` (which can hand a superseded caller a *different* account's id). **AC5.1** mandates option (a) — option (b) leaves a stale prior result rendering. **AC5.2** classifies a nullish response as a distinguishable error, not empty-success (bare `?? {}` blanks the coach's list + prunes all batch results + reports success). **AC8.1** predicate broadened (touched-but-invalid, incl. `0`/negative/label-only) + `:rules` needed. **AC8.2** re-scoped to defensive-only (no hydration path at HEAD). **AC9** notes the second call site `CoachCommandCenterPage.vue:95`. **AC11** re-scoped: drop the ERR-trap `${DC} up -d` bound (timeout mid-trap exits half-started), leave `aws s3 cp` / `${DC} config` / `${DC} down` explicitly unbounded with reasons, move redirections onto the inner `docker` cmd, relabel `run_bounded`. **AC12.2** seam corrected (`SenderProvider`/`MailService`, not `@MockitoBean JavaMailSender`); assert on the envelope row; circuit-breaker reset noted. **AC13** acceptance made coherent (change does not affect its own PR — verified on the next labelled PR). **AC14.2** now a new sibling `##` section, not a row in the migration-rewrites gate. **AC15** baselines corrected — `deferred-work.md` is **1991** lines / 87 headers / `[DECIDED]` 35 / `[DISMISSED]` 35 (was "1959 / 31 / 33", copied from the `deferred-108` block's own mis-recorded figures). Risk note added (largest prod-code change in the series; opt-in-only safety net). Cite drift corrected throughout — Task 1 stays load-bearing. |
 
 ## Dev Agent Record
@@ -1058,25 +1061,272 @@ targeted tests locally, GitHub CI is the full gate.
 
 ### Agent Model Used
 
-_(dev agent to fill)_
+Claude Sonnet 5 (`claude-sonnet-5`), `/bmad-dev-story` workflow.
 
 ### Implementation Plan
 
-_(dev agent to fill)_
+Executed AC1→AC15 in order (Tasks 1–19). Task 1: re-diffed every cite against HEAD — the branch
+carries only story docs, all source at `bbad7938`; cite drift noted per-AC below. Frontend ACs
+(AC1–AC9) first, each: minimal local production fix + regression block appended to the existing
+`deferred-108` spec file + a two-direction mutation check (revert → RED, restore → GREEN). Backend
+(AC10, AC12) with targeted test classes only, no `mvn verify` (`docs/validation-strategy.md`,
+[[feedback_no_local_mvn_verify]]). Deploy scripts (AC11) with `bash -n` + `shellcheck -S warning` +
+a stub-`timeout` behavioural check. Docs/ledger (AC13–AC15) last.
 
 ### Completion Notes List
 
-_(dev agent to fill)_
+- **AC1** `PaymentMethodCard.vue` — AC1.1: removed the early `stripeUnavailable.value = false`
+  (it flipped `showForm` before the fetches resolved, racing the watcher); now decides
+  `stripeUnavailable` from the fetch OUTCOME after the `await` (`paymentStore.error.stripeConfig ||
+  error.savedPaymentMethod` → raise + return; else clear + mount). AC1.2: post-save, if
+  `error.savedPaymentMethod` is set, a non-blocking `$q.notify({type:'warning'})` with a new
+  `payment.card.savedRefreshFailed` key (en/de/fr). AC1.3/AC1.4: spec-only. Added `useQuasar`
+  import. Spec: 7 new cases in `PaymentMethodCardSpec.js` (partial `quasar` mock stubs
+  `useQuasar().notify`). Cite drift: none material (`:174-187` etc. accurate).
+- **AC2** `sessionManager.js` — AC2.1 spec-only (past-`rint` + positive local estimate → no expiry;
+  + `WARNING_THRESHOLD` and `remaining==0`/no-cushion boundaries). AC2.2: `refreshExpiryState()`
+  now returns `tick()`'s boolean; `refreshSession` success path, when `!expired &&
+  hasSeenRintThisTab()`, flags `refreshFailed` unless the read-back expiry is `> WARNING_THRESHOLD`
+  in the future. Legacy-path spec case (no `rint` ever) added. Cite: line 140 was correct (the
+  creation "correction to :141" was itself wrong); `:259-273` → HEAD `:248-273`.
+- **AC3** `MainLayout.vue` — AC3.1: `LOGOUT_BACKEND_WAIT_MS` exported from `useSession.js`;
+  `handleLogout` now does pre-race `rint` clear → bounded `Promise.race([authStore.logout(), …])`
+  → post-race `rint` clear, keeping MainLayout's `logout→resetSelfPlayerId→destroySession→
+  deleteUserCookie→router.push` order (comment states what is unified vs deliberately divergent).
+  AC3.2: `try/catch` around both `localStorage` calls; the `lang` cookie clear still runs when
+  `setItem` throws. AC3.3: spec-only (PLAYER mount, `fetchSelfPlayerId` rejecting 404 → no
+  `console.error`; 500 → logged). Spec: `MainLayoutSpec.js` `vi.mock` switched to async
+  `importOriginal` to keep `LOGOUT_BACKEND_WAIT_MS`; `mountLayout` gained a `preMount` hook.
+- **AC4** `playerStore.js` — one-line: `return requestGeneration === selfPlayerIdGeneration ?
+  profile.id : null` (literal `null`, not `selfPlayerId.value`). Flipped the `deferred-108`
+  characterization test to assert the superseded call resolves to exactly `null` while driving the
+  B-repopulates-the-ref sequence. AC4.2 reject-path case added.
+- **AC5** `booking.store.js` — AC5.1: new `deleteBatchAcceptResult(batchId)` (copy-on-write) called
+  in `handleAcceptAllBatch`'s catch before the rethrow. AC5.2: explicit `if (res == null) {
+  coachRequestsError = new Error('empty response…'); return false }` before the destructure — not a
+  `?? {}` (which would blank the list + prune + report success). `loadCoachSchedule` not mirrored
+  (no destructure, no TypeError). Cite `:605-630`/`:388-429` → HEAD offsets ~+15.
+- **AC6** `BookingRequestPage.vue` — `.filter((slot) => !Number.isNaN(Date.parse(slot.startDatetime)))`
+  before the `available` map, matching `ownBlockingBookings`.
+- **AC7** `ParentBookingsPage.vue` — **no arithmetic change** (the fixed-instant delta is what
+  `RescheduleService.java:176-184` requires). Added a code comment citing that + a spec pinning the
+  submitted `proposedStart/End` span == the original booking's elapsed ms. DST-boundary *display*
+  ambiguity: pinned at the computed level (`rescheduleProposedEnd !== rescheduleProposedStart`),
+  noted as a minor follow-up (happy-dom Intl is UTC — the DST-crossing drift is not exercisable
+  here; the elapsed-ms invariant is zone-independent, per the story's spec note).
+- **AC8** `ProfileBuilderStep3.vue` — AC8.1: `hasTouchedInvalidPack` computed (any field non-null /
+  non-blank label yet not `sessionCount>0 && totalPrice>0`) → `submit()` sets `packError` and
+  returns; new `packError` text ref + `auth.coach.step3PackInvalid` key (en/de/fr) + a template
+  line. AC8.2: `Number()` coercion of `current` before the `DURATION_CHOICES.includes` check
+  (defensive only — no live hydration path; does NOT normalise the submitted value).
+- **AC9** `BookingStateChip.vue` — `bookingId: { type: [String, Number], default: null }`.
+  Verified: `useBookingSse` only interpolates the id into an EventSource URL; both call sites
+  (`ParentBookingsPage.vue:134` `booking.id`, `CoachCommandCenterPage.vue:95` `booking.bookingId`)
+  pass numbers; no consumer relies on a string. `ParentBookingsPageSpec.js` NOTE updated + a
+  no-`Invalid prop`-warning assertion (real chip, terminal-status fixture to avoid EventSource).
+- **AC10** `ConfigBounds.java` — added `"semiPro"`, `"pro"` to `VIDEO_QUOTA_TIER_SEGMENTS` (loop
+  auto-generates 4 `BoundedKey`s at `0..Long.MAX_VALUE`, `failFast=false`); reworded the templated-
+  key comment (incomplete-hand-list, not "removed constant"; no third runtime enum). Test:
+  `screamingSnakeToCamel` helper replaces `toLowerCase` in the tier-coverage derivation (+ a unit
+  test for it), explicit `semiPro`/`pro` assertions, `ConfigStartupAssertionTest` case for an
+  out-of-range `video.quota.pro.storageBytes` → ERROR + `config.value.misconfigured` metric, no
+  boot refusal. AC10.6: new `deferred-work.md` bullet for the `resolveTierKey` player-tier gap
+  (`SEMI_PRO`/`PRO` players get the ATHLETE quota). No `config`→business-module compile dep added.
+- **AC11** `provision.sh` + `restore-from-volume-backup.sh` — `run_bounded` signature is now
+  `<dur> <label> <cmd…>` (was reading `$1` after `shift`, labelling every call `'docker'`); it
+  swallows the wrapped command's stderr internally and emits its own timeout WARN afterwards so the
+  WARN survives even when the caller discards stdout. Both `docker image inspect` calls wrapped at
+  `IMAGE_INSPECT_TIMEOUT=10s`; the two existing `deferred-108` AC8 call sites relabelled.
+  Explicitly left UNBOUNDED with reasons in the aggregate-bound comment: `aws s3 cp`, ERR-trap +
+  final `${DC} up -d`, `${DC} config`, `${DC} down`. `bash -n` + `shellcheck -S warning` clean;
+  stub-`timeout` check confirms WARN-on-124 names the real label and rc propagates.
+- **AC12** `VideoModerationEmailListener.java` — AC12.1: explicit `persisted == null` (→ WARN
+  "send outcome not yet visible") vs fall-through `SENT` (→ INFO "delivered") branch split; the
+  `FAILED` block lost its redundant `persisted != null` guard. No change to the blank-recipient
+  path (owner D5). Test: flipped `noPersistedEnvelope_*` to assert the WARN, added "does not WARN"
+  to the SENT case, and a `@Nested RealMailManagerMappingAC122` that drives a real `MailManager`
+  (real Resilience4J CB + `RetryTemplate`) over a stubbed `MailService` (the seam — `@MockitoBean
+  JavaMailSender` can't work), asserting the produced `EnvelopeEntity(FAILED, isRetry)` row and the
+  listener's rethrow/release decision. Scope stated in the test doc: send-mapping + listener
+  decision, not the outbox-row lifecycle (`ModerationOutboxIT`'s).
+- **AC13** `.github/workflows/frontend-unit-tests.yml` — `opened` added to `pull_request: types`;
+  header comment updated (incl. the "base-ref → effective next PR, not this one" caveat).
+  `actionlint` clean. Not added to `ci.yml`/`pr-build.yml`/`pom.xml`; not a required check.
+- **AC14** `docs/deployment/runbook.md` — new sibling `## Pre-production release gate: queued
+  webhook events` section (NOT a row in the migration-rewrites gate). `deferred-work.md:1310` retag
+  `[DECIDED … AC14]`. No production code.
+- **AC15** ledger hygiene — baselines re-measured at `bbad7938`: **1991** lines / **87** headers /
+  **35** `[DECIDED` / **35** `[DISMISSED` tokens (matches the story-review-corrected figures).
+  15 bullets deleted outright, 5 `[DECIDED 2026-09-11 (skillars-deferred-109 …)]` retags (AC10,
+  AC11, AC12×2, AC14), the `:1695` return-value residual deleted, one new
+  `## Deferred from: skillars-deferred-109 story creation (2026-09-11)` section (the AC10.6 bullet),
+  and an audit block. Post-write: **1936** lines, **88** headers, real `[DECIDED]` items 35→40,
+  `[DISMISSED]` 35→35, two `[PICKED UP by …]` bullets retagged. B2 note + `skillars-7-1` D4
+  untouched. Reconstruction check: `git diff bbad7938` shows only the enumerated bullet
+  deletions/retags/additions — no unrelated line reworded.
+
+**Deferred verification (recorded per AC13):** the one-step `gh pr create --label frontend-tests`
+behaviour only takes effect from the NEXT labelled PR (GitHub reads `pull_request` triggers from
+the base ref). This story's own PR still adds the label after `gh pr create` (fires `labeled`), and
+must confirm the `frontend-unit` check actually RAN (green-because-skipped does not count).
 
 ### Validation summary
 
-_(dev agent to fill — per-AC mutation RED/GREEN, frontend suite counts, targeted backend classes,
-`bash -n`/`shellcheck`, reconstruction check line/header counts)_
+**Frontend (`cd src/frontend`):**
+- `npm run test:unit` — **12 files, 97 tests, all green** (was 84 pre-story: +13 new assertions
+  across the 10 extended `deferred-108` specs).
+- `npm run test:unit:ci` (`vitest run --coverage`) — same, green.
+- `npx eslint 'src/**/__tests__/**/*.js'` + every touched production file — exit 0.
+- `npx prettier --check` on all touched files — clean (4 files auto-fixed with `--write`, re-checked).
+- Per-AC mutation checks (revert → RED, restore → GREEN), all run in both directions:
+  - AC1.1a delete trailing `stripeUnavailable=false` → "retry mounts on first click" RED.
+  - AC1.1b remove the `error.*` re-raise block → "failed refetch, no stale loadStripe" RED.
+  - AC1.2 remove the `$q.notify` guard → "post-save refresh failure notice" RED.
+  - AC1.3 force the `savedCard.brand` ternary true → "detailsUnavailable rendered" RED.
+  - AC1.4 delete `|| setupIntent?.status !== 'succeeded'` → "requires_action" case RED.
+  - AC2.1 delete `sessionManager.js` skew guard → "past-rint stays positive, no expiry" RED.
+  - AC2.2a remove the whole post-refresh advance-check → "200 w/o fresh rint → refreshFailed" RED.
+  - AC2.2b drop `hasSeenRintThisTab()` from the guard → "legacy refresh stays clean" RED.
+  - AC3.1 bare `await authStore.logout()` → "stalled logout still resolves" hangs/RED.
+  - AC3.1 drop either `rint` clear → "rint cleared pre+post race" RED.
+  - AC3.2 remove either `try/catch` → "throwing setItem/getItem does not abort" RED (spy on
+    `window.localStorage`, not `Storage.prototype` — happy-dom does not inherit).
+  - AC3.3 `!== 404` → `if (err)` → "404 swallowed silently" RED.
+  - AC4.1 restore `return profile.id` → RED; change fix to `: selfPlayerId.value` → B-repopulation
+    case RED.
+  - AC4.2 delete the `.finally` ref-clear → "subsequent call retries" RED.
+  - AC5.1 remove `deleteBatchAcceptResult(batchId)` from the catch → "no leaked batchId key" RED.
+  - AC5.2 remove the `res == null` guard → "distinguishable /empty response/ error" RED.
+  - AC6 remove the `Number.isNaN(Date.parse(...))` filter → "bad slot dropped" RED.
+  - AC7 change `rescheduleProposedEnd` to `new Date(start.getTime())` → "submitted pair == original
+    elapsed ms" RED (2 tests, incl. the pre-existing `deferred-108` one).
+  - AC8.1 remove the `hasTouchedInvalidPack` guard → 4 touched-but-invalid cases RED.
+  - AC8.2 revert `Number()` coercion → "no duplicate synthetic 60" RED.
+  - AC9 revert prop to `type: String` → "no Invalid prop warning" RED.
+
+**Backend (targeted classes only, system `mvn`; GitHub CI is the full gate):**
+- `ConfigBoundsEnumCoverageTest` — 6 tests green (5 pre-existing + `screamingSnakeToCamel…`).
+- `ConfigStartupAssertionTest` — 11 tests green (10 + `videoQuotaProKey_negative_…`).
+- `VideoModerationEmailListenerTest` (incl. `@Nested RealMailManagerMappingAC122`) — 8 tests green.
+- Mutation: AC10.1 drop `semiPro`/`pro` from the list → `ConfigBoundsEnumCoverageTest` +
+  `ConfigStartupAssertionTest` each 1 FAILURE. AC12.1 remove the `persisted == null` branch →
+  `VideoModerationEmailListenerTest` 1 FAILURE.
+- **No `mvn verify` run** (`docs/validation-strategy.md`, [[feedback_no_local_mvn_verify]]).
+
+**Deploy scripts:** `bash -n` OK on both; `shellcheck -S warning` exit 0 on both; a stub-`timeout`
+harness confirms the relabelled `run_bounded` emits the WARN with the real label on exit 124 and
+propagates a non-124 rc silently.
+
+**Docs / workflow:** `actionlint` exit 0 on `frontend-unit-tests.yml`; YAML parses.
+
+**Ledger reconstruction check:** baselines at `bbad7938` = 1991 lines / 87 headers / 35 `[DECIDED`
+/ 35 `[DISMISSED` tokens. Post-edit = 1936 lines / 88 headers / real `[DECIDED]` items 40 /
+`[DISMISSED]` 35. `git diff bbad7938 -- deferred-work.md` reviewed: every removed line belongs to
+one of the 15 enumerated deleted bullets or the `:1695` residual; every changed line is an
+enumerated retag or the new section; no `## Deferred from:` header emptied; B2 bullet and
+`skillars-7-1` D4 present and unchanged.
 
 ### File List
 
-_(dev agent to fill)_
+**Production (frontend):**
+- `src/frontend/src/components/payment/PaymentMethodCard.vue` (AC1.1, AC1.2)
+- `src/frontend/src/plugins/sessionManager.js` (AC2.2)
+- `src/frontend/src/composables/useSession.js` (AC3.1 — export `LOGOUT_BACKEND_WAIT_MS`)
+- `src/frontend/src/layouts/MainLayout.vue` (AC3.1, AC3.2)
+- `src/frontend/src/stores/playerStore.js` (AC4.1)
+- `src/frontend/src/stores/booking.store.js` (AC5.1, AC5.2)
+- `src/frontend/src/pages/parent/BookingRequestPage.vue` (AC6)
+- `src/frontend/src/pages/parent/ParentBookingsPage.vue` (AC7 — comment only, no arithmetic change)
+- `src/frontend/src/components/profileBuilder/ProfileBuilderStep3.vue` (AC8.1, AC8.2)
+- `src/frontend/src/components/booking/BookingStateChip.vue` (AC9)
+- `src/frontend/src/i18n/en-US/index.js`, `src/frontend/src/i18n/de-DE/index.js`,
+  `src/frontend/src/i18n/fr-FR/index.js` (AC1.2 `payment.card.savedRefreshFailed`; AC8.1
+  `auth.coach.step3PackInvalid`)
+
+**Test (frontend specs — extended, not rewritten):**
+- `src/frontend/src/components/payment/__tests__/PaymentMethodCardSpec.js`
+- `src/frontend/src/plugins/__tests__/sessionManagerCoverageSpec.js`
+- `src/frontend/src/layouts/__tests__/MainLayoutSpec.js`
+- `src/frontend/src/stores/__tests__/playerStoreSpec.js`
+- `src/frontend/src/stores/__tests__/bookingStoreSpec.js`
+- `src/frontend/src/pages/parent/__tests__/BookingRequestPageSpec.js`
+- `src/frontend/src/pages/parent/__tests__/ParentBookingsPageSpec.js`
+- `src/frontend/src/components/profileBuilder/__tests__/ProfileBuilderStep3Spec.js`
+
+**Production (backend):**
+- `src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java` (AC10.1, AC10.4)
+- `src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListener.java` (AC12.1)
+
+**Test (backend):**
+- `src/test/java/com/softropic/skillars/platform/config/service/ConfigBoundsEnumCoverageTest.java` (AC10.2, AC10.3)
+- `src/test/java/com/softropic/skillars/platform/config/service/ConfigStartupAssertionTest.java` (AC10)
+- `src/test/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListenerTest.java` (AC12.1, AC12.2)
+
+**Deploy / docs / ledger:**
+- `deploy/provision.sh` (AC11)
+- `deploy/backup/restore-from-volume-backup.sh` (AC11)
+- `.github/workflows/frontend-unit-tests.yml` (AC13)
+- `docs/deployment/runbook.md` (AC14 — new pre-production release gate section)
+- `_bmad-output/implementation-artifacts/deferred-work.md` (AC10.5, AC10.6, AC12.3, AC14.1, AC15)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (status → in-progress → review)
+- `_bmad-output/implementation-artifacts/skillars-deferred-109-…-cutover-decisions.md` (this file)
+
+**Corrected by code review — this file IS part of the change under review:**
+- `docs/testing/frontend-unit-tests.md` — the "Adding the `frontend-tests` label" section. The File
+  List previously called this "pre-existing, left as-is … not part of this story's diff", which was
+  false: the 22-line addition is in the diff, and its text described the pre-AC13 trigger set while
+  the workflow comment in the same commit contradicted it. Both were reconciled by the code review;
+  the section is AC13's user-facing half and belongs to this story.
 
 ### Review Findings
 
-_(code review to fill)_
+_**All 20 patches applied and verified 2026-09-11.** Frontend: **108 tests green under BOTH `TZ=UTC`
+and `TZ=America/New_York`** (was 97, and the AC7 spec FAILED under a DST zone before this pass);
+Prettier clean. Backend: `ConfigBoundsEnumCoverageTest` 5, `ConfigStartupAssertionTest` 11,
+`VideoModerationEmailListenerTest` 8, the new `VideoModerationAdminAlertEnvelopeIT` 2 (real
+Postgres), plus the `IntegrationTestConventionTest` and `MigrationConventionLintTest` guardrails —
+all green. `bash -n` + `shellcheck -S warning` clean on both deploy scripts; `actionlint` clean.
+No `mvn verify` (GitHub CI is the gate)._
+
+_`/bmad-code-review` 2026-09-11 — three layers (Blind Hunter / Edge Case Hunter / Acceptance Auditor),
+all three completed. 2 decision-needed (both resolved by owner, converted to patches → **20 patch**), 3 deferred, 4 dismissed as noise. Every HIGH below
+was re-verified by the triager against the working tree; two were reproduced by running the suite._
+
+#### Decision needed — both RESOLVED by owner 2026-09-11, converted to patches
+
+- [x] [Review][Decision] `ConfigBoundsEnumCoverageTest`'s camelCase derivation is not the derivation `resolveTierKey` uses — AC10 replaced `toLowerCase()` with `screamingSnakeToCamel()`, but the runtime segment comes from a hand-written exhaustive `switch` with lowercase string literals (`QuotaConfigService.java:52-56`), and `ConfigBounds.java:213` still documents tiers as "lower-cased". Today every constant is single-word so the two coincide. Add `CoachSubscriptionTier.PRO_ACADEMY` and the guard demands `video.quota.proAcademy.*` while the switch author writes `"pro_academy"` — build green, bound ≠ key, which is the exact failure the guard's javadoc claims to prevent, relocated rather than closed. **RESOLVED 2026-09-11 (owner) → option (b):** drop the derivation for tiers and hard-code the expected tier segments; VideoType keeps `screamingSnakeToCamel`, which *is* mechanical via `VideoTypeConstraints.configKey`. Keeps the AC9 `[DECIDED]` no-enum-coupling decision intact. Reconcile the `ConfigBounds.java:213` "lower-cased" comment with whatever the test now asserts. → converted to a patch.
+- [x] [Review][Decision] AC12.2's "IT" was delivered as a mocked-repository unit test — AC12 required "a new / extended **IT**" asserting on a committed `EnvelopeEntity` row, with the spec noting `sendEmailSync` is `@Transactional(REQUIRES_NEW)` "so the `FAILED` row is **committed** and visible to the `findBySendId` read-back". What shipped is `@Nested class RealMailManagerMappingAC122` inside the plain unit test, with `repo = mock(EnvelopeEntityRepository.class)` and `findBySendId` stubbed via `thenAnswer(inv -> saved.get())`. The real `MailManager` retry/`isRetryable` mapping *is* exercised and the test states its own scope honestly, but no Spring context, no transaction, and no commit visibility — the one property AC12.2 called out. The story File List contains no IT file. **RESOLVED 2026-09-11 (owner) → option (a):** write the real `@SpringBootTest` IT so a genuine committed `EnvelopeEntity` row is read back through `findBySendId`. The existing `@Nested` unit test stays (it covers the `MailManager` retry/`isRetryable` mapping); the IT is additive. → converted to a patch.
+
+#### Patch — all applied 2026-09-11
+
+- [x] [Review][Patch] HIGH — reschedule end round-trips through a local wall-clock string, so a DST fall-back booking submits `start == end` and is hard-rejected [src/frontend/src/pages/parent/ParentBookingsPage.vue:261-266 → :382]
+- [x] [Review][Patch] HIGH — a failed *saved-card* fetch alone blanks the whole card UI; `error.savedPaymentMethod` should not raise `stripeUnavailable` [src/frontend/src/components/payment/PaymentMethodCard.vue:199]
+- [x] [Review][Patch] HIGH — the AC1.1 fix is not mutation-protected: re-inserting the deleted leading `stripeUnavailable.value = false` leaves the spec 11/11 green (reproduced) [src/frontend/src/components/payment/__tests__/PaymentMethodCardSpec.js]
+- [x] [Review][Patch] HIGH — the AC3.1 **pre-race** `rint` clear is not mutation-protected: deleting it leaves `MainLayoutSpec` 9/9 green; AC3.1's second (no-in-flight-rewrite) case is missing [src/frontend/src/layouts/__tests__/MainLayoutSpec.js]
+- [x] [Review][Patch] HIGH — the new `res == null` guard misses `''`, the exact 204 shape its own comment names (axios returns an empty body verbatim as `''`) [src/frontend/src/stores/booking.store.js:403]
+- [x] [Review][Patch] HIGH — AC4.1 introduced a `null` resolution, but `PlayerHomeRedirectPage` guards only the reject path and interpolates it into a route: `/player/locker-room/null` [src/frontend/src/pages/auth/PlayerHomeRedirectPage.vue:35]
+- [x] [Review][Patch] MED — the `deferred-108` story-implementation section is now empty with a dangling "One residual surfaced:", while the new audit block claims its header "stays — other bullets remain" [_bmad-output/implementation-artifacts/deferred-work.md:1687-1695, :1932]
+- [x] [Review][Patch] MED — AC15's post-write line count was never re-measured: claims **1936**, file is **1938**; "real `[DECIDED]` items 35 → 40" uses the raw token count as the item baseline [_bmad-output/implementation-artifacts/deferred-work.md:1937]
+- [x] [Review][Patch] MED — the AC2.2 `advanced` check subtracts a client instant from a server instant and compares against `WARNING_THRESHOLD`, re-coupling the client to `JWT_TTL` — which `SecurityConstants.java:68-79` explicitly forbids [src/frontend/src/plugins/sessionManager.js:285]
+- [x] [Review][Patch] MED — clearing a numeric `q-input` yields `''`, not `null`, so `packRowTouched` counts a visually empty row as touched and permanently blocks submit [src/frontend/src/components/profileBuilder/ProfileBuilderStep3.vue:161]
+- [x] [Review][Patch] MED — `packError` is never cleared by `removePack()` or by editing a row; the stale error survives after the offending row is fixed or removed [src/frontend/src/components/profileBuilder/ProfileBuilderStep3.vue:151-153]
+- [x] [Review][Patch] MED — the `opened`-trigger comment ("GitHub reads this file from the BASE ref") contradicts `docs/testing/frontend-unit-tests.md` in the same diff, and that doc is in the diff while the File List disowns it [.github/workflows/frontend-unit-tests.yml:18-21; docs/testing/frontend-unit-tests.md:34-56]
+- [x] [Review][Patch] LOW — AC11's new aggregate-bound comments cite pre-change line numbers, stale by ~29 lines in both scripts [deploy/backup/restore-from-volume-backup.sh:50-58; deploy/provision.sh:105-106]
+- [x] [Review][Patch] LOW — Task 9 is checked off claiming `:rules` were added; the only template change is one error `<div>` [story Tasks item 9]
+- [x] [Review][Patch] LOW — `run_bounded`'s timeout WARN claims the hardcoded fallback was used, but the first wrapped `inspect` is non-terminal and falls through to `docker pull`; a timeout is also indistinguishable from "image absent", so a slow daemon triggers a full registry pull inside the outage window [deploy/backup/restore-from-volume-backup.sh:89-91, :113]
+- [x] [Review][Patch] LOW — `console.error`/`console.warn` spies and `document.cookie` writes in the new spec blocks are never restored, suppressing console output for later tests in the file [src/frontend/src/layouts/__tests__/MainLayoutSpec.js; src/frontend/src/pages/parent/__tests__/ParentBookingsPageSpec.js]
+- [x] [Review][Patch] LOW — the AC9 "no Invalid prop warning" test has no positive control: it never asserts `BookingStateChip` mounted with `42`, so it passes vacuously if the chip stops rendering [src/frontend/src/pages/parent/__tests__/ParentBookingsPageSpec.js]
+- [x] [Review][Patch] LOW — AC15 states a `[DECIDED]` delta of **+3**; five retags were made and the audit block records 5 [story AC15]
+
+#### Deferred (pre-existing, filed to `deferred-work.md`)
+
+- [x] [Review][Defer] `VideoModerationEmailListener`: `persisted == null` WARNs and returns normally, which releases the outbox row for an *unknown* send outcome — identical handling to a confirmed success [src/main/java/.../VideoModerationEmailListener.java:102-107] — deferred, pre-existing (AC12.1 changed only the log level, not the release decision)
+- [x] [Review][Defer] `handleAcceptAllBatch`'s catch calls `deleteBatchAcceptResult` unconditionally, so a throw *after* a successful `setBatchAcceptResult` discards real per-booking results [src/frontend/src/stores/booking.store.js:645-651] — deferred, pre-existing
+- [x] [Review][Defer] No frontend CI job runs the Vitest suite under a non-UTC timezone, so every DST assertion in the suite is structurally unfalsifiable [.github/workflows/frontend-unit-tests.yml] — deferred, test-infra gap beyond this story
+
+#### Dismissed (4)
+
+- The trailing `stripeUnavailable.value = false` "overrides the catch arm" — false positive: the `catch` block `return`s, so there is no fall-through.
+- `slotRows` "silently discards" unparseable slots — this is AC6's stated requirement; the non-ISO-format scenario is speculative against an ISO-emitting API.
+- "Retry is untested against a sticky store error" — subsumed by the two `PaymentMethodCard` patches above.
+- AC11's redirection "implemented differently" (`2>/dev/null` bound inside `run_bounded` rather than at each call site) — the deviation is deliberate, documented in the header, meets AC11's stated intent, and is `shellcheck -S warning` clean.
