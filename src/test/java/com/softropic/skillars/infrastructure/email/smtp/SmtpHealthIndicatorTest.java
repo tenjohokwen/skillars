@@ -1,7 +1,5 @@
-package com.softropic.skillars.platform.notification.health;
+package com.softropic.skillars.infrastructure.email.smtp;
 
-import com.softropic.skillars.platform.notification.contract.EmailProperties;
-import com.softropic.skillars.platform.notification.contract.ProviderConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.actuate.health.Health;
@@ -20,11 +18,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * ({@link SmtpHealthIndicator#probeSmtpConnection}) is overridden per test, so nothing here opens
  * a socket, resolves DNS or depends on an external mail server — the whole class runs offline in
  * the Surefire {@code test} phase.
+ *
+ * <p>Story ses-1.2 AC2: moved from {@code platform.notification.health.SmtpHealthIndicatorTest} —
+ * logic unchanged, only the package and the {@code EmailProperties -> SmtpProperties} rename.
  */
 @DisplayName("SMTP Health Indicator")
 class SmtpHealthIndicatorTest {
 
-	private final EmailProperties emailProperties = new EmailProperties();
+	private final SmtpProperties smtpProperties = new SmtpProperties();
 
 	private static ProviderConfig provider(String name, String host, String port) {
 		ProviderConfig c = new ProviderConfig();
@@ -36,7 +37,7 @@ class SmtpHealthIndicatorTest {
 
 	/** Indicator whose probe result is decided by {@code probe} instead of a real connection. */
 	private SmtpHealthIndicator indicatorWithProbe(BiPredicate<String, Integer> probe) {
-		return new SmtpHealthIndicator(emailProperties) {
+		return new SmtpHealthIndicator(smtpProperties) {
 			@Override
 			boolean probeSmtpConnection(String host, int port) {
 				return probe.test(host, port);
@@ -65,7 +66,7 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("missing host -> UNKNOWN, probe never invoked")
 	void missingHost() {
-		emailProperties.setProviderConfigs(List.of(provider("incomplete", null, "587")));
+		smtpProperties.setProviderConfigs(List.of(provider("incomplete", null, "587")));
 		SmtpHealthIndicator indicator = indicatorWithProbe((h, p) -> {
 			throw new AssertionError("probe must not run for a misconfigured provider");
 		});
@@ -82,7 +83,7 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("non-numeric port -> UNKNOWN")
 	void invalidPort() {
-		emailProperties.setProviderConfigs(List.of(provider("badport", "mail.example.com", "invalid")));
+		smtpProperties.setProviderConfigs(List.of(provider("badport", "mail.example.com", "invalid")));
 		SmtpHealthIndicator indicator = indicatorWithProbe((h, p) -> true);
 
 		Health health = indicator.health();
@@ -95,7 +96,7 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("port out of range -> UNKNOWN, not DOWN")
 	void portOutOfRange() {
-		emailProperties.setProviderConfigs(List.of(provider("badport", "mail.example.com", "99999")));
+		smtpProperties.setProviderConfigs(List.of(provider("badport", "mail.example.com", "99999")));
 		SmtpHealthIndicator indicator = indicatorWithProbe((h, p) -> true);
 
 		Health health = indicator.health();
@@ -110,7 +111,7 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("probe succeeds -> UP with EHLO-success detail")
 	void providerUp() {
-		emailProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
+		smtpProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
 		SmtpHealthIndicator indicator = indicatorWithProbe((h, p) -> true);
 
 		Health health = indicator.health();
@@ -126,7 +127,7 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("probe returns false -> DOWN with EHLO-failed detail")
 	void providerDown() {
-		emailProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
+		smtpProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
 		SmtpHealthIndicator indicator = indicatorWithProbe((h, p) -> false);
 
 		Health health = indicator.health();
@@ -141,8 +142,8 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("probe throws IOException -> DOWN, message carried into detail")
 	void probeThrowsIoException() {
-		emailProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
-		SmtpHealthIndicator indicator = new SmtpHealthIndicator(emailProperties) {
+		smtpProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
+		SmtpHealthIndicator indicator = new SmtpHealthIndicator(smtpProperties) {
 			@Override
 			boolean probeSmtpConnection(String host, int port) throws IOException {
 				throw new IOException("connection refused");
@@ -159,8 +160,8 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("probe throws with null message -> DOWN, detail falls back to a non-null string")
 	void probeThrowsWithNullMessage() {
-		emailProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
-		SmtpHealthIndicator indicator = new SmtpHealthIndicator(emailProperties) {
+		smtpProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
+		SmtpHealthIndicator indicator = new SmtpHealthIndicator(smtpProperties) {
 			@Override
 			boolean probeSmtpConnection(String host, int port) {
 				throw new IllegalStateException(); // getMessage() == null
@@ -178,7 +179,7 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("provider with null name -> ProviderStatus.name defaults to \"unknown\"")
 	void nullProviderNameDefaulted() {
-		emailProperties.setProviderConfigs(List.of(provider(null, "mail.gmx.net", "587")));
+		smtpProperties.setProviderConfigs(List.of(provider(null, "mail.gmx.net", "587")));
 		SmtpHealthIndicator indicator = indicatorWithProbe((h, p) -> false);
 
 		Health health = indicator.health();
@@ -192,7 +193,7 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("any provider UP -> aggregate UP")
 	void anyUpIsUp() {
-		emailProperties.setProviderConfigs(List.of(
+		smtpProperties.setProviderConfigs(List.of(
 			provider("gmx", "mail.gmx.net", "587"),
 			provider("gmail", "smtp.gmail.com", "587")));
 		SmtpHealthIndicator indicator = indicatorWithProbe((host, p) -> "mail.gmx.net".equals(host));
@@ -207,7 +208,7 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("all providers DOWN -> aggregate DOWN")
 	void allDownIsDown() {
-		emailProperties.setProviderConfigs(List.of(
+		smtpProperties.setProviderConfigs(List.of(
 			provider("gmx", "mail.gmx.net", "587"),
 			provider("gmail", "smtp.gmail.com", "587")));
 		SmtpHealthIndicator indicator = indicatorWithProbe((h, p) -> false);
@@ -260,11 +261,11 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("AC5: providers are probed in parallel — N slow probes cost ≈ one, not N")
 	void probesRunInParallel() {
-		emailProperties.setProviderConfigs(List.of(
+		smtpProperties.setProviderConfigs(List.of(
 			provider("a", "a.example.com", "587"),
 			provider("b", "b.example.com", "587"),
 			provider("c", "c.example.com", "587")));
-		SmtpHealthIndicator indicator = new SmtpHealthIndicator(emailProperties, new com.softropic.skillars.platform.notification.contract.SmtpHealthProperties()) {
+		SmtpHealthIndicator indicator = new SmtpHealthIndicator(smtpProperties, new SmtpHealthProperties()) {
 			@Override
 			boolean probeSmtpConnection(String host, int port) {
 				try {
@@ -289,11 +290,11 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("AC5: a second call inside the TTL is served from cache — no re-probe")
 	void ttlCacheDedupesProbes() {
-		emailProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
+		smtpProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
 		java.util.concurrent.atomic.AtomicInteger probeCount = new java.util.concurrent.atomic.AtomicInteger();
-		var props = new com.softropic.skillars.platform.notification.contract.SmtpHealthProperties();
+		var props = new SmtpHealthProperties();
 		props.setTtl(java.time.Duration.ofSeconds(60));
-		SmtpHealthIndicator indicator = new SmtpHealthIndicator(emailProperties, props) {
+		SmtpHealthIndicator indicator = new SmtpHealthIndicator(smtpProperties, props) {
 			@Override
 			boolean probeSmtpConnection(String host, int port) {
 				probeCount.incrementAndGet();
@@ -312,8 +313,8 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("AC5: a port-465 provider is probed with a TLS handshake, not the plaintext banner")
 	void implicitTlsProviderUsesHandshakeProbe() {
-		emailProperties.setProviderConfigs(List.of(provider("smtps", "smtps.example.com", "465")));
-		SmtpHealthIndicator up = new SmtpHealthIndicator(emailProperties, new com.softropic.skillars.platform.notification.contract.SmtpHealthProperties()) {
+		smtpProperties.setProviderConfigs(List.of(provider("smtps", "smtps.example.com", "465")));
+		SmtpHealthIndicator up = new SmtpHealthIndicator(smtpProperties, new SmtpHealthProperties()) {
 			@Override
 			boolean probeSmtpConnection(String host, int port) {
 				throw new AssertionError("a 465 provider must not take the plaintext EHLO path");
@@ -334,8 +335,8 @@ class SmtpHealthIndicatorTest {
 	@Test
 	@DisplayName("AC5: a failed TLS handshake on port 465 -> DOWN")
 	void implicitTlsHandshakeFailureIsDown() {
-		emailProperties.setProviderConfigs(List.of(provider("smtps", "smtps.example.com", "465")));
-		SmtpHealthIndicator down = new SmtpHealthIndicator(emailProperties, new com.softropic.skillars.platform.notification.contract.SmtpHealthProperties()) {
+		smtpProperties.setProviderConfigs(List.of(provider("smtps", "smtps.example.com", "465")));
+		SmtpHealthIndicator down = new SmtpHealthIndicator(smtpProperties, new SmtpHealthProperties()) {
 			@Override
 			boolean probeImplicitTlsConnection(String host, int port) {
 				return false;

@@ -1,14 +1,12 @@
 package com.softropic.skillars.platform.notification.service;
 
+import com.softropic.skillars.infrastructure.email.EmailTransportPermanentException;
 import com.softropic.skillars.platform.notification.contract.EmailDeliveryStatus;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntity;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntityRepository;
 
-import jakarta.mail.MessagingException;
-import jakarta.mail.internet.AddressException;
-import jakarta.mail.internet.ParseException;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,8 +14,6 @@ import org.springframework.cloud.client.circuitbreaker.CircuitBreaker;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreakerFactory;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.transaction.event.TransactionPhase;
-import org.springframework.mail.MailParseException;
-import org.springframework.mail.MailPreparationException;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.transaction.annotation.Propagation;
@@ -39,10 +35,11 @@ public class MailManager {
     private final CircuitBreakerFactory<?, ?> circuitBreakerFactory;
     private final RetryTemplate retryTemplate;
 
-    private static final List<Class<? extends Exception>> NON_REPAIRABLE_ERRORS = List.of(MailParseException.class,
-                                                                                          MailPreparationException.class,
-                                                                                          AddressException.class,
-                                                                                          ParseException.class);
+    // Story ses-1.2 AC4: transport-neutral now — every OutboundEmailSender implementation already
+    // classifies its own failures into this taxonomy (SesErrorClassifier, SmtpErrorClassifier), so
+    // MailManager no longer needs to know about any transport-specific mail-library exception type.
+    private static final List<Class<? extends Exception>> NON_REPAIRABLE_ERRORS =
+        List.of(EmailTransportPermanentException.class);
 
     public MailManager(final MailService mailService,
                        final EnvelopeEntityRepository envelopeEntityRepository,
@@ -81,11 +78,6 @@ public class MailManager {
                     retryTemplate.execute(context -> {
                         try {
                             mailService.sendEmailFromTemplate(recipient, envelope.emailTemplate(), data);
-                        } catch (MessagingException e) {
-                            if (isRetryable(e)) {
-                                throw new RuntimeException("Retryable email error", e);
-                            }
-                            throw new RuntimeException("Non-retryable email error", e);
                         } catch (Exception e) {
                             if (isRetryable(e)) {
                                 throw new RuntimeException("Unexpected retryable email error", e);
@@ -135,12 +127,13 @@ public class MailManager {
     }
 
     private boolean isRetryable(final Exception unknownException) {
-        // isRetryable is called at two different wrapping depths: directly on the caught MessagingException
-        // inside the retry loop (cause is 1 level down, e.g. MimeMessageHelper#setTo wraps an AddressException),
-        // and on the RuntimeException wrapper the circuit breaker/retry-template layer throws before it reaches
-        // toEnvelopeEntity (cause is 2 levels down: RuntimeException -> MessagingException -> MailParseException).
-        // Bound the check to those two known depths instead of walking the exception's full, unbounded chain, so
-        // an unrelated non-repairable type buried deeper in some other exception's chain can't be misclassified.
+        // isRetryable is called at two different wrapping depths: directly on the caught EmailTransportException
+        // inside the retry loop (cause is 0-1 levels down — an OutboundEmailSender's own classifier, e.g.
+        // SmtpErrorClassifier/SesErrorClassifier, already did its wrapping), and on the RuntimeException wrapper
+        // the circuit breaker/retry-template layer throws before it reaches toEnvelopeEntity (cause is 1-2 levels
+        // down: RuntimeException -> EmailTransportPermanentException). Bound the check to those two known depths
+        // instead of walking the exception's full, unbounded chain, so an unrelated non-repairable type buried
+        // deeper in some other exception's chain can't be misclassified.
         Throwable direct = unknownException;
         Throwable cause = unknownException.getCause();
         Throwable causeOfCause = cause != null ? cause.getCause() : null;

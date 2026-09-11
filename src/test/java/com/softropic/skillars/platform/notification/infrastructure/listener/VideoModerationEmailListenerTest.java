@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.notification.infrastructure.listener;
 
+import com.softropic.skillars.infrastructure.email.EmailTransportPermanentException;
+import com.softropic.skillars.infrastructure.email.EmailTransportTransientException;
 import com.softropic.skillars.infrastructure.feature.FeatureToggleService;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.notification.contract.EmailDeliveryStatus;
@@ -17,7 +19,6 @@ import ch.qos.logback.core.read.ListAppender;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.timelimiter.TimeLimiterRegistry;
-import jakarta.mail.MessagingException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -26,7 +27,6 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JCircuitBreakerFactory;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.mail.MailParseException;
 import org.springframework.retry.support.RetryTemplate;
 
 import java.time.Duration;
@@ -198,10 +198,11 @@ class VideoModerationEmailListenerTest {
      * breaker + real {@link RetryTemplate}), so the listener's decision is taken from a genuinely
      * produced FAILED row rather than a hand-stubbed entity.
      *
-     * <p><strong>Seam.</strong> {@code @MockitoBean JavaMailSender} does not work —
-     * {@code MailService} gets its sender from {@code SenderProvider.nextSender()} and
-     * {@code MailSenderProvider} builds the list with {@code new}. So this stubs {@link MailService}
-     * (the seam the AC allows) and wires a real {@code MailManager} over it.
+     * <p><strong>Seam.</strong> Story ses-1.2 moved {@code MailService} onto the {@code
+     * OutboundEmailSender} port — a real {@code SmtpEmailSender}/{@code MailSenderProvider} would
+     * need a real socket, and there is no Spring context here to mock the port bean into. So this
+     * stubs {@link MailService} itself (the seam the AC allows) and wires a real {@code MailManager}
+     * over it.
      *
      * <p><strong>Scope.</strong> This covers the <em>send-mapping + listener decision</em> seam:
      * retryable failure → {@code FAILED, isRetry=true} → {@code sendAdminAlertSync} rethrows;
@@ -252,8 +253,8 @@ class VideoModerationEmailListenerTest {
 
         @Test
         @DisplayName("a retryable send failure → FAILED,isRetry=true row → sendAdminAlertSync rethrows")
-        void retryableFailure_producesRetryableRow_andListenerRethrows() throws MessagingException {
-            doThrow(new MessagingException("Connection timed out"))
+        void retryableFailure_producesRetryableRow_andListenerRethrows() {
+            doThrow(new EmailTransportTransientException("Connection timed out"))
                 .when(seamMailService).sendEmailFromTemplate(any(), any(), any());
 
             assertThatThrownBy(() -> listenerOverRealManager.sendAdminAlertSync(event()))
@@ -267,8 +268,8 @@ class VideoModerationEmailListenerTest {
 
         @Test
         @DisplayName("a permanent send failure → FAILED,isRetry=false row → sendAdminAlertSync logs UNDELIVERABLE and returns")
-        void permanentFailure_producesNonRetryableRow_andListenerReleases() throws MessagingException {
-            doThrow(new MessagingException("bad template", new MailParseException("unparseable")))
+        void permanentFailure_producesNonRetryableRow_andListenerReleases() {
+            doThrow(new EmailTransportPermanentException("bad template"))
                 .when(seamMailService).sendEmailFromTemplate(any(), any(), any());
 
             assertThatCode(() -> listenerOverRealManager.sendAdminAlertSync(event()))
@@ -277,14 +278,14 @@ class VideoModerationEmailListenerTest {
             assertThat(saved.get()).isNotNull();
             assertThat(saved.get().getStatus()).isEqualTo(EmailDeliveryStatus.FAILED);
             assertThat(saved.get().isRetry())
-                .as("a MailParseException in the cause chain is NON_REPAIRABLE → not retryable")
+                .as("an EmailTransportPermanentException is NON_REPAIRABLE → not retryable")
                 .isFalse();
             assertThat(loggedAt(Level.ERROR, "[VIDEO_MODERATION_ADMIN_ALERT_UNDELIVERABLE]")).isTrue();
         }
 
         @Test
         @DisplayName("a successful send → SENT row → sendAdminAlertSync logs delivered, no throw, no warn")
-        void successfulSend_producesSentRow_andListenerLogsDelivered() throws MessagingException {
+        void successfulSend_producesSentRow_andListenerLogsDelivered() {
             // seamMailService.sendEmailFromTemplate does nothing → success.
             assertThatCode(() -> listenerOverRealManager.sendAdminAlertSync(event()))
                 .doesNotThrowAnyException();

@@ -76,8 +76,12 @@ services:
       - APP_STORAGE_ENDPOINT_URL=http://${DOMAIN}:9500
       - APP_STORAGE_S3_ACCESS_KEY=${MINIO_ROOT_USER}
       - APP_STORAGE_S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      # ses-1.2 D9: SPRING_MAIL_PASSWORD removed — it backed Boot's own autoconfigured
+      # JavaMailSenderImpl, which nothing in this codebase ever injected.
+      # code review 2026-09-11: this knob is now DEAD — see docker-compose.uat.yml's full
+      # explanation. Boot's own mail health contributor is @ConditionalOnBean(JavaMailSenderImpl),
+      # a bean nothing in this codebase creates now that spring.mail.host is gone. Kept per AC7.
       - MANAGEMENT_HEALTH_MAIL_ENABLED=${MANAGEMENT_HEALTH_MAIL_ENABLED:-false}
-      - SPRING_MAIL_PASSWORD=${SPRING_MAIL_PASSWORD:-}
       - GMAIL_PASSWORD=${GMAIL_PASSWORD:-}
       - GMX_PASSWORD=${GMX_PASSWORD:-}
     # Makes `http://${DOMAIN}:9500/...` (the value baked into every presigned URL, above)

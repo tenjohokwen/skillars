@@ -1,8 +1,5 @@
-package com.softropic.skillars.platform.notification.health;
+package com.softropic.skillars.infrastructure.email.smtp;
 
-import com.softropic.skillars.platform.notification.contract.EmailProperties;
-import com.softropic.skillars.platform.notification.contract.ProviderConfig;
-import com.softropic.skillars.platform.notification.contract.SmtpHealthProperties;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,11 +32,11 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <ol>
  *   <li><strong>Parallel + bounded.</strong> Per-provider probes run on a small bounded pool under
- *       one overall wall-clock deadline ({@code app.notification.smtp-health.overall-timeout-ms},
+ *       one overall wall-clock deadline ({@code app.email.smtp.health.overall-timeout},
  *       default {@code max(connect + read timeout) + 1s slack}), so N providers cost ≈ one timeout,
  *       not N × timeout.</li>
  *   <li><strong>Short-TTL cache.</strong> The aggregate {@link Health} is recomputed at most once per
- *       {@code app.notification.smtp-health.ttl} (default 60s); every scrape in between is served
+ *       {@code app.email.smtp.health.ttl} (default 60s); every scrape in between is served
  *       from an {@link AtomicReference} without opening a socket.</li>
  *   <li><strong>Implicit-TLS aware.</strong> A provider on port 465 (or {@code implicit-tls: true})
  *       is probed with a TLS handshake, not a plaintext {@code 220} banner read — which such an
@@ -53,24 +50,37 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>This indicator lives in its own {@code notification} health group (skillars-deferred-96 AC2) so
  * it stays out of the deploy {@code smoke} aggregate.
+ *
+ * <h2>Story ses-1.2 AC2</h2>
+ *
+ * Moved unchanged in logic from {@code platform.notification.health.SmtpHealthIndicator}. The
+ * {@code @ConditionalOnProperty} below is updated to kebab-case ({@code provider-configs[0].host}, not
+ * {@code providerConfigs[0].host}) to match {@link SmtpProperties}'s new {@code app.email.smtp} YAML
+ * shape: {@code @ConditionalOnProperty}'s relaxed binding does <strong>not</strong> bridge
+ * camelCase↔kebab-case across an indexed ({@code [0]}) segment (verified empirically — an
+ * {@code ApplicationContextRunner} with a camelCase-named indexed conditional against a kebab-case-set
+ * property never activates the bean). Leaving the old camelCase literal here would silently and
+ * permanently disable this indicator once the backing YAML key moved to kebab-case. The conditional's
+ * semantics are unchanged — gated on a provider being configured, not on the transport enum; Phase 3
+ * is what adds a transport-gate alongside it.
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(prefix = "email", name = "providerConfigs[0].host")
+@ConditionalOnProperty(prefix = "app.email.smtp", name = "provider-configs[0].host")
 public class SmtpHealthIndicator extends AbstractHealthIndicator {
 
 	private static final int SOCKET_TIMEOUT_MS = 5000;
 	private static final int CONNECT_TIMEOUT_MS = 5000;
 	private static final int IMPLICIT_TLS_PORT = 465;
 
-	private final EmailProperties emailProperties;
+	private final SmtpProperties smtpProperties;
 	private final SmtpHealthProperties healthProperties;
 	private final ExecutorService probePool;
 	private final AtomicReference<Cached> cache = new AtomicReference<>();
 
 	@Autowired
-	public SmtpHealthIndicator(EmailProperties emailProperties, SmtpHealthProperties healthProperties) {
-		this.emailProperties = emailProperties;
+	public SmtpHealthIndicator(SmtpProperties smtpProperties, SmtpHealthProperties healthProperties) {
+		this.smtpProperties = smtpProperties;
 		this.healthProperties = healthProperties;
 		int size = Math.max(1, healthProperties.getProbePoolSize());
 		AtomicInteger n = new AtomicInteger();
@@ -82,8 +92,8 @@ public class SmtpHealthIndicator extends AbstractHealthIndicator {
 	}
 
 	/** Retains the pre-AC5 single-arg shape for the hermetic unit tests, with default tuning. */
-	SmtpHealthIndicator(EmailProperties emailProperties) {
-		this(emailProperties, new SmtpHealthProperties());
+	SmtpHealthIndicator(SmtpProperties smtpProperties) {
+		this(smtpProperties, new SmtpHealthProperties());
 	}
 
 	@PreDestroy
@@ -119,7 +129,7 @@ public class SmtpHealthIndicator extends AbstractHealthIndicator {
 	}
 
 	private Health computeAggregate() {
-		List<ProviderConfig> configs = emailProperties.getProviderConfigs();
+		List<ProviderConfig> configs = smtpProperties.getProviderConfigs();
 		if (configs == null || configs.isEmpty()) {
 			return Health.unknown().withDetail("reason", "No email providers configured").build();
 		}

@@ -115,17 +115,6 @@ spring:
     validateMigrationNaming: true
     baseline-on-migrate: true
     defaultSchema: main
-  mail:
-    host: mail.gmx.net
-    port: 587
-    username: blue-bone@gmx.de
-    password: ${SPRING_MAIL_PASSWORD} #BEQMN6SITHUDQEGIDWKZ
-    properties:
-      mail:
-        smtp:
-          auth: true
-          starttls:
-            enable: true
 
 custom:
   flyway:
@@ -141,22 +130,6 @@ custom:
     allowed-headers: '*'
     allow-credentials: true  #specifies if cookies and credentials are allowed.
     max-age: 1800
-email:
-  providerConfigs:
-    -
-      name: gmx
-      host: mail.gmx.net
-      port: 587
-      username: blue-bone@gmx.de
-      password: ${GMX_PASSWORD}
-    -
-      name: gmail
-      host: smtp.gmail.com
-      port: 587
-      username: enkap24@gmail.com
-      password: ${GMAIL_PASSWORD}
-
-
 #log configuration
 # default location is directly in the classpath (root of resources folder)
 logging.config: classpath:config/logback-spring.xml
@@ -179,14 +152,30 @@ app:
   # successor to today's actual behaviour everywhere except prod.
   email:
     transport: log
-  # skillars-deferred-99 AC5 — SmtpHealthIndicator tuning. Defaults live in SmtpHealthProperties;
-  # listed here for discoverability. `ttl` caps how often the aggregate SMTP Health is recomputed;
-  # `overall-timeout` (unset ⇒ max(connect+read)+1s) bounds one round of parallel per-provider probes.
-  notification:
-    smtp-health:
-      ttl: 60s
-      # overall-timeout: 11s
-      probe-pool-size: 4
+    # Story ses-1.2 AC2/AC6: SMTP config all lives under this one key now (NoStraySmtpConfigTest
+    # asserts it). Moved verbatim from the old top-level `email:` key — same provider list, same
+    # passwords, new path.
+    smtp:
+      provider-configs:
+        -
+          name: gmx
+          host: mail.gmx.net
+          port: 587
+          username: blue-bone@gmx.de
+          password: ${GMX_PASSWORD}
+        -
+          name: gmail
+          host: smtp.gmail.com
+          port: 587
+          username: enkap24@gmail.com
+          password: ${GMAIL_PASSWORD}
+      # skillars-deferred-99 AC5 — SmtpHealthIndicator tuning. Defaults live in SmtpHealthProperties;
+      # listed here for discoverability. `ttl` caps how often the aggregate SMTP Health is recomputed;
+      # `overall-timeout` (unset ⇒ max(connect+read)+1s) bounds one round of parallel per-provider probes.
+      health:
+        ttl: 60s
+        # overall-timeout: 11s
+        probe-pool-size: 4
   # skillars-deferred-99 AC9 — retention prune for development.player_slu_weekly_snapshot_applied.
   # Markers only need to outlive the write-retry window (minutes); the 90-day floor is generous.
   slu:

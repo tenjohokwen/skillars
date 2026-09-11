@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.notification.infrastructure;
 
+import com.softropic.skillars.infrastructure.email.EmailTransportPermanentException;
+import com.softropic.skillars.infrastructure.email.EmailTransportTransientException;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
@@ -15,11 +17,7 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JCircuitBreakerFactory;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreakerFactory;
-import org.springframework.mail.MailParseException;
 import org.springframework.retry.support.RetryTemplate;
-
-import jakarta.mail.internet.AddressException;
-import jakarta.mail.internet.ParseException;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -29,7 +27,6 @@ import java.util.UUID;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
-import jakarta.mail.MessagingException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -94,7 +91,7 @@ public class MailManagerResilienceTest {
     }
 
     @Test
-    void testSendEmail_Success() throws MessagingException {
+    void testSendEmail_Success() {
         mailManager.sendEmailSync(envelope);
 
         verify(mailService, times(1)).sendEmailFromTemplate(any(), any(), any());
@@ -102,10 +99,10 @@ public class MailManagerResilienceTest {
     }
 
     @Test
-    void testSendEmail_RetryLogic() throws MessagingException {
+    void testSendEmail_RetryLogic() {
         // Fail twice, succeed on third
-        doThrow(new MessagingException("Fail"))
-                .doThrow(new MessagingException("Fail"))
+        doThrow(new EmailTransportTransientException("Fail"))
+                .doThrow(new EmailTransportTransientException("Fail"))
                 .doNothing()
                 .when(mailService).sendEmailFromTemplate(any(), any(), any());
 
@@ -115,7 +112,7 @@ public class MailManagerResilienceTest {
     }
 
     @Test
-    void testSendEmail_CircuitBreakerOpens() throws MessagingException {
+    void testSendEmail_CircuitBreakerOpens() {
         // Using RuntimeException to ensure CB records it as failure by default
         doThrow(new RuntimeException("Crash"))
                 .when(mailService).sendEmailFromTemplate(any(), any(), any());
@@ -134,11 +131,12 @@ public class MailManagerResilienceTest {
     }
 
     @Test
-    void isRetryable_wrappedMailParseException_persistsRetryFalse() throws MessagingException {
-        // MailParseException nested as the cause of a MessagingException, as MimeMessageHelper does
-        // when address/template parsing fails inside a JavaMail call.
-        MessagingException wrapped = new MessagingException("template error", new MailParseException("bad template"));
-        doThrow(wrapped).when(mailService).sendEmailFromTemplate(any(), any(), any());
+    void isRetryable_permanentTransportException_persistsRetryFalse() {
+        // Story ses-1.2 AC4: the transport (SmtpErrorClassifier/SesErrorClassifier) already did the
+        // jakarta.mail/spring-mail classification — MailService now only ever throws the
+        // transport-neutral taxonomy, unwrapped, directly.
+        doThrow(new EmailTransportPermanentException("bad template"))
+            .when(mailService).sendEmailFromTemplate(any(), any(), any());
 
         mailManager.sendEmailSync(envelope);
 
@@ -150,37 +148,9 @@ public class MailManagerResilienceTest {
     }
 
     @Test
-    void isRetryable_wrappedAddressException_persistsRetryFalse() throws MessagingException {
-        // jakarta.mail.internet.AddressException nested as the cause of a MessagingException, as
-        // InternetAddress parsing does when a recipient address is malformed.
-        MessagingException wrapped = new MessagingException("bad recipient", new AddressException("not-an-email"));
-        doThrow(wrapped).when(mailService).sendEmailFromTemplate(any(), any(), any());
-
-        mailManager.sendEmailSync(envelope);
-
-        ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
-        verify(envelopeEntityRepository).save(captor.capture());
-        assertThat(captor.getValue().isRetry()).isFalse();
-    }
-
-    @Test
-    void isRetryable_wrappedJakartaParseException_persistsRetryFalse() throws MessagingException {
-        // jakarta.mail.internet.ParseException nested as the cause of a MessagingException, as
-        // header/RFC822 parsing does on a structurally malformed message.
-        MessagingException wrapped = new MessagingException("malformed header", new ParseException("bad header"));
-        doThrow(wrapped).when(mailService).sendEmailFromTemplate(any(), any(), any());
-
-        mailManager.sendEmailSync(envelope);
-
-        ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
-        verify(envelopeEntityRepository).save(captor.capture());
-        assertThat(captor.getValue().isRetry()).isFalse();
-    }
-
-    @Test
-    void isRetryable_connectionTimeout_persistsRetryTrue() throws MessagingException {
-        MessagingException timeout = new MessagingException("Connection timed out");
-        doThrow(timeout).when(mailService).sendEmailFromTemplate(any(), any(), any());
+    void isRetryable_transientTransportException_persistsRetryTrue() {
+        doThrow(new EmailTransportTransientException("Connection timed out"))
+            .when(mailService).sendEmailFromTemplate(any(), any(), any());
 
         mailManager.sendEmailSync(envelope);
 

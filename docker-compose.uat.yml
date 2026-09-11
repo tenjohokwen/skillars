@@ -57,14 +57,22 @@ services:
       - APP_BOOTSTRAP_ADMIN_EMAIL=${APP_BOOTSTRAP_ADMIN_EMAIL:-}
       - APP_BOOTSTRAP_ADMIN_PASSWORD=${APP_BOOTSTRAP_ADMIN_PASSWORD:-}
       - APP_BOOTSTRAP_ADMIN_PHONE=${APP_BOOTSTRAP_ADMIN_PHONE:-}
-      # Same MailHealthIndicator gotcha as local dev (see local-deployment.md Step 3):
-      # application-uat.yaml's spring.mail.password defaults to a placeholder, which
-      # fails real SMTP auth and drags /manage/health to DOWN. Set real mail creds
-      # below and flip this to true once they're in place; false keeps the health
-      # check (and therefore Compose's healthy/unhealthy status) meaningful in the
-      # meantime.
+      # ses-1.2 D9 + code review 2026-09-11 (AC7's "confirm rather than assume"): this knob is now
+      # DEAD. It configures Spring Boot's OWN mail actuator contributor
+      # (MailHealthContributorAutoConfiguration), which is @ConditionalOnBean(JavaMailSenderImpl) —
+      # confirmed by inspecting that class. Deleting spring.mail.host (D9) means Boot's
+      # MailSenderAutoConfiguration never registers that bean, and this codebase's own
+      # MailSenderProvider builds its JavaMailSenderImpl instances with `new`, never as a Spring
+      # bean — so the condition can never be satisfied and Boot's `mail` health contributor never
+      # exists, regardless of this flag's value. It is NOT a substitute for this codebase's own
+      # SmtpHealthIndicator (registered under the separate `notification` health group), which
+      # never authenticates at all (TCP connect + 220 banner + EHLO/TLS only) — a blank
+      # GMX_PASSWORD/GMAIL_PASSWORD cannot drag /manage/health DOWN through either mechanism. Kept,
+      # not removed, per AC7's explicit instruction not to speculatively clean up a line item
+      # nobody asked to change.
+      # ses-1.2 D9: SPRING_MAIL_PASSWORD removed — it backed Boot's own autoconfigured
+      # JavaMailSenderImpl, which nothing in this codebase ever injected.
       - MANAGEMENT_HEALTH_MAIL_ENABLED=${MANAGEMENT_HEALTH_MAIL_ENABLED:-false}
-      - SPRING_MAIL_PASSWORD=${SPRING_MAIL_PASSWORD:-}
       - GMAIL_PASSWORD=${GMAIL_PASSWORD:-}
       - GMX_PASSWORD=${GMX_PASSWORD:-}
     depends_on:

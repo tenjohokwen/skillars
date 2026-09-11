@@ -189,16 +189,21 @@ actually running this stack, not hypothetical ones:
   so the *entire app context* fails to start over an unused Bunny video
   setting. `123456` is the same placeholder the integration test suite
   already uses (`src/test/resources/application-test.yaml`).
-- **`MANAGEMENT_HEALTH_MAIL_ENABLED=false`** — Spring Boot Actuator's
-  `MailHealthIndicator` doesn't just check config, it opens a real SMTP
-  connection to `mail.gmx.net` and authenticates with whatever mail password
-  is configured. The `dev` profile's password is a placeholder
-  (`dev_mail_password`), so that connection always fails authentication,
-  which drags the aggregate `/manage/health` to `DOWN` (HTTP 503) — and
-  since `docker-compose.yml`'s healthcheck treats any non-2xx response as
-  failure, the container never reports `healthy`. Disabling this one
-  indicator sidesteps a check that was never going to succeed locally
-  anyway.
+- **`MANAGEMENT_HEALTH_MAIL_ENABLED=false`** — historically Spring Boot
+  Actuator's `MailHealthIndicator` opened a real SMTP connection to
+  `mail.gmx.net` and authenticated with whatever mail password was
+  configured, and the `dev` profile's placeholder password always failed
+  that, dragging `/manage/health` to `DOWN`. Story ses-1.2 (D9) deleted
+  `spring.mail.host` and everything that fed it, so Boot's mail health
+  contributor — `@ConditionalOnBean(JavaMailSenderImpl)` — no longer has a
+  bean to activate on and is inert regardless of this flag's value. This
+  codebase's real SMTP reachability check is now `SmtpHealthIndicator`
+  (`infrastructure.email.smtp`), registered under the separate
+  `notification` actuator group; it never authenticates (TCP connect + `220`
+  banner + `EHLO`/TLS only), so a placeholder password cannot fail it
+  either. `MANAGEMENT_HEALTH_MAIL_ENABLED=false` is kept here as a
+  belt-and-braces no-op rather than removed — see `docker-compose.uat.yml`
+  for the same note.
 - **`APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder`** —
   `PaymentConfig.configureStripe()` throws `AppSetupException` when
   `app.payment.stripe.api-key` is blank, and blank is exactly what it resolves

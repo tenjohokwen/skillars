@@ -32,7 +32,7 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 > - **An empty value is not the same as an unset one.** Spring applies a `${prop:default}` default
 >   only when the property is *absent*; an empty environment variable is present-and-blank and
 >   overrides the default. The compose defaults therefore mirror the application defaults
->   (`SPRING_MAIL_HOST` → `mail.gmx.net`, `APP_STORAGE_BUCKET` → `skillars-dev`, and so on) rather
+>   (`APP_STORAGE_BUCKET` → `skillars-dev`, and so on) rather
 >   than being blank. **This includes profile defaults.** Adding a variable to
 >   `docker-compose.yml` disables any `${VAR:some-default}` fallback for it in
 >   `application-dev.yaml` / `application-uat.yaml`, so a change aimed at production can break
@@ -55,13 +55,9 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `APP_BOOTSTRAP_ADMIN_EMAIL` | Email address | **Temporary — see the callout below.** The login for the platform's first administrator. Choose an address that does not already belong to a coach, parent or player account |
 | `APP_BOOTSTRAP_ADMIN_PASSWORD` | 24+ character random string | **Temporary — see the callout below.** `openssl rand -base64 24`. Stored bcrypt-hashed; never logged. Record it in your password manager before the first deploy — it cannot be recovered from the running system |
 | `APP_BOOTSTRAP_ADMIN_PHONE` | E.164 phone number, e.g. `+491700000000` | **Temporary — see the callout below.** Required whenever the two above are set. `main."user".phone` carries a `UNIQUE` constraint, so this cannot be a shared placeholder — a second admin bootstrapped on the same database needs a different number |
-| `SPRING_MAIL_HOST` | SMTP hostname, e.g. `smtp.gmail.com` | From your email provider (e.g. `smtp.gmail.com`, `smtp.sendgrid.net`) |
-| `SPRING_MAIL_PORT` | Integer, e.g. `587` | From your email provider — 587 for STARTTLS, 465 for SSL/TLS |
-| `SPRING_MAIL_USERNAME` | Email address | Your SMTP username or sending address |
-| `SPRING_MAIL_PASSWORD` | String | App password or SMTP credential from your email provider |
-| `GMX_PASSWORD` | String | Password for the `gmx` entry in `email.providerConfigs` (application.yaml keeps its own provider list, separate from `spring.mail.*`). Referenced with **no default**, so before the compose passthrough was fixed an unset value aborted startup on the `prod` profile |
+| `GMX_PASSWORD` | String | Password for the `gmx` entry in `app.email.smtp.provider-configs` (story ses-1.2 — moved from the pre-rename `email.providerConfigs`; application.yaml keeps its own provider list, separate from `spring.mail.*`, which no longer exists in this codebase). Referenced with **no default**, so before the compose passthrough was fixed an unset value aborted startup on the `prod` profile |
 | `GMAIL_PASSWORD` | String | As above, for the `gmail` provider entry |
-| `MANAGEMENT_HEALTH_MAIL_ENABLED` | Boolean | **Tuning knob, not a secret.** Actuator's mail health indicator opens a real SMTP connection and authenticates. Set `false` wherever the mail credentials are placeholders, or `/manage/health` reports DOWN and the container never becomes healthy. Consumed by the UAT and local compose files |
+| `MANAGEMENT_HEALTH_MAIL_ENABLED` | Boolean | **Dead knob (story ses-1.2 D9), kept for now.** It gates Spring Boot's own mail actuator contributor, which is `@ConditionalOnBean(JavaMailSenderImpl)` — a bean nothing in this codebase registers (the SMTP provider client is constructed manually by `MailSenderProvider`, never exposed as a Spring bean), and deleting `spring.mail.host` means Boot's own auto-registration of that bean no longer fires either. This codebase's real SMTP health check is `SmtpHealthIndicator`, registered separately under the `notification` actuator group — it never authenticates (TCP connect + `220` banner + `EHLO`/TLS only), so this variable does not gate it |
 | `BUNNY_API_KEY` | Hex string | Passed to the app as `APP_VIDEO_BUNNY_API_KEY`. Bunny.net Dashboard → Account → API |
 | `BUNNY_LIBRARY_ID` | Integer | Passed to the app as `APP_VIDEO_BUNNY_LIBRARY_ID`. Bunny.net Dashboard → Stream → Your Library → Library ID |
 | `BUNNY_CDN_HOSTNAME` | Hostname, e.g. `your-library.b-cdn.net` | Passed to the app as `APP_VIDEO_BUNNY_CDN_HOSTNAME`. Bunny.net Dashboard → Stream → Your Library → Pull Zone hostname |
@@ -69,7 +65,7 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `GF_SECURITY_ADMIN_USER` | Alphanumeric string, e.g. `admin` | Choose a Grafana admin username |
 | `GF_SECURITY_ADMIN_PASSWORD` | 24+ character random string | `openssl rand -base64 24` |
 | `GF_SMTP_ENABLED` | Boolean | `true` to enable email alerting from Grafana; `false` to disable |
-| `GF_SMTP_HOST` | `hostname:port` | SMTP server with port; e.g. `smtp.gmail.com:587`; can use same provider as `SPRING_MAIL_HOST` |
+| `GF_SMTP_HOST` | `hostname:port` | SMTP server with port; e.g. `smtp.gmail.com:587`; can use the same provider host as `app.email.smtp.provider-configs` |
 | `GF_SMTP_USER` | Email address | SMTP username for Grafana's outgoing email |
 | `GF_SMTP_PASSWORD` | String | App password or SMTP credential for Grafana's SMTP user |
 | `GF_SMTP_FROM_ADDRESS` | Email address | FROM address on Grafana alert emails |
@@ -151,10 +147,12 @@ application read them but no deploy supplied them. Defaults below are the applic
 > Leaving the two S3 keys blank still selects the AWS default credential chain — that check is on
 > blankness, not presence, so blank preserves the previous production behaviour.
 
-> **Email Providers:** The application uses SMTP for email via the `SPRING_MAIL_*` variables (the standard path).
-> Configure `SPRING_MAIL_HOST`, `SPRING_MAIL_PORT`, `SPRING_MAIL_USERNAME`, and `SPRING_MAIL_PASSWORD`
-> for your SMTP provider (Gmail, SendGrid, GMX, etc.). The `GMX_PASSWORD` and `GMAIL_PASSWORD` variables
-> are provider-specific overrides in `application.yaml` for multi-tenant mail routing.
+> **Email Providers (story ses-1.2):** SMTP is configured entirely via `app.email.smtp.provider-configs`
+> in `application.yaml` — one entry per provider (currently `gmx`, `gmail`), round-robined by
+> `MailSenderProvider`. There are no `SPRING_MAIL_*` variables any more; `spring.mail.*`
+> (Spring Boot's own autoconfigured mailer, which this codebase never injected) was deleted in D9.
+> `GMX_PASSWORD` and `GMAIL_PASSWORD` are the only secrets each provider entry needs — host/port/
+> username are literals in `application.yaml`, not environment-configurable.
 >
 > **AWS SES — `APP_SES_FROM_ADDRESS` is REQUIRED on prod (story ses-1.1).** Production runs
 > `app.email.transport: ses`, and `SesPropertiesValidator` aborts startup when `app.ses.from-address`

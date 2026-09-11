@@ -27,9 +27,9 @@ services:
       # docker-compose.uat.yml), so it INHERITS everything here and only overrides the keys it
       # restates. Add a new variable here and UAT picks it up for free.
 
-      # Mail. SPRING_MAIL_PASSWORD / GMX_PASSWORD / GMAIL_PASSWORD are referenced by
-      # application.yaml WITHOUT a default, so on the prod profile an unset value is not a
-      # degraded mailer — it is an unresolvable placeholder that aborts startup. The `:-`
+      # Mail. GMX_PASSWORD / GMAIL_PASSWORD feed app.email.smtp.provider-configs[*].password
+      # (application.yaml), referenced WITHOUT a default, so on the prod profile an unset value is
+      # not a degraded mailer — it is an unresolvable placeholder that aborts startup. The `:-`
       # defaults below keep that failure out of the container boot path; a blank password then
       # simply fails SMTP auth at send time, which is diagnosable.
       # EMPTY IS NOT UNSET. Spring applies a ${prop:default} default only when the property is
@@ -40,10 +40,10 @@ services:
       # application-dev.yaml / application-uat.yaml, which is why docker-compose.local.yml now
       # restates the dev values it needs. Adding a variable to this block is therefore not a
       # no-op for the other environments: check every profile before you do.
-      - SPRING_MAIL_HOST=${SPRING_MAIL_HOST:-mail.gmx.net}
-      - SPRING_MAIL_PORT=${SPRING_MAIL_PORT:-587}
-      - SPRING_MAIL_USERNAME=${SPRING_MAIL_USERNAME:-blue-bone@gmx.de}
-      - SPRING_MAIL_PASSWORD=${SPRING_MAIL_PASSWORD:-}
+      # ses-1.2 D9: SPRING_MAIL_HOST/PORT/USERNAME/PASSWORD removed — they backed Boot's own
+      # autoconfigured JavaMailSenderImpl (spring.mail.*), which nothing in this codebase ever
+      # injected; MailSenderProvider builds its own JavaMailSenderImpl instances from
+      # app.email.smtp.provider-configs, independently of Boot's autoconfiguration.
       - GMX_PASSWORD=${GMX_PASSWORD:-}
       - GMAIL_PASSWORD=${GMAIL_PASSWORD:-}
 

@@ -6,7 +6,7 @@ import org.springframework.core.env.ConfigurableEnvironment;
 
 /**
  * Replaces {@code SesEnabledPropertyValidator} (skillars-deferred-88 AC9): fail fast, with a clear
- * message, on an {@code app.email.transport} value this phase cannot wire.
+ * message, on an {@code app.email.transport} value this codebase cannot wire.
  *
  * <p>Mirrors that validator's structure and reasoning exactly, adapted to the new property:
  *
@@ -17,18 +17,16 @@ import org.springframework.core.env.ConfigurableEnvironment;
  *       {@code PropertiesFeatureToggleServiceIT}) and a bare {@code mvn spring-boot:run}, since
  *       {@link EnvironmentPostProcessor}s run for every {@code SpringApplication}, test or
  *       production — see story ses-1.1's AC3/Dev Notes.
- *   <li>A <strong>present</strong> value that is neither {@code ses}, {@code smtp} nor {@code log}
+ *   <li>A <strong>present</strong> value that is none of {@code ses}, {@code smtp}, {@code log}
  *       (case-insensitive, matching {@code @ConditionalOnProperty} semantics — no surrounding-
  *       whitespace tolerance) aborts with a one-line message naming the property and the value.
- *   <li>{@code smtp} is syntactically part of the {@link EmailTransport} enum but is <strong>deliberately
- *       rejected here in this phase</strong>, with a distinct message. {@code SmtpEmailSender} has
- *       no bean until Phase 2, so accepting {@code smtp} now would pass this fail-fast gate and then
- *       die in a {@code NoSuchBeanDefinitionException} when the registration listeners fail to
- *       inject {@link OutboundEmailSender} — precisely the ambiguous failure mode this class exists
- *       to eliminate. It is also the single most likely value a developer reaches for once
- *       {@code DevSesEmailService} is deleted, since "I want a real dev email" looks like {@code
- *       smtp} to someone who hasn't read the story.
  * </ul>
+ *
+ * <p><strong>Story ses-1.2 AC6:</strong> {@code smtp} is now a fully working transport — a bean now
+ * implements {@link OutboundEmailSender} for it, wired exactly like the {@code ses}/{@code log}
+ * senders already were — so the Phase-1-only special-case rejection of {@code smtp} (with its own
+ * "not implemented until Phase 2" message) is removed. All three {@link EmailTransport} values pass
+ * this gate the same way; nothing else in this class changes.
  *
  * <p><strong>Ordering.</strong> This class implements no {@link org.springframework.core.Ordered},
  * so it sorts to {@code Ordered.LOWEST_PRECEDENCE}. That is required, not incidental: it must run
@@ -48,13 +46,9 @@ public class EmailTransportPropertyValidator implements EnvironmentPostProcessor
             // Unset is allowed — application.yaml's base default (log) covers it.
             return;
         }
-        if (raw.equalsIgnoreCase("smtp")) {
+        if (!raw.equalsIgnoreCase("ses") && !raw.equalsIgnoreCase("smtp") && !raw.equalsIgnoreCase("log")) {
             throw new IllegalStateException(
-                PROPERTY + "=smtp is not implemented until Phase 2 — use 'log' or 'ses'");
-        }
-        if (!raw.equalsIgnoreCase("ses") && !raw.equalsIgnoreCase("log")) {
-            throw new IllegalStateException(
-                PROPERTY + " must be one of 'ses', 'log' (got: '" + raw + "')");
+                PROPERTY + " must be one of 'ses', 'smtp', 'log' (got: '" + raw + "')");
         }
     }
 }

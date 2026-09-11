@@ -75,19 +75,32 @@ class EmailTransportBootIT {
         // Assert the validator's own distinctive sentence, not just the property name and the
         // offending value — both of those also appear in Spring's generic relaxed-binding failure
         // ("Failed to bind properties under 'app.email.transport' ... Value: \"bogus\""), so the
-        // previous assertion could not tell this validator's abort apart from a binder error. The
-        // sibling smtp test below already asserts distinctive text; match it (code review
-        // 2026-09-11).
+        // previous assertion could not tell this validator's abort apart from a binder error.
         assertThatThrownBy(() -> boot("app.email.transport=bogus"))
             .satisfies(ex -> assertThat(fullCauseChainMessage(ex))
-                .contains("app.email.transport must be one of 'ses', 'log'")
+                .contains("app.email.transport must be one of 'ses', 'smtp', 'log'")
                 .contains("bogus"));
     }
 
+    /**
+     * Story ses-1.2 AC6 — {@code smtp} is no longer the Phase-1-only special-cased rejection; it now
+     * boots exactly like {@code ses}/{@code log}.
+     *
+     * <p><strong>Correction (code review 2026-09-11):</strong> this test on its own does
+     * <em>not</em> prove {@link EmailTransportPropertyValidator} is still registered via {@code
+     * META-INF/spring.factories} — if that registration were deleted entirely, this test would stay
+     * exactly as green, since {@code smtp} is also a syntactically valid {@link EmailTransport} enum
+     * value that Spring's own relaxed binding accepts with no validator involved at all. Registration
+     * is what {@link #unrecognisedValue_abortsWithThisValidatorsMessage()} proves, by asserting this
+     * validator's own distinctive message text (not Spring's generic binder-failure text) — a message
+     * that can only appear if the validator actually ran. What this test adds on top of that is
+     * narrower: that a valid, in-range value ({@code smtp}) is not itself rejected by validator logic
+     * that does run.
+     */
     @Test
-    void presentSmtpValue_abortsWithPhase2SpecificMessage() {
-        assertThatThrownBy(() -> boot("app.email.transport=smtp"))
-            .satisfies(ex -> assertThat(fullCauseChainMessage(ex))
-                .contains("app.email.transport=smtp is not implemented until Phase 2"));
+    void presentSmtpValue_bootsWithoutAborting() {
+        try (ConfigurableApplicationContext ctx = boot("app.email.transport=smtp")) {
+            assertThat(ctx.getEnvironment().getProperty("app.email.transport")).isEqualTo("smtp");
+        }
     }
 }
