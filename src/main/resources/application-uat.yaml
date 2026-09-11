@@ -21,8 +21,9 @@ email:
 app:
   environment: "${ENVIRONMENT:uat}"
   ses:
-    from-address: noreply@skillars.com
-    enabled: false
+    from-address: "${APP_SES_FROM_ADDRESS:}"
+  email:
+    transport: log
   frontend-url: "${APP_FRONTEND_URL:https://uat.skillars.com}"
   # Stripe TEST-mode credentials only — PaymentConfig refuses to start under the "uat"
   # profile if APP_PAYMENT_STRIPE_API_KEY resolves to a live key (sk_live_...), so this

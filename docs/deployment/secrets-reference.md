@@ -156,6 +156,23 @@ application read them but no deploy supplied them. Defaults below are the applic
 > for your SMTP provider (Gmail, SendGrid, GMX, etc.). The `GMX_PASSWORD` and `GMAIL_PASSWORD` variables
 > are provider-specific overrides in `application.yaml` for multi-tenant mail routing.
 >
+> **AWS SES — `APP_SES_FROM_ADDRESS` is REQUIRED on prod (story ses-1.1).** Production runs
+> `app.email.transport: ses`, and `SesPropertiesValidator` aborts startup when `app.ses.from-address`
+> resolves blank. `docker-compose.yml` passes `APP_SES_FROM_ADDRESS` through with **no `:-` fallback**,
+> deliberately, so a missing value reaches the app blank rather than silently becoming a literal.
+> Set it in prod's real `.env` **before** deploying. Note that the manual deploy workflow has a
+> smoke-test auto-revert, so a missing value presents as a failed smoke test and an automatic
+> revert — not as a readable boot error in the deploy console.
+>
+> | Variable | Required | Default | Notes |
+> |---|---|---|---|
+> | `APP_SES_FROM_ADDRESS` | **yes, on prod** | none — blank fails boot | Verified SES sender identity |
+> | `APP_SES_REGION` | no | `eu-west-1` | Blank (not unset) also fails boot |
+> | `APP_SES_ACCESS_KEY` / `APP_SES_SECRET_KEY` | no | blank | Blank selects the AWS default credential chain. The chain must still resolve — an unresolvable chain fails boot under `transport=ses` |
+> | `APP_SES_CONFIGURATION_SET` | no | blank | Must match `^[a-zA-Z0-9_-]{1,64}$` when set |
+> | `APP_SES_REPLY_TO_ADDRESS` | no | blank | Validated as a single address when set |
+> | `APP_SES_MAX_SEND_RATE_PER_SECOND` | no | `10` | Sandbox accounts cap at 1/s; `>= 10` logs a WARN at boot |
+>
 > **AWS SES (legacy):** `application-prod.yaml` sets `app.ses.enabled: true`, so a production boot constructs
 > a real `SesV2Client` (region defaults to `eu-west-1` via `app.ses.region`). Credentials come from
 > the AWS SDK default provider chain — environment, instance profile, or `~/.aws` — none of which

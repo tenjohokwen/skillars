@@ -1,7 +1,11 @@
 app:
   ses:
-    from-address: noreply@skillars.com
-    enabled: true
+    # No default: a genuinely missing value must reach the app as blank and trip
+    # SesPropertiesValidator, not silently fall back to a literal (see docker-compose.yml's
+    # APP_SES_FROM_ADDRESS, which also carries no `:-` default for the same reason).
+    from-address: "${APP_SES_FROM_ADDRESS:}"
+  email:
+    transport: ses
   frontend-url: "${APP_FRONTEND_URL:https://skillars.com}"
 
 email:

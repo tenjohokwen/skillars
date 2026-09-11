@@ -1,7 +1,8 @@
 package com.softropic.skillars.platform.security.infrastructure.listener;
 
-import com.softropic.skillars.infrastructure.ses.SesEmailService;
-import com.softropic.skillars.infrastructure.ses.exception.SesException;
+import com.softropic.skillars.infrastructure.email.EmailTransportException;
+import com.softropic.skillars.infrastructure.email.OutboundEmailRequest;
+import com.softropic.skillars.infrastructure.email.OutboundEmailSender;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.security.contract.event.PlayerOtpEmailEvent;
@@ -17,13 +18,14 @@ import org.thymeleaf.spring6.SpringTemplateEngine;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class PlayerRegistrationEmailListener {
 
-    private final SesEmailService sesEmailService;
+    private final OutboundEmailSender outboundEmailSender;
     private final SpringTemplateEngine templateEngine;
     private final MessageSource messageSource;
 
@@ -41,15 +43,18 @@ public class PlayerRegistrationEmailListener {
 
         String html = templateEngine.process("playerEmailVerify", context);
         String subject = messageSource.getMessage(EmailTemplate.PLAYER_EMAIL_VERIFY.subjectKey(), null, locale);
+        String correlationId = UUID.randomUUID().toString();
         try {
             log.atInfo()
                .addKeyValue("First name", event.firstName())
                .addKeyValue("Language used", event.langKey())
                .setMessage("Handling PlayerVerificationEmailEvent. About to handover to email send service").log();
 
-            sesEmailService.send(event.toAddress(), subject, html);
-        } catch (SesException ex) {
-            log.error("Failed to send verification email — registration may be orphaned. userId lookup required.", ex);
+            OutboundEmailRequest request = new OutboundEmailRequest(
+                event.toAddress(), subject, html, null, correlationId);
+            outboundEmailSender.send(request);
+        } catch (EmailTransportException | IllegalArgumentException ex) {
+            log.error("Failed to send verification email — registration may be orphaned. userId lookup required. correlationId={}", correlationId, ex);
         }
     }
 
@@ -67,10 +72,15 @@ public class PlayerRegistrationEmailListener {
 
         String html = templateEngine.process("playerOtp", context);
         String subject = messageSource.getMessage(EmailTemplate.PLAYER_OTP.subjectKey(), null, locale);
+        // Generated outside the try so the catch can name it. The request construction itself
+        // stays inside, per AC11, so the record's IllegalArgumentException is still caught.
+        String correlationId = UUID.randomUUID().toString();
         try {
-            sesEmailService.send(event.toAddress(), subject, html);
-        } catch (SesException ex) {
-            log.error("Failed to send OTP email — user is EMAIL_VERIFIED but OTP unreachable; resend-OTP endpoint required.", ex);
+            OutboundEmailRequest request = new OutboundEmailRequest(
+                event.toAddress(), subject, html, null, correlationId);
+            outboundEmailSender.send(request);
+        } catch (EmailTransportException | IllegalArgumentException ex) {
+            log.error("Failed to send OTP email — user is EMAIL_VERIFIED but OTP unreachable; resend-OTP endpoint required. correlationId={}", correlationId, ex);
         }
     }
 }
