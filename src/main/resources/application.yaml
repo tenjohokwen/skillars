@@ -172,6 +172,13 @@ loki:
 app:
   environment: ${ENVIRONMENT:prod}
   version: ${APP_VERSION:unknown}
+  # Base default — every profile also states its own value explicitly (see ses-1.1's AC3/Dev
+  # Notes: EnvironmentPostProcessors run for every SpringApplication, including the bare test
+  # contexts that activate no profile at all, so an "unset ⇒ abort" design would fail those and
+  # a bare `mvn spring-boot:run` before a single bean is created). 'log' is the faithful
+  # successor to today's actual behaviour everywhere except prod.
+  email:
+    transport: log
   # skillars-deferred-99 AC5 — SmtpHealthIndicator tuning. Defaults live in SmtpHealthProperties;
   # listed here for discoverability. `ttl` caps how often the aggregate SMTP Health is recomputed;
   # `overall-timeout` (unset ⇒ max(connect+read)+1s) bounds one round of parallel per-provider probes.

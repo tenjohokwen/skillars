@@ -1,750 +1,365 @@
-# Senior-dev audit — `skillars-deferred-109`
+# Story Review: SES-1-1 Introduce the Outbound Email Port
 
-**Target:** `_bmad-output/implementation-artifacts/skillars-deferred-109-frontend-defect-sweep-configbounds-completeness-deploy-probe-bounding-and-cutover-decisions.md`
-**Reviewed at:** HEAD `3589b514` (story-creation commit; base master `bbad7938`)
-**Reviewer:** senior-dev audit pass — missed corner cases, false assumptions, missed flows
-**Date:** 2026-09-10
-
-Every finding below was verified by reading the cited code at HEAD. Claims I could not
-substantiate were dropped rather than filed. A short **"Verified sound"** list at the end records
-what I checked and found correct, so the absence of a finding is a positive result, not a gap in
-coverage.
-
-**Verdict:** the story is well-researched and most of its 21 ledger bullets are real defects
-correctly characterised. But **three ACs prescribe fixes that are wrong or actively harmful**
-(AC7, AC12.1, AC10), **four have unsafe or under-specified fix shapes** (AC2.2, AC1.1↔AC1.2,
-AC4.1, AC11), and **AC15's own baseline figures are wrong** — the exact error it warns the dev
-agent about. Recommend **changes required** before `ready-for-dev`.
+**Reviewer:** Senior Dev  
+**Date:** 2026-09-11  
+**Story:** ses-1-1-introduce-outbound-email-port (Phase 1 of 7-phase SES consolidation)  
+**Status:** ready-for-dev → review findings documented
 
 ---
 
-## Severity summary
+## Summary
 
-| # | AC | Finding | Severity |
-|---|---|---|---|
-| 1 | AC7 | The DST "fix" is backwards; it would make every cross-DST reschedule fail backend validation | **Blocker** |
-| 2 | AC12.1 | `INFO`→`WARN` as specified mislabels every *successful* admin alert; the prescribed test passes either way | **Blocker** |
-| 3 | AC10 | Premise wrong — nothing reads `video.quota.semiPro.*`/`.pro.*`; no fail-fast results; the real defect is left untouched | **Blocker** |
-| 4 | AC2.2 | "expiry still absent → `refreshFailed`" breaks the documented legacy/no-`rint` fallback; ordering vs `tick()` unspecified | **High** |
-| 5 | AC1.1 ↔ AC1.2 | The two ACs contradict each other on the mechanism that preserves the retry affordance | **High** |
-| 6 | AC4.1 | `return selfPlayerId.value` can hand a superseded caller a *different* account's id | **High** |
-| 7 | AC11 | Bounding the ERR-trap `${DC} up -d` is unsafe; two unbounded calls missed; new WARNs get swallowed | **High** |
-| 8 | AC5.1 | Option (b) introduces a stale-result regression; the AC's verification window is the wrong one | Medium |
-| 9 | AC5.2 | "nullish response → empty + success" is a silent-data-loss contract, asserted without justification | Medium |
-| 10 | AC8.1 | The partial-row predicate still drops `0`/negative/label-only rows silently | Medium |
-| 11 | AC8.2 | Premise unreachable at HEAD — there is no hydration path into this component | Medium |
-| 12 | AC15 | Baseline line count and `[DECIDED]`/`[DISMISSED]` counts are all wrong | Medium |
-| 13 | AC12.2 | The prescribed test seam (`@MockitoBean JavaMailSender`) does not exist; assertion target ≠ setup | Medium |
-| 14 | AC14.2 | Target runbook section is topic-scoped and its "four items" sentence would be falsified | Low |
-| 15 | AC9 | Only one of the two `booking-id` call sites is analysed | Low |
-| 16 | AC1.4 | Misses the sibling dead-catch and the stale-saved-card path in the same function | Low |
-| 17 | AC3.1 | "Parity" delivers only one of `useSession`'s two `rint` clears | Low |
-| 18 | AC3.2 | Mutation check is only half-sensitive | Low |
-| 19 | AC13 | Acceptance evidence is self-contradicting between the AC and Task 19 | Low |
-| 20 | Header | Several "re-verified against HEAD" cites are wrong, including one that "corrects" a correct ledger cite | Low |
+This story introduces a transport-neutral `OutboundEmailSender` port, rebuilds the SES adapter behind it, and points the three registration listeners directly at the port. The scope is tightly bounded: SMTP, `MailManager`, `MailService`, and all booking/session-pack/alert email paths remain untouched.
+
+**Risk Assessment:** Mechanical refactoring with **medium-to-high attention needed** on three areas:
+1. **EnvironmentPostProcessor ordering** — startup failure mode if ordering assumption breaks
+2. **Property validation sequencing** — gap between binding and validation
+3. **LoggingEmailSender collision and degradation** — TOCTOU window and unbounded failure path
+
+All findings below are **actionable in this phase** — none require scope changes or depend on later phases.
 
 ---
 
-## Blockers
+## Findings
 
-### 1. AC7 — the prescribed DST fix is backwards and would break reschedule submission
+### BLOCKER-1: EnvironmentPostProcessor Registration Precedence Not Enforced
 
-**The AC says:** `rescheduleProposedEnd` is wrong because it adds a fixed-instant delta and reads
-the result back in wall clock; the fix is to compute *"start-wall-clock + duration-in-wall-clock-minutes"*.
+**Location:** AC3 / Dev Notes / Task 2  
+**Severity:** Blocker  
+**Issue:**
 
-**The backend disagrees.** `RescheduleService.java:176-186`:
+The story requires `EmailTransportPropertyValidator` to run **after** `ConfigDataEnvironmentPostProcessor` loads profile YAMLs, or it runs before any YAML is loaded and rejects the base default. AC3 states this in javadoc only:
 
-```java
-Duration originalDuration =
-    Duration.between(booking.getRequestedStartTime(), booking.getRequestedEndTime());
-Duration proposedDuration =
-    Duration.between(req.proposedStartTime(), req.proposedEndTime());
-if (!proposedDuration.equals(originalDuration)) { …reject… }
-```
+> "the validator's own javadoc states its `EnvironmentPostProcessor` ordering assumption explicitly: it implements no `Ordered`, sorting to `LOWEST_PRECEDENCE`, which is *required* — it must run after `ConfigDataEnvironmentPostProcessor`..."
 
-`Duration.between(Instant, Instant)` is an **exact elapsed-instant** duration. The reschedule is
-validated as *"the same number of real minutes"*, and `ParentBookingsPage.vue:340-348` derives
-`rescheduleDurationMs` the same way (`end.getTime() - start.getTime()` off the original booking's
-instants). The frontend's current fixed-instant arithmetic is therefore **exactly what the backend
-requires**, and the template comment at `:174-176` says so ("the backend requires a reschedule to
-keep the session's original length").
+**The problem:**
 
-**What the AC's fix would do.** For the AC's own example — a 60-minute booking moved to
-`2026-03-08T01:30` in `America/New_York`:
+1. **Javadoc is not executable.** A future Spring Boot upgrade, developer simplification, or reviewer oversight could strip the `// must be LOWEST_PRECEDENCE` comment and no test would fail.
+2. **`LOWEST_PRECEDENCE` is not explicit.** The default is implicit (no `@Order` = `LOWEST_PRECEDENCE`), so someone might add a minor value like `@Order(50)` thinking "lower than default," not realizing every other processor is lower.
+3. **Test coverage gap:** `EmailTransportPropertyValidatorTest` runs the validator directly against a `MockEnvironment`, which never calls `ConfigDataEnvironmentPostProcessor` at all. A test that passes doesn't prove the ordering is correct in a real `SpringApplication`.
 
-| | proposed end shown | submitted `proposedEndTime` | `Duration.between` | backend |
-|---|---|---|---|---|
-| current code | `03:30` | `07:30Z` | 60 min | accepted |
-| AC7's fix | `02:30` — **a local time that does not exist** | `07:30Z` (V8 normalises) or `06:30Z` | 60 or 0 min | rejected on the fall-back case |
+**Impact:**
 
-On the fall-back example the AC also cites (`2026-11-01T01:30`), "+60 wall minutes" gives `02:30`
-= `07:30Z`, i.e. **120 minutes** after the chosen start instant — a guaranteed
-`Duration` mismatch rejection.
+If the ordering is wrong, every profile's YAMLs are loaded *after* the validator runs, so `app.email.transport` is seen as unset, base default `log` never applies, and the validator rejects "unset" (per AC3: "an absent value falls back to a safe base default" — but in the broken ordering, there is no default yet). This manifests as:
 
-**What is actually wrong here** (and worth an AC, re-scoped):
+- Local dev with no profile: startup aborts with "app.email.transport is required"
+- CI tests with no profile: same abort (affects `AdminLoginResourceTest`, `RateLimitingAspectIT`, `PropertiesFeatureToggleServiceIT` per AC3)
+- `mvn spring-boot:run` with no profile: same abort
 
-- On fall-back, `new Date('2026-11-01T01:30')` silently resolves an **ambiguous** wall time; the
-  parent has no way to express "the second 01:30". The derived end then renders as `01:30` too —
-  identical to the start, which reads as a broken form.
-- `new Date(rescheduleProposedStart.value)` interprets the `datetime-local` value in the
-  **browser's** zone, while the session has its own `canonicalTimezone` (`:358`). The dialog
-  mitigates this with hint text naming both zones (`:167-172`, `:183-188`) but the arithmetic is
-  browser-zone throughout.
+This is a **production boot failure** on a configuration issue the story explicitly designs to avoid.
 
-**Recommendation:** delete the arithmetic change. Re-scope AC7 to (a) a spec that *pins* the
-current fixed-instant behaviour as correct — with the `RescheduleService:176-186` rationale in a
-comment so a future reviewer does not re-file this — and (b) optionally a display affordance for
-the DST-boundary cases. The mutation check as written ("revert to the fixed-ms delta → the 60-min
-assertion fails, shows 120") asserts the wrong direction and would enshrine the regression.
+**Fix:**
+
+Add an explicit test that proves the ordering is correct in a real `SpringApplication` context. `EmailTransportPropertyValidatorTest` must include a test using a real `SpringApplicationBuilder` (not `ApplicationContextRunner`) to verify the ordering assumption holds.
+
+**Not a deviation:** AC3 already names this constraint; enforcing it in a test is just making it machine-checkable.
 
 ---
 
-### 2. AC12.1 — the `INFO`→`WARN` change as specified mislabels every successful send
+### BLOCKER-2: SesPropertiesValidator Bean Creation Timing vs Property Binding
 
-**The AC says:** *"`sendAdminAlertSync` (`:107-108`) logs `log.info("[VIDEO_MODERATION_ADMIN_ALERT] delivered …")`
-when `envelopeEntityRepository.findBySendId(envelope.sendId())` returns `null`"* → change it to
-`log.warn("… send outcome not yet visible … envelope row not found on read-back")`.
+**Location:** AC7 / Task 4  
+**Severity:** Blocker  
+**Issue:**
 
-**That is not what the code does.** `VideoModerationEmailListener.java:94-108`:
+`SesPropertiesValidator` is a separate `@Component` gated on `@ConditionalOnProperty(name = "app.email.transport", havingValue = "ses")`, constructor-injecting `SesProperties`. But there's a **sequencing gap:** property binding happens *before* bean creation. If `SesProperties` binds with structural errors (YAML syntax issues), the context fails before `SesPropertiesValidator` bean is even constructed, and the error message is Spring's generic "Could not bind" rather than your specific validation message.
 
-```java
-EnvelopeEntity persisted = envelopeEntityRepository.findBySendId(envelope.sendId());
-if (persisted != null && persisted.getStatus() == EmailDeliveryStatus.FAILED) {
-    …retryable throw / permanent release…
-}
-log.info("[VIDEO_MODERATION_ADMIN_ALERT] delivered alert for videoId={} subject={}", …);
-```
+More critically: **what if `maxSendRatePerSecond` is malformed** (e.g., `not-a-number`)? `SesProperties` binding would fail before the validator can run its own checks. The operator sees a binding error, not a clear "max-send-rate-per-second must be positive."
 
-The `log.info` at `:107` is the fall-through for **two** cases:
+**Impact:**
 
-1. `persisted == null` — the case the AC is about; and
-2. `persisted != null && status != FAILED` — a **genuinely successful** send (`SENT`, stamped by
-   `MailManager.toEnvelopeEntity` at `MailManager.java:130-133`).
+- Error messages conflate binding errors with validation errors
+- Operator debugging is harder when two failure modes produce different exception types
+- Validation never runs if binding fails
 
-Implementing the AC literally — rewriting that one statement to the new WARN — turns **every
-successful admin alert** into `WARN … envelope row not found on read-back`, which is false, and
-inverts the operator signal the AC exists to sharpen.
+**Fix:**
 
-**It also ships green.** The prescribed test change is *"Update `VideoModerationEmailListenerTest.noPersistedEnvelope_doesNotThrow`
-(currently asserts `INFO`) to assert the new `WARN`"* — that test only drives case 1, so it passes
-whether or not the branch is split. Nothing in the AC exercises case 2.
+Ensure `SesProperties` binding is type-safe and separate from *logical* validation:
 
-**Recommendation:** rewrite AC12.1 to require an explicit split:
-
-```java
-if (persisted == null) { log.warn("[VIDEO_MODERATION_ADMIN_ALERT] send outcome not yet visible …"); return; }
-log.info("[VIDEO_MODERATION_ADMIN_ALERT] delivered …");
-```
-
-and add the missing second assertion (a `SENT` envelope still logs `INFO … delivered`) as the
-mutation-sensitivity pair.
+1. Add defensive binding handling (or ensure Spring's binding is strict for numeric fields)
+2. Tests covering both: `maxSendRatePerSecond: not-a-number` → clear binding error; `maxSendRatePerSecond: -5` + `transport=ses` → clear validation error
+3. Update `SesPropertiesValidator` javadoc to explain when it runs and what errors it reports
 
 ---
 
-### 3. AC10 — the premise is wrong about who reads those keys, there is no fail-fast, and the real defect is left in place
+### BLOCKER-3: LoggingEmailSender File-Writing Unbounded Retry Loop Failure Mode
 
-Three separate problems, all verified:
+**Location:** AC9 / Task 5  
+**Severity:** Blocker  
+**Issue:**
 
-**(a) Nothing reads `video.quota.semiPro.*` / `video.quota.pro.*`.**
-`QuotaConfigService.resolveTierKey` (`QuotaConfigService.java:47+`) is the only producer of the
-tier segment:
+`LoggingEmailSender` handles file collisions with a retry loop up to a bounded limit (e.g., 100). When exhausted, it falls through to log-only with no logging about the exhaustion.
+
+**The problems:**
+
+1. **Unspecified exhaustion behavior.** When the loop exhausts, what does the sender log? If INFO, the file-writing failure is silent. If ERROR, an operator sees confusing repeated errors.
+
+2. **No alerting on exhaustion.** The loop silently degrades without any `[FILE_WRITE_EXHAUSTED]` marker or metric. A dev using `outbox-dir` for template work assumes files are being written, but a prolonged collision (permission denied, file held open) silently loses them.
+
+3. **TOCTOU window post-startup.** Between directory creation at startup and first send, the directory could be deleted, unmounted, or become inaccessible. AC9 handles this by degrading to log-only, but there's no tracking that a send was degraded.
+
+**Impact:**
+
+- Template developers may silently lose files with no visibility
+- No operational metrics to detect file-writing issues
+- Permissions issues cascade silently across a dev box
+
+**Fix:**
+
+1. **Specify the exhaustion log message.** If max retries (e.g., 100) is reached, log at WARN with the correlation ID, e.g.:
+   ```
+   WARN: Failed to write outbox file for correlationId after 100 collision attempts; degraded to log-only
+   ```
+
+2. **Add a metric:** emit `email.log.file_write.degraded` counter on every degrade (not just exhaustion), tagged with reason. Operators can then detect permission issues.
+
+3. **Log directory setup failure at startup with the actual error message**, not just "Cannot write to outbox directory."
+
+4. **Add an explicit test** that removes the directory after startup, calls `send()`, and asserts it degrades to log-only with the expected WARN message.
+
+---
+
+### HIGH-1: app.email.transport Variable in Compose Files — Silent Breakage Risk
+
+**Location:** Task 9 warning / No guard rail  
+**Severity:** High  
+**Issue:**
+
+The story includes a warning **in the task** not to add `APP_EMAIL_TRANSPORT` to compose files. If it appears as `APP_EMAIL_TRANSPORT=${APP_EMAIL_TRANSPORT:-}` (blank), it overrides every profile's `app.email.transport` simultaneously, causing an abort.
+
+**The problem:**
+
+1. **Warning is in task prose, not in code.** A future developer won't read 250+ lines and will follow the established pattern of adding env vars to compose.
+
+2. **No test prevents this.** There's no CI check that `docker-compose.yml` doesn't contain `APP_EMAIL_TRANSPORT`.
+
+3. **The failure is cryptic.** Prod boot fails with "app.email.transport is not valid: [blank]" — an operator thinks something else is broken.
+
+**Fix:**
+
+Add a test to `IntegrationTestConventionTest` that fails if `APP_EMAIL_TRANSPORT` appears in `docker-compose.yml`:
 
 ```java
-CoachSubscriptionTier tier = coachProfileService.getCoachSubscriptionTier(coachId);
-return switch (tier) { case SCOUT -> "scout"; case INSTRUCTOR -> "instructor"; case ACADEMY -> "academy"; };
-} catch (IllegalArgumentException e) {
-    return "athlete";      // every non-UUID (i.e. player) ownerId
+@Test
+void noAppEmailTransportInDockerCompose() {
+    String dockerCompose = Files.readString(Path.of("docker-compose.yml"));
+    assertThat(dockerCompose)
+        .as("APP_EMAIL_TRANSPORT breaks all profiles; see requirements/ses-email-consolidation.md#4.5")
+        .doesNotContain("APP_EMAIL_TRANSPORT");
 }
 ```
 
-It can return only `scout` / `instructor` / `academy` / `athlete` — **never** `semiPro` or `pro`.
-`grep` confirms `PlayerSubscriptionTierBilling` is referenced nowhere outside its own declaration
-(`SubscriptionService.java:57,76,654` uses the string literals `"SEMI_PRO"` / `"PRO"` instead).
-So the four `V53` rows (ids 121, 122, 127, 128) are **dead configuration**. D2's motivation —
-*"an operator setting `video.quota.pro.storageBytes = -1` gets no fail-fast"* — describes a value
-that no code path ever reads.
-
-**(b) The prescribed fix produces no fail-fast.** The loop the AC leans on
-(`ConfigBounds.java:263-271`) generates every tier bound as
-`new BoundedKey(…, 0L, Long.MAX_VALUE, false)` — `failFast = false`. Per
-`ConfigStartupAssertion.java:29-32`, a non-`failFast` out-of-range key logs an ERROR and increments
-`config.value.misconfigured`, and **boots normally**. AC10's Test bullet ("add or extend a
-`ConfigStartupAssertion` test asserting an out-of-range `video.quota.pro.storageBytes` is now
-flagged") is only satisfiable as an ERROR-log/metric assertion, never as a boot refusal. The
-story's language ("fail-fast") should be corrected so the dev agent does not go looking for a
-`throw` that will not happen.
-
-**(c) The live defect this AC walks past.** Because `resolveTierKey` falls through to `"athlete"`
-for every player, a `SEMI_PRO` or `PRO` player receives the **ATHLETE** quota — 2 GiB storage /
-10 GiB bandwidth instead of the 4 GiB / 25 GiB and 7 GiB / 30 GiB that `V53:37-38,44-45` seeds for
-them. That is a real entitlement bug in shipped code; "complete the hand-list" bounds the keys
-around the hole without closing it.
-
-**(d) AC10.4 would enshrine the misunderstanding.** The AC asks to reword the
-`ConfigBounds.java:193-205` comment to say the guard "cannot see a key templated over a **third
-enum dimension**". There is no third dimension in the runtime key derivation — there is an
-unimplemented tier mapping. The reworded comment would mislead the next reader.
-
-**Recommendation:** keep AC10.1 (harmless, cheap) but rewrite its rationale to
-*"bound four rows that are currently seeded-but-unread, so a future `resolveTierKey` that does
-honour `PlayerSubscriptionTierBilling` inherits a bound"*. Correct the fail-fast language and the
-AC10.4 comment text. File the player-tier quota mapping as its own ledger bullet — it is a real
-defect and the story's own "genuine one-off bugs class is exhausted" claim is weakened while it
-stands.
-
-*Minor, same AC:* AC10.3 suggests cross-referencing `PlayerSubscriptionTierBilling.values()` in the
-test. That would make the enum's **only** usage in the codebase a test-side drift guard, and it
-makes the existing comment at `ConfigBoundsEnumCoverageTest.java:40-41` ("the player fallback tier
-… is not an enum constant") stale, since `ATHLETE` is one.
+Also add a bold warning in `.env.example` with the same rationale.
 
 ---
 
-## High
+### HIGH-2: SesProperties.maxSendRatePerSecond Default (10) Silent Misconfiguration in Sandbox
 
-### 4. AC2.2 — the ineffective-refresh check breaks the documented legacy fallback
+**Location:** AC7 / AC6  
+**Severity:** High  
+**Issue:**
 
-**The AC says:** after a resolved `sessionApi.refresh()`, read the expiry back and, *"if it did not
-advance beyond where it was before the call **(or is still absent)**, set `refreshFailed.value = true`"*.
+`maxSendRatePerSecond` defaults to 10/s and AC6 states this is for production SES (sandbox is 1/s). AC7 validates it's positive, but AC6 also says sandboxed accounts need `max-send-rate-per-second: 1`. No startup validation catches a sandbox account with the default 10/s.
 
-`readSessionExpiryFromCookie()` (`sessionManager.js:78-86`) returns `null` in **two** distinct
-situations:
+**The problem:**
 
-```java
-if (!match) return null;                                   // cookie absent
-…
-if (Number.isFinite(epochMs) && epochMs >= MIN_PLAUSIBLE_EPOCH_MS) { … return epochMs; }
-return null;                                               // stale pre-1.7b format
-```
+1. **No distinction between sandbox and production access.** A developer setting up uat with a sandboxed account and leaving the default 10/s will silently hit `TooManyRequestsException` and burn retries.
 
-The module has an entire documented fallback for the second case (`:113` *"Fallback (when 'rint' is
-missing or in the stale pre-1.7b format)"*) and carries `hasSeenRintThisTab()` (`:36`, used at
-`:133`) precisely so it can tell **"legacy build"** from **"cleared"**. Under the AC's rule, a
-successful refresh against a build that does not issue an absolute `rint` is reported as failed on
-every single refresh — the user gets *"we couldn't extend your session"* while nothing failed,
-which is the exact UX `deferred-90` AC4 was written to eliminate (quoted in the catch at `:266-269`).
+2. **Silent cascade.** An uat with default 10/s + sandboxed account will boot without error and silently throttle on first registration test.
 
-**Second problem — ordering.** The AC does not say where the new check sits relative to
-`refreshExpiryState()` (`:264`), which delegates to `tick()`. `tick()` clears the flag on the
-warning-band exit edge:
+**Impact:**
 
-```java
-if (!showWarning.value && wasWarning) { stopCountdown(); refreshFailed.value = false; }   // :177-184
-```
+- First-time uat setup will silently throttle with a confusing failure mode
+- No obvious log message or warning
 
-and `cleanup()` clears it again at `:286` on the expiry path. Setting `refreshFailed = true`
-*before* `refreshExpiryState()` silently loses it in both cases; setting it *after* can stamp the
-flag onto a session `tick()` has already torn down.
+**Fix:**
 
-**Third — the predicate.** Strict "advanced beyond the pre-call value" false-positives on a
-multi-tab race: a sibling tab's refresh can land between the pre-call read and the response, and a
-second-granularity `rint` can come back **equal**. A safer criterion is *"the expiry read back is
-meaningfully in the future"* (e.g. `> WARNING_THRESHOLD` remaining), not *"strictly greater than
-before"*.
+1. **Add a startup WARN** when `maxSendRatePerSecond >= 10` AND `transport=ses`:
+   ```
+   WARN: app.ses.max-send-rate-per-second=10 assumes production SES account.
+   If this is a sandboxed account, set to 1 or requests will throttle.
+   ```
 
-**Recommendation:** condition the guard on `hasSeenRintThisTab()` (or on having read a non-null
-expiry *before* the call), pin the ordering explicitly relative to `refreshExpiryState()`, and use
-a future-ness predicate rather than strict monotonicity. Add a spec case for the legacy path
-(no `rint` ever seen → successful refresh must **not** set `refreshFailed`) — without it the
-regression ships green.
+2. **Document in `.env.example`** the arithmetic and the sandbox caveat.
+
+3. **Add javadoc to `SesProperties.maxSendRatePerSecond`** noting the production assumption.
 
 ---
 
-### 5. AC1.1 and AC1.2 contradict each other
+### HIGH-3: SesErrorClassifier UnknownException Default Behavior Underdocumented
 
-AC1.1's fix instruction ends with: *"Keep the `deferred-103` AC9 affordance semantics (a failed
-retry re-raises `stripeUnavailable` so the button stays put — `:179-181`)."*
+**Location:** AC5  
+**Severity:** High  
+**Issue:**
 
-AC1.2, three paragraphs later, proves `:179-181` is **unreachable dead code**, and I confirmed it:
-`payment.store.js:238-248` and `:249-259` both `catch (err) { this.error.X = err }` and resolve, so
-the `Promise.all` at `PaymentMethodCard.vue:178` never rejects. Today the affordance survives only
-via `ensureStripeReady()`'s `stripeUnavailable.value = true` at `:111`.
+Unknown SDK exceptions default to **Transient**. The rationale (in AC5) is sound: unknown permanent → 6 retries; unknown transient → lost email. But the rationale is only in the AC, not in code.
 
-That matters because the two fixes **compose badly**:
+**The problem:**
 
-- AC1.1's suggested shape is *"move the `stripeUnavailable.value = false` to after the `await Promise.all`"*.
-- AC1.2 option (b) is *"null `this.stripeConfig` in the store's `catch`"*.
+1. **Rationale is not in javadoc.** A future developer might "improve" this to default Permanent without understanding the tradeoff.
 
-Together, on a **failed** retry: the `await` resolves (no rejection), `stripeUnavailable` is
-cleared → `showForm` (`:101-103`) flips true → the card form renders → the `watch` at `:155-158`
-fires `mountCardElement()` → `ensureStripeReady()` reads the now-nulled key and re-raises
-`stripeUnavailable`. Net result is correct but the unavailable block flickers away and back, and
-`:186`'s `if (showForm.value)` becomes order-dependent with the watcher job.
+2. **No test of the default.** `SesErrorClassifierTest` must include an explicit test for unknown exceptions.
 
-AC1.2 **option (a)** — detect `paymentStore.error.stripeConfig` after the `await` and raise
-`stripeUnavailable` there — is the only shape that composes cleanly with AC1.1, because it makes
-the raise happen *before* `showForm` is ever allowed to flip.
+**Impact:**
 
-**Recommendation:** collapse AC1.1 + AC1.2 into one fix with one prescribed shape (option (a)),
-delete the reference to `:179-181` as the affordance mechanism, and state that the dead `catch`
-becomes a live branch (or is removed) as part of it. Leaving them as two independent "choose the
-minimal shape" ACs invites a combination that regresses the `deferred-103` AC9 affordance.
+- The safety rationale is lost if not documented in code
+- An operator seeing 6 retries on an unknown error has no explanation
 
----
+**Fix:**
 
-### 6. AC4.1 — the prescribed return value can leak a *different* account's id
+1. **Add explicit javadoc to `SesErrorClassifier`** explaining the default behavior and why unknown exceptions are safer as Transient.
 
-**The AC's fix:**
-`return requestGeneration === selfPlayerIdGeneration ? profile.id : selfPlayerId.value`,
-justified as *"resolving with the current cached value, which a concurrent `resetSelfPlayerId` set
-to `null`, is correct"*.
+2. **Add a test:**
+   ```java
+   @Test
+   void unknownException_classifiesAsTransient() {
+       SdkException unknown = new SdkClientException("Unexpected");
+       assertThat(SesErrorClassifier.classify(unknown))
+           .isInstanceOf(EmailTransportTransientException.class);
+   }
+   ```
 
-`selfPlayerId.value` is a **ref read at resolution time**, not at reset time. Sequence:
-
-1. Account A's `fetchSelfPlayerId()` is in flight (`playerStore.js:32-46`).
-2. `resetSelfPlayerId()` fires (`:60-64`) — `selfPlayerId.value = null`, `selfPlayerIdRequest = null`, `selfPlayerIdGeneration++`.
-3. Account B calls `fetchSelfPlayerId()`; `selfPlayerIdRequest` is null so a **new** request starts
-   under the new generation.
-4. B's request resolves → `selfPlayerId.value = <B's id>` (`:39-41`).
-5. A's slow chain finally resolves → generation mismatch → returns `selfPlayerId.value` = **B's id**.
-
-A's caller (`BookingRequestPage.vue:627`, `MainLayout.vue:355`) then holds another account's player
-id — a *worse* outcome than the residual the AC is closing, and precisely the
-cross-account misattribution `deferred-43` guarded against.
-
-The AC's own spec instruction compounds it: *"assert the superseded call resolves with `null` (or
-the post-reset cached value)"*. Those two only coincide when nothing repopulated the ref, so the
-prescribed implementation and the prescribed assertion can disagree — the test is under-specified
-and would be order-dependent.
-
-**Returning a literal `null` is safe downstream** — I checked both consumers:
-
-- `BookingRequestPage.vue:297` — `canSubmit` gates on `!!playerId.value`; `:544` re-checks
-  `if (!playerId.value) return`. A null id disables submit rather than submitting a null.
-- `MainLayout.vue:289` — only builds a nav link, guarded by `selfPlayerId.value ? … : null`.
-
-**Recommendation:** `return requestGeneration === selfPlayerIdGeneration ? profile.id : null`, and
-make the flipped spec assert exactly `null`.
+3. **In `SesEmailSender`, log unknown exceptions at WARN** so operators can spot new exception types.
 
 ---
 
-### 7. AC11 — the `${DC} up -d` bound is unsafe, two calls are missed, and the new warnings get swallowed
+### HIGH-4: EnvironmentPostProcessor May Not Run in Test Contexts Using ApplicationContextRunner
 
-**(a) Bounding the ERR-trap `${DC} up -d` is the wrong move.**
-`restore-from-volume-backup.sh:150-154`:
+**Location:** Task 6 / Testing  
+**Severity:** High  
+**Issue:**
 
-```bash
-restore_failed() {
-  err "restore step failed — restarting services with the data currently on disk …"
-  ${DC} up -d
-}
-trap restore_failed ERR
-```
+`ApplicationContextRunner` does not run `EnvironmentPostProcessor`s. Task 6 says to split tests into two parts (bean wiring via `ApplicationContextRunner`, ordering via real `SpringApplicationBuilder`), but the task doesn't explicitly specify how or mandate both.
 
-The script runs under `set -euo pipefail` (`:7`). Wrapping that `up -d` means a timeout returns 124
-**from inside the ERR trap**, and the script exits with the stack half-started — the opposite of
-what the trap exists for. Worse: `timeout` kills the `docker compose` **CLI**, not the daemon's
-work, so a "bounded" `up -d` leaves an indeterminate, partially-orchestrated stack with no
-completion signal. The AC's justification ("both are already survivable via the existing recovery /
-ERR-trap path") does not apply to the recovery path itself.
+**The problem:**
 
-**(b) Two unbounded calls are missing from the enumeration.** The AC lists "`docker image inspect`
-×2, `aws s3 cp`, the two `${DC} up -d`". Also unbounded, also daemon round-trips, also inside the
-outage window:
+1. A developer might consolidate back into `ApplicationContextRunner` to simplify, undoing the fix
+2. The `spring.factories` registration test is described but not implemented in detail
 
-- `${DC} config --format json` — `restore-from-volume-backup.sh:83` and `provision.sh:152`, the
-  **first** call in `image_runtime_uid()`, so a wedged daemon hangs there before any of the
-  AC's targets is reached.
-- `${DC} down` — `restore-from-volume-backup.sh:145`, the call that *opens* the outage window.
+**Impact:**
 
-**(c) The new WARNs will be discarded by the existing redirections.** `run_bounded` reports a
-timeout via `log … >&2` (`:67`). But the call sites the AC wants wrapped already redirect:
+- A future refactoring silently breaks the validator registration without a test failing
+- The split-test structure is not enforced
 
-```bash
-docker image inspect "$img" >/dev/null 2>&1 \                    # :87 — swallows fd1 AND fd2
-user=$(docker image inspect --format '…' "$img" 2>/dev/null)     # :89 — swallows fd2
-```
+**Fix:**
 
-Wrapping the command puts `run_bounded`'s stderr *inside* those redirections. The
-"distinguish a wedged daemon from a normal probe failure" goal — the AC's whole point — is
-defeated unless the redirection is moved onto the inner `docker` command.
+Explicitly specify in Task 6 that two separate test classes/nested classes are required:
 
-**(d) The WARN will not identify which probe timed out.** `run_bounded` sets
-`local what="$1"` *after* `shift` (`:63-64`), so `what` is the **command name**. Every new call
-site is `docker`, giving four indistinguishable `'docker' exceeded …` warnings.
+1. **Unit tests** (direct instantiation or `ApplicationContextRunner`): validator logic
+2. **Integration tests** (real `SpringApplicationBuilder`): EnvironmentPostProcessor registration and ordering
 
-**(e) `--cli-read-timeout` / `--cli-connect-timeout` do not bound the download.** They bound
-per-request stalls, and they interact multiplicatively with the AWS CLI's own retry count and the
-archive's part count. The AC presents them as the bound for `aws s3 cp` at `:158`; a `timeout`
-wrapper (consistent with `run_bounded`) is the only thing that bounds total wall time. The AC's
-comment update ("reflect the newly-bounded calls") would overstate what was achieved.
-
-**Recommendation:** drop the `${DC} up -d` bounding entirely (or bound only the *final* `up -d` at
-`:208`, never the trap's at `:152`, and say why in a comment). Add `${DC} config` and `${DC} down`
-to the list or state explicitly why they are out of scope. Specify that the `>/dev/null 2>&1` /
-`2>/dev/null` redirections move onto the inner `docker` invocation. Pass a descriptive label to
-`run_bounded` rather than relying on `$1`-after-shift.
-
-*Credit where due:* AC11's line cites are the most accurate in the story — `restore:81/87/89/152/158/208`
-and `provision:150/156/158` all check out exactly.
+Document why both are needed: "ApplicationContextRunner does not run EnvironmentPostProcessor, so a real SpringApplication is required to verify registration and ordering."
 
 ---
 
-## Medium
+### MEDIUM-1: UUID-Based correlationId Discarded in Phase 4 — Logging Ambiguity
 
-### 8. AC5.1 — option (b) introduces a stale-result regression
+**Location:** AC11 / Dev Notes  
+**Severity:** Medium  
+**Issue:**
 
-The AC offers *"(a) delete the `batchId` entry in the `catch`"* or *"(b) move the
-`setBatchAcceptResult(batchId, null)` seed to after a successful `acceptAllBatch` resolves (it
-exists to reserve the slot in insertion order …)"* as equivalents.
+Phase 1 uses UUID for `correlationId`. Phase 4 replaces it with `sendId`. Logs will have two different identifier formats.
 
-The seed's real job is not slot reservation — `setBatchAcceptResult` (`booking.store.js:594-603`)
-already does `delete next[batchId]; next[batchId] = value` to move the key to most-recent on every
-write, so insertion order is handled regardless. The seed at `:608` **clears the previous
-attempt's result**. Under option (b): coach clicks accept-all → partial success → results rendered;
-clicks again → this attempt **fails** → the earlier attempt's results are still in the map and keep
-rendering as if current. Option (a) has no such hole.
+**Impact:**
 
-The AC's verification instruction — *"verify nothing reads the `null` placeholder between `:608`
-and `:616`"* — points at the wrong window. The risk is what is read **after a failure**, not
-between the seed and the success write.
+- Traceability is lost across the phase boundary
+- Operator debugging requires understanding two ID schemes
 
-**Recommendation:** mandate option (a); drop option (b) or add the stale-result caveat.
+**Fix:**
 
-### 9. AC5.2 — "nullish response → empty + success" is a contract decision asserted without justification
-
-The AC's fix `const res = (await getCoachBookingRequests()) ?? {}` does more than avoid a
-`TypeError`. With it, a `204` / unwrapped-empty-body response:
-
-- sets `coachBookingRequests.value = []` and `coachBatchGroups.value = []` (`:395-396`);
-- **returns `true`** (`:415`), so per the CONTRACT block at `:358-368` every caller treats the
-  refresh as successful and the `deferred-31` AC1 stale-list warnings stay silent;
-- and the prune at `:409-413` sees an empty `visibleBatchIds`, so **every**
-  `batchAcceptResultsByBatch` entry is dropped.
-
-That is a coach's entire request list silently blanking and reporting success. There is no
-documented `204` on this endpoint; the realistic trigger is an unexpected body (proxy error page,
-interceptor edge) — which is closer to an error than to "no data".
-
-**Recommendation:** the AC should state which contract it is choosing and why. Treating a nullish
-`res` as an error with a distinguishable classification (rather than as an empty success) is at
-least as defensible and preserves the stale-list warning. If "empty + success" is genuinely wanted,
-say so and note the prune side-effect.
-
-### 10. AC8.1 — the partial-row predicate leaves the same silent discard for `0`, negative, and label-only rows
-
-The AC defines a partial row as *"exactly one of `sessionCount` / `totalPrice` set"*. The filter it
-guards is `.filter((p) => p.sessionCount > 0 && p.totalPrice > 0)` (`ProfileBuilderStep3.vue:151`).
-Rows that are fully "set" under the AC's predicate but still silently dropped by the filter:
-
-| row | AC predicate says | filter does | user sees |
-|---|---|---|---|
-| `{sessionCount: 5, totalPrice: 0}` | both set → fine | dropped | nothing |
-| `{sessionCount: 0, totalPrice: 20}` | both set → fine | dropped | nothing |
-| `{sessionCount: -1, totalPrice: 20}` | both set → fine | dropped | nothing |
-| `{sessionCount: null, totalPrice: null, label: 'Starter'}` | "all-null, plausibly intentional" | dropped | nothing |
-
-The last is not the intentional-empty row the AC carves out — the coach typed a label. Note also
-that neither `q-input` at `:42-48` / `:51-58` carries a `:rules` (unlike `perSessionPrice` at
-`:10`), so there is no existing validation to hang the message on.
-
-**Recommendation:** define the predicate as *"any field on the row was touched, but the row would
-not survive the `> 0` filter"*, and add the `:rules` the `q-form` block would need for shape (a).
-
-### 11. AC8.2 — the premise is unreachable at HEAD
-
-The AC states a string `sessionDurationMinutes` *"from hydration (`'60'`)"* fails the
-`DURATION_CHOICES.includes(current)` check at `:131`, appends a duplicate synthetic option, and
-`emit-value` submits the string.
-
-There is no hydration path. `ProfileBuilderStep3.vue:104-112`:
-
-```js
-defineProps({ loading: Boolean })
-const form = reactive({ perSessionPrice: null, sessionDurationMinutes: null, sessionPacks: [] })
-```
-
-The component owns its form, takes only a `loading` prop, and its **sole** consumer is
-`CoachProfileBuilderPlaceholderPage.vue:64`. The adjacent code comment says exactly this
-(`:117-118`: *"this screen is create-only today (`form.sessionDurationMinutes` always starts null)"*).
-Every `durationOptions` entry carries a numeric or `null` `value` (`:123-129`), so `'60'` cannot
-arise. The AC inherits this premise verbatim from the ledger bullet's "Related:" clause
-(`deferred-work.md:1887-1889`) without re-checking it — while the story header asserts every cite
-was re-verified against HEAD.
-
-Also internally inconsistent: the fix is *"coerce `current` with `Number()` **and/or** normalise
-`form.sessionDurationMinutes` on hydration"*, but the mutation check requires the assertion
-*"…and submits the number"*, which only the second (optional) half delivers — coercing the
-`includes` argument alone leaves `emit-value` emitting whatever is in the form.
-
-**Recommendation:** re-scope to explicit defensive hardening, matching the `deferred-63` AC7
-framing already in the file; drop the "submits the number" clause or make the normalisation
-mandatory.
-
-### 12. AC15 — the baseline figures are wrong, which is the exact error the AC warns about
-
-AC15 says: *"**Re-run `wc -l` before writing the line-count figures** — the `deferred-108` pass
-mis-recorded them and its own code review flagged it."* The story's own "Files being modified" table
-then records:
-
-> `deferred-work.md` | post-`deferred-108` state, **1959 lines** | … | `[DECIDED]` (**31**) / `[DISMISSED]` (**33**)
-
-Measured at `bbad7938`:
-
-| figure | story | actual |
-|---|---|---|
-| `wc -l` | 1959 | **1991** |
-| `[DECIDED` occurrences (body, excl. the trailing audit block's own prose) | 31 | **33** |
-| `[DISMISSED` occurrences (same basis) | 33 | **34** |
-| `[DECIDED` / `[DISMISSED` across the whole file | — | 35 / 35 |
-
-The source of the error is visible in the file itself. The previous audit block at
-`deferred-work.md:1990-1991` reads:
-
-> Line count: 1960 pre-edit → 1959 after the bullet deletion → 1991 with this block appended
-
-The story copied the **intermediate** figure. The `31` / `33` are likewise copied from that block's
-claims (`:1988`), which do not match the file either.
-
-All three numbers are the baselines AC15's reconstruction check compares against
-("`[DECIDED]` count delta; `[DISMISSED]` count unchanged"), so the check as specified cannot pass
-honestly.
-
-**Recommendation:** correct the table to 1991 lines, and either state the tag counts from a fresh
-`grep -o … | wc -l` or specify the counting basis (occurrences vs. lines; whether the audit-block
-prose mentions count).
-
-*Minor, same AC:* AC15's "Leave untouched" bullet contains an unresolved self-correction
-(*"— **wait**: it is in the same `deferred-108` CR section …"*) and a rhetorical question
-(*"the `deferred-108` CR section keeps … `skillars-7-1` D4 references? no — `:1891` stays"*).
-That is drafting noise in an AC whose whole value is mechanical precision; the dev agent should not
-have to reconstruct the intent.
-
-### 13. AC12.2 — the prescribed test seam does not exist, and the assertion target does not match the setup
-
-**(a) There is no injectable `JavaMailSender` bean.** The AC prescribes
-*"a real `MailManager` wired to a mock `JavaMailSender` … `@MockitoBean JavaMailSender`"*.
-`MailService.java:41` obtains its sender from `senderProvider.nextSender()`, and
-`MailSenderProvider.java:20,28-29` builds `List<JavaMailSenderImpl>` with `new JavaMailSenderImpl()`
-from config. `@MockitoBean JavaMailSender` will replace nothing. The seam is `SenderProvider`
-(`SenderProvider.java:6`) or `MailService` itself.
-
-**(b) Assertion target ≠ setup.** The AC says *"Assert on the outbox-row state, not just the log"*
-while describing a setup that calls `sendAdminAlertSync` directly. That path creates no outbox row —
-the row lives with `ModerationAdminAlertOutboxHandler` (`:57-72`) and its drain. Asserting
-retain-vs-delete requires driving the handler through the actual drain, not the sender in isolation.
-(Asserting on the **envelope** row — `FAILED` + `isRetry` — *is* achievable directly, and is
-probably what the AC means; it should say so.)
-
-**(c) Retry and circuit-breaker state.** `MailManager.sendEmailSync` (`:64-104`) nests a
-`retryTemplate.execute` (`:81`) inside `circuitBreaker.run` (`:76`) on a breaker named
-`"emailService"` (`:72`). The retryable case will burn its full retry budget (test duration), and
-both AC cases share breaker state within one Spring context, so case ordering can flip the second
-case's outcome. Worth an explicit note in the AC (reset the breaker, or use distinct contexts).
-
-*Verified sound in the same AC:* `isRetryable` (`MailManager.java:137-151`) returns `true` unless a
-`NON_REPAIRABLE_ERRORS` type appears at one of three bounded depths, so the AC's transient/permanent
-split is achievable in principle; and `sendEmailSync` is `@Transactional(REQUIRES_NEW)` (`:64`), so
-the `FAILED` row really is committed and visible to the `findBySendId` read-back at
-`VideoModerationEmailListener.java:94`.
+Document in Phase 1's story that Phase 4 will introduce a new ID scheme and how to cross-reference them in logs.
 
 ---
 
-## Low / accuracy
+### MEDIUM-2: EmailAddressParser Validation Path Incomplete
 
-### 14. AC14.2 — the target runbook section is topic-scoped and its own text would be falsified
+**Location:** AC8  
+**Severity:** Medium  
+**Issue:**
 
-The AC says *"`docs/deployment/runbook.md` has a **'Pre-production release gate'** section (`:581+`)…
-Add a short subsection (mirroring the existing 'outstanding migration rewrites' one)"*.
+AC8 specifies `.validate()` or strict `parse()`, but no test explicitly verifies the implementation uses `.validate()` and not the bare constructor.
 
-There is only **one** such section, and it is not generic — `runbook.md:579`:
+**Impact:**
 
-```
-## Pre-production release gate: outstanding migration rewrites
-```
+- Invalid addresses might silently pass if test data happens to be valid
 
-Its body says *"Before the first production deploy, **all four items below must be closed**"*
-(`:588`) over a four-row migration table (`:590-595`), and its **Verification** line (`:601-603`) is
-`MigrationConventionLintTest`. A queued-webhook-drain item is not a migration rewrite; adding it as
-a row or subsection contradicts the heading, the "four items" sentence, and the verification method.
+**Fix:**
 
-**Recommendation:** add a sibling `##` section (e.g. `## Pre-production release gate: queued webhook
-events`) with its own owner/trigger line, or rename the existing heading to a generic one and
-promote "outstanding migration rewrites" to a `###`. Also correct the cite to `:579`.
-
-### 15. AC9 — only one of the two `booking-id` call sites is analysed
-
-The AC asserts *"every caller passes a **numeric** id (`ParentBookingsPage.vue:134` …)"*. There are
-two callers that pass `booking-id`:
-
-- `ParentBookingsPage.vue:134` — `:booking-id="booking.id"` (the one the AC covers)
-- `CoachCommandCenterPage.vue:95` — `:booking-id="booking.bookingId"` (unanalysed)
-
-`src/pages/coach/__tests__/` does not exist, so the AC's "no `Invalid prop` warning on render"
-assertion covers `ParentBookingsPage` only. The widening to `[String, Number]` is correct either
-way; the AC should either check the coach payload's type or scope its claim to the one call site.
-
-*Verified sound:* the AC's supporting claim that `useBookingSse` only interpolates the id into a URL
-is exactly right — `booking.store.js:66`, `new EventSource("/api/bookings/<id>/events", …)`,
-no key lookup or string comparison anywhere in `:53-100`. And the `deferred-108` NOTE it asks to
-update really is there (`ParentBookingsPageSpec.js:49`, fixture `id: 42` at `:55`).
-
-### 16. AC1.4 — misses the sibling dead-catch and the stale-saved-card path in the same function
-
-AC1.4 enumerates three branches of `submit()`. Two more things in `PaymentMethodCard.vue:189-214`
-belong in the same sweep:
-
-- `:202-206` — the inner `try { await paymentStore.fetchSavedPaymentMethod() } catch { … }` is
-  **dead for the same reason AC1.2 identifies**: the store action swallows and resolves
-  (`payment.store.js:249-259`). AC1.2 catches this pattern at `:178-181` but not here.
-- Consequence: after a successful save whose refresh silently fails, `savedPaymentMethod` stays
-  stale/null, so `showForm` (`:101-103`) keeps the entry form mounted even though the card saved.
-
-Related, in AC1.2's own scope: the fix is framed entirely around `error.stripeConfig`. A
-`fetchSavedPaymentMethod` failure still resolves "successfully" through `loadStripeConfig`, so a
-user who *has* a card on file is shown the add-card prompt (`:45-47`) with no indication anything
-failed.
-
-### 17. AC3.1 — "parity" delivers one of `useSession`'s two `rint` clears
-
-`useSession.js:70-108` clears `rint` **twice**, with a documented `deferred-91` code-review
-rationale for each:
-
-- `:82` — **before** the race, so sibling tabs enter `computeTimeUntilExpiry`'s fast-teardown branch
-  immediately rather than after the up-to-`LOGOUT_BACKEND_WAIT_MS` (3000 ms) window;
-- `:104` — **after** the race, because *"every authenticated response rewrites 'rint' with path=/
-  (JwtManagerImpl), so any request already in flight when the pre-race clear ran … can land
-  afterwards and re-establish the cookie"*.
-
-AC3.1 specifies one clear, *"alongside the existing `deleteUserCookie()` (`:331-333`)"* — i.e.
-post-race only. Both cases the pre-race clear exists for stay open.
-
-Separately, `useSession.handleLogout` calls `stopSessionMonitoring()` **first** (`:71`), whereas
-`MainLayout` reaches `destroySession()` only after the logout await (`:338`). AC3.1's instruction to
-*"preserve the ordering `logout → resetSelfPlayerId → destroySession → deleteUserCookie → router.push`"*
-locks in that divergence while the AC's stated goal is to remove it. Say explicitly which parts of
-the sequence are being unified and which are deliberately left different.
-
-### 18. AC3.2 — the mutation check is only half-sensitive
-
-The check is *"remove the `try/catch` around `changeLanguage`'s `setItem` → the new '`setItem`
-throwing does not prevent `locale.value` update **or** the `lang` cookie clear' assertion fails"*.
-`MainLayout.vue:303-311`:
-
-```js
-function changeLanguage(lang) {
-  locale.value = lang          // :304 — already before the throw
-  localStorage.setItem('locale', lang)   // :305
-  …
-  document.cookie = 'lang=; Max-Age=0; path=/'   // :310
-}
-```
-
-`locale.value` is assigned at `:304`, *before* `setItem`, so that half of the assertion passes with
-or without the guard. Only the cookie-clear half is mutation-sensitive. Reword so the RED signal is
-unambiguous.
-
-*Scope note (not a defect):* `src/boot/theme.js:28` and `:47` carry the same unguarded
-`localStorage` and are reached from this component via `onToggleTheme` (`:322`) and
-`onStorageThemeChange` (`:327`). Out of scope for AC3.2, but worth one sentence so the AC is not
-later read as "MainLayout is now storage-safe".
-
-### 19. AC13 — the acceptance evidence contradicts Task 19
-
-AC13's **Test** is: *"this story's own PR is the proof — created with `--label frontend-tests`, the
-`frontend-unit` check fires **on `opened`**"*. Task 19 says: *"AC13 is *in* this PR, so the label
-still needs adding post-create for the **first** run; a follow-up push fires `synchronize`."*
-
-Both cannot hold. Whichever is right, AC13 as written has no verifiable acceptance criterion inside
-its own PR — it needs either a stated deferral ("verified on the next labelled PR") or a
-determination of which trigger actually fires.
-
-*Not introduced here, but adjacent:* `unlabeled` is still absent from `types:` (`:22`), so removing
-the label leaves the last green result standing as the visible check state.
-
-### 20. "Re-verified against HEAD" — several cites are wrong
-
-The story header states *"Every line/function cite below was re-verified against HEAD `bbad7938`
-during story creation."* Most check out. These do not:
-
-| AC | story says | HEAD |
-|---|---|---|
-| AC2.1 | skew guard at `sessionManager.js:141`, *"ledger says `:140`"* | **`:140`** — the ledger was right; the "correction" introduced the error |
-| AC2.2 | `await sessionApi.refresh()` at `:262`; `recordActivity()`+`refreshExpiryState()` at `:264-265` | `:259`; `:263-264` |
-| AC1.3 | *"the adjacent 'Replace card' button (`:62`)"* | Replace-card is `:34-41`; **`:62` is the Cancel button** in the edit form |
-| AC13 | job `if` at `:31-33`; trigger paragraph at `:16-18` | `:29-31`; `:14-16` |
-| AC14.2 | pre-production gate at `:581+` | `:579` |
-| AC6 | `slotRows` at `:456-471`, available branch `:458-461` | `:456-472`, `:457-462` |
-| Files table | `deferred-work.md` 1959 lines / 31 `[DECIDED]` / 33 `[DISMISSED]` | 1991 / 33 / 34 (see finding 12) |
-
-Individually trivial; collectively they undercut the header's guarantee, which is what Task 1
-("Re-diff every cited line against HEAD") exists to backstop. Keep Task 1 and treat every cite as
-advisory.
+Require a test that explicitly checks:
+1. Bare `new InternetAddress("not-an-address")` would fail `.validate()`
+2. The parser implementation uses `.validate()` and rejects the same invalid input
 
 ---
 
-## Risk note (not a defect)
+### MEDIUM-3: LoggingEmailSender Filename Sanitization — Path Traversal Risk
 
-This is the largest **production-code** change in the `deferred-10x` series — nine `.vue`/store
-files, plus `payment.store.js` and `sessionManager.js`, both of which sit on the auth and payment
-critical paths. Its only automated frontend validation is `frontend-unit-tests.yml`, which owner
-decisions D2/D6 keep **opt-in and non-gating**, and which AC13 touches (ergonomics) without
-promoting. `mvn verify` never invokes Vitest (`frontend-unit-tests.yml:6-7`). So the sweep's whole
-safety net depends on a human remembering a label. Worth an explicit acknowledgement in the story
-(or a one-off "make it required for this PR only" carve-out) rather than leaving it implicit.
+**Location:** AC9  
+**Severity:** Medium  
+**Issue:**
 
----
+AC9 specifies sanitization, but there's no security test. Phase 4 introduces new callers; a future call might pass unchecked user data.
 
-## Verified sound — checked and found correct
+**Impact:**
 
-Recording these so the absence of a finding is a result, not a gap:
+- Path traversal risk if future callers pass unchecked data
+- Test gap for security-relevant string handling
 
-- **AC1.1** — the retry no-op is real. `stripeUnavailable.value = false` at `:176` flips `showForm`
-  (`:101-103`), the `watch` at `:155-158` queues `mountCardElement()`, `ensureStripeReady()` reads
-  the still-null key at `:109` and re-raises at `:111`, so `:186`'s `if (showForm.value)` is false
-  when the refetch resolves. Confirmed by trace.
-- **AC1.2** — both store actions swallow and resolve (`payment.store.js:238-248`, `:249-259`);
-  `stripeConfig` is never nulled on error. `stripeConfig` has exactly one consumer
-  (`PaymentMethodCard.vue:109,195`), so option (b) is grep-safe as the AC claims.
-- **AC1.3** — `payment.card.detailsUnavailable` exists in all three bundles
-  (`en-US:1224`, `de-DE:1110`, `fr-FR:991`), so the "add the key if missing" branch is a no-op.
-- **AC3.3** — `MainLayoutSpec.js:40` really does default every mount to `{ role: 'PARENT' }`, and
-  the helper already takes an override, so the PLAYER cases are cheap.
-- **AC4.2** — the `.finally` reference-clear at `playerStore.js:53` is the only thing preventing a
-  poisoned in-flight cache on a real rejection; the mutation check is correctly targeted.
-- **AC5.1 core** — `setBatchAcceptResult(batchId, null)` at `:608` runs before the `try`, and
-  `loadCoachBookingRequests()` at `:622` (the only pruner) is unreachable on the throw path at `:626`.
-- **AC6** — `slotRows`' available branch has no NaN filter while `ownBlockingBookings` filters at
-  `:437` and `:443`; the `own` branch is already protected by that upstream filter, so scoping the
-  fix to `available` is right.
-- **AC9 core** — the prop really is `type: String` (`BookingStateChip.vue:12`), and
-  `useBookingSse` only interpolates (`booking.store.js:66`), so `[String, Number]` needs no
-  companion change.
-- **AC10.2** — `ConfigBoundsEnumCoverageTest.java:32` does derive via `toLowerCase(Locale.ROOT)`
-  while the sibling `VideoType` test at `:50-55` uses a manual camelCase `switch`. The drift risk is
-  real (if hypothetical).
-- **AC11 cites** — `restore-from-volume-backup.sh:81/87/89/152/158/208` and
-  `provision.sh:150/156/158` are all exact. `run_bounded`'s existing `>&2` at `:67` is already
-  correct for the `uid=$(…)` case (the concern is only the *new* call sites' outer redirections).
-- **AC12 cites** — every `VideoModerationEmailListener.java` cite in the AC and in D5
-  (`:46-57`, `:83-89`, `:86-88`, `:95-106`, `:107-108`, `:112-117`) is exact, and the "materially
-  stale" re-scope of the `deferred-94` AC15/AC16 bullet is correct: the blank-recipient path really
-  is fully handled at HEAD.
-- **AC14 premise** — `VideoLifecycleService.java:77-83` does throw
-  `TerminalStateViolationException` and increment `video.moderation.bypass` on the plain
-  `PROCESSING→READY` path, exactly as described.
-- **Scope arithmetic** — the `deferred-108` CR section (`deferred-work.md:1802-1959`) holds 21
-  bullets; 16 are frontend production defects, matching the story's "~16" claim. All ten
-  `deferred-108` spec files named in the Global Conventions exist at the paths given.
+**Fix:**
+
+Add a security test covering path traversal (`../`), shell metacharacters, and very long IDs.
 
 ---
 
-## Recommended disposition
+### LOW-1: AC12 Narrows §6.11 Without Justifying the Trade-Off
 
-**Changes required.** Suggested order:
+**Location:** AC12  
+**Severity:** Low  
+**Issue:**
 
-1. **Rewrite AC7** — remove the arithmetic change; re-scope to pinning current behaviour + the
-   `RescheduleService:176-186` rationale. *(blocker)*
-2. **Rewrite AC12.1** — require the explicit branch split and the missing success-path assertion.
-   *(blocker)*
-3. **Rewrite AC10** — correct the premise and the fail-fast language, drop or reword AC10.4, and
-   file the `resolveTierKey` player-tier gap as its own ledger bullet. *(blocker)*
-4. **Amend AC2.2** — condition on `hasSeenRintThisTab()`, pin ordering vs `refreshExpiryState()`,
-   use a future-ness predicate, add the legacy-path spec case.
-5. **Merge AC1.1 + AC1.2** into one fix with option (a) prescribed.
-6. **Amend AC4.1** — return literal `null`; align the flipped spec assertion.
-7. **Amend AC11** — drop the ERR-trap `${DC} up -d` bound, add or explicitly exclude
-   `${DC} config` / `${DC} down`, move the redirections, label the `run_bounded` calls.
-8. **Tighten** AC5.1 (mandate option (a)), AC5.2 (state the contract), AC8.1 (predicate),
-   AC8.2 (defensive-only), AC12.2 (correct seam), AC14.2 (new sibling section).
-9. **Correct AC15's baselines** to 1991 / 33 / 34 and clean up its self-corrections.
-10. **Keep Task 1** ("re-diff every cited line") — finding 20 shows it is load-bearing.
+AC12 moves dev to `log` in Phase 1 (instead of Phase 5) because `SmtpEmailSender` doesn't exist yet. The claim is that the escape hatch is "already inert" but the reasoning isn't documented.
+
+**Fix:**
+
+Document in Dev Notes why the escape hatch was inert (e.g., `DevSesEmailService` is `@Profile("!dev")`, so it never creates on dev even if `enabled=true`).
+
+---
+
+### LOW-2: PlayerRegistrationEmailListener Structured Logging Block Not Specified
+
+**Location:** AC11 / Task 7  
+**Severity:** Low  
+**Issue:**
+
+AC11 mentions preserving a structured-log block but doesn't show the exact code or placement.
+
+**Fix:**
+
+In Task 7, add an explicit code snippet showing the block's placement inside the try block before the send call.
+
+---
+
+## Summary of Actions
+
+### Critical (Blockers)
+1. **BLOCKER-1:** Test EnvironmentPostProcessor ordering in real SpringApplication
+2. **BLOCKER-2:** Separate type-safe binding from logical validation in SesProperties
+3. **BLOCKER-3:** Specify exhaustion behavior and add metrics for LoggingEmailSender
+
+### High Priority
+1. **HIGH-1:** Add test preventing `APP_EMAIL_TRANSPORT` in compose files
+2. **HIGH-2:** Add startup WARN for default rate limit on sandboxed accounts
+3. **HIGH-3:** Add javadoc and test for unknown exception default
+4. **HIGH-4:** Explicitly document two-part test structure for EnvironmentPostProcessor
+
+### Medium/Low Priority
+- Remaining findings are implementation detail clarity and testing rigor
+
+**Recommended implementation order:** BLOCKER → HIGH → MEDIUM → LOW
+
+---
+
+## Final Assessment
+
+**Status:** Ready for dev, with three blockers requiring resolution before merge.
+
+**No scope changes needed.** All findings are testability/safety improvements to the design already outlined in the requirements.

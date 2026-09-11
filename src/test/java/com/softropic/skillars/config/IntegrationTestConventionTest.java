@@ -51,7 +51,16 @@ class IntegrationTestConventionTest {
         "com.softropic.skillars.infrastructure.security.RateLimitingAspectIT",
         "com.softropic.skillars.infrastructure.feature.PropertiesFeatureToggleServiceIT",
         // Sliced @SpringBootTest for the moderation sweeper.
-        "com.softropic.skillars.platform.messaging.service.MessageModerationSweeperIT"
+        "com.softropic.skillars.platform.messaging.service.MessageModerationSweeperIT",
+        // Sliced @SpringBootTest with its own WireMock server (ses-service) — story ses-1.1 Task
+        // 4b. Deliberately doesn't reuse AbstractIntegrationTest's two named servers (bunny-service,
+        // stripe-service): a third server name sharing that context would fork it for a test that
+        // needs none of the rest of it (no database, no Redis).
+        "com.softropic.skillars.infrastructure.ses.SesEmailEndToEndIT",
+        // Not a @SpringBootTest at all — builds its own real SpringApplicationBuilder per test
+        // method to prove EmailTransportPropertyValidator actually runs as a registered
+        // EnvironmentPostProcessor (ApplicationContextRunner cannot do this — story ses-1.1 Task 6).
+        "com.softropic.skillars.infrastructure.email.EmailTransportBootIT"
     );
 
     /**

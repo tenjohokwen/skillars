@@ -125,6 +125,15 @@ app:
     drain-async: false
   scheduling:
     enabled: false
+  # ses-1.1 AC3 (explicit per profile) / Task 9 (H4): the blank outbox-dir is load-bearing, not
+  # decorative. AbstractIntegrationTest is @ActiveProfiles({"dev", "test"}), so every integration
+  # test loads application-dev.yaml's outbox-dir: target/mails FIRST; profile order means "test"
+  # applies last and wins, so "" here disables file-writing (AC9 treats blank as unset) rather
+  # than every registration-flow IT in the suite writing real files to target/mails on every run.
+  email:
+    transport: log
+    log:
+      outbox-dir: ""
   payment:
     stripe:
       api-key: test_key

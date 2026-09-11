@@ -77,6 +77,27 @@ services:
       - APP_STORAGE_S3_ACCESS_KEY=${APP_STORAGE_S3_ACCESS_KEY:-}
       - APP_STORAGE_S3_SECRET_KEY=${APP_STORAGE_S3_SECRET_KEY:-}
 
+      # SES (ses-1.1). No `:-` default on APP_SES_FROM_ADDRESS, deliberately: a genuinely
+      # missing value must reach the app as blank and trip SesPropertiesValidator's startup
+      # check, not silently vanish behind a fallback (prod runs app.email.transport=ses, so
+      # this value is required). Leave the two access keys blank to keep the AWS default
+      # credential provider chain, same convention as the storage block above.
+      # The transport selector property itself is deliberately NEVER listed in this
+      # environment block, in this file or any other compose file — see
+      # EmailTransportPropertyValidator's javadoc and NoHardcodedSenderTest: a blank value
+      # would override every profile's transport choice simultaneously and abort boot
+      # everywhere at once.
+      - APP_SES_FROM_ADDRESS=${APP_SES_FROM_ADDRESS}
+      - APP_SES_REGION=${APP_SES_REGION:-eu-west-1}
+      - APP_SES_ACCESS_KEY=${APP_SES_ACCESS_KEY:-}
+      - APP_SES_SECRET_KEY=${APP_SES_SECRET_KEY:-}
+      - APP_SES_CONFIGURATION_SET=${APP_SES_CONFIGURATION_SET:-}
+      - APP_SES_REPLY_TO_ADDRESS=${APP_SES_REPLY_TO_ADDRESS:-}
+      # §4.5 requires this be settable from the environment: the default of 10 makes
+      # SesPropertiesValidator WARN on every prod boot, and the remediation that WARN prescribes
+      # (drop to 1 on a sandboxed account) is otherwise unreachable without editing committed YAML.
+      - APP_SES_MAX_SEND_RATE_PER_SECOND=${APP_SES_MAX_SEND_RATE_PER_SECOND:-10}
+
       # Platform / AI
       - PLATFORM_PIN_ENCRYPTION_SECRET=${PLATFORM_PIN_ENCRYPTION_SECRET:-}
       - PLATFORM_REGISTRATION_VERIFICATION_SECRET=${PLATFORM_REGISTRATION_VERIFICATION_SECRET:-}

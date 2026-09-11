@@ -1,3 +1,5 @@
-# Story skillars-deferred-88 AC9: validate app.ses.enabled before any bean is created.
+# Story ses-1.1: validate app.email.transport before any bean is created. Replaces
+# SesEnabledPropertyValidator (skillars-deferred-88 AC9), which validated app.ses.enabled — a
+# property this story removes.
 org.springframework.boot.env.EnvironmentPostProcessor=\
-  com.softropic.skillars.infrastructure.ses.SesEnabledPropertyValidator
+  com.softropic.skillars.infrastructure.email.EmailTransportPropertyValidator

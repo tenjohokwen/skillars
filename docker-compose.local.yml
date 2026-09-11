@@ -23,9 +23,9 @@ services:
       - APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder
       # No LOKI_ENABLED override: docker-compose.yml's LOKI_ENABLED=true now works, so
       # app logs actually reach the local Loki container and are queryable in Grafana.
-      # No APP_SES_ENABLED override here any more: application-dev.yaml now sets
-      # app.ses.enabled: false, which is what the dev profile always meant. See the
-      # comment there for why `true` could never work on this profile.
+      # ses-1.1: dev now runs app.email.transport: log (application-dev.yaml), not
+      # app.ses.enabled — that property and the DevSesEmailService/@Profile("!dev") trap it
+      # used to route around are both gone.
       - SPRING_MAIL_PASSWORD=${SPRING_MAIL_PASSWORD}
       - GMAIL_PASSWORD=${GMAIL_PASSWORD}
       - GMX_PASSWORD=${GMX_PASSWORD}
@@ -40,6 +40,13 @@ services:
       # breaking every upload. Keep this block in step with application-dev.yaml.
       - APP_STORAGE_S3_ACCESS_KEY=minioadmin
       - APP_STORAGE_S3_SECRET_KEY=minioadmin123
+      # docker-compose.yml's APP_SES_FROM_ADDRESS carries no default at all (see the comment
+      # there), so listing it in the base file makes it present-and-blank under compose —
+      # overriding application-dev.yaml's ${APP_SES_FROM_ADDRESS:dev@localhost} fallback the
+      # same way the other variables in this block do. Harmless today (dev runs
+      # app.email.transport=log, which doesn't validate from-address), but restated anyway so
+      # it isn't silently dead the moment anyone runs dev locally against transport=ses.
+      - APP_SES_FROM_ADDRESS=dev@localhost
       - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=dev-webhook-signing-secret
       - APP_VIDEO_PLAYBACK_SIGNING_SECRET=dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh
       - PLATFORM_PIN_ENCRYPTION_SECRET=S3CR3TW0RD
