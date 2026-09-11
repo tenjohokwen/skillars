@@ -35,7 +35,9 @@ import { usePlayerStore } from 'src/stores/playerStore'
  * }}
  */
 // Longest we block the logout teardown on the backend revocation call before proceeding anyway.
-const LOGOUT_BACKEND_WAIT_MS = 3000
+// Exported so MainLayout.vue's handleLogout can bound its own backend call to the SAME budget
+// (skillars-deferred-109 AC3.1 — the two logout sequences were diverging).
+export const LOGOUT_BACKEND_WAIT_MS = 3000
 
 export function useSession() {
   const router = useRouter()

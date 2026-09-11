@@ -177,6 +177,25 @@ class ConfigStartupAssertionTest {
     }
 
     @Test
+    void videoQuotaProKey_negative_noThrow_metricIncremented() {
+        // skillars-deferred-109 AC10: video.quota.pro.storageBytes / .bandwidthBytesMonthly (and the
+        // semiPro pair) are now generated into ConfigBounds.ALL. They are failFast=false, so an
+        // out-of-range value is ERROR + metric only, NOT a boot refusal.
+        String key = "video.quota.pro.storageBytes";
+        assertThat(ConfigBounds.ALL.stream().anyMatch(k -> k.key().equals(key)))
+                .as("video.quota.pro.storageBytes is a bounded key")
+                .isTrue();
+        when(configService.find(key)).thenReturn(Optional.of("-1"));
+
+        assertThatCode(() -> assertion.onApplicationEvent(EVENT)).doesNotThrowAnyException();
+
+        var counter = meterRegistry.get("config.value.misconfigured")
+                .tag("key", key).tag("reason", "out_of_range").counter();
+        assertThat(counter.count()).isEqualTo(1.0);
+        assertThat(counter.getId().getTags()).hasSize(2);
+    }
+
+    @Test
     void nonNumericValue_noThrow_metricIncrementedWithNonNumericReason() {
         BoundedKey k = aNonFailFastKey();
         when(configService.find(k.key())).thenReturn(Optional.of("not-a-number"));

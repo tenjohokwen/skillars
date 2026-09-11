@@ -29,6 +29,17 @@ onMounted(async () => {
     router.replace('/player/profile-builder')
     return
   }
+  // skillars-deferred-109 code review (AC4.1 follow-up): fetchSelfPlayerId() now has a THIRD
+  // outcome — it resolves literal `null` when resetSelfPlayerId() superseded the request mid-flight
+  // (a session:expired firing while getMyProfile() is in flight). Only the reject path is handled
+  // above, so without this guard the template literal below would navigate to
+  // '/player/locker-room/null' and drive the locker-room fetches with the string "null". The other
+  // three call sites (MainLayout.vue, BookingRequestPage.vue, CoachPublicProfilePage.vue) already
+  // truthiness-guard the value; this one did not.
+  if (id == null) {
+    router.replace('/player/profile-builder')
+    return
+  }
   // No .catch() would leave a rejected navigation (e.g. a stale-chunk load failure) fully
   // unhandled, stranding the player on the spinner indefinitely — fall back to the same safe
   // landing spot the catch branch above uses.

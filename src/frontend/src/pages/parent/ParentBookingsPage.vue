@@ -249,12 +249,37 @@ const rescheduleProposedStart = ref('')
 // from it, never typed.
 const rescheduleDurationMs = ref(0)
 
-const rescheduleProposedEnd = computed(() => {
-  if (!rescheduleProposedStart.value || !rescheduleDurationMs.value) return ''
+// skillars-deferred-109 AC7 (+ code review): this is a FIXED-INSTANT (elapsed-ms) delta, and it
+// must stay that way. RescheduleService.java:176-184 rejects the request unless
+//   Duration.between(proposedStartTime, proposedEndTime).equals(Duration.between(requestedStartTime, requestedEndTime))
+// on the Instants — i.e. the submitted pair must span the exact same number of elapsed milliseconds
+// as the original booking. A "start wall-clock + N wall minutes" end would drift by ±3600000 ms
+// across a DST boundary and be hard-rejected. Do NOT switch this to wall-clock arithmetic.
+//
+// THE INSTANT IS THE SOURCE OF TRUTH FOR THE WIRE. rescheduleProposedEnd below is a DISPLAY
+// projection of it, and the display string must NEVER be re-parsed back into an instant:
+// toDatetimeLocal() emits a local wall-clock 'YYYY-MM-DDTHH:mm', and in a DST fall-back hour that
+// wall time is AMBIGUOUS (01:30 happens twice). ECMAScript resolves an ambiguous local string to
+// the PRE-transition offset, so the round-trip silently loses the hour. Concretely, in
+// America/New_York a 60-minute booking proposed at 2026-11-01T01:30 renders an end of
+// '2026-11-01T01:30' — identical to the start — and re-parsing both yields the same Instant, so
+// the payload carries PT0S and RescheduleService hard-rejects with INVALID_SESSION_DURATION on a
+// field the parent cannot even edit (the end input is read-only, :model-value). Hence the split:
+// submitReschedule() reads the instant, the template reads the string.
+const rescheduleProposedEndInstant = computed(() => {
+  if (!rescheduleProposedStart.value || !rescheduleDurationMs.value) return null
   const start = new Date(rescheduleProposedStart.value)
-  if (Number.isNaN(start.getTime())) return ''
-  return toDatetimeLocal(new Date(start.getTime() + rescheduleDurationMs.value))
+  if (Number.isNaN(start.getTime())) return null
+  return new Date(start.getTime() + rescheduleDurationMs.value)
 })
+
+// Display only. Can legitimately read equal to rescheduleProposedStart inside a fall-back hour;
+// that is a rendering artifact of an ambiguous wall time, NOT what gets submitted.
+const rescheduleProposedEnd = computed(() =>
+  rescheduleProposedEndInstant.value === null
+    ? ''
+    : toDatetimeLocal(rescheduleProposedEndInstant.value),
+)
 
 /** datetime-local wants local wall-clock `YYYY-MM-DDTHH:mm`, which toISOString (UTC) is not. */
 function toDatetimeLocal(date) {
@@ -362,7 +387,7 @@ function openRescheduleDialog(booking) {
 }
 
 async function submitReschedule() {
-  if (!rescheduleProposedStart.value || !rescheduleProposedEnd.value) {
+  if (!rescheduleProposedStart.value || rescheduleProposedEndInstant.value === null) {
     $q.notify({ message: t('booking.reschedule.requestFailed'), type: 'negative' })
     return
   }
@@ -370,7 +395,8 @@ async function submitReschedule() {
   try {
     const data = {
       proposedStartTime: new Date(rescheduleProposedStart.value).toISOString(),
-      proposedEndTime: new Date(rescheduleProposedEnd.value).toISOString(),
+      // From the INSTANT, never from rescheduleProposedEnd — see the computed's comment.
+      proposedEndTime: rescheduleProposedEndInstant.value.toISOString(),
     }
     await bookingStore.handleRequestReschedule(rescheduleBookingId.value, data)
     rescheduleDialogOpen.value = false

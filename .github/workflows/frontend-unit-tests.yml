@@ -13,13 +13,25 @@
 #
 # `pull_request: types: [labeled, …]` fires the workflow on every label add; the job-level
 # `if` is what keeps it a no-op unless the label is `frontend-tests`. `synchronize` /
-# `reopened` keep an already-labelled PR's result fresh on new pushes.
+# `reopened` keep an already-labelled PR's result fresh on new pushes. `opened`
+# (skillars-deferred-109 AC13) lets `gh pr create --label frontend-tests` fire the job in ONE
+# step — the job-level `if` still gates on the label, so this stays opt-in and non-gating; it does
+# NOT make the job a required check (owner decisions D2/D6 unchanged).
+#
+# skillars-deferred-109 code review: an earlier revision of this comment claimed GitHub reads this
+# file from the BASE ref for `pull_request` events, so the `opened` trigger would only take effect
+# from the next PR. That is the rule for `pull_request_target`, not `pull_request` — a
+# `pull_request` workflow is resolved from the PR's MERGE ref, which already contains this change.
+# It also contradicted docs/testing/frontend-unit-tests.md in the same commit, which documents
+# `gh pr create --label frontend-tests` as working at creation time. Treat the trigger as live from
+# this PR onward and confirm on the first labelled PR; either way the job-level `if` is what gates
+# execution, so a wrong guess here costs a skipped run, never an unwanted one.
 name: Frontend Unit Tests
 
 on:
   workflow_dispatch: {}
   pull_request:
-    types: [labeled, synchronize, reopened]
+    types: [opened, labeled, synchronize, reopened]
 
 permissions:
   contents: read

@@ -1234,8 +1234,8 @@ _bmad-code-review Chunk 3 (i18n, AC12–AC14). Three `[Review][Defer]` findings.
 
 ## Deferred from: code review of skillars-deferred-93 (2026-09-05)
 
-- **`VideoModerationEmailListener` fail-open paths cemented by new tests.** `VideoModerationEmailListenerTest:150-173` asserts that a blank `platform.admin_alert_email` returns normally without sending, and that a null `findBySendId` logs `[VIDEO_MODERATION_ADMIN_ALERT]` at INFO. Both release the outbox row. `[PICKED UP by skillars-deferred-94 AC15: analyzed, current design kept as-is]` Consequence: in an environment where the admin alert address is unset, every permanently-failed video moderation drops its last-resort human notification with no send attempt, no ERROR, and nothing telling an operator the channel is misconfigured. Pre-existing listener behaviour — the tests document it rather than introduce it. Fix would be: treat a blank recipient as a configuration error (ERROR + retain row), and distinguish "envelope not yet visible" from "delivered".
-- **AC6 outbox retain/delete semantics remain unverified end-to-end.** `[PICKED UP by skillars-deferred-94 AC16: analyzed, existing coverage sufficient]` The story specified test cases in `ModerationOutboxIT` using a real `MailManager` with a mock `JavaMailSender`; what shipped is `VideoModerationEmailListenerTest`, a mocked listener unit test. It does reach both target branches of `sendAdminAlertSync` and is mutation-sensitive, so the branch logic is covered — but nothing asserts that a retryable failure retains the outbox row and a permanent failure deletes it, and the real exception→`EnvelopeEntity(FAILED, isRetry)` mapping is never exercised in this flow. Note AC6's stated infra premise was wrong: `NotificationEmailOutboxAtomicityIT` uses `TestMailManager`, not a real `MailManager`, so the pattern it pointed at does not produce a FAILED row.
+- **[DECIDED 2026-09-11 (skillars-deferred-109 AC12 / owner D5)] `VideoModerationEmailListener` blank-recipient behaviour is a documented decision, not a gap.** The original bullet ("silent drop, no send attempt, no ERROR") was materially stale at HEAD. The blank `platform.admin_alert_email` path now has: a `@PostConstruct checkAdminAlertConfig()` that logs `log.error("STARTUP: …")` and throws `IllegalStateException` ("STARTUP ABORTED") when `ARACHNID_ENABLED` is on; a per-send `log.error("… admin alert NOT sent")` in `adminAlertEnvelope()`; and a **deliberate documented decision** in `sendAdminAlertSync` NOT to retain the outbox row for an unset config key ("no number of re-drives fixes an unset config key, and a retained row would occupy a claim slot until a human noticed"). That behaviour is kept as-is by owner decision D5. `skillars-deferred-109` AC12.1 additionally split the read-back into explicit `persisted == null` (→ WARN "not yet visible") and `persisted == SENT` (→ INFO "delivered") branches — a single trailing `log.info` had been mislabelling a null read-back as a delivery. [`src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListener.java`]
+- **[DECIDED 2026-09-11 (skillars-deferred-109 AC12)] the retryable/permanent send mapping is now covered.** `VideoModerationEmailListenerTest.RealMailManagerMappingAC122` drives a real `MailManager` (real Resilience4J circuit breaker + `RetryTemplate`) over a stubbed `MailService` (the seam — `@MockitoBean JavaMailSender` does not work because `MailService` gets its sender from `SenderProvider.nextSender()`), and asserts on the produced `EnvelopeEntity` row: a retryable send failure → `FAILED, isRetry=true` → `sendAdminAlertSync` rethrows; a permanent failure → `FAILED, isRetry=false` → it logs `UNDELIVERABLE` and returns. Scope: the send-mapping + listener-decision seam; the durable outbox-row retain/delete lifecycle is `ModerationAdminAlertOutboxHandler`'s and is covered by `ModerationOutboxIT`. The old bullet's note about `NotificationEmailOutboxAtomicityIT` using `TestMailManager` is correct and is why the seam was moved to `MailService`.
 
 ## Deferred from: code review of skillars-deferred-94 (2026-09-07)
 
@@ -1307,7 +1307,7 @@ pack-purchase path). The follow-up it owes:
 Second-run bmad-code-review of the implementation. Pre-existing / explicitly-descoped items only —
 the actionable patch findings are tracked unchecked in the story's Review Findings section.
 
-- **No grace path for in-flight legacy `encoding.success` webhook events during the deferred-100 cutover.** With `PROCESSING→READY` removed from `VALID_TRANSITIONS` and the plain path converted from `log.warn` to `throw TerminalStateViolationException` + `video.moderation.bypass++`, any replayed/queued pre-deploy event that drives `PROCESSING→READY` on the plain path now throws and dead-letters (and raises a false-positive moderation-bypass alarm) instead of completing. Accepted cutover risk — AC5 verified the producer (`WebhookEventProcessorScheduler`) is already gone at HEAD, and dead-lettered events are re-drivable. [`VideoLifecycleService.java:77`]
+- **[DECIDED 2026-09-11 (skillars-deferred-109 AC14): accepted. No grace path or config-gated allowance will be built. Mitigation is operational — see the runbook pre-production release gate. Revisit only if a production deploy is planned with queued legacy events that cannot be drained.]** No grace path for in-flight legacy `encoding.success` webhook events during the deferred-100 cutover. With `PROCESSING→READY` removed from `VALID_TRANSITIONS` and the plain path converted from `log.warn` to `throw TerminalStateViolationException` + `video.moderation.bypass++`, any replayed/queued pre-deploy event that drives `PROCESSING→READY` on the plain path now throws and dead-letters (and raises a false-positive moderation-bypass alarm) instead of completing. AC5 verified the producer (`WebhookEventProcessorScheduler`) is already gone at HEAD, no production deploy has ever happened, and dead-lettered events are re-drivable. `docs/deployment/runbook.md` now carries a `## Pre-production release gate: queued webhook events` section requiring the queue to be drained or discarded before the first production deploy. No production code change. [`VideoLifecycleService.java:77-83`]
 
 ## Deferred from: skillars-deferred-101 story creation (2026-09-08)
 
@@ -1684,26 +1684,6 @@ bullet + its now-empty `## Deferred from:` header, the one struck-through audit-
 block. `[DISMISSED]` count: unchanged. `[DECIDED]` count: unchanged. `[PICKED UP by …]` bullets
 touched: one — the `deploy-3-4` hardcoded-UID bullet, deleted as a genuine closure.
 
-## Deferred from: skillars-deferred-108 story implementation (2026-09-10)
-
-skillars-deferred-108 filled the six frontend coverage gaps `skillars-deferred-104` unblocked
-(AC1–AC6 — each spec mutation-verified against the fix its ledger item was filed for), bounded the
-`image_runtime_uid` disaster-restore probe with `timeout` (AC8), and recorded the `ConfigBounds`
-templated-key decision (AC9). One residual surfaced:
-
-- **`playerStore.js` `fetchSelfPlayerId()` returns `profile.id` unconditionally.** The
-  `requestGeneration === selfPlayerIdGeneration` guard (added by `skillars-deferred-43`) suppresses
-  only the cached-ref *write* — a `fetchSelfPlayerId()` call superseded by `resetSelfPlayerId()`
-  still *resolves* with the prior account's id. `BookingRequestPage.vue`
-  (`selfPlayerId.value = await playerStore.fetchSelfPlayerId()`) feeds that value straight into the
-  booking submit payload, so this is the residual half of the `deferred-43`
-  cross-account-misattribution concern the test-coverage bullet named — the guard only closed the
-  cached-ref half. Characterized (not fixed) by `skillars-deferred-108` AC4's `playerStoreSpec.js`
-  "cross-account residual" test. Fix is a one-liner — gate the `return` on the generation, or
-  resolve `null` for a superseded call — but out of scope for a test-backfill story.
-  [`src/frontend/src/stores/playerStore.js` `fetchSelfPlayerId`,
-  `src/frontend/src/pages/parent/BookingRequestPage.vue`]
-
 ## Last audit: 2026-09-10 (skillars-deferred-108 story implementation)
 
 Scope: close the six `skillars-deferred-104`-unblocked frontend coverage-gap bullets and the two
@@ -1807,86 +1787,6 @@ in code the new specs now touch, so they are cheap to close next time that surfa
 Decision-needed and patch findings from the same review are tracked in the story file's
 `### Review Findings` section, not here.
 
-- **`PaymentMethodCard.vue:174-187` — Retry after a failed Stripe-config fetch no-ops on the first
-  click.** `loadStripeConfig({isRetry:true})` sets `stripeUnavailable.value = false` *before*
-  `await Promise.all([...])`. That flips `showForm` false→true and queues the pre-flush watcher job,
-  whose microtask runs during the `await`, so `mountCardElement()` → `ensureStripeReady()` reads the
-  still-null `publishableKey` and re-sets `stripeUnavailable = true`. When the successful refetch
-  resolves, `if (showForm.value)` is now false and Elements never mounts. The user must click Retry
-  twice. Defeats deferred-103 AC9's retry affordance in its most common failure mode.
-- **`PaymentMethodCard.vue:178-181` — the `catch` arm is unreachable, and a failed refetch leaves a
-  stale key in use.** `payment.store.js:238-259` swallows into `this.error.*` and resolves, so
-  `Promise.all` never rejects. The store also never nulls `stripeConfig` on error
-  (`payment.store.js:242-244`), so a stale-but-non-null publishable key from an earlier success
-  survives a later failure and the component proceeds with it.
-- **`PaymentMethodCard.vue:23-32` — `hasCard: true` with `brand: null` is uncovered.**
-  `SessionPackPaymentService.java:244` and `:250` both return
-  `new SavedPaymentMethodResponse(true, null, null, null, null)`. The ternary's false arm
-  (`payment.card.detailsUnavailable`) and the "Replace card" button beside it have zero coverage;
-  dropping the ternary would render `savedLabel` with `undefined undefined` and ship green.
-- **`PaymentMethodCard.vue:189-214` — the whole card-save path is stubbed and never exercised.**
-  `createSetupIntent` → `confirmCardSetup` → `savePaymentMethod` are `vi.mock`ed with no assertions.
-  Three reachable failure sub-cases go unpinned, notably a 3DS `requires_action` intent (no `error`,
-  `status !== 'succeeded'`) which surfaces the generic "couldn't save" message, indistinguishable
-  from a hard decline.
-- **`sessionManager.js:140` — the clock-skew cross-check has no regression protection.**
-  `if (remaining <= 0 && localEstimate > 0) return localEstimate` is the single guard between a fast
-  client clock and the unrecoverable logout loop the comment at `:100-105` describes. No fixture ever
-  sets `rint` in the past — every one uses `Date.now() + N` — so deleting line 140 leaves the suite
-  green. The `remaining === 0` and `timeUntilExpiry === WARNING_THRESHOLD` (`:175`) boundaries are
-  likewise untested.
-- **`sessionManager.js:259-264` — a refresh that succeeds without advancing `rint` is treated as
-  success.** No branch checks that the expiry actually moved; `refreshFailed` is set only in the
-  `catch`. A proxy that strips `Set-Cookie` on `GET /refresh`, or any 200 that does not re-issue the
-  cookie, re-enables "Continue session", keeps the countdown ticking, and logs the user out at 0:00
-  with no explanation — exactly the UX deferred-90 AC4 was written to eliminate.
-- **`MainLayout.vue:335-341` — `handleLogout` does not carry deferred-91 AC14's fixes.** No
-  `Promise.race` bound (contrast `useSession.js:93-96`, whose comment notes the axios instance sets
-  no timeout so the request can stay pending indefinitely) and no `document.cookie = 'rint=; …'`
-  clear (contrast `useSession.js:82` and `:104`). On a stalled `POST /logout` the user is stranded on
-  the authenticated page, and sibling tabs keep rendering an authenticated UI until the stale
-  absolute deadline. The app now carries two divergent logout sequences, both pinned as correct by
-  this story's specs.
-- **`MainLayout.vue:305,314` — unguarded `localStorage` access.** `sessionManager.js:28-42` wraps the
-  equivalent `sessionStorage` calls in `try/catch`; MainLayout does not. In Safari private mode
-  `setItem` throws before the `lang` cookie clear at `:310` (the line that exists to unstick a stuck
-  backend cookie) ever runs, and `getItem` throws inside `onMounted` (`:348`), aborting before the
-  `storage` listener registers (`:351`) and before the player self-id fetch (`:353-363`).
-- **`MainLayout.vue:353-363` — the silent-404 contract is unpinned.** `MainLayoutSpec.js` mounts as
-  `PARENT` for every test, so neither arm of `if (err.response?.status !== 404)` is exercised. A
-  regression that logs every 404, or surfaces one as a user-visible error, ships green.
-- **`playerStore.js:32-54` — the reject path (the documented 404) is untested.** Every spec case
-  drives failure through `{id: null}`, which takes the `.then`-throws path. On a real rejection only
-  `.finally` runs, and its `selfPlayerIdRequest === request` reset is the sole thing preventing a
-  permanently poisoned cache — if it regressed, one 404 would pin the rejected promise for the whole
-  tab and the pack dashboard nav would stay dead.
-- **`booking.store.js:605-630` — `handleAcceptAllBatch` rethrows and leaks a `null` LRU entry.**
-  `setBatchAcceptResult(batchId, null)` runs before the `try`; on rejection the catch sets
-  `batchAcceptError` and `throw e`, so `loadCoachBookingRequests()` — the only pruner — is never
-  reached. Every failed accept-all leaves a permanent `batchId → null` entry until the 200-cap
-  evicts it, and callers must `.catch()` or take an unhandled rejection. This is the one rethrowing
-  action in a file whose CONTRACT block (`:358-368`) states its loaders never rethrow.
-- **`booking.store.js:394-395` — no null guard on `res`.** `res.singleBookings ?? []` guards a
-  missing property, not a null response. A 204, or an interceptor that unwraps an empty body to
-  `undefined`, throws a `TypeError` inside the try which the catch files into `coachRequestsError` as
-  though it were an API failure.
-- **`BookingRequestPage.vue:457-462,476` — `slotRows` has no `Number.isNaN` filter on the available
-  branch.** `ownBlockingBookings` (`:437,:443-444`) explicitly filters NaN; the available branch does
-  not. A slot missing `startDatetime` yields `sortKey: NaN` (implementation-defined ordering from the
-  `a.sortKey - b.sortKey` comparator) and `key: slot-undefined` for every such row, causing row-reuse
-  artifacts. This is the branch the deferred-17/-18 rename actually touched.
-- **`ParentBookingsPage.vue:252-266` — `rescheduleProposedEnd` breaks across a DST transition.**
-  `new Date(start)` parses `datetime-local` as browser-local, a fixed instant delta is added, then
-  `toDatetimeLocal` reads `getHours()/getMinutes()` back in wall clock. A 1-hour booking moved to
-  `2026-03-08T01:30` in `America/New_York` displays `03:30` — a 2-hour session the coach never agreed
-  to — and the submitted payload follows. `2026-11-01T01:30` is ambiguous and resolves silently.
-- **`ProfileBuilderStep3.vue` — `submit()` silently discards a partially-filled pack row.** The
-  `.filter((p) => p.sessionCount > 0 && p.totalPrice > 0)` false arm has no user-facing branch: a
-  coach who types `sessionCount: 5` and leaves the price blank sees the pack on screen, completes
-  onboarding, and the pack is never created — no message at any point. (Distinct from the all-null
-  row, which is plausibly intentional.) Related: `durationOptions`' `includes` is strict-equality
-  with no `Number()` coercion, so a string-typed `sessionDurationMinutes` from hydration appends a
-  duplicate synthetic option and `emit-value` then submits the string.
 - **The `skillars-deferred-108` AC1–AC6 specs are real but NOT merge-gating — read the six bullets
   they closed with that caveat.** `frontend-unit-tests.yml` is deliberately decoupled from the build
   gate (its own header: not referenced by `ci.yml` or `pr-build.yml`, not a required status check,
@@ -1900,63 +1800,31 @@ Decision-needed and patch findings from the same review are tracked in the story
   Owner decision D2 (2026-09-10) made the job opt-in deliberately — this bullet records the coupling,
   not a disagreement. Revisit if/when the job is promoted to a required check.
   [`.github/workflows/frontend-unit-tests.yml`]
-- **`frontend-unit-tests.yml` cannot be triggered by `gh pr create --label frontend-tests` — the
-  label must be added as a second step.** The trigger is `pull_request: types: [labeled, synchronize,
-  reopened]`; without `opened`, a PR that already carries the label at creation time fires nothing,
-  which is why `skillars-deferred-108` AC7 has to specify "add the label AFTER `gh pr create`".
-  Adding `opened` to the `types` list would make the one-step form work; the job-level `if` still
-  gates on the label, so this changes ergonomics only and does **not** make the job gating (that is
-  the separate concern in the bullet above). One-line change, deliberately not made in deferred-108
-  because AC7 forbids workflow edits in that story. Filed by the deferred-108 code review, decision 4.
-  [`.github/workflows/frontend-unit-tests.yml:22-23`]
-- **`ConfigBounds.java:204` — `video.quota.semiPro.*` and `video.quota.pro.*` are seeded but
-  unbounded (decision 2b: filed, not fixed).** `V53__video_quota_system.sql:37-38,44-45` inserts four
-  live `platform_config` rows — `video.quota.semiPro.storageBytes`, `video.quota.pro.storageBytes`,
-  and both `bandwidthBytesMonthly` counterparts — that have no `BoundedKey`.
-  `ConfigStartupAssertion.onApplicationEvent` iterates `ConfigBounds.ALL` only (`:70`), so a row
-  absent from `ALL` is never range-checked, never logged, and never metered: an operator setting
-  `video.quota.pro.storageBytes = -1` gets no fail-fast. The cause is that these keys are templated
-  over a **third** enum dimension the hand-list ignores —
-  `PlayerSubscriptionTierBilling {ATHLETE, SEMI_PRO, PRO}`
-  (`payment/contract/PlayerSubscriptionTierBilling.java:4`, whitelisted by
-  `V64__subscription_tiers.sql:46`) — while `VIDEO_QUOTA_TIER_SEGMENTS` mirrors only
-  `CoachSubscriptionTier` plus the `"athlete"` player fallback from `QuotaConfigService.resolveTierKey`.
-  `ConfigBoundsEnumCoverageTest` iterates `CoachSubscriptionTier` and `VideoType`, so it cannot see
-  the gap and adding the two segments would produce no test failure either way. Note `"athlete"` is
-  itself outside the guard for the same reason: it is a `resolveTierKey` fallback string, not a
-  `CoachSubscriptionTier` constant. **This does not reopen `skillars-deferred-108` AC9** — the owner
-  decision to keep hand-listing the segments stands (2026-09-10, decision 2b); what is filed here is
-  that the hand-list is currently *incomplete*, which is a different claim from *should it be
-  hand-listed at all*. AC9's comment states the guard's only blind spot is a removed constant; that
-  understates it and should be amended whenever this is picked up. Surfaced by the
-  `skillars-deferred-108` code review (Edge Case Hunter).
-  [`src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java:204`]
-- **`BookingStateChip.bookingId` is declared `String` but every caller passes a numeric id.**
-  `BookingStateChip.vue:12` declares `bookingId: { type: String, default: null }`;
-  `ParentBookingsPage.vue:134` binds `:booking-id="booking.id"` straight from the API payload, where
-  `id` is a number. Vue logs `Invalid prop: type check failed for prop "bookingId". Expected String
-  with value "42", got Number with value 42` on every render, and `useBookingSse(props.bookingId)`
-  (`:17-18`) receives the unconverted value. Cosmetic today — the SSE subscription interpolates the
-  id into a URL, so a number works — but it is noise in every log and a real type lie. The fix is a
-  one-line prop widening to `[String, Number]` (or `Number`), which is a production `.vue` edit that
-  `skillars-deferred-108` AC7 forbids, so the deferred-108 code review left
-  `ParentBookingsPageSpec.js`'s fixture numeric on purpose: the warning it emits is a faithful
-  reproduction of production, not a test artefact. Coercing the fixture would have hidden this.
-  [`src/frontend/src/components/booking/BookingStateChip.vue:12`]
-- **`ConfigBoundsEnumCoverageTest.java:32` — the drift guard's segment derivation diverges from the
-  key convention.** The tier test expects `tier.name().toLowerCase(Locale.ROOT)`. Every current
-  `CoachSubscriptionTier` constant is single-word so the two coincide, but adding `PRO_ACADEMY` makes
-  the guard demand `video.quota.pro_academy.*` while every multi-word key already in the DB is
-  camelCase (`video.quota.semiPro.*`, `video.drillDemo.*`) and `VideoTypeConstraints.configKey:56-60`
-  camel-cases by hand. The build would go green with the bound and the runtime key pointing at
-  different rows — precisely the drift the guard is claimed to prevent.
-- **`provision.sh:104,106` / `restore-from-volume-backup.sh:52,54,110,117,123,173` — the remaining
-  unbounded calls in the same outage window.** deferred-108 AC8 scoped itself to the `pull` and `run`
-  probe calls. Both `docker image inspect` calls are still unwrapped, and a wedged daemon hangs the
-  *first* one before either wrapped call is reached. In the restore script, `aws s3 cp` (`:123`, no
-  `--cli-read-timeout`/`--cli-connect-timeout`) and `${DC} up -d` (`:173`, which pulls any absent
-  image) sit inside the `${DC} down` → `up -d` window and dwarf the ~225s the change does bound; the
-  ERR-trap recovery `${DC} up -d` (`:117`) can itself hang indefinitely.
+- **[DECIDED 2026-09-11 (skillars-deferred-109 AC10)] `ConfigBounds` hand-list is now complete for
+  the seeded tier keys, and the drift guard is fixed.** `VIDEO_QUOTA_TIER_SEGMENTS` gained
+  `"semiPro"`, `"pro"` so the `ConfigBounds.ALL` loop generates all four `V53`-seeded
+  `video.quota.semiPro.*` / `.pro.*` `BoundedKey`s (`0..Long.MAX_VALUE`, `failFast=false` — an
+  out-of-range value is ERROR + `config.value.misconfigured` metric, not a boot refusal, because
+  nothing reads these keys yet — see AC10.6 below). `ConfigBoundsEnumCoverageTest` now derives its
+  expected segment with a `SCREAMING_SNAKE → camelCase` helper (was `toLowerCase`, which would drift
+  on a future multi-word `CoachSubscriptionTier` constant), asserts `semiPro`/`pro` explicitly, and
+  the `ConfigStartupAssertion` coverage for `video.quota.pro.storageBytes` is pinned. The
+  `ConfigBounds.java` comment no longer frames the blind spot as "a removed constant" — it is
+  "an incomplete hand-list", which is what this was. `skillars-deferred-108` AC9's keep-hand-listing
+  decision is unchanged (this was a `List.of(...)` string edit, not an enum import).
+  [`src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java`]
+- **[DECIDED 2026-09-11 (skillars-deferred-109 AC11)] `docker image inspect` round-trips bounded;
+  `aws s3 cp` and the compose `up -d` calls deliberately left unbounded.** Both `docker image
+  inspect` calls in `image_runtime_uid` (in `provision.sh` and `restore-from-volume-backup.sh`) are
+  now wrapped in `run_bounded` at a short `IMAGE_INSPECT_TIMEOUT=10s` (the first inspect runs before
+  the already-wrapped `docker pull`, so a wedged daemon hangs there first); `run_bounded` gained an
+  explicit `<label>` arg so its timeout WARN names the real command, and its redirection now binds
+  the inner `docker` call so that WARN survives. Left explicitly UNBOUNDED, each with a reason in the
+  aggregate-bound comment: `aws s3 cp` (a hard wall-clock cap risks killing a slow-but-progressing
+  DR download; `--cli-*-timeout` bound per-request stalls only, not total wall time); the ERR-trap
+  `${DC} up -d` and the final `${DC} up -d` (a `timeout` exit 124 inside the ERR trap would exit the
+  script with the stack half-started); `${DC} config` (a local compose-file parse) and `${DC} down`
+  (same mid-teardown hazard as the ERR trap).
 
 ## Last audit: 2026-09-10 (post-merge prune — deferred-108 follow-up, DiskDataVolumeHigh row)
 
@@ -1989,3 +1857,142 @@ emptied. `[DISMISSED]` count: unchanged (33). `[DECIDED]` count: unchanged (31).
 bullets touched: one — the `deploy-3-3` DiskDataVolumeHigh bullet, deleted as a genuine closure.
 Line count: 1960 pre-edit → 1959 after the bullet deletion → 1991 with this block appended
 (`wc -l`, re-run after writing).
+
+## Deferred from: skillars-deferred-109 story creation (2026-09-11)
+
+- **`QuotaConfigService.resolveTierKey` maps no player to the `semiPro` / `pro` video-quota
+  segments.** `resolveTierKey` has a `switch` over `CoachSubscriptionTier {SCOUT, INSTRUCTOR,
+  ACADEMY}` and a `catch` that returns `"athlete"` for every non-UUID (player) ownerId — so it can
+  return only `scout` / `instructor` / `academy` / `athlete`, never `semiPro` / `pro`. A `SEMI_PRO`
+  or `PRO` player therefore receives the **ATHLETE** video quota (2 GiB storage / 10 GiB bandwidth)
+  regardless of billing tier, and the four `video.quota.semiPro.*` / `.pro.*` rows `V53` seeds
+  (4 GiB / 25 GiB; 7 GiB / 30 GiB — `V53:37-38,44-45`) are unreachable. `PlayerSubscriptionTierBilling`
+  is a dead enum (`SubscriptionService` uses the string literals `"SEMI_PRO"` / `"PRO"`). Closing
+  this needs a player billing-tier → quota-segment mapping in `resolveTierKey`, plus a product
+  decision on whether player video quotas are a shipped concern yet. `skillars-deferred-109` AC10
+  bounded the four keys ahead of this (ERROR + `config.value.misconfigured` metric on an
+  out-of-range value; no boot refusal — `failFast=false`), so the mapping inherits a range check
+  when it lands. Surfaced by the `skillars-deferred-109` story-review audit.
+  [`src/main/java/com/softropic/skillars/platform/video/service/QuotaConfigService.java` `resolveTierKey`]
+
+## Last audit: 2026-09-11 (post-implementation prune — skillars-deferred-109)
+
+`skillars-deferred-109` closed the ~16 pre-existing frontend production defects the
+`skillars-deferred-108` code review filed, plus four cross-module residuals. Ledger hygiene per this
+file's delete-outright-when-closed convention.
+
+**Baselines (measured at `bbad7938`, before this story's edits):** `wc -l` **1991**;
+`grep -c '^## Deferred from:'` **87**; whole-file `grep -o '\[DECIDED'` **35**;
+`grep -o '\[DISMISSED'` **35**. (The creation-draft figures "1959 / 31 / 33" were wrong — corrected
+by the story-review.)
+
+**Deleted outright** (genuine closures shipped by `skillars-deferred-109`), all inside
+`## Deferred from: code review of skillars-deferred-108 (2026-09-10)` unless noted:
+`PaymentMethodCard.vue` retry-noop + dead-catch/stale-key (AC1.1), `brand:null` uncovered (AC1.3),
+save-path stubbed (AC1.4); `sessionManager.js` skew cross-check (AC2.1), ineffective-refresh (AC2.2);
+`MainLayout.vue` handleLogout parity (AC3.1), unguarded `localStorage` (AC3.2), silent-404 unpinned
+(AC3.3); `playerStore.js` reject path (AC4.2) **and** the `fetchSelfPlayerId` return-value
+cross-account residual in `## Deferred from: skillars-deferred-108 story implementation` (AC4.1);
+`booking.store.js` handleAcceptAllBatch null-LRU-leak (AC5.1), null-response guard (AC5.2);
+`BookingRequestPage.vue` `slotRows` NaN filter (AC6); `ParentBookingsPage.vue` `rescheduleProposedEnd`
+(AC7 — deleted: the bullet's "breaks across DST" arithmetic claim was **backwards**, the
+fixed-instant delta is what `RescheduleService.java:176-184` requires; AC7 pinned it with a spec +
+comment. The remaining DST-boundary *display* ambiguity is minor, pinned by spec, and not re-filed);
+`ProfileBuilderStep3.vue` silent partial-pack discard + `durationOptions` coercion (AC8);
+`BookingStateChip.vue` prop-type (AC9); `ConfigBoundsEnumCoverageTest.java:32` camelCase derivation
+(AC10.2); the `frontend-unit-tests.yml` `opened`-trigger bullet (AC13). The sibling
+"specs are real but NOT merge-gating" bullet **stays** (B2, owner D6).
+
+**Retagged `[DECIDED 2026-09-11 (skillars-deferred-109 …)]`** (decisions, not closures — 5
+`[DECIDED` tokens added, replacing longer open-gap bullets):
+the `ConfigBounds` incomplete-hand-list bullet (decision 2b) → hand-list now complete + drift guard
+fixed + real entitlement gap filed separately (AC10, AC10.6); the `provision.sh`/`restore` remaining-
+unbounded-calls bullet → `docker image inspect` bounded, `aws s3 cp` / `${DC} up -d` / `${DC} config`
+/ `${DC} down` deliberately unbounded with reasons (AC11); the two `VideoModerationEmailListener`
+`[PICKED UP by skillars-deferred-94 AC15/AC16]` bullets → blank-recipient is a documented owner
+decision (D5) + the retryable/permanent mapping is now covered (AC12); the legacy `PROCESSING→READY`
+webhook-cutover bullet → accepted risk + runbook mitigation (AC14).
+
+**Added:** this section's one open bullet — the `QuotaConfigService.resolveTierKey` player-tier
+entitlement gap (AC10.6) — untagged open work, **not** a `[DECIDED]`.
+
+**Reconstruction check:** every surviving non-blank line matches the pre-edit file (`bbad7938` +
+this story's implementation commits), in order, nothing reworded/reordered apart from the
+deletions / retags / new section enumerated above. `## Deferred from:` header count: **87 → 88**
+(the new `skillars-deferred-109 story creation` section; the `deferred-108` CR section's header
+**stays** — the B2 bullet and two retagged bullets remain; the `deferred-108` story-implementation
+section's header was **removed** — see the code-review correction below). Real `[DECIDED]`-tagged
+*items*: **+5 retags**; real `[DISMISSED]`-tagged *items*: **35 → 35** (unchanged). Raw `grep -o`
+token counts read higher — 45 / 37 after this write — because this audit block's own prose names
+both tokens, as every prior audit block's does. `[PICKED UP by …]` bullets touched: **two** — the
+`deferred-94` AC15/AC16 `VideoModerationEmailListener` bullets, retagged (not deleted).
+`skillars-7-1` D4 and the `:1891`-region B2 note left untouched.
+
+**Code-review correction (2026-09-11).** Three figures in this block were wrong as first written and
+are corrected here rather than silently edited away:
+
+1. **Post-write line count.** Recorded as **1936**; the file was actually **1938** — the
+   post-append `wc -l` the AC demands ("re-run after writing") was never re-run. Arithmetic
+   confirms it: 1991 − 152 + 99 = 1938.
+2. **`[DECIDED]` item delta.** Recorded as "real items **35 → 40**", which used the raw *token*
+   count (35) as the *item* baseline. Roughly 20 of the 35 pre-write `[DECIDED` tokens are audit-
+   block prose, not tagged items, so the real item baseline is far lower and the "→ 40" is not
+   meaningful. Only the delta is trustworthy: **+5 retags**. AC15 itself predicted "+3"; the
+   implementation made 5, correctly — `:1238-1239` is two bullets and AC11 added a conditional
+   fifth — so the AC's figure was the wrong one, not the code.
+3. **The `deferred-108` story-implementation header.** This block claimed it "stays — other bullets
+   remain". It did not: AC15 deleted its only bullet (`:1695`), leaving the header above a
+   paragraph ending "One residual surfaced:" with nothing after it. The code review removed the
+   header and its orphaned intro, matching this file's own convention for an emptied section
+   ("header emptied and removed", used at `:1339`, `:1344`, `:1348`, `:1398`, `:1401`, `:1405`).
+
+**Measured after the code-review edits** (fresh `wc -l` / `grep -c` / `grep -o`, run at the time of
+writing, with every section below already in place): **1998** lines; **88** `## Deferred from:`
+headers; **48** raw `[DECIDED` tokens; **38** raw `[DISMISSED` tokens.
+
+## Deferred from: code review of skillars-deferred-109 (2026-09-11)
+
+`/bmad-code-review` on the `skillars-deferred-109` working tree (Blind Hunter + Edge Case Hunter +
+Acceptance Auditor, all three completed). 2 decision-needed and 18 patch findings were handled in
+the story; three items are genuinely pre-existing or wider than this story and are filed here:
+
+- `VideoModerationEmailListener.java:102-107` — the AC12.1 `persisted == null` branch WARNs and
+  returns normally. A normal return is exactly the signal `ModerationAdminAlertOutboxHandler` uses
+  to delete the durable outbox row, so an **unknown** send outcome (the `REQUIRES_NEW` commit not
+  yet visible on read-back) is handled identically to a confirmed success — the last-resort human
+  notification for a permanently-failed moderation can be dropped with only a WARN. AC12.1 changed
+  the log level, not the release decision, so this is pre-existing. Options: re-read with a short
+  bounded retry, or throw `IllegalStateException` (retain the row) on an unresolved read-back.
+- `booking.store.js:645-651` — `handleAcceptAllBatch`'s catch calls `deleteBatchAcceptResult(batchId)`
+  unconditionally before rethrowing. AC5.1 added it for the seeded-`null` case, but anything that
+  throws *after* a successful `acceptAllBatch` + `setBatchAcceptResult` now also wipes the real
+  per-booking results the coach needs to see which bookings in the batch were accepted. Guard the
+  delete on the stored value still being the `null` seed.
+- `.github/workflows/frontend-unit-tests.yml` — no frontend CI job runs the Vitest suite under a
+  non-UTC timezone. `happy-dom`'s `Intl` is UTC, so every DST-named assertion in the suite is
+  structurally unfalsifiable; `skillars-deferred-109` AC7.2's fall-back "pin" is the current
+  example, and the same spec **fails** under `TZ=America/New_York` (reproduced during this review).
+  A second matrix leg with `TZ: America/New_York`, or a per-spec `vi.stubEnv`/fake-timer zone, would
+  make the DST class of assertion real. Cheap, and it is the only thing standing between the suite
+  and a whole category of timezone regressions.
+- `MailManager.java:136-150` (`isRetryable`) + `ComponentConfig.java:44-49` — **every permanently
+  undeliverable email is classified as retryable against the real circuit-breaker configuration.**
+  Found while writing the AC12.2 IT the owner asked for (decision D2 → option a), which is exactly
+  the class of defect a mocked-collaborator unit test cannot reach. `isRetryable` deliberately scans
+  only three depths (direct, cause, cause-of-cause) to avoid misclassifying an unrelated
+  non-repairable type buried deep in some other chain. But with the real container-configured
+  `CircuitBreakerFactory`, the exception that reaches `toEnvelopeEntity` is
+  `RuntimeException("Email sending failed via Circuit Breaker")` caused by resilience4j's
+  `TimeoutException` — the originating exception is **absent from the chain entirely**, so no
+  non-repairable type is found at any depth and the row is stamped `FAILED, isRetry=true`.
+  Reproduced: throwing `AddressException` (a `NON_REPAIRABLE_ERRORS` member) directly from the
+  `MailService` seam still yields `isRetry=true`. Consequence for
+  `VideoModerationEmailListener.sendAdminAlertSync`: the retryable arm throws, the outbox row is
+  retained, and a failure no re-drive can fix re-drives until `[OUTBOX_STUCK]` summons a human —
+  the precise outcome the permanent arm at `:116-119` exists to avoid. The sibling unit test
+  (`VideoModerationEmailListenerTest.RealMailManagerMappingAC122`) does NOT reproduce it: its
+  hand-built `Resilience4JCircuitBreakerFactory` has no TimeLimiter, so the real cause survives.
+  Pre-existing — nothing in `skillars-deferred-109` caused it. Likely fix: have the circuit-breaker
+  fallback preserve the original throwable rather than replacing it, and/or classify from the
+  exception captured inside the retry loop instead of from whatever the CB layer surfaces. Until
+  then `VideoModerationAdminAlertEnvelopeIT` carries no permanent-failure case and says why.

@@ -9,7 +9,11 @@ import { useBookingSse, TERMINAL_BOOKING_STATUSES } from 'src/stores/booking.sto
 
 const props = defineProps({
   status: { type: String, required: true },
-  bookingId: { type: String, default: null },
+  // skillars-deferred-109 AC9: both call sites pass a numeric id straight from the API payload
+  // (ParentBookingsPage `booking.id`, CoachCommandCenterPage `booking.bookingId`), so a String-only
+  // type logged an "Invalid prop" warning on every render. useBookingSse only interpolates the id
+  // into an EventSource URL, so a Number needs no companion coercion.
+  bookingId: { type: [String, Number], default: null },
 })
 const { t } = useI18n()
 

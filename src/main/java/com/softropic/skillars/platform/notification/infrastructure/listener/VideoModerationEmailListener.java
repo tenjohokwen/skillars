@@ -92,7 +92,20 @@ public class VideoModerationEmailListener implements ModerationAdminAlertSender 
         mailManager.sendEmailSync(envelope);
 
         EnvelopeEntity persisted = envelopeEntityRepository.findBySendId(envelope.sendId());
-        if (persisted != null && persisted.getStatus() == EmailDeliveryStatus.FAILED) {
+        // skillars-deferred-109 AC12.1: split the persisted==null and persisted==SENT cases. A single
+        // trailing log.info covered BOTH, which is wrong in opposite directions: MailManager.sendEmailSync
+        // ALWAYS persists an EnvelopeEntity (SENT on success, FAILED otherwise — MailManager.java:105,
+        // 130-132), so a missing row on read-back is NOT a delivery — it is a read that raced
+        // persistence (the REQUIRES_NEW commit not yet visible), and calling it "delivered" hides a
+        // real gap. Collapsing this back to one log.info would mislabel a null read-back; collapsing
+        // to one log.warn would mislabel every genuinely successful send.
+        if (persisted == null) {
+            log.warn("[VIDEO_MODERATION_ADMIN_ALERT] send outcome not yet visible for videoId={} sendId={} "
+                    + "— EnvelopeEntity row not found on read-back (persistence lag?)",
+                event.videoId(), envelope.sendId());
+            return;
+        }
+        if (persisted.getStatus() == EmailDeliveryStatus.FAILED) {
             if (persisted.isRetry()) {
                 throw new IllegalStateException(
                     "video moderation admin alert send FAILED (retryable) for videoId=" + event.videoId()

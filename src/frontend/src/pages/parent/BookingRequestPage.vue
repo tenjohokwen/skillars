@@ -454,12 +454,18 @@ const ownBlockingBookings = computed(() => {
  * batchAtMax — batchAtMax reads bookingStore.batchBasketSize, which they never join.
  */
 const slotRows = computed(() => {
-  const available = bookingStore.computedSlots.map((slot) => ({
-    type: 'available',
-    key: `slot-${slot.startDatetime}`,
-    sortKey: Date.parse(slot.startDatetime),
-    slot,
-  }))
+  const available = bookingStore.computedSlots
+    // skillars-deferred-109 AC6: drop slots with an unparseable startDatetime BEFORE the map,
+    // matching the ownBlockingBookings idiom above. A slot missing startDatetime otherwise yields
+    // sortKey: NaN (implementation-defined ordering in the a.sortKey - b.sortKey comparator) and
+    // key: "slot-undefined" for every such row → Vue row-reuse artifacts.
+    .filter((slot) => !Number.isNaN(Date.parse(slot.startDatetime)))
+    .map((slot) => ({
+      type: 'available',
+      key: `slot-${slot.startDatetime}`,
+      sortKey: Date.parse(slot.startDatetime),
+      slot,
+    }))
   const own = ownBlockingBookings.value.map((b) => ({
     type: 'own',
     key: `own-${b.id ?? b.requestedStartTime}`,

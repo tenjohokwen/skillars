@@ -31,6 +31,29 @@ The CI job is never a required status check and is not referenced by `ci.yml` / 
 Apply the `frontend-tests` label to a PR when a change actually touches frontend logic and you
 want the suite to gate your own review.
 
+### Adding the `frontend-tests` label to a PR
+
+The label name the workflow checks is exactly **`frontend-tests`** (lowercase, hyphenated).
+"Frontend Unit Tests" is the *workflow* name shown in the Actions tab, not the label. The
+job-level `if` gate is `contains(github.event.pull_request.labels.*.name, 'frontend-tests')`.
+
+**GitHub web UI:** open the PR → **Labels** (gear icon, right sidebar) → tick **`frontend-tests`**.
+
+**`gh` CLI:**
+
+```bash
+gh pr edit --add-label "frontend-tests"        # current branch's PR
+gh pr edit <number> --add-label "frontend-tests"
+gh pr create --label "frontend-tests" ...      # set it at creation time
+```
+
+Because the workflow triggers on `pull_request: types: [opened, labeled, …]`, **adding the label
+starts a run immediately** — no new commit needed — and `gh pr create --label` fires it at creation
+in one step (the `opened` trigger, added by `skillars-deferred-109` AC13). Once the PR is labelled, `synchronize`
+re-runs the suite on every subsequent push. Removing the label does not cancel an in-flight
+run but stops future pushes from triggering it. The label must already exist in the repo
+(it is defined as `frontend-tests`, colour `#1D76DB`); `gh label list` confirms it.
+
 ---
 
 ## Running it

@@ -101,15 +101,24 @@ chown_if_needed() {
 # total; grafana/grafana alone is ~450 MB), so the uid-drift detection deferred-107 AC8 exists to
 # provide degraded to the hardcoded guess on precisely the first run.
 #
-# Worst case adds SERVICE_COUNT × (IMAGE_PULL_TIMEOUT + IMAGE_PROBE_TIMEOUT) to the run; with the
-# five services probed today that is 5 × (300 + 15) ≈ 26min against a registry that is hanging
-# rather than refusing — an unattended provision, not an outage.
+# skillars-deferred-109 AC11 additionally bounds the two `docker image inspect` daemon round-trips
+# in image_runtime_uid (a wedged dockerd hangs on the first one, which runs BEFORE the pull).
+# IMAGE_INSPECT_TIMEOUT is a local metadata read, so 10s here — same as restore's — and unlike
+# IMAGE_PULL_TIMEOUT it is NOT one of the "must differ between the scripts" constants. The
+# `${DC} config` compose-file parse (:169, already `|| return 0`) is a local parse, not a daemon
+# round-trip, and stays unbounded. (Cite re-derived after this story's edits shifted it — code
+# review.)
+#
+# Worst case adds SERVICE_COUNT × (2×IMAGE_INSPECT_TIMEOUT + IMAGE_PULL_TIMEOUT + IMAGE_PROBE_TIMEOUT)
+# to the run; with the five services probed today that is 5 × (20 + 300 + 15) ≈ 28min against a
+# registry/daemon that is hanging rather than refusing — an unattended provision, not an outage.
 #
 # `-k` matters: plain `timeout` sends SIGTERM only, so a docker client wedged on an unresponsive
 # /var/run/docker.sock would not actually be bounded. Note the daemon-side pull continues after the
 # client is killed — this bounds OUR wait, not the transfer.
 readonly IMAGE_PULL_TIMEOUT=300
 readonly IMAGE_PROBE_TIMEOUT=15
+readonly IMAGE_INSPECT_TIMEOUT=10  # local metadata read; only a wedged dockerd makes it hang (skillars-deferred-109 AC11)
 readonly IMAGE_TIMEOUT_KILL_AFTER=5
 
 # skillars-deferred-108 code review: `timeout` is a new external dependency in this script (GNU
@@ -121,19 +130,27 @@ readonly IMAGE_TIMEOUT_KILL_AFTER=5
 # chown_probed's silent `[ -z "$probed_uid" ]` arm), so exit 124 / 137 is WARNed here. Logging goes
 # to stderr: run_bounded is used inside `uid=$(...)` command substitution, and stdout would be
 # captured as the uid.
+# skillars-deferred-109 AC11: signature is run_bounded <dur> <label> <cmd…> — the label is an
+# explicit arg now (it previously read $1 AFTER shift, so every wrapped call was labelled 'docker').
+# The wrapped command's own stderr is swallowed inside run_bounded, so the timeout WARN — emitted
+# afterwards to fd2 — survives even when the caller discards stdout; do NOT add `2>&1` on the
+# run_bounded call (it would bury the WARN).
 if command -v timeout >/dev/null 2>&1; then
   run_bounded() {
-    local dur="$1"; shift
-    local what="$1" rc=0
-    timeout -k "${IMAGE_TIMEOUT_KILL_AFTER}s" "$dur" "$@" || rc=$?
+    local dur="$1" what="$2"; shift 2
+    local rc=0
+    timeout -k "${IMAGE_TIMEOUT_KILL_AFTER}s" "$dur" "$@" 2>/dev/null || rc=$?
     if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+      # Accurate as written: every timeout now ends the probe — the first `docker image inspect`
+      # no longer falls through to a pull on 124/137 (code review). Absence of this line still means
+      # "the probe did not time out", never "the probe did not run".
       log "⚠️  image probe: '${what}' exceeded ${dur} — giving up on this probe; the hardcoded uid:gid fallback will be used" >&2
     fi
     return "$rc"
   }
 else
   log "⚠️  timeout(1) not found — image-probe docker calls will run unbounded"
-  run_bounded() { shift; "$@"; }
+  run_bounded() { shift 2; "$@" 2>/dev/null; }
 fi
 
 # skillars-deferred-107 AC8: echo the numeric uid the given compose service's image declares (its
@@ -152,15 +169,30 @@ image_runtime_uid() {
   img=$(docker compose --env-file "${ENV_FILE}" -f "${APP_DIR}/docker-compose.yml" config --format json 2>/dev/null \
         | jq -r --arg s "$svc" '.services[$s].image // empty' 2>/dev/null) || return 0
   [ -n "${img:-}" ] || return 0
-  # skillars-deferred-108 AC8: bound both remote docker calls (constants above the function).
-  docker image inspect "$img" >/dev/null 2>&1 \
-    || run_bounded "${IMAGE_PULL_TIMEOUT}s" docker pull "$img" >/dev/null 2>&1 || return 0
-  user=$(docker image inspect --format '{{.Config.User}}' "$img" 2>/dev/null) || return 0
+  # skillars-deferred-108 AC8 + skillars-deferred-109 AC11: bound every daemon round-trip — both
+  # `docker image inspect` calls (a wedged dockerd hangs on the first, which runs BEFORE the pull),
+  # the `docker pull`, and the `docker run … id -u`.
+  # skillars-deferred-109 code review: branch on WHY the first inspect failed. run_bounded returns
+  # the raw rc, so 124/137 (timed out) previously reached the same `|| docker pull` arm as docker's
+  # own exit 1 ("No such image") — i.e. a slow-but-alive daemon, whose images are almost certainly
+  # already local, triggered a full registry re-pull inside the outage window this file's header
+  # exists to keep short. A timeout is not evidence the image is missing, so it ends the probe and
+  # takes the hardcoded fallback instead; only a genuine "not present" falls through to the pull.
+  local irc=0
+  run_bounded "${IMAGE_INSPECT_TIMEOUT}s" "docker image inspect ${img}" docker image inspect "$img" >/dev/null || irc=$?
+  if [ "$irc" -eq 124 ] || [ "$irc" -eq 137 ]; then
+    return 0
+  elif [ "$irc" -ne 0 ]; then
+    run_bounded "${IMAGE_PULL_TIMEOUT}s" "docker pull ${img}" docker pull "$img" >/dev/null || return 0
+  fi
+  user=$(run_bounded "${IMAGE_INSPECT_TIMEOUT}s" "docker image inspect --format ${img}" \
+         docker image inspect --format '{{.Config.User}}' "$img") || return 0
   user="${user%%:*}"                       # drop any ":gid"
   [ -n "$user" ] || return 0               # empty USER = root
   case "$user" in
     ''|*[!0-9]*)                           # a name — resolve it inside the image
-      uid=$(run_bounded "${IMAGE_PROBE_TIMEOUT}s" docker run --rm --entrypoint sh "$img" -c "id -u '$user'" 2>/dev/null) || return 0 ;;
+      uid=$(run_bounded "${IMAGE_PROBE_TIMEOUT}s" "docker run id -u ${img}" \
+            docker run --rm --entrypoint sh "$img" -c "id -u '$user'") || return 0 ;;
     *) uid="$user" ;;
   esac
   case "${uid:-}" in ''|*[!0-9]*|0) return 0 ;; esac   # unresolved / non-numeric / root => give up

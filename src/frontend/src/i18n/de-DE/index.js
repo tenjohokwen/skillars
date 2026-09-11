@@ -115,6 +115,8 @@ export default {
       step3PackPrice: 'Preis (EUR)',
       step3PackLabel: 'Bezeichnung',
       step3RemovePack: 'Paket entfernen',
+      step3PackInvalid:
+        'Jedes Sitzungspaket braucht eine Sitzungsanzahl und einen Preis über 0 – oder entfernen Sie die Zeile.',
       step4Title: 'Verfügbarkeit',
       step4Short: 'Verfügbarkeit',
       step4AvailabilityWindows: 'Verfügbarkeitsfenster',
@@ -1113,6 +1115,8 @@ export default {
       addCardCta: 'Karte hinzufügen',
       save: 'Karte speichern',
       saveError: 'Ihre Karte konnte nicht gespeichert werden. Bitte versuchen Sie es erneut.',
+      savedRefreshFailed:
+        'Ihre Karte wurde gespeichert, aber die Ansicht konnte nicht aktualisiert werden. Bitte laden Sie die Seite neu.',
       unavailable: 'Kartenzahlungen sind derzeit nicht verfügbar',
     },
   },

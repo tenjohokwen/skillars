@@ -267,7 +267,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { useSession } from 'src/composables/useSession'
+import { useSession, LOGOUT_BACKEND_WAIT_MS } from 'src/composables/useSession'
 import { toggleTheme as bootToggleTheme, isDarkMode } from 'src/boot/theme'
 import ParentChildSwitcher from 'src/components/ParentChildSwitcher.vue'
 import { useAuthStore } from 'src/stores/auth.store'
@@ -302,7 +302,14 @@ const currentLanguageLabel = computed(() => {
 
 function changeLanguage(lang) {
   locale.value = lang
-  localStorage.setItem('locale', lang)
+  // skillars-deferred-109 AC3.2: localStorage.setItem throws in Safari private mode. Guard it
+  // (sessionManager.js wraps its equivalent sessionStorage calls the same way) so the lang-cookie
+  // clear below still runs — that is the line that unsticks a stale backend `lang` cookie.
+  try {
+    localStorage.setItem('locale', lang)
+  } catch {
+    // localStorage unavailable (Safari private mode / disabled) — the choice just won't persist.
+  }
   // skillars-deferred-92 code review, chunk 3: a prior `?language=` visit can have left a `lang`
   // cookie (LocaleChangeInterceptor, MvcConfig) that outranks Accept-Language on every backend
   // request from then on, with no other way for the user to unstick it. Clear it so this switcher
@@ -311,7 +318,14 @@ function changeLanguage(lang) {
 }
 
 function loadLanguagePreference() {
-  const savedLocale = localStorage.getItem('locale')
+  let savedLocale = null
+  // skillars-deferred-109 AC3.2: localStorage.getItem throws in Safari private mode; unguarded it
+  // aborts onMounted before the storage listener registers and the self-player-id fetch runs.
+  try {
+    savedLocale = localStorage.getItem('locale')
+  } catch {
+    // localStorage unavailable — proceed with no saved preference.
+  }
   if (savedLocale && languages.some((l) => l.value === savedLocale)) {
     locale.value = savedLocale
   }
@@ -333,7 +347,27 @@ function deleteUserCookie() {
 }
 
 async function handleLogout() {
-  await authStore.logout()
+  // skillars-deferred-109 AC3.1: carry useSession.handleLogout's deferred-91 AC14 guarantees so the
+  // two logout sequences stop diverging on what matters for sibling-tab teardown — a BOUNDED wait
+  // on the backend call, and BOTH 'rint' clears (pre- and post-race). Deliberately NOT unified:
+  // useSession stops monitoring first; MainLayout keeps its
+  // logout → resetSelfPlayerId → destroySession → deleteUserCookie → router.push('/login') order
+  // (destroySession() below owns the monitoring teardown here).
+  //
+  // Pre-race clear: sibling tabs enter computeTimeUntilExpiry's fast-teardown branch immediately
+  // rather than after the up-to-LOGOUT_BACKEND_WAIT_MS window (useSession.js:82).
+  document.cookie = 'rint=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
+  // Bounded: the axios instance sets no timeout, so a stalled POST /logout would otherwise strand
+  // the user on the authenticated page (router.push is behind this await). authStore.logout()
+  // swallows its own errors, so this races only against the hang.
+  await Promise.race([
+    authStore.logout(),
+    new Promise((resolve) => setTimeout(resolve, LOGOUT_BACKEND_WAIT_MS)),
+  ])
+  // Post-race clear: any authenticated response in flight when the pre-race clear ran re-sets
+  // 'rint' with path=/ via JwtManagerImpl, so a sibling tab would read a live 'rint' again
+  // (useSession.js:104).
+  document.cookie = 'rint=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
   playerStore.resetSelfPlayerId()
   destroySession()
   deleteUserCookie()
