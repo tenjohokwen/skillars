@@ -106,7 +106,7 @@ production compose file and line it must track.
 |---|---|---|
 | PostgreSQL | `postgres:17-alpine` | `postgres:17-alpine` (`:64`) — **now matched** |
 | Redis | `redis:7-alpine` | `redis:7-alpine` (`:89`) |
-| MinIO | `minio/minio:RELEASE.2024-01-13T07-53-03Z` | same (`docker-compose.uat.yml:74`) |
+| MinIO | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` | same, via quay.io (`docker-compose.uat.yml`) — MinIO stopped publishing to Docker Hub in Oct 2025 |
 
 **The PostgreSQL gap is a real risk, not a cosmetic one:** every integration test currently validates
 against a database three major versions behind the one the product runs on. Deferred-19 bumps it to

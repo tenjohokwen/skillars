@@ -44,8 +44,11 @@ class StorageMigrationServiceIT extends BaseStorageIT {
 
     static final String DEST_BUCKET = "test-dest";
 
-    static final MinIOContainer destinationMinio =
-        new MinIOContainer(DockerImageName.parse("minio/minio:RELEASE.2024-01-13T07-53-03Z"));
+    // MinIO stopped publishing to Docker Hub in October 2025; see SharedContainers.MINIO_IMAGE's
+    // javadoc for why this needs quay.io and asCompatibleSubstituteFor.
+    static final MinIOContainer destinationMinio = new MinIOContainer(
+        DockerImageName.parse("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
+            .asCompatibleSubstituteFor("minio/minio"));
 
     static StorageService destinationService;
 

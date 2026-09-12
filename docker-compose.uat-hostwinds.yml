@@ -144,7 +144,8 @@ services:
   # validation unless carefully rewritten — directly publishing the port avoids that whole
   # class of problem.)
   minio:
-    image: minio/minio:RELEASE.2024-01-13T07-53-03Z
+    # MinIO stopped publishing to Docker Hub in Oct 2025; see SharedContainers.MINIO_IMAGE javadoc.
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: server /data --address ":9500" --console-address ":9501"
     # No limit at all otherwise — this is new to this stripped-down file (unlike
     # postgres/redis, minio isn't in the base docker-compose.yml with its own defaults to
@@ -185,7 +186,7 @@ services:
 
   # One-shot: creates the bucket on every startup (no-op if it already exists).
   minio-init:
-    image: minio/mc:RELEASE.2024-01-13T08-44-48Z
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     depends_on:
       minio:
         condition: service_healthy
