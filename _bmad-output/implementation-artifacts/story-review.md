@@ -1,344 +1,336 @@
-# Story Review: Ses-1.2 — Move SMTP Behind the Port and Contain It
+# Senior Dev Review — Story `ses-1.3` (Health, Monitoring, Rate Limiting)
 
-**Audit Date:** 2026-09-11  
-**Reviewer Role:** Senior Dev  
-**Status:** Ready for development with noted clarifications
+**Reviewed:** `_bmad-output/implementation-artifacts/ses-1-3-health-monitoring-rate-limiting.md` @ `3c00173f`
+**Scope:** corner cases, false assumptions, missed flows, missed call sites. Every finding below was
+verified against HEAD sources or against the resolved jars (`javap`); nothing is inferred from
+documentation alone. A "Verified accurate" section at the end records the story claims I checked and
+found *correct*, so they are not re-litigated.
 
----
-
-## Summary
-
-The story is **well-scoped and detailed**. It correctly identifies the key structural changes (SMTP encapsulation, EmailContentRenderer extraction, MailManager/MailService refactoring) and enforces invariants via architecture tests. No critical blockers found. Minor clarifications needed on a few semantic edges.
-
----
-
-## Verified Assumptions (No Issues)
-
-✓ **Phase 1 completion state:** EmailTransport enum exists with {SES, SMTP, LOG}; OutboundEmailSender port is in place; the three registration listeners call it directly; SES is fully behind the port.
-
-✓ **MailManager.NON_REPAIRABLE_ERRORS exact list:** Confirmed to be exactly four types:
-  - `org.springframework.mail.MailParseException`
-  - `org.springframework.mail.MailPreparationException`
-  - `jakarta.mail.internet.AddressException`
-  - `jakarta.mail.internet.ParseException`
-  
-SmtpErrorClassifier in AC2 correctly mirrors this list.
-
-✓ **SenderProvider single caller/implementation:** Grep confirms `SenderProvider` interface is implemented only by `MailSenderProvider` and called only by `MailService`. Safe to delete and fold into SmtpEmailSender.
-
-✓ **Boot-provided JavaMailSender never injected:** No `JavaMailSender` references in src/main/java. Safe to remove spring.mail autoconfiguration block in AC7 without risking runtime injection failures.
-
-✓ **MailManager.isRetryable scope:** Method walks exactly 3 exception levels (direct, cause, causeOfCause) per documented comments. SmtpErrorClassifier exceptions will land at the depth this walker expects.
-
-✓ **EmailTemplate.NONE behavior preserved:** Current MailService.sendEmailFromTemplate (lines 63–67) sends NONE templates as plaintext: calls `sendEmail(..., isHtml=false)`. AC1's requirement that EmailContentRenderer produce `(null htmlBody, plaintext textBody)` for NONE correctly mirrors this.
-
-✓ **MailService.sendEmail MimeMessage construction is the only place:** No other code constructs MimeMessage or calls SenderProvider. AC2's fold-into-SmtpEmailSender is clean.
+**Verdict: changes required before dev.** The story is unusually well-researched — most of its
+"verified" assertions hold. But four findings will stop a literal implementation dead (a runtime
+`IllegalArgumentException` at bean creation, two existing tests that break and are not listed as
+modified, and a leaked resilience4j exception type that AC3 explicitly forbids), and AC1's stated
+purpose (sandbox detection) is not achieved by AC1's own UP/DOWN mapping.
 
 ---
 
-## Semantic/Correctness Issues
+## Blocking
 
-### 1. **Correlation ID for retries: Each attempt gets a new UUID** ⚠ CLARIFY INTENT
+### B1 — AC4's prescribed `RetryTemplate` construction throws at bean creation
 
-**Location:** AC3, lines 45–46  
-**Finding:** 
-```java
-// AC3 says:
-correlationId for the OutboundEmailRequest is...a per-call UUID.randomUUID()
+AC4 says to rebuild `ComponentConfig.retryTemplate()` "from its current no-policy
+`RetryTemplate.builder().maxAttempts(3).fixedBackoff(1s).build()` to carry a `SimpleRetryPolicy(3, …)`".
+The 4-arg `SimpleRetryPolicy` constructor does exist (verified, `spring-retry-2.0.13`), but there is no
+way to hand it to the existing builder chain:
+
+```
+RetryTemplateBuilder.maxAttempts(int):
+  Assert.isNull(this.baseRetryPolicy, "You have already selected another retry policy")
+RetryTemplateBuilder.customPolicy(RetryPolicy):   // sets baseRetryPolicy
 ```
 
-MailManager retries via `retryTemplate.execute(...)` which calls `mailService.sendEmailFromTemplate()` multiple times on transient failure. Each retry generates a new UUID.
+`.maxAttempts(3).customPolicy(new SimpleRetryPolicy(3, …))` fails with
+`IllegalArgumentException: You have already selected another retry policy` — at context startup, for
+every environment. (Verified from the bytecode of `RetryTemplateBuilder.maxAttempts`.)
 
-**Why this matters:**
-- **For registration listeners (Phase 1):** Each direct call to OutboundEmailSender already gets UUID.randomUUID(). One call = one UUID. No retries at listener level. ✓ Correct.
-- **For MailManager's booking/session-pack mail (Phase 2):** Retry #1 gets UUID-A. Retry #2 (same envelope, transient failure) gets UUID-B. Logs and correlation will show two separate sends, not retries of one.
+Two workable routes; the AC should name one:
+- **`customPolicy` alone** — drop `.maxAttempts(3)`; `SimpleRetryPolicy`'s first arg already carries it.
+  `RetryTemplate.builder().customPolicy(policy).fixedBackoff(Duration.ofSeconds(1)).build()`.
+- **Builder-native (preferred)** —
+  `.maxAttempts(3).notRetryOn(EmailTransportRateLimitedException.class).traversingCauses().fixedBackoff(Duration.ofSeconds(1))`.
+  `build()` composes this into a `CompositeRetryPolicy(MaxAttemptsRetryPolicy, BinaryExceptionClassifierRetryPolicy)`
+  with `defaultValue=true` inferred from using `notRetryOn` (verified in `build()`'s bytecode), i.e.
+  exactly AC4's intended semantics with none of the hand-rolled construction.
 
-**Current behavior in Phase 1:** Does MailManager currently retry? Reading MailManager code (lines 81–96), yes—it calls retryTemplate.execute() inside circuitBreaker.run(), looping `for (Recipient recipient : recipients)` and retrying each per recipient inside the retry template.
+### B2 — AC3's catch is incomplete; a resilience4j type still leaks out of `SesSendRateLimiter`
 
-**Is this correct?**  
-The story says (AC3): *"Persisting `sendId` as the correlation id is a Phase 4 concern once `OutboundEmailResult.messageId()` is written onto `EnvelopeEntity`"* — Phase 4 will persist which messageId was sent for an envelope. Until then, each retry attempt surfaces as a distinct correlation ID in logs.
+AC3 requires that `RequestNotPermitted` "never leak past this class". `RateLimiter.waitForPermission`
+throws a **second** resilience4j type. From `resilience4j-ratelimiter-2.2.0`:
 
-**Verdict:** **NOT A BUG.** This is an accepted limitation until Phase 4. However, the story should clarify why this is acceptable (one-liner: "Retry attempts are logged separately; Phase 4 correlates them via persisted envelope.messageId"). Add a Dev Note or in-code comment to MailService explaining the UUID-per-call design and that the correlation ID is not envelope-scope until Phase 4.
-
----
-
-### 2. **SmtpHealthIndicator conditional property path must be updated** ⚠ IMPLEMENTATION DETAIL
-
-**Location:** AC2, line 34  
-**Finding:**
-The story says: *"its existing `@ConditionalOnProperty(prefix = "email", name = "providerConfigs[0].host")` guard moves with it, updated only to the new `app.email.smtp` prefix"*
-
-When renamed, the prefix should be `"app.email.smtp"` and name should reference the new binding path: `"provider-configs[0].host"` (kebab-case as per YAML convention).
-
-**Current SmtpHealthProperties binding:** AC2 says it becomes `@ConfigurationProperties(prefix = "app.email.smtp.health")`.  
-**Current SmtpHealthIndicator conditional:** Needs to check if SMTP is configured, not if the health properties exist.
-
-**What needs updating:**  
-- Prefix: `"email"` → `"app.email.smtp"` ✓ Mentioned in story
-- Property name: `"providerConfigs[0].host"` → `"provider-configs[0].host"` (kebab-case, matching YAML) ⚠ **NOT explicitly mentioned**
-
-The story assumes this will happen ("updated only to the new prefix") but doesn't name the kebab-case change. Add clarification: *"The @ConditionalOnProperty's name should use kebab-case (`provider-configs`) matching YAML convention, not Java camelCase."*
-
-**Verdict:** **NOT A BUG, but clarify in dev notes.** The developer should grep SmtpHealthIndicator's current conditional, then update both prefix and property-name simultaneously.
-
----
-
-### 3. **EmailContentRenderer characterization test scope: "Representative" vs. exhaustive** ⚠ DEFINITION NEEDED
-
-**Location:** AC1, lines 24–25  
-**Finding:**
 ```
-...for a representative set (one transactional template, one OTP template, 
-one booking template, plus EmailTemplate.NONE)...
+waitForPermission(RateLimiter, int):
+  acquirePermission(int)
+  Thread.currentThread().isInterrupted()  -> throw new AcquirePermissionCancelledException()
+  if (!permission)                        -> throw RequestNotPermitted.createRequestNotPermitted(...)
 ```
 
-The phrase "representative" is vague. Does this mean:
-- **Option A:** Those four are sufficient because they represent distinct content paths (transactional/OTP/booking/plaintext)?
-- **Option B:** Sample a few; don't need to test all 31 templates?
+`io.github.resilience4j.core.exception.AcquirePermissionCancelledException` is an unchecked
+`RuntimeException`, so it sails through:
+`SesSendRateLimiter` (catches only `RequestNotPermitted`) → `SesEmailSender.send`'s
+`catch (SdkException)` (not an `SdkException`) → AC5's `catch (EmailTransportException)`
+(not one either, so **no metric is recorded at all** — see M5) → `MailManager.isRetryable` →
+classified retryable by accident rather than by design.
 
-**Current state:** EmailTemplate enum has 31 values. AC1 says the extraction must be lossless and proved by a characterization test.
+Reachable whenever the sending thread carries an interrupt — most obviously graceful shutdown of the
+`sendMailPool` executor while an `@Async` `sendEmailFromTemplate` is in flight. Fix: either catch
+`RuntimeException` and re-classify, or call `rateLimiter.acquirePermission()` directly (returns
+`boolean`, throws neither) instead of the `waitForPermission` static helper — the latter is simpler
+and makes the "never blocks" contract self-evident.
 
-**Why this matters:** If the test only captures 4 templates and one of the 27 others has a unique content-rendering path that the extraction loses, the test gives false confidence.
+### B3 — Three existing test call sites break; the story lists one
 
-**Check required:**  
-Examine the EmailTemplate enum and MailService.sendEmailFromTemplate logic. Are the 31 templates rendered identically (all via Thymeleaf Context/TemplateEngine.process with the same variable setup), or do some have special cases beyond NONE?
+The Dev Notes say only "`SesEmailSenderTest` already exists and will need the new mock added". Also
+affected, none of them mentioned:
 
-**Verdict:** **NEEDS CLARIFICATION.** AC1 should either:
-1. List all 31 templates by category (e.g., "13 transactional, 8 OTP, ...") and argue why one from each is sufficient, or
-2. Require full 31-template coverage if paths diverge, or
-3. Define "representative" as "covers all distinct code paths in the rendering logic."
+| File | Why it breaks |
+|---|---|
+| `src/test/java/…/infrastructure/ses/SesAddressValidationTest.java:29` | `new SesEmailSender(client, props, new EmailAddressParser(), new SesErrorClassifier())` — compile error once AC3 adds the `rateLimiter` field. |
+| `src/test/java/…/infrastructure/email/TransportWiringTest.java:38-43` | The runner registers `SesConfig, SesEmailSender, SesErrorClassifier, EmailAddressParser, …` but **not** `SesSendRateLimiter`, and has no `MeterRegistry` bean. `transportSes_wiresSesEmailSenderAndSesV2Client` fails on `NoSuchBeanDefinitionException`. Needs `SesSendRateLimiter.class` **plus** a `SimpleMeterRegistry` supplied via `withBean(...)`. |
+| `src/test/java/…/infrastructure/email/TransportWiringTest.java:110-124` | `healthRunner` sets `provider-configs[0].host/port` but **no `app.email.transport`**. After AC2's gate, the existing `assertThat(ctx).hasSingleBean(SmtpHealthIndicator.class)` assertion **fails**. AC6 says "extend this test file" — it must also say "fix the existing assertion to supply `app.email.transport=smtp`", or this reads as an unrelated regression to whoever hits it. |
 
-For now, assume the dev will run the characterization test against all EmailTemplates and all known locales (not just 4 templates). If they find identical behavior for all, they can note that in test comments.
+### B4 — AC2's premise "never happens today" is false; it is happening in prod right now
 
----
+AC2 justifies the transport gate with: *"a `transport=ses` environment with SMTP providers still
+configured in YAML (**never happens today**, but nothing prevents it)"*.
 
-### 4. **NONE template handling: Same in SMTP, different in SES?** ⚠ VERIFY INTENT
+`src/main/resources/application.yaml:158-170` sets `app.email.smtp.provider-configs[0].host = mail.gmx.net`
+**unconditionally** (base document, no profile), and `application-prod.yaml` does not clear it while
+setting `app.email.transport: ses`. So prod today satisfies `provider-configs[0].host` and
+`SmtpHealthIndicator` **is an active bean in production**, opening sockets to `mail.gmx.net:587` and
+`smtp.gmail.com:587` every 60s from prod nodes and reporting their reachability as this app's
+`notification` health.
 
-**Location:** AC2, line 30  
-**Finding:**
-The story says both SES and SMTP use EmailContentRenderer to get (htmlBody, textBody). For NONE, that's (null, plaintext).
-
-**SES (AC4 in Phase 1):**
-> An `html` part **when `request.htmlBody()` is present** and, **independently**, a `text` part **when `request.textBody()` is present**
-
-For NONE: htmlBody=null, textBody=plaintext.  
-SES sends: text part only (html absent, text present). ✓ Correct.
-
-**SMTP (AC2):**
-> pick `htmlBody` when present, else `textBody`, matching today's `MailService.sendEmailFromTemplate` behavior exactly
-
-For NONE: htmlBody=null, textBody=plaintext.  
-SMTP sends: textBody only (because htmlBody is null). ✓ Matches current behavior.
-
-**Verdict:** ✓ **NO ISSUE.** Both transports send plaintext for NONE. The logic is consistent.
-
----
-
-### 5. **spring.factories registration for SmtpEmailSender unclear** ⚠ IMPLICIT ASSUMPTION
-
-**Location:** AC2, Task 2 (no mention of spring.factories)  
-**Finding:**
-The story moves SmtpProperties/MailSenderProvider/SmtpErrorClassifier/SmtpHealthIndicator to `infrastructure/email/smtp`, and creates SmtpEmailSender as a `@ConditionalOnProperty` bean.
-
-**Question:** Does SmtpEmailSender need a spring.factories entry for auto-configuration discovery?
-
-**Current pattern:**
-- Phase 1 added EmailTransportPropertyValidator to spring.factories as an EnvironmentPostProcessor.
-- SesEmailSender exists in infrastructure/ses, gated on `@ConditionalOnProperty`. No spring.factories entry required — component scanning finds it.
-
-**For SmtpEmailSender:**
-If it's a `@Component` in infrastructure/email/smtp, component scanning (scanning from the root package down) should find it. No spring.factories entry needed, assuming the root package is scanned. But the story doesn't confirm this assumption.
-
-**Check required:**
-- Grep the current codebase for how many root-level component-scan `@ComponentScans` exist.
-- Confirm infrastructure.email.smtp is within the scanned package tree.
-
-**Verdict:** **IMPLICIT ASSUMPTION, likely OK.** Component scanning from the root app package will reach infrastructure/email/smtp by default in a Boot app. But AC5's containment test (EmailTransportArchitectureTest) should verify that SmtpEmailSender is **not** imported outside of MailService and infrastructure/email.smtp, which indirectly confirms it exists and is wired.
-
-Add a dev note: *"SmtpEmailSender bean discovery relies on default component scanning. If the bean fails to wire, verify the root package's scan scope includes infrastructure/email/smtp."*
+The fix AC2 prescribes is correct and this makes it *more* urgent, not less — but the framing should
+change from hypothetical to live-defect, and AC6's test plan should assert the **real prod shape**:
+`app.email.transport=ses` **with** base-yaml-style `provider-configs[0].host` set ⇒ no
+`SmtpHealthIndicator` bean. As written, AC6 describes that case but calls it "even if SMTP provider
+properties happen to be set", which will read to a dev as a defensive edge case rather than the
+production configuration.
 
 ---
 
-### 6. **AC5 containment test false positive risk: Carve-out too narrow?** ⚠ EDGE CASE
+## Should fix
 
-**Location:** AC5, lines 59–62  
-**Finding:**
-```
-Only files under infrastructure/email/smtp/ may import jakarta.mail.., 
-javax.mail.., JavaMailSender, org.springframework.mail.. 
-— **with one named carve-out: `infrastructure/email/EmailAddressParser.java`**
-```
+### M1 — AC1 does not detect the sandbox, which the story says is its purpose
 
-EmailAddressParser is in `infrastructure/email`, not in smtp subdirectory. The carve-out allows it to import jakarta.mail despite being outside the smtp package.
+The Story statement ("reports whether SES can actually send — **sandboxed**, suspended, or genuinely
+healthy") and the `§6.8` citation both name sandbox/account-state detection as this indicator's job.
+AC1's mapping is UP ⟺ `sendingEnabled() == true`.
 
-**What if there are other infrastructure/email classes that also need jakarta.mail?** For example, a hypothetical EmailLoggingSupport or EmailMetricsCollector under infrastructure/email (not smtp).
+`sendingEnabled` is **true** on a sandboxed account — sandbox restricts *recipients*, it does not
+disable sending. `productionAccessEnabled` is the sandbox signal, and AC1 relegates it to a detail
+that nothing alerts on. Verified against `sesv2-2.54.13`'s `GetAccountResponse`, which also exposes
+`enforcementStatus()` (`HEALTHY` / `PROBATION` / `SHUTDOWN`) — the actual *suspension* signal — which
+AC1 does not read at all.
 
-**Current state (Phase 1):** Only EmailAddressParser exists under infrastructure/email. AC1 says this is the carve-out from Phase 1's code review.
+Net effect as specified: a sandboxed or on-probation prod account reports **UP**, i.e. the exact
+"before it matters" failure the story exists to prevent stays invisible. Decide explicitly and write
+it into the AC — a reasonable mapping is UP only when `sendingEnabled && productionAccessEnabled &&
+!"SHUTDOWN".equals(enforcementStatus)`, or UP-with-a-warning-detail if the owner prefers not to page
+on sandbox. Either is fine; silently mapping sandbox to UP is not.
 
-**Verdict:** ✓ **NO ISSUE.** The story correctly hardcodes the one known exception per Phase 1 decision. If future infrastructure/email classes need jakarta.mail, the test can be updated then. The dev note should clarify: *"EmailAddressParser is the only infrastructure/email class (outside smtp/) that legitimately needs jakarta.mail for address validation. If a new infrastructure/email class needs jakarta.mail, add it to the carve-out here."*
+### M2 — AC1's justification for the local catch is factually wrong
 
----
+> "this indicator's failure to reach AWS must never throw out of `doHealthCheck` — actuator health
+> indicators that throw break the endpoint for every other indicator in the same group"
 
-### 7. **NoStraySmtpConfigTest must handle app.email.retry** ⚠ CONFIGURATION CORNER
+`AbstractHealthIndicator.health()` already wraps `doHealthCheck` in `try { … } catch (Exception ex) {
+builder.status(DOWN).withException(ex); }`. A throwing `doHealthCheck` degrades **only that
+contributor** to DOWN; it does not break the group or the endpoint.
 
-**Location:** AC5, lines 64–65  
-**Finding:**
-```
-asserts every shipped `application*.yaml`...contains no `spring.mail:` block 
-and no bare `email:` top-level key
-```
+Catching locally is still the right call — for the detail shape AC1 specifies and to keep a stack
+trace out of the payload — but the AC should say that, because the stated reason invites a reviewer
+to accept a defensive `catch (Throwable)` on a premise that does not hold.
 
-The story dev notes (line 166) mention:
-> `application-prod.yaml` has an unrelated `email: retry: enabled: true` key (`EmailRetryScheduler`'s own `@ConditionalOnProperty`, default `matchIfMissing = true`)
+### M3 — Null-unboxing on the SDK response
 
-This is NOT the same `email` prefix as old EmailProperties/new SmtpProperties. It's a separate email-retry scheduler config.
+Both accessors AC1 relies on are boxed/nullable (verified):
+`GetAccountResponse.sendingEnabled()` → `java.lang.Boolean`; `GetAccountResponse.sendQuota()` →
+`SendQuota` (all three of whose accessors return `java.lang.Double`).
 
-**Risk:** A naive `grep "^email:"` across YAML files will false-positive on this `email.retry` block.
+A literal reading of AC1 (`UP when response.sendingEnabled() is true`) produces
+`if (response.sendingEnabled())` → **NPE on a partial response**, and
+`response.sendQuota().maxSendRate()` → NPE when the quota block is absent. AC1 hedges with "(when
+available)" but never says what "available" means in code.
 
-**Verdict:** ✓ **ADDRESSED IN DEV NOTES.** Line 166 warns the developer to scope the test to the specific `email.providerConfigs` shape, not a blanket top-level-key check. Dev should check for `email.providerConfigs:` or `email:` with an immediate child of `providerConfigs`, not just `email:` alone.
+This is not theoretical for this codebase: `SesEmailEndToEndIT` already exercises SES against WireMock
+stubs, and a hand-written `GetAccount` stub is precisely where a partial body appears. Spell out
+`Boolean.TRUE.equals(...)` and a null-guarded `sendQuota` in the AC, and add a
+"`getAccount` returns a response with null `sendQuota`" case to `SesHealthIndicatorTest`.
 
-Clarification for Task 5: *"When scanning for stray `email:` config, search specifically for `email.providerConfigs:` or `email:\n  providerConfigs:`. The `email.retry:` block is different and should not trigger a failure."*
+### M4 — AC5's transport tag NPEs in a state the codebase deliberately supports
 
----
+AC5 tags the metric `transport=<ses|smtp|log lowercase>` from `EmailTransportProperties`. That field
+has **no default** (`EmailTransportProperties.java:17`), and property-absent is a state this codebase
+explicitly keeps working: `LoggingEmailSender` carries `matchIfMissing = true` with a javadoc calling
+it "load-bearing, not decoration", and `TransportWiringTest.transportAbsent_fallsBackToTheSafeLoggingTransport`
+pins it. In that state `getTransport()` is `null`, and Micrometer rejects a null tag value — so
+**every email send throws** from the metrics wrapper.
 
-### 8. **Downstream tests: VideoModerationEmailListenerTest signature change** ⚠ COMPILE FIX SCOPE
+Add the fallback to the AC (`transport = props.getTransport() == null ? "log" : props.getTransport().name().toLowerCase(Locale.ROOT)`)
+and a `MailServiceTest` case for it. Note `Locale.ROOT` explicitly — `toLowerCase()` with a Turkish
+default locale turns `SES` into `ses` fine but is a latent trap worth closing while you're here.
 
-**Location:** AC9, lines 100–101  
-**Finding:**
-```
-Given VideoModerationEmailListenerTest and VideoModerationAdminAlertEnvelopeIT 
-mock MailService as a seam and currently compile against 
-sendEmailFromTemplate(...) throws MessagingException
-```
+### M5 — AC5's catch scope leaves an unmeasured hole
 
-The story says these tests need compile fixes for the new signature (no checked exception).
+AC5 records `outcome=failure` "on any `EmailTransportException`". Anything else thrown by the port —
+B2's `AcquirePermissionCancelledException`, a Mockito/SDK `NullPointerException`, a
+`RejectedExecutionException` — records **neither** success nor failure, so
+`sum(mail_send_seconds_count)` silently under-counts attempts, which is the one property an outcome
+metric has to have.
 
-**What needs verifying:**
-These tests mock MailService. When sendEmailFromTemplate no longer throws MessagingException, the mock's signature must change. But what assertions are in these tests? Do they test error handling?
+Use `try { … } catch (Throwable t) { record(failure); throw t; }` or a `finally` with an outcome
+variable. The AC's genuinely important constraint — *rethrow the identical instance, never wrap* —
+is preserved either way, and AC6's `isSameAs` assertion still proves it.
 
-**Example:** If `VideoModerationEmailListenerTest.testXyz` does:
-```java
-doThrow(new MessagingException(...)).when(mockMailService)
-  .sendEmailFromTemplate(...);
-```
-This must change to throw an unchecked exception (EmailTransportException subtype).
+### M6 — AC4's fail-fast has an unstated cost: mid-loop abort ⇒ duplicate sends on re-drive
 
-**Verdict:** ✓ **CLEAR REQUIREMENT.** AC9 correctly identifies this as a compile-only change. The dev should search each test file for `throws MessagingException` and `doThrow(new MessagingException`, update both, and re-run the tests to confirm they still compile and pass.
+`MailManager.sendEmailSync` (`MailManager.java:74-90`) runs `retryTemplate.execute(...)` **per
+recipient inside a loop**. Today a transient failure on recipient 3 of 5 gets up to 3 attempts with a
+`fixedBackoff(1s)`. AC4 makes a rate-limit rejection abort on attempt 1, which aborts the whole loop:
+recipients 4–5 are never attempted, the envelope is persisted `FAILED, retry=true`, and
+`EmailRetryScheduler` re-drives the **entire envelope** (`EmailRetryScheduler.sendAll` →
+`mailManager.sendEmailSync(envelope)`), re-sending to recipients 1–2 who already received it.
 
----
+The sharp edge: the existing `fixedBackoff` is **1 second** and the limiter's `limitRefreshPeriod` is
+**1 second**. The retry AC4 removes is the one most likely to have succeeded — it lands exactly one
+refresh window later. §6.17's rationale (don't hold `sendEmailSync`'s transaction open) is real, but
+the RetryTemplate already holds it open for up to 2s of backoff on every *other* transient failure, so
+AC4 buys a narrow reduction in hold time and pays for it in duplicate mail.
 
-### 9. **MailManager.isRetryable exception depth: Exactly 3 levels?** ✓ VERIFIED
+This may still be the right call — it is the owner's decision. It should be *recorded as a decision*
+in the AC, with the duplicate-send consequence named, not presented as strictly better.
 
-**Location:** AC4, lines 51–52  
-**Finding:**
-The story says `isRetryable` walks "two-level cause-walk (direct exception, its cause, its cause's cause)" and "stays exactly as it is".
+### M7 — Rate-limit rejections still consume the circuit breaker's failure window
 
-Looking at the actual code (MailManager.java:144–150), it does exactly this:
-```java
-Throwable direct = unknownException;
-Throwable cause = unknownException.getCause();
-Throwable causeOfCause = cause != null ? cause.getCause() : null;
+AC4 says the fix avoids attempts "burned against the 5-recipient-loop/**circuit-breaker**/transaction
+budget". It avoids burning *retries*; it does not stop the rejection counting as one failure against
+the `emailService` breaker, because `circuitBreaker.run(...)` wraps the whole loop and the exception
+propagates out of it (`MailManager.java:72-96`).
 
-return Stream.of(direct, cause, causeOfCause)
-    .filter(Objects::nonNull)
-    .noneMatch(t -> NON_REPAIRABLE_ERRORS.stream().anyMatch(...));
-```
+With `slidingWindowSize=5, minimumNumberOfCalls=5, failureRateThreshold=50%, waitDurationInOpenState=5s`
+(`ComponentConfig.defaultCustomizer`), **five rate-limited envelopes open the breaker for all outbound
+mail for 5 seconds** — including sends that were comfortably under the limit. That is arguably
+acceptable backpressure, but it is a behaviour change the story does not mention and the AC's wording
+currently implies is avoided.
 
-**In Phase 2's flow:**  
-- Retry template wraps exceptions in RuntimeException
-- MailManager.isRetryable() checks: direct (RuntimeException), cause (MessagingException or EmailTransportPermanentException), causeOfCause (null or the original error)
-- For SmtpEmailSender throwing EmailTransportPermanentException directly: direct=EmailTransportPermanentException → isRetryable=false. ✓ Correct.
+### M8 — Burst → attempt exhaustion → permanent mail loss
 
-**Verdict:** ✓ **NO ISSUE.** The depth is correct for Phase 2's exception layers.
+Interaction the story does not walk: `EnvelopeEntityRepository:17` fetches `LIMIT 10` retryable
+envelopes per tick (default 60s), and `EmailRetryScheduler.sendAll` dispatches them in a tight,
+**unpaced** loop. Each `sendEmailSync` increments `attempts`; `MAX_RETRY_ATTEMPTS = 6` then marks the
+envelope `ATTEMPTS_EXHAUSTED` with `retry=false` — permanently dropped.
 
----
+With single-recipient envelopes and the default `max-send-rate-per-second=10` this is marginal
+(10 sends vs 10 permits). With multi-recipient envelopes the burst is 10 × N sends against 10 permits,
+so roughly `10N − 10` rejections per tick, each burning one of six attempts on an envelope that hit no
+actual SES error. Sustained saturation therefore reaches permanent mail loss in ~6 minutes.
 
-### 10. **SmtpErrorClassifier must handle all jakarta.mail exceptions** ⚠ COMPLETENESS CHECK
-
-**Location:** AC2, line 36  
-**Finding:**
-The story specifies four types for Permanent:
-- MailParseException, MailPreparationException, jakarta.mail.internet.AddressException, jakarta.mail.internet.ParseException
-
-And "every other MessagingException → Transient".
-
-**Question:** Are these the only four that are actually thrown by MimeMessage/MimeMessageHelper/JavaMailSenderImpl in typical SMTP scenarios?
-
-**Likely omissions to check:**
-- `jakarta.mail.SendFailedException` — thrown when send() fails to reach recipient
-- `jakarta.mail.AuthenticationFailedException` — thrown on auth error
-- `jakarta.mail.internet.MimeTypeParseException` — thrown if charset/encoding is invalid
-- `jakarta.mail.IllegalWriteException`, `IllegalStateException` — API misuse
-
-**Dev note:** The story says "preserves MailManager.NON_REPAIRABLE_ERRORS's exact classification" which is correct—SmtpErrorClassifier maps the same four types. If new exception types appear during implementation (e.g., when constructing MimeMessage), they'll default to Transient, which is the safe choice.
-
-**Verdict:** ✓ **CORRECT APPROACH.** The four types are what's currently classified as permanent in MailManager. SmtpErrorClassifier should mirror this exactly. Future exceptions (if encountered) will default to Transient. The dev should log any encountered exceptions that don't match the four types at WARN (like AC5 requires for SES) so unexpected types are visible.
-
----
-
-## Missed Flows / Edge Cases
-
-### 1. **Registration listener exception wrapping unchanged** ✓ CORRECT
-
-AC11 (Phase 1) widened catch from `EmailTransportException` to `EmailTransportException | IllegalArgumentException`. Phase 2 doesn't touch the registration listeners. ✓ Correct — registration listeners stay on direct OutboundEmailSender calls, not routed through MailManager.
-
-### 2. **Health indicator activation order: SMTP indicator activates even if transport ≠ SMTP** ✓ DELIBERATE
-
-AC2 says: *"Do not re-gate SmtpHealthIndicator on app.email.transport=smtp in this story"*
-
-Until Phase 3, SmtpHealthIndicator activates if SMTP is configured (provider-presence-gated), regardless of the active transport. This can be confusing (health check for a disabled transport) but is explicitly called out as deliberate under-scoping. Phase 3 will add SesHealthIndicator and re-gate both. ✓ Intentional.
-
-### 3. **Resend flow for SMTP: What if SMTP send fails?** ✓ SAME AS TODAY
-
-Phase 2 doesn't move registration listeners to MailManager/outbox (that's Phase 4). They call OutboundEmailSender directly. If SMTP send fails, the exception is caught and logged by the listener. The user can call POST /resend-otp to retry. ✓ Same as today.
-
-### 4. **What if both htmlBody and textBody are present?** ✓ SMTP PICKS HTML
-
-AC2 says: *"pick `htmlBody` when present, else `textBody`"*
-
-If both are present (e.g., an email with both HTML and plaintext versions), SMTP sends only HTML. This mirrors "matching today's MailService behavior exactly" and is consistent with current code (line 75 of MailService sends `isHtml=true` for templates, ignoring any text-only option). ✓ Correct.
+At minimum, the story should state whether a rate-limit rejection *should* consume a scheduler attempt.
+A cheap, in-scope mitigation: have `SesSendRateLimiter` be the only thing that fails, and let the
+scheduler's attempt counter skip `EmailTransportRateLimitedException` — but that is a real design call
+and belongs in the AC, not in a dev's judgement at 5pm.
 
 ---
 
-## Testing Coverage Gaps: None
+## Minor / nits
 
-The story specifies tests for each AC and provides a test plan that is comprehensive.
+- **N1 — arch-test doc trap AC6 doesn't warn about.** `EmailTransportArchitectureTest:68` lists
+  `"SmtpHealthIndicator"` in `SMTP_ONLY_CLASS_NAMES`, and rule 2 matches `\bSmtpHealthIndicator\b`
+  against **whole file content, javadoc included**, for every main source file outside
+  `infrastructure/email/smtp/`. AC1 instructs the dev to *"mirror `SmtpHealthIndicator`'s
+  `AtomicReference<Cached>` + double-checked-locking pattern
+  (`infrastructure/email/smtp/SmtpHealthIndicator.java`) exactly"* — writing that sentence into
+  `SesHealthIndicator`'s javadoc, the natural thing to do, fails rule 2. AC6's "no rule changes
+  needed" is correct but should add: *the new class must not name `SmtpHealthIndicator` in code or
+  comments.*
+- **N2 — stale version citation.** AC1 says the accessors were "verified against `sesv2-2.54.7.jar`".
+  `pom.xml`'s `dependencyManagement` imports `software.amazon.awssdk:bom:**2.54.13**`. The accessors
+  exist in both, so the conclusion holds — the citation is just stale and will mislead the next reader.
+- **N3 — AC3's dependency list is incomplete.** The "Given" clause says `SesSendRateLimiter`
+  constructor-injects `SesProperties`; the counter requirement means it also needs `MeterRegistry`.
+  Trivial, but B3's `TransportWiringTest` breakage comes directly from this omission.
+- **N4 — startup-order race on a misconfigured rate.** `SesPropertiesValidator` is a separate
+  `@Component` with `@PostConstruct validate()` (`SesPropertiesValidator.java:42,61-62`) and owns the
+  friendly `app.ses.max-send-rate-per-second must be positive` message.
+  `RateLimiterConfig.custom().limitForPeriod(n)` throws its own `IllegalArgumentException` for `n <= 0`.
+  Bean init order between the two is not pinned, so a misconfigured deployment may get the resilience4j
+  message instead of the actionable one. Build the `RateLimiter` lazily on first use, or add
+  `@DependsOn("sesPropertiesValidator")`.
+- **N5 — AC6's rate-limiter test is timing-flaky as specified.** Two issues: (a) the wall-clock
+  assertion is inherently CI-sensitive; (b) "N+1 acquires within one window" straddles
+  `AtomicRateLimiter`'s refresh boundary — with `limitForPeriod=10, limitRefreshPeriod=1s` the 11th
+  acquire legitimately succeeds if the window rolls mid-test. Construct the limiter under test with a
+  deliberately awkward config (e.g. `limitForPeriod=2, limitRefreshPeriod=60s`) so the rejection is
+  deterministic, and assert an upper bound (`< 200ms`) rather than a tight one. §7.2 item 23's intent
+  — prove "fails fast", not "blocks" — survives both changes.
+- **N6 — `transport=log` has no health contributor.** After AC2, `management.endpoint.health.group.notification`
+  has zero members in any `transport=log` environment (`application.yaml:154` base default,
+  `application-test.yaml:134`), so `/manage/health/notification` returns 404 there. Today the base
+  yaml's SMTP providers happen to keep the group populated. Nothing consumes the endpoint — I grepped
+  `docs/`, `deploy/`, `.github/` and `src/test` and found no reference — so this is informational, but
+  the source doc's *"whichever transport an environment runs, its health is visible"* is not literally
+  satisfied for `log`. Worth one line in Dev Notes saying that is intentional.
+- **N7 — metric blind spot in AC5.** Wrapping only `outboundEmailSender.send(request)` means the
+  `EmailTransportPermanentException` `MailService` itself raises for a malformed payload
+  (`MailService.java:62-65`, added by ses-1.2's code review) never appears as `outcome=failure`. If
+  the metric is meant to answer "what happened to this email", that class of failure should be in it.
+- **N8 — nothing alerts on the new signals.** No rule in `deploy/lgtm/alerts.yml` or
+  `grafana-alerts.yml` references mail at all. `mail.send{outcome=failure}` and
+  `mail.ses.rate_limiter.rejected` will be scrapeable and unwatched. Out of scope for this story, but
+  §10's *"prod's health becomes observable before it serves real traffic"* is only half-delivered
+  without a follow-up item.
 
 ---
 
-## Blockers: None
+## Verified accurate — no action (recorded so these are not re-audited)
 
-All identified items are either clarifications (not bugs) or already-addressed (dev notes).
+These story claims were checked against HEAD or the resolved jars and are **correct**:
+
+- `SimpleRetryPolicy(int, Map<Class<? extends Throwable>, Boolean>, boolean, boolean)` exists in
+  `spring-retry-2.0.13` (`javap`).
+- `AllNestedConditions(ConfigurationPhase)` exists in `spring-boot-autoconfigure-3.5.16` (`javap`), and
+  `@ConditionalOnProperty` is indeed not `@Repeatable`.
+- No `AllNestedConditions` / `AnyNestedCondition` / `@Conditional(` usage anywhere in `src/main/java`
+  today — the pattern genuinely has no house precedent, as AC2 states.
+- `MailManager.sendEmailSync` rewraps *every* exception in `new RuntimeException(...)` before rethrow
+  (`MailManager.java:78-84`), so AC4's `traverseCauses=true` is genuinely required, and
+  `BinaryExceptionClassifier` with `defaultValue=true` does walk that one level and return `false`.
+- AC4's claimed end state is right: `isRetryable` finds no `EmailTransportPermanentException` in the
+  bounded 2-level walk, so the envelope persists as `FAILED, retry=true` and is re-driven by
+  `EmailRetryScheduler`, exactly as described.
+- `MailManagerResilienceTest.setUp()` really does build its own
+  `RetryTemplate.builder().maxAttempts(3).fixedBackoff(Duration.ofMillis(10)).build()` and never
+  touches `ComponentConfig`'s bean — AC6's "would pass vacuously" warning is correct and valuable.
+- `EmailTransportTransientException` / `EmailTransportPermanentException` are plain non-`final`
+  `public class` — the new subclass compiles without touching the parent.
+- `TransportWiringTest`'s `smtpHealthIndicator_activatesOnlyWhenAProviderIsConfigured` javadoc does
+  name `SesHealthIndicator`'s non-existence as the reason the exclusivity story was deferred.
+- `GetAccountResponse.sendingEnabled()` / `productionAccessEnabled()` / `sendQuota()` and
+  `SendQuota.max24HourSend()` / `maxSendRate()` / `sentLast24Hours()` all exist (the *version* cited is
+  stale — see N2 — but the accessors are real).
+- `SesConfig`'s `SesV2Client` bean carries `apiCallTimeout(5s)` / `apiCallAttemptTimeout(3s)`, so
+  `SesHealthIndicator` inherits the bound with no extra wiring.
+- `app.ses.max-send-rate-per-second` is fully wired (`SesProperties:27` default 10,
+  `SesPropertiesValidator` positive check + `>= 10` sandbox WARN, `docker-compose.yml:99`,
+  `.env.example:81`) — and `.env.example:77-80` **does** document the per-node division
+  ("that ceiling is shared, so divide by the number of app nodes"), so the References claim holds.
+- `resilience4j-ratelimiter:2.2.0` is present on the compile classpath transitively; no `pom.xml`
+  change is needed.
+- Metric-name style: `mail.ses.rate_limiter.rejected`'s underscore-inside-segment matches existing
+  house precedent (`video.orphan_asset.purge_failed`, `video.error.count`) — not a defect.
+- Package placement needs no arch-rule changes: `infrastructure/ses` already owns the SES SDK carve-out
+  (rule 3), `infrastructure.email` is transport-neutral, and rule 4 only bans SES-SDK / mail-API
+  package tokens under `platform/**`, which `MailMetrics` and the new exception do not carry.
+- No new Spring-context-forking test is introduced; `ApplicationContextRunner` contexts do not enter
+  the TestContext cache, so `assert-context-count.sh`'s `CEILING=39` is unaffected.
+- Group member naming is right: `SesHealthIndicator` → `ses`, `SmtpHealthIndicator` → `smtp`, derived
+  from the bean name with the `HealthIndicator` suffix stripped.
 
 ---
 
-## High Confidence Items (No Rework Expected)
+## Suggested AC edits (condensed)
 
-✓ AC1 extraction is mechanical — verbatim move of lines 61–74 plus special case  
-✓ AC2 SMTP package structure mirrors Phase 1's port pattern  
-✓ AC3 MailService rewrite is straightforward once EmailContentRenderer exists  
-✓ AC4 MailManager exception classification mirrors current behavior  
-✓ AC5 containment tests are hand-rolled, pattern already established in codebase  
-✓ AC6 config migration is straightforward (rename/rebind YAML keys)  
-✓ AC7 spring.mail removal is a pure deletion (zero references in src/main/java confirmed)  
-✓ AC8/AC9 wiring and downstream fixes are compile-time changes
-
----
-
-## Recommendations for Developer
-
-1. **Before Task 1:** Verify EmailTemplate enum has 31 entries and confirm they all use identical Thymeleaf rendering logic (or list exceptions). This informs characterization test scope.
-
-2. **Before Task 2:** Search the current SmtpHealthIndicator for its exact `@ConditionalOnProperty` annotation. Update both prefix AND property-name (kebab-case) simultaneously.
-
-3. **Task 5 implementation note:** When writing `NoStraySmtpConfigTest`, scope the `email:` key check to `email.providerConfigs:` specifically, not a blanket top-level-key match. The `email.retry:` block is unrelated.
-
-4. **After all tasks:** Run `mvn clean verify` to confirm all tests pass (CI is the gate per project convention). Do NOT run locally per project's documented preference.
-
-5. **Correlation ID logging:** Add a comment in MailService explaining that UUID-per-call generates unique IDs for each retry attempt; correlation across retries is Phase 4 concern via persisted envelope.messageId.
-
----
-
-## No False Positives Detected
-
-Every spot-check against Phase 1 code and the current codebase state holds up. The story is accurate and internally consistent.
+1. **AC4** — replace the `SimpleRetryPolicy` construction with the builder-native
+   `.maxAttempts(3).notRetryOn(EmailTransportRateLimitedException.class).traversingCauses().fixedBackoff(Duration.ofSeconds(1))`,
+   and add the M6 duplicate-send consequence + M7 circuit-breaker note as recorded decisions.
+2. **AC3** — add `MeterRegistry` to the dependency list; require the class to translate *any* exception
+   out of the permit acquisition, not just `RequestNotPermitted` (or use `acquirePermission()` directly).
+3. **AC1** — decide and state the sandbox/`enforcementStatus` mapping; require null-safe reads of
+   `sendingEnabled()` / `sendQuota()`; drop the false "breaks the endpoint for every other indicator"
+   rationale; forbid naming `SmtpHealthIndicator` in the new file's comments (N1).
+4. **AC2** — restate the premise as a live prod defect (base `application.yaml:158-170` + prod's
+   `transport: ses`), and make AC6's exclusivity test use that exact shape.
+5. **AC5** — add the `transport == null` fallback and widen the catch to `Throwable`-and-rethrow.
+6. **AC6 / Task list** — add `SesAddressValidationTest` and both broken `TransportWiringTest` cases to
+   the modified-files list; de-flake the rate-limiter test per N5.

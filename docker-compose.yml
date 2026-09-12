@@ -115,7 +115,14 @@ services:
       - APP_BOOTSTRAP_ADMIN_PASSWORD=${APP_BOOTSTRAP_ADMIN_PASSWORD:-}
       - APP_BOOTSTRAP_ADMIN_PHONE=${APP_BOOTSTRAP_ADMIN_PHONE:-}
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8367/manage/health || exit 1"]
+      # Story ses-1.3 code review 2026-09-12: polls the `smoke` group (db,diskSpace,ping), NOT the
+      # default `/manage/health`. The default group is unconditionally every registered contributor
+      # — Spring Boot offers no way to exclude one from it — so once SesHealthIndicator landed, a
+      # sandboxed SES account (productionAccessEnabled=false) or a missing ses:GetAccount IAM grant
+      # would mark this container unhealthy while sending still worked fine. `smoke` is the liveness
+      # signal; mail-transport health belongs to the `notification` group and its own alerting.
+      # .github/workflows/deploy.yml already polls /manage/health/smoke for exactly this reason.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8367/manage/health/smoke || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -140,9 +147,12 @@ services:
       - "traefik.http.routers.app-health.middlewares=health-rewrite"
       - "traefik.http.routers.app-health.service=app-health-svc"
       - "traefik.http.services.app-health-svc.loadbalancer.server.port=8367"
-      # Middleware: /actuator/health → /manage/health ($$1 escapes $ from Compose interpolation)
-      - "traefik.http.middlewares.health-rewrite.replacepathregex.regex=/actuator/(.*)"
-      - "traefik.http.middlewares.health-rewrite.replacepathregex.replacement=/manage/$$1"
+      # Middleware: /actuator/health → /manage/health/smoke. The router rule above only matches the
+      # exact path /actuator/health, so this rewrite has exactly one input. It targets the `smoke`
+      # group for the same reason as the container healthcheck above — an external uptime monitor is
+      # asking "is the app serving", which mail-transport health must not be able to answer with 503.
+      - "traefik.http.middlewares.health-rewrite.replacepathregex.regex=/actuator/health"
+      - "traefik.http.middlewares.health-rewrite.replacepathregex.replacement=/manage/health/smoke"
     networks:
       - skillars-internal
       - skillars-observability

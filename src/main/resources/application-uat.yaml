@@ -61,3 +61,11 @@ skillars:
   platform:
     pin-encryption-secret: "${PLATFORM_PIN_ENCRYPTION_SECRET:}"
     registration-verification-secret: "${PLATFORM_REGISTRATION_VERIFICATION_SECRET:}"
+
+# Story ses-1.3 AC2: uat runs app.email.transport=smtp, so SmtpHealthIndicator is the only registered transport indicator.
+management:
+  endpoint:
+    health:
+      group:
+        notification:
+          include: smtp

@@ -58,7 +58,11 @@ class SesEmailSenderTest {
         when(client.sendEmail(any(java.util.function.Consumer.class))).thenCallRealMethod();
         props = new SesProperties();
         props.setFromAddress("noreply@example.com");
-        sender = new SesEmailSender(client, props, new EmailAddressParser(), new SesErrorClassifier());
+        // Story ses-1.3 AC3: SesEmailSender's 5th constructor argument. A mock's default no-op
+        // acquireOrThrow() never rejects — these tests are about request-shape mapping, not rate
+        // limiting, which SesSendRateLimiterTest covers on its own.
+        sender = new SesEmailSender(
+            client, props, new EmailAddressParser(), new SesErrorClassifier(), mock(SesSendRateLimiter.class));
 
         senderLogger = (Logger) LoggerFactory.getLogger(SesErrorClassifier.class);
         logAppender = new ListAppender<>();

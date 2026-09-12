@@ -6,10 +6,14 @@ import com.softropic.skillars.infrastructure.email.OutboundEmailRequest;
 import com.softropic.skillars.infrastructure.email.OutboundEmailResult;
 import com.softropic.skillars.infrastructure.email.OutboundEmailSender;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.wiremock.spring.ConfigureWireMock;
 import org.wiremock.spring.EnableWireMock;
 import org.wiremock.spring.InjectWireMock;
@@ -34,9 +38,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  * servers ({@code bunny-service}, {@code stripe-service}): a third server name sharing that context
  * would fork the shared context for a test that doesn't need any of it. {@code app.ses.from-address}
  * is pinned as an explicit test property rather than left to inherit from any profile.
+ *
+ * <p>Story ses-1.3 Task 6: {@link SesEmailSender} gained a {@link SesSendRateLimiter} constructor
+ * dependency (AC3) — added to the {@code classes} list below, or context startup fails with a
+ * {@code NoSuchBeanDefinitionException}. {@link SesSendRateLimiter} in turn needs a
+ * {@link MeterRegistry} bean: this sliced context does not scan for or auto-configure one (it lists
+ * exactly the beans it needs rather than bootstrapping the whole application), so {@link
+ * MeterRegistryTestConfig} below supplies a bare {@link SimpleMeterRegistry}, the same as {@code
+ * TransportWiringTest}'s {@code ApplicationContextRunner.withBean(MeterRegistry.class,
+ * SimpleMeterRegistry::new)}.
  */
 @SpringBootTest(classes = {
-    SesConfig.class, SesEmailSender.class, SesErrorClassifier.class, EmailAddressParser.class
+    SesConfig.class, SesEmailSender.class, SesErrorClassifier.class, EmailAddressParser.class,
+    SesSendRateLimiter.class, SesEmailEndToEndIT.MeterRegistryTestConfig.class
 }, properties = {
     "app.email.transport=ses",
     "app.ses.from-address=noreply@example.com",
@@ -57,6 +71,14 @@ class SesEmailEndToEndIT {
 
     @InjectWireMock("ses-service")
     private WireMockServer wireMockServer;
+
+    @TestConfiguration
+    static class MeterRegistryTestConfig {
+        @Bean
+        MeterRegistry meterRegistry() {
+            return new SimpleMeterRegistry();
+        }
+    }
 
     @Test
     void send_callsSesOverTheStubbedEndpoint_andReturnsTheMessageId() {

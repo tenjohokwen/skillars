@@ -46,10 +46,14 @@ public class SesEmailSender implements OutboundEmailSender {
     private final SesProperties props;
     private final EmailAddressParser addressParser;
     private final SesErrorClassifier errorClassifier;
+    private final SesSendRateLimiter rateLimiter;
 
     @Override
     public OutboundEmailResult send(OutboundEmailRequest request) {
         validateRecipient(request.toAddress());
+        // Story ses-1.3 AC3: after validation (a malformed address must not consume a permit for a
+        // send that was never going to succeed) and before the SDK call.
+        rateLimiter.acquireOrThrow();
 
         try {
             SendEmailResponse response = sesV2Client.sendEmail(r -> {

@@ -171,6 +171,20 @@ application read them but no deploy supplied them. Defaults below are the applic
 > | `APP_SES_REPLY_TO_ADDRESS` | no | blank | Validated as a single address when set |
 > | `APP_SES_MAX_SEND_RATE_PER_SECOND` | no | `10` | Sandbox accounts cap at 1/s; `>= 10` logs a WARN at boot |
 >
+> **IAM: `ses:GetAccount` is required in addition to `ses:SendEmail` (story ses-1.3).** `SesHealthIndicator`
+> calls `GetAccount` to report sandbox and enforcement state on `/manage/health/notification`. A principal
+> that can send but cannot call `GetAccount` makes that group report DOWN with an `AccessDeniedException`
+> while mail delivery itself is unaffected. Grant both actions on the SES resource.
+>
+> **Phase-5 ordering constraint (story ses-1.3).** `SesHealthIndicator` reports UP only when
+> `sendingEnabled` **and** `productionAccessEnabled` hold **and** `enforcementStatus` is readable and not
+> `SHUTDOWN` — a sandboxed account is deliberately DOWN, because a sandboxed prod account cannot mail real
+> users. So SES **production access must be granted before** an environment is flipped to
+> `app.email.transport: ses`, or its `notification` health group reports DOWN from the first boot. This does
+> not affect container liveness or the deploy gate: both poll the `smoke` group (db, diskSpace, ping), which
+> carries no mail contributor — see `docker-compose.yml`'s app `healthcheck` and the `health-rewrite`
+> Traefik middleware.
+>
 > **AWS SES (legacy):** `application-prod.yaml` sets `app.ses.enabled: true`, so a production boot constructs
 > a real `SesV2Client` (region defaults to `eu-west-1` via `app.ses.region`). Credentials come from
 > the AWS SDK default provider chain — environment, instance profile, or `~/.aws` — none of which

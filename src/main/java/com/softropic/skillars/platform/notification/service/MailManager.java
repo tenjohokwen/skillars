@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.notification.service;
 
 import com.softropic.skillars.infrastructure.email.EmailTransportPermanentException;
+import com.softropic.skillars.infrastructure.email.EmailTransportRateLimitedException;
 import com.softropic.skillars.platform.notification.contract.EmailDeliveryStatus;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
@@ -69,6 +70,14 @@ public class MailManager {
         final CircuitBreaker circuitBreaker = circuitBreakerFactory.create("emailService");
 
         EnvelopeEntity envelopeEntity;
+        // Story ses-1.3, code review 2026-09-12: a rate-limit rejection must not spend a delivery
+        // attempt. The send never reached SES — the limiter refused it locally — so counting it
+        // would let a burst exhaust MAX_RETRY_ATTEMPTS and mark perfectly deliverable envelopes
+        // ATTEMPTS_EXHAUSTED (retry=false, never fetched again) without a single real transport
+        // failure. Most acute at the 1/s rate SesPropertiesValidator prescribes for a sandboxed
+        // account, where one 10-envelope scheduler batch yields ~9 rejections per tick. The
+        // envelope's deadline remains the terminal bound: DEADLINE_EXPIRED still applies.
+        boolean rateLimited = false;
         try {
             circuitBreaker.run(() -> {
                 for (Recipient recipient : recipients) {
@@ -96,12 +105,15 @@ public class MailManager {
             });
             envelopeEntity = toEnvelopeEntity(envelope, null);
         } catch (Exception exception) {
+            rateLimited = EmailTransportRateLimitedException.isPresentIn(exception);
             envelopeEntity = toEnvelopeEntity(envelope, exception);
             logger.error("Could not send email after retries and circuit breaker protection. {}", envelopeEntity, exception);
         }
         final EnvelopeEntity entityBySendId = envelopeEntityRepository.findBySendId(envelopeEntity.getSendId());
         if (entityBySendId != null) {
-            entityBySendId.setAttempts(entityBySendId.getAttempts() + 1);
+            if (!rateLimited) {
+                entityBySendId.setAttempts(entityBySendId.getAttempts() + 1);
+            }
             entityBySendId.setStatus(envelopeEntity.getStatus());
             entityBySendId.setError(envelopeEntity.getError());
             entityBySendId.setRetry(envelopeEntity.isRetry());
@@ -113,7 +125,11 @@ public class MailManager {
     private EnvelopeEntity toEnvelopeEntity(final Envelope envelope, final Exception exception) {
         final EnvelopeEntity envelopeEntity = EnvelopeMapper.toEntity(envelope);
         long attempts = envelopeEntity.getAttempts();
-        envelopeEntity.setAttempts(++attempts);
+        // A null exception is the success path, which always counts. See sendEmailSync for why a
+        // rate-limit rejection does not.
+        if (!EmailTransportRateLimitedException.isPresentIn(exception)) {
+            envelopeEntity.setAttempts(++attempts);
+        }
         if (exception != null) {
             final String stacktrace = ExceptionUtils.getStackTrace(exception);
             envelopeEntity.setError(stacktrace);
