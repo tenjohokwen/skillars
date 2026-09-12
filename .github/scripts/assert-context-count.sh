@@ -72,7 +72,19 @@ LOG="${1:?usage: assert-context-count.sh <build-log> [ceiling]}"
 # This is the deterministic, one-time cost the @MockitoBean trap describes (see
 # docs/testing/why-inheritance-over-import.md), not ordering-dependent thrashing: every local and
 # CI run of this branch reproduces exactly 37, not a range.
-CEILING="${2:-37}"
+#
+# CEILING = 39, deliberate +2 (story ses-1.2, SmtpTransportBootIT). This class's own javadoc
+# already names the +1 it expects and accepts: it is the only place the shipped
+# `transport=smtp` path is verified end-to-end (real component scan, real YAML binding, a real
+# socket conversation with a fake SMTP server) via @DynamicPropertySource -- which is
+# structurally invisible to IntegrationTestConventionTest's static checks, so nothing catches it
+# before this gate does. Measured on PR #179 (run 34675738460): missCount went 37 -> 39, not 38,
+# because the suite runs at cache capacity (`size = 32, maxSize = 32`) by this point -- exactly
+# the "one new config also evicts and later re-forks something else" dynamic this file's own
+# CEILING=36 section above already documents, not a second, separate regression. Reproduced
+# twice at 39 on the same tree; not a 37-39 range, so this is not the ordering-thrashing case the
+# warning below guards against.
+CEILING="${2:-39}"
 
 if [ ! -f "$LOG" ]; then
   echo "assert-context-count: build log not found: $LOG" >&2
