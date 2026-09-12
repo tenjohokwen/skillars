@@ -5,7 +5,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.actuate.health.AbstractHealthIndicator;
 import org.springframework.boot.actuate.health.Health;
+import org.springframework.boot.autoconfigure.condition.AllNestedConditions;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
 
 import javax.net.ssl.SSLSocket;
@@ -63,10 +65,31 @@ import java.util.concurrent.atomic.AtomicReference;
  * permanently disable this indicator once the backing YAML key moved to kebab-case. The conditional's
  * semantics are unchanged — gated on a provider being configured, not on the transport enum; Phase 3
  * is what adds a transport-gate alongside it.
+ *
+ * <h2>Story ses-1.3 AC2 — bean existence is gated on provider-presence AND the active transport</h2>
+ *
+ * Before this story the gate was provider-presence alone, which meant a {@code transport=ses}
+ * environment with SMTP providers still in YAML kept this indicator live — and that was not
+ * hypothetical: the base {@code application.yaml} sets {@code provider-configs[0].host}
+ * unconditionally and {@code application-prod.yaml} does not clear it, so prod really was opening
+ * sockets to SMTP hosts it never sends through. Both conditions must now hold.
+ *
+ * <p>{@code @ConditionalOnProperty} is not {@code @Repeatable}, so the two checks are ANDed via
+ * {@link AllNestedConditions} — Spring Boot's standard idiom for exactly this — and applied with
+ * {@code @Conditional}. {@code REGISTER_BEAN} is the right phase for a component-scanned class.
+ *
+ * <p>This pairs with a <strong>per-profile</strong>
+ * {@code management.endpoint.health.group.notification.include} ({@code smtp} in dev/uat,
+ * {@code ses} in prod, absent from the base file whose {@code transport=log} has no indicator at
+ * all). Spring Boot's {@code HealthEndpointGroupMembershipValidator} resolves every name in an
+ * {@code include} list against actually-registered beans at context refresh and fails startup on a
+ * miss, so a single profile-independent {@code include: smtp,ses} cannot coexist with
+ * transport-gated beans. Declaring both per profile keeps each list naming exactly the indicator
+ * that profile's transport implies (code review 2026-09-12).
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(prefix = "app.email.smtp", name = "provider-configs[0].host")
+@Conditional(SmtpHealthIndicator.ActivationCondition.class)
 public class SmtpHealthIndicator extends AbstractHealthIndicator {
 
 	private static final int SOCKET_TIMEOUT_MS = 5000;
@@ -319,5 +342,24 @@ public class SmtpHealthIndicator extends AbstractHealthIndicator {
 
 	/** Aggregate {@link Health} plus the {@link System#currentTimeMillis()} it was computed at. */
 	private record Cached(Health health, long computedAtMillis) {
+	}
+
+	/**
+	 * ANDs the two {@code @ConditionalOnProperty} checks this bean needs — {@code @ConditionalOnProperty}
+	 * itself is not {@code @Repeatable}, so they cannot simply be stacked on the class.
+	 */
+	static class ActivationCondition extends AllNestedConditions {
+
+		ActivationCondition() {
+			super(ConfigurationPhase.REGISTER_BEAN);
+		}
+
+		@ConditionalOnProperty(prefix = "app.email.smtp", name = "provider-configs[0].host")
+		static class SmtpProviderConfigured {
+		}
+
+		@ConditionalOnProperty(name = "app.email.transport", havingValue = "smtp")
+		static class SmtpIsTheActiveTransport {
+		}
 	}
 }

@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.notification.infrastructure;
 
 import com.softropic.skillars.infrastructure.email.EmailTransportPermanentException;
+import com.softropic.skillars.infrastructure.email.EmailTransportRateLimitedException;
 import com.softropic.skillars.infrastructure.email.EmailTransportTransientException;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
@@ -145,6 +146,48 @@ public class MailManagerResilienceTest {
         // The EmailRetryScheduler polls on this flag — a structurally impossible parse error must
         // not be picked up again, or it would fail forever.
         assertThat(captor.getValue().isRetry()).isFalse();
+    }
+
+    /**
+     * Story ses-1.3, code review 2026-09-12 (decision D3). A rate-limit rejection never reached the
+     * transport — the limiter refused it locally — so it must not spend one of the six
+     * {@code EmailRetryScheduler} attempts. Without this, a burst that the limiter exists to *defer*
+     * instead exhausts the attempt budget and lands perfectly deliverable envelopes in
+     * {@code ATTEMPTS_EXHAUSTED} with {@code retry=false}, never to be fetched again.
+     *
+     * <p>Contrast with the transient case directly below, which does still consume an attempt: that
+     * one genuinely failed at the transport.
+     */
+    @Test
+    void rateLimitRejection_persistsRetryTrueWithoutConsumingAnAttempt() {
+        doThrow(new EmailTransportRateLimitedException("SES send rate limit exceeded: 10 sends/second"))
+            .when(mailService).sendEmailFromTemplate(any(), any(), any());
+
+        mailManager.sendEmailSync(envelope);
+
+        ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
+        verify(envelopeEntityRepository).save(captor.capture());
+        assertThat(captor.getValue().isRetry()).isTrue();
+        assertThat(captor.getValue().getAttempts())
+            .as("a rate-limit rejection must not consume a delivery attempt")
+            .isZero();
+    }
+
+    /**
+     * The counterpart assertion that makes the case above non-vacuous: an ordinary transient failure
+     * DOES consume an attempt, so the zero above is the rate-limit branch and not simply how every
+     * failure is counted.
+     */
+    @Test
+    void transientTransportException_doesConsumeAnAttempt() {
+        doThrow(new EmailTransportTransientException("Connection timed out"))
+            .when(mailService).sendEmailFromTemplate(any(), any(), any());
+
+        mailManager.sendEmailSync(envelope);
+
+        ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
+        verify(envelopeEntityRepository).save(captor.capture());
+        assertThat(captor.getValue().getAttempts()).isEqualTo(1);
     }
 
     @Test

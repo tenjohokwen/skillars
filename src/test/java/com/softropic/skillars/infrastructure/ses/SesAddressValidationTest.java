@@ -26,7 +26,11 @@ class SesAddressValidationTest {
         client = mock(SesV2Client.class);
         SesProperties props = new SesProperties();
         props.setFromAddress("noreply@example.com");
-        sender = new SesEmailSender(client, props, new EmailAddressParser(), new SesErrorClassifier());
+        // Story ses-1.3 AC3: SesEmailSender's 5th constructor argument. A mock's default no-op
+        // acquireOrThrow() never rejects, which is correct here — these tests exist to prove a
+        // malformed address never reaches the SDK, not to exercise rate limiting.
+        sender = new SesEmailSender(
+            client, props, new EmailAddressParser(), new SesErrorClassifier(), mock(SesSendRateLimiter.class));
     }
 
     @Test

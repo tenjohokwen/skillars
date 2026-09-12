@@ -14,3 +14,11 @@ email:
 loki:
   url: ${LOKI_URL:http://localhost:3100}
   enabled: true
+
+# Story ses-1.3 AC2: prod runs app.email.transport=ses, so SesHealthIndicator is the only registered transport indicator.
+management:
+  endpoint:
+    health:
+      group:
+        notification:
+          include: ses
