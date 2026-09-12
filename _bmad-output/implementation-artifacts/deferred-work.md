@@ -17,6 +17,26 @@ One bullet = one open item. Grouped by the review that raised it; the heading ca
   Verify against the code before trusting an unannotated forward-reference.
 - **File paths and line numbers age fast.** They were accurate at the review date in the heading.
 
+## Last audit: 2026-09-12 (post-merge prune after ses-1-3, narrow scope)
+
+Routine sweep after `skillars-ses-1-3` (PR #181) merged to master. Two checks, not a full-file
+re-audit (the whole file was last swept 2026-09-11; this pass trusts that and looks only at what
+ses-1-3 could plausibly have closed):
+
+- **No live `[CLOSED by ...]` / `[STALE ...]` / `[WITHDRAWN ...]` tag found anywhere in the file**
+  outside historical `## Last audit` narrative text (full-file grep before writing) — nothing to
+  mechanically delete under this file's own convention.
+- **Checked the three `ses-1-*` code-review sections** (the only ones a just-merged SES story could
+  affect) against current code. One item was closed and deleted: `ses-1-1`'s "`app.ses.max-send-
+  rate-per-second` is validated and warned on but never enforced" — `SesSendRateLimiter` (new in
+  ses-1-3) now builds its bucket from `props.getMaxSendRatePerSecond()` and `SesEmailSender.send`
+  calls `rateLimiter.acquireOrThrow()` before every send (verified by direct read, not by trusting
+  the story note). Every other item under `ses-1-1`/`ses-1-2`/`ses-1-3` was checked against ses-1-3's
+  actual diff and confirmed still open (none are in scope of what ses-1-3 touched) — left in place.
+
+**Not done this pass:** re-verifying any item outside the three `ses-1-*` sections. Those were swept
+2026-09-11 and are trusted current.
+
 ## Last audit: 2026-09-11 (post-merge prune — deferred-work.md hygiene)
 
 Routine sweep after `skillars-deferred-109` (PR #176) merged to master, per this file's own
@@ -2006,7 +2026,6 @@ the story; three items are genuinely pre-existing or wider than this story and a
 
 ## Deferred from: code review of ses-1-1-introduce-outbound-email-port (2026-09-11)
 
-- **`app.ses.max-send-rate-per-second` is validated and warned on but never enforced.** `SesPropertiesValidator:86-97` rejects non-positive values and WARNs at `>= 10`, but nothing in `SesEmailSender.send` rate-limits: no semaphore, no bucket, no scheduler gate. `grep` confirms `getMaxSendRatePerSecond()` has no other consumer. An operator on a sandboxed SES account who sets it to 1 expecting throttling gets none. §5 assigns throttling to a later phase; revisit when Phase 3/4 lands.
 - **`LoggingEmailSender` collision-exhaustion is unthrottled and costs 100 syscalls per send.** The loop-exhausted `log.warn` at `LoggingEmailSender:121` sits outside the `directoryWritable` transition-throttle designed for the `IOException` branch at `:114`, and the `FileAlreadyExistsException` branch never touches that flag. A caller reusing a constant `correlationId` (the port places no uniqueness constraint on it) against an outbox already holding 100 matching files performs 100 `Files.writeString` attempts and emits one WARN per send, indefinitely. Degraded-path nuisance on a dev-only transport.
 - **No non-production environment exercises the SES path.** dev, uat and test are all `app.email.transport: log`; `smtp` is deliberately rejected until Phase 2; `DevSesEmailService` (the old way to make a dev box send real mail) is deleted by this story. The first execution of `SesEmailSender` against real AWS — real credentials, real region, real verified-domain state, 3s attempt timeout, zero retries — therefore happens in production. This is the phase plan working as designed, not a defect; noted so it is not rediscovered at the Phase 5 cutover.
 - **`LoggingEmailSender` silently discards the text part when both bodies are present.** `LoggingEmailSender:94-95` picks `htmlBody` when present and never writes a `.txt` companion, though `OutboundEmailRequest` explicitly supports both (`OutboundEmailRequestValidationTest.bothBodiesPresent_isAccepted`). No current caller sends both — all six registration emails are html-only — so the outbox artifact is simply not a faithful record for a shape nothing produces yet. Revisit if a multipart caller appears.
