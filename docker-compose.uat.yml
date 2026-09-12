@@ -85,7 +85,8 @@ services:
   # Traefik on its own domain (STORAGE_DOMAIN) with its own Let's Encrypt certificate, the
   # same pattern already used for MONITORING_DOMAIN/grafana below.
   minio:
-    image: minio/minio:RELEASE.2024-01-13T07-53-03Z
+    # MinIO stopped publishing to Docker Hub in Oct 2025; see SharedContainers.MINIO_IMAGE javadoc.
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: server /data --address ":9500" --console-address ":9501"
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
@@ -113,7 +114,7 @@ services:
 
   # One-shot: creates the UAT bucket on every startup (no-op if it already exists).
   minio-init:
-    image: minio/mc:RELEASE.2024-01-13T08-44-48Z
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     depends_on:
       minio:
         condition: service_healthy

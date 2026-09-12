@@ -62,8 +62,17 @@ public final class SharedContainers {
     /** Test Redis image. Tracks {@code docker-compose.yml:89}. */
     static final String REDIS_IMAGE = "redis:7-alpine";
 
-    /** MinIO image. No production compose entry — object storage is S3 in production. */
-    static final String MINIO_IMAGE = "minio/minio:RELEASE.2024-01-13T07-53-03Z";
+    /**
+     * MinIO image. No production compose entry — object storage is S3 in production.
+     *
+     * <p>MinIO stopped publishing images to Docker Hub in October 2025; the {@code minio/minio}
+     * repository there now 404s entirely, which is why this moved to {@code quay.io} (confirmed
+     * live via {@code quay.io/api/v1/repository/minio/minio/tag/}). {@link Minio#create()} must
+     * mark the parsed name {@code asCompatibleSubstituteFor("minio/minio")} — {@link MinIOContainer}'s
+     * constructor asserts the image is compatible with its {@code minio/minio}-registry default,
+     * and that check compares registry host too, so an unmarked {@code quay.io} image fails it.
+     */
+    static final String MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z";
 
     /**
      * Database name for the shared PostgreSQL container.
@@ -137,7 +146,8 @@ public final class SharedContainers {
         static final MinIOContainer INSTANCE = create();
 
         private static MinIOContainer create() {
-            MinIOContainer container = new MinIOContainer(DockerImageName.parse(MINIO_IMAGE));
+            MinIOContainer container = new MinIOContainer(
+                DockerImageName.parse(MINIO_IMAGE).asCompatibleSubstituteFor("minio/minio"));
             container.start();
             return container;
         }
