@@ -29,11 +29,9 @@ class EmailTransportProfileDeclarationTest {
         String content = Files.readString(Path.of(path));
         assertThat(content)
             .as(path + " must declare app.email.transport explicitly (AC3/AC12)")
-            // 'smtp' is deliberately NOT in this alternation. EmailTransportPropertyValidator
-            // aborts the boot on it until Phase 2, so accepting it here would let a profile be set
-            // to a value that kills prod on the next deploy while the whole suite stayed green
-            // (code review 2026-09-11).
-            .containsPattern("(?m)^\\s*transport:\\s*(ses|log)\\s*$");
+            // 'smtp' became a fully working transport in story ses-1.2 (AC6) — dev/uat now declare
+            // it explicitly. EmailTransportPropertyValidator accepts all three values the same way.
+            .containsPattern("(?m)^\\s*transport:\\s*(ses|smtp|log)\\s*$");
     }
 
     @Test

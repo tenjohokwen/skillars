@@ -1,17 +1,20 @@
-package com.softropic.skillars.platform.notification.contract;
+package com.softropic.skillars.infrastructure.email.smtp;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
 
 /**
- * skillars-deferred-99 AC5 — tuning for {@code SmtpHealthIndicator}: how long an aggregate result is
+ * skillars-deferred-99 AC5 — tuning for {@link SmtpHealthIndicator}: how long an aggregate result is
  * served from cache, and the overall wall-clock budget for one round of parallel per-provider probes.
  *
- * <p>Passive value holder (contract layer). Registered via {@code @EnableConfigurationProperties} in
- * {@code notification.config.ComponentConfig}.
+ * <p>Story ses-1.2 AC2: moved from {@code platform.notification.contract.SmtpHealthProperties} and
+ * rebound to {@code app.email.smtp.health}, matching {@code SmtpProperties}'s new home.
+ *
+ * <p>Passive value holder. Registered via {@code @EnableConfigurationProperties} in this package's
+ * own {@code @Configuration}.
  */
-@ConfigurationProperties(prefix = "app.notification.smtp-health")
+@ConfigurationProperties(prefix = "app.email.smtp.health")
 public class SmtpHealthProperties {
 
     /** Aggregate {@code Health} is recomputed at most once per this window. Default 60s. */

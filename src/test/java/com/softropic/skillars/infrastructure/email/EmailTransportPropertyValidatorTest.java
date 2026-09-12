@@ -8,9 +8,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Story ses-1.1 AC3 — {@link EmailTransportPropertyValidator} allows an absent value (falls through
- * to the base default), accepts {@code ses}/{@code log} case-insensitively, rejects a present
- * {@code smtp} with the Phase-2-specific message, and rejects anything else naming the offending
- * value.
+ * to the base default), and accepts {@code ses}/{@code smtp}/{@code log} case-insensitively.
+ *
+ * <p>Story ses-1.2 AC6: {@code smtp} became a fully working transport in this story, so the
+ * Phase-1-only rejection of a present {@code smtp} value no longer applies — it is now allowed
+ * exactly like {@code ses}/{@code log}. Anything else still aborts, naming the offending value.
  */
 class EmailTransportPropertyValidatorTest {
 
@@ -51,18 +53,14 @@ class EmailTransportPropertyValidatorTest {
     }
 
     @Test
-    void smtp_isRejectedWithPhase2Message() {
-        assertThatThrownBy(() -> run("smtp"))
-            .isInstanceOf(IllegalStateException.class)
-            .hasMessageContaining("app.email.transport=smtp is not implemented until Phase 2")
-            .hasMessageContaining("'log' or 'ses'");
+    void smtp_lowercase_isAllowed() {
+        assertThatCode(() -> run("smtp")).doesNotThrowAnyException();
     }
 
     @Test
-    void smtp_mixedCase_isRejectedWithPhase2Message() {
-        assertThatThrownBy(() -> run("SMTP"))
-            .isInstanceOf(IllegalStateException.class)
-            .hasMessageContaining("Phase 2");
+    void smtp_mixedCase_isAllowed() {
+        assertThatCode(() -> run("SMTP")).doesNotThrowAnyException();
+        assertThatCode(() -> run("Smtp")).doesNotThrowAnyException();
     }
 
     @Test

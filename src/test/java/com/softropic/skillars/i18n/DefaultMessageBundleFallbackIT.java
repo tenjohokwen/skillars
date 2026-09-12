@@ -36,7 +36,9 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
  * to {@code Accept-Language} when no locale cookie is set, so a Spanish or Italian client resolving
  * any of the 46 missing keys hit a {@code NoSuchMessageException} <em>where something still calls
  * the throwing three-arg {@code getMessage}</em> — in this codebase that is
- * {@link com.softropic.skillars.platform.notification.service.MailService#sendEmailFromTemplate},
+ * {@link com.softropic.skillars.platform.notification.service.EmailContentRenderer#render} (moved
+ * out of {@code MailService.sendEmailFromTemplate} by story ses-1.2's AC1 extraction; the lookup
+ * itself is unchanged — see that story's characterization test),
  * not any HTTP error path (every {@code ApiAdvice} handler uses the four-arg, non-throwing
  * {@code getMessage(key, args, defaultMessage, locale)} — see the honesty note on
  * {@link #spanishAcceptLanguage_protectedEndpoint_returnsCleanUnauthorized()} below). So the actual
@@ -194,8 +196,9 @@ class DefaultMessageBundleFallbackIT extends AbstractIntegrationTest {
      * this one included — resolves through the four-argument, non-throwing
      * {@code getMessage(key, args, defaultMessage, locale)}. Reverting all 46 AC12 keys would not
      * fail this test: the HTTP error path was never the code path that could throw. The genuine
-     * throwing call site is {@link com.softropic.skillars.platform.notification.service.MailService
-     * #sendEmailFromTemplate}'s three-argument {@code getMessage}, which
+     * throwing call site is {@link com.softropic.skillars.platform.notification.service.EmailContentRenderer
+     * #render}'s three-argument {@code getMessage} (moved out of {@code MailService} by story
+     * ses-1.2's AC1 extraction), which
      * {@link #unsupportedLocale_resolvesFromTheDefaultBundle()} above exercises directly against the
      * real {@code MessageSource} bean. This test earns its place for a narrower, still-real reason:
      * it is the only coverage that the {@code Accept-Language} → {@code LocaleContextHolder} →
@@ -232,7 +235,8 @@ class DefaultMessageBundleFallbackIT extends AbstractIntegrationTest {
 
     /**
      * skillars-deferred-92 code review, chunk 3 — the finding that motivated this class's honesty
-     * corrections above. {@code MailService#sendEmailFromTemplate} resolves its subject with the
+     * corrections above. {@code EmailContentRenderer#render} (story ses-1.2 AC1: moved out of {@code
+     * MailService#sendEmailFromTemplate}, lookup unchanged) resolves the subject with the
      * <strong>throwing</strong> three-argument {@code getMessage(subjectKey, null, locale)}, the one
      * call site in this codebase that can actually raise {@code NoSuchMessageException} in
      * production. 17 of {@link EmailTemplate}'s 39 {@code subjectKey()} values existed in no bundle
@@ -247,11 +251,11 @@ class DefaultMessageBundleFallbackIT extends AbstractIntegrationTest {
         final List<Locale> supported = List.of(Locale.ENGLISH, Locale.GERMAN, Locale.FRENCH);
         for (EmailTemplate template : EmailTemplate.values()) {
             if (EmailTemplate.NONE.equals(template)) {
-                continue; // carries no subject key — MailService special-cases it before any lookup.
+                continue; // carries no subject key — EmailContentRenderer special-cases it before any lookup.
             }
             for (Locale locale : supported) {
                 assertThatCode(() -> messageSource.getMessage(template.subjectKey(), null, locale))
-                    .as("EmailTemplate.%s's subjectKey '%s' must resolve for %s — MailService uses the "
+                    .as("EmailTemplate.%s's subjectKey '%s' must resolve for %s — EmailContentRenderer uses the "
                         + "throwing getMessage(key, null, locale) to build every email subject",
                         template.name(), template.subjectKey(), locale)
                     .doesNotThrowAnyException();

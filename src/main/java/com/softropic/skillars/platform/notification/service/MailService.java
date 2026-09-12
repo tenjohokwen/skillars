@@ -1,77 +1,64 @@
 package com.softropic.skillars.platform.notification.service;
 
-import com.google.common.base.CaseFormat;
-
+import com.softropic.skillars.infrastructure.email.EmailTransportPermanentException;
+import com.softropic.skillars.infrastructure.email.OutboundEmailRequest;
+import com.softropic.skillars.infrastructure.email.OutboundEmailSender;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 
-import org.springframework.context.MessageSource;
-import org.springframework.mail.javamail.JavaMailSenderImpl;
-import org.springframework.mail.javamail.MimeMessageHelper;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.thymeleaf.context.Context;
-import org.thymeleaf.spring6.SpringTemplateEngine;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 import io.micrometer.observation.annotation.Observed;
-import jakarta.mail.MessagingException;
-import jakarta.mail.internet.MimeMessage;
 
+/**
+ * Story ses-1.2 AC3: no longer constructs a {@code MimeMessage} or selects an SMTP provider itself —
+ * rendering is delegated to {@link EmailContentRenderer} (AC1) and the actual send to whichever
+ * {@link OutboundEmailSender} is wired for {@code app.email.transport}.
+ */
+@Slf4j
 @Service
 public class MailService {
 
-    private static final String RECIPIENT = "recipient";
+    private final EmailContentRenderer contentRenderer;
+    private final OutboundEmailSender outboundEmailSender;
 
-    private final SenderProvider senderProvider;
-    private final MessageSource messageSource;
-    private final SpringTemplateEngine templateEngine;
-
-    public MailService(final SenderProvider senderProvider,
-                       final SpringTemplateEngine templateEngine,
-                       final MessageSource messageSource) {
-        this.senderProvider = senderProvider;
-        this.templateEngine = templateEngine;
-        this.messageSource = messageSource;
-    }
-
-    public void sendEmail(String to, String subject, String content, boolean isMultipart, boolean isHtml) throws MessagingException {
-        JavaMailSenderImpl javaMailSender = senderProvider.nextSender();
-        MimeMessage mimeMessage = javaMailSender.createMimeMessage();
-        MimeMessageHelper message = new MimeMessageHelper(mimeMessage,
-                                                          isMultipart,
-                                                          String.valueOf(StandardCharsets.UTF_8));
-        message.setTo(to);
-        message.setFrom(javaMailSender.getUsername());
-        message.setSubject(subject);
-        message.setText(content, isHtml);
-
-        // Any MessagingException (quota, network, SMTP auth) propagates to MailManager, which
-        // catches it, marks the envelope FAILED with retry=true, and persists it. The
-        // EmailRetryScheduler then picks it up via SELECT FOR UPDATE SKIP LOCKED.
-        javaMailSender.send(mimeMessage);
+    public MailService(final EmailContentRenderer contentRenderer,
+                       final OutboundEmailSender outboundEmailSender) {
+        this.contentRenderer = contentRenderer;
+        this.outboundEmailSender = outboundEmailSender;
     }
 
     @Observed(name = "mail.send_from_template")
     public void sendEmailFromTemplate(final Recipient recipient,
                                       final EmailTemplate emailTemplate,
-                                      final Map<String, Object> values) throws MessagingException {
-        final Locale locale = Locale.forLanguageTag(recipient.getLangKey());
+                                      final Map<String, Object> values) {
+        final EmailContentRenderer.Rendered rendered = contentRenderer.render(recipient, emailTemplate, values);
 
-        if (EmailTemplate.NONE.equals(emailTemplate)) {
-            final String subject = (String) values.get("subject");
-            final String content = (String) values.get("body");
-            sendEmail(recipient.getEmail(), subject, content, false, false);
-            return;
+        // One correlation id per call, not per logical send — a RetryTemplate retry (MailManager)
+        // gets a new id. Correlating retries of the same envelope back to one logical send is a
+        // Phase 4 concern, once OutboundEmailResult.messageId() is persisted onto EnvelopeEntity and
+        // envelope.sendId() becomes available to key off of.
+        final String correlationId = UUID.randomUUID().toString();
+        // Code review 2026-09-11, owner decision (b): OutboundEmailRequest's compact constructor
+        // throws unchecked IllegalArgumentException on a blank recipient/subject or two blank
+        // bodies — a malformed-payload failure, not a transport one. Left unwrapped, it is neither
+        // an EmailTransportPermanentException nor a checked exception the old code path produced,
+        // so MailManager.isRetryable's depth-bounded walk (AC4's NON_REPAIRABLE_ERRORS, unchanged
+        // per the owner's decision) would never match it and would retry a payload no re-drive can
+        // ever fix. Before this story a blank recipient reached MimeMessageHelper.setTo and surfaced
+        // as AddressException -> permanent; wrapping here restores that classification.
+        final OutboundEmailRequest request;
+        try {
+            request = new OutboundEmailRequest(
+                recipient.getEmail(), rendered.subject(), rendered.htmlBody(), rendered.textBody(), correlationId);
+        } catch (IllegalArgumentException ex) {
+            throw new EmailTransportPermanentException("malformed email payload: " + ex.getMessage(), ex);
         }
-
-        final Context context = new Context(locale);
-        context.setVariable(RECIPIENT, recipient);
-        context.setVariable("map", values);
-        final String content = templateEngine.process(CaseFormat.UPPER_UNDERSCORE.to(CaseFormat.LOWER_CAMEL, emailTemplate.name()), context);
-        final String subject = messageSource.getMessage(emailTemplate.subjectKey(), null, locale);
-        sendEmail(recipient.getEmail(), subject, content, false, true);
+        final var result = outboundEmailSender.send(request);
+        log.info("Email sent. correlationId={}, messageId={}", correlationId, result.messageId());
     }
 }

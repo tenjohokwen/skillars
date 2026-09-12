@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.notification.infrastructure.listener;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
+import com.softropic.skillars.infrastructure.email.EmailTransportTransientException;
 import com.softropic.skillars.infrastructure.feature.FeatureToggleService;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.notification.contract.EmailDeliveryStatus;
@@ -10,8 +11,6 @@ import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.service.MailService;
 import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
-
-import jakarta.mail.MessagingException;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -171,9 +170,9 @@ class VideoModerationAdminAlertEnvelopeIT extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("a retryable send failure commits a FAILED/isRetry row and the listener rethrows to retain the outbox row")
-    void retryableFailure_commitsRetryableRow_andListenerRethrows() throws MessagingException {
+    void retryableFailure_commitsRetryableRow_andListenerRethrows() {
         UUID videoId = UUID.randomUUID();
-        doThrow(new MessagingException("Connection timed out"))
+        doThrow(new EmailTransportTransientException("Connection timed out"))
             .when(seamMailService).sendEmailFromTemplate(any(), any(), any());
 
         assertThatThrownBy(() -> runListener(videoId))
@@ -185,7 +184,7 @@ class VideoModerationAdminAlertEnvelopeIT extends AbstractIntegrationTest {
         // because MailManager committed it in its own REQUIRES_NEW transaction first.
         EnvelopeEntity row = committedRow();
         assertThat(row.getStatus()).isEqualTo(EmailDeliveryStatus.FAILED);
-        assertThat(row.isRetry()).as("a MessagingException is classified retryable").isTrue();
+        assertThat(row.isRetry()).as("an EmailTransportTransientException is classified retryable").isTrue();
         assertThat(row.getError()).isNotBlank();
         // Mutation: drop the `throw new IllegalStateException(...)` from the FAILED/isRetry arm →
         // sendAdminAlertSync returns normally, the outbox row is released, and the retryable
@@ -194,7 +193,7 @@ class VideoModerationAdminAlertEnvelopeIT extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("a successful send commits a SENT row and the listener returns normally")
-    void successfulSend_commitsSentRow_andListenerReturns() throws MessagingException {
+    void successfulSend_commitsSentRow_andListenerReturns() {
         UUID videoId = UUID.randomUUID();
         doNothing().when(seamMailService).sendEmailFromTemplate(any(), any(), any());
 

@@ -13,6 +13,9 @@ services:
     environment:
       - SPRING_PROFILES_ACTIVE=dev
       - APP_VIDEO_BUNNY_LIBRARY_ID=123456
+      # ses-1.2 D9 + code review 2026-09-11: this knob is now DEAD — see docker-compose.uat.yml's
+      # full explanation. Boot's own mail health contributor is @ConditionalOnBean(JavaMailSenderImpl),
+      # a bean nothing in this codebase creates now that spring.mail.host is gone. Kept per AC7.
       - MANAGEMENT_HEALTH_MAIL_ENABLED=false
       # PaymentConfig.configureStripe() throws AppSetupException on a blank key, and blank is what
       # it resolves to locally: application.yaml defaults it to "", application-dev.yaml has no
@@ -23,12 +26,20 @@ services:
       - APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder
       # No LOKI_ENABLED override: docker-compose.yml's LOKI_ENABLED=true now works, so
       # app logs actually reach the local Loki container and are queryable in Grafana.
-      # ses-1.1: dev now runs app.email.transport: log (application-dev.yaml), not
-      # app.ses.enabled — that property and the DevSesEmailService/@Profile("!dev") trap it
-      # used to route around are both gone.
-      - SPRING_MAIL_PASSWORD=${SPRING_MAIL_PASSWORD}
-      - GMAIL_PASSWORD=${GMAIL_PASSWORD}
-      - GMX_PASSWORD=${GMX_PASSWORD}
+      # ses-1.2: dev now runs app.email.transport: smtp (application-dev.yaml), including
+      # registration/OTP mail. ses-1.1's app.ses.enabled and the DevSesEmailService/
+      # @Profile("!dev") trap it used to route around are both gone.
+      # ses-1.2 D9: SPRING_MAIL_PASSWORD removed — it backed Boot's own autoconfigured
+      # JavaMailSenderImpl, which nothing in this codebase ever injected.
+      # code review 2026-09-11 (owner decision (a)): these `:-` defaults restate
+      # application-dev.yaml's OWN `${GMX_PASSWORD:dev_gmx_password}`/`${GMAIL_PASSWORD:
+      # dev_gmail_password}` fallbacks — same "EMPTY IS NOT UNSET" reasoning as every other
+      # variable in this block (see the comment below). Without them, a bare `docker compose -f
+      # docker-compose.local.yml up` with no `.env` passes an empty (present-but-blank) value,
+      # which overrides application-dev.yaml's own default and requires real GMX/Gmail
+      # credentials just to run locally — a regression from AC6 flipping dev to `transport: smtp`.
+      - GMAIL_PASSWORD=${GMAIL_PASSWORD:-dev_gmail_password}
+      - GMX_PASSWORD=${GMX_PASSWORD:-dev_gmx_password}
       # These restate application-dev.yaml's OWN defaults, and are required rather than tidy.
       # docker-compose.yml passes each of these variables through with a `:-` empty default so a
       # production deploy can set them. But an empty environment variable is present-and-blank,

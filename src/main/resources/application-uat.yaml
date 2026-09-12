@@ -1,29 +1,27 @@
-spring:
-  mail:
-    password: "${SPRING_MAIL_PASSWORD:dev_mail_password}"
-
-# Lists replace entirely in Spring — must repeat full entries to override passwords
-email:
-  providerConfigs:
-    -
-      name: gmx
-      host: mail.gmx.net
-      port: 587
-      username: blue-bone@gmx.de
-      password: "${GMX_PASSWORD:dev_gmx_password}"
-    -
-      name: gmail
-      host: smtp.gmail.com
-      port: 587
-      username: enkap24@gmail.com
-      password: "${GMAIL_PASSWORD:dev_gmail_password}"
-
 app:
   environment: "${ENVIRONMENT:uat}"
   ses:
     from-address: "${APP_SES_FROM_ADDRESS:}"
+  # ses-1.2: UAT now runs the SMTP transport for everything, including registration/OTP mail — this
+  # is what fixes D4 (UAT used to silently drop registration/OTP mail under the old
+  # app.ses.enabled: false no-op path). Under one transport, UAT now sends everything over SMTP.
   email:
-    transport: log
+    transport: smtp
+    # Lists replace entirely in Spring — must repeat full entries to override passwords.
+    smtp:
+      provider-configs:
+        -
+          name: gmx
+          host: mail.gmx.net
+          port: 587
+          username: blue-bone@gmx.de
+          password: "${GMX_PASSWORD:dev_gmx_password}"
+        -
+          name: gmail
+          host: smtp.gmail.com
+          port: 587
+          username: enkap24@gmail.com
+          password: "${GMAIL_PASSWORD:dev_gmail_password}"
   frontend-url: "${APP_FRONTEND_URL:https://uat.skillars.com}"
   # Stripe TEST-mode credentials only — PaymentConfig refuses to start under the "uat"
   # profile if APP_PAYMENT_STRIPE_API_KEY resolves to a live key (sk_live_...), so this

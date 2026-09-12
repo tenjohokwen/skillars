@@ -1,5 +1,8 @@
-package com.softropic.skillars.platform.notification.contract;
+package com.softropic.skillars.infrastructure.email.smtp;
 
+/**
+ * Story ses-1.2 AC2: moved unchanged from {@code platform.notification.contract.ProviderConfig}.
+ */
 public class ProviderConfig {
     private String name;
     private String host;
