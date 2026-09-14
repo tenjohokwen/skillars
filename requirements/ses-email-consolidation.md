@@ -614,9 +614,14 @@ production access. Then, per environment and independently:
 1. uat → `transport=ses` with its own identity and configuration set; run §7.3's manual
    checklist against a real inbox.
 2. dev → `transport=log` with `outbox-dir` (per D-4).
-3. Confirm `/actuator/health/notification` reports SES in both prod and uat.
+3. Confirm `/actuator/health/notification` reports SES in both prod and uat. **This confirms
+   account-level state only (sending enabled, production access, not suspended) — it does
+   NOT confirm the configured `from-address` identity is verified or that DKIM/SPF/DMARC pass.
+   See §6.8b, a gap found while scoping this phase: pick and implement one of that section's
+   options as part of this story, not just this health check.**
 
-*Exit:* no environment uses SMTP. This phase changes configuration only — no code.
+*Exit:* no environment uses SMTP. This phase changes configuration only — no code, unless
+§6.8b's chosen option adds one (e.g. the startup identity-verification check).
 
 ### Phase 6 — Delete SMTP
 
@@ -802,6 +807,51 @@ mail real users — acceptable only because prod is not live. **Production acces
 granted before prod serves real traffic**, and it is a hard gate for Phase 5's UAT flip.
 `SesHealthIndicator`'s `GetAccount` check surfaces exactly this, which is a reason to land
 Phase 3 before anyone relies on prod email.
+
+### 6.8b `SesHealthIndicator`'s `GetAccount` check does not verify the sending identity itself
+
+**Gap found 2026-09-14, while scoping Phase 5 — not closed by anything in this doc, must be
+addressed when `ses-1-5` is written.** §6.8 and Phase 5 item 3 both point at
+`/actuator/health/notification` reporting SES as the confirmation that the transport is
+correctly configured. That check is `SesHealthIndicator` calling SES v2's `GetAccount`, which
+is purely **account-level**: `sendingEnabled`, `productionAccessEnabled`,
+`enforcementStatus`. It has no concept of *which* identity `app.ses.from-address` names —
+`GetAccount` cannot see whether that specific email/domain identity is verified, or whether
+its DKIM/SPF/DMARC records are correctly published and passing.
+
+Consequence: a misconfigured `from-address` (typo'd domain, missing DKIM CNAME, DNS record
+never propagated) boots green and reports `/actuator/health/notification` **UP** — the account
+is fine, the identity is not. The gap surfaces only on the first real send attempt, as SES's
+`MessageRejectedException` ("Email address is not verified..."), which §3.2's classifier maps
+to **Permanent** — so at least it fails loud and is recorded as a non-repairable envelope
+rather than silently retried forever (unlike the account-level `MailFromDomainNotVerifiedException`/
+`AccountSuspendedException` cases in §8, which classify Transient and self-heal via the
+scheduler once the block lifts — an unverified identity does **not** self-heal the same way;
+it needs an operator to fix the identity and manually resend). But this is reactive, triggered
+by the first user-facing action (a registration, a booking), not caught proactively at deploy
+time or by any periodic probe.
+
+Options for `ses-1-5` to choose from, cheapest first:
+
+1. **Startup-time identity check** — extend `SesPropertiesValidator`'s existing
+   `@PostConstruct` (already fails fast on a blank `from-address` / unresolvable credentials)
+   to also call SES v2's `GetEmailIdentity` for the configured `from-address` and abort or
+   loudly warn if it is not verified or DKIM is not passing. Same shape and cost as the checks
+   already there — the most natural fit.
+2. **Ongoing health check** — extend `SesHealthIndicator` (or add a sibling) to poll
+   `GetEmailIdentity` on its existing TTL cadence, catching drift after go-live (a DNS record
+   deleted, a DKIM key rotated) that a one-time startup check would miss.
+3. **Canary send** — periodically send a real test email to a controlled mailbox. Catches
+   things `GetEmailIdentity` can't see (DMARC alignment, actual inbox-vs-spam placement), at
+   the cost of a dedicated recipient and more moving parts.
+4. **Manual-only** — rely on §7.3's existing "real inbox, check DKIM/SPF/DMARC pass" checklist,
+   run once before flipping `transport=ses`. Cheapest, but does not protect against drift after
+   launch, and is exactly the check Phase 5 item 3 currently, misleadingly, treats the health
+   endpoint as substituting for.
+
+Recommendation (not yet a settled decision — pick when `ses-1-5` is scoped): at minimum, (1).
+Treat (2) as a should-have if live drift detection matters for this deployment; (3) is
+probably more than this migration needs.
 
 ### 6.9 Bounces and complaints become invisible
 
