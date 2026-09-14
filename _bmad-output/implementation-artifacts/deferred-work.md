@@ -17,6 +17,32 @@ One bullet = one open item. Grouped by the review that raised it; the heading ca
   Verify against the code before trusting an unannotated forward-reference.
 - **File paths and line numbers age fast.** They were accurate at the review date in the heading.
 
+## Last audit: 2026-09-14 (post-merge prune after ses-1-4, narrow scope)
+
+Routine sweep after `skillars-ses-1-4` (PR #183) merged to master. Same narrow-scope method as the
+ses-1-3 prune below: not a full-file re-audit, just the four `ses-1-*` sections checked against what
+ses-1-4 actually touched (`EmailTemplate`, `NotificationOutboxSupport`, `NotificationEmailOutboxHandler`,
+`MailManager`, the three registration listeners).
+
+- **No live `[CLOSED by ...]` / `[STALE ...]` / `[WITHDRAWN ...]` tag found anywhere in the file**
+  outside historical `## Last audit` narrative text (full-file grep before writing) — nothing to
+  mechanically delete under this file's own convention.
+- **Checked all four `ses-1-*` code-review sections against ses-1-4's actual diff.** Nothing closed:
+  the `ses-1-3` "mid-loop rate-limit rejection duplicates earlier recipients" item names
+  `MailManager.java:74`'s per-recipient loop, which ses-1-4 did not touch (verified by direct read —
+  the loop shape is unchanged; ses-1-4's `MailManager` edits were `save`→`saveAndFlush`, breaker-name
+  derivation, and log masking, none of which are in that loop). The `ses-1-2` items (`SmtpErrorClassifier`,
+  `MailSenderProvider`, SMTP validator gap, adapter-wrap-depth guard, stale dev-doc line) and the
+  `ses-1-1` items (`LoggingEmailSender` throttling/text-part gaps, no non-prod SES path,
+  `NoHardcodedSenderTest` first-match-only) are all in files or concerns ses-1-4 never touches — left
+  in place, unchecked beyond confirming they're out of this story's diff.
+- **ses-1-4's own code review added 5 new deferred items** (the `## Deferred from: code review of
+  ses-1-4-registration-email-durability (2026-09-12)` section below) — these are new open work, not
+  closures, and are correctly still present.
+
+**Not done this pass:** re-verifying any item outside the four `ses-1-*` sections. Those were swept
+2026-09-11/2026-09-12 and are trusted current.
+
 ## Last audit: 2026-09-12 (post-merge prune after ses-1-3, narrow scope)
 
 Routine sweep after `skillars-ses-1-3` (PR #181) merged to master. Two checks, not a full-file
