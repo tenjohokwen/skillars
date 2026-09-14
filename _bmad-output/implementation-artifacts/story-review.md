@@ -1,152 +1,325 @@
-# Senior-Dev Review — Story ses-1.4: Registration Email Durability
+# Senior Dev Review — `ses-1-7-documentation.md`
 
-**Reviewed:** `_bmad-output/implementation-artifacts/ses-1-4-registration-email-durability.md`
-**Date:** 2026-09-12
-**Method:** every claim below was checked against the code on `master` before it was written. Claims the story got right are listed in §3 so they are not re-litigated during dev. Nothing here is speculative — each finding cites the file and line that makes it true.
+**Reviewed:** 2026-09-14 · **Branch:** `story/ses-1-7-documentation` · **Verdict: changes required before dev-story**
 
-**Verdict:** the story's *direction* is right and its research is unusually good (AC2 in particular catches a real regression the source doc missed). But three ACs contain assumptions that do not hold against the current code, and one of them means the story does not achieve its own stated goal. **Not ready for dev as written** — AC3 and AC4 need rework, AC6 needs a different test strategy.
+Every finding below was verified by direct read of the current code, config and docs on this branch — no
+finding is inferred from the story's own text or from another document's claims. Line numbers are as of
+this branch. A "confirmed-correct" list is at the end so the dev does not re-litigate what the story got right.
 
----
+The story's own stated goal is that reading these pages "does not actively mislead me." Judged against that
+goal rather than against its AC list, it has three classes of problem:
 
-## 1. Blocking findings
-
-### B1 — AC3's delivery deadline is never consulted on the delivery path. The story's headline goal is not met.
-
-The story's "so that" clause promises *"an expired-by-the-time-it-arrives OTP is never delivered."* AC3 as specified cannot deliver that.
-
-`deadline` is read in exactly one place in `src/main`: `EmailRetryScheduler.java:97`. That loop only ever sees rows returned by `EnvelopeEntityRepository.fetchFailedEmails()` (`EnvelopeEntityRepository.java:17`), whose predicate is `retry = 'true' AND status = 'FAILED'`. Neither `MailManager.sendEmailSync` nor `MailService.sendEmailFromTemplate` looks at `envelope.deadline()` at all — confirmed by reading both files end to end and by grepping every `deadline` reference in `src/main`.
-
-Consequence: `NotificationEmailOutboxHandler.handle` (`:70-71`) constructs the `Envelope` *with* the deadline and then hands it to `sendEmailSync`, which ignores it and sends. So:
-
-- An OTP whose outbox row is not drained promptly — `outboxDrainPool` saturated, pod restart between commit and drain, the `app.outbox.sweep-ms:300000` five-minute safety-net sweep, an SES outage — is delivered **whenever it finally drains**, with no staleness check.
-- `OutboxService` retries a failed row **forever** by design (`OutboxService.java:37-40`: "It is still retried forever… Crossing this threshold means the operation needs a human, not that it is abandoned"), with `OutboxRowProcessor.backoffFor` escalating 30s → 1m → 2m → … → 1h cap (`OutboxRowProcessor.java:144-155`). A registration OTP can therefore be delivered hours after its 10-minute TTL expired.
-- The 5-minute deadline only ever fires for an envelope that has already been recorded `FAILED` **and** is picked up by `EmailRetryScheduler` before it succeeds. That is the narrow case, not the one the story is worried about.
-
-**Fix:** AC3 needs a second half — an explicit deadline check on the delivery path. The natural place is the top of `NotificationEmailOutboxHandler.handle` (after deserialising, before `sendEmailSync`): if `p.deadline()` has passed, persist a `DEADLINE_EXPIRED` envelope (or log `[NOTIFICATION_EMAIL_DEADLINE_EXPIRED]`), return normally so the outbox row is released, and **do not send**. Guarding inside `sendEmailSync` instead also covers the `EmailRetryScheduler` and direct-publish paths but changes behaviour for every existing producer, so it is the larger blast radius — pick one deliberately and say which.
-
-### B2 — AC4's `try { save } catch (DataIntegrityViolationException)` cannot fire where AC4 puts it.
-
-AC4 instructs: *"wrap the `save(envelopeEntity)` call in `try { } catch (DataIntegrityViolationException) { }`"* (`MailManager.java:121`). That catch is unreachable for the duplicate-`sendId` case:
-
-- `EnvelopeEntity` has `@Id private UUID id` with **no** `@GeneratedValue` (`EnvelopeEntity.java:27-28`); the id is assigned by hand in `EnvelopeMapper.toEntity` (`EnvelopeMapper.java:24`).
-- `@Version private long version` is a **primitive** (`EnvelopeEntity.java:30-31`). Spring Data's `JpaMetamodelEntityInformation.isNew` skips the version-based check for primitive version attributes and falls back to the id-null check. The id is non-null, so the entity is treated as *not new* and `SimpleJpaRepository.save` calls `em.merge(...)`.
-- Neither `save` nor `merge` flushes. The INSERT against the `sendId` unique constraint (`EnvelopeEntity.java:56-57`) is issued when `sendEmailSync`'s `REQUIRES_NEW` transaction commits — **after** the method body has returned. The catch never sees it.
-
-There is a second, independent problem with the prescribed recovery. AC4 says: *"on catch, re-query `findBySendId` and fall through to the same update logic."* Even if you force the exception to surface early (with `saveAndFlush` — the pattern `RegistrationOtpResendSupport.resendPhoneOtp` already uses deliberately for exactly this reason, see its javadoc bullet on `uq_pot_one_active_per_user`), a constraint violation leaves the Hibernate persistence context in an undefined state and marks the transaction rollback-only. The re-query runs on a poisoned `EntityManager`, and any dirty-checked update it makes cannot commit. Catch-and-continue inside the same transaction is not a valid recovery here.
-
-**Fix:** AC4 must either (a) use `saveAndFlush` **and** perform the recovery in a fresh transaction (a small `REQUIRES_NEW` collaborator), or (b) let the violation propagate out of `sendEmailSync` and be handled by the caller — for the outbox path that means the row is retried, which is already correct behaviour — and settle for the ERROR log. Option (b) is materially simpler and loses nothing AC4 actually promised. Whichever is chosen, the AC needs to stop describing a catch around a non-flushing `save`.
-
-### B3 — AC4's `NON_REPAIRABLE_ERRORS` addition is dead code for the case it names.
-
-`NON_REPAIRABLE_ERRORS` (`MailManager.java:42-43`) is consulted only by `isRetryable`, which is called from exactly two places: inside the retry loop on the transport exception (`MailManager.java:91`) and from `toEnvelopeEntity` on the exception caught out of `circuitBreaker.run(...)` (`MailManager.java:137`, fed by the catch at `:107`). A duplicate-`sendId` `DataIntegrityViolationException` arises at `:121`/commit — *after* `envelopeEntity` has already been built and classified. It never reaches `isRetryable`, so adding `DataIntegrityViolationException` to the list changes nothing about whether `EmailRetryScheduler` re-drives it.
-
-It also breaks a deliberate abstraction. `MailManager.java:39-43` documents (ses-1.2 AC4) that this list is *transport-neutral* — "every `OutboundEmailSender` implementation already classifies its own failures into this taxonomy… `MailManager` no longer needs to know about any transport-specific exception type." A Spring DAO exception is not a transport classification, and no `OutboundEmailSender` can throw one.
-
-**Fix:** drop this bullet from AC4. If the intent is "a duplicate `sendId` must never be retried six times," the real mechanism is B2's decision about where the violation is handled, not the classification list.
+1. **Three ACs instruct the dev to write statements that are themselves false** (F1, F3, F4, F5). These are
+   the blockers — following the story as written *adds* new wrong claims to the docs.
+2. **The single biggest staleness in `notification/index.html` is not the transport at all** — it is that the
+   module moved to a transactional outbox (deferred-91/92) and the page still describes the pre-outbox event
+   path (F1, F2, F11). The story scoped only the SES/SMTP delta and asserts the rest of the page is fine.
+3. **Three files with live false claims are out of scope, one of them inside the source doc's own named
+   scope** (F6, F7, F8), and two sections of an in-scope file are explicitly fenced off by a
+   "do not touch anything else" instruction (F9, F10).
 
 ---
 
-## 2. Significant findings (fix before merge, not necessarily before starting)
+## Blockers — following the AC as written writes a NEW false claim
 
-### S1 — AC6's IT model cannot demonstrate what AC6 asks for.
+### F1. AC1 assumes the "Booking confirmed" diagram needs one participant rename. The whole flow is wrong.
 
-AC6 says to drive `RegistrationEmailDurabilityIT` *"the same way `BookingReminderEmailWiringIT` drives its own outbox-to-delivery assertion."* That class runs under the shared test profile, where `enable.test.mail=true` swaps the entire `MailManager` bean for `TestMailManager` (`src/test/.../config/TestConfig.java:87-91`, `@Primary @ConditionalOnProperty(name="enable.test.mail", havingValue="true")`), and it asserts against `TestMailManager` — it never touches `envelope_entity` at all. With `TestMailManager` in place there is no `EnvelopeEntity` row, no `FAILED`/`retry=true`, and nothing for `EmailRetryScheduler` to re-drive, so the exact assertions AC6 specifies are unreachable in that shape.
+AC1 says: *"in 'Booking confirmed → templated email sent,' replace `Mail->>SMTP: send MimeMessage` with
+`Mail->>Port: send(OutboundEmailRequest)`"* — and nothing else in that diagram.
 
-The IT therefore needs `enable.test.mail=false` — which forks a second Spring context (real cost on CI time) — and it must call `EmailRetryScheduler.retryFailedEmails()` directly, because scheduling is disabled under the test profile (`app.scheduling.enabled`, per `OutboxService.sweep`'s javadoc). AC6 should say this outright instead of pointing at a class whose mechanism is the opposite of what is needed.
+`BookingEmailListener` does not publish an `Envelope` Spring event any more:
 
-### S2 — AC6's IT has two competing retry drivers and will be flaky as specified.
+- `platform/notification/infrastructure/listener/BookingEmailListener.java:49` injects
+  `NotificationOutboxSupport`; every handler is `@TransactionalEventListener(phase = BEFORE_COMMIT)`
+  (`:60`, `:86`, …). Same for `SessionPackEmailListener.java:35,37`.
+- The real chain is: domain event → listener (BEFORE_COMMIT, *inside* the business transaction) →
+  `NotificationOutboxSupport.enqueueEmail` (`Propagation.MANDATORY`) → outbox row committed atomically with
+  the business row → `OutboxService`'s poller (`platform/outbox/service/OutboxService.java:119`) →
+  `NotificationEmailOutboxHandler` → `MailManager.sendEmailSync` → `MailService` → `OutboundEmailSender`.
 
-A `FAILED`/`retry=true` envelope is re-driven by **both**:
-1. `EmailRetryScheduler` on a flat 60-second `fixedDelay` (`EmailRetryScheduler.java:86`), and
-2. the outbox row itself — `NotificationEmailOutboxHandler.handle` throws on `FAILED` + retryable (`:74-78`), so `OutboxRowProcessor` backs the row off 30s → 1m → 2m → … and re-drives it too.
+So diagram lines 189-197 of `notification/index.html` are false independent of transport:
+`Listener->>Bus: publish Envelope(BOOKING_CONFIRMED, ...)` and
+`Bus->>Manager: sendEmailFromTemplate(envelope) [async, sendMailPool]` no longer happen for booking mail.
+The prose under it (`:205`, "picks it up asynchronously on the `sendMailPool` executor … sends via SMTP") is
+false for the same reason, and AC1 does not mention that paragraph at all.
 
-Both call `sendEmailSync`, and **both increment `attempts` on the same envelope row**. `MAX_RETRY_ATTEMPTS = 6` (`EmailRetryScheduler.java:61`) can be consumed in roughly two minutes by the pair — i.e. *before* a 5-minute OTP deadline is reached. Since `EmailRetryScheduler` checks the deadline first but only for rows still `FAILED`+`retry=true` (`:97` then `:103`), the AC6 assertion "…is marked `DEADLINE_EXPIRED`" may instead observe `ATTEMPTS_EXHAUSTED`, non-deterministically.
+**Complication the story must not flatten:** there are now **three** producer shapes, not one.
 
-**Fix:** the IT must set the envelope's state explicitly (persist a row with a past deadline and a controlled `attempts`) and invoke the scheduler directly, rather than letting the two drivers race. Worth a line in Dev Notes either way — the dual-driver behaviour is pre-existing and surprising.
+| Producer | Mechanism | Phase |
+|---|---|---|
+| `BookingEmailListener`, `SessionPackEmailListener` | `NotificationOutboxSupport` → outbox | `@TransactionalEventListener(BEFORE_COMMIT)` |
+| `Coach`/`Parent`/`PlayerRegistrationEmailListener` (in **security**) | `NotificationOutboxSupport` → outbox | `@TransactionalEventListener(BEFORE_COMMIT)` |
+| `AccountChangeEmailListener:44`, `VideoModerationEmailListener:59,152` | still `publisher.publishEvent(envelope)` | plain `@EventListener` (deliberate — see that file's :31-34 comment) |
 
-### S3 — AC1 routes live OTP codes and verification tokens into two log statements and an indefinitely-retained DB column.
+A rewrite that says "everything goes through the outbox now" would be as wrong as what is there today.
 
-Today the registration listeners render the OTP into HTML and never log it (`CoachRegistrationEmailListener.java:70-81` logs only `correlationId`), and `MailService` logs only `correlationId`/`messageId` (`:77`). Routing through `MailManager` changes that:
+**Action:** widen AC1's diagram bullet from a participant rename to a flow correction, and either add a
+second diagram or fork the existing one to show the outbox path and the surviving direct-`Envelope` path.
 
-- `MailManager.java:64` — `logger.info("sendEmailFrom template called:  Envelope {}", envelope)`. `Envelope` is a record, so its generated `toString()` prints every component **including `data`**: `{otpCode=123456}`, `{verifyUrl=…&token=<uuid>}`. At **INFO**, on every send.
-- `MailManager.java:110` — `logger.error("… {}", envelopeEntity, exception)`; `EnvelopeEntity.toString()` also prints `data` (`EnvelopeEntity.java:155`).
-- `EnvelopeEntity.data` is a persisted `jsonb` column (`:41-43`). There is **no purge or retention job** for `envelope_entity` anywhere in the repo (checked). The OTP and the verification token live in the database indefinitely.
-- There is no log-masking converter in this project (checked `src/main/java` and `src/main/resources`).
+### F2. AC1 asserts the "Failed send → durable retry" diagram "is unchanged and needs no edit." It is not.
 
-This is pre-existing for activation/password-reset tokens, which already flow through `MailManager` via `AccountManagementFacade`. It becomes newly true for **OTP secrets**, which is a different sensitivity class. The story should make this an explicit, recorded decision — mask/omit `data` for OTP templates, demote the INFO log, or accept it in writing.
+That diagram contains `participant SMTP as JavaMailSenderImpl` (`:248`) and `Manager->>SMTP: send MimeMessage`
+(`:252`) — the exact staleness AC1 fixes in the *other* diagram. `MailManager` reaches the transport only via
+`MailService` → `OutboundEmailSender` (`MailService.java:7,30,76`); it never touches `JavaMailSenderImpl`.
 
-### S4 — AC3's "a producer can never forget" rationale only holds for outbox producers.
+Same wording survives in three more places AC1 does not name:
 
-AC3 justifies putting the deadline on the enum because a per-call-site override *"fails silently for the next one that forgets."* But `EmailTemplate.deliveryDeadline()` would only be read by `NotificationOutboxSupport.enqueueEmail`. Six producers construct `Envelope` directly and pass their own deadline, bypassing it entirely:
+- `:112` `EmailRetryScheduler` row — "SMTP I/O is deliberately kept off the DB connection"
+- `:267` — "When an SMTP send throws a retryable exception…"
+- `:271` — "keeping SMTP network I/O off the database connection pool"
 
-| Call site | Deadline |
-|---|---|
-| `AccountManagementFacade.java:197` | caller-supplied |
-| `EmailRegistrationStrategy.java:142` | caller-supplied (`Instant.now()` for `ACTIVATION`) |
-| `SendMailListener.java:51` | from `SendMailEvent` |
-| `AlertNotificationListener.java:66` | 5 min |
-| `VideoModerationEmailListener.java:143, :168` | 1 h / 1 d |
-| `ReportGenerationService.java:337` | 48 h |
+Executing AC1 literally leaves the page self-contradictory: one diagram transport-neutral, the next one
+naming `JavaMailSenderImpl`. The *scheduler's* shape is indeed unchanged — the story is right about that —
+but the participant and the surrounding prose are not.
 
-Most relevant: `TwoFactorLoginService.java:60` gives the login-2FA `SEND_OTP` flow its own **10-minute** deadline. `OtpDeadlineParityTest` as AC6 specifies it ("every other template returns the 24-hour default") would assert `SEND_OTP.deliveryDeadline() == 24h` — pinning a value the enum advertises but that flow never uses, sitting one file away from the real 10-minute value. That is the *opposite* of the "can never forget" property AC3 claims.
+### F3. AC1 instructs putting the registration listeners in a package they are not in.
 
-**Fix:** either scope `OtpDeadlineParityTest` to outbox-routed templates and say so in the test's javadoc, or make `deliveryDeadline()` the default that the direct producers fall back to (larger change, probably a separate story). Do not ship a parity test that pins a misleading value for `SEND_OTP`.
+AC1: *"Add the three registration listeners (`Coach`/`Parent`/`PlayerRegistrationEmailListener`) to the
+`infrastructure.listener.*` row's description."*
 
-### S5 — `sendId` uniqueness dedupes the envelope row, not the send. AC4's test would pass while the email goes out twice.
+That row (`:117`) documents **this module's** `platform.notification.infrastructure.listener` package.
+The three registration listeners live in `platform/security/infrastructure/listener/` — verified; the
+notification listener package contains exactly four files (`AccountChange`, `Booking`, `SessionPack`,
+`VideoModeration`). Doing what AC1 says replaces one false claim with another: that these classes moved
+modules. They did not — only what they *call* changed (`CoachRegistrationEmailListener.java:1-5,51`).
 
-The outbox is at-least-once by construction (`OutboxService` javadoc: "A row is **never dropped**"). On a re-drive, `NotificationEmailOutboxHandler.handle` calls `sendEmailSync` again with the same `sendId`; `mailService.sendEmailFromTemplate` runs and **a second real email is delivered** before `findBySendId` (`MailManager.java:112`) finds the existing row and merely updates it. Worse, if that second attempt fails, the row flips `SENT → FAILED, retry=true`, re-arming `EmailRetryScheduler` for a third send.
+Two knock-ons AC1 misses: the row opens with "Four listener classes", which the edit would contradict; and
+`ses-1.4` changed the *existing* four-listener description too, since two of the four no longer publish
+`Envelope`s (F1).
 
-AC4's stated assertions — "does not throw, does not create a second row, does not silently drop the second send's outcome" — are all satisfied by this behaviour. The test as specified is blind to the thing a reader would assume it proves. For registration OTP this is benign (the same code, sent twice), but the story should say so explicitly rather than leaving "distinct `sendId`" reading like duplicate-suppression.
+**Action:** document the registration listeners in "Dependencies on other layers" / the Key Flows section as
+*security-module* listeners that call into this module's `NotificationOutboxSupport` — not as rows in this
+module's own package table. AC1's claim that they are "exactly the same shape as
+`BookingEmailListener`/`SessionPackEmailListener`" is **correct** and worth keeping.
 
-Related, and relevant to why B2/S5 matter in practice: the producer most likely to actually collide on `sendId` today is `VideoModerationEmailListener` (`:148`, `:173`), which uses `ShortCode.shortenInt(UUID.randomUUID().hashCode())` — a 32-bit value, with birthday-bound collisions at a few tens of thousands of sends. The registration listeners' `UUID.randomUUID().toString()` will not realistically collide.
+### F4. "One bean per transport value is selected by `EmailTransportPropertyValidator`" is false.
+
+This sentence appears in AC2 and again in the staleness note, and AC2 tells the dev to put it in the doc.
+
+`EmailTransportPropertyValidator` is an `EnvironmentPostProcessor`. Its entire body reads the property and
+throws `IllegalStateException` on a value outside `{ses, smtp, log}`. It selects no bean and has no bean
+knowledge at all. Selection is `@ConditionalOnProperty(name = "app.email.transport", havingValue = …)` on
+each sender/config — e.g. `SesConfig.java:34,46`.
+
+Two more details the doc wording must not lose, both load-bearing:
+
+- **An absent value is allowed**, by design — it falls through to `application.yaml`'s base default `log`
+  (validator javadoc: aborting on unset "would break every Spring test context that loads no profile").
+  AC1's callout instruction ("aborts startup on an unrecognised value") is fine, but a dev compressing it to
+  "aborts unless set" would be wrong.
+- Matching is **case-insensitive**, mirroring `@ConditionalOnProperty` semantics, with no whitespace tolerance.
+
+**Action:** "each transport's sender bean is `@ConditionalOnProperty` on `app.email.transport`;
+`EmailTransportPropertyValidator` is a separate startup guard that rejects an unrecognised value (an absent
+value is legal and falls through to the `log` default)."
+
+### F5. AC2's "Given" says `SesConfig` was deleted. It still exists.
+
+AC2: *"…`app.ses.enabled`/`SesConfig` gating a `SesV2Client` bean — a class shape `ses-1.1` deleted."*
+
+`infrastructure/ses/SesConfig.java` is present and still creates the `SesV2Client` bean. `ses-1.1` changed
+its **gate** (`app.ses.enabled=true` → `@ConditionalOnProperty("app.email.transport", havingValue="ses")`,
+`:34,46`) and its javadoc explicitly records "`app.ses.enabled` no longer exists". What `ses-1.1` deleted was
+`SesEmailService`/`SesEmailServiceImpl`/`NoOpSesEmailService`/`DevSesEmailService` — not `SesConfig`.
+
+As written, AC2 invites the dev to drop `SesConfig` from the doc or describe it as gone. It also omits
+`SesPropertiesValidator`, which is the class most likely to stop a prod boot (blank `from-address`,
+unresolvable credential chain) and is already cited in `secrets-reference.md:158`.
 
 ---
 
-## 3. Claims the story got right — verified, do not re-derive
+## Missed files — live false claims outside the story's scope
 
-These were checked because they are load-bearing, and they hold:
+### F6. AC3's core premise is disproven by `secrets-reference.md` itself.
 
-- **Template-name resolution works with no extra mapping.** `EmailContentRenderer.java:66` derives the Thymeleaf template from the enum via Guava `UPPER_UNDERSCORE → LOWER_CAMEL`, so `COACH_EMAIL_VERIFY → coachEmailVerify`, `PLAYER_OTP → playerOtp`, etc. All six files exist under `src/main/resources/mails/`.
-- **AC2's gap is real and correctly scoped.** All six registration templates use `${recipient.firstname}`; the full set of templates that do is `{coach,parent,player}{EmailVerify,Otp}`, `activation`, `creationDup`, `passwordReset`, `profileChange`, `sendOtp` — and **none** of the booking / session-pack / video-moderation templates that route through the outbox today. Routing without AC2 would blank the greeting exactly as the story says.
-- **AC5's "no `ComponentConfig` change needed" is correct.** `defaultCustomizer()` (`ComponentConfig.java:89-100`) calls `factory.configureDefault(id -> …)`, which applies the same config to every id while keeping independent breaker instances. `"emailService"` appears only at `MailManager.java:70` and in one test comment — nothing keys health checks, metrics or alerting off the literal name, so a second id introduces no orphaned dashboards.
-- **AC2's payload change is backward-compatible with in-flight rows.** `NotificationEmailPayload` is JSON in a text column (no migration), and Jackson leaves a missing record component `null` by default (`FAIL_ON_MISSING_CREATOR_PROPERTIES` is off and not overridden in `CommonConfig`).
-- **`Propagation.MANDATORY` will be satisfied.** `CoachRegistrationService` (`:52-54`), `ParentRegistrationService`, `PlayerRegistrationService` and `RegistrationOtpResendSupport` are all class-level `@Transactional`.
-- **`enable.test.mail=true` really does replace the whole `MailManager` bean** (`TestConfig.java:87-91` vs `ComponentConfig.java:32-37`), so AC6's "the §7.1 targeted set needs no changes" is sound.
-- **`verifyUrl` and `otp` are already `String`**, so AC1's "no reformatting needed" holds.
-- **The blank-address failure terminates; it is not a poison row.** `MailService.java:73-75` wraps `OutboundEmailRequest`'s `IllegalArgumentException` into `EmailTransportPermanentException`, which `isRetryable` classifies non-retryable, so the envelope lands `FAILED`/`retry=false` and `NotificationEmailOutboxHandler:79-82` releases the outbox row. (See L2 below for what does change.)
+The story states, twice, that all six deployment docs are current and that "none claim anything false about
+the current SES/SMTP config surface," making AC3 verify-only.
+
+`docs/deployment/secrets-reference.md:188-193` (**"AWS SES (legacy)"**), present tense, operator-facing:
+
+> `application-prod.yaml` sets `app.ses.enabled: true`, so a production boot constructs a real `SesV2Client`
+> … If AWS SES is not needed, set `app.ses.enabled: false` in `application.yaml`. `uat` and `dev` set it to
+> `false` and use `NoOpSesEmailService`, which logs the subject and drops the message.
+
+Every clause is false: the property does not exist; `application-prod.yaml:8` sets `app.email.transport: ses`;
+`application-uat.yaml:9` and `application-dev.yaml:16` set `smtp`; `NoOpSesEmailService` is deleted. It also
+contradicts the *same file* thirty lines above (`:157-158`, "Production runs `app.email.transport: ses`").
+An operator following it would edit a property nothing reads and conclude mail is suppressed when it is not.
+
+Why AC3 misses it: AC3's test is narrowed to "any claim **ses-1.4** falsifies (registration/OTP durability,
+the `registrationEmailService` circuit breaker, OTP delivery deadlines)". This block is falsified by
+**ses-1.1**, so the AC as written passes over it. The narrowing is the defect — the story is the migration's
+documentation closer, not a ses-1.4 delta pass.
+
+**Action:** broaden AC3 from verify-only to "delete the `AWS SES (legacy)` block; re-verify the rest," and
+restate its test as *"any claim falsified by ses-1.1 … ses-1.4"*.
+
+### F7. `docs/dev-docs/index.html` — the dev-docs landing page — carries the same dead gotcha. Not in scope.
+
+`:163`:
+
+> **Email is silently suppressed in dev.** When `app.ses.enabled=false` (the local default),
+> `NoOpSesEmailService` logs the subject line only and sends nothing — a common source of "I registered but
+> got no email" confusion locally.
+
+Dead property, deleted class, and the advice inverts current behaviour: `application-dev.yaml:11-16` records
+that "dev now runs the SMTP transport — including registration/OTP mail, for the first time". This is the
+first page the story's own stated persona ("an engineer onboarding onto the notification/email stack") opens.
+One `callout` to fix. Add it to AC1/AC2's file list.
+
+### F8. `requirements/deployment/local/local-manual-testing.md` — inside the source doc's named scope, missed.
+
+The story maps "the deployment requirements docs" to `docs/deployment/*.md`. The source doc's §4.5 impact
+table (`requirements/ses-email-consolidation.md:502`) names **`requirements/deployment/*`, `deploy/` docs** —
+a different tree, never checked.
+
+`requirements/deployment/local/local-manual-testing.md:230`, under "Creating the accounts", present tense:
+
+> **Emails never arrive.** `SesEmailServiceImpl` is annotated `@Profile("!dev")`, so under the `dev` profile
+> the `NoOpSesEmailService` bean wins and logs only the subject: `NoOp SES: email suppressed — subject=…`
+> The verification token is still written to the database, so pull it from there.
+
+False since `ses-1.2`. This is step-by-step manual-testing instruction, so it misroutes a real workflow.
+
+Checked and **not** stale in the same file: §3 "Fixed: dev no longer builds an AWS SES client" (`:146-165`)
+is correctly past-tense incident history — leave it, or add one dated line noting the property is gone.
+`.env.example` was checked too and is fully current (ses-1.1/ses-1.2 updated it) — no action.
 
 ---
 
-## 4. Lower-severity findings
+## In-scope file, fenced off by an over-tight instruction
 
-**L1 — Unstated user-visible behaviour change: an outbox failure can now fail a signup.**
-`AFTER_COMMIT → BEFORE_COMMIT` plus `Propagation.MANDATORY` means a failed outbox INSERT marks the transaction rollback-only, and per `NotificationOutboxSupport`'s own "Failure semantics" javadoc this rolls the business transaction back **whether or not the listener catches it** (`UnexpectedRollbackException` at commit). So an email-infrastructure problem can now fail `POST /register` or `POST /resend-otp` with a 500, where today the user is created and only the email is lost. That is a defensible trade — it is the same one booking already makes — but it is a new failure mode for the registration API and the story never states it. Add it to Dev Notes and confirm `ApiAdvice` renders `UnexpectedRollbackException` sensibly.
+### F9. AC2's "do not touch any other section of this page" strands two stale sections.
 
-**L2 — AC1 drops the blank-recipient short-circuit that every other outbox producer keeps.**
-AC1 says to "mirror `BookingEmailListener`'s established shape exactly," but omits the part of that shape that guards the address: `BookingEmailListener.java:65-68` does an explicit blank check with `log.warn` and an early return *before* building anything. Today a blank registration address is rejected inside the listener's catch with a log carrying registration context; after AC1 it costs an outbox row, an `EnvelopeEntity` row and a delivery round trip, and surfaces as `[NOTIFICATION_EMAIL_UNDELIVERABLE]` from the notification module with no registration context. AC6 explicitly retires the two existing blank-address tests without specifying a replacement. Decide: keep the guard (recommended, it is one `if`) and keep a test for it, or state that the diagnostic moves.
+AC2 restricts edits to lines ~49-76 and ~165-173 of `infrastructure/index.html`. Two live false claims sit
+outside that range:
 
-**L3 — AC5's line-70 change moves a potential NPE outside the failure-recording block.**
-`circuitBreakerFactory.create(envelope.emailTemplate().circuitBreakerName())` sits at `MailManager.java:70`, before the `try` at `:81`. Every other failure in `sendEmailSync` is recorded onto an envelope row; a throw at `:70` escapes uncaught. `emailTemplate` is non-null at all current call sites (verified), but three of them take it as a parameter (`AccountManagementFacade`, `EmailRegistrationStrategy`, `SendMailListener`). Either null-guard or move the `create(...)` inside the `try`.
+- **`:292-297`, Conventions & Gotchas:** *"**Emails are silently suppressed in most local/dev setups.**
+  `NoOpSesEmailService` activates whenever `app.ses.enabled` is `false` *or unset* … check for that log line
+  before assuming a bug."* Dead class, dead property, inverted advice — the highest-traffic section of the page.
+- **`:342`, Related Modules:** *"Notification — the primary consumer of `ses` for outbound email."* Notification
+  consumes the `infrastructure.email` **port**; `ses` is the active transport only on prod.
 
-**L4 — D-8's "one extra breaker to watch" understates the window semantics.**
-`ComponentConfig.java:92-99` configures a **count**-based sliding window (`slidingWindowSize(5)`, `minimumNumberOfCalls(5)`) with no time-based decay. On the shared high-volume `emailService` breaker that window spans seconds; on a low-volume `registrationEmailService` breaker it can span hours, so three failures from a morning signup spike still sit in the window that afternoon. The isolation is still the right call, but record this — it is the practical cost of the split, and it is not "one extra breaker to watch."
+Obeying AC2 literally produces a page whose `ses` card is correct and whose gotcha callout contradicts it.
 
-**L5 — Two file references in AC6 do not exist.**
-`MailManagerErrorClassificationTest` is named in AC6's last-but-one bullet; there is no such file (`MailManagerResilienceTest` and `MailManagerIT` do exist). Separately, `NotificationOutboxSupport`'s javadoc (`:79`) cites `EmailDataStringContractTest` as a build gate that "fails the build otherwise" — that test does not exist either. The story does not depend on it, but a dev following the javadoc will look for a guard that is not there; the AC1 string-typing claim rests on manual inspection only (which is fine here — both values are already `String`).
+### F10. AC1 fixes one of two identical false claims in Related Modules.
+
+Task 1.7 says "Fix the Related Modules **Infrastructure** entry" (`notification/index.html:334-335`). The
+**Security** entry, `:329-331`, carries the same claim from the other side: *"its own registration listeners
+call `infrastructure.ses` directly (bypassing this module)"* — made false by the very ses-1.4 change this
+story exists to document. Both entries, not one.
 
 ---
 
-## 5. Recommended AC changes, in order
+## Gaps that make the corrected page incomplete
 
-1. **AC3** — add a delivery-path deadline check (`NotificationEmailOutboxHandler.handle`, before `sendEmailSync`), or the story does not close its own "so that" clause. *(B1)*
-2. **AC4** — delete the `NON_REPAIRABLE_ERRORS` bullet *(B3)*; replace the `try { save } catch` bullet with either `saveAndFlush` + a `REQUIRES_NEW` recovery, or let-it-propagate + ERROR log *(B2)*; and state explicitly that `sendId` dedupes the envelope row, not the send *(S5)*.
-3. **AC6** — drop `BookingReminderEmailWiringIT` as the model and specify `enable.test.mail=false` + a direct `retryFailedEmails()` call with explicitly seeded envelope state *(S1, S2)*; scope `OtpDeadlineParityTest` to outbox-routed templates *(S4)*; restore a blank-address case *(L2)*.
-4. **New AC or explicit Dev Note** — the OTP-in-logs / OTP-in-`jsonb` exposure *(S3)*, and the rollback-on-enqueue-failure change to the registration API's contract *(L1)*.
-5. **AC1** — keep `BookingEmailListener`'s blank-address guard *(L2)*.
-6. **AC5** — one-line null guard or move `create(...)` inside the `try` *(L3)*; amend the D-8 cost note *(L4)*.
+### F11. The outbox is invisible on the page, and no AC adds it.
 
-## 6. What this review deliberately does not flag
+`grep -i outbox docs/dev-docs/notification/index.html` → no match, and there is no `docs/dev-docs/outbox/`
+page anywhere. Concretely:
 
-- `ACTIVATION` envelopes are created with `deadline = Instant.now()` (`EmailRegistrationStrategy.java:79-80`), so a single failure marks them `DEADLINE_EXPIRED` immediately. Pre-existing, unrelated to this story, and correctly outside its stated scope.
-- The `MailManager.sendEmailSync` missing `@Transactional(timeout)` (§6.17) — the story already scopes this out explicitly and is right to.
-- `EmailRetryScheduler`'s `ORDER BY e.deadline LIMIT 10` will now put 5-minute OTP envelopes at the front of every retry batch. This is a *benefit* of AC3, not a defect; noted only so it is not mistaken for one during review.
+- Package-layout `service` row (`:91`) lists "the core send pipeline (`MailManager` → `MailService`)" and
+  omits `NotificationOutboxSupport`, `NotificationEmailOutboxHandler`, `EmailContentRenderer`, `MailMetrics`
+  — all present in `platform/notification/service/`.
+- AC1's replacement text for the `MailService` row references `EmailContentRenderer`, which after the edit
+  appears nowhere else on the page.
+- Business-overview bullet `:65-67` — "Every outbound email is modeled as an `Envelope` … that any module can
+  publish as a Spring application event" — is now true for only two of the six producing listeners (F1).
+
+**Action:** add `NotificationOutboxSupport` / `NotificationEmailOutboxHandler` / `EmailContentRenderer` to the
+package-layout and key-services tables, and qualify the `Envelope`-as-event bullet.
+
+### F12. The `MailManager` row still describes a single circuit breaker.
+
+`:109` — "runs the send through a Resilience4j circuit breaker + Spring `RetryTemplate`". `MailManager.java:115-117`
+now resolves the breaker **per template** via `EmailTemplate.circuitBreakerName()`. That is exactly the
+`registrationEmailService` breaker AC3 names in passing. AC1 adds `circuitBreakerName()` to the `contract`
+row but never corrects the row that describes the behaviour it drives.
+
+### F13. AC4 is not executable by the agent that has to satisfy it.
+
+"open in a browser, or at minimum confirm no unclosed tags by eye" — no browser, and "by eye" is not a check.
+A deterministic substitute costs one command and needs no new tooling:
+
+```bash
+python3 - <<'PY'
+from html.parser import HTMLParser
+import sys
+VOID={'area','base','br','col','embed','hr','img','input','link','meta','source','track','wbr'}
+class P(HTMLParser):
+    def __init__(s): super().__init__(convert_charrefs=False); s.st=[]; s.bad=[]
+    def handle_starttag(s,t,a):
+        if t not in VOID: s.st.append((t,s.getpos()))
+    def handle_endtag(s,t):
+        if not s.st or s.st[-1][0]!=t: s.bad.append((t,s.getpos()))
+        else: s.st.pop()
+for f in ('docs/dev-docs/notification/index.html','docs/dev-docs/infrastructure/index.html'):
+    p=P(); p.feed(open(f,encoding='utf-8').read())
+    print(f,'OK' if not p.st and not p.bad else f'MISMATCH unclosed={p.st[:5]} stray={p.bad[:5]}')
+PY
+grep -n 'sequenceDiagram\|participant \|->>' docs/dev-docs/notification/index.html
+```
+
+Pair that with one literal reading of the mermaid blocks — the Mermaid gotcha in Dev Notes is a real risk and
+correctly flagged; it just needs a check the dev can actually run.
+
+### F14. `LoggingEmailSender`'s package is wrong in AC2.
+
+AC2 places it in `infrastructure.email`; it is `infrastructure/email/log/LoggingEmailSender.java`. If the
+doc names exact classes, name the exact package. Also absent from AC2's enumerations, all present on disk:
+`SesPropertiesValidator`, `SesProperties`, `SmtpErrorClassifier`, `SmtpConfig`, `SmtpProperties`,
+`SmtpHealthProperties`. Not all need naming — decide deliberately rather than by omission.
+
+### F15. "Don't document the future" is right, but its example under-states prod.
+
+Dev Notes says only "`uat`/`dev` still run `smtp`, not `ses`". Prod has run `app.email.transport: ses` since
+ses-1.1 (`application-prod.yaml:8`). A dev over-applying the guidance could write "SES isn't in use yet",
+which is false. The unambiguous form is a four-row table, which both pages would benefit from anyway:
+base default `log` · dev `smtp` · uat `smtp` · prod `ses`. Phase 5 then flips two cells, which is exactly the
+"few sentences, not a rewrite" follow-up Task 5.2 promises.
+
+---
+
+## Verified correct — do not re-litigate
+
+Checked against current code and confirmed as the story states:
+
+- `EmailProperties`/`ProviderConfig` are gone from `platform/notification/contract/` (it holds only
+  `AlertFiredEvent`, `EmailDeliveryStatus`, `EmailTemplate`, `Envelope`, `Recipient`) — AC1's removal is right.
+- `EmailTemplate.deliveryDeadline()` (`:97`) and `.circuitBreakerName()` (`:109`) exist.
+- `MailSenderProvider` now lives in `infrastructure/email/smtp/`; notification's `infrastructure/` holds only
+  `EmailRetryScheduler` and `listener/` — AC1's `infrastructure`-row edit is right.
+- `MailService` does render via `EmailContentRenderer` then dispatch through `OutboundEmailSender`
+  (`MailService.java:30,34,76`) — AC1's `MailService` row text is accurate.
+- **No Flyway migration creates `envelope_entity`** — the existing callout is still true; keeping it is correct.
+- `local-deployment.md:228` frames the `app.ses.enabled: true` crash loop as history, past-tense — correctly
+  excluded from edits.
+- `MAX_RETRY_ATTEMPTS = 6` (`EmailRetryScheduler.java:61`) — that business rule still holds.
+- `git log --follow` on both dev-docs pages: last touched in `bf9c8280`; no `ses-1-*` commit — the staleness
+  premise is sound.
+- The four `docs/deployment/` files outside the story's six (`uat-hostwinds-deployment.md`, `monitoring.md`,
+  `rollback.md`, `backup-restore.md`) contain no email/SES/SMTP configuration — the six-file list is complete
+  **for that directory**. The gap is the other directory (F8).
+- Registration listeners really are the same shape as `BookingEmailListener`/`SessionPackEmailListener`
+  (`NotificationOutboxSupport` + `BEFORE_COMMIT`) — only their claimed *location* is wrong (F3).
+
+Minor, not worth an AC: the `contract` row says "~45 templates"; `EmailTemplate` currently declares 40. Only
+adjust if that row is being edited anyway.
+
+---
+
+## Recommended changes before `dev-story`
+
+1. **AC1** — replace the diagram bullet with a flow correction covering the outbox path *and* the surviving
+   direct-`Envelope` path; extend to the second diagram and the three prose spots naming SMTP/`JavaMailSenderImpl`
+   (F1, F2); move the registration listeners out of the package-table row (F3); add both Related Modules
+   entries (F10); add the outbox/renderer services and correct the `MailManager` breaker row (F11, F12).
+2. **AC2** — drop the "`SesConfig` deleted" premise (F5); fix the bean-selection sentence (F4); fix
+   `LoggingEmailSender`'s package (F14); lift the "do not touch any other section" fence to cover the gotcha
+   callout at `:292` and Related Modules at `:342` (F9).
+3. **AC3** — promote from verify-only to an edit: delete `secrets-reference.md`'s "AWS SES (legacy)" block,
+   and restate the test as "falsified by ses-1.1 … ses-1.4", not ses-1.4 alone (F6).
+4. **New AC** — `docs/dev-docs/index.html:163` and
+   `requirements/deployment/local/local-manual-testing.md:230` (F7, F8).
+5. **AC4** — swap "by eye" for the well-formedness command above (F13).
+6. **Dev Notes** — add the four-profile transport table and state that prod is already on `ses` (F15).
