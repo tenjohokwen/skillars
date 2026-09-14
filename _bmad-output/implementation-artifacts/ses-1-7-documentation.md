@@ -1,6 +1,6 @@
 # Story Ses-1.7: Documentation
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -323,50 +323,97 @@ someone will actually follow**
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — AC1: rewrite `docs/dev-docs/notification/index.html`'s stale sections**
-  - [ ] 1.1 Business Overview: add the registration/OTP-durability sentence; qualify the `Envelope`-as-event
+- [x] **Task 1 — AC1: rewrite `docs/dev-docs/notification/index.html`'s stale sections**
+  - [x] 1.1 Business Overview: add the registration/OTP-durability sentence; qualify the `Envelope`-as-event
     bullet to name the two listeners it still applies to
-  - [ ] 1.2 Package layout table: remove `EmailProperties`/`ProviderConfig`/`MailSenderProvider`; add
+  - [x] 1.2 Package layout table: remove `EmailProperties`/`ProviderConfig`/`MailSenderProvider`; add
     `deliveryDeadline()`/`circuitBreakerName()` mention; add `NotificationOutboxSupport`/
     `NotificationEmailOutboxHandler`/`EmailContentRenderer`/`MailMetrics` to the `service` row; correct the
     template count
-  - [ ] 1.3 Key services table: correct `MailManager`'s row (per-template circuit breaker, not one shared
+  - [x] 1.3 Key services table: correct `MailManager`'s row (per-template circuit breaker, not one shared
     breaker); rewrite `MailService` row; delete `MailSenderProvider` row; update the four-listener row's prose
     (two no longer publish `Envelope`s); explain the outbox producer/consumer pair
-  - [ ] 1.4 Document the three registration listeners as security-module listeners calling into this module
+  - [x] 1.4 Document the three registration listeners as security-module listeners calling into this module
     (Dependencies on other layers / Key Flows) — NOT as a row in this module's own package/service tables
-  - [ ] 1.5 Rewrite "Dependencies on other layers" paragraph
-  - [ ] 1.6 Redraw the "Booking confirmed" sequence diagram for the real outbox flow (domain event → listener
+  - [x] 1.5 Rewrite "Dependencies on other layers" paragraph
+  - [x] 1.6 Redraw the "Booking confirmed" sequence diagram for the real outbox flow (domain event → listener
     BEFORE_COMMIT → `enqueueEmail` → outbox poller → `NotificationEmailOutboxHandler` → `MailManager` →
     `MailService` → port) and its surrounding prose
-  - [ ] 1.7 Fix the "Failed send → durable retry" diagram's `SMTP`/`JavaMailSenderImpl` participant, plus the
+  - [x] 1.7 Fix the "Failed send → durable retry" diagram's `SMTP`/`JavaMailSenderImpl` participant, plus the
     three SMTP-naming prose spots (`EmailRetryScheduler` row, two sentences under the diagram)
-  - [ ] 1.8 Rewrite the "SES is suppressed by default" gotcha callout for `app.email.transport`
-  - [ ] 1.9 Fix BOTH Related Modules entries (Infrastructure and Security)
-- [ ] **Task 2 — AC2: rewrite `docs/dev-docs/infrastructure/index.html`'s `ses`-related prose and the two
+  - [x] 1.8 Rewrite the "SES is suppressed by default" gotcha callout for `app.email.transport`
+  - [x] 1.9 Fix BOTH Related Modules entries (Infrastructure and Security)
+- [x] **Task 2 — AC2: rewrite `docs/dev-docs/infrastructure/index.html`'s `ses`-related prose and the two
   stranded sections**
-  - [ ] 2.1 Update the `ses` card description and surrounding prose; name `SesConfig` as unchanged-but-regated,
+  - [x] 2.1 Update the `ses` card description and surrounding prose; name `SesConfig` as unchanged-but-regated,
     not deleted; name `SesPropertiesValidator` explicitly; fix `LoggingEmailSender`'s package
     (`infrastructure.email.log`)
-  - [ ] 2.2 Correct the `EmailTransportPropertyValidator` bean-selection sentence
-  - [ ] 2.3 Fix the Conventions & Gotchas callout (~line 292) and the Related Modules Notification entry
+  - [x] 2.2 Correct the `EmailTransportPropertyValidator` bean-selection sentence
+  - [x] 2.3 Fix the Conventions & Gotchas callout (~line 292) and the Related Modules Notification entry
     (~line 342) — both outside the original fenced range, both carrying the same dead claim
-- [ ] **Task 3 — AC3: delete `secrets-reference.md`'s stale legacy-SES block; re-verify all six deployment docs**
-  - [ ] 3.1 Delete the false "AWS SES (legacy)" premise; preserve the still-relevant packaging-bug history
+- [x] **Task 3 — AC3: delete `secrets-reference.md`'s stale legacy-SES block; re-verify all six deployment docs**
+  - [x] 3.1 Delete the false "AWS SES (legacy)" premise; preserve the still-relevant packaging-bug history
     that follows it
-  - [ ] 3.2 Re-check all six deployment docs against `ses-1.1`-`ses-1.4` (not `ses-1.4` alone); fix anything
+  - [x] 3.2 Re-check all six deployment docs against `ses-1.1`-`ses-1.4` (not `ses-1.4` alone); fix anything
     else found, otherwise record the confirmation in Dev Notes
-- [ ] **Task 4 — AC4: fix the dev-docs landing page's email-suppression callout**
-  - [ ] 4.1 Rewrite `docs/dev-docs/index.html:163`
-- [ ] **Task 5 — AC5: fix the local manual-testing guide's "emails never arrive" section**
-  - [ ] 5.1 Rewrite `requirements/deployment/local/local-manual-testing.md`'s "Creating the accounts" callout
-- [ ] **Task 6 — AC6: structural validity of every edited file**
-  - [ ] 6.1 Run the tag-balance script against all three edited HTML files
-  - [ ] 6.2 Manually inspect the edited Mermaid diagram blocks line by line
-- [ ] **Task 7 — Story wrap-up**
-  - [ ] 7.1 Update File List, Change Log, Dev Agent Record
-  - [ ] 7.2 Note the Phase 5/6 forward-pointer (one more short doc pass needed once SES cutover/SMTP removal
+- [x] **Task 4 — AC4: fix the dev-docs landing page's email-suppression callout**
+  - [x] 4.1 Rewrite `docs/dev-docs/index.html:163`
+- [x] **Task 5 — AC5: fix the local manual-testing guide's "emails never arrive" section**
+  - [x] 5.1 Rewrite `requirements/deployment/local/local-manual-testing.md`'s "Creating the accounts" callout
+- [x] **Task 6 — AC6: structural validity of every edited file**
+  - [x] 6.1 Run the tag-balance script against all three edited HTML files
+  - [x] 6.2 Manually inspect the edited Mermaid diagram blocks line by line
+- [x] **Task 7 — Story wrap-up**
+  - [x] 7.1 Update File List, Change Log, Dev Agent Record
+  - [x] 7.2 Note the Phase 5/6 forward-pointer (one more short doc pass needed once SES cutover/SMTP removal
     ship) in Dev Notes — do not act on it now
+
+### Review Findings
+
+Code review 2026-09-14 (`/bmad-code-review`, 3 layers: Blind Hunter / Edge Case Hunter / Acceptance Auditor).
+Per-AC verdicts: AC1 PARTIAL, AC2 SATISFIED, AC3 PARTIAL, AC4 SATISFIED, AC5 PARTIAL, AC6 SATISFIED.
+The story's core thesis (outbox + port + three transports) is correct and well executed; the defects below are
+almost all **new false or over-broad claims written while removing old ones** — the exact failure mode this
+story existed to prevent.
+
+- [x] [Review][Patch] **Producer census — full correction (owner decision 2026-09-14: option (b), full census).** The page says *"Only two of six producing listeners (`AccountChangeEmailListener`, `VideoModerationEmailListener`) still publish an `Envelope` ... the rest enqueue straight onto this module's own durable outbox."* The code's own maintained census at `platform/notification/contract/EmailTemplate.java:88-95` contradicts this: **six** producers build an `Envelope` directly — `AccountManagementFacade` (`platform/security/api/AccountManagementFacade.java:197-202`), `EmailRegistrationStrategy` (`platform/security/api/registration/EmailRegistrationStrategy.java:142-147`), `SendMailListener` (`platform/security/infrastructure/listener/SendMailListener.java:51-56`), `AlertNotificationListener` (`platform/notification/service/AlertNotificationListener.java:66-73`), `VideoModerationEmailListener`, `ReportGenerationService` (`platform/development/service/ReportGenerationService.java:337-343`). Three of the four omitted ones are account/registration-flow mail. The count is also internally inconsistent: four `platform.notification` listeners plus three `platform.security` registration listeners = seven, not six. **Agreed scope: document all six direct producers AND the third producer shape (direct `sendEmailSync`, used by `AlertNotificationListener:73` and `VideoModerationEmailListener:92`), expanding Business Overview and Key Services beyond AC1's original scope.** Record the expansion as a deviation in the Change Log. Note also that `VideoModerationEmailListener` is a hybrid — it publishes at `:65`/`:168` and calls `sendEmailSync` at `:92` — and that `MailManager.sendEmailFromTemplate` is `@TransactionalEventListener(AFTER_COMMIT)` with default `fallbackExecution=false` (`MailManager.java:80`), so envelopes it publishes outside a transaction are silently discarded; that is why its sync path exists.
+  **Fixed 2026-09-14, independently re-verified against source, not taken on faith.** Grepped every `new Envelope(` and `.sendEmailSync(` call site directly rather than trusting either the review's "six" or the class javadoc's "six": found **seven** direct-publish call sites, not six — the javadoc's own list omits `AccountChangeEmailListener` (confirmed it builds `new Envelope(...)` + `publisher.publishEvent(...)` exactly like the other six) and doesn't count `ResendEmailService` (a manual-resend replay of an already-persisted envelope, correctly not a new producer). Rewrote `notification/index.html`'s Business Overview (both bullets — the registration/OTP-durability one now names the six `COACH_`/`PARENT_`/`PLAYER_` templates explicitly and calls out that login's separate `SEND_OTP` was never part of that path; the `Envelope` bullet now describes three shapes without a specific wrong count), the `MailManager` key-services row (adds `AlertNotificationListener` to the `sendEmailSync` caller list, ties the per-template breaker isolation explicitly to the six registration templates and explicitly excludes `SEND_OTP`), the internal-events sentence under "Domain events consumed" (still said "two of the six" — same defect, missed on the first pass, caught during this fix), and added a new "Producer census" section after Key Services enumerating all three shapes by class, citing the javadoc's six by name plus the two it omits. AC1 scope deviation recorded in Change Log.
+- [x] [Review][Patch] **`infrastructure.email` navigation — add the card and re-head the section (owner decision 2026-09-14: option 1).** `docs/dev-docs/infrastructure/index.html:68-84` (card grid) and the `<h3>ses</h3>` heading. The rewritten body documents four packages (`infrastructure.email`, `.email.log`, `.email.smtp`, `.ses`) under a heading and card naming only `ses` — the transport active in neither dev nor uat. **Agreed scope: add an `infrastructure.email` card to the Subpackage Reference grid and re-head the transport section so the navigation surface reflects the port-first architecture.** This deliberately widens AC2's "do not touch any section outside `infrastructure.ses`" fence — record as a deviation in the Change Log.
+  **Fixed 2026-09-14.** Added an `email` card to the Subpackage Reference grid, immediately before the `ses` card. Re-headed `<h3>ses</h3>` to `<h3>email, ses, email.smtp, email.log — the transport port and its three implementations</h3>`. Confirmed no anchor/TOC mechanism depends on the old heading text (`docs.js` has none) before renaming. AC2 scope deviation recorded in Change Log.
+
+- [x] [Review][Patch] `sendEmailSync` caller list drops `AlertNotificationListener` and mislabels it as "the video-moderation alert path" [docs/dev-docs/notification/index.html:~117 — `MailManager` row]
+  **Confirmed real, fixed.** Grepped all `.sendEmailSync(` call sites: `NotificationEmailOutboxHandler`, `EmailRetryScheduler`, `AlertNotificationListener`, `VideoModerationEmailListener` — four, not the three implied. `MailManager` row now names all four explicitly. Folded into the producer-census fix above.
+- [x] [Review][Patch] "Registration/OTP mail ... durable ... as of ses-1.4" is over-broad: login-2FA `SEND_OTP` is neither outbox-routed nor breaker-isolated [docs/dev-docs/notification/index.html + docs/dev-docs/infrastructure/index.html + docs/dev-docs/index.html + requirements/deployment/local/local-manual-testing.md]
+  **Confirmed real, fixed.** Verified `EmailTemplate.SEND_OTP` uses the default constructor (`emailService` breaker, 1-day deadline, not `registrationEmailService`) and that `SendMailListener` (not a `platform.security` registration listener) is its producer, via direct-publish, not the outbox — distinct from the six `COACH_`/`PARENT_`/`PLAYER_` templates the durability/breaker-isolation claims are actually about. Tightened wording in `notification/index.html` (two spots, see producer-census fix) to name the six templates explicitly and call out `SEND_OTP` as a separate, unaffected case. Left the other three files' wording as-is on review — those instances describe the *transport* switch (real SMTP/SES delivery), which genuinely does apply to `SEND_OTP` too (it flows through the same `MailService`/`OutboundEmailSender` pipeline regardless of producer shape), so no correction was needed there; only the durability/breaker-isolation claims in `notification/index.html` were actually over-broad.
+- [x] [Review][Patch] Replacement grep string `"Sending email"` never matches on the stack the doc documents — dev runs `smtp`, and that string is emitted only by the `log` transport [docs/deployment/local-deployment.md:~498]
+  **Confirmed real — my own AC3 fix was itself a new false claim.** Read `SmtpEmailSender.send()` directly: it has no log statement at all. Read `MailService.sendEmailFromTemplate` instead: it logs `"Email sent. correlationId={}, messageId={}"` unconditionally after every successful send, transport-neutral. Replaced the grep string with `"Email sent"` and added a parenthetical explaining why (and that `LoggingEmailSender`'s own `"Sending email (log transport)"` line is transport-specific and would NOT match under dev's `smtp`).
+- [x] [Review][Patch] Live "Emails are suppressed under `dev`" claim survives and now contradicts the rewrite 250 lines above in the same file [requirements/deployment/local/local-manual-testing.md:484-485]
+  **Confirmed real — a second stale claim in the same file, missed by AC5's "touch nothing else in this file" fence, which was scoped to the "Creating the accounts" section and didn't anticipate a duplicate claim in Troubleshooting.** Rewrote the "Registration succeeds but no verification link" entry to point at the placeholder-credential caveat instead of asserting suppression.
+- [x] [Review][Patch] "Emails now arrive for real" omits the default-local failure branch — dev ships placeholder SMTP credentials, so sends fail auth unless `GMX_PASSWORD`/`GMAIL_PASSWORD` are set [requirements/deployment/local/local-manual-testing.md:~415]
+  **Confirmed real.** Verified `application-dev.yaml` defaults both to literal placeholder strings (`dev_gmx_password`/`dev_gmail_password`) against real `mail.gmx.net`/`smtp.gmail.com` hosts, and `docker-compose.local.yml` restates the same placeholder defaults (with its own code-review-cited rationale for doing so). Rewrote the "Creating the accounts" email paragraph to state the failure mode and name where to set real credentials (`.env.local` for Mode A, shell-exported for Mode B — verified against this file's own Mode A/B run instructions rather than guessing a filename).
+- [x] [Review][Patch] `EmailTransport` enum never named, though AC2 explicitly asked for it (0 occurrences on the page) [docs/dev-docs/infrastructure/index.html]
+  **Confirmed real, fixed.** Read `infrastructure.email.EmailTransport` (a plain 3-value enum) and added it to the port paragraph, naming `EmailTransportProperties` as the binder.
+- [x] [Review][Patch] Vestigial "any profile with SES enabled" survives the AC3 deletion — the boolean it referred to was defined by the block just deleted [docs/deployment/secrets-reference.md:188]
+  **Confirmed real; my first fix attempt (referencing `app.email.transport: ses`) introduced a new anachronism — `git log` shows `ses-1.1` (which introduced `app.email.transport`) shipped 2026-09-11, ten days *after* this packaging bug's stated fix date (2026-09-01), so the property in play at the time was the older `app.ses.enabled`, not the new one.** Rewrote to be self-contained and date-accurate: names `app.ses.enabled: true` explicitly as the historical config, states the ten-day gap, and no longer depends on the deleted paragraph as an antecedent.
+- [x] [Review][Patch] `matchIfMissing = true` and "the base `application.yaml` default" presented as one mechanism; base explicitly sets `log` at `application.yaml:154`, so `matchIfMissing` covers only the profile-less case [docs/dev-docs/infrastructure/index.html:~104]
+  **Confirmed real, fixed.** Verified `application.yaml:154` sets `email.transport: log` explicitly (a present value, matched by `havingValue`, not by `matchIfMissing`) and that `matchIfMissing` only matters when even that file isn't loaded. Split the two mechanisms apart in the `email.log` bullet.
+- [x] [Review][Patch] Booking sequence diagram has no return arrows, yet the prose insists the outcome is persisted either way; `Outbox-->>Booking` also draws the commit as a return from the outbox, inverting the `MANDATORY`-propagation ownership the same page describes [docs/dev-docs/notification/index.html:~199-215]
+  **Confirmed real.** The `-->>` arrow implied an Outbox→Booking call that never happens in code (`enqueueEmail` is `MANDATORY` — it joins the *caller's* transaction; nothing calls back). Replaced with `Note over Listener,Outbox: outbox row commits atomically with the booking row`, which doesn't misrepresent a call direction. Re-ran the AC6 tag-balance script and re-inspected the diagram character-by-character after the edit.
+- [x] [Review][Patch] Two deadlines introduced with no reconciliation — `Envelope`'s caller-supplied deadline vs per-template `deliveryDeadline()`, which `EmailTemplate.java:88-95` says is read by exactly one caller (`NotificationOutboxSupport.enqueueEmail`) [docs/dev-docs/notification/index.html:~108]
+  **Confirmed real, fixed.** Added the "consulted by exactly one caller" caveat directly to the `contract` row's `deliveryDeadline()` mention, with the direct-Envelope-producers-hardcode-their-own-deadline contrast made explicit — ties directly into the producer-census fix above.
+- [x] [Review][Patch] Same component cited at two package depths in one page: `platform.outbox.service` (line 118) vs `platform.outbox` (line 199) [docs/dev-docs/notification/index.html:118,199]
+  **Confirmed real, fixed.** Verified `platform.outbox.service.OutboxService` is the correct fully-qualified package (it owns `enqueue`/`requestDrainAfterCommit`). Changed the diagram's `Poller` participant label from `platform.outbox` to `platform.outbox.service` to match the prose.
+- [x] [Review][Patch] Surviving lead-in "Two things make this different from production" now introduces a non-difference, and the rewrite dropped the *why* without naming where `dev` sets the transport [requirements/deployment/local/local-manual-testing.md:~403]
+  **Confirmed real.** Per the Dev Notes transport table, dev and prod both deliver real mail now (just different transports) — no longer a meaningful difference. Reworded the lead-in to "worth understanding... neither is really a difference from production any more" and named `application-dev.yaml` explicitly as where the transport is set. Folded into the same edit as the placeholder-credential fix above.
+
+**Self-review catch beyond the reported findings:** while fixing the producer-census item, found the "Domain events consumed" section's internal-events sentence ("an `Envelope` published by... two of the six producing listeners") carried the exact same now-corrected defect — it wasn't flagged by the code review but shares the same root cause. Fixed in the same pass. Also found two accidental line-breaks inside `<code>` tags introduced by my own edits (`app.email` / `.transport` and `NotificationOutboxSupport` / `.enqueueEmail` split across lines), which HTML would render with a stray space — caught by a targeted regex sweep of every edited `<code>...</code>` span for embedded newlines, not by the tag-balance script (which doesn't check for this). Fixed both.
+
+- [x] [Review][Defer] `app.email.log.outbox-dir` collides in name with the transactional outbox the same docs introduce [docs/dev-docs/infrastructure/index.html:~106] — deferred, code-naming issue not introduced by this change
+- [x] [Review][Defer] `envelope_entity` Flyway callout gained provenance detail but not its raised severity — registration/OTP mail now routes through `EnvelopeEntity` for the first time; `deferred-work.md` also cited as bare filename, not a link, unlike every other cross-reference on the page [docs/dev-docs/notification/index.html:336] — deferred, AC1 explicitly scoped this callout to "leave as-is plus optional cross-reference"
+- [x] [Review][Defer] Unbounded absolute "there is no boolean enable/disable flag anywhere in this area any more" — true of the transport packages, but `ComponentConfig.java:32` still gates a notification bean on `enable.test.mail` [docs/dev-docs/infrastructure/index.html:~100] — deferred, wording looseness, different package area
+- [x] [Review][Defer] SMTP round-robin provider config (`email.providerConfigs`) is now documented nowhere — `MailSenderProvider`'s notification row was deleted and its infrastructure mention carries no description [docs/dev-docs/infrastructure/index.html] — deferred, pre-existing gap surfaced by the row deletion
+
+**Dismissed as false positives (4):** `secrets-reference.md` stripped of email config guidance (content survives at `:157-158`, `:168`); `SesPropertiesValidator` cross-reference unverifiable (real, at `secrets-reference.md:158`); `transport=SES` uppercase would leave zero sender beans (Spring's `OnPropertyCondition.isMatch` uses `equalsIgnoreCase`, so it matches); "40 templates" suspect (verified exactly 40 by two independent counts).
 
 ## Dev Notes
 
@@ -451,6 +498,29 @@ character-by-character after editing, not just the prose around it.
   checks only look at what the just-merged story actually touched. This story is documentation-only and adds
   no new deferred items, so no comparable prune is needed after this one ships
 
+### Forward pointer for Phase 5/6 (Task 7.2 — not acted on now)
+
+When `ses-1-5-ses-cutover` and `ses-1-6-delete-smtp` eventually ship, whichever lands last should do one more
+short documentation pass (a few sentences, not a rewrite): flip the transport table's `uat` row from `smtp` to
+`ses` in both `notification/index.html`'s implicit framing and this story's own Dev Notes transport table if
+it's still referenced, and — once Phase 6 actually deletes `infrastructure.email.smtp` — remove
+`infrastructure/index.html`'s `smtp` bullet under the `ses` heading and the `SmtpEmailSender`/
+`MailSenderProvider`/`SmtpHealthIndicator` references alongside it. Everything else this story wrote (the
+outbox architecture, the port abstraction, the registration-listener routing) is unaffected by that cutover —
+only the "which transport is active on which environment" framing needs the touch-up.
+
+### AC3 re-verification confirmation (Task 3.2)
+
+Re-checked all six deployment docs against `ses-1.1` through `ses-1.4` (not `ses-1.4` alone, correcting the
+original narrower test). `deploy-guide.md`, `first-time-setup.md`, `uat-deployment.md`, `runbook.md` carry no
+`app.ses.enabled`/`SesEmailServiceImpl`/`NoOpSesEmailService` claims at all — clean. `local-deployment.md`'s
+crash-loop history (`app.ses.enabled: true` failing with `NoClassDefFoundError`) is correctly past-tensed
+("used to sit behind these... both are now fixed") — no change needed there, confirmed by direct re-read, not
+assumed. One live issue found beyond the story's original scope: `local-deployment.md`'s "Grep for a specific
+thing" example searched log output for the literal string `"NoOp SES"`, a log line `LoggingEmailSender`
+(the class that replaced `NoOpSesEmailService`) never emits — fixed to grep `"Sending email"` instead, which is
+what that transport actually logs. `secrets-reference.md` is covered by AC3's own primary edit (Task 3.1).
+
 ### Git intelligence (last 5 commits)
 
 `f2a7f86` (requirements: record SES identity/DKIM health-check gap for ses-1-5) → `d4527da0` (deferred-work.md
@@ -468,11 +538,85 @@ architecture, testing, or code-structure implications.
 
 ### Agent Model Used
 
+Claude Sonnet 5 (`claude-sonnet-5`), via `/bmad-dev-story`.
+
 ### Debug Log References
+
+None — documentation-only story, no test failures or debugging required. Verification was direct code reads
+(matching every doc claim against the current `src/main/java` classes named in the story's Dev Notes) plus the
+AC6 tag-balance script and manual Mermaid-diagram inspection (both run and passing, see Completion Notes).
 
 ### Completion Notes List
 
+- AC1: Rewrote `docs/dev-docs/notification/index.html` across Business Overview, the package-layout and
+  key-services tables, "Dependencies on other layers," both sequence diagrams and their surrounding prose, the
+  "SES is suppressed" gotcha callout, and both Related Modules entries naming the mirrored false claim. Verified
+  every replacement claim directly against `MailManager`, `MailService`, `NotificationOutboxSupport`,
+  `NotificationEmailOutboxHandler`, `EmailContentRenderer`, `MailMetrics`, `EmailTemplate`,
+  `BookingEmailListener`, `SessionPackEmailListener`, `AccountChangeEmailListener`,
+  `VideoModerationEmailListener`, `EmailRetryScheduler`, and the three `platform.security` registration
+  listeners (`CoachRegistrationEmailListener` read in full as the representative sample; `Parent`/
+  `PlayerRegistrationEmailListener` confirmed to exist with the same shape). Template count re-verified at
+  40 (not ~45) by direct enum count. The three registration listeners were documented in "Dependencies on other
+  layers," not added to this module's own package/service tables, per the AC's explicit instruction.
+- AC2: Rewrote `docs/dev-docs/infrastructure/index.html`'s `ses` card, the "modules call
+  `infrastructure.ses.SesEmailService`" sentence in "Why This Layer Exists," and the full `<h3>ses</h3>` section
+  to describe `infrastructure.email` (the port), `infrastructure.email.log` (`LoggingEmailSender`),
+  `infrastructure.ses` (confirming `SesConfig` still exists, only its gate changed), and
+  `infrastructure.email.smtp`. Corrected the `EmailTransportPropertyValidator` bean-selection claim (it
+  validates the property string only; `@ConditionalOnProperty` selects beans). Also fixed the two sections
+  outside the original fenced range carrying the identical dead claim: the Conventions & Gotchas callout and
+  the Related Modules Notification entry. Verified against `EmailTransportPropertyValidator`, `SesConfig`,
+  `LoggingEmailSender`, and the `infrastructure/email`, `infrastructure/ses`, `infrastructure/email/smtp`
+  directory listings.
+- AC3: Deleted the self-contradicting "AWS SES (legacy)" block in `secrets-reference.md`, preserving the
+  still-relevant `NoClassDefFoundError` packaging-bug history that followed it (retitled as explicitly
+  historical). Re-verified all six deployment docs against `ses-1.1`-`ses-1.4` (not `ses-1.4` alone, the
+  original narrower test the pre-dev review corrected) — found and fixed one more live issue outside the
+  story's original file list: `local-deployment.md`'s log-grep example searched for `"NoOp SES"`, a string the
+  current `LoggingEmailSender` transport never logs; changed to `"Sending email"`. Confirmation recorded in Dev
+  Notes ("AC3 re-verification confirmation").
+- AC4: Rewrote the `docs/dev-docs/index.html:163` callout — dev delivers real SMTP mail since `ses-1.2`,
+  registration/OTP included since `ses-1.4`. No other change to that page.
+- AC5: Rewrote `requirements/deployment/local/local-manual-testing.md`'s "Emails never arrive" callout to
+  "Emails now arrive for real," keeping the SQL token-fetch method documented as a still-valid alternative
+  rather than removing it, per the AC. No other change to that file — §3's already-correct historical framing
+  was left untouched.
+- AC6: Ran the prescribed tag-balance script against all three edited HTML files —
+  `notification/index.html` and `infrastructure/index.html` both `OK`. `dev-docs/index.html` reports a
+  pre-existing `MISMATCH` from two `<br/>` tags inside an unrelated architecture flowchart (lines 84-85) that
+  predates this story and sits nowhere near the one callout this story edited (line ~163) — confirmed via
+  `git diff` that this story's edit to that file is a clean, isolated 6-line callout-text swap. Manually
+  inspected all three Mermaid `sequenceDiagram` blocks in `notification/index.html` line by line
+  (`participant`/`->>`/`-->>`/`loop`/`alt`/`else`/`end` all well-formed and balanced).
+- No `src/main`/`src/test` files touched — confirmed by `git status` at completion (all seven changed files are
+  under `docs/`, `requirements/deployment/`, or `_bmad-output/implementation-artifacts/`). No `mvn verify`/test
+  suite run — not applicable to a documentation-only story per Dev Notes and the project's validation-strategy
+  guidance.
+- Code review (`/bmad-code-review`, 3 layers) follow-up: addressed all 13 `[Review][Patch]` findings under
+  "Review Findings," including the two carrying pre-made owner decisions (producer-census full correction;
+  `infrastructure.email` navigation card + re-head). Every finding was independently re-verified against
+  current source (grepping `new Envelope(`/`.sendEmailSync(` call sites, reading `SmtpEmailSender`,
+  `EmailTransport`, `application.yaml`/`application-dev.yaml`, `docker-compose.local.yml`, and `git log` for
+  date sequencing) rather than taken on faith — none were false positives, though two of my own first-attempt
+  fixes needed a second, more careful correction after that re-verification surfaced a new inaccuracy in each
+  (see Change Log for both). Also caught and fixed one defect the review didn't flag (the "Domain events
+  consumed" section carrying the same "two of six" error the producer-census finding corrected elsewhere) and
+  two accidental `<code>`-tag line-break rendering bugs from my own earlier edits. No new files touched beyond
+  the seven already listed below. AC6's tag-balance script and manual Mermaid inspection re-run clean after
+  all fixes.
+
 ### File List
+
+- `docs/dev-docs/notification/index.html` — modified (AC1)
+- `docs/dev-docs/infrastructure/index.html` — modified (AC2)
+- `docs/deployment/secrets-reference.md` — modified (AC3)
+- `docs/deployment/local-deployment.md` — modified (AC3, found during the Task 3.2 re-verification, outside
+  the story's original file list)
+- `docs/dev-docs/index.html` — modified (AC4)
+- `requirements/deployment/local/local-manual-testing.md` — modified (AC5)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — modified (status tracking: ready-for-dev →
+  in-progress → review)
 
 ## Change Log
 
@@ -508,3 +652,50 @@ architecture, testing, or code-structure implications.
   tag-balance script AC6 now names explicitly, since "by eye" is not something an agent can reliably execute
   (F13). Added a four-row transport table to Dev Notes so "don't document the future" isn't over-applied to
   `prod`, which has run SES since `ses-1.1`, independent of Phase 5 (F15).
+- 2026-09-14: Implementation complete via `/bmad-dev-story`. All six ACs applied across seven files
+  (`docs/dev-docs/notification/index.html`, `docs/dev-docs/infrastructure/index.html`,
+  `docs/deployment/secrets-reference.md`, `docs/dev-docs/index.html`,
+  `requirements/deployment/local/local-manual-testing.md`, plus `docs/deployment/local-deployment.md` and
+  `sprint-status.yaml`). One additional stale claim found and fixed during AC3's Task 3.2 re-verification, past
+  the story's original file list: `local-deployment.md`'s log-grep example referenced a `"NoOp SES"` log line
+  the current `LoggingEmailSender` transport never emits. AC6's tag-balance script passed clean on the two
+  files this story wrote entirely new sections into (`notification/index.html`, `infrastructure/index.html`);
+  the pre-existing `<br/>`-tag mismatch it reports on `dev-docs/index.html` predates this story and sits in an
+  unrelated flowchart this story never touched (confirmed via `git diff`). All three edited Mermaid diagrams
+  manually inspected line by line and are well-formed. No `src/main`/`src/test` files touched; no code changes.
+  Status set to `review`.
+- 2026-09-14: Code review (`/bmad-code-review`, 3 layers) applied. Verdicts: AC1 PARTIAL, AC2 SATISFIED, AC3
+  PARTIAL, AC4 SATISFIED, AC5 PARTIAL, AC6 SATISFIED. 13 Patch findings, all independently re-verified against
+  current code before fixing — none were false positives, though two of my own attempted fixes needed a
+  second correction after re-verification (see below). 4 findings dismissed by the reviewer as false positives
+  were spot-checked and confirmed correctly dismissed; 3 Defer findings were left as deferred (out of this
+  story's scope or already-decided wording looseness). Two findings carried pre-made owner decisions and were
+  implemented as scoped: (1) **producer census, full correction** — `notification/index.html`'s claim that
+  only 2 of "6" producing listeners still publish an `Envelope` was replaced by an accurate 3-shape,
+  per-class census (outbox / direct-publish / direct-sync) covering all modules, not just this one; my own
+  re-verification found the code's own census (`EmailTemplate.java`'s javadoc) is itself one short (7 direct
+  publishers, not 6 — it omits `AccountChangeEmailListener`), documented explicitly rather than silently
+  copied. (2) **`infrastructure.email` navigation** — added an `email` card to the Subpackage Reference grid
+  and re-headed the `ses` section, since it documents four packages, not one. 11 more findings fixed: dropped
+  `AlertNotificationListener` from the `sendEmailSync` caller list; over-broad "registration/OTP...durable"
+  wording that could be misread to include login's separate `SEND_OTP` template; a replacement grep string in
+  `local-deployment.md` (my own AC3 fix) that matched nothing on the transport the doc documents — replaced
+  after reading `MailService`'s actual log line; a second, un-rewritten "emails suppressed" claim 250 lines
+  into `local-manual-testing.md`'s Troubleshooting section, missed by AC5's single-section fence; "emails now
+  arrive" omitting that `application-dev.yaml` defaults SMTP credentials to placeholders that fail auth;
+  `EmailTransport` enum never named on the infrastructure page despite AC2 asking for it; a vestigial "SES
+  enabled" phrase left dangling after the AC3 deletion (my first attempted fix for this introduced a new
+  anachronism — referencing `app.email.transport`, which `git log` shows postdates the historical bug by ten
+  days — corrected to name the actual period-accurate `app.ses.enabled`); `matchIfMissing`/base-default
+  conflated as one mechanism when they're two independent ones; a sequence-diagram return arrow
+  (`Outbox-->>Booking`) that implied a call direction the `MANDATORY`-propagation code doesn't have, replaced
+  with a `Note over` directive; `deliveryDeadline()` presented without noting it has exactly one caller;
+  `platform.outbox.service` vs `platform.outbox` package-depth inconsistency between prose and diagram; and a
+  "different from production" framing in `local-manual-testing.md` that's no longer true now that both
+  environments deliver real mail. One additional defect found during this pass, not in the original report:
+  the "Domain events consumed" section's internal-events sentence carried the identical "two of six" defect
+  the producer-census finding corrected elsewhere — fixed in the same pass. Also caught two accidental
+  line-breaks inside `<code>` tags from my own earlier edits (would have rendered as stray spaces) via a
+  targeted sweep, not the tag-balance script. Re-ran AC6's tag-balance script and manual Mermaid inspection
+  after all fixes — clean. Status set to `done` (this cycle's final gate — all ACs and code-review findings
+  closed, no further review pass pending).

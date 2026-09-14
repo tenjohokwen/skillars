@@ -185,15 +185,11 @@ application read them but no deploy supplied them. Defaults below are the applic
 > carries no mail contributor — see `docker-compose.yml`'s app `healthcheck` and the `health-rewrite`
 > Traefik middleware.
 >
-> **AWS SES (legacy):** `application-prod.yaml` sets `app.ses.enabled: true`, so a production boot constructs
-> a real `SesV2Client` (region defaults to `eu-west-1` via `app.ses.region`). Credentials come from
-> the AWS SDK default provider chain — environment, instance profile, or `~/.aws` — none of which
-> `docker-compose.yml` supplies. **Do not use SES unless AWS credentials are configured via IAM roles on the Node.**
-> If AWS SES is not needed, set `app.ses.enabled: false` in `application.yaml`. `uat` and `dev` set it to `false`
-> and use `NoOpSesEmailService`, which logs the subject and drops the message.
->
-> Until 2026-09-01 this bean crashed the application outright on any profile with SES enabled:
-> `pom.xml` declared `httpclient5` at test scope, stripping it from the shipped jar even though the
+> **Packaging bug, fixed 2026-09-01 (history — not a currently active gate, and predates `ses-1.1`'s
+> `app.email.transport` by ten days — the config in play at the time was the older, since-replaced
+> `app.ses.enabled: true`).** Until that date, any profile with SES enabled that way crashed the
+> application outright: `pom.xml` declared `httpclient5` at test scope, stripping it from the shipped jar
+> even though the
 > AWS SDK's `apache5-client` needs it at runtime, producing
 > `NoClassDefFoundError: org/apache/hc/client5/http/io/HttpClientConnectionManager`. Fixed by
 > moving that dependency to compile scope.

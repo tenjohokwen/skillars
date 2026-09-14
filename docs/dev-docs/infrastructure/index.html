@@ -60,7 +60,7 @@
       imports <code>infrastructure.blobstore.service.StorageService</code> directly. <code>filestorage</code> itself is
       the only platform module allowed to depend on <code>blobstore</code>, because it adds the business rules
       (quota, ownership, soft-delete/retention, DB-backed metadata) that raw blob storage doesn't know about. The same
-      shape repeats elsewhere in this layer: modules call <code>infrastructure.ses.SesEmailService</code>,
+      shape repeats elsewhere in this layer: modules call <code>infrastructure.email.OutboundEmailSender</code>,
       <code>infrastructure.feature.FeatureToggleService</code>, or <code>infrastructure.exception.ApplicationException</code>
       directly (these genuinely are thin, stable, cross-cutting primitives with no business logic of their own to
       wrap), but anything that has business rules layered on top of a raw technical capability — like blob storage —
@@ -73,7 +73,8 @@
       <div class="card"><h4>security</h4><p>Cross-cutting auth primitives: cookie helpers, rate limiting, request context, JWT/role constants, security error events.</p></div>
       <div class="card"><h4>feature</h4><p>Simple properties-backed feature-toggle service (<code>features.*</code> config keys) gating payments, invoicing, arachnid, videointel.</p></div>
       <div class="card"><h4>persistence</h4><p>JPA base classes (<code>BaseEntity</code>, <code>AbstractAuditingEntity</code>), TSID generation, Flyway schema check, audit listeners.</p></div>
-      <div class="card"><h4>ses</h4><p>AWS SES email sending, with a <code>NoOpSesEmailService</code> that silently swallows sends when disabled.</p></div>
+      <div class="card"><h4>email</h4><p>The <code>OutboundEmailSender</code> transport port + <code>EmailTransport</code> enum (<code>ses</code>/<code>smtp</code>/<code>log</code>) that <code>platform.notification</code> dispatches every send through.</p></div>
+      <div class="card"><h4>ses</h4><p>The AWS SES implementation of the <code>infrastructure.email</code> transport port — one of three, active when <code>app.email.transport=ses</code>.</p></div>
       <div class="card"><h4>sanitizer</h4><p>Regex-based redaction of emails/phone numbers from free text, used to strip contact info from user-generated content.</p></div>
       <div class="card"><h4>threadpool</h4><p>MDC task decorator and executor wiring so <code>@Async</code>/detached threads keep the originating request's logging context.</p></div>
       <div class="card"><h4>exception</h4><p><code>ApplicationException</code> — the base runtime exception (support-id, error code, log context) every module's own exceptions extend.</p></div>
@@ -161,18 +162,46 @@
       module ultimately extends <code>BaseEntity</code> or <code>AbstractAuditingEntity</code>.
     </p>
 
-    <h3>ses</h3>
+    <h3>email, ses, email.smtp, email.log — the transport port and its three implementations</h3>
     <p>
-      <code>SesEmailService</code> is a one-method contract (<code>send(to, subject, htmlBody)</code>) with two
-      mutually-exclusive Spring-conditional implementations. <code>SesEmailServiceImpl</code> activates only when
-      <code>app.ses.enabled=true</code>, calling AWS SESv2 and wrapping SDK failures in <code>SesException</code>.
-      <code>NoOpSesEmailService</code> activates whenever <code>app.ses.enabled=false</code> <em>or the property is
-      simply absent</em> (<code>matchIfMissing = true</code>) — it just logs <code>"NoOp SES: email suppressed"</code>
-      and returns. This is the default in local/dev environments: no AWS credentials are needed and no real email
-      goes out, but callers get no error either, which is a common source of "why didn't my email arrive" confusion
-      during local testing. <code>SesConfig</code> only creates the <code>SesV2Client</code> bean when SES is enabled.
-      <code>platform.notification</code> is the primary consumer, sending through this interface rather than touching
-      the AWS SDK directly.
+      <code>infrastructure.email.OutboundEmailSender</code> is the one-method transport port
+      (<code>send(OutboundEmailRequest) -&gt; OutboundEmailResult</code>) that <code>platform.notification</code>'s
+      <code>MailService</code> calls — it never talks to a specific transport SDK itself.
+      <code>app.email.transport</code> is bound, via <code>EmailTransportProperties</code>, onto the
+      <code>infrastructure.email.EmailTransport</code> enum (<code>SES</code>/<code>SMTP</code>/<code>LOG</code>),
+      and exactly one of three beans implements the port at a time, each gated by its own
+      <code>@ConditionalOnProperty(name = "app.email.transport", havingValue = ...)</code> — there is no boolean
+      enable/disable flag anywhere in this area any more:
+    </p>
+    <ul>
+      <li><code>infrastructure.email.log</code> (<code>LoggingEmailSender</code>) — the <code>transport=log</code>
+        implementation, and what runs by default: base <code>application.yaml</code> sets
+        <code>email.transport: log</code> explicitly (each profile then overrides it), and — for the rarer case
+        where even that file isn't loaded, e.g. some test slices with a fully-absent property — the bean's own
+        <code>matchIfMissing = true</code> covers that too. Logs every send and, when
+        <code>app.email.log.outbox-dir</code> is configured, writes the rendered body to disk. Note the exact
+        sub-package — it is not collapsed into <code>infrastructure.email</code> itself.</li>
+      <li><code>infrastructure.ses</code> (<code>SesConfig</code>, <code>SesEmailSender</code>,
+        <code>SesErrorClassifier</code>, <code>SesHealthIndicator</code>, <code>SesSendRateLimiter</code>,
+        <code>SesPropertiesValidator</code>) — active when <code>app.email.transport=ses</code>.
+        <code>SesConfig</code> was never deleted by the transport-port migration; only its <em>gate</em> changed,
+        from a boolean <code>app.ses.enabled=true</code> to the <code>@ConditionalOnProperty</code> above — it
+        still builds the <code>SesV2Client</code> bean the same as before.
+        <code>SesPropertiesValidator</code> is worth naming explicitly: it is the class most likely to abort a
+        prod boot on a blank <code>from-address</code> or an unresolvable credential chain, and it's already
+        cited by name in <code>secrets-reference.md</code>.</li>
+      <li><code>infrastructure.email.smtp</code> (<code>SmtpEmailSender</code>, <code>MailSenderProvider</code>,
+        <code>SmtpHealthIndicator</code>) — active when <code>app.email.transport=smtp</code>.</li>
+    </ul>
+    <p>
+      <code>EmailTransportPropertyValidator</code> is <strong>not</strong> what selects a bean — that would be a
+      common but incorrect reading of its name. It is an <code>EnvironmentPostProcessor</code> that only
+      validates the raw property string at startup: an <strong>absent</strong> value is legal by design (falls
+      through to the base <code>log</code> default — the validator does not abort on unset, only on a
+      present-but-unrecognised value), and matching is case-insensitive with no whitespace tolerance. Bean
+      selection is entirely the <code>@ConditionalOnProperty</code> annotations named above.
+      <code>platform.notification</code> is the primary consumer of the port; it is unaffected by which transport
+      is active.
     </p>
 
     <h3>sanitizer</h3>
@@ -291,10 +320,12 @@ sequenceDiagram
       silently don't apply to whatever you stored.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Emails are silently suppressed in most local/dev setups.</strong> <code>NoOpSesEmailService</code>
-      activates whenever <code>app.ses.enabled</code> is <code>false</code> <em>or unset</em> — there is no error, no
-      exception, just a log line ("NoOp SES: email suppressed"). If a verification email or notification "isn't
-      arriving" during local development, check for that log line before assuming a bug in the sending code.</p>
+      <p><strong>Dev/uat deliver real email over SMTP; there is no silent local suppression any more.</strong>
+      <code>app.ses.enabled</code> and <code>NoOpSesEmailService</code> no longer exist. <code>dev</code> and
+      <code>uat</code> both run <code>app.email.transport=smtp</code> — real mail goes out, registration/OTP
+      included since <code>ses-1.4</code>. If a base context or test slice runs with no profile active it falls
+      through to the <code>log</code> transport instead, which only logs (and optionally writes to disk) rather
+      than sending — check <code>app.email.transport</code> before assuming a bug in the sending code.</p>
     </div>
     <div class="callout">
       <p><strong>All custom exceptions should extend <code>ApplicationException</code>, not raw <code>RuntimeException</code>.</strong>
@@ -339,7 +370,10 @@ sequenceDiagram
       <li><a href="../booking/index.html">Booking</a> and <a href="../session/index.html">Session</a> — heavy users of <code>persistence</code> base entities, <code>threadpool</code>-decorated async work, and <code>ApplicationException</code> subclassing.</li>
       <li><a href="../payment/index.html">Payment</a> — uses <code>client.AbstractClient</code> for outbound provider HTTP calls and the <code>feature</code> toggle service (<code>PAYMENTS</code>/<code>INVOICING</code>).</li>
       <li><a href="../messaging/index.html">Messaging</a> — uses <code>sanitizer</code> for contact-detail redaction and <code>gemini</code> for moderation.</li>
-      <li><a href="../notification/index.html">Notification</a> — the primary consumer of <code>ses</code> for outbound email.</li>
+      <li><a href="../notification/index.html">Notification</a> — the primary consumer of the
+        <code>infrastructure.email</code> transport port, not <code>ses</code> specifically; <code>ses</code> is
+        only the transport that's active in <code>prod</code> (<code>uat</code>/<code>dev</code> run
+        <code>smtp</code>).</li>
       <li><a href="../admin/index.html">Admin</a> — consumes security/persistence primitives for cross-cutting admin operations.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
