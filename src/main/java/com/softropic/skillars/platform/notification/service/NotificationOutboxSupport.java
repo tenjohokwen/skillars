@@ -12,7 +12,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 
@@ -60,14 +59,16 @@ import java.util.Map;
  *       decision.</strong> {@link #enqueueEmail} rethrows rather than swallowing (it is the wrong
  *       layer to set that policy), and each listener's {@code catch (Exception)} then decides: a
  *       notification failure must not roll back the business operation it merely describes. The
- *       residual is one lost email, logged at ERROR, while the booking commits. AC2's string-typed
- *       {@code data} contract shrinks the input space that can trigger it to essentially nothing.</li>
+ *       residual is one lost email, logged at ERROR, while the business transaction — a booking, a
+ *       session-pack change, or (story ses-1.4) a registration/resend-OTP request — still commits.
+ *       AC2's string-typed {@code data} contract shrinks the input space that can trigger it to
+ *       essentially nothing.</li>
  * </ul>
  *
  * <p>Payload construction must stay defensive to keep that split honest: build the map, serialise,
  * enqueue — no I/O, no external call, no lookup that can fail on data the business transaction has
- * not already validated. Neither listener holds a repository, which is what makes this structural
- * rather than a rule someone has to remember.
+ * not already validated. None of the producing listeners hold a repository, which is what makes this
+ * structural rather than a rule someone has to remember.
  *
  * <h2>Email template data is string-typed by contract (AC2)</h2>
  *
@@ -88,32 +89,37 @@ public class NotificationOutboxSupport {
 
     public static final String AGGREGATE_TYPE = "NOTIFICATION_EMAIL";
 
-    /** How long after enqueue the send is still considered timely. Stamped into the payload. */
-    private static final Duration DELIVERY_DEADLINE = Duration.ofDays(1);
-
     private final OutboxService outboxService;
     private final ObjectMapper objectMapper;
 
     /**
-     * MUST be a cross-bean call (the listeners live in {@code ...infrastructure.listener}) so the
-     * propagation advice goes through the proxy.
+     * MUST be a cross-bean call (the producing listeners live in a separate {@code ...infrastructure
+     * .listener} package — {@code platform.notification} for booking/session-pack,
+     * {@code platform.security} for registration/OTP) so the propagation advice goes through the
+     * proxy.
      *
      * <p>{@link Propagation#MANDATORY}, not {@code REQUIRED}: "there must already be a business
      * transaction to join" is this method's whole contract after AC4, and {@code MANDATORY} makes a
      * caller that forgets fail loudly at the call instead of quietly opening its own transaction and
      * reintroducing the non-atomic window. Every call path was audited when this changed — all 28
      * publish sites across twelve producers are inside {@code @Transactional} or a
-     * {@code TransactionTemplate}, and the only two callers of this method are the two email
-     * listeners, both {@code BEFORE_COMMIT}.
+     * {@code TransactionTemplate}. The callers of this method were {@code BookingEmailListener} and
+     * {@code SessionPackEmailListener} when that audit was done; story ses-1.4 added three more
+     * ({@code Coach}/{@code Parent}/{@code PlayerRegistrationEmailListener}) — all five are
+     * {@code BEFORE_COMMIT}, and the audit's conclusion (every publish site already has an ambient
+     * business transaction to join) holds for all five, not just the original two.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void enqueueEmail(EmailTemplate template, Recipient recipient, Map<String, Object> data, String sendId) {
         // Stamped here, at enqueue time, not recomputed at delivery — otherwise a message that sat in
         // the outbox through an outage is delivered with a fresh deadline and any staleness guard is
         // unreachable (skillars-deferred-91 code review).
+        //
+        // Story ses-1.4 AC3: deadline now comes from the template itself (COACH_OTP/PARENT_OTP/
+        // PLAYER_OTP get a much shorter window than the 24h default), not the fixed constant.
         NotificationEmailPayload payload = new NotificationEmailPayload(
-            template.name(), recipient.getEmail(), recipient.getLangKey(), sendId,
-            Instant.now().plus(DELIVERY_DEADLINE), data);
+            template.name(), recipient.getEmail(), recipient.getLangKey(), recipient.getFirstname(), sendId,
+            Instant.now().plus(template.deliveryDeadline()), data);
         try {
             outboxService.enqueue(AGGREGATE_TYPE, objectMapper.writeValueAsString(payload));
             outboxService.requestDrainAfterCommit();
@@ -139,8 +145,13 @@ public class NotificationOutboxSupport {
      *
      * <p>{@code deadline} is nullable only so rows enqueued before it was introduced still
      * deserialise; {@code NotificationEmailOutboxHandler} falls back for those.
+     *
+     * <p>{@code firstname} (story ses-1.4 AC2) is nullable and, for every producer that predates
+     * this story, always {@code null} — {@code null} round-trips through Jackson as {@code null}, so
+     * no existing outbox row's shape changes and no existing template (none of which reads
+     * {@code ${recipient.firstname}}) is affected. Only the six registration templates populate it.
      */
-    public record NotificationEmailPayload(String template, String toAddress, String langKey,
+    public record NotificationEmailPayload(String template, String toAddress, String langKey, String firstname,
                                            String sendId, Instant deadline, Map<String, Object> data) {
     }
 }

@@ -1,17 +1,33 @@
 package com.softropic.skillars.platform.notification.contract;
 
+import java.time.Duration;
+
 public enum EmailTemplate {
     NONE(""),
     ACTIVATION("email.activation.title"),
     CREATION_DUP("email.creation_dup.title"),
     PASSWORD_RESET("email.pw_reset.title"),
     SEND_OTP("email.otp.title"),
-    COACH_EMAIL_VERIFY("email.coach.verify.title"),
-    COACH_OTP("email.coach.otp.title"),
-    PARENT_EMAIL_VERIFY("email.parent.verify.title"),
-    PARENT_OTP("email.parent.otp.title"),
-    PLAYER_EMAIL_VERIFY("email.player.verify.title"),
-    PLAYER_OTP("email.player.otp.title"),
+    // Story ses-1.4 AC3/AC5, deadlines corrected by code review 2026-09-12:
+    // - COACH_EMAIL_VERIFY/PARENT_EMAIL_VERIFY/PLAYER_EMAIL_VERIFY: 12h, half of the verification
+    //   token's own 24h TTL (CoachRegistrationService.java:250 and its Parent/Player equivalents) —
+    //   the original 24h deadline equaled the token's TTL exactly, so a verify mail delivered near
+    //   its deadline carried a token that expired seconds later.
+    // - COACH_OTP/PARENT_OTP/PLAYER_OTP: 8 min, not 5. `app.outbox.sweep-ms` defaults to 300000 (5
+    //   min, OutboxService.java) and is the documented safety net when the inline AFTER_COMMIT drain
+    //   is discarded (OutboxConfig's ThreadPoolExecutor.DiscardPolicy) — a 5-minute deadline could
+    //   equal or precede the sweep that was supposed to recover the send, so
+    //   NotificationEmailOutboxHandler's first-attempt guard would discard an OTP the sweep never
+    //   got a chance to attempt. 8 minutes clears the sweep interval and still leaves >=2 min of the
+    //   10-minute OTP TTL in the worst case.
+    // All six also get an isolated circuit breaker name — a signup spike with bad addresses must not
+    // open the breaker that gates booking confirmations (D-8).
+    COACH_EMAIL_VERIFY("email.coach.verify.title", Duration.ofHours(12), "registrationEmailService"),
+    COACH_OTP("email.coach.otp.title", Duration.ofMinutes(8), "registrationEmailService"),
+    PARENT_EMAIL_VERIFY("email.parent.verify.title", Duration.ofHours(12), "registrationEmailService"),
+    PARENT_OTP("email.parent.otp.title", Duration.ofMinutes(8), "registrationEmailService"),
+    PLAYER_EMAIL_VERIFY("email.player.verify.title", Duration.ofHours(12), "registrationEmailService"),
+    PLAYER_OTP("email.player.otp.title", Duration.ofMinutes(8), "registrationEmailService"),
     EMAIL_CHANGE("email.change.title"),
     PROFILE_CHANGE("email.profile_change.title"),
     BOOKING_REQUESTED("email.booking.requested.title"),
@@ -48,11 +64,49 @@ public enum EmailTemplate {
     COACH_VISIBILITY_REDUCED("email.reliability.visibility_reduced.title");
 
     private final String subjectKey;
+    private final Duration deliveryDeadline;
+    private final String circuitBreakerName;
+
+    // Enum constants initialize before any static field on the same class, so a static constant
+    // cannot be referenced from a constructor called during that initialization ("illegal forward
+    // reference") — the defaults are inlined here instead.
     EmailTemplate(final String subjectKey) {
+        this(subjectKey, Duration.ofDays(1), "emailService");
+    }
+
+    EmailTemplate(final String subjectKey, final Duration deliveryDeadline, final String circuitBreakerName) {
         this.subjectKey = subjectKey;
+        this.deliveryDeadline = deliveryDeadline;
+        this.circuitBreakerName = circuitBreakerName;
     }
 
     public String subjectKey() {
         return subjectKey;
+    }
+
+    /**
+     * Story ses-1.4 AC3. Read by exactly one caller, {@code NotificationOutboxSupport.enqueueEmail}
+     * — this is not a codebase-wide guarantee. Six producers build an {@code Envelope} directly with
+     * their own caller-supplied deadline and never consult this accessor at all
+     * ({@code AccountManagementFacade}, {@code EmailRegistrationStrategy}, {@code SendMailListener},
+     * {@code AlertNotificationListener}, {@code VideoModerationEmailListener},
+     * {@code ReportGenerationService}), and the login-2FA {@code SEND_OTP} flow
+     * ({@code TwoFactorLoginService}) has its own independent hardcoded 10-minute deadline that this
+     * enum value's own {@code deliveryDeadline()} advertises but that flow never reads.
+     */
+    public Duration deliveryDeadline() {
+        return deliveryDeadline;
+    }
+
+    /**
+     * Story ses-1.4 AC5 (D-8): the id {@code MailManager.sendEmailSync} passes to
+     * {@code CircuitBreakerFactory.create(...)}. Isolating registration/OTP mail onto its own breaker
+     * means a signup spike of bad addresses cannot open the breaker that gates booking confirmations
+     * and every other transactional email. {@code ComponentConfig.defaultCustomizer()} configures
+     * every breaker id identically, so no config change is needed for a new id to get the same
+     * resilience shape as {@code "emailService"}, tracked as an independent instance.
+     */
+    public String circuitBreakerName() {
+        return circuitBreakerName;
     }
 }
