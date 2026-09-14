@@ -481,6 +481,12 @@ all green. No `mvn verify` run — GitHub CI is the full-suite gate.
   re-run, all green. Status remains review.
 - 2026-09-14: Code review's 15 patch findings and 5 decisions were already fully applied with no
   outstanding follow-up; story marked done.
+- 2026-09-14: CI's `assert-context-count.sh` gate failed on PR #183 — `RegistrationEmailDurabilityIT`'s
+  deliberate `enable.test.mail=false` context fork (see AC6's own S1 note: `BookingReminderEmailWiringIT`
+  runs under `TestMailManager` and structurally cannot assert this story's `FAILED`/`DEADLINE_EXPIRED`
+  re-drive behaviour) pushed `missCount` from 39 to 40, one over the checked-in ceiling. Raised
+  `CEILING` 39 -> 40 in `.github/scripts/assert-context-count.sh` and `pr-build.yml`, with the same
+  "deliberate one-context cost" justification already on file for `SmtpTransportBootIT`'s prior +2.
 
 ## Status
 

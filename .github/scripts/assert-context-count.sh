@@ -84,7 +84,17 @@ LOG="${1:?usage: assert-context-count.sh <build-log> [ceiling]}"
 # CEILING=36 section above already documents, not a second, separate regression. Reproduced
 # twice at 39 on the same tree; not a 37-39 range, so this is not the ordering-thrashing case the
 # warning below guards against.
-CEILING="${2:-39}"
+#
+# CEILING = 40, deliberate +1 (story ses-1.4, RegistrationEmailDurabilityIT). AC6's own story
+# text names and accepts this cost explicitly: BookingReminderEmailWiringIT (the obvious model)
+# runs with `enable.test.mail=true`, which swaps the whole MailManager bean for TestMailManager
+# and never produces an EnvelopeEntity row -- structurally unable to assert this story's
+# FAILED/DEADLINE_EXPIRED re-drive behaviour. RegistrationEmailDurabilityIT instead runs with
+# `enable.test.mail=false` so the real MailManager bean is active, which is a distinct
+# ContextCustomizer set from every other `enable.test.mail=true` IT and therefore forks its own
+# context, the same one-new-config-forks-one-context shape as SmtpTransportBootIT above.
+# Measured on PR #183 (run 34808851693): missCount went 39 -> 40.
+CEILING="${2:-40}"
 
 if [ ! -f "$LOG" ]; then
   echo "assert-context-count: build log not found: $LOG" >&2
