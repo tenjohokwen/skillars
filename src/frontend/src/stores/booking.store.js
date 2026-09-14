@@ -636,6 +636,16 @@ export const useBookingStore = defineStore('booking', () => {
     batchAcceptLoading.value = true
     batchAcceptError.value = null
     setBatchAcceptResult(batchId, null)
+    // skillars-deferred-110 AC6, code review 2026-09-14 (patch): a LOCAL flag, not a re-read of
+    // batchAcceptResultsByBatch[batchId], decides whether the catch block below may delete the
+    // entry. The first version of this guard checked `batchAcceptResultsByBatch.value[batchId]
+    // === null` to infer "still the seed" — but a genuinely successful acceptAllBatch call can
+    // ALSO resolve to `null` (an empty/204 response unwraps to null the same way axios does
+    // elsewhere in this store — see loadCoachBookingRequests' own null-response handling), which
+    // is indistinguishable from the seed by value alone. A local flag set the instant a real
+    // result is stored has no such ambiguity: it is true if and only if this invocation actually
+    // received a response, regardless of what that response was.
+    let resultReceived = false
     try {
       // acceptAllBatch resolves through the shared axios response interceptor (boot/axios.js), which
       // already unwraps to response.data before resolving — `results` here IS the response body
@@ -644,6 +654,7 @@ export const useBookingStore = defineStore('booking', () => {
       // batchAcceptResultsByBatch and this function's own return value).
       const results = await acceptAllBatch(batchId)
       setBatchAcceptResult(batchId, results)
+      resultReceived = true
       // Returns its own refresh outcome AND its own results — see the CONTRACT note above
       // loadCoachBookingRequests. Callers must read results from here, not from
       // batchAcceptResultsByBatch[batchId]: AC1's pruning (inside loadCoachBookingRequests, called next)
@@ -656,9 +667,14 @@ export const useBookingStore = defineStore('booking', () => {
       // skillars-deferred-109 AC5.1: the setBatchAcceptResult(batchId, null) seed at the top of this
       // function exists to clear the PREVIOUS attempt's result. On failure loadCoachBookingRequests()
       // — the only pruner of batchAcceptResultsByBatch — is never reached, so that `batchId → null`
-      // entry leaks until MAX_BATCH_ACCEPT_RESULTS evicts it. Remove it here. The rethrow stays:
-      // callers read { refreshed, results } from the resolved value and depend on it.
-      deleteBatchAcceptResult(batchId)
+      // entry leaks until MAX_BATCH_ACCEPT_RESULTS evicts it. Remove it here — guarded by
+      // resultReceived (skillars-deferred-110 AC6) so a future change that lets something after a
+      // real setBatchAcceptResult propagate a rejection into this block can never wipe a real
+      // result out from under a caller still reading it. The rethrow stays: callers read
+      // { refreshed, results } from the resolved value and depend on it.
+      if (!resultReceived) {
+        deleteBatchAcceptResult(batchId)
+      }
       throw e
     } finally {
       batchAcceptLoading.value = false

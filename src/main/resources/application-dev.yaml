@@ -10,12 +10,14 @@ app:
     from-address: "${APP_SES_FROM_ADDRESS:dev@localhost}"
   # ses-1.2: dev now runs the SMTP transport — including registration/OTP mail, for the first time
   # (fixes D4). The old DevSesEmailService/@Profile("!dev") trap this comment used to document is
-  # gone since ses-1.1; app.email.log.outbox-dir stays set below, harmless while unused — Phase 5
-  # flips dev to `log` and it becomes load-bearing again, so don't delete it.
+  # gone since ses-1.1; app.email.log.dump-dir (skillars-deferred-110 AC10: renamed from
+  # outbox-dir, which collided in name with platform.outbox's real transactional outbox) stays set
+  # below, harmless while unused — Phase 5 flips dev to `log` and it becomes load-bearing again, so
+  # don't delete it.
   email:
     transport: smtp
     log:
-      outbox-dir: target/mails
+      dump-dir: target/mails
     # Lists replace entirely in Spring — must repeat full entries to override passwords.
     smtp:
       provider-configs:

@@ -21,10 +21,10 @@ import java.util.regex.Pattern;
 
 /**
  * The dev-friendly logging transport, replacing {@code NoOpSesEmailService} (story ses-1.1 AC9/
- * AC9b): logs every send and, when {@code app.email.log.outbox-dir} is configured, writes the
+ * AC9b): logs every send and, when {@code app.email.log.dump-dir} is configured, writes the
  * rendered body to disk so template work has a real artifact to look at.
  *
- * <p><strong>Never throws.</strong> A misconfigured or since-removed outbox directory degrades to
+ * <p><strong>Never throws.</strong> A misconfigured or since-removed dump directory degrades to
  * log-only rather than failing the send — see the two distinct disable mechanisms below.
  *
  * <ul>
@@ -61,8 +61,8 @@ public class LoggingEmailSender implements OutboundEmailSender {
     private static final int MAX_CORRELATION_ID_LENGTH = 200;
     private static final int MAX_COLLISION_ATTEMPTS = 100;
 
-    private final String outboxDir;
-    private final boolean outboxConfigured;
+    private final String dumpDir;
+    private final boolean dumpDirConfigured;
 
     /** Set once, at startup, if directory creation fails. Never cleared — see class javadoc. */
     private volatile boolean startupWriteDisabled = false;
@@ -71,18 +71,18 @@ public class LoggingEmailSender implements OutboundEmailSender {
     private final AtomicBoolean directoryWritable = new AtomicBoolean(true);
 
     public LoggingEmailSender(EmailTransportProperties properties) {
-        String configuredDir = properties.getLog().getOutboxDir();
-        this.outboxConfigured = configuredDir != null && !configuredDir.isBlank();
-        this.outboxDir = outboxConfigured ? configuredDir : null;
+        String configuredDir = properties.getLog().getDumpDir();
+        this.dumpDirConfigured = configuredDir != null && !configuredDir.isBlank();
+        this.dumpDir = dumpDirConfigured ? configuredDir : null;
     }
 
     @PostConstruct
-    void createOutboxDirectory() {
-        if (!outboxConfigured) {
+    void createDumpDirectory() {
+        if (!dumpDirConfigured) {
             return;
         }
         try {
-            Files.createDirectories(Path.of(outboxDir));
+            Files.createDirectories(Path.of(dumpDir));
         } catch (IOException | InvalidPathException ex) {
             // InvalidPathException is unchecked and is NOT an IOException — Path.of throws it for a
             // value containing a NUL byte, or any illegal character on the host filesystem. Catching
@@ -90,7 +90,7 @@ public class LoggingEmailSender implements OutboundEmailSender {
             // exact opposite of this class's contract, for the transport whose whole purpose is to
             // be the safe default (code review 2026-09-11).
             startupWriteDisabled = true;
-            log.warn("Failed to create outbox directory '{}'; file-writing disabled for this process", outboxDir, ex);
+            log.warn("Failed to create dump directory '{}'; file-writing disabled for this process", dumpDir, ex);
         }
     }
 
@@ -99,14 +99,14 @@ public class LoggingEmailSender implements OutboundEmailSender {
         log.info("Sending email (log transport): to={}, subject={}, correlationId={}",
             maskAddress(request.toAddress()), request.subject(), request.correlationId());
 
-        if (outboxConfigured && !startupWriteDisabled) {
-            writeToOutbox(request);
+        if (dumpDirConfigured && !startupWriteDisabled) {
+            writeToDumpDir(request);
         }
 
         return new OutboundEmailResult("log:" + request.correlationId());
     }
 
-    private void writeToOutbox(OutboundEmailRequest request) {
+    private void writeToDumpDir(OutboundEmailRequest request) {
         boolean isHtml = isPresent(request.htmlBody());
         String content = isHtml ? request.htmlBody() : request.textBody();
         if (!isPresent(content)) {
@@ -117,12 +117,12 @@ public class LoggingEmailSender implements OutboundEmailSender {
         String baseName = sanitize(request.correlationId());
         Path dir;
         try {
-            dir = Path.of(outboxDir);
+            dir = Path.of(dumpDir);
         } catch (InvalidPathException ex) {
             // Unreachable while startupWriteDisabled guards this call, but Path.of is unchecked and
-            // this method is contractually "never throws" — see createOutboxDirectory.
+            // this method is contractually "never throws" — see createDumpDirectory.
             if (directoryWritable.compareAndSet(true, false)) {
-                log.warn("Outbox directory '{}' is not a valid path; degraded to log-only", outboxDir, ex);
+                log.warn("Dump directory '{}' is not a valid path; degraded to log-only", dumpDir, ex);
             }
             return;
         }
@@ -138,13 +138,13 @@ public class LoggingEmailSender implements OutboundEmailSender {
                 // Collision on this correlation id — try the next suffix.
             } catch (IOException ex) {
                 if (directoryWritable.compareAndSet(true, false)) {
-                    log.warn("Failed to write outbox file for correlationId={}: {}",
+                    log.warn("Failed to write dump file for correlationId={}: {}",
                         request.correlationId(), ex.getMessage(), ex);
                 }
                 return;
             }
         }
-        log.warn("Failed to write outbox file for correlationId={} after {} collision attempts; degraded to log-only",
+        log.warn("Failed to write dump file for correlationId={} after {} collision attempts; degraded to log-only",
             request.correlationId(), MAX_COLLISION_ATTEMPTS);
     }
 
@@ -165,7 +165,7 @@ public class LoggingEmailSender implements OutboundEmailSender {
      * logged the subject only; logging the full recipient was a silent widening of what lands in
      * log storage. UAT runs this transport with {@code LOKI_ENABLED=true}, and this platform's
      * registrants include minors and their parents, so the full address does not belong at INFO.
-     * The rendered outbox file still carries everything, which is what dev actually reads
+     * The rendered dump file still carries everything, which is what dev actually reads
      * (code review 2026-09-11, D4).
      */
     static String maskAddress(String address) {

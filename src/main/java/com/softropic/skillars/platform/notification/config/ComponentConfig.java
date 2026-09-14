@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.notification.config;
 
+import com.softropic.skillars.infrastructure.email.EmailTransportPermanentException;
 import com.softropic.skillars.infrastructure.email.EmailTransportRateLimitedException;
 import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.platform.notification.service.MailService;
@@ -17,6 +18,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.retry.support.RetryTemplate;
 
 import java.time.Duration;
+import java.util.List;
 
 /**
  * Story ses-1.2 AC2 Dev Notes: {@code @EnableConfigurationProperties({EmailProperties.class,
@@ -56,12 +58,20 @@ public class ComponentConfig {
      * conflict: {@code .maxAttempts(3)} populates {@code baseRetryPolicy}, while
      * {@code .notRetryOn(...)}/{@code .traversingCauses()} populate a separate classifier that {@code
      * build()} composes alongside it via {@code CompositeRetryPolicy} — no conflicting field write.
+     *
+     * <p>skillars-deferred-110 AC4 (owner decision 2026-09-14): {@link EmailTransportPermanentException}
+     * joins the exclusion — a failure already known permanent gains nothing from 3 in-process
+     * attempts. This is a <strong>latency-only</strong> win, not circuit-breaker relief: {@code
+     * retryTemplate.execute(...)} runs inside {@code circuitBreaker.run(...)} ({@code
+     * MailManager.sendEmailSync}), so the breaker records exactly one call regardless of retry count.
+     * The real effect is bounding the 10s {@code TimeLimiter} budget and the open {@code
+     * REQUIRES_NEW} transaction's duration for a failure that cannot succeed on re-attempt.
      */
     @Bean
     public RetryTemplate retryTemplate() {
         return RetryTemplate.builder()
                 .maxAttempts(3)
-                .notRetryOn(EmailTransportRateLimitedException.class)
+                .notRetryOn(List.of(EmailTransportRateLimitedException.class, EmailTransportPermanentException.class))
                 .traversingCauses()
                 .fixedBackoff(Duration.ofSeconds(1))
                 .build();
@@ -84,6 +94,12 @@ public class ComponentConfig {
      * latter is a plain {@code instanceof} test, and what actually reaches the breaker is
      * {@code MailManager}'s unconditional {@code new RuntimeException(..., cause)} rewrap, never the
      * bare exception. {@link EmailTransportRateLimitedException#isPresentIn} does the cause walk.
+     *
+     * <p>skillars-deferred-110 AC4b (owner decision 2026-09-14): {@link EmailTransportPermanentException}
+     * also joins {@code ignoreException} — the symmetric question {@code ses-1.3}'s own code review
+     * left unasked when it excluded the rate-limited type here. A permanent failure (e.g. a bad
+     * recipient address) is a data problem, not a signal the transport itself is unhealthy, so it
+     * should not count toward this breaker's failure-rate window either.
      */
     @Bean
     public Customizer<Resilience4JCircuitBreakerFactory> defaultCustomizer() {
@@ -94,7 +110,8 @@ public class ComponentConfig {
                         .minimumNumberOfCalls(5)
                         .failureRateThreshold(50.0f)
                         .waitDurationInOpenState(Duration.ofSeconds(5))
-                        .ignoreException(EmailTransportRateLimitedException::isPresentIn)
+                        .ignoreException(throwable -> EmailTransportRateLimitedException.isPresentIn(throwable)
+                                || EmailTransportPermanentException.isPresentIn(throwable))
                         .build())
                 .build());
     }

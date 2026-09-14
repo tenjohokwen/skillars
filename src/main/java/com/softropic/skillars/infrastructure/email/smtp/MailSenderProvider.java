@@ -1,5 +1,6 @@
 package com.softropic.skillars.infrastructure.email.smtp;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.stereotype.Component;
 
@@ -17,15 +18,30 @@ import java.util.stream.Collectors;
  * calls {@link #nextSender()} on this class directly, per §3.3's ownership table ("pick an SMTP
  * provider" moves to {@code infrastructure.email.smtp} as a concrete call, not a re-abstracted
  * interface).
+ *
+ * <p>skillars-deferred-110 AC3: gated on {@code app.email.transport=smtp} — matching {@link
+ * SmtpEmailSender}, its one and only consumer — so a malformed {@code provider-configs} entry (a
+ * non-numeric port, for instance) can never crash a {@code transport=ses} prod boot out of a bean
+ * that would otherwise be constructed unconditionally in every profile. Validation runs inside
+ * this constructor itself, not a separate {@code @PostConstruct} validator, because bean-creation
+ * ordering between a sibling {@code @PostConstruct} and this constructor is not guaranteed —
+ * only a check performed here is guaranteed to win the race and produce a named, friendly {@code
+ * AppSetupException} instead of a raw {@code NumberFormatException}/{@code
+ * ArithmeticException}/{@code IndexOutOfBoundsException}. The check itself lives in {@link
+ * ProviderConfigsValidator}, shared with {@link SmtpPropertiesValidator} (code review 2026-09-14 —
+ * the two had drifted out of sync byte-for-byte before the extraction).
  */
 @Component
+@ConditionalOnProperty(name = "app.email.transport", havingValue = "smtp")
 public class MailSenderProvider {
 
     private final AtomicInteger counter = new AtomicInteger(0);
     private final List<JavaMailSenderImpl> providers;
 
     public MailSenderProvider(SmtpProperties smtpProperties) {
-        this.providers = smtpProperties.getProviderConfigs().stream()
+        List<ProviderConfig> providerConfigs = smtpProperties.getProviderConfigs();
+        ProviderConfigsValidator.validate(providerConfigs);
+        this.providers = providerConfigs.stream()
                 .map(this::toMailSender)
                 .collect(Collectors.toList());
     }
@@ -63,9 +79,14 @@ public class MailSenderProvider {
         return javaMailSender;
     }
 
+    /**
+     * skillars-deferred-110 AC3: {@code Math.floorMod} (not {@code %}) so an {@link AtomicInteger}
+     * rollover to {@code Integer.MIN_VALUE} after 2^31 calls can never index negative. It still
+     * divides by zero on an empty provider list exactly like {@code %} does — the constructor's
+     * own empty-list guard is what actually prevents that case from reaching here.
+     */
     public JavaMailSenderImpl nextSender() {
-        final var currentCounterValue = counter.getAndIncrement();
-        final var nextProviderPos = currentCounterValue % providers.size();
+        final var nextProviderPos = Math.floorMod(counter.getAndIncrement(), providers.size());
         return providers.get(nextProviderPos);
     }
 }

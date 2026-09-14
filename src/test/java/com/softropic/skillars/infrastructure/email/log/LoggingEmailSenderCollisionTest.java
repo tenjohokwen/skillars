@@ -43,9 +43,9 @@ class LoggingEmailSenderCollisionTest {
 
     private static LoggingEmailSender sender(Path dir) {
         EmailTransportProperties props = new EmailTransportProperties();
-        props.getLog().setOutboxDir(dir.toString());
+        props.getLog().setDumpDir(dir.toString());
         LoggingEmailSender sender = new LoggingEmailSender(props);
-        sender.createOutboxDirectory();
+        sender.createDumpDirectory();
         return sender;
     }
 
@@ -71,7 +71,7 @@ class LoggingEmailSenderCollisionTest {
         assertThat(result.messageId()).isEqualTo("log:cid");
         assertThat(logAppender.list).anySatisfy(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.WARN);
-            assertThat(event.getFormattedMessage()).contains("Failed to write outbox file");
+            assertThat(event.getFormattedMessage()).contains("Failed to write dump file");
         });
     }
 

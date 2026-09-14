@@ -52,16 +52,16 @@ class LoggingEmailSenderTest {
         senderLogger.setLevel(originalLevel);
     }
 
-    private static EmailTransportProperties propsWithOutboxDir(String dir) {
+    private static EmailTransportProperties propsWithDumpDir(String dir) {
         EmailTransportProperties props = new EmailTransportProperties();
-        props.getLog().setOutboxDir(dir);
+        props.getLog().setDumpDir(dir);
         return props;
     }
 
     @Test
     void neverThrows_evenWhenNothingConfigured() {
-        LoggingEmailSender sender = new LoggingEmailSender(propsWithOutboxDir(null));
-        sender.createOutboxDirectory();
+        LoggingEmailSender sender = new LoggingEmailSender(propsWithDumpDir(null));
+        sender.createDumpDirectory();
 
         OutboundEmailResult result = sender.send(
             new OutboundEmailRequest("to@example.com", "subject", "<html/>", null, "cid"));
@@ -85,37 +85,37 @@ class LoggingEmailSenderTest {
     }
 
     @Test
-    void unsetOutboxDir_writesNoFileAnywhere() throws IOException {
+    void unsetDumpDir_writesNoFileAnywhere() throws IOException {
         Set<Path> before = workingDirectorySnapshot();
 
-        LoggingEmailSender sender = new LoggingEmailSender(propsWithOutboxDir(null));
-        sender.createOutboxDirectory();
+        LoggingEmailSender sender = new LoggingEmailSender(propsWithDumpDir(null));
+        sender.createDumpDirectory();
         sender.send(new OutboundEmailRequest("to@example.com", "subject", "<html/>", null, "cid-unset"));
 
         assertThat(workingDirectorySnapshot())
-            .as("an unset outbox-dir must not write a file anywhere, including the working directory")
+            .as("an unset dump-dir must not write a file anywhere, including the working directory")
             .isEqualTo(before);
         assertThat(Path.of("cid-unset.html")).doesNotExist();
     }
 
     @Test
-    void blankOutboxDir_treatedAsUnset_writesNoFileAnywhere() throws IOException {
+    void blankDumpDir_treatedAsUnset_writesNoFileAnywhere() throws IOException {
         Set<Path> before = workingDirectorySnapshot();
 
-        LoggingEmailSender sender = new LoggingEmailSender(propsWithOutboxDir(""));
-        sender.createOutboxDirectory();
+        LoggingEmailSender sender = new LoggingEmailSender(propsWithDumpDir(""));
+        sender.createDumpDirectory();
         sender.send(new OutboundEmailRequest("to@example.com", "subject", "<html/>", null, "cid-blank"));
 
         assertThat(workingDirectorySnapshot())
-            .as("a blank outbox-dir must be treated as unset, not resolved to the working directory")
+            .as("a blank dump-dir must be treated as unset, not resolved to the working directory")
             .isEqualTo(before);
         assertThat(Path.of("cid-blank.html")).doesNotExist();
     }
 
     @Test
     void htmlBody_writesHtmlFile(@TempDir Path tempDir) {
-        LoggingEmailSender sender = new LoggingEmailSender(propsWithOutboxDir(tempDir.toString()));
-        sender.createOutboxDirectory();
+        LoggingEmailSender sender = new LoggingEmailSender(propsWithDumpDir(tempDir.toString()));
+        sender.createDumpDirectory();
 
         OutboundEmailResult result = sender.send(
             new OutboundEmailRequest("to@example.com", "subject", "<p>hi</p>", null, "cid-html"));
@@ -127,8 +127,8 @@ class LoggingEmailSenderTest {
 
     @Test
     void textOnlyBody_writesTxtFileNotHtml(@TempDir Path tempDir) {
-        LoggingEmailSender sender = new LoggingEmailSender(propsWithOutboxDir(tempDir.toString()));
-        sender.createOutboxDirectory();
+        LoggingEmailSender sender = new LoggingEmailSender(propsWithDumpDir(tempDir.toString()));
+        sender.createDumpDirectory();
 
         sender.send(new OutboundEmailRequest("to@example.com", "subject", null, "plain body", "cid-text"));
 
@@ -138,8 +138,8 @@ class LoggingEmailSenderTest {
 
     @Test
     void nonNullMessageIdAlways() {
-        LoggingEmailSender sender = new LoggingEmailSender(propsWithOutboxDir(null));
-        sender.createOutboxDirectory();
+        LoggingEmailSender sender = new LoggingEmailSender(propsWithDumpDir(null));
+        sender.createDumpDirectory();
 
         OutboundEmailResult result = sender.send(
             new OutboundEmailRequest("to@example.com", "subject", "<html/>", null, "abc-123"));
@@ -152,8 +152,8 @@ class LoggingEmailSenderTest {
         Path notADirectory = tempDir.resolve("not-a-directory-its-a-file");
         Files.writeString(notADirectory, "occupied");
 
-        LoggingEmailSender sender = new LoggingEmailSender(propsWithOutboxDir(notADirectory.toString()));
-        sender.createOutboxDirectory(); // Files.createDirectories fails: path exists as a file
+        LoggingEmailSender sender = new LoggingEmailSender(propsWithDumpDir(notADirectory.toString()));
+        sender.createDumpDirectory(); // Files.createDirectories fails: path exists as a file
 
         OutboundEmailResult result = sender.send(
             new OutboundEmailRequest("to@example.com", "subject", "<html/>", null, "cid"));
@@ -161,14 +161,14 @@ class LoggingEmailSenderTest {
         assertThat(result).isEqualTo(new OutboundEmailResult("log:cid"));
         assertThat(logAppender.list).anySatisfy(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.WARN);
-            assertThat(event.getFormattedMessage()).contains("Failed to create outbox directory");
+            assertThat(event.getFormattedMessage()).contains("Failed to create dump directory");
         });
     }
 
     @Test
-    void correlationIdWithPathTraversal_isSanitisedAndStaysInsideOutboxDir(@TempDir Path tempDir) throws IOException {
-        LoggingEmailSender sender = new LoggingEmailSender(propsWithOutboxDir(tempDir.toString()));
-        sender.createOutboxDirectory();
+    void correlationIdWithPathTraversal_isSanitisedAndStaysInsideDumpDir(@TempDir Path tempDir) throws IOException {
+        LoggingEmailSender sender = new LoggingEmailSender(propsWithDumpDir(tempDir.toString()));
+        sender.createDumpDirectory();
 
         sender.send(new OutboundEmailRequest(
             "to@example.com", "subject", "<html/>", null, "../../etc/passwd"));
@@ -181,7 +181,7 @@ class LoggingEmailSenderTest {
             .exists();
         try (Stream<Path> files = Files.walk(tempDir)) {
             assertThat(files.filter(Files::isRegularFile))
-                .as("exactly one file, and it did not escape the outbox dir")
+                .as("exactly one file, and it did not escape the dump dir")
                 .hasSize(1);
         }
     }
@@ -190,13 +190,13 @@ class LoggingEmailSenderTest {
      * The {@code NoOpSesEmailService} this class replaces logged the subject only. Logging the full
      * recipient silently widened what lands in log storage: UAT runs this transport with
      * {@code LOKI_ENABLED=true}, and this platform's registrants include minors and their parents.
-     * The rendered outbox file still carries everything, which is what dev actually reads
+     * The rendered dump file still carries everything, which is what dev actually reads
      * (code review 2026-09-11, D4).
      */
     @Test
-    void recipientAddressIsMaskedOnTheInfoLine_butIntactInTheOutboxFile(@TempDir Path tempDir) {
-        LoggingEmailSender sender = new LoggingEmailSender(propsWithOutboxDir(tempDir.toString()));
-        sender.createOutboxDirectory();
+    void recipientAddressIsMaskedOnTheInfoLine_butIntactInTheDumpFile(@TempDir Path tempDir) {
+        LoggingEmailSender sender = new LoggingEmailSender(propsWithDumpDir(tempDir.toString()));
+        sender.createDumpDirectory();
 
         sender.send(new OutboundEmailRequest(
             "jane.doe@example.com", "subject", "<p>hi jane.doe@example.com</p>", null, "cid-mask"));

@@ -170,8 +170,14 @@
       <code>app.email.transport</code> is bound, via <code>EmailTransportProperties</code>, onto the
       <code>infrastructure.email.EmailTransport</code> enum (<code>SES</code>/<code>SMTP</code>/<code>LOG</code>),
       and exactly one of three beans implements the port at a time, each gated by its own
-      <code>@ConditionalOnProperty(name = "app.email.transport", havingValue = ...)</code> — there is no boolean
-      enable/disable flag anywhere in this area any more:
+      <code>@ConditionalOnProperty(name = "app.email.transport", havingValue = ...)</code> — <strong>the transport
+      selection mechanism itself</strong> carries no boolean enable/disable flag; it is entirely driven by
+      <code>app.email.transport</code>'s three-way value. Two unrelated boolean toggles still exist elsewhere in
+      <code>platform.notification</code> and are worth naming so this claim isn't read too broadly:
+      <code>enable.test.mail</code> (<code>ComponentConfig</code>, gates the <code>MailManager</code> bean itself)
+      and <code>email.retry.enabled</code> (<code>EmailRetryScheduler</code>, <code>true</code> in prod). Neither
+      selects a transport — they gate different beans entirely. The three transport implementations
+      themselves:
     </p>
     <ul>
       <li><code>infrastructure.email.log</code> (<code>LoggingEmailSender</code>) — the <code>transport=log</code>
@@ -179,7 +185,7 @@
         <code>email.transport: log</code> explicitly (each profile then overrides it), and — for the rarer case
         where even that file isn't loaded, e.g. some test slices with a fully-absent property — the bean's own
         <code>matchIfMissing = true</code> covers that too. Logs every send and, when
-        <code>app.email.log.outbox-dir</code> is configured, writes the rendered body to disk. Note the exact
+        <code>app.email.log.dump-dir</code> is configured, writes the rendered body to disk. Note the exact
         sub-package — it is not collapsed into <code>infrastructure.email</code> itself.</li>
       <li><code>infrastructure.ses</code> (<code>SesConfig</code>, <code>SesEmailSender</code>,
         <code>SesErrorClassifier</code>, <code>SesHealthIndicator</code>, <code>SesSendRateLimiter</code>,
@@ -191,7 +197,24 @@
         prod boot on a blank <code>from-address</code> or an unresolvable credential chain, and it's already
         cited by name in <code>secrets-reference.md</code>.</li>
       <li><code>infrastructure.email.smtp</code> (<code>SmtpEmailSender</code>, <code>MailSenderProvider</code>,
-        <code>SmtpHealthIndicator</code>) — active when <code>app.email.transport=smtp</code>.</li>
+        <code>SmtpPropertiesValidator</code>, <code>SmtpHealthIndicator</code>) — active when
+        <code>app.email.transport=smtp</code>. <code>app.email.smtp.provider-configs</code> is a list of
+        <code>ProviderConfig</code> entries, each with six fields: <code>name</code> (the operator-visible label
+        <code>SmtpHealthIndicator</code> surfaces per provider in the <code>notification</code> health group —
+        not decorative), <code>host</code>, <code>port</code>, <code>username</code>, <code>password</code>, and
+        <code>implicitTls</code> (defaults from <code>port == 465</code> when unset — see
+        skillars-deferred-99 AC5). <code>MailSenderProvider.nextSender()</code> round-robins across the
+        configured providers via an <code>AtomicInteger</code> counter, so outbound mail is spread across
+        whichever providers are listed (dev ships two: gmx and gmail). <code>SmtpPropertiesValidator</code>
+        mirrors <code>SesPropertiesValidator</code>'s shape — a dedicated, transport-gated
+        <code>@PostConstruct</code> check — though <code>MailSenderProvider</code>'s own constructor performs
+        the load-bearing version of the same checks itself, since bean-creation ordering between the two is not
+        guaranteed.
+        <strong>Known gap, not yet fixed:</strong> <code>MailSenderProvider.toMailSender</code> ignores
+        <code>implicitTls</code> entirely — it hardcodes plaintext-plus-STARTTLS for every provider — so a
+        port-465 (implicit-TLS) provider is probed UP by <code>SmtpHealthIndicator</code> (which does perform a
+        real TLS handshake) while the actual send path talks the wrong protocol to that same endpoint and fails.
+        Tracked in <code>deferred-work.md</code>; not fixed here.</li>
     </ul>
     <p>
       <code>EmailTransportPropertyValidator</code> is <strong>not</strong> what selects a bean — that would be a
