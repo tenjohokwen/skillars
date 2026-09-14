@@ -181,6 +181,31 @@ class VideoModerationEmailListenerTest {
         // Mutation: merge the null/SENT branches into one log.info → this assertion goes RED.
     }
 
+    /**
+     * skillars-deferred-110 AC5: establish-the-cause-first — the WARN now carries transaction/
+     * isolation context alongside the read-back result, so a real occurrence can be diagnosed rather
+     * than assumed. Not a fix; this only pins the diagnostic content the story's own AC5 asks for.
+     */
+    @Test
+    @DisplayName("the not-yet-visible WARN carries transaction/isolation context, not just the read-back result")
+    void noPersistedEnvelope_warnCarriesTransactionContext() {
+        when(envelopeEntityRepository.findBySendId(anyString())).thenReturn(null);
+
+        assertThatCode(() -> listener.sendAdminAlertSync(event())).doesNotThrowAnyException();
+
+        ILoggingEvent warning = logAppender.list.stream()
+            .filter(e -> e.getLevel() == Level.WARN
+                && e.getFormattedMessage().contains("[VIDEO_MODERATION_ADMIN_ALERT] send outcome not yet visible"))
+            .findFirst()
+            .orElseThrow();
+        assertThat(warning.getFormattedMessage())
+            .contains("actualTransactionActive=")
+            .contains("currentTransactionName=")
+            .contains("currentTransactionReadOnly=")
+            .contains("currentTransactionIsolationLevel=")
+            .contains("thread=");
+    }
+
     @Test
     @DisplayName("a blank admin_alert_email short-circuits before any send and does not throw")
     void blankRecipient_returnsWithoutSending() {

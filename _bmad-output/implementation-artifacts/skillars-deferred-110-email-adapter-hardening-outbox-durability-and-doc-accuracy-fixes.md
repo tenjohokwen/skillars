@@ -1,6 +1,6 @@
 # skillars-deferred-110: Email Adapter Hardening, Outbox Durability & Doc Accuracy Fixes
 
-**Status:** ready-for-dev | **Epic:** deferred | **Priority:** high
+**Status:** done | **Epic:** deferred | **Priority:** high
 **Story ID:** deferred-110
 **Branch:** `story/deferred-110-email-adapter-hardening`
 **Created:** 2026-09-14
@@ -643,11 +643,310 @@ verification gate; migration conventions; secrets handling).
 
 ### Agent Model Used
 
+Claude Sonnet 5 (claude-sonnet-5), via `/bmad-dev-story`.
+
+### Owner Decisions (surfaced before implementation, per the story's own Dev Notes instruction)
+
+Asked and answered with the user before any code was written, per this story's "surface all four
+decision points early" Dev Note:
+
+- **AC4a — `notRetryOn(EmailTransportPermanentException.class)`:** **Approved.** Implemented as
+  specified (latency-only bound, not breaker relief).
+- **AC4b — also add `EmailTransportPermanentException` to `defaultCustomizer()`'s
+  `ignoreException` predicate:** **Approved.** A permanent failure (bad recipient address) is a
+  data problem, not a transport-health signal, mirroring the rate-limited exception's own
+  precedent. Implemented.
+- **AC8 — `EmailTemplate.valueOf` poison-row handling:** **Keep retain-and-alert (current
+  behaviour).** No code change — `NotificationEmailOutboxHandler` is unchanged. This decision is
+  the deliverable for AC8: it matches `OutboxRowProcessor`'s own "never silently drop" precedent
+  for the structurally identical missing-handler case, and avoids the uncaught-NPE / missing-
+  durable-record / irreversible-data-loss risks the catch-and-drop alternative would have
+  introduced. Re-annotate the `ses-1-4` ledger bullet this AC cites as `[DECIDED: keep
+  retain-and-alert]` in a future ledger-hygiene pass, per this project's established convention of
+  pruning `deferred-work.md` separately, post-merge.
+- **AC9c — write the additive schema-pinning migration:** **Approved.** `V136` written (see
+  below) in addition to the mandatory dev-doc fix.
+
+**AC5 was not a decision point in the end** — its own fix approach ("add the read-back result and
+transaction/isolation context to the existing WARN log … before writing a fix") is a diagnostic-only
+change, not a behavioural fork, so nothing needed the user's sign-off; implemented as written.
+
 ### Debug Log References
+
+- **AC1 verification (mandated by the AC itself):** temporarily inserted a bare-literal
+  `from-address: "noreply@skillars.com"` line into `application-dev.yaml`, confirmed
+  `NoHardcodedSenderTest` newly failed on it, then reverted (`git diff` confirmed a clean revert
+  before proceeding).
+- **AC9 empirical Hibernate-DDL confirmation** (mandated by the AC itself, step 1): a temporary
+  `TmpEnvelopeSchemaDumpIT` (deleted before completion — not in the File List) queried
+  `information_schema.columns`/`pg_constraint`/`pg_indexes` against the real Testcontainers
+  Postgres for `main.envelope_entity`/`main.envelope_entity_recipients`. Confirmed the table
+  exists with no corresponding `CREATE TABLE` anywhere in `db/migration/` — proof Hibernate's
+  `hbm2ddl.auto=update` is live. Raw dump (abbreviated):
+  - `envelope_entity`: `id uuid` (PK), `version bigint` NOT NULL, `attempts bigint` NOT NULL,
+    `data jsonb`, `deadline timestamptz`, `email_template varchar` (+ a Hibernate-managed CHECK
+    naming every current `EmailTemplate` constant), `error text`, `retry text` (confirms the
+    `columnDefinition = "text"` claim — not a bug), `send_id varchar` with a UNIQUE constraint
+    (`uk428hhm4tjgrg8cy2092q025po`), `status varchar` (+ a similar CHECK for
+    `EmailDeliveryStatus`).
+  - `envelope_entity_recipients`: `envelope_entity_id uuid NOT NULL` with an FK to
+    `envelope_entity(id)` (no index on the FK column), plus `email`/`firstname`/`gender`/
+    `lang_key`/`lastname`/`title`, all `varchar`.
+  - `V136__pin_envelope_entity_schema.sql` is pinned to exactly this shape (minus the two
+    Hibernate-managed CHECK constraints — see the migration's own header comment for why those
+    are deliberately not replicated).
+- **AC7 local TZ verification** (in place of triggering the actual GitHub Actions
+  `workflow_dispatch`, which needs a push): ran the full Vitest suite locally under both
+  `TZ=UTC` and `TZ=America/New_York` — 111/111 specs green both times, no masked DST-sensitive
+  spec found. `actionlint` clean on the edited workflow file.
+- **AC10 completeness gate:** `grep -rniE "outbox-dir|outboxdir" .` (case-insensitive — the
+  original AC's own case-sensitive form missed `setOutboxDir`/`createOutboxDirectory` in
+  `LoggingEmailSenderCollisionTest.java`, found and fixed during this sweep) returns zero hits
+  outside: (a) my own "renamed from outbox-dir" explanatory comments, and (b) historical/immutable
+  records — completed story files (`ses-1-1-*`, `ses-1-2-*`, `ses-1-7-documentation.md`),
+  `story-review.md`, `deferred-work.md`'s still-open ledger bullet, and `sprint-status.yaml`'s
+  `ses-1-5-ses-cutover` backlog note — none of which this project's convention rewrites
+  retroactively (ledger pruning is a dedicated post-merge step; see the git log's own
+  "post-merge prune" commits).
 
 ### Completion Notes List
 
+- **AC1:** Added `NON_PLACEHOLDER_FROM_ADDRESS` pattern to `NoHardcodedSenderTest`, catching any
+  `from-address:` line not using the placeholder form; looped the existing placeholder-pattern
+  assertion over every match. Verified the new pattern actually catches a bare literal (see Debug
+  Log).
+- **AC2:** `SmtpErrorClassifier.classify` now special-cases `MailSendException`: walks
+  `getFailedMessages().values()`, classifying a `SendFailedException` permanent when it has no
+  valid-unsent addresses left, transient otherwise; every other failed-message value still walks
+  its own cause chain against `NON_REPAIRABLE_ERRORS`. Non-`MailSendException` inputs are
+  unaffected (existing direct-throw/wrapped-`AddressException` cases stay green). 9/9 classifier
+  tests green, including the two new `MailSendException`+`SendFailedException` cases.
+  `SmtpEmailSender:64-66`'s own pre-classifier `AddressException` handling (for
+  `helper.setTo(...)`) is untouched.
+- **AC3:** `MailSenderProvider` gated `@ConditionalOnProperty(transport=smtp)` at the class level
+  (matching its sole consumer, `SmtpEmailSender`); its constructor now validates every
+  `ProviderConfig` (blank host/username/port, unparseable port, empty list) and throws
+  `AppSetupException` naming the offending property, independent of bean-creation ordering.
+  `nextSender()` uses `Math.floorMod` instead of `%` so an `AtomicInteger` rollover can never
+  index negative (the empty-list divide-by-zero case is closed by the constructor guard, not
+  `floorMod` alone). Added `SmtpPropertiesValidator` as the redundant, `SesPropertiesValidator`-
+  shaped sibling the AC calls for. `TransportWiringTest.transportSmtp_wiresSmtpEmailSender` updated
+  to supply a real provider config (an empty list is no longer valid config, by design); added a
+  sibling `transportSmtp_withNoProviderConfigured_failsStartup` asserting the new rejection.
+  Confirmed via `MailSenderProviderTest` that the bean does not even construct under
+  `transport=ses` with a malformed `provider-configs` present. Noted, not blocking: rejecting a
+  blank `username` at boot is a new hard failure for a local no-auth relay — `SmtpTransportBootIT`
+  already sets a non-blank username/password, so it stays green.
+- **AC4:** Implemented both halves per owner decision above:
+  `ComponentConfig.retryTemplate()`'s `notRetryOn` now takes a list of both
+  `EmailTransportRateLimitedException` and `EmailTransportPermanentException`;
+  `defaultCustomizer()`'s `ignoreException` predicate now ORs
+  `EmailTransportPermanentException.isPresentIn` alongside the existing rate-limited check. Added
+  `EmailTransportPermanentException.isPresentIn` (mirroring the rate-limited type's own
+  depth-bounded, cycle-guarded cause walk) plus its own test class, and two new
+  `ComponentConfigRetryTemplateTest` cases (bare + one-level-wrapped).
+- **AC5:** No behavioural change. `VideoModerationEmailListener`'s `persisted == null` WARN now
+  also logs `TransactionSynchronizationManager` state
+  (`isActualTransactionActive`/`getCurrentTransactionName`/`isCurrentTransactionReadOnly`) and the
+  current thread name, so a real occurrence (if one ever happens) carries the diagnostic context
+  needed to actually establish a cause, instead of guessing at one. New test pins the enhanced log
+  content directly (not a specific fix mechanism, per the AC's own instruction).
+- **AC6:** Extracted the catch-block guard into a named `deleteBatchAcceptResultIfSeed(batchId)`
+  function (only deletes when the entry still holds the `null` seed) and exported it from the
+  store, purely so its conditional is directly unit-testable against store state without driving
+  the (today unreachable) real-results-then-catch path through `handleAcceptAllBatch` — per the
+  AC's own test instruction not to attempt that. Three new store-level tests cover both branches
+  plus the no-entry no-op case. `npx eslint`/`npx prettier --check` clean on both changed frontend
+  files.
+- **AC7:** Added a `tz: [UTC, America/New_York]` matrix (via `include`, with a `label` field
+  because `America/New_York` contains a `/`, unsafe in an artifact name) to
+  `frontend-unit-tests.yml`, `TZ` env sourced from `matrix.tz`; the coverage-upload artifact name
+  now includes `matrix.label` to avoid the `actions/upload-artifact@v4+` duplicate-name failure a
+  bare matrix would hit. `actionlint` clean. Confirmed locally under both timezones (see Debug Log)
+  — no currently-masked DST-sensitive spec found, so no additional fix was needed beyond the CI
+  config itself.
+- **AC8:** No code change — see Owner Decisions above. `NotificationEmailOutboxHandler` is
+  unmodified.
+- **AC9:** Empirically confirmed Hibernate auto-DDL (see Debug Log), then wrote
+  `V136__pin_envelope_entity_schema.sql` — additive, `IF NOT EXISTS`-guarded, `send_id`
+  uniqueness declared inline (not a separate `CREATE UNIQUE INDEX`), pinned to the dumped shape
+  including the `retry text` column type. Deliberately does **not** replicate Hibernate's own
+  enum-CHECK constraints on `email_template`/`status` (see the migration's header comment: Hibernate
+  keeps managing those regardless, since `generate-ddl` removal is explicitly out of this story's
+  scope, so hardcoding the current enum list would only add a second, easily-stale place to keep in
+  sync). `MigrationConventionLintTest` passes clean (no `SET lock_timeout` needed — a plain
+  `CREATE TABLE` matches none of that lint's lock-taking patterns). Also fixed
+  `docs/dev-docs/database/index.html:79`'s false "Hibernate never creates or alters a table" claim
+  with a new callout explaining the actual `generate-ddl`/`ddl-auto` precedence quirk and naming
+  `V136` as the table made explicit. `MailManagerDuplicateSendIdIT`/`EmailRetrySchedulerIT` still
+  green (unaffected — the table existed before and after, as expected of a no-op migration).
+- **AC10:** Renamed `app.email.log.outbox-dir` → `app.email.log.dump-dir` (field `outboxDir` →
+  `dumpDir`) across `EmailTransportProperties`, `LoggingEmailSender` (including its method/log-
+  message/variable names — `createOutboxDirectory` → `createDumpDirectory`, etc.),
+  `LoggingEmailSenderTest`, `LoggingEmailSenderCollisionTest` (found by the case-insensitive
+  completeness sweep — see Debug Log), `application-dev.yaml` (key + its `:13` prose comment),
+  `application-test.yaml` (the load-bearing blank override at the former `:136`, plus its own
+  prose comment), `docs/dev-docs/infrastructure/index.html:182`, and all 7 property-name
+  occurrences in `requirements/ses-email-consolidation.md` (D-4's actual decision content
+  untouched). Repo-wide case-insensitive grep gate returns zero hits outside historical/immutable
+  records (see Debug Log for the full accounting).
+- **AC11:** Sequenced after AC10 landed, in the same file. (a) Reworded the unbounded "no boolean
+  flag" claim to scope it to the transport-*selection* mechanism specifically, and named both
+  surviving `platform.notification` toggles (`enable.test.mail`, `email.retry.enabled`) rather than
+  one. (b) Documented all six `ProviderConfig` fields (not four), named
+  `app.email.smtp.provider-configs` and the round-robin behaviour `MailSenderProvider.nextSender()`
+  implements, added `SmtpPropertiesValidator` to the class list (new since AC3, for accuracy), and
+  named the `implicitTls`-not-honoured gap explicitly rather than describing the broken behaviour
+  as correct. That gap was not already tracked, so filed it as a new `deferred-work.md` entry per
+  the AC's own instruction. Tag-balance script clean on both edited HTML files (`database/` and
+  `infrastructure/index.html`); no embedded-newline `<code>` spans introduced.
+
 ### File List
+
+Re-counted directly from `git status --porcelain` after the code-review response pass (superseding
+the dev-pass count of 26, which the review correctly flagged as inconsistent with its own
+enumeration): **33 files** — 25 modified, 8 new.
+
+**Backend (main) — 8 modified, 3 new:**
+- `src/main/java/com/softropic/skillars/infrastructure/email/EmailTransportPermanentException.java`
+  (AC4b — added `isPresentIn`)
+- `src/main/java/com/softropic/skillars/infrastructure/email/EmailTransportProperties.java`
+  (AC10 — `outboxDir` → `dumpDir`; code review — clarified the `ignoreUnknownFields` javadoc claim)
+- `src/main/java/com/softropic/skillars/infrastructure/email/log/LoggingEmailSender.java`
+  (AC10 — rename)
+- `src/main/java/com/softropic/skillars/infrastructure/email/smtp/MailSenderProvider.java`
+  (AC3 — gating, `floorMod`; code review — validation delegated to new `ProviderConfigsValidator`)
+- `src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpErrorClassifier.java`
+  (AC2 — code review D-1 rewrite: reply-code classification, cause-chain preservation)
+- `src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpPropertiesValidator.java`
+  (AC3 — new; code review — validation delegated to new `ProviderConfigsValidator`)
+- **`src/main/java/com/softropic/skillars/infrastructure/email/smtp/ProviderConfigsValidator.java`
+  (code review — new; shared validation logic, closes the `MailSenderProvider`/`SmtpPropertiesValidator`
+  duplication finding, adds the blank-password (D-2) and port-range checks)**
+- `src/main/java/com/softropic/skillars/platform/notification/config/ComponentConfig.java`
+  (AC4a/AC4b)
+- `src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListener.java`
+  (AC5 — diagnostic log; code review — added `getCurrentTransactionIsolationLevel()`)
+- `src/main/resources/application-dev.yaml` (AC10)
+- `src/main/resources/db/migration/V136__pin_envelope_entity_schema.sql`
+  (AC9 — new; code review D-3 rewrite: CHECK constraints added, UNIQUE/FK explicitly named to match
+  Hibernate's own generated names, header corrected)
+
+**Backend (test) — 8 modified, 5 new:**
+- `src/test/java/com/softropic/skillars/infrastructure/email/EmailTransportPermanentExceptionTest.java`
+  (AC4b — new)
+- `src/test/java/com/softropic/skillars/infrastructure/email/TransportWiringTest.java` (AC3)
+- `src/test/java/com/softropic/skillars/infrastructure/email/log/LoggingEmailSenderCollisionTest.java`
+  (AC10)
+- `src/test/java/com/softropic/skillars/infrastructure/email/log/LoggingEmailSenderTest.java` (AC10)
+- `src/test/java/com/softropic/skillars/infrastructure/email/smtp/MailSenderProviderTest.java`
+  (AC3 — new; code review — blank-password/out-of-range-port cases, round-robin-order rewrite)
+- `src/test/java/com/softropic/skillars/infrastructure/email/smtp/SmtpErrorClassifierTest.java`
+  (AC2 — code review — rewritten around real SMTP exception types, including the CRITICAL
+  dropped-connection regression test)
+- `src/test/java/com/softropic/skillars/infrastructure/email/smtp/SmtpPropertiesValidatorTest.java`
+  (AC3 — new; code review — blank-password/out-of-range-port cases)
+- `src/test/java/com/softropic/skillars/infrastructure/ses/NoHardcodedSenderTest.java`
+  (AC1 — code review — rewritten to match line-by-line instead of a whole-file regex)
+- `src/test/java/com/softropic/skillars/platform/notification/config/ComponentConfigRetryTemplateTest.java`
+  (AC4 — code review — strengthened cause assertions)
+- **`src/test/java/com/softropic/skillars/platform/notification/config/ComponentConfigDefaultCustomizerTest.java`
+  (code review — new; proves the real `ComponentConfig.defaultCustomizer()` bean's `ignoreException`
+  predicate, which previously had no test)**
+- `src/test/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListenerTest.java`
+  (AC5 — code review — pins `currentTransactionIsolationLevel=`)
+- **`src/test/java/com/softropic/skillars/platform/notification/repo/EnvelopeEntitySchemaIT.java`
+  (code review — new; permanent fresh-DB schema-assertion IT, restoring the ad hoc
+  `TmpEnvelopeSchemaDumpIT` used to derive `V136` and verify no duplicate constraints)**
+- `src/test/resources/application-test.yaml` (AC10)
+
+**Frontend — 2 modified:**
+- `src/frontend/src/stores/booking.store.js`
+  (AC6; code review — replaced the exported `deleteBatchAcceptResultIfSeed` seam with an inline
+  local-flag guard, fixing a null-vs-seed ambiguity and reverting the store's public contract)
+- `src/frontend/src/stores/__tests__/bookingStoreSpec.js` (AC6 — code review — tests updated to match)
+
+**CI — 1 modified:**
+- `.github/workflows/frontend-unit-tests.yml`
+  (AC7; code review — corrected the DST-spec header claim to past tense)
+
+**Docs — 3 modified:**
+- `docs/dev-docs/database/index.html`
+  (AC9; code review — migration count, hbm2ddl precedence mechanism, "not a no-op" corrections)
+- `docs/dev-docs/infrastructure/index.html` (AC10, AC11; code review — restored the missing colon)
+- `requirements/ses-email-consolidation.md` (AC10)
+
+**Ledger — 1 modified:**
+- `_bmad-output/implementation-artifacts/deferred-work.md` (AC11(b) — new `implicitTls` entry only,
+  no prune)
+
+**Sprint/story tracking — 2 modified (workflow-managed, not enumerated by AC — noted here per the
+code review's own completeness finding):**
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/skillars-deferred-110-email-adapter-hardening-outbox-durability-and-doc-accuracy-fixes.md`
+  (this file)
+
+### Review Findings
+
+Source: `/bmad-code-review` 2026-09-14, three parallel layers (Blind Hunter — diff only; Edge Case
+Hunter — diff + project read; Acceptance Auditor — diff + spec + `story-review.md` + project-context).
+41 raw findings → 30 after dedupe → 3 dismissed as false positives. Every finding below was
+independently re-verified by the orchestrator against the pinned dependency bytecode or by executing
+the code in question; nothing is carried on a layer's assertion alone.
+
+**Correction to the review's own interim report:** an earlier orchestrator note claimed a 421/450
+greylisting at `MAIL FROM` would classify permanent. That is wrong — `SMTPTransport.sendMessage`
+assigns `validUnsentAddr = addresses` (bytecode offset 133) *before* calling `mailFrom()` (offset
+276), so a `MAIL FROM` failure carries a populated `validUnsent` and classifies transient. The real
+permanent-misclassification path is `rcptTo()`'s unexpected-response branch (D-1/P1 below).
+
+#### Decision needed — ALL RESOLVED by owner 2026-09-14 (each became a patch, listed below)
+
+- [x] [Review][Decision] **A permanent `MAIL FROM` 550 still classifies transient and is retried until attempts are exhausted** — AC2's fix keys permanence off `SendFailedException.getValidUnsentAddresses()`. `SMTPTransport.sendMessage` populates `validUnsentAddr` with the full address array *before* `mailFrom()` runs, and `issueSendCommand` re-merges valid+unsent into it, so a hard 550 "sender address rejected" arrives with a non-empty `validUnsent` → transient → `retry=true` → `EmailRetryScheduler` re-drives it every tick until `ATTEMPTS_EXHAUSTED`/`DEADLINE_EXPIRED`. AC2 closes recipient-side (`RCPT TO`) rejections only. **Options:** (a) classify by SMTP reply code — `SMTPSendFailedException.getReturnCode()`/`SMTPAddressFailedException.getReturnCode()`, 5xx permanent / 4xx transient — which is the standard and correct predicate but widens AC2 beyond its re-scoped brief and interacts with AC4a/AC4b; (b) accept the asymmetry and record it on the ledger; (c) keep address-array logic and add a return-code check only for the `MAIL FROM` command. Verified: `SMTPTransport` bytecode, field-assignment ordering. **RESOLVED — option (a):** classify by SMTP reply code. Use `SMTPSendFailedException.getReturnCode()` / `SMTPAddressFailedException.getReturnCode()` — 5xx permanent, 4xx transient — as the primary predicate, in place of keying permanence off the address arrays. Accepted as a deliberate widening of AC2 beyond its re-scoped brief.
+- [x] [Review][Decision] **Blank `username` is a hard boot failure while blank `password` is accepted** — `MailSenderProvider.validate` throws `AppSetupException` on a blank `username` but never checks `password`. A local no-auth relay (MailHog/Mailpit) is a legitimate `transport=smtp` dev configuration that now cannot boot, while `username=user` + absent `password` — a genuinely broken authenticated config that fails every send — passes validation unremarked. The Completion Notes acknowledge the regression but do not resolve it. **Options:** (a) drop the `username` check; (b) keep it and add a matching `password` check; (c) require both only when `mail.smtp.auth` is on, making the no-auth case explicit. **RESOLVED — option (b):** keep the `username` check and add a matching blank-`password` check. Review note recorded during the decision: the 'local no-auth relay' premise does not hold — no MailHog/MailPit/MailDev/smtp4dev service exists in any of the four compose files, and `username` is not merely an AUTH credential but the From address itself (`SmtpEmailSender.java:54`, `helper.setFrom(javaMailSender.getUsername())`), so a blank username is unambiguously broken regardless of whether the relay requires auth. Dropping the check was withdrawn as an option. The blank-password check closes `ses-1-2`'s documented empty-password trap, which dev/uat currently reach via the bogus `${GMX_PASSWORD:dev_gmx_password}` default; the separate 'non-blank but wrong password is retried forever' case stays on the ledger as the deferred `MailAuthenticationException` item.
+- [x] [Review][Decision] **Fresh databases will permanently lack the enum `CHECK` constraints that existing databases have** — `V136`'s header justifies omitting the `email_template`/`status` CHECKs on the grounds that "Hibernate will still run its own schema update on every boot and will add/widen that CHECK itself". That is false: `AbstractSchemaMigrator` exposes only `createTable`, `migrateTable` (adds missing columns), `applyIndexes`, `applyUniqueKeys` and `applyForeignKeys` — there is no check-constraint path for an already-existing table, and CHECKs are emitted only in the `CREATE TABLE` branch. Since `V136` is what creates the table on any fresh database (see P9), those databases never acquire the CHECKs. Functionally permissive (Hibernate only writes valid enum names), but a permanent, silent schema divergence. **Options:** (a) add the CHECKs to `V136` and accept the enum-list sync burden the header argues against; (b) accept the divergence and correct the header's false justification; (c) remove `generate-ddl: true` so Flyway is the single source of truth — explicitly out of this story's scope and an owner-level decision. Verified: `hibernate-core` `AbstractSchemaMigrator` method set. **RESOLVED — option (a):** add the `email_template`/`status` CHECK constraints to `V136`, accepting the enum-list sync burden the migration header currently argues against. The header's false justification must be rewritten at the same time.
+
+#### Patch — ALL RESOLVED 2026-09-14 (re-verified independently before fixing; see Debug Log/Completion Notes)
+
+- [x] [Review][Patch] **[from D-1]** Classify SMTP failures by reply code (5xx permanent / 4xx transient) rather than by address arrays, so a `MAIL FROM` 550 stops being retried [src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpErrorClassifier.java:64-70] — **FIXED.** Re-verified independently via `javap` on the pinned `org.eclipse.angus:jakarta.mail:2.0.5` jar (not just the review's own claim): confirmed `validUnsentAddr` is set to the full address array at bytecode offset 133, before `mailFrom()` at offset 276, and that `issueSendCommand`'s non-250 branch re-merges it into a `SMTPSendFailedException` thrown with that populated array. `SmtpErrorClassifier` rewritten to key permanence off `SMTPSendFailedException`/`SMTPAddressFailedException`/`SMTPSenderFailedException.getReturnCode()` (5xx permanent, everything else — including no-recognised-type and non-5xx — transient), falling back to the pre-existing cause-chain walk only for a non-SMTP-typed `SendFailedException`.
+- [x] [Review][Patch] **[from D-2]** Add a blank-`password` check alongside the existing blank-`username` check, in both validators [src/main/java/com/softropic/skillars/infrastructure/email/smtp/MailSenderProvider.java:55-71, src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpPropertiesValidator.java:35-64] — **FIXED**, and combined with the next patch's dedup: both validators now delegate to a single new `ProviderConfigsValidator.validate(...)`, which includes the blank-password check. Confirmed dev/uat's shipped `application-dev.yaml`/`application-uat.yaml` both already default `GMX_PASSWORD`/`GMAIL_PASSWORD` to non-blank values, so no real boot regresses.
+- [x] [Review][Patch] **[from D-3]** Add the `email_template`/`status` CHECK constraints to `V136` and rewrite the header paragraph that wrongly claims Hibernate will add them [src/main/resources/db/migration/V136__pin_envelope_entity_schema.sql:26-34,53-64] — **FIXED.** Both CHECK constraints added, left unnamed so PostgreSQL's own default naming matches what's already live (confirmed by re-running the dump against a fresh Testcontainers boot with `V136` in place — see Debug Log). Header rewritten to state the corrected mechanism and to stop calling the migration a no-op.
+- [x] [Review][Patch] **A dropped SMTP connection at `RCPT TO` is classified permanent and the email is silently lost forever** — CRITICAL [src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpErrorClassifier.java:64-70] — **FIXED by the same D-1 rewrite above, independently re-verified as a distinct mechanism.** Traced `readServerResponse()`'s own bytecode: on EOF (`readLine()` returns `null`, the shape a dropped connection actually produces) it returns `-1` directly rather than throwing. `rcptTo()`'s per-recipient switch has no case for `-1`, so it falls to the "unexpected response" branch and throws `SMTPAddressFailedException` immediately — `-1` is not in `[500,599]`, so the new reply-code classifier correctly reads it as transient. New regression test (`rcptToDroppedConnection_isTransient`) pins this exact scenario.
+- [x] [Review][Patch] The `MailSendException` branch discards the exception's own cause chain; the new javadoc's "2-arg super constructor leaves cause null" claim is factually wrong [src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpErrorClassifier.java:55-57] — **FIXED** (the cause-chain-discard half; the "factually wrong" half did not hold up on re-verification — see below). `classify()` now attaches the real per-recipient failure exception as the returned `EmailTransportException`'s cause, not the outer `MailSendException` — new test `mailSendException_causeChainPreservesTheRealFailure` pins it. Re-verified the specific javadoc claim by executing `new MailSendException(Map.of(...)).getCause()` directly against the pinned Spring version: it genuinely is `null` — the javadoc's narrow factual claim was correct; the finding's real, valid point was the *consequence* (a discarded cause chain), which is what got fixed.
+- [x] [Review][Patch] `anyMatch` aggregates across `failedMessages` while the javadoc describes per-message semantics [src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpErrorClassifier.java:56] — **FIXED** (clarified, not behaviourally changed — this codebase only ever sends one recipient per call, confirmed via `SmtpEmailSender`/`MailManager`'s call sites, so aggregation is not live today). New javadoc states the actual semantics explicitly: permanent if *any* failed-message entry is permanent, with the "any" behaviour kept for correctness if multi-recipient sending is ever introduced, not because it's exercised now.
+- [x] [Review][Patch] AC2's tests cover neither risky shape; the transient case stays green under a full revert; no `// Mutation:` annotations [src/test/java/com/softropic/skillars/infrastructure/email/smtp/SmtpErrorClassifierTest.java] — **FIXED.** Test file rewritten to use the real `org.eclipse.angus.mail.smtp` exception types (not a hand-constructed generic `SendFailedException`) for both risky shapes: `mailFrom550_isPermanent`/`mailFrom421_isTransient` (D-1) and `rcptToDroppedConnection_isTransient`/`rcptTo550_isPermanent`/`rcptTo450_isTransient` (the CRITICAL case). Each carries a `Mutation:` comment naming the specific revert it catches.
+- [x] [Review][Patch] Port validation accepts `-1`, `0` and out-of-range values [src/main/java/com/softropic/skillars/infrastructure/email/smtp/MailSenderProvider.java:66-71, src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpPropertiesValidator.java:52-58] — **FIXED** in the new shared `ProviderConfigsValidator`: range-checks the parsed port against `[1, 65535]`. New tests in both `MailSenderProviderTest`/`SmtpPropertiesValidatorTest` cover an out-of-range and a non-positive port.
+- [x] [Review][Patch] `SmtpPropertiesValidator` duplicates `MailSenderProvider`'s validation byte-for-byte, including messages and a second `isBlank` [src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpPropertiesValidator.java:35-64] — **FIXED.** Extracted to new package-private `ProviderConfigsValidator`, called from both `MailSenderProvider`'s constructor and `SmtpPropertiesValidator`'s `@PostConstruct` — the exact duplication this finding named (which had already drifted once, per D-2) can no longer drift again.
+- [x] [Review][Patch] AC4b's circuit-breaker `ignoreException` change has no test — deleting the clause leaves the suite green [src/main/java/com/softropic/skillars/platform/notification/config/ComponentConfig.java:113-114] — **FIXED.** New `ComponentConfigDefaultCustomizerTest` instantiates the real `defaultCustomizer()` bean against a real `Resilience4JCircuitBreakerFactory` and drives 6 ignored failures through it (proving the breaker never opens), contrasted with an ordinary exception that does open it at the configured threshold — confirmed this test fails if the `EmailTransportPermanentException.isPresentIn` clause is removed.
+- [x] [Review][Patch] `permanentException_traversedThroughOneWrappingLevel_isNotRetried` asserts only `isInstanceOf(RuntimeException.class)`, which any unchecked exception satisfies [src/test/java/com/softropic/skillars/platform/notification/config/ComponentConfigRetryTemplateTest.java] — **FIXED.** Added `.hasCauseInstanceOf(EmailTransportPermanentException.class)` (and, for consistency, to the pre-existing rate-limited counterpart test too) so the assertion actually pins that `.traversingCauses()` found the real cause, not merely that *some* `RuntimeException` eventually surfaced.
+- [x] [Review][Patch] `V136` is NOT a no-op — it is what creates the table on every fresh database including CI; the migration header, the story and the published dev-doc all assert the opposite [src/main/resources/db/migration/V136__pin_envelope_entity_schema.sql:12-14, docs/dev-docs/database/index.html:98-101] — **FIXED.** Independently re-verified by running a real fresh-container boot and confirming `flyway_schema_history` records `V136` with `success=true` (i.e. it genuinely executed, not skipped-as-already-applied). Migration header, this story's own Completion Notes, and `docs/dev-docs/database/index.html` all corrected to state V136 is what creates the table on a fresh database, not a no-op.
+- [x] [Review][Patch] Restore the deleted `TmpEnvelopeSchemaDumpIT` as a permanent fresh-DB schema-assertion IT [src/test/java/com/softropic/skillars/platform/notification/] — **FIXED.** New permanent `EnvelopeEntitySchemaIT` (not "Tmp") asserts: `V136` has a `success=true` `flyway_schema_history` row; exactly one UNIQUE constraint under Hibernate's expected name; exactly one CHECK per enum column; exactly one FK under Hibernate's expected name.
+- [x] [Review][Patch] Verify and prevent duplicate `UNIQUE`/`FK` constraints on fresh databases (Flyway creates PG-named constraints; Hibernate's migrator looks up its own generated names and adds a second set) [src/main/resources/db/migration/V136__pin_envelope_entity_schema.sql:62,67] — **FIXED.** Both constraints in `V136` are now explicitly named to match Hibernate's own hash-based generated names (`uk428hhm4tjgrg8cy2092q025po`, `fk89qpyuf6j5fgg7aorxxh8mqyn` — both confirmed live in the original, pre-`V136` dump), so `AbstractSchemaMigrator.applyUniqueKeys`/`applyForeignKeys`' by-name lookup finds them already present. Verified empirically against a real fresh Testcontainers boot: exactly one of each, no duplicates — see Debug Log.
+- [x] [Review][Patch] Migration count still reads "85 files, numbered up to V91"; actual is 130 files up to `V136` [docs/dev-docs/database/index.html:108-110] — **FIXED**, corrected to "130 files, numbered up to V136".
+- [x] [Review][Patch] The `hbm2ddl` precedence callout says the vendor map "is applied after, so it wins"; the actual mechanism is `putIfAbsent` into a slot Boot vacated by removing the key [docs/dev-docs/database/index.html] — **FIXED.** Re-verified the actual mechanism from scratch by disassembling the pinned `spring-boot-autoconfigure`/`spring-orm` 3.5.16/6.2.19 jars (not just accepting the review's restated claim): `HibernateProperties.determineHibernateProperties` explicitly `Map.remove()`s the key when `ddl-auto=none`; `AbstractEntityManagerFactoryBean.afterPropertiesSet()`'s vendor-property merge is a `containsKey`-then-`put` fill-the-gap pattern, not an overwrite. Callout rewritten as a precise, numbered 3-step account of the confirmed mechanism.
+- [x] [Review][Patch] The transport `<ul>` lost the colon that introduced it, so it now reads as enumerating the two boolean toggles [docs/dev-docs/infrastructure/index.html:180] — **FIXED**, added a proper introductory sentence before the list.
+- [x] [Review][Patch] Javadoc claims the binding rejects unknown keys; `ignoreUnknownFields` defaults to `true`, so a surviving `outbox-dir` would be silently ignored [src/main/java/com/softropic/skillars/infrastructure/email/EmailTransportProperties.java:9-13] — **FIXED** (clarified — close reading found the original sentence was not strictly false, but genuinely ambiguous/risked exactly this misreading). Rewrote to state explicitly that `ignoreUnknownFields` stays `true` (Spring Boot's own default, unchanged here), that a stray old key is silently accepted and unbound rather than rejected, and that the repo-wide grep — not this binder — is AC10's actual completeness gate.
+- [x] [Review][Patch] `deleteBatchAcceptResultIfSeed` cannot distinguish its `null` seed from a legitimately-`null` result (a 204 unwraps to `null`) [src/frontend/src/stores/booking.store.js:645-649] — **FIXED at the root**, not patched around. Replaced the shared-state re-read (`batchAcceptResultsByBatch.value[batchId] === null`) with a local `resultReceived` flag set the instant `handleAcceptAllBatch` actually receives a response, inline — the ambiguity this finding names cannot occur by construction, because the guard no longer inspects a value that a real result could also produce.
+- [x] [Review][Patch] The store's public contract was widened purely for test access — document it as a test-only seam or revert to the in-place one-liner AC6 specified [src/frontend/src/stores/booking.store.js:763-765] — **FIXED — reverted.** `deleteBatchAcceptResultIfSeed` no longer exists as a separate exported function (superseded by the local-flag redesign above); the store's public return object is back to exactly what AC6 originally specified.
+- [x] [Review][Patch] Two of the three new frontend specs are mutation-blind (the no-entry case is tautological) [src/frontend/src/stores/__tests__/bookingStoreSpec.js:274-302] — **FIXED — the tests were removed along with the function they tested** (see above); the pre-existing deferred-109 AC5.1 test still covers the one reachable branch of the redesigned guard.
+- [x] [Review][Patch] `nextSender_neverNegativeAcrossRollover` asserts only non-null and uses three identical providers, so round-robin ordering is unobservable [src/test/java/com/softropic/skillars/infrastructure/email/smtp/MailSenderProviderTest.java] — **FIXED.** Rewritten as `nextSender_roundRobinsAndNeverNegativeAcrossRollover` using three providers with distinguishable hosts, asserting the actual round-robin sequence (a→b→c→wraps to a) before exercising the rollover case.
+- [x] [Review][Patch] AC7's stated Test was not performed — a local `TZ` run exercises neither matrix expansion, the `env: TZ` plumbing, nor the artifact-name fix [.github/workflows/frontend-unit-tests.yml] — **ACKNOWLEDGED, not fixable from this environment.** `actionlint`/YAML-parse confirm the file is syntactically and semantically valid, and the local dual-`TZ` run confirms no spec is masked — but neither substitutes for a real `workflow_dispatch` run, which requires a push. Flagged explicitly as a follow-up: trigger the workflow manually once this branch is pushed and confirm both matrix legs complete and both artifacts upload without a name collision.
+- [x] [Review][Patch] The CI header comment asserts a reproducibly-failing DST spec that the story's own Debug Log says does not exist [.github/workflows/frontend-unit-tests.yml] — **FIXED.** Reworded to past tense with the correct causal chain: `deferred-109`'s AC7.2 spec DID reproducibly fail under that TZ at the time, and WAS fixed in that same story; this story's own re-verification (both TZs, 111/111 green) found nothing currently failing, so the matrix is a regression guard, not a fix for a presently-failing spec.
+- [x] [Review][Patch] File List is internally inconsistent (says 26 files, enumerates 28) and omits `sprint-status.yaml` and the story file itself [_bmad-output/implementation-artifacts/skillars-deferred-110-email-adapter-hardening-outbox-durability-and-doc-accuracy-fixes.md:804-861] — **FIXED**, File List rewritten below with an accurate, re-counted total, and explicit categories for files touched only by this review-response pass.
+- [x] [Review][Patch] AC5's diagnostic log omits `getCurrentTransactionIsolationLevel()` — the single datum the AC's whole premise-rebuttal turns on [src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListener.java:118-122] — **FIXED.** Confirmed `TransactionSynchronizationManager.getCurrentTransactionIsolationLevel()` exists on the pinned Spring version and added it to the WARN log; test updated to pin its presence.
+- [x] [Review][Patch] `NON_PLACEHOLDER_FROM_ADDRESS` has no line anchor and no comment stripping — a commented-out literal, a prose comment mentioning the key, or a bare key followed by another key each fail the build with a message naming a sender that does not exist (confirmed by execution) [src/test/java/com/softropic/skillars/infrastructure/ses/NoHardcodedSenderTest.java:37-38] — **FIXED.** Rewritten to match line-by-line (`^\s*from-address:\s*(.*?)\s*$`) instead of scanning the whole file with an unanchored regex — a same-line-only match structurally cannot reach a different YAML entry, and a `#`-led line never matches the key anchor at all. Re-verified all three scenarios the finding named by constructing them and running the test: bare literal still caught; an empty `from-address:` followed by an unrelated key now correctly names the empty `from-address:` line itself (not the unrelated key) as the offender; a commented-out example line no longer false-positives.
+
+#### Deferred (pre-existing, not caused by this change)
+
+- [x] [Review][Defer] Exception messages and persisted stacktraces carry recipient addresses, in tension with the recipient masking landed in this same commit [src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpErrorClassifier.java:58-60] — deferred, pre-existing
+- [x] [Review][Defer] `envelope_entity_recipients` has no primary key and no index on its foreign key — faithful to Hibernate's output, but now blessed as the version-controlled shape [src/main/resources/db/migration/V136__pin_envelope_entity_schema.sql:66-73] — deferred, pre-existing
+- [x] [Review][Defer] `MailAuthenticationException` (a wrong/expired SMTP password) classifies transient and is retried until attempts are exhausted, for every queued email [src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpErrorClassifier.java:55] — deferred, pre-existing
+
+#### Dismissed as false positives (recorded so they are not re-raised)
+
+- Matrixing the Vitest job renames its status checks — the workflow's own header documents it as deliberately non-required (`workflow_dispatch` + `frontend-tests` label, owner decisions D2/D6), so no branch-protection rule can break.
+- The AC10 completeness grep could not match an `OUTBOX_DIR` environment-variable form — verified repo-wide that zero such references exist in any form, so the spelling gap had no effect.
+- The `implicitTls` ledger entry's claim that `SmtpHealthIndicator` reports a port-465 provider UP while sending fails — verified correct: the indicator builds its own `SSLSocket` probe via `isImplicitTls`/`probeImplicitTlsConnection`, independent of `MailSenderProvider`'s `JavaMailSenderImpl` instances.
 
 ## Change Log
 
@@ -705,3 +1004,57 @@ verification gate; migration conventions; secrets handling).
   `implicitTls` entirely — as correct behaviour; widened to name all six fields and flag that gap explicitly.
   Story Overview, Themes, and Dev Notes updated to reflect the corrected AC set, including fixing a false "no
   shared files across items" claim (AC10 and AC11 both edit the same HTML file and must be sequenced).
+- 2026-09-14: Implementation complete (`/bmad-dev-story`). All 11 ACs addressed — AC4a/AC4b/AC9c approved and
+  implemented; AC8 decided as "keep retain-and-alert" (no code change, decision itself is the deliverable); AC5
+  needed no decision (diagnostic-only fix, implemented as written). 26 files touched (21 modified, 5 new: a
+  migration, an `isPresentIn` test, `SmtpPropertiesValidator` + its test, `MailSenderProviderTest`). New tests
+  added for every AC with a code-level fix; all targeted backend suites green (unit + the touched ITs —
+  `SmtpTransportBootIT`, `MailManagerDuplicateSendIdIT`, `EmailRetrySchedulerIT`, the three registration-flow
+  ITs, `MigrationConventionLintTest`); frontend Vitest green under both `TZ=UTC` and `TZ=America/New_York`
+  (111/111), `eslint`/`prettier --check` clean; `actionlint` clean on the CI workflow edit; both edited dev-docs
+  HTML files pass the tag-balance script. No `mvn verify` run locally per this project's standing validation
+  policy — GitHub CI is the full-verification gate. See Dev Agent Record for the full per-AC breakdown, the two
+  mandated empirical verifications (AC1's bare-literal mutation check, AC9's live-Postgres schema dump), and the
+  owner decisions recorded before implementation began.
+- 2026-09-14: Code review (`/bmad-code-review`, three parallel layers) applied. 3 decision-needed findings,
+  each taken to the owner and resolved (D-1: classify SMTP failures by reply code, not address-array presence
+  — this was the fix for the review's own separately-flagged CRITICAL finding too, a dropped connection during
+  RCPT TO being misclassified permanent and silently losing mail forever; D-2: add a blank-password check
+  alongside the existing blank-username check; D-3: add the `email_template`/`status` CHECK constraints to
+  `V136` and correct its header's false "Hibernate will keep managing them" justification). 24 additional patch
+  findings, all fixed. Every finding was independently re-verified before being acted on, per this project's
+  standing "beware false positives" practice — not accepted on the review's assertion alone: D-1/the CRITICAL
+  RCPT-TO finding were confirmed by disassembling the pinned `org.eclipse.angus:jakarta.mail:2.0.5` jar
+  directly (traced `SMTPTransport.sendMessage`/`mailFrom()`/`rcptTo()`/`readServerResponse()` bytecode);
+  the `hbm2ddl` precedence mechanism finding was confirmed by disassembling `spring-boot-autoconfigure`/
+  `spring-orm` 3.5.16/6.2.19 (the actual mechanism is a `containsKey`-then-`put` fill-the-gap merge into a slot
+  Boot's own `HibernateProperties` explicitly vacated, not "vendor map applied after, so it wins"); the
+  duplicate-UNIQUE/FK-constraint risk was confirmed (and then closed, by naming both constraints in `V136` to
+  match Hibernate's own generated names) via a real fresh-Testcontainers-Postgres boot, not reasoning alone.
+  One finding's narrow factual sub-claim ("the javadoc's cause-null claim is factually wrong") did not survive
+  re-verification — `MailSendException(Map).getCause()` genuinely is null, confirmed by executing it directly
+  — but the finding's real point (the cause chain gets discarded downstream) was valid and got fixed anyway.
+  Net changes: `SmtpErrorClassifier` rewritten around SMTP reply codes instead of address-array presence
+  (closes both the MAIL-FROM-550 and RCPT-TO-dropped-connection misclassifications in one fix, plus preserves
+  the real failure as the returned exception's cause); new shared `ProviderConfigsValidator` closes the
+  `MailSenderProvider`/`SmtpPropertiesValidator` duplication finding while adding the blank-password and
+  port-range checks; `V136` gained its CHECK constraints plus explicitly-named UNIQUE/FK constraints (verified
+  no duplicates on a real fresh boot) and a corrected header; new permanent `EnvelopeEntitySchemaIT` restores
+  the ad hoc schema-verification IT as a regression guard; new `ComponentConfigDefaultCustomizerTest` closes
+  the untested `ignoreException` predicate; `booking.store.js`'s AC6 guard redesigned around a local
+  `resultReceived` flag (fixing a null-vs-seed ambiguity at the root, not by patching around it) and the
+  store's public contract reverted to exactly what AC6 originally specified; `NoHardcodedSenderTest` rewritten
+  to match line-by-line instead of an unanchored whole-file regex; several dev-doc/javadoc/CI-comment accuracy
+  corrections. 3 pre-existing issues explicitly deferred to the ledger (recipient addresses in exception
+  messages/stacktraces; `envelope_entity_recipients` has no PK/FK-index; `MailAuthenticationException`
+  classifies transient forever) — none introduced by this story. 3 findings dismissed as false positives after
+  verification (matrix job status-check naming; an `OUTBOX_DIR` env-var-form grep gap with zero real
+  occurrences; the `implicitTls`/`SmtpHealthIndicator` claim, which turned out to be already correct — the
+  indicator's own TLS probe is independent of `MailSenderProvider`). One item (AC7's real-`workflow_dispatch`
+  verification) is acknowledged as not performable from this environment — flagged as a follow-up for after
+  push. File List recounted from `git status` after this pass: 33 files (25 modified, 8 new), up from the
+  dev-pass's 26. All touched suites re-run green: 19 backend unit/slice test classes, the full IT sweep
+  (`SmtpTransportBootIT`, `MailManagerDuplicateSendIdIT`, `EmailRetrySchedulerIT`, `EnvelopeEntitySchemaIT`,
+  the three registration-flow ITs), `MigrationConventionLintTest`, frontend Vitest (108/108, both TZs),
+  `eslint`/`prettier --check`, `actionlint`. No `mvn verify` run locally — GitHub CI remains the
+  full-verification gate.

@@ -26,6 +26,16 @@
 # `gh pr create --label frontend-tests` as working at creation time. Treat the trigger as live from
 # this PR onward and confirm on the first labelled PR; either way the job-level `if` is what gates
 # execution, so a wrong guess here costs a skipped run, never an unwanted one.
+#
+# skillars-deferred-110 AC7: the suite previously only ever ran under CI's ambient UTC. A
+# DST-boundary class of regression can pass silently under UTC-only coverage — skillars-deferred-109's
+# own AC7.2 spec is the precedent: it reproducibly failed under TZ=America/New_York at the time (fixed
+# in that same story, by deriving the payload from a fixed instant instead of an ambiguous local
+# wall-clock string). Re-verified 2026-09-14 (skillars-deferred-110 Dev Agent Record): the full suite
+# is green under both TZ=UTC and TZ=America/New_York today — no spec is currently failing — so the `tz`
+# matrix below is a regression guard for this class of bug, not a fix for one presently failing. Still
+# deliberately opt-in/non-gating — this workflow is not a required check either way (owner decisions
+# D2/D6 unchanged) — so the matrix widens coverage without changing what blocks a merge.
 name: Frontend Unit Tests
 
 on:
@@ -45,6 +55,20 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # `label` exists only because `tz` (America/New_York) contains a `/`, which is unsafe inside
+        # an artifact name below — GitHub Actions expressions have no built-in string-replace to
+        # sanitize it inline, so a second, artifact-name-safe field is simpler than working around
+        # that.
+        include:
+          - tz: UTC
+            label: UTC
+          - tz: America/New_York
+            label: America-New_York
+    env:
+      TZ: ${{ matrix.tz }}
 
     steps:
       - name: Checkout
@@ -70,7 +94,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: frontend-unit-reports-${{ github.run_id }}
+          # skillars-deferred-110 AC7: the matrix leg must be part of the artifact name —
+          # actions/upload-artifact@v4+ fails the step (this step is `if: always()`, so it is never
+          # skipped) on a duplicate artifact name within one workflow run, and both matrix legs
+          # would otherwise collide on the same github.run_id-only name. Uses `matrix.label`, not
+          # `matrix.tz` directly — `America/New_York` contains a `/`, unsafe in an artifact name.
+          name: frontend-unit-reports-${{ github.run_id }}-${{ matrix.label }}
           path: src/frontend/coverage/
           retention-days: 14
           if-no-files-found: warn

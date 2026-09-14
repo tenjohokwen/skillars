@@ -428,7 +428,7 @@ that as a defect in this design, not as a normal cost of removal.
 | `EmailTransport` (enum: `SES`, `SMTP`, `LOG`) | The selector value |
 | `EmailTransportProperties` | `@ConfigurationProperties("app.email")` — holds `transport` |
 | `EmailTransportPropertyValidator` | `EnvironmentPostProcessor`, same role and rationale as today's `SesEnabledPropertyValidator`: an unrecognised value must abort with a one-line message, not a `NoSuchBeanDefinitionException` deep in a bean-creation stack trace. **Must be registered in `src/main/resources/META-INF/spring.factories`**, replacing the `SesEnabledPropertyValidator` entry on line 3 — an `EnvironmentPostProcessor` is found through that file, never by component scan. Forgetting it is silent: the validator simply never runs, which is worse than not having one, since its entire purpose is to fail fast |
-| `log/LoggingEmailSender` | `transport=log`. Logs recipient + subject + correlation id; when `app.email.log.outbox-dir` is set, writes the rendered HTML to `<dir>/<correlationId>.html` so dev can open real emails in a browser (§6.11). **Never throws** — a dev convenience must not be able to fail a send, so an unwritable directory logs a warning once and degrades to log-only. Create the directory at startup rather than at first send, so a permission problem surfaces immediately. **Filenames must not collide**: a retry deliberately reuses the `sendId`-derived correlation id, so a bare `<correlationId>.html` silently overwrites the earlier attempt — destroying exactly the artifact §6.11 sells. Open with `StandardOpenOption.CREATE_NEW` and, on `FileAlreadyExistsException`, retry as `<correlationId>-2.html`, `-3`, … The `CREATE_NEW` failure *is* the concurrency check, so no separate exists-test is needed and two threads cannot both win. Do not fall back to random or temp-file names: the whole value is that the file is findable by the id in the log line |
+| `log/LoggingEmailSender` | `transport=log`. Logs recipient + subject + correlation id; when `app.email.log.dump-dir` is set, writes the rendered HTML to `<dir>/<correlationId>.html` so dev can open real emails in a browser (§6.11). **Never throws** — a dev convenience must not be able to fail a send, so an unwritable directory logs a warning once and degrades to log-only. Create the directory at startup rather than at first send, so a permission problem surfaces immediately. **Filenames must not collide**: a retry deliberately reuses the `sendId`-derived correlation id, so a bare `<correlationId>.html` silently overwrites the earlier attempt — destroying exactly the artifact §6.11 sells. Open with `StandardOpenOption.CREATE_NEW` and, on `FileAlreadyExistsException`, retry as `<correlationId>-2.html`, `-3`, … The `CREATE_NEW` failure *is* the concurrency check, so no separate exists-test is needed and two threads cannot both win. Do not fall back to random or temp-file names: the whole value is that the file is findable by the id in the log line |
 | `smtp/SmtpEmailSender` | ⚠ temporary. The `MimeMessage` construction from `MailService.sendEmail` moves here verbatim |
 | `smtp/MailSenderProvider`, `smtp/SmtpProperties`, `smtp/ProviderConfig` | ⚠ temporary. Moved from `platform/notification`, package-private where possible. `SenderProvider` is folded into `SmtpEmailSender` — the indirection had one implementation |
 | `smtp/SmtpErrorClassifier` | ⚠ temporary. Preserves today's classification exactly (§3.2) |
@@ -491,7 +491,7 @@ publish through the same durable path as every other producer (Phase 4).
 | File | Action |
 |---|---|
 | `application.yaml` | Remove `spring.mail.*` (118-128) — dead, D9; move `email.providerConfigs` (144-157) under `app.email.smtp.provider-configs`; move `app.notification.smtp-health` (175-182) under `app.email.smtp.health`; health group `notification: include: smtp` → `include: smtp,ses` (both conditional, only the active one registers a bean); add `app.email.transport` with **no default** so every profile states its own |
-| `application-dev.yaml` | `app.email.transport: smtp`; keep the provider configs (moved key); replace the `from-address: noreply@skillars.com` literal (30) with `${APP_SES_FROM_ADDRESS:dev@localhost}`; delete the 10-line comment at 31-40 documenting the `@Profile("!dev")` trap, which no longer exists; add `app.email.log.outbox-dir: target/mails` ready for the post-cutover flip |
+| `application-dev.yaml` | `app.email.transport: smtp`; keep the provider configs (moved key); replace the `from-address: noreply@skillars.com` literal (30) with `${APP_SES_FROM_ADDRESS:dev@localhost}`; delete the 10-line comment at 31-40 documenting the `@Profile("!dev")` trap, which no longer exists; add `app.email.log.dump-dir: target/mails` ready for the post-cutover flip |
 | `application-uat.yaml` | `app.email.transport: smtp`; keep the provider configs (moved key); `from-address: ${APP_SES_FROM_ADDRESS}` with **no default**. Fixes D4 immediately — UAT starts sending registration mail for the first time. When it flips to `ses` in Phase 5, set `max-send-rate-per-second: 1` if the UAT account is sandboxed (§6.5) |
 | `application-prod.yaml` | `app.email.transport: ses`; `from-address: ${APP_SES_FROM_ADDRESS}` with **no default**, so a prod boot without it aborts (§6.7) rather than sending as a placeholder; **no SMTP config at all** — prod never acquires a dependency it would have to shed |
 | `src/test/resources/application-test.yaml` | `app.email.transport: log`. **Deliberate reading of the decision** — "tests continue as today" means *no mail is sent*, which is what `enable.test.mail: true` already guarantees by replacing `MailManager` with `TestMailManager`. `log` makes that safe by construction: a test that ever slips past the `TestMailManager` seam writes a file instead of opening a socket to Gmail or calling AWS from CI. Say so if you'd rather it be `smtp` |
@@ -613,7 +613,7 @@ production access. Then, per environment and independently:
 
 1. uat → `transport=ses` with its own identity and configuration set; run §7.3's manual
    checklist against a real inbox.
-2. dev → `transport=log` with `outbox-dir` (per D-4).
+2. dev → `transport=log` with `dump-dir` (per D-4).
 3. Confirm `/actuator/health/notification` reports SES in both prod and uat.
 
 *Exit:* no environment uses SMTP. This phase changes configuration only — no code.
@@ -828,7 +828,7 @@ but the circuit breaker + `EmailRetryScheduler` are now the only cushion, and
 ### 6.11 Dev experience
 
 Dev keeps Gmail SMTP until Phase 5, then moves to `transport=log` with
-`app.email.log.outbox-dir`, writing each rendered email to `target/mails/<correlationId>.html`
+`app.email.log.dump-dir`, writing each rendered email to `target/mails/<correlationId>.html`
 — arguably better than a mailbox for template work, since the file is the exact rendered body.
 Optional higher fidelity later: point `app.ses.endpoint-url` at LocalStack. Explicitly **not**
 recommended: keeping a dev-only SMTP adapter past Phase 6, which is how the current split
@@ -1041,7 +1041,7 @@ tracking is the real fix and belongs with the §6.17 restructuring story.
 4. `SmtpEmailSenderTest` + `SmtpErrorClassifierTest` — pin that the relocated SMTP path
    behaves exactly as `MailService.sendEmail` did, including the four permanent exception
    types. Deleted in Phase 6, but they are what make Phase 2 safe for dev/uat.
-5. `LoggingEmailSenderTest` — writes the HTML file when `outbox-dir` is set, pure no-op when
+5. `LoggingEmailSenderTest` — writes the HTML file when `dump-dir` is set, pure no-op when
    not, never throws.
 6. `SesSendRateLimiterTest` — N sends over the limit take at least the expected wall-clock; an
    acquire timeout maps to `EmailTransportTransientException`.
@@ -1111,7 +1111,7 @@ tracking is the real fix and belongs with the §6.17 restructuring story.
     skip defensive checks.
 
 16c. `LoggingEmailSenderCollisionTest` — two concurrent sends sharing a `correlationId`
-    produce two files, not one overwritten (§4.1); an unwritable `outbox-dir` degrades to
+    produce two files, not one overwritten (§4.1); an unwritable `dump-dir` degrades to
     log-only without throwing.
 
 16d. `SesPropertyValidationTest` — malformed `configuration-set`, unparseable
@@ -1203,7 +1203,7 @@ recovers the backlog automatically. Beyond it, rows go `DEADLINE_EXPIRED`.
 |---|---|---|
 | D-3 | What does UAT do for email? | **dev, test and uat stay on Gmail SMTP** until the SES/domain decision lands, structured so the switch and the removal are easy. This is what drove §3.4 and the Phase 2/5/6 split |
 | D-3b | What does prod do? | **Prod goes to SES for everything, immediately** (Phase 2). Prod is not live, and it must never acquire an SMTP dependency it would later have to shed |
-| D-4 | Dev transport after cutover | **Rendered HTML to disk** (`app.email.log.outbox-dir`), Phase 5 |
+| D-4 | Dev transport after cutover | **Rendered HTML to disk** (`app.email.log.dump-dir`), Phase 5 |
 | D-5 | Registration durability (Phase 4) | **In scope for this migration**, not a follow-up |
 
 ### 9.2 Still open

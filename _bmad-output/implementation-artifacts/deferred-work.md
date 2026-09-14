@@ -2100,3 +2100,55 @@ note, HCLOUD_TOKEN ops note) are either still-open or explicitly pre-existing/di
 documentation-only story. The four items ses-1.7's own code review added (`app.email.log.outbox-dir` naming
 collision, envelope_entity callout severity, unbounded no-flag claim, undocumented `email.providerConfigs`)
 are new and correctly still present.
+
+## Deferred from: pre-dev story-review of skillars-deferred-110 (2026-09-14)
+
+- **`MailSenderProvider.toMailSender` ignores `ProviderConfig.implicitTls` entirely.** It hardcodes
+  `protocol = "smtp"` and `mail.smtp.starttls.enable = true` for every configured provider
+  (`infrastructure/email/smtp/MailSenderProvider.java`), regardless of the per-provider `implicitTls` field
+  (added by skillars-deferred-99 AC5, defaults from `port == 465` when unset). `SmtpHealthIndicator` performs a
+  real TLS handshake and correctly reports a port-465 (implicit-TLS) provider UP, while the actual send path
+  still talks plaintext-plus-STARTTLS to that same endpoint and fails — a health check that is green for a
+  transport that cannot actually send. Surfaced while documenting `ProviderConfig`'s six fields for
+  skillars-deferred-110 AC11(b); the doc fix names the gap rather than describing the broken behaviour as
+  correct, but the underlying `MailSenderProvider` bug itself is unfixed. No current caller configures a
+  port-465 provider (dev ships two STARTTLS providers, gmx/gmail), so this is latent, not an active incident.
+
+## Last audit: 2026-09-14 (skillars-deferred-110 dev-story — addition only, no prune)
+
+Adding the `implicitTls` bullet above only; not a full ledger audit. The three `ses-1-7-documentation`
+bullets this story's own AC10/AC11 close (`app.email.log.outbox-dir` naming collision, unbounded no-flag
+claim, undocumented `email.providerConfigs`) are left as-is here — per this project's established convention,
+closing/pruning ledger entries happens in a dedicated post-merge pass (see the prior "Last audit" entries
+above), not inline during the story that closes them.
+
+## Deferred from: code review of skillars-deferred-110 (2026-09-14)
+
+- `SmtpErrorClassifier` writes recipient addresses into exception messages, and `MailManager` persists
+  the full stacktrace into `envelope_entity.error` and logs it at ERROR.
+  `MailSendException.getMessage()` concatenates every failed message's detail, and a
+  `SendFailedException`'s own message/`toString` enumerates invalid and valid-unsent addresses
+  (`SmtpErrorClassifier.java:58-60`, `MailManager.java:146-150`). This directly contradicts the
+  recipient masking landed in the same commit for `LoggingEmailSender`, whose stated rationale is that
+  UAT runs with `LOKI_ENABLED=true` and this platform's registrants include minors and their parents.
+  Pre-existing (the classifier interpolated `ex.getMessage()` before this story too) — but the masking
+  work in this commit makes the asymmetry newly visible and worth closing on the SMTP path as well.
+
+- `envelope_entity_recipients` has no primary key and no index on its `envelope_entity_id` foreign
+  key (`V136__pin_envelope_entity_schema.sql:66-73`). Every collection load and every FK
+  cascade-check on this join table is therefore a sequential scan, and nothing prevents duplicate
+  recipient rows. The migration is a faithful pin of what Hibernate's auto-DDL actually produced
+  (confirmed by the dev's own schema dump), so this is pre-existing — but `V136` promotes the missing
+  index from an accident of `hbm2ddl` to the intentional, version-controlled shape, which deserves an
+  explicit decision rather than a faithfulness argument.
+
+- A wrong or expired SMTP password is retried until attempts are exhausted, for every queued email.
+  `JavaMailSenderImpl.doSend` catches `AuthenticationFailedException` before any `failedMessages`
+  bookkeeping and rethrows `MailAuthenticationException`, which is a `MailException` but not a
+  `MailSendException` — so `SmtpErrorClassifier.classify` takes the cause-chain branch, and neither
+  `MailAuthenticationException` nor `AuthenticationFailedException` appears in `NON_REPAIRABLE_ERRORS`
+  (`SmtpErrorClassifier.java:55`). Result: 3 in-process retries plus six `EmailRetryScheduler`
+  re-drives per envelope against a credential that cannot succeed. Behaviour is unchanged by
+  skillars-deferred-110, but `classify()` — the method this story rewrote — is where it is decided.
+  This is the exact scenario `docker-compose.local.yml`'s empty-password trap produces, per
+  `ses-1-2`'s own ledger note.

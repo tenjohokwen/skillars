@@ -20,6 +20,7 @@ import jakarta.annotation.PostConstruct;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -100,9 +101,31 @@ public class VideoModerationEmailListener implements ModerationAdminAlertSender 
         // real gap. Collapsing this back to one log.info would mislabel a null read-back; collapsing
         // to one log.warn would mislabel every genuinely successful send.
         if (persisted == null) {
+            // skillars-deferred-110 AC5: a REQUIRES_NEW commit-visibility race was the original
+            // suspected cause, but does not hold under this codebase's actual transaction semantics —
+            // mailManager.sendEmailSync's own REQUIRES_NEW transaction has already committed by the
+            // time control returns here (it runs through the Spring proxy on a cross-bean call), and
+            // this read then runs under PostgreSQL's default READ COMMITTED, which takes a fresh
+            // per-statement snapshot: a just-committed row should already be visible. Rather than
+            // guess at a fix for an unproven cause, this log now captures the transaction/isolation
+            // context alongside the read-back result, so a real occurrence can be diagnosed instead
+            // of assumed. See the story's own AC5 analysis before changing this behaviour.
+            //
+            // Code review 2026-09-14 (patch): getCurrentTransactionIsolationLevel() is the one datum
+            // the "READ COMMITTED" premise above actually turns on — a null return means "no explicit
+            // override was set on this transaction", i.e. whatever the connection/datasource default
+            // is (expected to be Postgres's own READ COMMITTED default here, but that is exactly the
+            // assumption a real occurrence should confirm rather than have logged as fact).
             log.warn("[VIDEO_MODERATION_ADMIN_ALERT] send outcome not yet visible for videoId={} sendId={} "
-                    + "— EnvelopeEntity row not found on read-back (persistence lag?)",
-                event.videoId(), envelope.sendId());
+                    + "— EnvelopeEntity row not found on read-back (persistence lag?) "
+                    + "actualTransactionActive={} currentTransactionName={} currentTransactionReadOnly={} "
+                    + "currentTransactionIsolationLevel={} thread={}",
+                event.videoId(), envelope.sendId(),
+                TransactionSynchronizationManager.isActualTransactionActive(),
+                TransactionSynchronizationManager.getCurrentTransactionName(),
+                TransactionSynchronizationManager.isCurrentTransactionReadOnly(),
+                TransactionSynchronizationManager.getCurrentTransactionIsolationLevel(),
+                Thread.currentThread().getName());
             return;
         }
         if (persisted.getStatus() == EmailDeliveryStatus.FAILED) {

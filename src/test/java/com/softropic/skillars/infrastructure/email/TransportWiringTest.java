@@ -65,17 +65,39 @@ class TransportWiringTest {
 
     /**
      * Story ses-1.2 AC8 — the {@code smtp} case: {@code SmtpEmailSender} is the sole
-     * {@link OutboundEmailSender}, backed by a real (if empty) {@code MailSenderProvider}.
+     * {@link OutboundEmailSender}, backed by a real {@code MailSenderProvider}.
+     *
+     * <p>skillars-deferred-110 AC3: a provider config is now required — {@code MailSenderProvider}'s
+     * constructor rejects an empty {@code provider-configs} list with {@code AppSetupException}
+     * rather than constructing an empty round-robin pool that would later divide by zero in {@code
+     * nextSender()}. This test's own {@code transportSmtp_withNoProviderConfigured_failsStartup}
+     * sibling below covers that rejection directly.
      */
     @Test
     void transportSmtp_wiresSmtpEmailSender() {
-        runner.withPropertyValues("app.email.transport=smtp")
+        runner.withPropertyValues(
+                "app.email.transport=smtp",
+                "app.email.smtp.provider-configs[0].host=mail.example.com",
+                "app.email.smtp.provider-configs[0].port=587",
+                "app.email.smtp.provider-configs[0].username=user",
+                "app.email.smtp.provider-configs[0].password=secret")
             .run(ctx -> {
                 assertThat(ctx).hasNotFailed();
                 assertThat(ctx).hasSingleBean(OutboundEmailSender.class);
                 assertThat(ctx.getBean(OutboundEmailSender.class)).isInstanceOf(SmtpEmailSender.class);
                 assertThat(ctx).doesNotHaveBean(SesV2Client.class);
             });
+    }
+
+    /**
+     * skillars-deferred-110 AC3: {@code transport=smtp} with no provider configured at all must fail
+     * startup with a named, friendly error — not construct an empty round-robin pool that only blows
+     * up later, inside {@code nextSender()}, as a raw {@code ArithmeticException}.
+     */
+    @Test
+    void transportSmtp_withNoProviderConfigured_failsStartup() {
+        runner.withPropertyValues("app.email.transport=smtp")
+            .run(ctx -> assertThat(ctx).hasFailed());
     }
 
     /**

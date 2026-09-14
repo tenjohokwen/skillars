@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.notification.config;
 
+import com.softropic.skillars.infrastructure.email.EmailTransportPermanentException;
 import com.softropic.skillars.infrastructure.email.EmailTransportRateLimitedException;
 import com.softropic.skillars.infrastructure.email.EmailTransportTransientException;
 
@@ -51,7 +52,8 @@ class ComponentConfigRetryTemplateTest {
         assertThatThrownBy(() -> retryTemplate.execute(context -> {
             invocations.incrementAndGet();
             throw new RuntimeException("wrapped", new EmailTransportRateLimitedException("rate limited"));
-        })).isInstanceOf(RuntimeException.class);
+        })).isInstanceOf(RuntimeException.class)
+            .hasCauseInstanceOf(EmailTransportRateLimitedException.class);
 
         assertThat(invocations.get()).isEqualTo(1);
     }
@@ -67,5 +69,41 @@ class ComponentConfigRetryTemplateTest {
         })).isInstanceOf(EmailTransportTransientException.class);
 
         assertThat(invocations.get()).isEqualTo(3);
+    }
+
+    /** skillars-deferred-110 AC4 (owner decision 2026-09-14). */
+    @Test
+    @DisplayName("an EmailTransportPermanentException is not retried — exactly one invocation")
+    void permanentException_isNotRetried() {
+        AtomicInteger invocations = new AtomicInteger();
+
+        assertThatThrownBy(() -> retryTemplate.execute(context -> {
+            invocations.incrementAndGet();
+            throw new EmailTransportPermanentException("permanent");
+        })).isInstanceOf(EmailTransportPermanentException.class);
+
+        assertThat(invocations.get()).isEqualTo(1);
+    }
+
+    /**
+     * skillars-deferred-110 AC4 — same wrapped-one-level case as the rate-limited exception above.
+     * Code review 2026-09-14 (patch): {@code .isInstanceOf(RuntimeException.class)} alone is nearly
+     * every unchecked exception and proves nothing on its own — {@code .hasCauseInstanceOf(...)}
+     * pins that the classifier actually traversed into the wrapper and found the real cause, not
+     * just that /some/ RuntimeException eventually surfaced (which retry-exhaustion after 3
+     * attempts would also produce).
+     */
+    @Test
+    @DisplayName("an EmailTransportPermanentException wrapped one level deep is still not retried")
+    void permanentException_traversedThroughOneWrappingLevel_isNotRetried() {
+        AtomicInteger invocations = new AtomicInteger();
+
+        assertThatThrownBy(() -> retryTemplate.execute(context -> {
+            invocations.incrementAndGet();
+            throw new RuntimeException("wrapped", new EmailTransportPermanentException("permanent"));
+        })).isInstanceOf(RuntimeException.class)
+            .hasCauseInstanceOf(EmailTransportPermanentException.class);
+
+        assertThat(invocations.get()).isEqualTo(1);
     }
 }

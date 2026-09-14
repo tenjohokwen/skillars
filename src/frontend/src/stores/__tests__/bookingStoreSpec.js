@@ -262,6 +262,24 @@ describe('booking.store — coach-request ordering + batch-accept guards (deferr
     })
   })
 
+  // -------------------------------------------------------------------------
+  // skillars-deferred-110 AC6 — defensive guard on handleAcceptAllBatch's catch-block delete.
+  // Code review 2026-09-14 (patch): the first version of this guard checked
+  // `batchAcceptResultsByBatch.value[batchId] === null` to infer "still the seed, safe to delete" —
+  // but a genuinely successful acceptAllBatch call can ALSO resolve to null (an empty/204
+  // response), which is indistinguishable from the seed by value alone, so that guard could have
+  // deleted a real (if empty) result in a future world where the catch block becomes reachable
+  // after a real setBatchAcceptResult. Replaced with a LOCAL `resultReceived` flag set the instant
+  // a response is actually received, inline in handleAcceptAllBatch — sidestepping the ambiguity
+  // entirely rather than trying to distinguish it by value, and not exported purely for test access
+  // (the store's public contract stays exactly what AC6 originally specified). Not a live-bug fix
+  // either way: loadCoachBookingRequests swallows every rejection and returns false, so the catch
+  // block is only ever reached today before any result is received — the AC5.1 test above already
+  // covers that one reachable branch. Per the story's own AC6 test instructions, this deliberately
+  // does NOT drive loadCoachBookingRequests to reject to fabricate the other branch — that path
+  // does not exist in the real store.
+  // -------------------------------------------------------------------------
+
   describe('loadCoachBookingRequests classifies a nullish response as an error (deferred-109 AC5.2)', () => {
     it('a null response sets a distinguishable error, returns false, and does not blank or prune', async () => {
       const store = useBookingStore()

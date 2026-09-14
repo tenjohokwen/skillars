@@ -76,14 +76,51 @@
       <tr><td><code>spring.flyway.defaultSchema</code></td><td><code>main</code></td><td><code>flyway_schema_history</code> lives in <code>main</code>.</td></tr>
       <tr><td><code>spring.flyway.validateMigrationNaming</code></td><td><code>true</code></td><td>A misnamed file fails startup rather than being silently skipped.</td></tr>
       <tr><td><code>spring.flyway.baseline-on-migrate</code></td><td><code>true</code></td><td>An existing non-empty DB without a history table gets baselined instead of erroring.</td></tr>
-      <tr><td><code>spring.jpa.hibernate.ddl-auto</code></td><td><code>none</code></td><td><strong>Hibernate never creates or alters a table.</strong> Every schema change must be a migration — there is no "it'll be created on startup" fallback.</td></tr>
+      <tr><td><code>spring.jpa.hibernate.ddl-auto</code></td><td><code>none</code></td><td><strong>Not the whole story — see the callout below.</strong> On its own this setting means "no DDL", but this app also sets <code>spring.jpa.generate-ddl: true</code>, which changes that.</td></tr>
       <tr><td><code>spring.jpa.properties.hibernate.default_schema</code></td><td><code>main</code></td><td>An entity without an explicit <code>schema</code> in <code>@Table</code> lands in <code>main</code>.</td></tr>
       <tr><td><code>custom.flyway.check-schema</code></td><td><code>true</code> in dev</td><td>Activates <code>DbSchemaChecker</code>, which fails startup if Flyway reports <em>pending</em> migrations.</td></tr>
     </table>
+
+    <div class="callout warn">
+      <p><strong><code>ddl-auto: none</code> does not mean "Hibernate never touches the schema" — this app's own
+      config quietly overrides it.</strong> <code>application.yaml</code> sets
+      <code>spring.jpa.generate-ddl: true</code> alongside <code>hibernate.ddl-auto: none</code>. On its own
+      <code>ddl-auto: none</code> would mean exactly what an earlier revision of this page claimed. The real
+      mechanism (code review 2026-09-14 — corrected an earlier, imprecise "vendor map is applied after, so it
+      wins" description of this same page), confirmed by disassembling the pinned
+      <code>spring-boot-autoconfigure</code>/<code>spring-orm</code> jars:</p>
+      <ol>
+        <li><code>JpaBaseConfiguration.jpaVendorAdapter()</code> calls
+          <code>adapter.setGenerateDdl(properties.isGenerateDdl())</code> — <code>spring.jpa.generate-ddl</code>
+          is bound directly onto the Hibernate vendor adapter, independently of <code>ddl-auto</code>.</li>
+        <li><code>HibernateProperties.determineHibernateProperties(...)</code> builds Spring Boot's <strong>own</strong>
+          Hibernate properties map — and when <code>ddl-auto</code> resolves to <code>none</code>, it explicitly
+          <code>result.remove("hibernate.hbm2ddl.auto")</code>, so that key is <strong>absent</strong> from Boot's
+          map, not merely unset.</li>
+        <li><code>AbstractEntityManagerFactoryBean.afterPropertiesSet()</code> then merges the vendor adapter's
+          <strong>own</strong> property map (<code>HibernateJpaVendorAdapter.getJpaPropertyMap()</code>, which puts
+          <code>hibernate.hbm2ddl.auto=update</code> whenever <code>isGenerateDdl()</code> is true) into Boot's map
+          via a fill-the-gap merge — <code>if (!jpaPropertyMap.containsKey(key)) jpaPropertyMap.put(key, value)</code> —
+          <strong>not</strong> a blanket overwrite.</li>
+      </ol>
+      <p>The two steps compose: Boot's own removal in step 2 is exactly the gap the vendor adapter's value fills in
+      step 3. Net effect: Hibernate really does run with <code>hbm2ddl.auto=update</code> in every environment
+      today, silently creating and altering tables that have no Flyway migration at all.</p>
+      <p><code>main.envelope_entity</code>/<code>main.envelope_entity_recipients</code>
+      (<code>platform.notification</code>'s outbound-email envelope record) is a real example, not a
+      hypothetical one — it has been entirely Hibernate-managed since it was introduced
+      (<code>skillars-ses-1.4</code>) and was only made an explicit, version-controlled migration in
+      <code>V136__pin_envelope_entity_schema.sql</code> (<code>skillars-deferred-110</code> AC9), as a safety net
+      for future environments — not because anything was broken. Removing <code>generate-ddl</code> so Hibernate
+      genuinely stops auto-managing schema is a separate, owner-level decision (every other
+      Hibernate-managed-but-unmigrated table would need its own migration written first) and is intentionally
+      out of scope here.</p>
+    </div>
+
     <p>
       Migrations live in <code>src/main/resources/db/migration/</code> and are named
-      <code>V&lt;n&gt;__snake_case_description.sql</code>. There are currently <strong>85 files, numbered up to
-      V91</strong> — the numbering is intentionally non-contiguous (see below), and Flyway does not require
+      <code>V&lt;n&gt;__snake_case_description.sql</code>. There are currently <strong>130 files, numbered up to
+      V136</strong> — the numbering is intentionally non-contiguous (see below), and Flyway does not require
       contiguous versions.
     </p>
 
