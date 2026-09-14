@@ -1,86 +1,77 @@
 package com.softropic.skillars.platform.security.infrastructure.listener;
 
-import com.softropic.skillars.infrastructure.email.EmailTransportException;
-import com.softropic.skillars.infrastructure.email.OutboundEmailRequest;
-import com.softropic.skillars.infrastructure.email.OutboundEmailSender;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Recipient;
+import com.softropic.skillars.platform.notification.service.NotificationOutboxSupport;
 import com.softropic.skillars.platform.security.contract.event.PlayerOtpEmailEvent;
 import com.softropic.skillars.platform.security.contract.event.PlayerVerificationEmailEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
-import org.thymeleaf.context.Context;
-import org.thymeleaf.spring6.SpringTemplateEngine;
 
-import java.util.Locale;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
+import static net.logstash.logback.argument.StructuredArguments.kv;
+
+/**
+ * Story ses-1.4 AC1 — see {@link CoachRegistrationEmailListener}'s class javadoc for the full
+ * rationale (including the two-outcome failure-mode correction, code review 2026-09-12); this class
+ * mirrors it exactly for the player registration flow.
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class PlayerRegistrationEmailListener {
 
-    private final OutboundEmailSender outboundEmailSender;
-    private final SpringTemplateEngine templateEngine;
-    private final MessageSource messageSource;
+    private final NotificationOutboxSupport notificationOutboxSupport;
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onVerificationEmail(PlayerVerificationEmailEvent event) {
-        Locale locale = Locale.forLanguageTag(event.langKey());
-
-        Recipient recipient = new Recipient();
-        recipient.setFirstname(event.firstName());
-        recipient.setLangKey(event.langKey());
-
-        Context context = new Context(locale);
-        context.setVariable("recipient", recipient);
-        context.setVariable("map", Map.of("verifyUrl", event.verifyUrl()));
-
-        String html = templateEngine.process("playerEmailVerify", context);
-        String subject = messageSource.getMessage(EmailTemplate.PLAYER_EMAIL_VERIFY.subjectKey(), null, locale);
-        String correlationId = UUID.randomUUID().toString();
+        if (event.toAddress() == null || event.toAddress().isBlank()) {
+            log.warn("Cannot send player verification email: address is blank");
+            return;
+        }
+        String sendId = UUID.randomUUID().toString();
         try {
-            log.atInfo()
-               .addKeyValue("First name", event.firstName())
-               .addKeyValue("Language used", event.langKey())
-               .setMessage("Handling PlayerVerificationEmailEvent. About to handover to email send service").log();
+            Map<String, Object> data = new HashMap<>();
+            data.put("verifyUrl", event.verifyUrl());
 
-            OutboundEmailRequest request = new OutboundEmailRequest(
-                event.toAddress(), subject, html, null, correlationId);
-            outboundEmailSender.send(request);
-        } catch (EmailTransportException | IllegalArgumentException ex) {
-            log.error("Failed to send verification email — registration may be orphaned. userId lookup required. correlationId={}", correlationId, ex);
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.toAddress());
+            recipient.setLangKey(event.langKey());
+            recipient.setFirstname(event.firstName());
+
+            notificationOutboxSupport.enqueueEmail(EmailTemplate.PLAYER_EMAIL_VERIFY, recipient, data, sendId);
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.PLAYER_EMAIL_VERIFY),
+                kv("sendId", sendId), e);
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onOtpEmail(PlayerOtpEmailEvent event) {
-        Locale locale = Locale.forLanguageTag(event.langKey());
-
-        Recipient recipient = new Recipient();
-        recipient.setFirstname(event.firstName());
-        recipient.setLangKey(event.langKey());
-
-        Context context = new Context(locale);
-        context.setVariable("recipient", recipient);
-        context.setVariable("map", Map.of("otpCode", event.otp()));
-
-        String html = templateEngine.process("playerOtp", context);
-        String subject = messageSource.getMessage(EmailTemplate.PLAYER_OTP.subjectKey(), null, locale);
-        // Generated outside the try so the catch can name it. The request construction itself
-        // stays inside, per AC11, so the record's IllegalArgumentException is still caught.
-        String correlationId = UUID.randomUUID().toString();
+        if (event.toAddress() == null || event.toAddress().isBlank()) {
+            log.warn("Cannot send player OTP email: address is blank");
+            return;
+        }
+        String sendId = UUID.randomUUID().toString();
         try {
-            OutboundEmailRequest request = new OutboundEmailRequest(
-                event.toAddress(), subject, html, null, correlationId);
-            outboundEmailSender.send(request);
-        } catch (EmailTransportException | IllegalArgumentException ex) {
-            log.error("Failed to send OTP email — user is EMAIL_VERIFIED but OTP unreachable; resend-OTP endpoint required. correlationId={}", correlationId, ex);
+            Map<String, Object> data = new HashMap<>();
+            data.put("otpCode", event.otp());
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.toAddress());
+            recipient.setLangKey(event.langKey());
+            recipient.setFirstname(event.firstName());
+
+            notificationOutboxSupport.enqueueEmail(EmailTemplate.PLAYER_OTP, recipient, data, sendId);
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.PLAYER_OTP),
+                kv("sendId", sendId), e);
         }
     }
 }

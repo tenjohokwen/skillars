@@ -75,7 +75,7 @@ class EmailDataRoundTripContractTest {
     private static Map<String, Object> roundTrip(Map<String, Object> data) {
         try {
             NotificationEmailPayload payload = new NotificationEmailPayload(
-                EmailTemplate.BOOKING_REMINDER.name(), "x@example.com", "en",
+                EmailTemplate.BOOKING_REMINDER.name(), "x@example.com", "en", null,
                 UUID.randomUUID().toString(), Instant.now(), data);
             String json = MAPPER.writeValueAsString(payload);
             return MAPPER.readValue(json, NotificationEmailPayload.class).data();

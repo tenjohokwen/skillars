@@ -96,7 +96,9 @@ public class MailManagerResilienceTest {
         mailManager.sendEmailSync(envelope);
 
         verify(mailService, times(1)).sendEmailFromTemplate(any(), any(), any());
-        verify(envelopeEntityRepository).save(any(EnvelopeEntity.class));
+        // Story ses-1.4 AC4: save() -> saveAndFlush() so a sendId collision surfaces synchronously
+        // instead of at an arbitrary later commit.
+        verify(envelopeEntityRepository).saveAndFlush(any(EnvelopeEntity.class));
     }
 
     @Test
@@ -142,7 +144,7 @@ public class MailManagerResilienceTest {
         mailManager.sendEmailSync(envelope);
 
         ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
-        verify(envelopeEntityRepository).save(captor.capture());
+        verify(envelopeEntityRepository).saveAndFlush(captor.capture());
         // The EmailRetryScheduler polls on this flag — a structurally impossible parse error must
         // not be picked up again, or it would fail forever.
         assertThat(captor.getValue().isRetry()).isFalse();
@@ -166,7 +168,7 @@ public class MailManagerResilienceTest {
         mailManager.sendEmailSync(envelope);
 
         ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
-        verify(envelopeEntityRepository).save(captor.capture());
+        verify(envelopeEntityRepository).saveAndFlush(captor.capture());
         assertThat(captor.getValue().isRetry()).isTrue();
         assertThat(captor.getValue().getAttempts())
             .as("a rate-limit rejection must not consume a delivery attempt")
@@ -186,7 +188,7 @@ public class MailManagerResilienceTest {
         mailManager.sendEmailSync(envelope);
 
         ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
-        verify(envelopeEntityRepository).save(captor.capture());
+        verify(envelopeEntityRepository).saveAndFlush(captor.capture());
         assertThat(captor.getValue().getAttempts()).isEqualTo(1);
     }
 
@@ -198,7 +200,7 @@ public class MailManagerResilienceTest {
         mailManager.sendEmailSync(envelope);
 
         ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
-        verify(envelopeEntityRepository).save(captor.capture());
+        verify(envelopeEntityRepository).saveAndFlush(captor.capture());
         assertThat(captor.getValue().isRetry()).isTrue();
     }
 }

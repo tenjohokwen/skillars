@@ -227,9 +227,9 @@ class VideoModerationEmailListenerTest {
             seamMailService = mock(MailService.class);
             repo = mock(EnvelopeEntityRepository.class);
             saved.set(null);
-            // MailManager.sendEmailSync: findBySendId==null → save(entity); the listener then
-            // read-backs the same sendId and must see that saved entity.
-            when(repo.save(any(EnvelopeEntity.class))).thenAnswer(inv -> {
+            // MailManager.sendEmailSync: findBySendId==null → saveAndFlush(entity) (story ses-1.4
+            // AC4); the listener then read-backs the same sendId and must see that saved entity.
+            when(repo.saveAndFlush(any(EnvelopeEntity.class))).thenAnswer(inv -> {
                 saved.set(inv.getArgument(0));
                 return inv.getArgument(0);
             });
