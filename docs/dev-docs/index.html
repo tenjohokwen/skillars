@@ -160,7 +160,12 @@ flowchart LR
       <p><strong>Never call <code>infrastructure.blobstore</code> directly.</strong> Only <code>filestorage</code> is allowed to. Every other module that needs to store or retrieve a file must go through <code>filestorage</code>'s own API. See <a href="filestorage/index.html">Filestorage</a> and <a href="infrastructure/index.html">Infrastructure</a>.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Email is silently suppressed in dev.</strong> When <code>app.ses.enabled=false</code> (the local default), <code>NoOpSesEmailService</code> logs the subject line only and sends nothing — a common source of "I registered but got no email" confusion locally.</p>
+      <p><strong>Dev delivers real email over SMTP.</strong> Since <code>ses-1.2</code>, the <code>dev</code>
+      profile runs <code>app.email.transport=smtp</code> — registration/verification/OTP mail included, as of
+      <code>ses-1.4</code>. If "I registered but got no email" locally, check the configured SMTP provider
+      credentials before assuming a bug in the sending code; the verification token is also always written to
+      the database as a fallback. See <a href="notification/index.html">Notification</a> and
+      <a href="infrastructure/index.html">Infrastructure</a> for the transport switch.</p>
     </div>
     <div class="callout">
       <p><strong>booking vs. session</strong> — <code>booking</code> owns scheduling/calendar; <code>session</code> owns training content (drill library, plans, templates, homework). They meet only at a read-only booking snapshot and a completion event.</p>

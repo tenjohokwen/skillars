@@ -224,18 +224,29 @@ off. The pattern is unchanged from the old one and lives at
 
 ## Creating the accounts
 
-Register through the UI like a real user. Two things make this different from
-production.
+Register through the UI like a real user. Two things worth understanding as
+you do — neither is really a difference from production any more, just a
+local wrinkle:
 
-**Emails never arrive.** `SesEmailServiceImpl` is annotated `@Profile("!dev")`,
-so under the `dev` profile the `NoOpSesEmailService` bean wins and logs only the
-subject:
+**Real email delivery depends on real SMTP credentials.** Since `ses-1.2`,
+`application-dev.yaml` sets `app.email.transport: smtp` — the same kind of
+real delivery path production uses (production instead runs `ses`; both have
+delivered real mail since their respective stories, neither is suppressed).
+Registration/verification/OTP mail is included since `ses-1.4`, which routed
+those templates through this same switch. But `application-dev.yaml` also
+defaults `GMX_PASSWORD`/`GMAIL_PASSWORD` to literal placeholder strings
+(`dev_gmx_password`/`dev_gmail_password`) whenever the real env vars aren't
+set, and `docker-compose.local.yml` restates the same placeholder defaults —
+with those in place, the send fails SMTP authentication server-side (the
+envelope is recorded `FAILED`, then retried and eventually exhausted; nothing
+reaches an inbox). Set real `GMX_PASSWORD`/`GMAIL_PASSWORD` values — in
+`.env.local` for Mode A, or exported in your shell before `mvn spring-boot:run`
+for Mode B — to actually receive mail.
 
-```
-NoOp SES: email suppressed — subject=...
-```
-
-The verification token is still written to the database, so pull it from there.
+The verification token is always written to the database regardless of
+whether the email send itself succeeds, so pulling it from there (see "Fetch
+the token" below) remains a valid — often faster — alternative that works
+either way.
 
 **Phone OTP is already disabled.** Migration `V85` seeds
 `security.registration.phone-otp-required=false`. `AuthService.login` only
@@ -481,8 +492,12 @@ existing row cannot be repaired, since payment already recorded a failure).
 there is no `marketplace.coach_profiles` row in a usable state. Finish the
 profile builder first.
 
-**Registration succeeds but no verification link** — expected. Emails are
-suppressed under `dev`; query `main.email_verification_tokens` as shown above.
+**Registration succeeds but no verification link** — dev delivers real SMTP
+mail (see "Creating the accounts" above), so first check `GMX_PASSWORD`/
+`GMAIL_PASSWORD` are set to real credentials rather than the placeholder
+defaults; with placeholders, the send fails SMTP auth and no email arrives.
+Either way, query `main.email_verification_tokens` as shown above — the token
+is written regardless of whether the email send itself succeeds.
 
 **Login returns "Account is not activated"** — email verification has not been
 completed. `activated` flips at email verification, not at registration.

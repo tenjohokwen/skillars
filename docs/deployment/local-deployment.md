@@ -498,11 +498,15 @@ docker logs skillars-app-1 --since 10m 2>&1 | jq -r 'select(.level=="ERROR")'
 docker logs skillars-app-1 --since 10m 2>&1 | jq -r '"\(.["@timestamp"]) \(.level) \(.logger_name) \(.message)"'
 ```
 
-**Grep for a specific thing** (e.g. email suppression, a specific endpoint):
+**Grep for a specific thing** (e.g. an outbound email, a specific endpoint):
 
 ```bash
-docker logs skillars-app-1 --since 30m 2>&1 | grep -i "NoOp SES\|player/register"
+docker logs skillars-app-1 --since 30m 2>&1 | grep -i "Email sent\|player/register"
 ```
+
+(`"Email sent"` is logged by `MailService` after every successful send, regardless of which transport is
+active — the `log` transport's own `LoggingEmailSender` additionally logs `"Sending email (log
+transport)"`, which is transport-specific and won't match under `dev`'s `smtp` transport.)
 
 **Follow one request end-to-end** — every log line for a request carries the
 same `traceId`/`requestId`, so once you spot one, you can pull the whole
