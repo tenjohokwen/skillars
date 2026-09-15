@@ -17,6 +17,174 @@ One bullet = one open item. Grouped by the review that raised it; the heading ca
   Verify against the code before trusting an unannotated forward-reference.
 - **File paths and line numbers age fast.** They were accurate at the review date in the heading.
 
+## Last audit: 2026-09-15 (full-file re-audit + premature-prune correction)
+
+Two parts, both requested directly (not tied to a merge): (1) correct a process violation from the
+same day's `skillars-deferred-113` story *creation* commit (`bdcf782d`), which deleted ~14 bullets
+across 6 sections on the theory that the new story now "owned" them — before the story was
+implemented, and before some of them were even in its scope, contradicting this file's own "deleted
+outright once implemented" rule; (2) a full re-audit of every remaining section back to the first
+(2026-06-04), not just the ones a recent merge could plausibly have touched.
+
+**Part 1 — premature-deletion correction.** Every bullet `bdcf782d` removed was checked directly
+against current code (not against the new story's own claims, several of which turned out wrong —
+see the separate `story-review.md` audit of that story). Of the ~14:
+- **9 were genuinely fixed** (mostly by `skillars-deferred-111`, merged after the prior ledger prune
+  but before this deletion) and correctly stay gone: SES DOWN-health-caching TTL (`SesHealthIndicator`
+  now has a configurable `downTtl`, deferred-111 AC4); rate-limit WARN-log-level (`SesSendRateLimiter`
+  now WARNs only on the throttle transition, DEBUGs while sustained, deferred-111 AC5);
+  `MailManager`'s log-masking-bypass (the exception argument is now a pre-sanitized String, not
+  SLF4J's raw-Throwable arg, deferred-111 AC11 — confirmed by re-reading the code and by running
+  `RegistrationEmailDurabilityIT`, whose log output shows `data={verifyUrl=[REDACTED]}`);
+  `LoggingEmailSender`'s collision-exhaustion throttle and text-part discard (both fixed, separate
+  throttle flags / per-file writes now exist); `implicitTls` handling (`MailSenderProvider` now
+  branches on it, deferred-111 AC10); SMTP recipient-address masking asymmetry and
+  `MailAuthenticationException` retried-forever (both closed in `SmtpErrorClassifier` — `MailAuthenticationException`/
+  `AuthenticationFailedException` joined `NON_REPAIRABLE_ERRORS`, and its message is now
+  `EmailPiiSanitizer.sanitize`d); `envelope_entity_recipients` missing PK (the baseline schema now
+  carries a composite PK on `(envelope_entity_id, email)`).
+- **4 were NOT fixed and are restored below**, each verified against current code: ses-1-2's
+  adapter-wrap-depth guard (no test drives `MailManager.isRetryable` through the real adapters at
+  both wrap depths — confirmed via `requirements/ses-email-consolidation.md:1072-1082`, the item's
+  actual source, which the deleted-then-recreated bullet had been citing correctly); ses-1-1's "no
+  non-production environment exercises the SES path" (dev/uat still run `smtp`, confirmed in
+  `application-{dev,uat}.yaml`; its own closing condition, the Phase 5 cutover, hasn't happened);
+  ses-1-4's `Map.of`→`HashMap` null-token guard in the three registration listeners (still bare
+  `HashMap`, no guard restored — confirmed by reading `{Coach,Parent,Player}RegistrationEmailListener.java`);
+  ses-1-4's `RegistrationEmailDurabilityIT` global-state fragility note (still `findAll()`-based, no
+  `@AfterEach`, confirmed by reading the test file and running it — 7/7 green, matching its own
+  "correct today" framing, not a live failure).
+- **The `ses-1-7-documentation` section's deletion also broke a live cross-reference**:
+  `docs/dev-docs/notification/index.html` still linked to "`deferred-work.md`'s `ses-1-7-documentation`
+  section" for history that section no longer holds. Fixed in the doc directly (see Files Touched
+  below) rather than resurrecting a correctly-closed ledger bullet just to keep a link alive.
+
+**Part 2 — full re-audit, every section.** Read all 89 `## Deferred from:` sections (then ~2000
+lines) end to end, not sampled. Result: this file has already been pruned extremely aggressively and
+repeatedly (the 2026-08-24, 2026-09-04, 2026-09-08 ×2, 2026-09-09, 2026-09-10 ×4 and 2026-09-11
+passes each did real, verified work) — almost everything untagged and still standing is either a
+deliberate, well-reasoned "not a bug" note or a genuinely open item nobody has closed yet. Beyond
+Part 1, three more corrections:
+
+- **Deleted, genuinely closed:** `skillars-11-3` code review D1 ("`V89__drop_legacy_session_packs.sql`'s
+  `DROP TABLE` has no `IF EXISTS` guard … adopt `IF EXISTS` for future destructive migrations").
+  `docs/deployment/migration-conventions.md` now documents exactly this ("every `DROP` is last and
+  guarded: `IF EXISTS`…") and `MigrationLint` mechanically enforces it (`"a DROP TABLE/INDEX/CONSTRAINT
+  is missing IF EXISTS"`, `"a DROP COLUMN is missing IF EXISTS"`) — the bullet's ask has been adopted
+  as an enforced project convention, not merely a good idea. Its section had no other bullet — header
+  removed.
+- **Deleted as factually wrong, not merely stale:** `code review of skillars-deferred-109`'s
+  `MailManager.java:136-150` (`isRetryable`) / `ComponentConfig.java:44-49` bullet — "every
+  permanently undeliverable email is classified as retryable against the real circuit-breaker
+  configuration," claiming the sibling test `VideoModerationEmailListenerTest.RealMailManagerMappingAC122`
+  "does NOT reproduce it: its hand-built `Resilience4JCircuitBreakerFactory` has no TimeLimiter."
+  That claim is false at HEAD and was false the day it was written: `git log -L` shows the test's
+  `TimeLimiterRegistry.ofDefaults()` wiring was added by `f3d0d53a`, `skillars-deferred-109`'s *own*
+  implementation commit — the same story the code-review bullet was filed against. Independently
+  verified three ways: (1) decompiling the exact pinned library bytecode (`resilience4j-circuitbreaker`/
+  `-timelimiter` 2.2.0, `spring-cloud-circuitbreaker-resilience4j` 3.3.3 — confirmed via `mvn
+  dependency:tree`, not assumed) shows `TimeLimiterImpl` unwraps `ExecutionException` to its real
+  cause and `CircuitBreaker`/Spring's own wrapper never re-wrap an exception on the way out; (2)
+  running `MailManagerResilienceTest` — 7/7 green, including
+  `isRetryable_permanentTransportException_persistsRetryFalse` against a real
+  `Resilience4JCircuitBreakerFactory`; (3) running `VideoModerationEmailListenerTest` — 17/17 green,
+  including `RealMailManagerMappingAC122.permanentFailure_producesNonRetryableRow_andListenerReleases`.
+  `MailManager`'s cause-preserving fallback closure (`if (throwable instanceof RuntimeException &&
+  throwable.getCause() != null) { throw (RuntimeException) throwable; }`) has been unchanged since the
+  very first commit — this was never a live gap in the current architecture. The sibling
+  `persisted == null` bullet in the same section is kept (that one's root-cause-unestablished framing
+  already matches `skillars-deferred-110` AC5's own finding, folded in here for the reader who reaches
+  this section without also reading that one).
+- **Corrected, not deleted — two stale rows in the 2026-08-24/2026-09-04 `deploy-*` audit table**
+  (line ~127-128 above): `deploy-3-1` credentials in `/proc/<pid>/environ` still read "open, unchanged"
+  though the standalone bullet elsewhere in this file was retagged `[DECIDED 2026-09-10
+  (skillars-deferred-107 AC6)]` five sessions ago; `deploy-3-1` awscli v1 still read "open, unchanged —
+  `provision.sh:131`" though the 2026-09-08 audit block already recorded it **CLOSED by
+  `skillars-deferred-102` AC9** in a different list further down the file. Both rows struck through
+  and annotated to match their sibling rows in the same table, which already carry this treatment.
+
+**Not touched, by design:** every `[DECIDED …]` / `[DISMISSED …]` bullet (52 / 40 raw token count,
+inflated by this and prior audit blocks' own prose naming both tokens, as always) — these are declined
+or decided-wont-fix, not open work, and the file keeps them so the decision is not re-litigated. Every
+`[PICKED UP by …]` bullet. Every untagged bullet this pass read and could not find contradicted by
+current code, git history, or a passing/failing test — the large majority of the file.
+
+**Files touched:** `_bmad-output/implementation-artifacts/deferred-work.md` (this file);
+`docs/dev-docs/notification/index.html` (dangling `ses-1-7-documentation` cross-reference reworded to
+stand on its own, and its `V136` mention updated to note the `skillars-deferred-112` rebaseline that
+folded it into `V138`).
+
+**Net effect:** 4 bullets restored (ses-1-1 ×1, ses-1-2 ×1, ses-1-4 ×2, across 2 recreated section
+headers), 2 bullets deleted (the V89 `IF EXISTS` item, the stale `isRetryable` circuit-breaker item —
+the latter's now-empty half merged into its surviving sibling rather than left as a bare deletion), 2
+audit-table rows corrected in place. `## Deferred from:` header count: 90 (post-`bdcf782d`, pre this
+audit) → 89. Line count: 2144 (post-`bdcf782d`) → ~2231 with this audit block itself appended
+(`wc -l`; approximate rather than chased to the exact line, since re-running it after writing the
+figure changes the figure — the same self-referential trap this file's history has repeatedly hit).
+
+## Last audit: 2026-09-15 (post-merge prune after skillars-deferred-113, and a same-day ledger-error correction)
+
+`/bmad-dev-story` on `skillars-deferred-113`. Before implementing, re-verified this story's own two
+"AC4"/"AC5" items (adapter-wrap-depth guard, `Map.of`→`HashMap` null-token guard) against HEAD, per
+this story's own established pattern of catching stale scope. Both turned out to be **already fixed**
+— and the "full-file re-audit" entry immediately above, written earlier the same day, had incorrectly
+"restored" both as still-open. That entry's own verification was wrong, not just stale:
+
+- **`AdapterWrapDepthTest` (`src/test/java/.../infrastructure/email/smtp/AdapterWrapDepthTest.java`)
+  already exists and does exactly what the ses-1-2 §7.2 item 13 bullet asked for** — drives a real
+  `SmtpEmailSender` + `SmtpErrorClassifier` RCPT-TO-550 failure and a real `SesEmailSender` +
+  `SesErrorClassifier` `BadRequestException` failure end to end through `MailManager.isRetryable`,
+  asserting `EnvelopeEntity.isRetry()==false` for both. `git blame` traces it to `4a3f218d`
+  (`skillars-deferred-111` AC3), merged **before** this same-day audit claimed no such test existed.
+  Ran it directly: 2/2 green.
+- **`CoachRegistrationEmailListener`/`ParentRegistrationEmailListener`/`PlayerRegistrationEmailListener`
+  already guard `event.verifyUrl()`/`event.otp()` with `Objects.requireNonNull(...)`, outside the
+  try/catch**, added by the same `4a3f218d` (`skillars-deferred-111` AC6) — restoring exactly the
+  fail-fast NPE the ledger bullet said `HashMap` had silently dropped. Each listener has an existing
+  unit test asserting the `NullPointerException`. Ran all three `*RegistrationEmailListenerTest`
+  classes: 28/28 green.
+
+Both were deleted above rather than merely re-annotated, since the file's own convention is delete-
+outright-on-closure, and this is a closure (found already shipped), not new work.
+
+**Genuinely closed by this story's own implementation** (all verified by a real, container-backed
+test added or extended for the purpose, not just code inspection):
+
+- **`QuotaConfigService.resolveTierKey` player-tier gap** (`skillars-deferred-109` story creation,
+  reconfirmed open by the 2026-09-15 "ad-hoc verification" audit below) — `resolveTierKey` now
+  resolves a non-UUID `ownerId` via `PaymentPlayerSubscriptionRepository.findByPlayerId`, mapping
+  `SEMI_PRO`/`PRO`/`ATHLETE` to `semiPro`/`pro`/`athlete`, failing open to `athlete` for every
+  unrecognised shape (no row, unparsable id, unknown tier string). New `QuotaConfigServicePlayerTierIT`
+  proves all three tiers resolve to their real `V139`-seeded quota amounts against a real Postgres;
+  `QuotaConfigServiceTest` covers the mapping and fail-open paths at the unit level.
+- **Mid-loop rate-limit rejection duplicating earlier recipients** (ses-1-3 code review) —
+  `MailManager.sendEmailSync` now tracks per-recipient delivery on `RecipientEntity.delivered`
+  (`V140__envelope_entity_recipients_delivered_flag.sql`) and skips already-delivered recipients on
+  a retry. New `MailManagerRateLimitIT` reproduces a 5-recipient envelope rate-limited at recipient 3,
+  proves recipients 1–2 are sent to exactly once across two attempts (not duplicated) and all five are
+  eventually delivered; a single-recipient regression case confirms no behaviour change there.
+- **`VideoModerationEmailListener`'s `persisted == null` outcome treated identically to success**
+  (code review of `skillars-deferred-109`) — Option B taken (owner risk assessment: Option A's bounded
+  retry adds latency/complexity for a race `skillars-deferred-110` AC5 already found does not hold
+  under this codebase's transaction semantics). The branch now throws `IllegalStateException`,
+  reusing the identical retain-the-row treatment this method already gives a confirmed retryable
+  FAILED send. New `VideoModerationAdminAlertEnvelopeIT` case reproduces a real committed SENT row
+  the listener is deliberately blinded to (a separate, mocked `EnvelopeEntityRepository` wired only
+  into the listener) and proves the throw retains the outbox row instead of releasing it. Root cause
+  of a *genuine* null read-back remains unestablished, as before — this closes the defense-in-depth
+  gap, not a proven data-loss bug, so is filed as closed on that basis.
+- **No non-production environment exercises the SES path** (ses-1-1 code review) — not code-fixable
+  (the phase plan deliberately runs `smtp` pre-prod, `ses` only in prod); closed by adding a
+  `## Pre-production release gate: SES cutover` section to `docs/deployment/runbook.md`, matching this
+  file's own `skillars-deferred-100` webhook-event-gate precedent for the same "accepted risk, closed
+  by a checklist" shape.
+
+**Not touched:** `skillars-deferred-109`'s `MailManager.isRetryable`/circuit-breaker misclassification
+bullet was already deleted (see "full-file re-audit" above, "Deleted as factually wrong"); this story's
+own draft re-added it as a new "AC9", re-traced it to the same conclusion (does not reproduce against
+the real `CircuitBreakerFactory`), and closed it again in the story file itself rather than the ledger,
+since it was never re-added here.
+
 ## Last audit: 2026-09-14 (post-merge prune after ses-1-4, narrow scope)
 
 Routine sweep after `skillars-ses-1-4` (PR #183) merged to master. Same narrow-scope method as the
@@ -124,8 +292,8 @@ Every item below was checked against the live file at `c2c47c1`, not against the
 | `deploy-3-3` node_exporter network isolation | ~~open, **substantially narrowed** by `skillars-deferred-88` AC8 — see the corrected bullet~~ **DECIDED by `skillars-deferred-107` AC5** — accept & document: the only on-host peers are first-party `app`/`grafana`, a compromised `app` already holds the DB/Stripe/Bunny/OTLP credentials, a dedicated network was evaluated and rejected. Full rationale in the `docker-compose.yml` `node_exporter` comment. |
 | `deploy-3-3` DiskDataVolumeHigh needs the Volume mounted | ~~`[PICKED UP by skillars-deferred-94 AC6]` — comment + docs added; volume mount prerequisite documented.~~ **CLOSED by `skillars-deferred-94` AC6** — the clarifying comment shipped (`deploy/lgtm/alerts.yml:62-65`: "DiskDataVolumeHigh requires the Hetzner volume to be mounted … If unmounted, the … metric is absent and this alert silent") and the volume-mount verification step is documented (`docs/deployment/first-time-setup.md:388`). Standalone bullet deleted 2026-09-10 (post-`deferred-108`-merge prune). |
 | `deploy-3-1` PGPASSWORD via `docker exec -e` | ~~`[PICKED UP by skillars-deferred-94 AC1]`~~ **CLOSED (skillars-deferred-94 AC1, shipped 2026-09-07):** all occurrences now use `PGPASSWORD="…" docker exec -e PGPASSWORD "$CID"` env-var inheritance — no secret in `ps aux`. Bullet deleted 2026-09-10. The separate `/proc/<pid>/environ` bullet remains. |
-| `deploy-3-1` credentials in `/proc/<pid>/environ` | open, unchanged, project-wide |
-| `deploy-3-1` awscli v1 from Ubuntu apt | open, unchanged — `provision.sh:131` |
+| `deploy-3-1` credentials in `/proc/<pid>/environ` | ~~open, unchanged, project-wide~~ **DECIDED by `skillars-deferred-107` AC6** — accept as won't-fix: `env-guard.sh` bare-sources `.env` (no `set -a`), so the scripts hold the creds as unexported shell vars, not in their own `/proc/<pid>/environ`; the real surfaces (the short-lived `PGPASSWORD=… docker exec -e` child, the postgres/app container envs) are root-only, single-tenant VPS, `.env` is `root:root 0600`. See `docs/deployment/secrets-reference.md#accepted-credential-exposure-surface`. |
+| `deploy-3-1` awscli v1 from Ubuntu apt | ~~open, unchanged — `provision.sh:131`~~ **CLOSED by `skillars-deferred-102` AC9** — official AWS CLI v2 installer, GPG-fingerprint-pinned + signature-verified fail-closed, replaces the apt package. |
 | `deploy-1-5` repo cloned before the Volume is mounted | open, unchanged |
 | `deploy-1-5` repo cloned as root, `.git` beside runtime data | open, unchanged |
 | `deploy-1-5` no rollback / DR documentation | **CLOSED, deleted** — `rollback.md`, `backup-restore.md` and `runbook.md` all shipped with Epic 3, exactly as the item predicted |
@@ -960,8 +1128,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 <!-- skillars-deferred-100 AC7 (2026-09-08): D4 (concurrent strike issuance race — two simultaneous issue() calls both read count=N and both fire StrikeThresholdReachedEvent) closed by AC1. ReliabilityStrikeService.issue() now takes a PESSIMISTIC_WRITE lock on the coach row via lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)) before the count/threshold/status decision; the count read moved under the lock so the loser blocks, re-reads status = PENDING_REVIEW/REDUCED, and its existing guard suppresses the duplicate event. ReliabilityStrikeConcurrencyIT covers it. -->
 - D5: `CoachCancellationHistory.createdAt` with `@Column(updatable=false)` + `@PrePersist` — in-memory entity is null until DB round-trip if ever used with batch `saveAll`; low risk given single-save usage [`CoachCancellationHistory.java`]
 
-## Deferred from: code review of skillars-11-3-remove-legacy-session-pack-system (2026-08-04)
-- D1: `V89__drop_legacy_session_packs.sql`'s `DROP TABLE` has no `IF EXISTS` guard — not blocking (Flyway won't re-run an applied migration, table confirmed empty at this dev/UAT stage), but there's no prior DROP TABLE in this codebase to establish a convention either way; adopt `IF EXISTS` for future destructive migrations. [`src/main/resources/db/migration/V89__drop_legacy_session_packs.sql`]
 ## Deferred from: code review of skillars-11-1-payment-path-parity-gaps (2026-08-03)
 - D1: Partial/mismatched `confirmedCancellationIds` lets `PackSessionService.pausePack()` apply the pause even when not all currently-conflicting bookings are confirmed for cancellation (or the confirmed ids don't match any real conflict) — verified byte-for-byte identical to legacy `SessionPackService.pausePack()`; AC4 explicitly requires mirroring legacy here. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
 - D5: `pausePack` holds a pessimistic row lock across booking cancellations and event publishing within one `@Transactional` method — same single-transaction shape as the legacy method this story mirrors. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
@@ -1361,12 +1527,6 @@ Second-run bmad-code-review of the implementation. Pre-existing / explicitly-des
 the actionable patch findings are tracked unchecked in the story's Review Findings section.
 
 - **[DECIDED 2026-09-11 (skillars-deferred-109 AC14): accepted. No grace path or config-gated allowance will be built. Mitigation is operational — see the runbook pre-production release gate. Revisit only if a production deploy is planned with queued legacy events that cannot be drained.]** No grace path for in-flight legacy `encoding.success` webhook events during the deferred-100 cutover. With `PROCESSING→READY` removed from `VALID_TRANSITIONS` and the plain path converted from `log.warn` to `throw TerminalStateViolationException` + `video.moderation.bypass++`, any replayed/queued pre-deploy event that drives `PROCESSING→READY` on the plain path now throws and dead-letters (and raises a false-positive moderation-bypass alarm) instead of completing. AC5 verified the producer (`WebhookEventProcessorScheduler`) is already gone at HEAD, no production deploy has ever happened, and dead-lettered events are re-drivable. `docs/deployment/runbook.md` now carries a `## Pre-production release gate: queued webhook events` section requiring the queue to be drained or discarded before the first production deploy. No production code change. [`VideoLifecycleService.java:77-83`]
-
-## Deferred from: skillars-deferred-101 story creation (2026-09-08)
-
-### Pre-production migration rebaseline (future task, no owner)
-
-**Before the first production deploy**, while the schema still carries no data: squash `V1`..`V<current>` into a single clean baseline migration and fold in every safe-pattern rewrite the lock-unsafe applied files (V60/V94/V97/V98/V117, see `docs/deployment/migration-conventions.md#known-lock-unsafe-applied-migrations`) could not take in place. Removes the frozen-file constraint entirely and lets `MigrationLint` bind from `V1`. Large, disruptive, must be its own story; only viable pre-data.
 
 ---
 
@@ -1911,23 +2071,6 @@ bullets touched: one — the `deploy-3-3` DiskDataVolumeHigh bullet, deleted as 
 Line count: 1960 pre-edit → 1959 after the bullet deletion → 1991 with this block appended
 (`wc -l`, re-run after writing).
 
-## Deferred from: skillars-deferred-109 story creation (2026-09-11)
-
-- **`QuotaConfigService.resolveTierKey` maps no player to the `semiPro` / `pro` video-quota
-  segments.** `resolveTierKey` has a `switch` over `CoachSubscriptionTier {SCOUT, INSTRUCTOR,
-  ACADEMY}` and a `catch` that returns `"athlete"` for every non-UUID (player) ownerId — so it can
-  return only `scout` / `instructor` / `academy` / `athlete`, never `semiPro` / `pro`. A `SEMI_PRO`
-  or `PRO` player therefore receives the **ATHLETE** video quota (2 GiB storage / 10 GiB bandwidth)
-  regardless of billing tier, and the four `video.quota.semiPro.*` / `.pro.*` rows `V53` seeds
-  (4 GiB / 25 GiB; 7 GiB / 30 GiB — `V53:37-38,44-45`) are unreachable. `PlayerSubscriptionTierBilling`
-  is a dead enum (`SubscriptionService` uses the string literals `"SEMI_PRO"` / `"PRO"`). Closing
-  this needs a player billing-tier → quota-segment mapping in `resolveTierKey`, plus a product
-  decision on whether player video quotas are a shipped concern yet. `skillars-deferred-109` AC10
-  bounded the four keys ahead of this (ERROR + `config.value.misconfigured` metric on an
-  out-of-range value; no boot refusal — `failFast=false`), so the mapping inherits a range check
-  when it lands. Surfaced by the `skillars-deferred-109` story-review audit.
-  [`src/main/java/com/softropic/skillars/platform/video/service/QuotaConfigService.java` `resolveTierKey`]
-
 ## Last audit: 2026-09-11 (post-implementation prune — skillars-deferred-109)
 
 `skillars-deferred-109` closed the ~16 pre-existing frontend production defects the
@@ -2003,48 +2146,11 @@ are corrected here rather than silently edited away:
 writing, with every section below already in place): **1998** lines; **88** `## Deferred from:`
 headers; **48** raw `[DECIDED` tokens; **38** raw `[DISMISSED` tokens.
 
-## Deferred from: code review of skillars-deferred-109 (2026-09-11)
-
-`/bmad-code-review` on the `skillars-deferred-109` working tree (Blind Hunter + Edge Case Hunter +
-Acceptance Auditor, all three completed). 2 decision-needed and 18 patch findings were handled in
-the story; three items are genuinely pre-existing or wider than this story and are filed here:
-
-- `VideoModerationEmailListener.java:102-107` — the AC12.1 `persisted == null` branch WARNs and
-  returns normally. A normal return is exactly the signal `ModerationAdminAlertOutboxHandler` uses
-  to delete the durable outbox row, so an **unknown** send outcome (the `REQUIRES_NEW` commit not
-  yet visible on read-back) is handled identically to a confirmed success — the last-resort human
-  notification for a permanently-failed moderation can be dropped with only a WARN. AC12.1 changed
-  the log level, not the release decision, so this is pre-existing. Options: re-read with a short
-  bounded retry, or throw `IllegalStateException` (retain the row) on an unresolved read-back.
-- `MailManager.java:136-150` (`isRetryable`) + `ComponentConfig.java:44-49` — **every permanently
-  undeliverable email is classified as retryable against the real circuit-breaker configuration.**
-  Found while writing the AC12.2 IT the owner asked for (decision D2 → option a), which is exactly
-  the class of defect a mocked-collaborator unit test cannot reach. `isRetryable` deliberately scans
-  only three depths (direct, cause, cause-of-cause) to avoid misclassifying an unrelated
-  non-repairable type buried deep in some other chain. But with the real container-configured
-  `CircuitBreakerFactory`, the exception that reaches `toEnvelopeEntity` is
-  `RuntimeException("Email sending failed via Circuit Breaker")` caused by resilience4j's
-  `TimeoutException` — the originating exception is **absent from the chain entirely**, so no
-  non-repairable type is found at any depth and the row is stamped `FAILED, isRetry=true`.
-  Reproduced: throwing `AddressException` (a `NON_REPAIRABLE_ERRORS` member) directly from the
-  `MailService` seam still yields `isRetry=true`. Consequence for
-  `VideoModerationEmailListener.sendAdminAlertSync`: the retryable arm throws, the outbox row is
-  retained, and a failure no re-drive can fix re-drives until `[OUTBOX_STUCK]` summons a human —
-  the precise outcome the permanent arm at `:116-119` exists to avoid. The sibling unit test
-  (`VideoModerationEmailListenerTest.RealMailManagerMappingAC122`) does NOT reproduce it: its
-  hand-built `Resilience4JCircuitBreakerFactory` has no TimeLimiter, so the real cause survives.
-  Pre-existing — nothing in `skillars-deferred-109` caused it. Likely fix: have the circuit-breaker
-  fallback preserve the original throwable rather than replacing it, and/or classify from the
-  exception captured inside the retry loop instead of from whatever the CB layer surfaces. Until
-  then `VideoModerationAdminAlertEnvelopeIT` carries no permanent-failure case and says why.
-
-## Deferred from: code review of ses-1-3-health-monitoring-rate-limiting (2026-09-12)
-
-- **A mid-loop rate-limit rejection duplicates earlier recipients and never sends later ones** (`platform/notification/service/MailManager.java:74`). `sendEmailSync` loops recipients with a single row-level status and no per-recipient progress marker; a rejection at recipient *k* aborts the loop, persists the envelope FAILED/retry=true, and the re-drive restarts at recipient 1 — duplicating 1..k-1 on every one of the 6 attempts and never reaching k+1..n. Where *n* exceeds the per-second limit the envelope deterministically dies at the same index and ends `ATTEMPTS_EXHAUSTED`. Latent today: `SendMailListener` accepts an arbitrary-length `userIds` list but its only caller (`TwoFactorLoginService.java:61`) passes one id. Becomes live the moment any producer emits a multi-recipient envelope.
-
 ## Deferred from: code review of ses-1-4-registration-email-durability (2026-09-12)
 
 - **[DECIDED: keep retain-and-alert — skillars-deferred-110]** ~~`EmailTemplate.valueOf(p.template())` creates an immortal poison outbox row for a removed or renamed constant~~ (`platform/notification/service/NotificationEmailOutboxHandler.java:90`). Payloads carry the template as a `String` and can sit in `outbox_messages` for up to the 24h default deadline, so a rename during a rolling deploy makes `valueOf` throw `IllegalArgumentException` — thrown *after* ses-1.4's new deadline guard, so a still-live row is never rescued by it. `OutboxRowProcessor` wraps it, backs the row off and retries forever, consuming a claim slot and eventually reporting `[OUTBOX_STUCK]` with no path to completion. `skillars-deferred-110`'s AC8 explicitly decided **not** to change this: `OutboxRowProcessor:109-113` already makes the identical decision for the structurally-identical missing-handler case ("never dropped: it keeps its data safe until a deploy that carries the handler picks it up"), and a rename/rollback self-resolves the same way — catch-and-drop would trade a loud, recoverable state for irreversible message loss. No code change; retain-and-alert is the documented, intentional precedent, not a silent gap.
+- **`RegistrationEmailDurabilityIT`'s scheduler cases operate on global repository state** (`src/test/java/.../listener/RegistrationEmailDurabilityIT.java`). `emailRetryScheduler.retryFailedEmails()` polls the whole `envelope_entity` table (`EmailRetryScheduler:106`) and the `committedRowFor`/`committedRowBySendId` helpers use `findAll()`. Assertions are scoped by a UUID-unique email address so they are correct today, but the scheduler will also re-drive `FAILED`/`retry=true` rows left by other tests in the shared JVM-static Postgres, and `findAll()` grows with the suite. Fragility note, not a correctness bug. **[Restored 2026-09-15 — see the audit below.]**
+
 ## Last audit: 2026-09-14 (post-merge prune after ses-1-7-documentation)
 
 Narrow-scope check: reviewed every deferred-work.md item referencing a file ses-1-7 touched
@@ -2101,3 +2207,59 @@ and left in place:
   dev pass) and the three bullets from `skillars-deferred-110`'s own code review (recipient-address exception-
   message masking asymmetry, `envelope_entity_recipients` missing PK/index, `MailAuthenticationException`
   retried forever) — all newly filed, not yet actioned.
+
+## Last audit: 2026-09-15 (ad-hoc verification, four open-item bullets from a ledger analysis)
+
+Not a full re-mine — the user asked to verify four specific items an assistant analysis had listed as
+open, on the hunch that `skillars-deferred-112` (merged after the 2026-09-14 audits above, PR #191) had
+already closed one of them. Checked each directly against HEAD (`7fd0a045`):
+
+- **`skillars-deferred-101` story creation's "Pre-production migration rebaseline (future task, no
+  owner)" bullet — CLOSED, deleted.** `skillars-deferred-112` did exactly this: `git log` shows
+  `V02..V137` deleted (131 files, squashed) and replaced by `V138__baseline_schema.sql` +
+  `V139__baseline_seed_data.sql`; `src/main/resources/db/migration/` now contains only those two files.
+  The bullet's own header ("Deferred from: skillars-deferred-101 story creation") had only this one
+  bullet under it — **header removed with it**.
+- **`skillars-deferred-100`'s "drop `main.pending_blob_deletions` in a later release" bullet — confirmed
+  still open, left in place.** `PendingBlobDeletion.java` / `PendingBlobDeletionRepository.java` /
+  `PendingBlobDeletionResidualDrainRunner.java` are all still present under
+  `platform/filestorage/{repo,service}/`, and `main.pending_blob_deletions` (table + sequence + PK) is
+  still declared in the new `V138__baseline_schema.sql:740-756,2408-2412` — the rebaseline carried the
+  table forward rather than dropping it. Unchanged from deferred-100's own condition for closing this
+  ("once confirmed deployed and the table is provably empty in every environment") — still not met, no
+  production deploy has happened.
+- **`skillars-deferred-109`'s `QuotaConfigService.resolveTierKey` player-tier entitlement gap —
+  confirmed still open, left in place.** Read `QuotaConfigService.java` directly: `resolveTierKey` is
+  unchanged — a `switch` over `CoachSubscriptionTier {SCOUT, INSTRUCTOR, ACADEMY}` for a UUID `ownerId`,
+  and a bare `"athlete"` fallback for every non-UUID (player) `ownerId`. No `semiPro`/`pro` branch exists;
+  the mapping this bullet asks for was not added. **[Superseded same day — CLOSED 2026-09-15 by
+  `skillars-deferred-113` AC3, a few hours after this spot-check ran; the live ledger bullet was
+  deleted as part of that closure — see the "post-merge prune after skillars-deferred-113" audit
+  above. This historical line is left as written, since it accurately reports what was true at the
+  moment this spot-check ran.]**
+- **`skillars-deferred-92` chunk 2's "`V129` does not address the rolling-deploy window it runs in"
+  bullet — confirmed still open, left in place, premise unaffected by the rebaseline.** `V129` no longer
+  exists as a standalone file (folded into `V138`'s baseline by `deferred-112`, same as every other
+  pre-baseline migration), but the concern was never about the file surviving — it is an *operational*
+  step owed after the first real production rollout, and `docs/deployment/migration-rebaseline.md:137`
+  and `runbook.md:598-613` (both written by `deferred-112`) still say explicitly "no production deploy
+  has ever happened." Nothing to do yet; not obsolete.
+
+**Not re-checked:** every other item in the file. This was a targeted four-item spot-check, not a
+full-file re-mine.
+
+## Deferred from: code review of skillars-deferred-113 (2026-09-15)
+
+Six findings from the 3-layer code review (`bmad-review-adversarial-general` + `edge-case-hunter` + acceptance auditor) are deferred — pre-existing patterns or acceptable tradeoffs, not code bugs blocking the story:
+
+- **Concurrent retry from multiple instances** (`MailManager.java:106,195-203`). The per-recipient delivery tracking doesn't prevent concurrent calls with same `sendId` from multiple threads. Mitigated by `@SchedulerLock` cluster-wide serialization — the scheduler is the only real caller — but not enforced at method level. Acceptable; if direct calls ever become a caller, they'd need to handle their own locking.
+
+- **Throw-on-null is defensive, not curative** (`VideoModerationEmailListener.java:143-145`). The fix (Option B: throw `IllegalStateException` to retain the outbox row) retains the row but doesn't diagnose why `persisted==null` occurs. Root-cause analysis remains unaddressed. Defensive approach correct per AC2 risk assessment; future investigation may uncover a real transaction-isolation race or confirm it's a false alarm.
+
+- **Missing subscription row silently downgrades tier** (`QuotaConfigService.java:90-94`). Players without a subscription row fall back to "athlete" quota with DEBUG logging only. No audit trail or explicit alert. Acceptable operational concern; the fallback is intentional and matches the method's fail-open posture for every other unrecognised shape.
+
+- **No transactional consistency tier/quota lookup** (`QuotaConfigService.java:82-94`). Subscription tier can be updated between the `findByPlayerId` lookup and actual quota enforcement, leading to a brief window where returned quota doesn't match current tier. Acceptable check-then-use pattern; not a code bug, known tradeoff.
+
+- **Runbook checklist manual, not code-enforced** (`docs/deployment/runbook.md:644-665`). Pre-production SES checks are textual procedures with no deployment blocker. AC6 scope: runbook documentation only; enforcement is procedural by design, matching `skillars-deferred-100`'s analogous webhook-events gate precedent.
+
+- **No automated health check integration** (`docs/deployment/runbook.md:657-662`). Health check is documented but optional in the runbook; a cached `/actuator/health/notification` response (up to 60s TTL per line 660) doesn't prove the current transport is live. Acceptable given manual pre-production review gate model; automated CI/pipeline integration is a separate concern.

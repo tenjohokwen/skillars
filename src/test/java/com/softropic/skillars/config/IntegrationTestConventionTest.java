@@ -76,7 +76,7 @@ class IntegrationTestConventionTest {
      * {@code // context-fork:} comment on the annotation saying why the property cannot live in
      * {@code application-test.yaml}. Making the number deliberate is the entire point.
      */
-    private static final int EXPECTED_TEST_PROPERTY_SOURCE_COUNT = 6;
+    private static final int EXPECTED_TEST_PROPERTY_SOURCE_COUNT = 7;
 
     /**
      * Spring Boot test slices ({@code @WebMvcTest} and friends) build a cut-down context with no

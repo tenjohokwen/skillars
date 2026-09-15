@@ -26,6 +26,10 @@ public class RecipientEntity implements Serializable {
     //@Size(min = 2, max = 5)
     private String langKey;
     private String gender;
+    // skillars-deferred-113 AC1: per-recipient delivery tracking, added by
+    // V140__envelope_entity_recipients_delivered_flag.sql. Lets MailManager.sendEmailSync skip
+    // recipients a prior attempt already delivered, instead of re-sending to them on every retry.
+    private boolean delivered;
 
     public String getTitle() {
         return title;
@@ -73,5 +77,13 @@ public class RecipientEntity implements Serializable {
 
     public void setGender(String gender) {
         this.gender = gender;
+    }
+
+    public boolean isDelivered() {
+        return delivered;
+    }
+
+    public void setDelivered(boolean delivered) {
+        this.delivered = delivered;
     }
 }

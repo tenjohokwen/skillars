@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.video.moderation.admin_alert.title}">Video Moderation Admin Alert</title>
+</head>
+<body>
+    <h2 th:text="${map.subject}">Moderation pipeline permanently failed</h2>
+    <p th:if="${map.urgent}"><strong>Urgent — manual review required.</strong></p>
+    <p th:text="${map.body}">Details of the moderation failure.</p>
+    <p>Video ID: <strong th:text="${map.videoId}">N/A</strong></p>
+    <p>Owner: <strong th:text="${map.ownerId}">N/A</strong></p>
+</body>
+</html>
