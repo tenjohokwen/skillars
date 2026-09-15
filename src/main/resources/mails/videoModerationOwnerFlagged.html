@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.video.moderation.owner_flagged.title}">Video Moderation Notice</title>
+</head>
+<body>
+    <h2 th:text="#{email.video.moderation.owner_flagged.title}">Video Moderation Notice</h2>
+    <p th:text="${map.message}">Your video could not be approved.</p>
+    <p>Video ID: <strong th:text="${map.videoId}">N/A</strong></p>
+</body>
+</html>

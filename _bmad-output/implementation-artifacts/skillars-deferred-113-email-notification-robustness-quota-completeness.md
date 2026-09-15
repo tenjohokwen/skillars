@@ -384,6 +384,8 @@ changes made in response.
 - `src/main/resources/db/migration/V140__envelope_entity_recipients_delivered_flag.sql`
 - `src/test/java/com/softropic/skillars/platform/notification/infrastructure/MailManagerRateLimitIT.java`
 - `src/test/java/com/softropic/skillars/platform/video/service/QuotaConfigServicePlayerTierIT.java`
+- `src/main/resources/mails/videoModerationAdminAlert.html` (post-PR CI fix — was missing entirely; see Change Log 2026-09-16)
+- `src/main/resources/mails/videoModerationOwnerFlagged.html` (post-PR CI fix — same missing-template gap, sibling template)
 
 **Modified:**
 - `src/main/java/com/softropic/skillars/platform/notification/repo/RecipientEntity.java` (AC1 — new `delivered` field)
@@ -397,6 +399,8 @@ changes made in response.
 - `_bmad-output/implementation-artifacts/deferred-work.md` (ledger closures + correction)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (status tracking)
 - `_bmad-output/implementation-artifacts/skillars-deferred-113-email-notification-robustness-quota-completeness.md` (this story file)
+- `src/test/java/com/softropic/skillars/platform/outbox/ModerationOutboxIT.java` (post-PR CI fix — forked context, `TestMailManager` → real `EnvelopeEntityRepository` read-back)
+- `src/test/java/com/softropic/skillars/config/IntegrationTestConventionTest.java` (post-PR CI fix — `EXPECTED_TEST_PROPERTY_SOURCE_COUNT` 6→7)
 
 ## Change Log
 
@@ -410,3 +414,4 @@ changes made in response.
 - 2026-09-15: All targeted suites green (notification 104/104, quota 30/30, migration lint 13/13). Status → review.
 - 2026-09-15: Code review completed, added to story as "Review Findings" (2 Patch, 6 Defer). Both Patch items verified against code and dismissed as false positives, with rationale, per explicit instruction — no code change made. Deferred items reviewed for false positives too; all 6 confirmed as accurate, already-acknowledged design tradeoffs, left as-is.
 - 2026-09-16: Status → done.
+- 2026-09-16: CI build failure post-PR: `ModerationOutboxIT.adminAlert_roundTripsThroughTheOutbox` broke under AC2's new throw. Root cause traced to two separate pre-existing gaps AC2 exposed rather than caused: (1) `TestMailManager` (the universal test double, `enable.test.mail=true` by default) persists nothing, so the outbox-driven, fully-autowired `VideoModerationEmailListener` in that IT could only ever see `persisted == null` — fixed by forking a dedicated Spring context for that class (`@TestPropertySource(enable.test.mail=false)`, `IntegrationTestConventionTest.EXPECTED_TEST_PROPERTY_SOURCE_COUNT` 6→7), mirroring `RegistrationEmailDurabilityIT`/`MailManagerDuplicateSendIdIT`'s existing precedent, and rewriting the two `TestMailManager`-based assertions to read the real `EnvelopeEntity` row back instead. (2) Once routed through the real `MailManager`, the send itself failed: `mails/videoModerationAdminAlert.html` (and the sibling `mails/videoModerationOwnerFlagged.html`) had never existed — `VIDEO_MODERATION_ADMIN_ALERT`/`VIDEO_MODERATION_OWNER_FLAGGED` emails have apparently never been sendable via the real template-rendering path in any environment, in any prior story, because no test before this one exercised real `MailService` + real Thymeleaf rendering for either template (`VideoModerationAdminAlertEnvelopeIT` mocks `MailService` entirely). Added both missing HTML templates. All targeted suites re-verified green after both fixes (notification module + video module + outbox module + `IntegrationTestConventionTest`, plus the full CI build).

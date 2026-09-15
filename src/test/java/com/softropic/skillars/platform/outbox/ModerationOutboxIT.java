@@ -2,11 +2,11 @@ package com.softropic.skillars.platform.outbox;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.platform.config.service.ConfigService;
-import com.softropic.skillars.platform.notification.contract.EmailTemplate;
-import com.softropic.skillars.platform.notification.contract.Envelope;
+import com.softropic.skillars.platform.notification.contract.EmailDeliveryStatus;
+import com.softropic.skillars.platform.notification.repo.EnvelopeEntity;
+import com.softropic.skillars.platform.notification.repo.EnvelopeEntityRepository;
 import com.softropic.skillars.platform.video.contract.event.VideoModerationRetryEvent;
 import com.softropic.skillars.platform.video.service.ModerationOutboxSupport;
-import com.softropic.skillars.utils.TestMailManager;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +17,7 @@ import org.springframework.context.ApplicationListener;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.PayloadApplicationEvent;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -39,7 +40,24 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  * <p>Under the test profile {@code app.outbox.drain-async=false}, so {@code drain()} runs on the
  * calling thread and the effect is observable as soon as the producing transaction commits.
+ *
+ * <h2>Why {@code enable.test.mail=false}</h2>
+ *
+ * {@code application-test.yaml}'s shared default ({@code enable.test.mail=true}) makes
+ * {@code TestMailManager} the universal {@code MailManager} bean; it persists nothing, so the
+ * autowired {@code VideoModerationEmailListener} bean this class's admin-alert round trip drains
+ * through can never see anything but {@code persisted == null} on its post-send read-back —
+ * skillars-deferred-113 AC2 made that outcome throw rather than log-and-return, which turned this
+ * class's success assertion permanently red. This class needs the real {@code MailManager} bean
+ * (the {@code log} transport under test — no real outbound mail), so it forks a second Spring
+ * context via {@code @TestPropertySource}, mirroring {@code RegistrationEmailDurabilityIT} and
+ * {@code MailManagerDuplicateSendIdIT} — accepted per {@code IntegrationTestConventionTest}'s
+ * governance (count bumped, this comment is the required justification).
  */
+@TestPropertySource(properties = "enable.test.mail=false")
+// context-fork: needs the real MailManager bean (see class javadoc) — TestMailManager persists
+// nothing, so it cannot produce the EnvelopeEntity row this class's admin-alert round trip reads
+// back, and skillars-deferred-113 AC2 now throws on that null read-back instead of tolerating it.
 class ModerationOutboxIT extends AbstractIntegrationTest {
 
     private static final String ADMIN_ALERT_EMAIL_KEY = "platform.admin_alert_email";
@@ -49,7 +67,7 @@ class ModerationOutboxIT extends AbstractIntegrationTest {
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private ConfigurableApplicationContext applicationContext;
     @Autowired private ConfigService configService;
-    @Autowired private TestMailManager testMailManager;
+    @Autowired private EnvelopeEntityRepository envelopeEntityRepository;
 
     private final UUID videoId = UUID.randomUUID();
     private final String adminEmail = "ac5.admin." + UUID.randomUUID() + "@skillars-test.com";
@@ -65,7 +83,6 @@ class ModerationOutboxIT extends AbstractIntegrationTest {
             ModerationOutboxSupport.ADMIN_ALERT_AGGREGATE_TYPE, videoId.toString()));
 
         captured.clear();
-        testMailManager.clear();
         // The alert handler now delivers through MailManager rather than re-publishing an event
         // (code review D1), and VideoModerationEmailListener suppresses a send when this key is
         // blank — which is its shipped default. Set it for the duration of the test, restored below.
@@ -96,6 +113,21 @@ class ModerationOutboxIT extends AbstractIntegrationTest {
     }
 
     /**
+     * Reads envelope_entity rows back in a FRESH transaction, started after the call under test has
+     * finished — only a genuinely committed row can satisfy the callers below. Filtered by this
+     * test's own UUID-unique {@code adminEmail} recipient so a concurrently running IT's rows in the
+     * same shared table cannot leak in. Mirrors {@code VideoModerationAdminAlertEnvelopeIT}'s
+     * {@code committedRow()}.
+     */
+    private List<EnvelopeEntity> committedAdminAlertRows() {
+        return transactionTemplate.execute(status ->
+            envelopeEntityRepository.findAll().stream()
+                .filter(e -> e.getRecipients() != null
+                    && e.getRecipients().stream().anyMatch(r -> adminEmail.equals(r.getEmail())))
+                .toList());
+    }
+
+    /**
      * The assertion is on a <em>send</em>, not on a re-published event (code review D1). Dispatching
      * an event and returning is what let the drain delete the row before anything had been delivered;
      * the property worth pinning is that {@code handle()} does not return until the alert has actually
@@ -108,15 +140,13 @@ class ModerationOutboxIT extends AbstractIntegrationTest {
             videoId, "owner@example.com", "Moderation pipeline permanently failed",
             "videoId=" + videoId + " retries=5 — manual review required", true));
 
-        List<Envelope> alerts = testMailManager.getEnvelopes().values().stream()
-            .filter(e -> e.emailTemplate() == EmailTemplate.VIDEO_MODERATION_ADMIN_ALERT)
-            .filter(e -> e.recipients().stream().anyMatch(r -> adminEmail.equals(r.getEmail())))
-            .toList();
+        List<EnvelopeEntity> alerts = committedAdminAlertRows();
 
         assertThat(alerts)
             .as("the drain must have DELIVERED the alert, synchronously, before releasing the row")
             .hasSize(1);
-        assertThat(alerts.get(0).data())
+        assertThat(alerts.get(0).getStatus()).isEqualTo(EmailDeliveryStatus.SENT);
+        assertThat(alerts.get(0).getData())
             .containsEntry("subject", "Moderation pipeline permanently failed")
             .containsEntry("ownerId", "owner@example.com")
             .containsEntry("urgent", true)
@@ -140,9 +170,9 @@ class ModerationOutboxIT extends AbstractIntegrationTest {
             videoId, "owner@example.com", "Moderation pipeline permanently failed",
             "videoId=" + videoId, true));
 
-        assertThat(testMailManager.getEnvelopes().values())
+        assertThat(committedAdminAlertRows())
             .as("nothing may be sent when there is no recipient configured")
-            .noneMatch(e -> e.emailTemplate() == EmailTemplate.VIDEO_MODERATION_ADMIN_ALERT);
+            .isEmpty();
         assertThat(myRows(ModerationOutboxSupport.ADMIN_ALERT_AGGREGATE_TYPE)).isZero();
     }
 
