@@ -2038,33 +2038,13 @@ the story; three items are genuinely pre-existing or wider than this story and a
   exception captured inside the retry loop instead of from whatever the CB layer surfaces. Until
   then `VideoModerationAdminAlertEnvelopeIT` carries no permanent-failure case and says why.
 
-## Deferred from: code review of ses-1-1-introduce-outbound-email-port (2026-09-11)
-
-- **`LoggingEmailSender` collision-exhaustion is unthrottled and costs 100 syscalls per send.** The loop-exhausted `log.warn` at `LoggingEmailSender:121` sits outside the `directoryWritable` transition-throttle designed for the `IOException` branch at `:114`, and the `FileAlreadyExistsException` branch never touches that flag. A caller reusing a constant `correlationId` (the port places no uniqueness constraint on it) against an outbox already holding 100 matching files performs 100 `Files.writeString` attempts and emits one WARN per send, indefinitely. Degraded-path nuisance on a dev-only transport.
-- **No non-production environment exercises the SES path.** dev, uat and test are all `app.email.transport: log`; `smtp` is deliberately rejected until Phase 2; `DevSesEmailService` (the old way to make a dev box send real mail) is deleted by this story. The first execution of `SesEmailSender` against real AWS — real credentials, real region, real verified-domain state, 3s attempt timeout, zero retries — therefore happens in production. This is the phase plan working as designed, not a defect; noted so it is not rediscovered at the Phase 5 cutover.
-- **`LoggingEmailSender` silently discards the text part when both bodies are present.** `LoggingEmailSender:94-95` picks `htmlBody` when present and never writes a `.txt` companion, though `OutboundEmailRequest` explicitly supports both (`OutboundEmailRequestValidationTest.bothBodiesPresent_isAccepted`). No current caller sends both — all six registration emails are html-only — so the outbox artifact is simply not a faithful record for a shape nothing produces yet. Revisit if a multipart caller appears.
-
-## Deferred from: code review of ses-1-2-smtp-behind-port-and-containment (2026-09-11)
-
-- **§7.2 item 13's adapter-wrap-depth guard is absent.** `requirements/ses-email-consolidation.md:1080-1086` requires driving at least one case through the real `SesEmailSender` + `SesErrorClassifier` and one through `SmtpEmailSender` + `SmtpErrorClassifier`, "so the test fails if either adapter's wrap depth drifts". `SmtpErrorClassifier` throws `EmailTransportPermanentException` at depth 0 and `MailManager.isRetryable`'s fixed 3-level walk handles it — but that coupling is asserted only by mocks that hand-construct the exception, which is precisely the failure mode §7.2 item 13 names. Story ses-1.2's AC4 did not carry the requirement forward from the source doc it cites.
-
 ## Deferred from: code review of ses-1-3-health-monitoring-rate-limiting (2026-09-12)
 
-- **A DOWN health result is cached for the full 60s TTL** (`infrastructure/ses/SesHealthIndicator.java:128`). Recovery after a transient SES failure is delayed up to a full TTL, and a single blip yields exactly two consecutive container-healthcheck failures (30s interval vs 60s TTL) — one short of the `retries: 3` threshold. Pre-existing pattern: `SmtpHealthIndicator` caches DOWN the same way. Worth revisiting jointly (e.g. a shorter TTL for DOWN than UP) rather than in one indicator only.
 - **A mid-loop rate-limit rejection duplicates earlier recipients and never sends later ones** (`platform/notification/service/MailManager.java:74`). `sendEmailSync` loops recipients with a single row-level status and no per-recipient progress marker; a rejection at recipient *k* aborts the loop, persists the envelope FAILED/retry=true, and the re-drive restarts at recipient 1 — duplicating 1..k-1 on every one of the 6 attempts and never reaching k+1..n. Where *n* exceeds the per-second limit the envelope deterministically dies at the same index and ends `ATTEMPTS_EXHAUSTED`. Latent today: `SendMailListener` accepts an arbitrary-length `userIds` list but its only caller (`TwoFactorLoginService.java:61`) passes one id. Becomes live the moment any producer emits a multi-recipient envelope.
-- **One WARN line per rejected send** (`infrastructure/ses/SesSendRateLimiter.java:52`). Rejections are the expected steady state whenever the queue drains faster than the limit, so a 10-envelope scheduler batch at a 1/s sandbox rate emits ~9 WARN lines per tick until the backlog clears. The condition is already counted by `mail.ses.rate_limiter.rejected`, which is the signal worth alerting on. Consider DEBUG, or WARN on transition into the throttled state. Coupled to the burst/attempt-exhaustion decision from the same review.
 
 ## Deferred from: code review of ses-1-4-registration-email-durability (2026-09-12)
 
 - **[DECIDED: keep retain-and-alert — skillars-deferred-110]** ~~`EmailTemplate.valueOf(p.template())` creates an immortal poison outbox row for a removed or renamed constant~~ (`platform/notification/service/NotificationEmailOutboxHandler.java:90`). Payloads carry the template as a `String` and can sit in `outbox_messages` for up to the 24h default deadline, so a rename during a rolling deploy makes `valueOf` throw `IllegalArgumentException` — thrown *after* ses-1.4's new deadline guard, so a still-live row is never rescued by it. `OutboxRowProcessor` wraps it, backs the row off and retries forever, consuming a claim slot and eventually reporting `[OUTBOX_STUCK]` with no path to completion. `skillars-deferred-110`'s AC8 explicitly decided **not** to change this: `OutboxRowProcessor:109-113` already makes the identical decision for the structurally-identical missing-handler case ("never dropped: it keeps its data safe until a deploy that carries the handler picks it up"), and a rename/rollback self-resolves the same way — catch-and-drop would trade a loud, recoverable state for irreversible message loss. No code change; retain-and-alert is the documented, intentional precedent, not a silent gap.
-- **`Map.of` → `HashMap` in the three registration listeners removes a fail-fast NPE on a null token.** `Map.of` rejects null values; `HashMap` accepts them, so a null `otp`/`verifyUrl` would now serialise as `{"otpCode":null}`, survive the outbox round trip, render as an empty value and be **delivered** with `EnvelopeEntity.status = SENT`. Not reachable today — `generateOtp()` returns a non-null `String` and `verifyUrl` is built by concatenation — so this is a latent loss of a guard rather than a live bug. Revisit if any future producer can supply a nullable token.
-- **ses-1.4 AC7's log masking is bypassed by the logged exception argument itself** (`platform/notification/service/MailManager.java:137`). `loggableData(...)` redacts the interpolated `data={}` argument, while the `exception` argument printed beside it renders its full stack trace: a Jackson serialisation failure can echo the partially-written JSON and a JDBC failure can echo bound statement parameters — either of which may reproduce the OTP the masking exists to hide. Bounding this properly needs a logging-layer sanitiser rather than a call-site helper, which is why it was not folded into AC7.
-- **`RegistrationEmailDurabilityIT`'s scheduler cases operate on global repository state** (`src/test/java/.../listener/RegistrationEmailDurabilityIT.java`). `emailRetryScheduler.retryFailedEmails()` polls the whole `envelope_entity` table (`EmailRetryScheduler:89`) and the `committedRowFor`/`noRowExistsFor`/`rowCountForSendId` helpers use `findAll()`. Assertions are scoped by a UUID-unique email address so they are correct today, but the scheduler will also re-drive `FAILED`/`retry=true` rows left by other tests in the shared JVM-static Postgres, and `findAll()` grows with the suite. Fragility note, not a correctness bug.
-
-## Deferred from: code review of ses-1-7-documentation (2026-09-14)
-
-- **`envelope_entity` Flyway callout does not reflect its raised severity, and is now also stale about the migration's existence.** `docs/dev-docs/notification/index.html:336`'s callout still frames the missing `CREATE TABLE envelope_entity` migration as an audit-history gap. Since ses-1.4, registration and OTP mail route through `EnvelopeEntity` for the first time, so a missing table now breaks account verification, not just booking-email history. The callout also cites `deferred-work.md` as a bare `<code>` filename with no path and no `<a href>`, from a page nested at `docs/dev-docs/notification/` — every other cross-reference on that page is a link. ses-1.7's AC1 explicitly scoped this callout to "leave as-is beyond an optional cross-reference," so both points were out of scope for that story. **Update since `skillars-deferred-110`'s AC9:** the underlying DDL gap this callout describes is now closed — `V136__pin_envelope_entity_schema.sql` pins the table Hibernate had been auto-managing — so the callout's "missing migration" framing is now factually wrong, not just under-severe. What remains open here is doc-only: reword the callout to reference `V136` instead of a missing migration, keep (or raise) the severity framing, and add the missing `<a href>` cross-reference.
-
 ## Last audit: 2026-09-14 (post-merge prune after ses-1-7-documentation)
 
 Narrow-scope check: reviewed every deferred-work.md item referencing a file ses-1-7 touched
@@ -2079,19 +2059,6 @@ documentation-only story. The four items ses-1.7's own code review added (`app.e
 collision, envelope_entity callout severity, unbounded no-flag claim, undocumented `email.providerConfigs`)
 are new and correctly still present.
 
-## Deferred from: pre-dev story-review of skillars-deferred-110 (2026-09-14)
-
-- **`MailSenderProvider.toMailSender` ignores `ProviderConfig.implicitTls` entirely.** It hardcodes
-  `protocol = "smtp"` and `mail.smtp.starttls.enable = true` for every configured provider
-  (`infrastructure/email/smtp/MailSenderProvider.java`), regardless of the per-provider `implicitTls` field
-  (added by skillars-deferred-99 AC5, defaults from `port == 465` when unset). `SmtpHealthIndicator` performs a
-  real TLS handshake and correctly reports a port-465 (implicit-TLS) provider UP, while the actual send path
-  still talks plaintext-plus-STARTTLS to that same endpoint and fails — a health check that is green for a
-  transport that cannot actually send. Surfaced while documenting `ProviderConfig`'s six fields for
-  skillars-deferred-110 AC11(b); the doc fix names the gap rather than describing the broken behaviour as
-  correct, but the underlying `MailSenderProvider` bug itself is unfixed. No current caller configures a
-  port-465 provider (dev ships two STARTTLS providers, gmx/gmail), so this is latent, not an active incident.
-
 ## Last audit: 2026-09-14 (skillars-deferred-110 dev-story — addition only, no prune)
 
 Adding the `implicitTls` bullet above only; not a full ledger audit. The three `ses-1-7-documentation`
@@ -2099,37 +2066,6 @@ bullets this story's own AC10/AC11 close (`app.email.log.outbox-dir` naming coll
 claim, undocumented `email.providerConfigs`) are left as-is here — per this project's established convention,
 closing/pruning ledger entries happens in a dedicated post-merge pass (see the prior "Last audit" entries
 above), not inline during the story that closes them.
-
-## Deferred from: code review of skillars-deferred-110 (2026-09-14)
-
-- `SmtpErrorClassifier` writes recipient addresses into exception messages, and `MailManager` persists
-  the full stacktrace into `envelope_entity.error` and logs it at ERROR.
-  `MailSendException.getMessage()` concatenates every failed message's detail, and a
-  `SendFailedException`'s own message/`toString` enumerates invalid and valid-unsent addresses
-  (`SmtpErrorClassifier.java:58-60`, `MailManager.java:146-150`). This directly contradicts the
-  recipient masking landed in the same commit for `LoggingEmailSender`, whose stated rationale is that
-  UAT runs with `LOKI_ENABLED=true` and this platform's registrants include minors and their parents.
-  Pre-existing (the classifier interpolated `ex.getMessage()` before this story too) — but the masking
-  work in this commit makes the asymmetry newly visible and worth closing on the SMTP path as well.
-
-- `envelope_entity_recipients` has no primary key and no index on its `envelope_entity_id` foreign
-  key (`V136__pin_envelope_entity_schema.sql:66-73`). Every collection load and every FK
-  cascade-check on this join table is therefore a sequential scan, and nothing prevents duplicate
-  recipient rows. The migration is a faithful pin of what Hibernate's auto-DDL actually produced
-  (confirmed by the dev's own schema dump), so this is pre-existing — but `V136` promotes the missing
-  index from an accident of `hbm2ddl` to the intentional, version-controlled shape, which deserves an
-  explicit decision rather than a faithfulness argument.
-
-- A wrong or expired SMTP password is retried until attempts are exhausted, for every queued email.
-  `JavaMailSenderImpl.doSend` catches `AuthenticationFailedException` before any `failedMessages`
-  bookkeeping and rethrows `MailAuthenticationException`, which is a `MailException` but not a
-  `MailSendException` — so `SmtpErrorClassifier.classify` takes the cause-chain branch, and neither
-  `MailAuthenticationException` nor `AuthenticationFailedException` appears in `NON_REPAIRABLE_ERRORS`
-  (`SmtpErrorClassifier.java:55`). Result: 3 in-process retries plus six `EmailRetryScheduler`
-  re-drives per envelope against a credential that cannot succeed. Behaviour is unchanged by
-  skillars-deferred-110, but `classify()` — the method this story rewrote — is where it is decided.
-  This is the exact scenario `docker-compose.local.yml`'s empty-password trap produces, per
-  `ses-1-2`'s own ledger note.
 
 ## Last audit: 2026-09-14 (post-merge prune after skillars-deferred-110)
 

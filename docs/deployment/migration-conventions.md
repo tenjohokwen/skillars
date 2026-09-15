@@ -11,25 +11,34 @@ visible stall.
 
 An automated guard (`MigrationConventionLintTest`, run in the `test` phase — no
 container) fails the build when a migration **above the grandfather baseline**
-(`V121`) breaks the mechanical subset of these rules. The rules it cannot mechanically
+(`V139`) breaks the mechanical subset of these rules. The rules it cannot mechanically
 check are still your responsibility in review.
+
+_Migration history before this point (formerly `V02`–`V137`) was squashed into a single
+generated baseline by `skillars-deferred-112`. See
+[`migration-rebaseline.md`](migration-rebaseline.md) for why, what closed by deletion rather
+than rewrite, and the operator procedure for recreating an existing database against the new
+baseline._
 
 ## The expand / contract standard
 
 ### Go-forward checklist (skillars-deferred-99 AC8)
 
-A compressed form of the rules below — run it against every migration `> V121`. The prose
+A compressed form of the rules below — run it against every migration `> V139`. The prose
 after it is the authority; this is the quick pass.
 
 - [ ] **New column / table / enum value / index ships a release before any code reads or
       writes it.** New columns nullable or defaulted; `NOT NULL` comes later, after the backfill.
 - [ ] **FK or `CHECK` on a table that can grow → `ADD CONSTRAINT … NOT VALID` now, `VALIDATE
       CONSTRAINT` in a later migration.** Never a validating `ADD` in one shot.
-- [ ] **Index on a hot / large table → `CREATE INDEX CONCURRENTLY`** (and therefore its own
-      migration — `CONCURRENTLY` cannot run in Flyway's transaction with other statements).
+- [ ] **Index on a hot / large table → `CREATE INDEX CONCURRENTLY`.** **This has no working
+      online-safe mechanism in this codebase yet** — see the callout under rule 4. Get sign-off
+      on a plain `CREATE INDEX` (`-- migration-lint: allow-blocking-index <reason>`) or wait for
+      the follow-up tracked in `migration-rebaseline.md`.
 - [ ] **Enum / `CHECK` widening lands one release ahead of the first write of the new value.**
-- [ ] **Backfill `UPDATE` is chunked** (`WHERE` on a key range or `ctid` batch + loop), never one
-      unbounded full-table write.
+- [ ] **Backfill `UPDATE` is chunked** (`WHERE` on a key range or `ctid` batch + loop, each batch
+      committed independently via the `executeInTransaction=false` sidecar — see rule 6), never
+      one unbounded full-table write.
 - [ ] **Every `DROP` is last and guarded**: `IF EXISTS`, a header explaining which release removed
       the last reader, and `-- migration-lint: drop-prepared-in: V<n>` immediately above the
       statement (one per `DROP`).
@@ -37,16 +46,6 @@ after it is the authority; this is the quick pass.
       (`0` = unbounded, does not count), or `-- migration-lint: allow-unbounded-lock-wait <reason>`.
 - [ ] **`INSERT INTO main.platform_config` omits `id`** (identity since `V128`).
 - [ ] **`MigrationConventionLintTest` passes.** It enforces the mechanical subset; the rest is review's.
-
-### Pre-production migration debt
-
-`V60`, `V94`, `V117` (validating `ACCESS EXCLUSIVE` on a growth table), `V97` (`DROP COLUMN` —
-catalog-only, safe as written) and `V98` (unbatched backfill) predate this standard and are
-**applied and immutable**. The hard trigger to redo `V60` / `V94` / `V117` online-safe (and split
-`V124`'s same-release CHECK widen) **before the first production deploy** is stated in full under
-[Grandfathering → Per-migration disposition](#per-migration-disposition-skillars-deferred-91-ac8)
-and repeated in `docs/deployment/runbook.md`. This checklist section is the pointer so the debt is
-findable from the top of the document.
 
 ---
 
@@ -91,43 +90,78 @@ findable from the top of the document.
    - Opt out for a genuinely tiny / empty table with an inline
      `-- migration-lint: allow-validating-constraint <reason>` comment.
 
-4. **Indexes on large or hot tables use `CREATE INDEX CONCURRENTLY`** in a
-   **non-transactional** migration (Flyway: a `.sql` migration whose script sets
-   `-- executeInTransaction=false` is not supported directly — use a dedicated migration
-   containing only the concurrent index, and mark it so Flyway does not wrap it: see the
-   Flyway `CREATE INDEX CONCURRENTLY` note below). A plain `CREATE INDEX` takes a
-   `SHARE` lock that blocks writes for the whole build.
-   - The **current in-repo standard is still non-concurrent** — see
-     `V121__phone_otp_tokens_one_active_per_user.sql:14-16`, which documents why (Flyway
-     wraps migrations in a transaction; `CONCURRENTLY` cannot run in one; the table is
-     tiny). The concurrent form is the target for any index on a table expected to grow.
-   - Opt out for a small table with `-- migration-lint: allow-blocking-index <reason>`.
+4. **Indexes on large or hot tables should use `CREATE INDEX CONCURRENTLY` — but this has
+   no working online-safe mechanism in this codebase yet.** A plain `CREATE INDEX` takes a
+   `SHARE` lock that blocks writes for the whole build, which is exactly what rule 4 exists
+   to avoid; `CONCURRENTLY` is still the right target, but getting there needs a mechanism
+   this project has not built.
 
-   ### `CREATE INDEX CONCURRENTLY` failure recovery (read before you use it)
+   **Why the obvious fix (the `executeInTransaction=false` sidecar) does not work here**
+   (found empirically during `skillars-deferred-112`, not assumed): Flyway 11.7.2 does
+   support running one migration outside its own transaction wrapper, via a sidecar file
+   named for the migration (`V140__some_index.sql` + `V140__some_index.sql.conf` containing
+   `executeInTransaction=false`) — confirmed present in the resolved jar
+   (`SqlScriptMetadata`), and Flyway does log `[non-transactional]` for the migration when
+   the sidecar is applied. **That is not enough.** Flyway's own `DbMigrate` holds a separate
+   bookkeeping connection open, idle-in-transaction, for the *entire* `migrate()` call
+   (observed query: `SELECT COUNT(*) FROM pg_namespace WHERE nspname=$1`). `CREATE INDEX
+   CONCURRENTLY`'s first phase must wait for every other open transaction that could see the
+   table to finish before it can proceed — and that bookkeeping connection's transaction
+   won't close until `migrate()` itself returns, which can't happen until the concurrent
+   index build finishes. The two conditions produce a **permanent self-deadlock**, reproduced
+   three times against both Flyway's own internal connection pool and a real `HikariDataSource`
+   configured identically to this project's `application.yaml` (`auto-commit: false`, pool
+   size 25, min-idle 8) — confirmed via `pg_stat_activity` showing the two backends
+   permanently waiting on each other (`idle in transaction` / `Lock: virtualxid`). This is not
+   a slow build; left alone it never resolves.
+
+   **What the sidecar *is* confirmed good for:** a multi-statement, multi-commit **batched
+   backfill** (rule 6) — each statement in a non-transactional script commits independently,
+   with no interaction with the deadlock above (a backfill doesn't wait on other sessions'
+   snapshots the way `CREATE INDEX CONCURRENTLY` does). See rule 6.
+
+   **Until a real fix exists** (a mechanism that runs outside Flyway's own connection/lock
+   lifecycle entirely — e.g. an `afterMigrate` `Callback` on a hand-opened connection, once
+   Flyway's bookkeeping connection has already been released, or an out-of-band operational
+   script run separately from application startup; tracked as a follow-up in
+   `migration-rebaseline.md`), an index on a hot/large table has two honest options:
+   - Accept a plain, blocking `CREATE INDEX` with explicit sign-off:
+     `-- migration-lint: allow-blocking-index <reason, incl. expected row count and an
+     estimate of build time>`.
+   - Build the index **outside** the application's own Flyway-triggered migration entirely —
+     an operator runs `CREATE INDEX CONCURRENTLY` by hand against the database, then a later
+     migration adds nothing but a `CHECK` that the index already exists (or is skipped
+     entirely if the operational runbook already covers it). This is manual and easy to
+     forget; prefer the first option unless the table is genuinely too large for a blocking
+     build to be acceptable even briefly.
+
+   ### `CREATE INDEX CONCURRENTLY` failure recovery (if you build one by hand, per the above)
 
    A `CONCURRENTLY` build that fails part-way (a duplicate value, a deadlock, the
-   session dropping) leaves **two** artefacts behind:
-   - an **`INVALID` index** in `pg_index` (`indisvalid = false`) — it consumes space,
-     is maintained on every write, and is never used by the planner; and
-   - a **failed row in `flyway_schema_history`** (`success = false`).
-
-   The next deploy is then **blocked**: Flyway refuses to run with a failed history row.
-   An operator must, by hand, on the database:
-   1. `DROP INDEX CONCURRENTLY IF EXISTS <the_invalid_index>;`
-   2. `flyway repair` (removes the failed history row);
-   3. re-run the deploy, which re-attempts the migration.
-
-   Put these three steps in the migration's header comment so whoever is paged has them.
+   session dropping) leaves an **`INVALID` index** behind in `pg_index` (`indisvalid = false`)
+   — it consumes space, is maintained on every write, and is never used by the planner.
+   `DROP INDEX CONCURRENTLY IF EXISTS <the_invalid_index>;` before retrying. (If this were run
+   through Flyway rather than by hand, a failed non-transactional migration also leaves a
+   failed row in `flyway_schema_history` that blocks the next deploy until `flyway repair`
+   removes it — moot for a hand-run build, but worth knowing if the follow-up above ever lands
+   as a Flyway-driven mechanism instead.)
 
 5. **`CHECK` / enum-domain widening precedes the first write by one release.** Adding a
    value to a Postgres `enum`, or widening a `CHECK`, must land in the release **before**
    any code writes the new value — old instances still running during the rollout will
    reject it otherwise. (This is the `AdminAlertType.MODERATION_UNRESOLVED` failure mode.)
 
-6. **Long `UPDATE` backfills are batched / chunked** (see `V98` and the `Def10`
-   precedent in `skillars-6-1`), with `SET lock_timeout` / `SET statement_timeout` set
-   where a full scan is unavoidable, so a slow backfill cannot hold a lock indefinitely
-   or wedge the deploy.
+6. **Long `UPDATE` backfills are batched / chunked** (the `Def10` precedent in
+   `skillars-6-1`; a pre-baseline example that used to live at `V98` is now folded into the
+   `V138` baseline — see `migration-rebaseline.md`), with `SET lock_timeout` /
+   `SET statement_timeout` set where a full scan is unavoidable, so a slow backfill cannot
+   hold a lock indefinitely or wedge the deploy. **Multi-batch, multi-commit backfills need
+   the `executeInTransaction=false` sidecar** (confirmed working — see the callout under
+   rule 4): name the migration's `.conf` file after it
+   (`V140__some_backfill.sql` + `V140__some_backfill.sql.conf` containing
+   `executeInTransaction=false`) so each batch's `UPDATE` commits independently instead of
+   accumulating in one long-held transaction. A non-transactional migration cannot be rolled
+   back, so this is for genuine multi-commit backfills only, never for convenience.
    - `MigrationLint.Rule.UNBATCHED_DML` (skillars-deferred-92 AC9) fails an `UPDATE`,
      `DELETE` or `TRUNCATE` with **no** `WHERE` (or none possible, for `TRUNCATE`), or
      with a tautological one that is the *entire* predicate (`WHERE TRUE`, `WHERE 1=1` —
@@ -139,8 +173,8 @@ findable from the top of the document.
    - A row-level `UPDATE`/`DELETE` that is bounded (a small, named set of rows) does not
      take `ACCESS EXCLUSIVE` and is not what rule 7 below binds — but it still takes
      ordinary row locks, which a concurrent writer on the same rows can hold indefinitely.
-     `SET lock_timeout` is worth adding defensively even here; `V129` does, for exactly
-     this reason, despite touching only a handful of rows.
+     `SET lock_timeout` is worth adding defensively even here, despite touching only a
+     handful of rows.
    - The same applies to application code, not just migrations.
      `BandwidthResetService.resetMonthlyBandwidth` was a single unpartitioned `UPDATE` over
      every `video_quotas` row at the month boundary — it locked all of them and blocked
@@ -210,94 +244,50 @@ findable from the top of the document.
 
 ## Grandfathering
 
-Skillars has **no production system yet**. The migrations that predate this convention —
-`V60`, `V89`, `V94`, `V97`, `V98`, `V117`, and the `AdminAlertType` enum widen — are
-**applied and immutable**; they are not rewritten. The convention and its guard bind
-**new** migrations only (version `> V121`).
+Skillars had no production system as of `skillars-deferred-112`, which used that fact to close
+this section's entire subject rather than keep managing it: the whole pre-baseline migration
+history (formerly `V02`–`V137`, six of them carrying lock-unsafe patterns — `V60`, `V94`, `V117`,
+`V124`, `V98`, and the three `CREATE INDEX` migrations `V125`/`V126`/`V127`) was **deleted**, not
+rewritten, and replaced with one generated baseline: `V138__baseline_schema.sql` (pure DDL) and
+`V139__baseline_seed_data.sql` (seed rows). See
+[`migration-rebaseline.md`](migration-rebaseline.md) for why, the full list of what closed by
+deletion, the git SHA the deleted history is still findable at, and the operator procedure for
+recreating an existing database against the new baseline.
 
-### Two baselines (skillars-deferred-92)
+`V138` and `V139` are themselves grandfathered — deliberately, not by oversight. `V138` is
+machine-generated from `pg_dump` and necessarily contains validating `ADD CONSTRAINT`s and
+non-concurrent `CREATE INDEX`es; both are correct here because the file runs exactly once,
+against an empty database, where they are instantaneous. Linting generated output would demand
+hundreds of opt-out comments for zero safety gain. `V139` is pure `INSERT … ON CONFLICT DO
+NOTHING`, which trips no rule regardless. The convention and its guard bind **new** migrations
+only (version `> V139`).
 
-The rules added by skillars-deferred-92 — `DROP_WITHOUT_PRIOR_RELEASE_PREP`,
-`MISSING_LOCK_TIMEOUT`, `UNBATCHED_DML`, `PLATFORM_CONFIG_EXPLICIT_ID` — bind from
-**`V128`**, not `V122`, and `MigrationLint` carries a second constant
-(`DEFERRED_92_BASELINE = 127`) for exactly that.
+### One baseline, not two
 
-The reason is mechanical rather than editorial: **Flyway checksums a migration's whole
-file, comments included.** `V122`–`V127` are already applied, so they cannot be edited —
-not even to add an opt-out marker — without breaking `flyway validate` on every
-environment that has run them. Several of them would trip the new rules. The choice was
-between rewriting applied migrations (which the first sentence of this section forbids)
-and grandfathering once more; grandfathering is the same call this project already made at
-`V121`, applied a second time.
+Before the squash, this section described **two** grandfather baselines
+(`MigrationLint.GRANDFATHER_BASELINE` and `MigrationLint.DEFERRED_92_BASELINE`), because the
+skillars-deferred-92 rules arrived after some migrations (`V122`–`V127`) were already applied and
+checksum-frozen, and Flyway checksums a migration's whole file — an applied migration cannot be
+edited, not even to add an opt-out marker, without breaking `flyway validate` on every
+environment that has run it. Rewriting those applied migrations was off the table for the same
+reason `V60`/`V94`/`V117` couldn't be rewritten either, so the rules bound from a second,
+later constant instead of the first.
 
-Anyone adding a rule in future should expect to add a third baseline rather than edit
-history.
+The squash deleted that whole band along with everything else below it. There is no longer a gap
+between the two boundaries to bridge: **both constants now sit at `V139`.** They are kept as two
+distinct constants rather than collapsed into one, because they still gate mechanically distinct
+rule sets and could diverge again if a future rule needs its own grandfather band — see
+`migration-rebaseline.md`'s follow-up note for the case to collapse them properly.
 
-### Per-migration disposition (skillars-deferred-91 AC8)
-
-Each grandfathered migration was re-read for a validating `ACCESS EXCLUSIVE` operation on a
-table that can grow. Disposition: **documented safe, left as-is** for all six.
-
-> **Pre-production grandfathering (added by the skillars-deferred-91 code review, decision D7).**
-> AC8 as written offered only two dispositions: an online-safe redo, or "document it if the table
-> is genuinely small at any realistic scale". Three of the six — `V60` (`videos`), `V94`
-> (`booking_payments`), `V117` (`coach_radar_preferences`) — **do not** meet the second condition
-> by this table's own admission: each names a growing table and a validating `ACCESS EXCLUSIVE`
-> operation. They were left as-is under a third rationale, "no production system exists", which is
-> a real and consistently applied project fact (`V124`, `V125`, `V126` and `V127` all lean on it)
-> but is not what AC8 permitted.
->
-> That third disposition is hereby **explicit and permitted**, with a hard trigger:
->
-> **Before the first production deploy, `V60`, `V94` and `V117` must be redone online-safe**
-> (`NOT VALID` + a later `VALIDATE CONSTRAINT`, and `CREATE INDEX CONCURRENTLY`), **and `V124`'s
-> same-release CHECK widen must be split into widen-then-write across two releases.** Until then
-> they are accepted as-is. This trigger is repeated in `docs/deployment/runbook.md` so it cannot be
-> lost with this document. A retroactive
-"online-safe redo" would have to `DROP` the already-valid constraint / index and re-add it
-`NOT VALID` + `VALIDATE` (or `CONCURRENTLY`), producing a **byte-identical end state** whose
-only runtime effect is overhead on every fresh install — it helps only a large *existing*
-deployment mid-rolling-upgrade, and none of these already-applied migrations will ever run in
-that situation. The expand/contract standard is enforced from `V122` onward instead.
-
-| Migration | Operation | Growth table? | Blocking validate under `ACCESS EXCLUSIVE`? | Why safe / left as-is |
-| :--- | :--- | :--- | :--- | :--- |
-| `V60` | `video_approval_requests` FK + `chk_var_status` inside `DO … IF NOT EXISTS`; re-add `chk_videos_operational_state` on `main.videos` | `videos` grows; `video_approval_requests` moderate | The `video_approval_requests` constraints run on a table that is empty at this point (created just above / a fresh V59 stub) → instant. The `main.videos` CHECK re-add **would** full-scan under `ACCESS EXCLUSIVE` at scale. | `videos` has no production rows; a redo yields the identical CHECK. Future CHECK widenings on `videos` follow rule 5 (`NOT VALID` + later `VALIDATE`). |
-| `V89` | `DROP TABLE booking.session_packs_purchased` | legacy table, deliberately removed (skillars-11-3) | No — `DROP TABLE` is a catalog-only operation, brief `ACCESS EXCLUSIVE`, **no scan or rewrite**. | Nothing to make online-safe; the lock is held for microseconds regardless of former table size. |
-| `V94` | `booking_payments` `chk_bp_status` `DROP` + re-`ADD` (enum-value widen) | `booking_payments` grows | Yes — the re-`ADD CONSTRAINT … CHECK` validates the whole table under `ACCESS EXCLUSIVE`. | No production rows. The end state is the current `chk_bp_status`; a redo is churn. Any *further* status-value change must land `NOT VALID` first per rule 5. |
-| `V97` | `bookings` `DROP COLUMN refund_eligibility`, `DROP COLUMN refund_amount` | `bookings` grows | No — `DROP COLUMN` in PostgreSQL is catalog-only (marks the column dropped); **no table rewrite or scan**, brief lock. | Metadata-only; online-safe as written. |
-| `V98` | `ADD COLUMN distinct_coach_count INT NOT NULL DEFAULT 0` + single unbatched `UPDATE … FROM (aggregate)` backfill on `player_radar_composites` | `player_radar_composites` grows | The `ADD COLUMN` is metadata-only since PG 11 (constant default, no rewrite). The **backfill `UPDATE`** is the real at-scale hazard: one unbatched full-table write (ordinary row locks, not `ACCESS EXCLUSIVE`) → long transaction + bloat. | No production rows. Rule 6 now requires batched backfills for `V122+`; this one is already applied and cannot be re-chunked retroactively. |
-| `V117` | unbatched orphan `DELETE` + `ADD CONSTRAINT fk_crp_player_id … REFERENCES` (validating) + non-`CONCURRENTLY` `CREATE INDEX ix_crp_player_id` on `development.coach_radar_preferences` | `coach_radar_preferences` grows (per coach × player) | Yes — the FK `ADD CONSTRAINT` validates under `ACCESS EXCLUSIVE` (scans both tables); the plain `CREATE INDEX` takes a `SHARE` lock blocking writes for the build. | No production rows. A redo would `DROP` the valid FK + index and re-create them `NOT VALID` / `CONCURRENTLY` for an identical end state. Rules 3 (`NOT VALID` FK) and 4 (`CONCURRENTLY`) bind any future index/FK here. |
-| `AdminAlertType` widen (`V70`/`V91` `admin_alerts_type_check`) | `DROP`/`ADD` the `type` CHECK to admit `MODERATION_UNRESOLVED` | `admin_alerts` grows slowly (moderation queue) | Yes in principle, but `admin_alerts` is a bounded work-queue (OPEN rows are actioned and resolved). | Small bounded table. The *read* side is now tolerant per skillars-deferred-91 AC6 (`AdminQueueService` skips an unknown `alert_type` with a WARN instead of 500ing the page). |
-
-### Known lock-unsafe applied migrations (pre-production)
-
-**Migrations V60, V94, V97, V98, and V117 use patterns that would not pass the current
-linting rules.** They are applied and immutable (Flyway checksums the contents). Each is safe
-to deploy as-written **only because there is no production data yet** — the tables affected are
-empty or near-empty at this revision. **Before the first production deploy**, each must either:
-
-1. Be rewritten following the expand/contract pattern (see specific rewrites below), or
-2. Be accepted if the affected table is confirmed to remain small at go-live.
-
-The responsibility is divided: until a redo is taken, operations must agree on go-live
-table sizes and lock-hold risk; this decision is documented below per-migration.
-
-**Specific lock-unsafe patterns and safe rewrites:**
-
-| Migration | Unsafe pattern | Safe rewrite | Status |
-| :--- | :--- | :--- | :--- |
-| `V60` | `ADD CONSTRAINT … CHECK` on `main.videos` under `ACCESS EXCLUSIVE` (validating scan at scale) | `ADD CONSTRAINT … CHECK … NOT VALID` now; `VALIDATE CONSTRAINT` in a later release after backfill window closes. | No production rows; redo is churn. Future `videos` constraints use `NOT VALID` + `VALIDATE` (rule 2). |
-| `V94` | `DROP` + re-`ADD CONSTRAINT … CHECK` on `booking_payments` (enum-value widen, validating at scale) | `ADD CONSTRAINT … NOT VALID` first; `VALIDATE` later; or accept if `booking_payments` stays small. | No production rows; re-ADD is identical end state. Future widening here must be split (rule 5 applies from `V122+`). |
-| `V97` | `DROP COLUMN` pair on `bookings` | None needed — `DROP COLUMN` is metadata-only in PostgreSQL, no scan or rewrite. Lock held briefly regardless of table size. | Safe as-written; kept for record. |
-| `V98` | Unbatched full-table `UPDATE` backfill on `player_radar_composites` | Chunk the backfill: `WHERE` on a key range or `ctid` batch loop, multiple transactions. | No production rows; one unbatched backfill is already applied. Subsequent backfills on this or other tables must be batched (rule 6, from `V122+`). |
-| `V117` | Validating `ADD CONSTRAINT FK` + non-`CONCURRENTLY` `CREATE INDEX` on `coach_radar_preferences` | `ADD CONSTRAINT FK … NOT VALID` then `VALIDATE` later; `CREATE INDEX CONCURRENTLY` (its own migration, no other statements). | No production rows; redo would `DROP` and re-create `NOT VALID` / `CONCURRENTLY`. Future index/FK here follow rules 2 & 3. |
+Anyone adding a rule in future that would flag an already-applied migration above `V139` should
+expect to add a third baseline rather than edit history — the same call this project has now made
+twice.
 
 ## What the guard now covers (skillars-deferred-91 AC7)
 
 The three blind spots this section used to name are now checked by `MigrationLint`:
 
-- a **backported lower-version migration** — a `V<n>__…` with `n <= 121` that is *new in the
+- a **backported lower-version migration** — a `V<n>__…` with `n <= 139` that is *new in the
   working tree* (absent from `git cat-file -e HEAD:<path>`) fails as `BACKPORT_BELOW_BASELINE`.
 
   **Scope, stated honestly (corrected by the skillars-deferred-91 code review).** This rule is a
@@ -365,12 +355,15 @@ The three blind spots this section used to name are now checked by `MigrationLin
   which makes an unprepared drop or an unbounded lock wait there at least as much a hazard as in
   a versioned migration, and Flyway's own scan of `classpath:db/migration` is recursive where the
   lint's used not to be.
-- **A decimal minor version in the baseline band is not silently grandfathered.** `V127.1` is
-  newer than `V127`, even though `DEFERRED_92_BASELINE = 127` — see the two-baselines note above.
+- **A decimal minor version in the baseline band is not silently grandfathered.** `V139.1` is
+  newer than `V139`, even though both baseline constants equal `139` — see the "One baseline,
+  not two" note above.
 
 **Still not covered:** rule 5 (enum / `CHECK` widening one release ahead of the first write) has
-no lint rule. `V124` deviates from it knowingly under the pre-production clause below and carries
-a `-- migration-lint: allow-enum-widen-same-release` marker for the day the rule is implemented.
+no lint rule. A pre-baseline example (`V124`, now folded into `V138`) deviated from it knowingly
+and carried a `-- migration-lint: allow-enum-widen-same-release` marker for the day the rule is
+implemented — that marker is gone with the file, but the gap it documented is not: rule 5 still
+has no mechanical check.
 
 ## What the guard still cannot catch
 
