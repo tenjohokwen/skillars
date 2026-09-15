@@ -4,6 +4,13 @@ package com.softropic.skillars.infrastructure.email.smtp;
  * Story ses-1.2 AC2: moved unchanged from {@code platform.notification.contract.ProviderConfig}.
  */
 public class ProviderConfig {
+
+    /**
+     * skillars-deferred-99 AC5's own default: a provider with no explicit {@link #implicitTls} is
+     * assumed implicit-TLS when its port is this one — the SMTPS convention.
+     */
+    private static final int IMPLICIT_TLS_PORT = 465;
+
     private String name;
     private String host;
     private String port;
@@ -62,5 +69,16 @@ public class ProviderConfig {
 
     public void setImplicitTls(Boolean implicitTls) {
         this.implicitTls = implicitTls;
+    }
+
+    /**
+     * skillars-deferred-111 AC10: extracted from what was {@code SmtpHealthIndicator}'s own private
+     * {@code isImplicitTls(ProviderConfig, int)} helper, so the health probe and the actual send
+     * path (previously drifted — {@link MailSenderProvider#toMailSender} never called it at all)
+     * cannot silently diverge again. Defaults from {@code port == 465} when {@link #implicitTls} is
+     * unset.
+     */
+    public boolean isImplicitTls(int port) {
+        return implicitTls != null ? implicitTls : port == IMPLICIT_TLS_PORT;
     }
 }

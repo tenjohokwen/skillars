@@ -1,15 +1,18 @@
 package com.softropic.skillars.infrastructure.email.smtp;
 
+import com.softropic.skillars.infrastructure.email.EmailPiiSanitizer;
 import com.softropic.skillars.infrastructure.email.EmailTransportException;
 import com.softropic.skillars.infrastructure.email.EmailTransportPermanentException;
 import com.softropic.skillars.infrastructure.email.EmailTransportTransientException;
 
+import jakarta.mail.AuthenticationFailedException;
 import jakarta.mail.SendFailedException;
 import jakarta.mail.internet.AddressException;
 import jakarta.mail.internet.ParseException;
 import org.eclipse.angus.mail.smtp.SMTPAddressFailedException;
 import org.eclipse.angus.mail.smtp.SMTPSendFailedException;
 import org.eclipse.angus.mail.smtp.SMTPSenderFailedException;
+import org.springframework.mail.MailAuthenticationException;
 import org.springframework.mail.MailParseException;
 import org.springframework.mail.MailPreparationException;
 import org.springframework.mail.MailSendException;
@@ -81,7 +84,18 @@ import java.util.stream.Stream;
 public class SmtpErrorClassifier {
 
     private static final List<Class<? extends Exception>> NON_REPAIRABLE_ERRORS = List.of(
-        MailParseException.class, MailPreparationException.class, AddressException.class, ParseException.class);
+        MailParseException.class, MailPreparationException.class, AddressException.class, ParseException.class,
+        // skillars-deferred-111 AC9: JavaMailSenderImpl.doSend catches jakarta.mail's
+        // AuthenticationFailedException at connect time and rethrows Spring's MailAuthenticationException
+        // (a MailException, not a MailSendException) with it as the cause — confirmed by disassembling
+        // spring-context-support 6.2.19's doSend bytecode. Neither type was listed here before, so a wrong
+        // or expired SMTP password (the exact scenario docker-compose.local.yml's bogus
+        // ${GMX_PASSWORD:dev_gmx_password} default produces) took the plain isPermanentByCauseChain branch,
+        // matched nothing, and was retried forever — 3 in-process RetryTemplate attempts plus up to 6
+        // EmailRetryScheduler re-drives against a credential that can never succeed. Both listed: the
+        // former is what actually propagates (confirmed), the latter as a direct-cause-position safety
+        // net if a future JavaMail version ever surfaces it unwrapped.
+        MailAuthenticationException.class, AuthenticationFailedException.class);
 
     /**
      * Classifies any exception raised while building/sending the SMTP message. For a {@link
@@ -125,7 +139,36 @@ public class SmtpErrorClassifier {
         return isPermanentByCauseChain(failedMessageException);
     }
 
+    /**
+     * skillars-deferred-111 AC3: a RCPT TO rejection does not surface as a typed
+     * {@link SMTPAddressFailedException} directly — confirmed by disassembling the pinned
+     * {@code org.eclipse.angus:jakarta.mail:2.0.5} jar's {@code SMTPTransport.rcptTo()}: after the
+     * per-recipient response loop, a failure throws a plain {@link SendFailedException}
+     * ({@code new SendFailedException("Invalid Addresses", mex, ...)}) whose {@code getCause()} is
+     * the real typed exception ({@code mex}) carrying the actual reply code. Only a MAIL FROM
+     * rejection ({@code mailFrom()}, thrown as a bare {@link SMTPSendFailedException}) is ever the
+     * direct exception type. Before this fix, {@code smtpReturnCode} only inspected the outer
+     * exception's own type — for a RCPT TO rejection that outer type is always the generic {@link
+     * SendFailedException}, which matches none of the three {@code instanceof} checks, so this
+     * method returned empty and every real single-recipient RCPT TO rejection fell through to
+     * {@link #isPermanentByCauseChain}, whose {@link #NON_REPAIRABLE_ERRORS} list has no SMTP-
+     * specific entry either — misclassifying it transient and retrying it forever. Caught by
+     * skillars-deferred-111 AC3's real-adapter test, which drives an actual RCPT TO 550 through a
+     * real {@link SmtpEmailSender} end to end, something no prior test in this suite did (every
+     * existing case here hand-constructs the typed exception directly as the failed-message value).
+     * One level of cause-unwrap is enough: {@code SendFailedException}'s own cause is never itself
+     * wrapped further for this shape.
+     */
     private static OptionalInt smtpReturnCode(Throwable t) {
+        OptionalInt direct = typedSmtpReturnCode(t);
+        if (direct.isPresent()) {
+            return direct;
+        }
+        Throwable cause = t.getCause();
+        return cause != null && cause != t ? typedSmtpReturnCode(cause) : OptionalInt.empty();
+    }
+
+    private static OptionalInt typedSmtpReturnCode(Throwable t) {
         if (t instanceof SMTPSendFailedException e) {
             return OptionalInt.of(e.getReturnCode());
         }
@@ -148,9 +191,19 @@ public class SmtpErrorClassifier {
             .anyMatch(t -> NON_REPAIRABLE_ERRORS.stream().anyMatch(c -> c.isInstance(t)));
     }
 
+    /**
+     * skillars-deferred-111 AC11 (owner decision: full sanitizer): {@code message} may be a
+     * per-recipient failure's own message, which can embed the recipient address — masked here
+     * before it becomes part of this returned exception's own message (surfaced by {@code
+     * MailManager}'s logging and persisted into {@code envelope_entity.error}). {@code cause} is
+     * left as the original, unsanitized throwable — {@code MailManager} masks the FULL rendered
+     * stack trace (this exception's message plus every cause's own message) at its own log/persist
+     * sites, which is the choke point that actually controls what reaches a log line or the DB.
+     */
     private static EmailTransportException build(boolean permanent, String message, Throwable cause) {
+        String sanitizedMessage = EmailPiiSanitizer.sanitize(message);
         return permanent
-            ? new EmailTransportPermanentException("SMTP send failed permanently: " + message, cause)
-            : new EmailTransportTransientException("SMTP send failed transiently: " + message, cause);
+            ? new EmailTransportPermanentException("SMTP send failed permanently: " + sanitizedMessage, cause)
+            : new EmailTransportTransientException("SMTP send failed transiently: " + sanitizedMessage, cause);
     }
 }

@@ -40,6 +40,16 @@ import java.util.regex.Pattern;
  *       currently-believed writable state: a failure only logs when it is a genuine transition from
  *       writable to unwritable, and a later success silently clears the flag so a <em>future</em>
  *       failure logs again rather than being permanently suppressed.
+ *   <li><strong>Collision exhaustion (a correlationId reused past {@code MAX_COLLISION_ATTEMPTS}
+ *       times) gets its own, separate transition-throttle flag</strong> (code review 2026-09-15, C2)
+ *       — sharing one flag with the I/O-failure case above meant an exhausted-collisions send could
+ *       flip it to "unwritable" and permanently swallow the next genuine {@code IOException} (disk
+ *       full, permissions), since that later failure would see the flag already false and never
+ *       observe the transition it throttles on. The two failure kinds are unrelated, so they no
+ *       longer share state. Both bodies of one send (html/text) are aggregated into a single
+ *       writable/exhausted decision per {@link #writeToDumpDir} call (code review 2026-09-15, H3) —
+ *       resolving each {@code writeOneFile} outcome independently would let one body's success reset
+ *       the flag the other body's failure just set, within the same send.
  * </ul>
  *
  * <p><strong>{@code matchIfMissing = true} is load-bearing, not decoration.</strong> The
@@ -69,6 +79,13 @@ public class LoggingEmailSender implements OutboundEmailSender {
 
     /** Tracks whether the directory is currently believed writable, for WARN-on-transition only. */
     private final AtomicBoolean directoryWritable = new AtomicBoolean(true);
+
+    /**
+     * Tracks collision exhaustion separately from {@link #directoryWritable} (code review 2026-09-15,
+     * C2) — an unrelated failure mode (a correlationId's name space is full) sharing one flag with
+     * genuine I/O errors let a collision-exhaustion event mask the next real {@code IOException}.
+     */
+    private final AtomicBoolean collisionAttemptsExhausted = new AtomicBoolean(false);
 
     public LoggingEmailSender(EmailTransportProperties properties) {
         String configuredDir = properties.getLog().getDumpDir();
@@ -107,14 +124,13 @@ public class LoggingEmailSender implements OutboundEmailSender {
     }
 
     private void writeToDumpDir(OutboundEmailRequest request) {
-        boolean isHtml = isPresent(request.htmlBody());
-        String content = isHtml ? request.htmlBody() : request.textBody();
-        if (!isPresent(content)) {
-            // Both blank cannot happen (AC1), but guards against writing a null/empty file.
+        boolean hasHtml = isPresent(request.htmlBody());
+        boolean hasText = isPresent(request.textBody());
+        if (!hasHtml && !hasText) {
+            // Both blank cannot happen (AC1 of ses-1.1), but guards against writing a null/empty file.
             return;
         }
-        String extension = isHtml ? "html" : "txt";
-        String baseName = sanitize(request.correlationId());
+
         Path dir;
         try {
             dir = Path.of(dumpDir);
@@ -127,25 +143,98 @@ public class LoggingEmailSender implements OutboundEmailSender {
             return;
         }
 
+        // Write each present body as its own file, with its own independent collision-suffix
+        // counter (AC2 of skillars-deferred-111) — a caller sending both an HTML and a text body
+        // (none does today; OutboundEmailRequestValidationTest.bothBodiesPresent_isAccepted is the
+        // only place this shape is exercised, and it's a validator test, not this class's) must not
+        // have the text part silently dropped just because the HTML branch was picked first.
+        //
+        // The two outcomes are collected rather than acted on inside writeOneFile itself (code review
+        // 2026-09-15, H3): resolving the throttle flags per-file let one body's success clear the
+        // flag the other body's failure in the very same send had just set, spuriously re-arming the
+        // WARN for the next reused correlationId.
+        String baseName = sanitize(request.correlationId());
+        WriteOutcome htmlOutcome = hasHtml ? writeOneFile(dir, baseName, "html", request.htmlBody()) : null;
+        WriteOutcome textOutcome = hasText ? writeOneFile(dir, baseName, "txt", request.textBody()) : null;
+        recordOutcome(htmlOutcome, textOutcome, request.correlationId());
+    }
+
+    private WriteOutcome writeOneFile(Path dir, String baseName, String extension, String content) {
         for (int attempt = 1; attempt <= MAX_COLLISION_ATTEMPTS; attempt++) {
-            String fileName = attempt == 1 ? baseName + "." + extension : baseName + "-" + attempt + "." + extension;
+            String fileName = attempt == 1 ? baseName + "." + extension : baseName + "~" + attempt + "." + extension;
             Path target = dir.resolve(fileName);
             try {
                 Files.writeString(target, content, StandardOpenOption.CREATE_NEW);
-                directoryWritable.set(true);
-                return;
+                return WriteOutcome.success();
             } catch (FileAlreadyExistsException ex) {
-                // Collision on this correlation id — try the next suffix.
+                // Collision on this correlation id/extension — try the next suffix.
             } catch (IOException ex) {
-                if (directoryWritable.compareAndSet(true, false)) {
-                    log.warn("Failed to write dump file for correlationId={}: {}",
-                        request.correlationId(), ex.getMessage(), ex);
-                }
-                return;
+                return WriteOutcome.ioError(ex);
             }
         }
-        log.warn("Failed to write dump file for correlationId={} after {} collision attempts; degraded to log-only",
-            request.correlationId(), MAX_COLLISION_ATTEMPTS);
+        // MAX_COLLISION_ATTEMPTS real CREATE_NEW syscalls still happen here every time — there is no
+        // way to know a name is taken without attempting it, without reintroducing the exists-then-
+        // create TOCTOU this class avoids elsewhere. What's throttled below is only the WARN log line,
+        // not the syscalls themselves.
+        return WriteOutcome.collisionExhausted();
+    }
+
+    /**
+     * Applies the transition-throttle for both failure kinds exactly once per {@link
+     * #writeToDumpDir} call, from the combined outcome of every body actually written — see that
+     * method's javadoc note for why per-file resolution is wrong (code review 2026-09-15, C2 + H3).
+     */
+    private void recordOutcome(WriteOutcome first, WriteOutcome second, String correlationId) {
+        boolean anySuccess = isKind(first, WriteOutcome.Kind.SUCCESS) || isKind(second, WriteOutcome.Kind.SUCCESS);
+        IOException ioFailure = ioFailureOf(first) != null ? ioFailureOf(first) : ioFailureOf(second);
+        boolean anyCollisionExhausted = isKind(first, WriteOutcome.Kind.COLLISION_EXHAUSTED)
+            || isKind(second, WriteOutcome.Kind.COLLISION_EXHAUSTED);
+
+        if (ioFailure != null) {
+            if (directoryWritable.compareAndSet(true, false)) {
+                log.warn("Failed to write dump file for correlationId={}: {}", correlationId, ioFailure.getMessage(), ioFailure);
+            }
+        } else if (anySuccess) {
+            directoryWritable.set(true);
+        }
+
+        if (anyCollisionExhausted) {
+            // Throttled the same way as the IOException branch above (AC1 of skillars-deferred-111): a
+            // caller reusing a constant correlationId against an outbox already holding
+            // MAX_COLLISION_ATTEMPTS matching files must not emit one WARN per send indefinitely —
+            // only a genuine not-exhausted-to-exhausted transition logs.
+            if (collisionAttemptsExhausted.compareAndSet(false, true)) {
+                log.warn("Failed to write dump file for correlationId={} after {} collision attempts; degraded to log-only",
+                    correlationId, MAX_COLLISION_ATTEMPTS);
+            }
+        } else if (anySuccess) {
+            collisionAttemptsExhausted.set(false);
+        }
+    }
+
+    private static boolean isKind(WriteOutcome outcome, WriteOutcome.Kind kind) {
+        return outcome != null && outcome.kind() == kind;
+    }
+
+    private static IOException ioFailureOf(WriteOutcome outcome) {
+        return outcome != null && outcome.kind() == WriteOutcome.Kind.IO_ERROR ? outcome.ioException() : null;
+    }
+
+    /** Outcome of one {@link #writeOneFile} attempt, resolved by the caller rather than logged inline. */
+    private record WriteOutcome(Kind kind, IOException ioException) {
+        enum Kind { SUCCESS, IO_ERROR, COLLISION_EXHAUSTED }
+
+        static WriteOutcome success() {
+            return new WriteOutcome(Kind.SUCCESS, null);
+        }
+
+        static WriteOutcome ioError(IOException ex) {
+            return new WriteOutcome(Kind.IO_ERROR, ex);
+        }
+
+        static WriteOutcome collisionExhausted() {
+            return new WriteOutcome(Kind.COLLISION_EXHAUSTED, null);
+        }
     }
 
     /**

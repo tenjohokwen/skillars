@@ -31,9 +31,23 @@ final class FakeSmtpServer implements AutoCloseable {
     private final ServerSocket serverSocket;
     private final Thread acceptThread;
     private final List<String> transcript = new CopyOnWriteArrayList<>();
+    private final String rejectedRecipient;
     private volatile String lastMessageBody;
 
     FakeSmtpServer() throws IOException {
+        this(null);
+    }
+
+    /**
+     * skillars-deferred-111 AC3: when {@code rejectedRecipient} is non-null, a {@code RCPT TO}
+     * command naming it (case-insensitively) is answered with a hard {@code 550} instead of the
+     * usual {@code 250 OK} — enough for a real {@code JavaMailSenderImpl.send(...)} call against
+     * this stub to produce the real {@code org.eclipse.angus.mail.smtp.SMTPAddressFailedException}
+     * (return code 550) the pinned angus-mail jar actually throws for that reply, driving a genuine
+     * end-to-end permanent classification instead of a hand-constructed fixture.
+     */
+    FakeSmtpServer(String rejectedRecipient) throws IOException {
+        this.rejectedRecipient = rejectedRecipient;
         this.serverSocket = new ServerSocket(0);
         this.acceptThread = new Thread(this::acceptOneConnection, "fake-smtp-server");
         this.acceptThread.setDaemon(true);
@@ -71,7 +85,11 @@ final class FakeSmtpServer implements AutoCloseable {
                 } else if (upper.startsWith("MAIL FROM")) {
                     reply(out, "250 OK");
                 } else if (upper.startsWith("RCPT TO")) {
-                    reply(out, "250 OK");
+                    if (rejectedRecipient != null && upper.contains(rejectedRecipient.toUpperCase(Locale.ROOT))) {
+                        reply(out, "550 5.1.1 No such user");
+                    } else {
+                        reply(out, "250 OK");
+                    }
                 } else if (upper.startsWith("DATA")) {
                     reply(out, "354 Start mail input; end with <CRLF>.<CRLF>");
                     lastMessageBody = readDataBlock(in);

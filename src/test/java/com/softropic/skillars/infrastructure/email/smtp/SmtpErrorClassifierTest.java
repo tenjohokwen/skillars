@@ -13,6 +13,7 @@ import org.eclipse.angus.mail.smtp.SMTPSendFailedException;
 import org.eclipse.angus.mail.smtp.SMTPSenderFailedException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.mail.MailAuthenticationException;
 import org.springframework.mail.MailParseException;
 import org.springframework.mail.MailPreparationException;
 import org.springframework.mail.MailSendException;
@@ -190,6 +191,51 @@ class SmtpErrorClassifierTest {
         assertThat(result).isInstanceOf(EmailTransportTransientException.class);
     }
 
+    /**
+     * skillars-deferred-111 AC3: the real shape a RCPT TO rejection actually arrives in — confirmed
+     * by disassembling {@code SMTPTransport.rcptTo()} in the pinned angus-mail jar, and by
+     * {@code AdapterWrapDepthTest} driving a real fake-SMTP-server 550 through the real adapter end
+     * to end. {@code rcptTo()} never throws {@link SMTPAddressFailedException} directly — it throws
+     * a generic {@link jakarta.mail.SendFailedException} ({@code "Invalid Addresses"}) whose {@code
+     * getCause()} is the typed exception above. Every other test in this class hand-constructs the
+     * typed exception as the failed-message value directly, which is what {@code
+     * MailSendException.getFailedMessages()} would hold for a MAIL FROM rejection, but never for a
+     * RCPT TO one. {@code // Mutation:} reverting {@code smtpReturnCode}'s one-level cause-unwrap
+     * turns this red (falls through to {@code isPermanentByCauseChain}, which has no SMTP-specific
+     * entry, and misclassifies transient).
+     */
+    @Test
+    @DisplayName("a RCPT TO 550, in the generic SendFailedException wrapper rcptTo() actually throws it in, "
+        + "still classifies as permanent")
+    void rcptTo550_wrappedInGenericSendFailedException_isPermanent() throws AddressException {
+        InternetAddress recipient = new InternetAddress("no-such-user@example.com");
+        SMTPAddressFailedException typed =
+            new SMTPAddressFailedException(recipient, "RCPT", 550, "550 5.1.1 No such user");
+        jakarta.mail.SendFailedException wrapped = new jakarta.mail.SendFailedException("Invalid Addresses", typed);
+
+        EmailTransportException result = classifier.classify(mailSendExceptionWith(wrapped));
+
+        assertThat(result).isInstanceOf(EmailTransportPermanentException.class);
+    }
+
+    /**
+     * The transient counterpart, making the case above non-vacuous: a genuinely transient RCPT TO
+     * code, wrapped the same real way, must not flip to permanent just because unwrapping happens.
+     */
+    @Test
+    @DisplayName("a RCPT TO 450, in the generic SendFailedException wrapper rcptTo() actually throws it in, "
+        + "still classifies as transient")
+    void rcptTo450_wrappedInGenericSendFailedException_isTransient() throws AddressException {
+        InternetAddress recipient = new InternetAddress("player@example.com");
+        SMTPAddressFailedException typed =
+            new SMTPAddressFailedException(recipient, "RCPT", 450, "450 4.2.0 Mailbox temporarily unavailable");
+        jakarta.mail.SendFailedException wrapped = new jakarta.mail.SendFailedException("Invalid Addresses", typed);
+
+        EmailTransportException result = classifier.classify(mailSendExceptionWith(wrapped));
+
+        assertThat(result).isInstanceOf(EmailTransportTransientException.class);
+    }
+
     @Test
     @DisplayName("a permanent SMTPSenderFailedException (chained, single-address form) classifies as "
         + "permanent, by reply code")
@@ -212,6 +258,39 @@ class SmtpErrorClassifierTest {
         EmailTransportException result = classifier.classify(mailSendExceptionWith(unrecognised));
 
         assertThat(result).isInstanceOf(EmailTransportTransientException.class);
+    }
+
+    /**
+     * skillars-deferred-111 AC9: constructed the way {@code JavaMailSenderImpl.doSend} actually
+     * throws it — {@code new MailAuthenticationException(authFailure)}, at connect time, never
+     * wrapped in a {@code MailSendException} (confirmed by disassembling spring-context-support
+     * 6.2.19's {@code doSend} bytecode: {@code AuthenticationFailedException} is caught in its own
+     * dedicated handler, separate from the per-message loop that populates the failed-messages map).
+     * {@code // Mutation:} removing {@code MailAuthenticationException} from {@code
+     * NON_REPAIRABLE_ERRORS} turns this red (falls through to transient — the exact bug: a wrong or
+     * expired password retried forever).
+     */
+    @Test
+    @DisplayName("a wrong/expired SMTP password (MailAuthenticationException, as JavaMailSenderImpl.doSend "
+        + "actually throws it) classifies as permanent")
+    void mailAuthenticationException_isPermanent() {
+        jakarta.mail.AuthenticationFailedException authFailure =
+            new jakarta.mail.AuthenticationFailedException("535 5.7.8 Authentication failed");
+        MailAuthenticationException wrapped = new MailAuthenticationException(authFailure);
+
+        EmailTransportException result = classifier.classify(wrapped);
+
+        assertThat(result).isInstanceOf(EmailTransportPermanentException.class);
+    }
+
+    @Test
+    @DisplayName("a bare jakarta.mail.AuthenticationFailedException (defensive, unwrapped) also classifies as "
+        + "permanent")
+    void bareAuthenticationFailedException_isPermanent() {
+        EmailTransportException result =
+            classifier.classify(new jakarta.mail.AuthenticationFailedException("535 5.7.8 Authentication failed"));
+
+        assertThat(result).isInstanceOf(EmailTransportPermanentException.class);
     }
 
     @Test

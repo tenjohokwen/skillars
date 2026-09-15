@@ -371,13 +371,18 @@ sequenceDiagram
       existing row — don't expect the row's primary key or audit history to be preserved across an update.</p>
     </div>
     <div class="callout">
-      <p><code>EnvelopeEntity</code> has no explicit <code>@Table(schema = ...)</code>, unlike <code>AlertRule</code>
-      which is pinned to <code>schema = "main"</code>. No Flyway migration in <code>db/migration</code> currently
-      creates an <code>envelope_entity</code> table either — worth confirming your local schema actually has it
-      (e.g. via a Hibernate-generated DDL or a migration outside this search) before relying on retry/audit
-      history in a fresh environment. Still open as of <code>ses-1.4</code>'s own code review, which re-found it
-      independently — see <code>deferred-work.md</code>'s <code>ses-1-4-registration-email-durability</code>
-      section for the fuller detail.</p>
+      <p><code>EnvelopeEntity</code> still has no explicit <code>@Table(schema = ...)</code>, unlike
+      <code>AlertRule</code> which is pinned to <code>schema = "main"</code> — but this is no longer the "undocumented
+      provenance" gap an earlier revision of this callout described.
+      <code>V136__pin_envelope_entity_schema.sql</code> (shipped by <code>skillars-deferred-110</code>) now pins
+      <code>envelope_entity</code>/<code>envelope_entity_recipients</code> as an explicit, version-controlled
+      migration, column-for-column matching what Hibernate's own auto-DDL had been silently creating and altering
+      via the <code>generate-ddl: true</code> + <code>ddl-auto: none</code> precedence quirk this codebase's own
+      <a href="../database/index.html">Database &amp; Migrations</a> page corrects at length. Since
+      <code>ses-1.4</code>, registration and OTP mail route through <code>EnvelopeEntity</code> for the first
+      time, so a schema issue here affects account verification, not just booking-email history — see
+      <a href="../../../_bmad-output/implementation-artifacts/deferred-work.md">deferred-work.md</a>'s
+      <code>ses-1-7-documentation</code> section for the fuller history of this callout.</p>
     </div>
     <div class="callout">
       <p>Alert threshold evaluation is currently a no-op: <code>AlertEvaluationService.computeMetricValue()</code>

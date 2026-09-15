@@ -80,4 +80,39 @@ class EnvelopeEntitySchemaIT extends AbstractIntegrationTest {
             .hasSize(1);
         assertThat(foreignKeys.get(0).get("conname")).isEqualTo("fk89qpyuf6j5fgg7aorxxh8mqyn");
     }
+
+    /**
+     * skillars-deferred-111 AC12, code review 2026-09-14 (owner decision) —
+     * {@code V137__envelope_entity_recipients_composite_pk.sql}'s composite primary key. Hibernate's
+     * {@code @ElementCollection} mapping carries no {@code @Id} for this table, so Hibernate's
+     * auto-DDL can never create, duplicate, or drop this constraint — it exists purely because the
+     * migration adds it, which is exactly why a permanent regression guard belongs here rather than
+     * being left to Hibernate-tracking assertions like the sibling tests in this class.
+     */
+    @Test
+    void envelopeEntityRecipients_hasCompositePrimaryKeyOnEnvelopeEntityIdAndEmail() {
+        List<Map<String, Object>> primaryKeys = jdbcTemplate.queryForList(
+            "select conname, pg_get_constraintdef(oid) as definition from pg_constraint "
+                + "where conrelid = 'main.envelope_entity_recipients'::regclass and contype = 'p'");
+
+        assertThat(primaryKeys)
+            .as("exactly one PRIMARY KEY on envelope_entity_recipients")
+            .hasSize(1);
+        assertThat(primaryKeys.get(0).get("conname")).isEqualTo("envelope_entity_recipients_pkey");
+        assertThat((String) primaryKeys.get(0).get("definition"))
+            .as("must cover both key columns, in the order the migration declared them")
+            .isEqualTo("PRIMARY KEY (envelope_entity_id, email)");
+    }
+
+    @Test
+    void envelopeEntityRecipients_emailColumn_isNotNull() {
+        List<Map<String, Object>> columns = jdbcTemplate.queryForList(
+            "select is_nullable from information_schema.columns "
+                + "where table_schema = 'main' and table_name = 'envelope_entity_recipients' and column_name = 'email'");
+
+        assertThat(columns).hasSize(1);
+        assertThat(columns.get(0).get("is_nullable"))
+            .as("a composite PRIMARY KEY requires every key column NOT NULL")
+            .isEqualTo("NO");
+    }
 }

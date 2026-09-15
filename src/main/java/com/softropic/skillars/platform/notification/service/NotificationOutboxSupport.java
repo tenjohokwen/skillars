@@ -46,29 +46,41 @@ import java.util.Map;
  *
  * <h2>Failure semantics — read before changing anything here</h2>
  *
- * A throw inside a {@code BEFORE_COMMIT} listener rolls the business transaction back. That is the
- * correct atomic semantic, but it means a bad email payload could roll back a booking. The split
- * this codebase settled on:
+ * <p><strong>Code review 2026-09-15 (H1) corrected this section — it previously claimed an in-memory
+ * failure is "not atomic," which is false.</strong> {@link #enqueueEmail} is {@code
+ * Propagation.MANDATORY}: it always <em>joins</em> the caller's existing transaction rather than
+ * starting its own. When a participating (non-new) transactional method throws an exception that
+ * matches Spring's default rollback rule (any unchecked exception, and {@link IllegalStateException}
+ * is one), {@code TransactionInterceptor} marks the underlying transaction rollback-only <em>before
+ * the exception ever reaches the caller</em> — {@code AbstractPlatformTransactionManager.rollback()}
+ * takes the "not a new transaction" branch, which sets the flag rather than performing a real
+ * rollback, precisely because it is not this method's transaction to roll back. A listener's own
+ * {@code catch (Exception)} runs after that flag is already set; catching the exception stops it
+ * from propagating further, but it cannot un-set a rollback-only flag once {@code
+ * TransactionInterceptor} has set it. Both failure kinds therefore behave identically:
  *
  * <ul>
  *   <li><strong>Infrastructure failure (the outbox {@code INSERT} itself fails) — atomic.</strong>
  *       A DB error marks the transaction rollback-only, so the business transaction rolls back at
  *       commit with {@code UnexpectedRollbackException} <em>whether or not</em> the listener catches
  *       the exception. Nothing can commit a booking whose outbox row failed to write.</li>
- *   <li><strong>In-memory failure (serialisation, a bug building the payload) — not atomic, by
- *       decision.</strong> {@link #enqueueEmail} rethrows rather than swallowing (it is the wrong
- *       layer to set that policy), and each listener's {@code catch (Exception)} then decides: a
- *       notification failure must not roll back the business operation it merely describes. The
- *       residual is one lost email, logged at ERROR, while the business transaction — a booking, a
- *       session-pack change, or (story ses-1.4) a registration/resend-OTP request — still commits.
- *       AC2's string-typed {@code data} contract shrinks the input space that can trigger it to
- *       essentially nothing.</li>
+ *   <li><strong>In-memory failure (serialisation, a bug building the payload) — also atomic, by the
+ *       same mechanism.</strong> {@link #enqueueEmail} rethrows rather than swallowing (it is the
+ *       wrong layer to decide what a caller does with the failure), but by the time any listener's
+ *       {@code catch (Exception)} runs, {@code MANDATORY} propagation has already marked the shared
+ *       transaction rollback-only. The listener's catch only controls whether the {@code
+ *       IllegalStateException} itself propagates further (it does not, today) — it does not, and
+ *       cannot, save the business commit. The business transaction — a booking, a session-pack
+ *       change, or (story ses-1.4) a registration/resend-OTP request — rolls back with a 500 either
+ *       way. AC2's string-typed {@code data} contract shrinks the input space that can trigger this
+ *       to essentially nothing.</li>
  * </ul>
  *
- * <p>Payload construction must stay defensive to keep that split honest: build the map, serialise,
- * enqueue — no I/O, no external call, no lookup that can fail on data the business transaction has
- * not already validated. None of the producing listeners hold a repository, which is what makes this
- * structural rather than a rule someone has to remember.
+ * <p>Payload construction should still stay defensive — no I/O, no external call, no lookup that can
+ * fail on data the business transaction has not already validated — simply because there is no
+ * upside to a payload-construction bug taking down an otherwise-valid business operation. None of the
+ * producing listeners hold a repository, which is what makes that structural rather than a rule
+ * someone has to remember.
  *
  * <h2>Email template data is string-typed by contract (AC2)</h2>
  *
@@ -130,10 +142,12 @@ public class NotificationOutboxSupport {
             // still open, and returning normally means the booking commits while its email is lost
             // inside the very method whose job is to make that impossible.
             //
-            // So: rethrow. This layer reports the failure; it does not decide what the failure costs.
-            // The calling listener owns that policy (see this class's javadoc, "Failure semantics") —
-            // today each catches and logs, deliberately, because a malformed notification payload
-            // must not roll back the booking it merely describes.
+            // So: rethrow. This layer reports the failure; it does not decide what happens next. Each
+            // listener's catch (Exception) still logs it at ERROR with the sendId — but per this
+            // class's javadoc, "Failure semantics" (corrected 2026-09-15, H1), that catch does not
+            // save the business commit: MANDATORY propagation has already marked the shared
+            // transaction rollback-only by the time the catch runs, same as the outbox-INSERT-failure
+            // path above. The catch only prevents this exception itself from propagating further.
             throw new IllegalStateException(
                 "[NOTIFICATION_EMAIL_ENQUEUE_FAILED] could not serialise the email payload for template="
                     + payload.template() + " to=" + payload.toAddress() + " sendId=" + payload.sendId(), e);

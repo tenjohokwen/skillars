@@ -13,6 +13,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 import static net.logstash.logback.argument.StructuredArguments.kv;
@@ -35,6 +36,12 @@ public class PlayerRegistrationEmailListener {
             log.warn("Cannot send player verification email: address is blank");
             return;
         }
+        // skillars-deferred-111 AC6: restores the fail-fast guard the HashMap literal here (unlike
+        // the Map.of(...) it replaced for ses-1.4) does not provide for free. Deliberately OUTSIDE
+        // the try/catch below so it propagates rather than being logged and swallowed like a
+        // serialisation failure — this method has no @Async, so the NPE rolls back the still-open
+        // registration transaction instead of silently persisting a null token.
+        Objects.requireNonNull(event.verifyUrl(), "verifyUrl must not be null");
         String sendId = UUID.randomUUID().toString();
         try {
             Map<String, Object> data = new HashMap<>();
@@ -58,6 +65,8 @@ public class PlayerRegistrationEmailListener {
             log.warn("Cannot send player OTP email: address is blank");
             return;
         }
+        // skillars-deferred-111 AC6 — see onVerificationEmail's comment above for the full rationale.
+        Objects.requireNonNull(event.otp(), "otp must not be null");
         String sendId = UUID.randomUUID().toString();
         try {
             Map<String, Object> data = new HashMap<>();

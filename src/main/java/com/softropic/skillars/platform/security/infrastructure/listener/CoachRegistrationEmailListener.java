@@ -13,6 +13,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 import static net.logstash.logback.argument.StructuredArguments.kv;
@@ -35,12 +36,15 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
  *       maps the resulting {@code UnexpectedRollbackException} to a 500 with a logged help code —
  *       verified, no change needed there.</li>
  *   <li>A serialisation failure inside {@code enqueueEmail} (an {@code IllegalStateException} —
- *       see {@code NotificationOutboxSupport}'s "Failure semantics") is a different, deliberately
- *       <em>non</em>-atomic case: this listener's {@code catch (Exception)} swallows it, so
- *       registration/resend-OTP still commits with no outbox row and no email. That is the intended
- *       split documented on {@code NotificationOutboxSupport} — a malformed notification payload must
- *       not roll back the account it merely describes — not a regression of the silent-loss mode AC1
- *       otherwise removes.</li>
+ *       see {@code NotificationOutboxSupport}'s "Failure semantics", corrected 2026-09-15 by code
+ *       review H1) behaves <em>the same</em> as the outbox-{@code INSERT} case above, not
+ *       differently: {@code enqueueEmail} is {@code Propagation.MANDATORY}, so it joins this
+ *       listener's own transaction rather than opening its own, and Spring marks that shared
+ *       transaction rollback-only as it unwinds from the throw — before this listener's {@code catch
+ *       (Exception)} ever runs. The catch still logs the failure at ERROR and prevents the exception
+ *       itself from propagating further, but it cannot undo the rollback-only flag Spring already
+ *       set. Registration/resend-OTP rolls back with a 500 (surfaced as {@code
+ *       UnexpectedRollbackException} at commit) either way — there is no non-atomic case here.</li>
  * </ul>
  */
 @Slf4j
@@ -56,6 +60,12 @@ public class CoachRegistrationEmailListener {
             log.warn("Cannot send coach verification email: address is blank");
             return;
         }
+        // skillars-deferred-111 AC6: restores the fail-fast guard the HashMap literal here (unlike
+        // the Map.of(...) it replaced for ses-1.4) does not provide for free. Deliberately OUTSIDE
+        // the try/catch below so it propagates rather than being logged and swallowed like a
+        // serialisation failure — this method has no @Async, so the NPE rolls back the still-open
+        // registration transaction instead of silently persisting a null token.
+        Objects.requireNonNull(event.verifyUrl(), "verifyUrl must not be null");
         String sendId = UUID.randomUUID().toString();
         try {
             Map<String, Object> data = new HashMap<>();
@@ -79,6 +89,8 @@ public class CoachRegistrationEmailListener {
             log.warn("Cannot send coach OTP email: address is blank");
             return;
         }
+        // skillars-deferred-111 AC6 — see onVerificationEmail's comment above for the full rationale.
+        Objects.requireNonNull(event.otp(), "otp must not be null");
         String sendId = UUID.randomUUID().toString();
         try {
             Map<String, Object> data = new HashMap<>();

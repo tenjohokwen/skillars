@@ -20,7 +20,7 @@ import java.time.Duration;
  * {@code app.ses.enabled} no longer exists.
  */
 @Configuration
-@EnableConfigurationProperties(SesProperties.class)
+@EnableConfigurationProperties({SesProperties.class, SesHealthProperties.class})
 public class SesConfig {
 
     /**

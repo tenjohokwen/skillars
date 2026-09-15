@@ -23,6 +23,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -144,9 +145,16 @@ class CoachRegistrationEmailListenerTest {
 
     /**
      * AC1: {@code enqueueEmail}'s widened {@code catch (Exception e)} — a serialization/DB failure
-     * must be caught and logged, not propagated out of the {@code BEFORE_COMMIT} listener (which
-     * would otherwise mark the whole registration transaction rollback-only for a notification
-     * failure the caller already decided must not do that).
+     * must be caught and logged rather than left to propagate out of this listener uncaught.
+     *
+     * <p><strong>What this does NOT prove (code review 2026-09-15, H1):</strong> this test mocks
+     * {@code NotificationOutboxSupport} directly, so {@code doThrow(...)} never goes through the real
+     * {@code Propagation.MANDATORY} transactional proxy. In production, that proxy already marks the
+     * shared registration transaction rollback-only as the exception unwinds from {@code
+     * enqueueEmail} — before this listener's catch ever runs — so catching it here does not prevent
+     * the registration commit from failing; see {@code NotificationOutboxSupport}'s "Failure
+     * semantics" javadoc. This test only proves the exception itself doesn't propagate further and
+     * gets logged with a recoverable sendId.
      *
      * <p>Code review 2026-09-12: the method name promised "logged" but nothing verified it — only
      * {@code doesNotThrowAnyException()} was asserted. This now captures the real log output and
@@ -177,6 +185,36 @@ class CoachRegistrationEmailListenerTest {
                     .as("a UUID-shaped sendId must be among the logged structured arguments")
                     .anyMatch(arg -> arg.startsWith("sendId=") && UUID_PATTERN.matcher(arg.substring("sendId=".length())).matches());
             });
+    }
+
+    /**
+     * skillars-deferred-111 AC6: the {@code HashMap} literal {@code onVerificationEmail} builds
+     * {@code data} into (unlike the {@code Map.of(...)} it replaced for ses-1.4) accepts a null value
+     * silently — {@code Objects.requireNonNull} restores the fail-fast behaviour. Placed OUTSIDE the
+     * try/catch, so it must propagate, not be swallowed like an {@code enqueueEmail} failure.
+     * {@code // Mutation:} moving the {@code requireNonNull} call inside the try block turns this red
+     * (the NPE would be caught by {@code catch (Exception e)} and only logged).
+     */
+    @Test
+    void onVerificationEmail_nullVerifyUrl_throwsNpe_doesNotEnqueue() {
+        CoachVerificationEmailEvent event = new CoachVerificationEmailEvent(
+            "coach@example.com", null, "en", "Ada");
+
+        assertThatThrownBy(() -> listener.onVerificationEmail(event))
+            .isInstanceOf(NullPointerException.class);
+
+        verifyNoInteractions(notificationOutboxSupport);
+    }
+
+    /** skillars-deferred-111 AC6 — the OTP-side counterpart of the guard above. */
+    @Test
+    void onOtpEmail_nullOtp_throwsNpe_doesNotEnqueue() {
+        CoachOtpEmailEvent event = new CoachOtpEmailEvent("coach@example.com", null, "en", "Ada");
+
+        assertThatThrownBy(() -> listener.onOtpEmail(event))
+            .isInstanceOf(NullPointerException.class);
+
+        verifyNoInteractions(notificationOutboxSupport);
     }
 
     @Test

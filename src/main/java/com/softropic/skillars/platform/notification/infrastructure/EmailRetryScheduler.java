@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.notification.service.MailManager;
 import io.micrometer.observation.annotation.Observed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 
 import static net.logstash.logback.argument.StructuredArguments.kv;
@@ -81,9 +82,26 @@ public class EmailRetryScheduler {
      * <p>The {@code timeout = 600} bound prevents an indefinitely open transaction in edge
      * cases (e.g., a stuck REQUIRES_NEW sub-transaction). SMTP calls themselves happen
      * after the outer transaction commits (see class-level Javadoc).
+     *
+     * <p><strong>Code review 2026-09-15 (C1):</strong> {@code fetchFailedEmails()}'s {@code FOR UPDATE
+     * SKIP LOCKED} only holds the row lock for the lifetime of this method's own transaction. An
+     * eligible row (not DEADLINE_EXPIRED / ATTEMPTS_EXHAUSTED) is never marked "in-flight" before that
+     * transaction commits, and {@code sendAll} — which is what actually advances {@code status}/
+     * {@code attempts} via {@code MailManager#sendEmailSync}'s own {@code REQUIRES_NEW} transaction —
+     * only runs afterward, in the {@code afterCommit} hook. Between this method's commit and that send
+     * completing, the row is {@code status='FAILED'}, {@code retry=true} again and re-selectable: a
+     * second pod's next tick (or, with a slow SMTP round-trip, this same pod's next tick) can pick up
+     * the identical row and dispatch the email a second time. {@code @SchedulerLock} closes that
+     * window by serializing whole invocations of this method cluster-wide — every other scheduler in
+     * this codebase already carries it. {@code lockAtMostFor} is sized well above the realistic worst
+     * case (10 rows × up to 3 {@code RetryTemplate} attempts × the ~10s circuit-breaker time limit) so
+     * the lock cannot expire out from under a still-running batch; {@code lockAtLeastFor} keeps a
+     * fast/empty tick from immediately re-firing on another node inside the same interval.
      */
     @Observed(name = "scheduler.email-retry")
     @Scheduled(fixedDelayString = "${email.retry.interval-ms:60000}")
+    @SchedulerLock(name = "EmailRetryScheduler_retryFailedEmails",
+                   lockAtMostFor = "PT10M", lockAtLeastFor = "PT10S")
     @Transactional(timeout = 600)
     public void retryFailedEmails() {
         List<EnvelopeEntity> candidates = envelopeEntityRepository.fetchFailedEmails();
