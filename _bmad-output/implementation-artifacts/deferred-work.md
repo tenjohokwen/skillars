@@ -1362,12 +1362,6 @@ the actionable patch findings are tracked unchecked in the story's Review Findin
 
 - **[DECIDED 2026-09-11 (skillars-deferred-109 AC14): accepted. No grace path or config-gated allowance will be built. Mitigation is operational — see the runbook pre-production release gate. Revisit only if a production deploy is planned with queued legacy events that cannot be drained.]** No grace path for in-flight legacy `encoding.success` webhook events during the deferred-100 cutover. With `PROCESSING→READY` removed from `VALID_TRANSITIONS` and the plain path converted from `log.warn` to `throw TerminalStateViolationException` + `video.moderation.bypass++`, any replayed/queued pre-deploy event that drives `PROCESSING→READY` on the plain path now throws and dead-letters (and raises a false-positive moderation-bypass alarm) instead of completing. AC5 verified the producer (`WebhookEventProcessorScheduler`) is already gone at HEAD, no production deploy has ever happened, and dead-lettered events are re-drivable. `docs/deployment/runbook.md` now carries a `## Pre-production release gate: queued webhook events` section requiring the queue to be drained or discarded before the first production deploy. No production code change. [`VideoLifecycleService.java:77-83`]
 
-## Deferred from: skillars-deferred-101 story creation (2026-09-08)
-
-### Pre-production migration rebaseline (future task, no owner)
-
-**Before the first production deploy**, while the schema still carries no data: squash `V1`..`V<current>` into a single clean baseline migration and fold in every safe-pattern rewrite the lock-unsafe applied files (V60/V94/V97/V98/V117, see `docs/deployment/migration-conventions.md#known-lock-unsafe-applied-migrations`) could not take in place. Removes the frozen-file constraint entirely and lets `MigrationLint` bind from `V1`. Large, disruptive, must be its own story; only viable pre-data.
-
 ---
 
 ## Last audit: 2026-09-08 (skillars-deferred-101 story creation + implementation)
@@ -2101,3 +2095,39 @@ and left in place:
   dev pass) and the three bullets from `skillars-deferred-110`'s own code review (recipient-address exception-
   message masking asymmetry, `envelope_entity_recipients` missing PK/index, `MailAuthenticationException`
   retried forever) — all newly filed, not yet actioned.
+
+## Last audit: 2026-09-15 (ad-hoc verification, four open-item bullets from a ledger analysis)
+
+Not a full re-mine — the user asked to verify four specific items an assistant analysis had listed as
+open, on the hunch that `skillars-deferred-112` (merged after the 2026-09-14 audits above, PR #191) had
+already closed one of them. Checked each directly against HEAD (`7fd0a045`):
+
+- **`skillars-deferred-101` story creation's "Pre-production migration rebaseline (future task, no
+  owner)" bullet — CLOSED, deleted.** `skillars-deferred-112` did exactly this: `git log` shows
+  `V02..V137` deleted (131 files, squashed) and replaced by `V138__baseline_schema.sql` +
+  `V139__baseline_seed_data.sql`; `src/main/resources/db/migration/` now contains only those two files.
+  The bullet's own header ("Deferred from: skillars-deferred-101 story creation") had only this one
+  bullet under it — **header removed with it**.
+- **`skillars-deferred-100`'s "drop `main.pending_blob_deletions` in a later release" bullet — confirmed
+  still open, left in place.** `PendingBlobDeletion.java` / `PendingBlobDeletionRepository.java` /
+  `PendingBlobDeletionResidualDrainRunner.java` are all still present under
+  `platform/filestorage/{repo,service}/`, and `main.pending_blob_deletions` (table + sequence + PK) is
+  still declared in the new `V138__baseline_schema.sql:740-756,2408-2412` — the rebaseline carried the
+  table forward rather than dropping it. Unchanged from deferred-100's own condition for closing this
+  ("once confirmed deployed and the table is provably empty in every environment") — still not met, no
+  production deploy has happened.
+- **`skillars-deferred-109`'s `QuotaConfigService.resolveTierKey` player-tier entitlement gap —
+  confirmed still open, left in place.** Read `QuotaConfigService.java` directly: `resolveTierKey` is
+  unchanged — a `switch` over `CoachSubscriptionTier {SCOUT, INSTRUCTOR, ACADEMY}` for a UUID `ownerId`,
+  and a bare `"athlete"` fallback for every non-UUID (player) `ownerId`. No `semiPro`/`pro` branch exists;
+  the mapping this bullet asks for was not added.
+- **`skillars-deferred-92` chunk 2's "`V129` does not address the rolling-deploy window it runs in"
+  bullet — confirmed still open, left in place, premise unaffected by the rebaseline.** `V129` no longer
+  exists as a standalone file (folded into `V138`'s baseline by `deferred-112`, same as every other
+  pre-baseline migration), but the concern was never about the file surviving — it is an *operational*
+  step owed after the first real production rollout, and `docs/deployment/migration-rebaseline.md:137`
+  and `runbook.md:598-613` (both written by `deferred-112`) still say explicitly "no production deploy
+  has ever happened." Nothing to do yet; not obsolete.
+
+**Not re-checked:** every other item in the file. This was a targeted four-item spot-check, not a
+full-file re-mine.
