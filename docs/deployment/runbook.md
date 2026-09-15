@@ -576,31 +576,27 @@ application" below is really waiting on for the rest.
 
 ---
 
-## Pre-production release gate: outstanding migration rewrites
+## Pre-production release gate: outstanding migration rewrites — CLOSED (skillars-deferred-112)
 
-**Owner:** whoever prepares the first production deploy. **Trigger:** before that deploy, not after.
+**Closed by:** `skillars-deferred-112`, by deleting the migrations this gate was tracking rather
+than rewriting them. The entire pre-baseline migration history (formerly `V02`–`V137`, including
+all four items this gate used to list — `V60`, `V94`, `V117`, `V124` — plus the `V125`/`V126`/`V127`
+follow-on note) was squashed into a single generated baseline
+(`V138__baseline_schema.sql` + `V139__baseline_seed_data.sql`). None of those files exist in the
+tree any more; the lock-unsafe patterns they carried no longer exist to be unsafe. See
+[`docs/deployment/migration-rebaseline.md`](migration-rebaseline.md) for the full reasoning, the
+git SHA the deleted history is still recoverable at, and the operator procedure for recreating an
+existing database against the new baseline.
 
-Skillars has no production system yet, and several migrations lean on that fact rather than on
-rolling-deploy safety. `docs/deployment/migration-conventions.md` records the reasoning; this entry
-exists so the obligation survives independently of that document (skillars-deferred-91 code review,
-decision D7).
-
-Before the first production deploy, **all four items below must be closed**:
-
-| Item | What is wrong today | Required before production |
-| --- | --- | --- |
-| `V60` (`main.videos` CHECK re-add) | Validates the whole table under `ACCESS EXCLUSIVE`; `videos` grows | Redo as `ADD CONSTRAINT … NOT VALID` + a later `VALIDATE CONSTRAINT` |
-| `V94` (`payment.booking_payments` `chk_bp_status`) | Same — re-`ADD CONSTRAINT … CHECK` validates the whole table | Redo as `NOT VALID` + later `VALIDATE CONSTRAINT` |
-| `V117` (`marketplace.coach_radar_preferences` FK + index) | FK `ADD CONSTRAINT` validates under `ACCESS EXCLUSIVE`; the plain `CREATE INDEX` takes a `SHARE` lock | FK as `NOT VALID` + later `VALIDATE`; index as `CREATE INDEX CONCURRENTLY` |
-| `V124` (`CAPTURE_ABANDONED` CHECK widen) | The CHECK widen and its first write (`PaymentPendingSweeper.abandonCapture`) ship in the **same** release, deviating from convention rule 5 | Split into widen-then-write across two releases |
-
-Also outstanding, and cheap to close at the same time: `V125`/`V126`/`V127` create indexes without
-`CONCURRENTLY` because Flyway runs migrations in a transaction here. Once a production database
-exists, either move those to a non-transactional Flyway callback or accept and schedule the lock.
-
-**Verification:** `MigrationConventionLintTest` passes with the corresponding
-`-- migration-lint: allow-*` opt-outs **removed** from the affected files. If a migration still
-needs its opt-out, the item is not closed.
+**One item did not close, and is now tracked as ongoing project debt instead of a
+pre-production gate:** `CREATE INDEX CONCURRENTLY` has no working online-safe mechanism in this
+codebase. `skillars-deferred-112` tested the obvious fix (Flyway's `executeInTransaction=false`
+sidecar) and found it does not work here — Flyway's own bookkeeping connection self-deadlocks
+against `CONCURRENTLY`'s snapshot-wait phase, reproduced against a real Hikari pool matching this
+project's configuration. See `docs/deployment/migration-conventions.md` rule 4 for the full
+finding and `migration-rebaseline.md` for the follow-up this is tracked under. This is not blocked
+on "before the first production deploy" the way the closed items were — it blocks the first time
+this codebase actually needs a `CONCURRENTLY` index on a hot/large table, whenever that is.
 
 ---
 
