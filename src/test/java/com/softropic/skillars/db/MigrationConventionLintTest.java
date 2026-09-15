@@ -25,14 +25,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  * with {@code validateMigrationNaming: true} and {@code locations = classpath:db/migration}, so a
  * fixture placed there would be executed or fail naming validation.
  *
- * <h2>The fixture set has two baselines too</h2>
+ * <h2>The fixture set still exercises two baselines, even though the real tree's have converged</h2>
  *
- * The real migration tree grandfathers the skillars-deferred-92 rules below {@code V127}, because
- * {@code V122}–{@code V127} are already applied and Flyway checksums whole files — they cannot be
- * edited to carry the markers those rules demand. The fixtures mirror that split at
- * {@link #FIXTURE_DEFERRED_92_BASELINE}: {@code V800}–{@code V808} predate the new rules exactly as
- * {@code V122}–{@code V127} do, and {@code V809}+ are bound by them. Mirroring it here means the
- * two-baseline mechanism is itself exercised rather than only described.
+ * Before skillars-deferred-112, the real migration tree grandfathered the skillars-deferred-92 rules
+ * below {@code V127} specifically, because {@code V122}–{@code V127} were already applied and Flyway
+ * checksums whole files — they could not be edited to carry the markers those rules demand.
+ * skillars-deferred-112's squash deleted that whole pre-baseline band (formerly {@code V02}–{@code
+ * V137}) rather than editing it, so in the real tree {@link MigrationLint#GRANDFATHER_BASELINE} and
+ * {@link MigrationLint#DEFERRED_92_BASELINE} now sit at the same value, {@code 139} — there is no
+ * longer a gap between them to bridge. The two-baseline <em>mechanism</em> is still real — the two
+ * constants gate mechanically distinct rule bands and could diverge again in the future — so the
+ * fixtures deliberately keep exercising it at two different values ({@link #FIXTURE_DEFERRED_92_BASELINE} = {@code 808},
+ * unchanged by skillars-deferred-112): {@code V800}–{@code V808} predate the deferred-92 rules,
+ * {@code V809}+ are bound by them, independent of whatever the real tree's constants happen to be.
  */
 @DisplayName("New DB migrations must follow the rolling-deploy safety conventions")
 class MigrationConventionLintTest {
@@ -62,7 +67,7 @@ class MigrationConventionLintTest {
     }
 
     @Test
-    @DisplayName("real migrations above the V121 grandfather baseline have zero violations")
+    @DisplayName("real migrations above the V139 grandfather baseline have zero violations")
     void realMigrations_aboveBaseline_areClean() throws IOException {
         List<MigrationLint.Violation> violations = MigrationLint.lint(
             MigrationLint.REAL_MIGRATIONS, MigrationLint.GRANDFATHER_BASELINE, MigrationLint::gitKnownAtHead);

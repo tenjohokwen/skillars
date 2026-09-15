@@ -30,21 +30,36 @@ import java.util.stream.Stream;
  * scripts with a version <strong>strictly greater than</strong> {@code baselineVersion} are checked
  * — everything at or below the baseline is grandfathered (applied and immutable).
  *
- * <h2>Two baselines, and why</h2>
+ * <h2>Two baselines, and why they now share one value</h2>
  *
- * Flyway checksums a migration's whole file, comments included, so an applied migration cannot be
- * edited — not even to add an opt-out marker — without breaking validation on every environment that
- * already ran it. The rules skillars-deferred-92 adds ({@link Rule#MISSING_LOCK_TIMEOUT},
- * {@link Rule#UNBATCHED_DML}, {@link Rule#DROP_WITHOUT_PRIOR_RELEASE_PREP},
- * {@link Rule#PLATFORM_CONFIG_EXPLICIT_ID}) would flag several of {@code V122}–{@code V127}, which
- * are above {@link #GRANDFATHER_BASELINE} but already applied. They therefore bind from
- * {@link #DEFERRED_92_BASELINE} instead. This is the same reasoning that produced the first baseline,
- * applied a second time rather than quietly rewriting shipped migrations.
+ * Before skillars-deferred-112, this history was two different bands. Flyway checksums a
+ * migration's whole file, comments included, so an applied migration cannot be edited — not even to
+ * add an opt-out marker — without breaking validation on every environment that already ran it. The
+ * rules skillars-deferred-92 added ({@link Rule#MISSING_LOCK_TIMEOUT}, {@link Rule#UNBATCHED_DML},
+ * {@link Rule#DROP_WITHOUT_PRIOR_RELEASE_PREP}, {@link Rule#PLATFORM_CONFIG_EXPLICIT_ID}) would have
+ * flagged several already-applied migrations above the original {@code GRANDFATHER_BASELINE}, so
+ * they bound from a second, later constant instead — the same reasoning that produced the first
+ * baseline, applied a second time rather than quietly rewriting shipped migrations.
+ *
+ * <p>skillars-deferred-112 closed that gap by deletion, not by edit: the entire pre-baseline history
+ * (formerly {@code V02}–{@code V137}) was replaced with a single generated baseline,
+ * {@code V138__baseline_schema.sql} (pure DDL) plus {@code V139__baseline_seed_data.sql} (seed rows).
+ * Both are grandfathered by design — {@code V138} is machine-generated from {@code pg_dump} and
+ * necessarily contains validating {@code ADD CONSTRAINT}s and non-concurrent {@code CREATE INDEX}es
+ * that are correct only because the file runs exactly once, against an empty database; linting it
+ * would demand hundreds of opt-outs in generated output for zero safety gain. There is no longer a
+ * band of already-applied migrations that the newer rules would flag but cannot be edited to exempt
+ * — both constants now sit at the same rebaseline boundary, {@code V139}, and every migration from
+ * {@code V140} onward is bound by the full rule set with no grandfather exceptions. The two constants
+ * are kept distinct rather than collapsed into one (see {@code migration-rebaseline.md}'s follow-up
+ * note) because {@link Rule#PLATFORM_CONFIG_EXPLICIT_ID} and friends are still, mechanically, a
+ * separate rule band from the original expand/contract rules — they just happen to bind from the
+ * same version now.
  *
  * <p><strong>The baseline comparison is version-aware, not major-only</strong> (code review): a
- * decimal minor version in the baseline band, e.g. {@code V127.1} when
- * {@code DEFERRED_92_BASELINE = 127}, is strictly newer than the bare baseline and is bound by the
- * new rules even though its major component equals the baseline. See {@link #isAboveBaseline}.
+ * decimal minor version in the baseline band, e.g. {@code V139.1} when the baseline is {@code 139},
+ * is strictly newer than the bare baseline and is bound by the new rules even though its major
+ * component equals the baseline. See {@link #isAboveBaseline}.
  *
  * <h2>Statement scoping (skillars-deferred-92 AC11.2)</h2>
  *
@@ -84,17 +99,30 @@ public final class MigrationLint {
         Path.of("src", "main", "java"), Path.of("src", "main", "resources"));
 
     /**
-     * Highest migration version that predates this convention. V60/V89/V94/V97/V98/V117 + the
-     * AdminAlertType enum widen are all &le; this and are immutable; the guard binds V122+.
+     * Highest migration version that predates this convention. Since skillars-deferred-112's true
+     * squash, this is the generated baseline itself: {@code V138} (pure DDL) and
+     * {@code V139} (seed data) are both machine-generated, run exactly once against an empty
+     * database, and are correct as generated even though they contain patterns the rules below
+     * would otherwise flag. The entire pre-baseline history they replaced (formerly
+     * {@code V02}–{@code V137}, including V60/V94/V117/V124 and the other migrations once
+     * individually grandfathered here) no longer exists — it was deleted, not edited, and is
+     * recoverable from git history at commit {@code 4a3f218d} if ever needed. The guard binds
+     * {@code V140+}, with zero grandfather exceptions.
      */
-    public static final int GRANDFATHER_BASELINE = 121;
+    public static final int GRANDFATHER_BASELINE = 139;
 
     /**
-     * Highest migration version that predates the skillars-deferred-92 rules. {@code V122}–{@code V127}
-     * are above {@link #GRANDFATHER_BASELINE} but already applied and therefore checksum-frozen, so
-     * they cannot carry the opt-out markers the new rules would demand. Those rules bind {@code V128+}.
+     * Historically a second, later boundary for the skillars-deferred-92 rules ({@link
+     * Rule#MISSING_LOCK_TIMEOUT}, {@link Rule#UNBATCHED_DML}, {@link Rule#DROP_WITHOUT_PRIOR_RELEASE_PREP},
+     * {@link Rule#PLATFORM_CONFIG_EXPLICIT_ID}), needed only because those rules arrived after some
+     * migrations were already applied above {@link #GRANDFATHER_BASELINE} and could not be edited to
+     * add opt-outs. skillars-deferred-112's squash deleted that whole band, so there is no longer a
+     * gap between the two boundaries to bridge — both now sit at {@code V139}, the rebaseline
+     * boundary. Kept as a distinct constant (not collapsed into {@link #GRANDFATHER_BASELINE}) because
+     * the two still gate mechanically distinct rule sets; see {@code migration-rebaseline.md}'s
+     * follow-up note for the case to collapse them properly in a future story.
      */
-    public static final int DEFERRED_92_BASELINE = 127;
+    public static final int DEFERRED_92_BASELINE = 139;
 
     /**
      * Sentinel passed to {@link #lintDropOrdering} for an {@code R__} repeatable, which has no
