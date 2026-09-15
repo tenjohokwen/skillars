@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * skillars-deferred-109 AC12.2 (code review, owner decision D2 → option a): the admin-alert
@@ -107,6 +108,7 @@ class VideoModerationAdminAlertEnvelopeIT extends AbstractIntegrationTest {
     @Autowired private PlatformTransactionManager transactionManager;
 
     private MailService seamMailService;
+    private MailManager realMailManager;
     private VideoModerationEmailListener listener;
     private String adminEmail;
 
@@ -120,7 +122,7 @@ class VideoModerationAdminAlertEnvelopeIT extends AbstractIntegrationTest {
         TransactionTemplate requiresNew = new TransactionTemplate(transactionManager);
         requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 
-        MailManager realMailManager = new MailManager(
+        realMailManager = new MailManager(
             seamMailService, envelopeEntityRepository, circuitBreakerFactory, retryTemplate) {
             @Override
             public void sendEmailSync(Envelope envelope) {
@@ -164,8 +166,12 @@ class VideoModerationAdminAlertEnvelopeIT extends AbstractIntegrationTest {
 
     /** Runs the listener inside an outer transaction, the way production calls it. */
     private void runListener(UUID videoId) {
+        runListener(listener, videoId);
+    }
+
+    private void runListener(VideoModerationEmailListener targetListener, UUID videoId) {
         new TransactionTemplate(transactionManager)
-            .executeWithoutResult(status -> listener.sendAdminAlertSync(event(videoId)));
+            .executeWithoutResult(status -> targetListener.sendAdminAlertSync(event(videoId)));
     }
 
     @Test
@@ -204,5 +210,45 @@ class VideoModerationAdminAlertEnvelopeIT extends AbstractIntegrationTest {
         assertThat(row.isRetry()).isFalse();
         // This is the case AC12.1's branch split exists for: before it, the same trailing log.info
         // covered both this row and a null read-back, labelling an unknown outcome "delivered".
+    }
+
+    /**
+     * skillars-deferred-113 AC2 (Option B): an unknown send outcome — {@code findBySendId} returns
+     * {@code null} on read-back, indistinguishable in production from the still-unconfirmed
+     * commit-visibility race this class's own AC5 analysis already found does not hold — must throw
+     * to retain the outbox row, exactly like the confirmed-retryable case above, rather than
+     * silently releasing an alert whose actual delivery outcome was never established.
+     *
+     * <p>Reproduced against a REAL, container-backed send (the row genuinely commits to Postgres via
+     * {@link #realMailManager}'s real {@code envelopeEntityRepository}) while the listener under test
+     * is wired with a separate, blinded {@code EnvelopeEntityRepository} that always returns
+     * {@code null} from {@code findBySendId} — a real, controllable stand-in for "the read-back
+     * cannot see the row", since {@code VideoModerationEmailListener} takes its own repository
+     * reference independent of the one {@code MailManager} writes through.
+     */
+    @Test
+    @DisplayName("an unknown outcome (persisted==null on read-back) throws to retain the outbox row, even though the send itself succeeded")
+    void unknownOutcome_throwsToRetainOutboxRow_despiteRealSendSucceeding() {
+        UUID videoId = UUID.randomUUID();
+        doNothing().when(seamMailService).sendEmailFromTemplate(any(), any(), any());
+
+        EnvelopeEntityRepository blindRepository = mock(EnvelopeEntityRepository.class);
+        when(blindRepository.findBySendId(any())).thenReturn(null);
+        VideoModerationEmailListener blindListener = new VideoModerationEmailListener(
+            publisher, configService, featureToggleService, realMailManager, blindRepository);
+
+        assertThatThrownBy(() -> runListener(blindListener, videoId))
+            .as("an unknown outcome must be treated as retain-the-row, not release-it")
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("outcome unknown");
+
+        // The real send actually succeeded and committed a SENT row — proving this isn't a case of
+        // the send itself failing; the listener's own read-back was blind to a row that genuinely
+        // exists, which is exactly the unconfirmed-race shape AC2 defends against.
+        EnvelopeEntity row = committedRow();
+        assertThat(row.getStatus()).isEqualTo(EmailDeliveryStatus.SENT);
+        // Mutation: revert VideoModerationEmailListener's persisted==null branch to a plain `return`
+        // → assertThatThrownBy above goes RED, proving the outbox row would otherwise be silently
+        // released for a send whose real outcome (SENT, right here) was never actually seen.
     }
 }

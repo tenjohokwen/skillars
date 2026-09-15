@@ -126,7 +126,23 @@ public class VideoModerationEmailListener implements ModerationAdminAlertSender 
                 TransactionSynchronizationManager.isCurrentTransactionReadOnly(),
                 TransactionSynchronizationManager.getCurrentTransactionIsolationLevel(),
                 Thread.currentThread().getName());
-            return;
+            // skillars-deferred-113 AC2 (Option B, owner risk assessment): the root cause of a
+            // persisted==null read-back remains unconfirmed (AC5 above already disproved the only
+            // theory anyone has had for it), so this is precautionary defense-in-depth against an
+            // unknown failure mode, not a fix for a diagnosed one. Option A (bounded retry with
+            // backoff) was rejected: retrying a read that the transaction-isolation analysis above
+            // says SHOULD already be consistent adds latency and complexity for a race nothing has
+            // ever actually reproduced, and a retry that also comes back null would still need this
+            // same fallback behind it. Option B instead reuses the identical, already-proven pattern
+            // this method uses for a confirmed retryable FAILED send two branches below: treat an
+            // unknown outcome exactly like a retryable one — throw to keep ModerationAdminAlertOutboxHandler's
+            // durable row (see that class's javadoc reference on sendAdminAlertSync above), so a
+            // human/re-drive gets another chance instead of the alert being silently released on a
+            // read this class cannot yet explain. Once a real occurrence is captured (the diagnostic
+            // log above), the actual cause can inform a more targeted fix than this fail-safe.
+            throw new IllegalStateException(
+                "video moderation admin alert send outcome unknown (EnvelopeEntity not found on "
+                    + "read-back) for videoId=" + event.videoId() + " sendId=" + envelope.sendId());
         }
         if (persisted.getStatus() == EmailDeliveryStatus.FAILED) {
             if (persisted.isRetry()) {

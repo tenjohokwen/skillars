@@ -3,6 +3,8 @@ package com.softropic.skillars.platform.video.service;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
+import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscription;
+import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscriptionRepository;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -10,10 +12,12 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -26,17 +30,73 @@ class QuotaConfigServiceTest {
 
     @Mock ConfigService configService;
     @Mock CoachProfileService coachProfileService;
+    @Mock PaymentPlayerSubscriptionRepository paymentPlayerSubscriptionRepository;
 
     @InjectMocks QuotaConfigService quotaConfigService;
 
     @Test
-    void storageQuota_nonUuidOwner_readsAthleteKeyThroughBoundedAccessor_floorZero() {
-        // Non-UUID ownerId → "athlete" tier. Floor is 0 (scout is seeded storageBytes = 0).
+    void storageQuota_nonUuidNonNumericOwner_readsAthleteKeyThroughBoundedAccessor_floorZero() {
+        // ownerId is neither a UUID nor a Long → "athlete" tier without ever touching the
+        // subscription repository (skillars-deferred-113 AC3's fail-open path). Floor is 0 (scout
+        // is seeded storageBytes = 0).
         when(configService.getBoundedLong("video.quota.athlete.storageBytes", 0L, Long.MAX_VALUE))
             .thenReturn(2_147_483_648L);
 
         assertThat(quotaConfigService.getStorageQuotaBytes("player-123")).isEqualTo(2_147_483_648L);
         verify(configService).getBoundedLong("video.quota.athlete.storageBytes", 0L, Long.MAX_VALUE);
+        verifyNoInteractions(paymentPlayerSubscriptionRepository);
+    }
+
+    // skillars-deferred-113 AC3: a Long ownerId with no PaymentPlayerSubscription row falls open to
+    // athlete, same fail-open posture as every other unmapped case.
+    @Test
+    void storageQuota_longOwnerWithNoSubscriptionRow_readsAthleteKey() {
+        when(paymentPlayerSubscriptionRepository.findByPlayerId(42L)).thenReturn(Optional.empty());
+        when(configService.getBoundedLong("video.quota.athlete.storageBytes", 0L, Long.MAX_VALUE))
+            .thenReturn(2_147_483_648L);
+
+        assertThat(quotaConfigService.getStorageQuotaBytes("42")).isEqualTo(2_147_483_648L);
+    }
+
+    @Test
+    void storageQuota_semiProPlayer_readsSemiProKey() {
+        PaymentPlayerSubscription subscription = new PaymentPlayerSubscription();
+        subscription.setPlayerId(7L);
+        subscription.setTier("SEMI_PRO");
+        when(paymentPlayerSubscriptionRepository.findByPlayerId(7L)).thenReturn(Optional.of(subscription));
+        when(configService.getBoundedLong("video.quota.semiPro.storageBytes", 0L, Long.MAX_VALUE))
+            .thenReturn(4L * 1024 * 1024 * 1024);
+
+        assertThat(quotaConfigService.getStorageQuotaBytes("7")).isEqualTo(4L * 1024 * 1024 * 1024);
+        verify(configService).getBoundedLong("video.quota.semiPro.storageBytes", 0L, Long.MAX_VALUE);
+    }
+
+    @Test
+    void bandwidthQuota_proPlayer_readsProKey() {
+        PaymentPlayerSubscription subscription = new PaymentPlayerSubscription();
+        subscription.setPlayerId(9L);
+        subscription.setTier("PRO");
+        when(paymentPlayerSubscriptionRepository.findByPlayerId(9L)).thenReturn(Optional.of(subscription));
+        when(configService.getBoundedLong("video.quota.pro.bandwidthBytesMonthly", 0L, Long.MAX_VALUE))
+            .thenReturn(30L * 1024 * 1024 * 1024);
+
+        assertThat(quotaConfigService.getBandwidthQuotaBytesMonthly("9"))
+            .isEqualTo(30L * 1024 * 1024 * 1024);
+    }
+
+    // Mutation: remove playerTierToQuotaSegment's SEMI_PRO/PRO branches (fall through to "athlete"
+    // for every tier) → this test fails because "video.quota.athlete.storageBytes" is stubbed to a
+    // different value than "video.quota.semiPro.storageBytes" and the verify() above never matches.
+    @Test
+    void storageQuota_athletePlayer_readsAthleteKey() {
+        PaymentPlayerSubscription subscription = new PaymentPlayerSubscription();
+        subscription.setPlayerId(11L);
+        subscription.setTier("ATHLETE");
+        when(paymentPlayerSubscriptionRepository.findByPlayerId(11L)).thenReturn(Optional.of(subscription));
+        when(configService.getBoundedLong("video.quota.athlete.storageBytes", 0L, Long.MAX_VALUE))
+            .thenReturn(2_147_483_648L);
+
+        assertThat(quotaConfigService.getStorageQuotaBytes("11")).isEqualTo(2_147_483_648L);
     }
 
     @Test

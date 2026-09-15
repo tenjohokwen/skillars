@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntity;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntityRepository;
+import com.softropic.skillars.platform.notification.repo.RecipientEntity;
 
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.slf4j.Logger;
@@ -24,10 +25,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 
@@ -92,6 +95,20 @@ public class MailManager {
             throw new IllegalStateException("Recipient is missing. Cannot process email send request");
         }
 
+        // skillars-deferred-113 AC1: a mid-loop rate-limit rejection (or any other exception) at
+        // recipient k of n must not re-send to recipients 1..k-1 on retry. EmailRetryScheduler
+        // re-drives a FAILED envelope by reconstructing this same Envelope (same sendId, same full
+        // recipients list) from the persisted EnvelopeEntity and calling this method again — so
+        // "already delivered" has to survive across separate sendEmailSync invocations, not just
+        // within one loop. The persisted EnvelopeEntity for this sendId (if any — a first attempt
+        // has none) is that durable record: RecipientEntity.delivered, added by
+        // V140__envelope_entity_recipients_delivered_flag.sql.
+        final EnvelopeEntity existingEntity = envelopeEntityRepository.findBySendId(envelope.sendId());
+        final Set<String> alreadyDelivered = deliveredEmails(existingEntity);
+        final List<Recipient> pendingRecipients = recipients.stream()
+            .filter(recipient -> !alreadyDelivered.contains(recipient.getEmail()))
+            .toList();
+
         EnvelopeEntity envelopeEntity;
         // Story ses-1.4 AC5 (D-8, code review L3): derived from the envelope's own template rather
         // than a signature change to this method — five call sites across MailManager,
@@ -111,35 +128,49 @@ public class MailManager {
         // account, where one 10-envelope scheduler batch yields ~9 rejections per tick. The
         // envelope's deadline remains the terminal bound: DEADLINE_EXPIRED still applies.
         boolean rateLimited = false;
+        // skillars-deferred-113 AC1: seeded with whatever a prior attempt already delivered, so the
+        // persisted delivered set only ever grows across attempts — a recipient once marked
+        // delivered stays delivered even if THIS attempt fails on a later recipient. Captured by
+        // reference (not reassigned) inside the circuitBreaker/retryTemplate lambdas below, which
+        // run synchronously on this thread within this same method call.
+        final Set<String> deliveredThisAttempt = new LinkedHashSet<>(alreadyDelivered);
         try {
-            final String breakerName = envelope.emailTemplate() != null
-                ? envelope.emailTemplate().circuitBreakerName()
-                : "emailService";
-            final CircuitBreaker circuitBreaker = circuitBreakerFactory.create(breakerName);
-            circuitBreaker.run(() -> {
-                for (Recipient recipient : recipients) {
-                    final Map<String, Object> data = new HashMap<>(envelope.data());
-                    data.put("sendId", envelope.sendId());
+            if (!pendingRecipients.isEmpty()) {
+                final String breakerName = envelope.emailTemplate() != null
+                    ? envelope.emailTemplate().circuitBreakerName()
+                    : "emailService";
+                final CircuitBreaker circuitBreaker = circuitBreakerFactory.create(breakerName);
+                circuitBreaker.run(() -> {
+                    for (Recipient recipient : pendingRecipients) {
+                        final Map<String, Object> data = new HashMap<>(envelope.data());
+                        data.put("sendId", envelope.sendId());
 
-                    retryTemplate.execute(context -> {
-                        try {
-                            mailService.sendEmailFromTemplate(recipient, envelope.emailTemplate(), data);
-                        } catch (Exception e) {
-                            if (isRetryable(e)) {
-                                throw new RuntimeException("Unexpected retryable email error", e);
+                        retryTemplate.execute(context -> {
+                            try {
+                                mailService.sendEmailFromTemplate(recipient, envelope.emailTemplate(), data);
+                            } catch (Exception e) {
+                                if (isRetryable(e)) {
+                                    throw new RuntimeException("Unexpected retryable email error", e);
+                                }
+                                throw new RuntimeException("Unexpected non-retryable email error", e);
                             }
-                            throw new RuntimeException("Unexpected non-retryable email error", e);
-                        }
-                        return null;
-                    });
-                }
-                return null;
-            }, throwable -> {
-                if (throwable instanceof RuntimeException && throwable.getCause() != null) {
-                    throw (RuntimeException) throwable;
-                }
-                throw new RuntimeException("Email sending failed via Circuit Breaker", throwable);
-            });
+                            return null;
+                        });
+                        // Recorded only after retryTemplate.execute returns without throwing — i.e.
+                        // only a recipient mailService actually accepted counts as delivered. A
+                        // rate-limit rejection (or any other failure) on this recipient leaves it,
+                        // and every recipient after it in this loop, out of the set: exactly the
+                        // recipients a subsequent retry still needs to reach.
+                        deliveredThisAttempt.add(recipient.getEmail());
+                    }
+                    return null;
+                }, throwable -> {
+                    if (throwable instanceof RuntimeException && throwable.getCause() != null) {
+                        throw (RuntimeException) throwable;
+                    }
+                    throw new RuntimeException("Email sending failed via Circuit Breaker", throwable);
+                });
+            }
             envelopeEntity = toEnvelopeEntity(envelope, null);
         } catch (Exception exception) {
             rateLimited = EmailTransportRateLimitedException.isPresentIn(exception);
@@ -158,7 +189,10 @@ public class MailManager {
                 envelopeEntity.getAttempts(), loggableData(envelopeEntity.getEmailTemplate(), envelopeEntity.getData()),
                 envelopeEntity.getError());
         }
-        final EnvelopeEntity entityBySendId = envelopeEntityRepository.findBySendId(envelopeEntity.getSendId());
+        // skillars-deferred-113 AC1: the same row fetched at the top of this method (no code path
+        // between there and here saves a competing row under this sendId), reused rather than
+        // re-queried so the delivered-flag update below lands on the identical managed entity.
+        final EnvelopeEntity entityBySendId = existingEntity;
         if (entityBySendId != null) {
             if (!rateLimited) {
                 entityBySendId.setAttempts(entityBySendId.getAttempts() + 1);
@@ -166,8 +200,10 @@ public class MailManager {
             entityBySendId.setStatus(envelopeEntity.getStatus());
             entityBySendId.setError(envelopeEntity.getError());
             entityBySendId.setRetry(envelopeEntity.isRetry());
+            applyDeliveryFlags(entityBySendId, recipients, deliveredThisAttempt);
             scrubDataIfSentAndSensitive(entityBySendId);
         } else {
+            applyDeliveryFlags(envelopeEntity, recipients, deliveredThisAttempt);
             // Story ses-1.4 AC4 (code review B2/B3): EnvelopeEntity's @Id is hand-assigned
             // (EnvelopeMapper.toEntity) with no @GeneratedValue, and @Version is a primitive, so
             // Spring Data's isNew() check falls back to "id is non-null => not new" and save() calls
@@ -224,6 +260,35 @@ public class MailManager {
             masked.put(key, "[REDACTED]");
         }
         return masked;
+    }
+
+    /**
+     * skillars-deferred-113 AC1: the set of recipient emails a prior attempt for this sendId already
+     * delivered, or empty for a first attempt (no persisted entity yet).
+     */
+    private static Set<String> deliveredEmails(final EnvelopeEntity entity) {
+        if (entity == null || entity.getRecipients() == null) {
+            return Set.of();
+        }
+        return entity.getRecipients().stream()
+            .filter(RecipientEntity::isDelivered)
+            .map(RecipientEntity::getEmail)
+            .collect(Collectors.toUnmodifiableSet());
+    }
+
+    /**
+     * skillars-deferred-113 AC1: rebuilds {@code entity}'s recipient list from the envelope's own
+     * (always-full) recipient list, marking each one delivered iff its email is in
+     * {@code deliveredEmails}. A full replace rather than an in-place mutation of the existing
+     * embedded elements — {@code @ElementCollection} elements carry no {@code @Id}, so Hibernate
+     * tracks the collection as a value type; replacing it via the setter is the well-supported path,
+     * an in-place field mutation on an already-loaded embeddable is not guaranteed to be detected.
+     */
+    private static void applyDeliveryFlags(final EnvelopeEntity entity, final List<Recipient> recipients,
+                                            final Set<String> deliveredEmails) {
+        final List<RecipientEntity> updated = EnvelopeMapper.toRecipientEntities(recipients);
+        updated.forEach(recipientEntity -> recipientEntity.setDelivered(deliveredEmails.contains(recipientEntity.getEmail())));
+        entity.setRecipients(updated);
     }
 
     /**

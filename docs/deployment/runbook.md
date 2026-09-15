@@ -624,6 +624,56 @@ drained.
 
 ---
 
+## Pre-production release gate: SES cutover
+
+**Owner:** whoever prepares the first production deploy that turns on `app.email.transport: ses`.
+**Trigger:** before that deploy, not after.
+
+`dev`/`uat`/`test` all run `app.email.transport: log` today, `smtp` is deliberately rejected until
+Phase 2 (see `requirements/ses-email-consolidation.md`), and `DevSesEmailService` — the old way to
+exercise SES from a dev box — was deleted during `ses-1.1`. That means the switch to
+`app.email.transport: ses` in `application-prod.yaml` (`src/main/resources/application-prod.yaml`)
+is the **first time ever** `SesEmailSender` runs against real AWS: real credentials, real region,
+real verified-domain state, a 3s attempt timeout, zero retries — with no prior non-production
+exercise of the path. This is a deliberate phase-plan gap (`ses-1.1`'s own plan calls for `smtp` in
+non-prod and `ses` only in prod), not a defect — there is nothing to patch in code, only a pre-flight
+verification gap to close with process. This mirrors this runbook's existing
+"Pre-production release gate: queued webhook events" section above: an accepted cutover risk closed
+by a checklist, not a code change.
+
+Before flipping `app.email.transport` to `ses` in production, verify **all** of the following:
+
+1. **The target SES account/domain is out of the sandbox.** Once `transport=ses` is live,
+   `SesHealthIndicator` exposes this as the `productionAccessEnabled` detail on the `notification`
+   actuator health group (`GET /actuator/health/notification` — group is declared per-profile;
+   `application-prod.yaml` includes `ses`). A sandboxed account can only send to verified
+   individual addresses, which is enough for step 3 below but not for real user traffic — confirm
+   `productionAccessEnabled: true` before considering the account itself production-ready.
+2. **The IAM identity the app runs as has `ses:GetAccount` and `ses:SendEmail` attached.**
+   `SesHealthIndicator` calls `GetAccount` on every health check; `SesEmailSender` calls `SendEmail`
+   on every send. A missing permission on either surfaces as a health-check/send failure only after
+   the flip — verify both are attached beforehand, not discovered afterward.
+3. **Immediately after flipping the property, send one real test email to an internal address**
+   and confirm both (a) the email is actually delivered, and (b) `GET /actuator/health/notification`
+   reports `status: UP` (i.e. `sendingEnabled && productionAccessEnabled && notShutDown`, per
+   `SesHealthIndicator`'s composite check). Do not rely on the health check alone — a stale cached
+   `UP` (this indicator caches a healthy result for `SesHealthProperties.getTtl()`, default 60s) is
+   not proof a send just worked; a cached `DOWN` clears faster (`getDownTtl()`, default 15s) but the
+   only real proof either way is a delivered test email.
+4. **Roll back to `smtp`/`log` immediately if either check in step 3 fails.** There is no
+   config-gated grace path for a half-verified SES cutover — this is an accepted deploy risk, not a
+   feature to build.
+
+Optional, left to the implementer's judgement rather than mandated by this gate: a manually-triggered
+(not scheduled) admin/ops probe that sends one test email through the live `SesEmailSender` on
+demand, so step 3 doesn't require improvising a real user-facing flow just to get an email sent.
+
+Revisit this gate only if a later change adds a non-production environment that genuinely exercises
+the SES path end-to-end (at which point this cutover stops being this codebase's first-ever
+production exercise of it, and the gate's core premise no longer holds).
+
+---
+
 ## Repository cleanup safety
 
 **skillars-deferred-102 AC6:** the git checkout now lives at `/opt/skillars/app`, a **sibling** of the

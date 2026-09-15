@@ -172,13 +172,21 @@ class VideoModerationEmailListenerTest {
     void noPersistedEnvelope_warnsNotYetVisible() {
         when(envelopeEntityRepository.findBySendId(anyString())).thenReturn(null);
 
-        assertThatCode(() -> listener.sendAdminAlertSync(event())).doesNotThrowAnyException();
+        // skillars-deferred-113 AC2 (Option B): an unknown send outcome now throws — same
+        // defense-in-depth treatment as a confirmed retryable FAILED send below — so the durable
+        // outbox row is retained instead of being released on a read this class cannot explain.
+        assertThatThrownBy(() -> listener.sendAdminAlertSync(event()))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("outcome unknown")
+            .hasMessageContaining(videoId.toString());
 
         assertThat(loggedAt(Level.WARN, "[VIDEO_MODERATION_ADMIN_ALERT] send outcome not yet visible")).isTrue();
         assertThat(loggedAt(Level.INFO, "[VIDEO_MODERATION_ADMIN_ALERT] delivered"))
             .as("a missing row is not a delivery")
             .isFalse();
         // Mutation: merge the null/SENT branches into one log.info → this assertion goes RED.
+        // Mutation (AC2): revert the throw back to a plain `return` → this test's assertThatThrownBy
+        // goes RED, proving the outbox row would otherwise be silently released on an unknown outcome.
     }
 
     /**
@@ -191,7 +199,9 @@ class VideoModerationEmailListenerTest {
     void noPersistedEnvelope_warnCarriesTransactionContext() {
         when(envelopeEntityRepository.findBySendId(anyString())).thenReturn(null);
 
-        assertThatCode(() -> listener.sendAdminAlertSync(event())).doesNotThrowAnyException();
+        // skillars-deferred-113 AC2: the diagnostic WARN still fires before the new throw (Option B)
+        // — this test only pins the WARN's content, so the throw is caught rather than asserted here.
+        assertThatThrownBy(() -> listener.sendAdminAlertSync(event())).isInstanceOf(IllegalStateException.class);
 
         ILoggingEvent warning = logAppender.list.stream()
             .filter(e -> e.getLevel() == Level.WARN

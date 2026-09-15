@@ -374,15 +374,17 @@ sequenceDiagram
       <p><code>EnvelopeEntity</code> still has no explicit <code>@Table(schema = ...)</code>, unlike
       <code>AlertRule</code> which is pinned to <code>schema = "main"</code> — but this is no longer the "undocumented
       provenance" gap an earlier revision of this callout described.
-      <code>V136__pin_envelope_entity_schema.sql</code> (shipped by <code>skillars-deferred-110</code>) now pins
+      <code>V136__pin_envelope_entity_schema.sql</code> (shipped by <code>skillars-deferred-110</code>, later folded
+      into <code>V138__baseline_schema.sql</code> by <code>skillars-deferred-112</code>'s migration rebaseline) pinned
       <code>envelope_entity</code>/<code>envelope_entity_recipients</code> as an explicit, version-controlled
       migration, column-for-column matching what Hibernate's own auto-DDL had been silently creating and altering
       via the <code>generate-ddl: true</code> + <code>ddl-auto: none</code> precedence quirk this codebase's own
       <a href="../database/index.html">Database &amp; Migrations</a> page corrects at length. Since
       <code>ses-1.4</code>, registration and OTP mail route through <code>EnvelopeEntity</code> for the first
-      time, so a schema issue here affects account verification, not just booking-email history — see
-      <a href="../../../_bmad-output/implementation-artifacts/deferred-work.md">deferred-work.md</a>'s
-      <code>ses-1-7-documentation</code> section for the fuller history of this callout.</p>
+      time, so a schema issue here affects account verification, not just booking-email history. (The
+      <code>ses-1-7-documentation</code> ledger section this paragraph used to cross-reference was pruned once
+      closed, per <code>deferred-work.md</code>'s own delete-outright-when-closed convention — this paragraph is
+      now the only surviving record of that history.)</p>
     </div>
     <div class="callout">
       <p>Alert threshold evaluation is currently a no-op: <code>AlertEvaluationService.computeMetricValue()</code>
