@@ -174,4 +174,36 @@ class MailManagerRedactionTest {
             .contains("otpCode=[REDACTED]");
         assertThat(rendered).doesNotContain("999000");
     }
+
+    /**
+     * skillars-deferred-111 AC11 (owner decision: full sanitizer, both logs and the persisted
+     * record). Before this fix, the exception was passed as SLF4J's dedicated trailing-Throwable
+     * argument, rendered directly from the Throwable object — completely bypassing {@code
+     * loggableData(...)}'s redaction of the {@code data={}} argument two positions earlier on the
+     * SAME log line. {@code // Mutation:} reverting the log call to pass {@code exception} as the
+     * trailing argument again (instead of the sanitized {@code envelopeEntity.getError()} string)
+     * turns this red — the raw address would reappear in {@code getFormattedMessage()}, since a
+     * trailing Throwable's stack trace is rendered separately and this test only inspects the
+     * formatted message text.
+     */
+    @Test
+    void failedSend_exceptionMessageEmbedsRecipientAddress_isMaskedInBothTheLogLineAndThePersistedRecord() {
+        doThrow(new EmailTransportPermanentException(
+            "SMTP send failed permanently: 550 5.1.1 <no-such-user@example.com> No such user"))
+            .when(mailService).sendEmailFromTemplate(any(), any(), any());
+        when(envelopeEntityRepository.findBySendId(any())).thenReturn(null);
+        ArgumentCaptor<EnvelopeEntity> captor = ArgumentCaptor.forClass(EnvelopeEntity.class);
+
+        mailManager.sendEmailSync(envelope(EmailTemplate.BOOKING_CONFIRMED, Map.of("coachDisplayName", "Coach Ada")));
+
+        org.mockito.Mockito.verify(envelopeEntityRepository).saveAndFlush(captor.capture());
+        assertThat(allFormattedMessages())
+            .as("the recipient address must not appear in the log line, in any form")
+            .doesNotContain("no-such-user@example.com")
+            .contains("n***@example.com");
+        assertThat(captor.getValue().getError())
+            .as("nor in the persisted envelope_entity.error record")
+            .doesNotContain("no-such-user@example.com")
+            .contains("n***@example.com");
+    }
 }

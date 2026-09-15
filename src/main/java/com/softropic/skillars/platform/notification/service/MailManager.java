@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.notification.service;
 
+import com.softropic.skillars.infrastructure.email.EmailPiiSanitizer;
 import com.softropic.skillars.infrastructure.email.EmailTransportPermanentException;
 import com.softropic.skillars.infrastructure.email.EmailTransportRateLimitedException;
 import com.softropic.skillars.platform.notification.contract.EmailDeliveryStatus;
@@ -143,11 +144,19 @@ public class MailManager {
         } catch (Exception exception) {
             rateLimited = EmailTransportRateLimitedException.isPresentIn(exception);
             envelopeEntity = toEnvelopeEntity(envelope, exception);
+            // skillars-deferred-111 AC11 (owner decision: full sanitizer): the exception is logged
+            // as a sanitized STRING parameter, not passed as SLF4J's dedicated trailing-Throwable
+            // argument. That argument is rendered directly from the Throwable object (its own and
+            // every cause's message, unmasked) and bypasses loggableData(...)'s redaction of the
+            // data={} argument two positions earlier on the same line entirely — the exact asymmetry
+            // this AC exists to close. envelopeEntity.getError() is already the same sanitized
+            // stacktrace toEnvelopeEntity persisted just above, so this reuses it rather than
+            // re-rendering/re-sanitizing the same exception twice.
             logger.error("Could not send email after retries and circuit breaker protection. "
-                    + "template={} sendId={} status={} attempts={} data={}",
+                    + "template={} sendId={} status={} attempts={} data={} error={}",
                 envelopeEntity.getEmailTemplate(), envelopeEntity.getSendId(), envelopeEntity.getStatus(),
                 envelopeEntity.getAttempts(), loggableData(envelopeEntity.getEmailTemplate(), envelopeEntity.getData()),
-                exception);
+                envelopeEntity.getError());
         }
         final EnvelopeEntity entityBySendId = envelopeEntityRepository.findBySendId(envelopeEntity.getSendId());
         if (entityBySendId != null) {
@@ -230,6 +239,14 @@ public class MailManager {
      * follow-up, not part of this decision.
      */
     private static void scrubDataIfSentAndSensitive(final EnvelopeEntity entity) {
+        // Code review 2026-09-15 (M6): Set.of(...) throws NPE on contains(null); a null template
+        // can't reach this method today (only SENT rows get here, and a null template can't produce
+        // a successful send), but loggableEnvelope/loggableData both null-check their template
+        // argument before the same SENSITIVE_DATA_TEMPLATES lookup — this guard keeps the three
+        // consistent rather than relying on that invariant holding forever.
+        if (entity.getEmailTemplate() == null) {
+            return;
+        }
         if (entity.getStatus() == EmailDeliveryStatus.SENT
                 && SENSITIVE_DATA_TEMPLATES.contains(entity.getEmailTemplate())) {
             entity.setData(Map.of());
@@ -245,7 +262,14 @@ public class MailManager {
             envelopeEntity.setAttempts(++attempts);
         }
         if (exception != null) {
-            final String stacktrace = ExceptionUtils.getStackTrace(exception);
+            // skillars-deferred-111 AC11 (owner decision: full sanitizer, both logs AND the
+            // persisted record): the full rendered stack trace — this exception's own message plus
+            // every cause's, at every level — is sanitized before it becomes the durable
+            // envelope_entity.error value, not just the outer exception's own message at the point
+            // SmtpErrorClassifier builds it. This is the choke point that actually controls what a
+            // DB reader (or, via the log line above, a Loki-shipped UAT log) sees, regardless of
+            // which cause-chain level embedded the address.
+            final String stacktrace = EmailPiiSanitizer.sanitize(ExceptionUtils.getStackTrace(exception));
             envelopeEntity.setError(stacktrace);
             envelopeEntity.setStatus(EmailDeliveryStatus.FAILED);
             envelopeEntity.setRetry(isRetryable(exception));

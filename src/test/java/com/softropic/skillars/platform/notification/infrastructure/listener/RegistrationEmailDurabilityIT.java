@@ -72,6 +72,16 @@ class RegistrationEmailDurabilityIT extends AbstractIntegrationTest {
         return "ses14." + prefix + "." + UUID.randomUUID() + "@skillars-test.com";
     }
 
+    /**
+     * skillars-deferred-111 AC7: the one {@code findAll()} + in-memory filter this class cannot
+     * avoid — the registration/OTP listener generates the row's {@code sendId} internally, so at the
+     * point a test needs to find its own row for the first time, only the UUID-unique email address
+     * it seeded is known. Paid once per test (every call site here is already followed by caching the
+     * result into a local {@code row}, never re-queried), not once per assertion. Any subsequent
+     * lookup on the SAME row within a test (e.g. after driving {@code EmailRetryScheduler}) must use
+     * {@link #committedRowBySendId} instead — see {@code persistedFailedEnvelope}'s two callers below,
+     * which already know their own generated {@code sendId} and no longer need this method at all.
+     */
     private EnvelopeEntity committedRowFor(String email) {
         List<EnvelopeEntity> rows = transactionTemplate.execute(status ->
             envelopeEntityRepository.findAll().stream()
@@ -80,6 +90,20 @@ class RegistrationEmailDurabilityIT extends AbstractIntegrationTest {
                 .toList());
         assertThat(rows).as("exactly one committed envelope row for %s", email).hasSize(1);
         return rows.get(0);
+    }
+
+    /**
+     * skillars-deferred-111 AC7: scoped via the existing {@code findBySendId} repository method
+     * (already used elsewhere in this codebase) instead of {@link #committedRowFor}'s
+     * {@code findAll()} scan — for the case where this class's own test code generated the
+     * {@code sendId} itself and so already knows it, with no need to discover it by email at all.
+     * A single-row DB-level lookup, not a full-table scan that grows with everything else the shared
+     * JVM-static Postgres accumulates across the suite.
+     */
+    private EnvelopeEntity committedRowBySendId(String sendId) {
+        EnvelopeEntity row = transactionTemplate.execute(status -> envelopeEntityRepository.findBySendId(sendId));
+        assertThat(row).as("a committed envelope row for sendId %s", sendId).isNotNull();
+        return row;
     }
 
     // --- AC1/AC2: the listener actually enqueues BEFORE_COMMIT, and a real send preserves firstname ---
@@ -219,11 +243,15 @@ class RegistrationEmailDurabilityIT extends AbstractIntegrationTest {
     @DisplayName("EmailRetryScheduler re-drives a FAILED/retryable registration OTP envelope to SENT")
     void retryScheduler_redrivesFailedRegistrationOtpEnvelope_toSent() {
         String email = freshEmail("redrive");
-        persistedFailedEnvelope(email, EmailTemplate.COACH_OTP, Instant.now().plus(Duration.ofMinutes(5)), 1);
+        // skillars-deferred-111 AC7: this test generated the sendId itself (inside
+        // persistedFailedEnvelope) — capture it and re-fetch by it, not by re-discovering the row
+        // via a findAll() scan keyed on the email this method already knows too.
+        String sendId = persistedFailedEnvelope(
+            email, EmailTemplate.COACH_OTP, Instant.now().plus(Duration.ofMinutes(5)), 1).getSendId();
 
         emailRetryScheduler.retryFailedEmails();
 
-        EnvelopeEntity row = committedRowFor(email);
+        EnvelopeEntity row = committedRowBySendId(sendId);
         assertThat(row.getStatus()).isEqualTo(EmailDeliveryStatus.SENT);
     }
 
@@ -231,15 +259,39 @@ class RegistrationEmailDurabilityIT extends AbstractIntegrationTest {
     @DisplayName("EmailRetryScheduler marks a past-deadline registration OTP envelope DEADLINE_EXPIRED without a send attempt")
     void retryScheduler_marksPastDeadlineRegistrationOtpEnvelope_deadlineExpired() {
         String email = freshEmail("deadline");
-        persistedFailedEnvelope(email, EmailTemplate.PARENT_OTP, Instant.now().minus(Duration.ofHours(1)), 2);
+        String sendId = persistedFailedEnvelope(
+            email, EmailTemplate.PARENT_OTP, Instant.now().minus(Duration.ofHours(1)), 2).getSendId();
 
         emailRetryScheduler.retryFailedEmails();
 
-        EnvelopeEntity row = committedRowFor(email);
+        EnvelopeEntity row = committedRowBySendId(sendId);
         assertThat(row.getStatus()).isEqualTo(EmailDeliveryStatus.DEADLINE_EXPIRED);
         assertThat(row.isRetry()).isFalse();
         assertThat(row.getAttempts())
             .as("a deadline-expired precheck must not count as a delivery attempt")
             .isEqualTo(2);
+    }
+
+    /**
+     * skillars-deferred-111 AC7's own verification: a stray {@code FAILED}/{@code retry=true} row
+     * from an unrelated email, seeded before this test's own row, must not affect the scoped
+     * assertion — pinning exactly the fragility this AC's fix removes ({@code
+     * committedRowBySendId}'s exact-sendId lookup, not an email-scoped {@code findAll()} scan that
+     * would still incidentally work today only because email is UUID-unique per test).
+     */
+    @Test
+    @DisplayName("AC7: an unrelated stray FAILED/retry=true row does not affect this test's scoped re-drive assertion")
+    void retryScheduler_unrelatedStrayFailedRow_doesNotAffectScopedAssertion() {
+        String strayEmail = freshEmail("stray");
+        persistedFailedEnvelope(strayEmail, EmailTemplate.PLAYER_OTP, Instant.now().plus(Duration.ofMinutes(5)), 0);
+
+        String email = freshEmail("redrive-scoped");
+        String sendId = persistedFailedEnvelope(
+            email, EmailTemplate.COACH_OTP, Instant.now().plus(Duration.ofMinutes(5)), 1).getSendId();
+
+        emailRetryScheduler.retryFailedEmails();
+
+        EnvelopeEntity row = committedRowBySendId(sendId);
+        assertThat(row.getStatus()).isEqualTo(EmailDeliveryStatus.SENT);
     }
 }

@@ -25,6 +25,7 @@ import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -117,6 +118,31 @@ class ParentRegistrationEmailListenerTest {
         ParentOtpEmailEvent event = new ParentOtpEmailEvent(null, "123456", "en", "Grace");
 
         assertThatCode(() -> listener.onOtpEmail(event)).doesNotThrowAnyException();
+
+        verifyNoInteractions(notificationOutboxSupport);
+    }
+
+    /**
+     * skillars-deferred-111 AC6 — see {@code CoachRegistrationEmailListenerTest} for the full
+     * rationale.
+     */
+    @Test
+    void onVerificationEmail_nullVerifyUrl_throwsNpe_doesNotEnqueue() {
+        ParentVerificationEmailEvent event = new ParentVerificationEmailEvent(
+            "parent@example.com", null, "en", "Grace");
+
+        assertThatThrownBy(() -> listener.onVerificationEmail(event))
+            .isInstanceOf(NullPointerException.class);
+
+        verifyNoInteractions(notificationOutboxSupport);
+    }
+
+    @Test
+    void onOtpEmail_nullOtp_throwsNpe_doesNotEnqueue() {
+        ParentOtpEmailEvent event = new ParentOtpEmailEvent("parent@example.com", null, "en", "Grace");
+
+        assertThatThrownBy(() -> listener.onOtpEmail(event))
+            .isInstanceOf(NullPointerException.class);
 
         verifyNoInteractions(notificationOutboxSupport);
     }

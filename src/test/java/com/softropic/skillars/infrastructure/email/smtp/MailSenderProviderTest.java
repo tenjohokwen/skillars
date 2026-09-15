@@ -175,6 +175,66 @@ class MailSenderProviderTest {
         ((AtomicInteger) field.get(provider)).set(value);
     }
 
+    // ---------------------------------------------------------------- skillars-deferred-111 AC10
+
+    /**
+     * {@code // Mutation:} reverting {@code toMailSender} to always set {@code protocol = "smtp"}
+     * turns this red.
+     */
+    @Test
+    @DisplayName("AC10: implicitTls=true builds an smtps sender with every property under mail.smtps.*, "
+        + "no mail.smtp.* keys at all")
+    void implicitTlsTrue_buildsSmtpsSenderWithNoStarttls() {
+        ProviderConfig config = validConfig();
+        config.setPort("465");
+        config.setImplicitTls(true);
+
+        JavaMailSenderImpl sender = new MailSenderProvider(propsWith(List.of(config))).nextSender();
+
+        assertThat(sender.getProtocol()).isEqualTo("smtps");
+        java.util.Properties props = sender.getJavaMailProperties();
+        assertThat(props.stringPropertyNames())
+            .as("no property may remain keyed under the wrong namespace — mis-keyed timeouts would "
+                + "silently revert to JavaMail's own defaults instead of this class's configured 5000ms")
+            .allMatch(key -> key.startsWith("mail.smtps."));
+        assertThat(props.getProperty("mail.smtps.auth")).isEqualTo("true");
+        assertThat(props.getProperty("mail.smtps.connectiontimeout")).isEqualTo("5000");
+        assertThat(props.getProperty("mail.smtps.timeout")).isEqualTo("5000");
+        assertThat(props.getProperty("mail.smtps.writetimeout")).isEqualTo("5000");
+        assertThat(props.getProperty("mail.smtp.starttls.enable"))
+            .as("implicit TLS needs no STARTTLS upgrade — the property must be dropped, not merely renamed")
+            .isNull();
+    }
+
+    /**
+     * A port-465 provider with {@code implicitTls} left unset defaults to implicit TLS too — the same
+     * default {@link SmtpHealthIndicator} already applies for its own probe.
+     */
+    @Test
+    @DisplayName("AC10: port 465 with implicitTls unset also defaults to smtps")
+    void port465_implicitTlsUnset_defaultsToSmtps() {
+        ProviderConfig config = validConfig();
+        config.setPort("465");
+
+        JavaMailSenderImpl sender = new MailSenderProvider(propsWith(List.of(config))).nextSender();
+
+        assertThat(sender.getProtocol()).isEqualTo("smtps");
+    }
+
+    /** The counterpart making the two cases above non-vacuous: today's STARTTLS behaviour is unchanged. */
+    @Test
+    @DisplayName("AC10: a STARTTLS provider (implicitTls=false, or unset on a non-465 port) is unaffected")
+    void starttlsProvider_behaviourUnchanged() {
+        JavaMailSenderImpl sender = new MailSenderProvider(propsWith(List.of(validConfig()))).nextSender();
+
+        assertThat(sender.getProtocol()).isEqualTo("smtp");
+        java.util.Properties props = sender.getJavaMailProperties();
+        assertThat(props.getProperty("mail.smtp.starttls.enable")).isEqualTo("true");
+        assertThat(props.getProperty("mail.smtp.auth")).isEqualTo("true");
+        assertThat(props.getProperty("mail.smtp.connectiontimeout")).isEqualTo("5000");
+        assertThat(props.stringPropertyNames()).noneMatch(key -> key.startsWith("mail.smtps."));
+    }
+
     @Configuration
     @EnableConfigurationProperties(SmtpProperties.class)
     static class Config {

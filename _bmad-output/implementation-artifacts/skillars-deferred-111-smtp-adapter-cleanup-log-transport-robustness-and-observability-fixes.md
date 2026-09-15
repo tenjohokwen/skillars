@@ -1,6 +1,6 @@
 # skillars-deferred-111: SMTP Adapter Cleanup, Log-Transport Robustness & Observability Fixes
 
-**Status:** ready-for-dev | **Epic:** deferred | **Priority:** medium
+**Status:** done | **Epic:** deferred | **Priority:** medium
 **Story ID:** deferred-111
 **Branch:** `story/deferred-111-smtp-adapter-cleanup`
 **Created:** 2026-09-14
@@ -496,21 +496,370 @@ points for context on the files this story touches.
 
 ### Agent Model Used
 
-_(to be filled in by dev-story)_
+claude-sonnet-5 (bmad-dev-story workflow)
 
 ### Debug Log References
 
-_(to be filled in by dev-story)_
+No debug-log-tool session; all verification was direct `mvn -o -DskipFrontend=true test`/`failsafe:integration-test`
+runs against a real Testcontainers Postgres for the DB-touching ACs (AC7, AC12), plus targeted unit-test runs after
+each AC. No `mvn verify` — GitHub CI is the gate, per project convention. Full unrestricted `mvn test` run at the
+end: 1751/1751 green (1 pre-existing unrelated skip).
 
 ### Completion Notes List
 
-_(to be filled in by dev-story)_
+All 12 ACs implemented. Owner decisions taken before coding, per the story's own "surface early" Dev Note
+instruction (AC4, AC11, AC12 each needed one):
+
+- **AC4 decided: configurable DOWN TTL.** Added `SmtpHealthProperties.downTtl` (default 15s) alongside the
+  existing `ttl`, and a brand-new `SesHealthProperties` (`app.ses.health.ttl`/`.down-ttl`, defaults 60s/15s,
+  registered via `SesConfig`) replacing `SesHealthIndicator`'s old hardcoded `CACHE_TTL` constant. Both
+  indicators' `Cached` record now carries the TTL that applied to that specific cached result (DOWN vs
+  UP/UNKNOWN), decided at cache-write time, so a DOWN result re-probes sooner without touching UP's behaviour.
+- **AC11 decided: full sanitizer, mask both logs and the persisted record.** New shared,
+  transport-neutral `infrastructure.email.EmailPiiSanitizer` (regex-masks email-address-shaped substrings,
+  same first-char+`***`+domain shape `LoggingEmailSender.maskAddress` already established). Applied at three
+  points: `SmtpErrorClassifier.build(...)`'s constructed message; `MailManager`'s failure-path log line (now
+  logs the sanitized full stack trace as a `error={}` string parameter instead of passing the raw exception as
+  SLF4J's dedicated trailing-Throwable argument, which bypassed `loggableData(...)`'s masking entirely); and
+  `MailManager.toEnvelopeEntity`'s persisted `envelope_entity.error` stacktrace. Honestly scoped: does not
+  attempt to mask a bare OTP digit-string echoed by an unrelated JSON/JDBC serialization failure — a
+  text-pattern sanitizer cannot safely distinguish that from a legitimate number (amount, timestamp, id)
+  without unacceptable false positives; that sub-gap needs the JSON/JDBC boundary itself and stays open.
+- **AC12 decided: composite PRIMARY KEY on `(envelope_entity_id, email)`.** Owner confirmed no dev/uat/prod
+  data exists in this table today, so no empirical duplicate-check/backfill was needed before applying it
+  directly. New `V137__envelope_entity_recipients_composite_pk.sql`: `SET lock_timeout='5s'` (both
+  `ALTER COLUMN ... SET NOT NULL` and `ADD CONSTRAINT ... PRIMARY KEY` are lock-taking DDL per
+  `MigrationConventionLintTest`'s rules), `email` column set `NOT NULL` (required for PK membership), then the
+  composite PK added, explicitly named `envelope_entity_recipients_pkey`. `RecipientEntity.email` annotated
+  `@Column(nullable = false)` to document the now-true shape (Hibernate has no `@Id` on this
+  `@ElementCollection` table and cannot itself manage or duplicate the constraint). Verified against a real
+  fresh Testcontainers Postgres via `EnvelopeEntitySchemaIT`'s two new tests (composite PK shape + NOT NULL
+  column), plus `MigrationConventionLintTest` and a full `RegistrationEmailDurabilityIT`/`EmailRetrySchedulerIT`
+  re-run to confirm no existing test path violates the new constraint.
+
+AC-by-AC implementation notes:
+
+- **AC1:** `LoggingEmailSender.writeToDumpDir` refactored into a per-extension `writeOneFile` helper so the
+  collision-exhausted WARN (previously outside the `directoryWritable` transition-throttle) now shares the same
+  guard the `IOException` branch already used.
+- **AC2:** the same refactor writes both `.html` and `.txt` companions independently (each with its own
+  collision-suffix counter) whenever both bodies are present, instead of picking HTML and silently dropping
+  text. Asymmetric-collision case tested explicitly.
+- **AC3:** new `AdapterWrapDepthTest` drives a real `SmtpEmailSender`+`SmtpErrorClassifier` (via a real socket
+  to an extended `FakeSmtpServer` answering RCPT TO with a hard 550) and a real `SesEmailSender`+
+  `SesErrorClassifier` (mocked `SesV2Client` throwing a real `BadRequestException`) end-to-end through a real
+  `MailManager.isRetryable`. **This test caught a genuine, previously-unnoticed production bug while being
+  written**, not merely a hypothetical drift: `SMTPTransport.rcptTo()` never throws the typed
+  `SMTPAddressFailedException`/`SMTPSendFailedException` directly for a RCPT TO rejection — it always wraps it
+  in a generic `jakarta.mail.SendFailedException("Invalid Addresses", ...)` (confirmed by disassembling the
+  pinned angus-mail 2.0.5 jar's `rcptTo()` source), one level deeper than `SmtpErrorClassifier.smtpReturnCode`
+  ever looked. Every real single-recipient RCPT TO rejection (bad address, mailbox full, etc. — the exact
+  shipped `javaMailSender.send(mimeMessage)` call path) was therefore silently misclassified transient and
+  retried forever, regardless of the actual SMTP reply code. Fixed: `smtpReturnCode` now unwraps one level of
+  cause when the outer exception isn't itself one of the three typed SMTP exceptions. New regression tests
+  added directly to `SmtpErrorClassifierTest` pinning the real wrapped shape (550 permanent, 450 transient).
+- **AC5:** `SesSendRateLimiter` gained an `AtomicBoolean throttled` transition-guard (same pattern as
+  `LoggingEmailSender`'s `directoryWritable`) — WARN only on the `false→true` transition into throttling, DEBUG
+  on every rejection thereafter, cleared on the next successful acquire so a later burst logs its own WARN.
+- **AC6:** `Objects.requireNonNull` added for `verifyUrl`/`otp` in all three registration listeners (six call
+  sites), placed OUTSIDE each method's try/catch so the NPE propagates and rolls back the transaction, rather
+  than being caught and merely logged like a serialization failure.
+- **AC7:** `RegistrationEmailDurabilityIT` — the two scheduler-driven tests already had their own `sendId`
+  available (generated by the test itself in `persistedFailedEnvelope`, previously discarded) and now use the
+  existing `findBySendId` repository method via a new `committedRowBySendId` helper instead of re-discovering
+  the row through `committedRowFor`'s `findAll()` scan. The four listener-driven tests keep `committedRowFor`
+  unchanged — the sendId there is generated internally by the listener, genuinely unknown until the one
+  necessary lookup, and every call site already caches its result rather than re-querying. Added a new test
+  seeding an unrelated stray `FAILED`/`retry=true` row to pin the scoping fix directly. Verified against a real
+  Testcontainers Postgres: 7/7 green.
+- **AC8:** reworded the stale `docs/dev-docs/notification/index.html` callout (was still framing `V136` as a
+  missing migration) to describe what `V136` actually pins, added the missing `<a href>` to `deferred-work.md`
+  (this page had none, unlike several sibling dev-doc pages that already link `.md` files under `docs/` the
+  same relative way), and named the two still-open AC11/AC12-adjacent decisions this callout's history touches.
+  Tag-balance script (ses-1-7-documentation's own AC6 script) run against the edited file: OK.
+- **AC9:** added `org.springframework.mail.MailAuthenticationException` (confirmed via disassembling
+  spring-context-support 6.2.19's `doSend` bytecode: thrown directly at connect time, never wrapped in a
+  `MailSendException`) and `jakarta.mail.AuthenticationFailedException` (defensive, cause-position) to
+  `SmtpErrorClassifier.NON_REPAIRABLE_ERRORS`.
+- **AC10:** extracted `SmtpHealthIndicator`'s private `isImplicitTls` helper onto `ProviderConfig` itself as a
+  public `isImplicitTls(int port)` instance method (shared by both call sites now). `MailSenderProvider.
+  toMailSender` branches on it: implicit-TLS providers get `protocol="smtps"` and every property re-keyed under
+  `mail.smtps.*` (not just `starttls.enable` dropped — the whole namespace moves, confirmed load-bearing by
+  disassembling the pinned angus-mail jar's `SMTPSSLTransport`), STARTTLS providers are unchanged.
+- **AC11/AC12:** see Owner Decisions above.
+
+26 files touched: 18 main (4 new: `SesHealthProperties`, `EmailPiiSanitizer`, `V137__...sql`, and
+`AdapterWrapDepthTest` is a test not main — see File List for the precise split), 16 test (2 new). Targeted
+suites green throughout dev; final unrestricted `mvn -o -DskipFrontend=true test`: 1751/1751 (1 pre-existing,
+unrelated skip). Targeted `failsafe:integration-test` runs (real Testcontainers Postgres, not part of the
+default `test` phase): `RegistrationEmailDurabilityIT` (7/7), `EnvelopeEntitySchemaIT` (6/6),
+`EmailRetrySchedulerIT` (9/9), `SmtpTransportBootIT` (1/1) — the four IT classes this story's changes could
+plausibly affect. No `mvn verify`/full failsafe sweep run locally (CI is the gate, per project convention);
+`MigrationConventionLintTest` (runs in the `test` phase, no container) passed as part of the full suite.
 
 ### File List
 
-_(to be filled in by dev-story)_
+**Main (14 modified, 4 new):**
+
+- `src/main/java/com/softropic/skillars/infrastructure/email/log/LoggingEmailSender.java` (modified — AC1, AC2)
+- `src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpErrorClassifier.java` (modified — AC3, AC9, AC11)
+- `src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpHealthIndicator.java` (modified — AC4, AC10)
+- `src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpHealthProperties.java` (modified — AC4)
+- `src/main/java/com/softropic/skillars/infrastructure/email/smtp/ProviderConfig.java` (modified — AC10)
+- `src/main/java/com/softropic/skillars/infrastructure/email/smtp/MailSenderProvider.java` (modified — AC10)
+- `src/main/java/com/softropic/skillars/infrastructure/ses/SesHealthIndicator.java` (modified — AC4)
+- `src/main/java/com/softropic/skillars/infrastructure/ses/SesHealthProperties.java` (**new** — AC4)
+- `src/main/java/com/softropic/skillars/infrastructure/ses/SesConfig.java` (modified — AC4)
+- `src/main/java/com/softropic/skillars/infrastructure/ses/SesSendRateLimiter.java` (modified — AC5)
+- `src/main/java/com/softropic/skillars/infrastructure/email/EmailPiiSanitizer.java` (**new** — AC11)
+- `src/main/java/com/softropic/skillars/platform/notification/service/MailManager.java` (modified — AC11)
+- `src/main/java/com/softropic/skillars/platform/notification/repo/RecipientEntity.java` (modified — AC12)
+- `src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/CoachRegistrationEmailListener.java` (modified — AC6)
+- `src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/ParentRegistrationEmailListener.java` (modified — AC6)
+- `src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/PlayerRegistrationEmailListener.java` (modified — AC6)
+- `src/main/resources/db/migration/V137__envelope_entity_recipients_composite_pk.sql` (**new** — AC12)
+- `docs/dev-docs/notification/index.html` (modified — AC8)
+
+**Test (14 modified, 2 new):**
+
+- `src/test/java/com/softropic/skillars/infrastructure/email/log/LoggingEmailSenderTest.java` (modified — AC2)
+- `src/test/java/com/softropic/skillars/infrastructure/email/log/LoggingEmailSenderCollisionTest.java` (modified — AC1)
+- `src/test/java/com/softropic/skillars/infrastructure/email/smtp/AdapterWrapDepthTest.java` (**new** — AC3)
+- `src/test/java/com/softropic/skillars/infrastructure/email/smtp/FakeSmtpServer.java` (modified — AC3 support)
+- `src/test/java/com/softropic/skillars/infrastructure/email/smtp/SmtpErrorClassifierTest.java` (modified — AC3, AC9)
+- `src/test/java/com/softropic/skillars/infrastructure/email/smtp/SmtpHealthIndicatorTest.java` (modified — AC4)
+- `src/test/java/com/softropic/skillars/infrastructure/email/smtp/MailSenderProviderTest.java` (modified — AC10)
+- `src/test/java/com/softropic/skillars/infrastructure/ses/SesHealthIndicatorTest.java` (modified — AC4)
+- `src/test/java/com/softropic/skillars/infrastructure/ses/SesSendRateLimiterTest.java` (modified — AC5)
+- `src/test/java/com/softropic/skillars/infrastructure/email/EmailPiiSanitizerTest.java` (**new** — AC11)
+- `src/test/java/com/softropic/skillars/platform/notification/infrastructure/MailManagerRedactionTest.java` (modified — AC11)
+- `src/test/java/com/softropic/skillars/platform/notification/repo/EnvelopeEntitySchemaIT.java` (modified — AC12)
+- `src/test/java/com/softropic/skillars/platform/security/infrastructure/listener/CoachRegistrationEmailListenerTest.java` (modified — AC6)
+- `src/test/java/com/softropic/skillars/platform/security/infrastructure/listener/ParentRegistrationEmailListenerTest.java` (modified — AC6)
+- `src/test/java/com/softropic/skillars/platform/security/infrastructure/listener/PlayerRegistrationEmailListenerTest.java` (modified — AC6)
+
+---
+
+## Code Review Findings
+
+**Multi-layer adversarial review completed 2026-09-15 using edge-case, transaction-boundary, and TOCTOU hunters.**
+
+### 🚨 CRITICAL ISSUES (Must Fix Before Merge)
+
+#### **C1 — EmailRetryScheduler Duplicate Email Delivery [HIGH]**
+- **Pre-existing structural issue** exposed by review scrutiny; not caused by deferred-111
+- Rows claimed with `FOR UPDATE` but never marked "in-flight"; after commit, lock releases and row re-selectable
+- **Observable failure:** Pod A sends OTP, releases lock; Pod B's next tick re-selects same row and sends OTP again
+- **Impact:** User receives OTP twice; attempts counted twice per send, exhausts `MAX_RETRY_ATTEMPTS=6` in ~3 cycles
+- **Fix required:** Add `@SchedulerLock` to `EmailRetryScheduler.retryFailedEmails()` (every other scheduler in codebase has it), or mark rows with `status='SENDING'` before commit
+- **Files affected:** `src/main/java/com/softropic/skillars/platform/notification/infrastructure/EmailRetryScheduler.java`
+
+#### **C2 — LoggingEmailSender Collision Throttle Poisons Real I/O Failure Warnings [AC1 REGRESSION]**
+- `directoryWritable` flag shared between three conditions: startup failure, IOException, collision exhaustion
+- **Observable failure:** Collision exhaustion flips flag false; later genuine IOException (disk full, permissions) finds flag already false → no WARN logged → operators see no signal that dumps have failed
+- **Secondary issue:** Comment claims "prevents MAX_COLLISION_ATTEMPTS syscalls and emit one WARN" — code still performs all 100 syscalls, only suppresses the log line
+- **Fix required:** Give collision exhaustion its own `AtomicBoolean` flag, separate from I/O error flag
+- **Files affected:** `src/main/java/com/softropic/skillars/infrastructure/email/log/LoggingEmailSender.java` (AC1)
+
+#### **C3 — SmtpHealthIndicator TLS Probe Skips Hostname Verification [AC10 DIVERGENCE]**
+- Health indicator probe uses bare `SSLSocketFactory` → chain validation only → no hostname matching
+- Send path enforces hostname matching (verified in angus-mail bytecode, default enabled)
+- **Observable failure:** Port-465 provider with misconfigured cert (TLS proxy, CN mismatch) → health reports UP; every real send throws `SSLPeerUnverifiedException`; SmtpErrorClassifier finds no permanent-error match → classifies transient, retries forever
+- **This is the exact failure shape AC9 just fixed for wrong passwords**
+- **Fix required:** Add `setEndpointIdentificationAlgorithm("HTTPS")` on probe socket before `startHandshake()`
+- **Files affected:** `src/main/java/com/softropic/skillars/infrastructure/email/smtp/SmtpHealthIndicator.java` (AC10)
+
+### ⚠️ HIGH SEVERITY ISSUES
+
+#### **H1 — Registration Listener Catch Block False Javadoc [Pre-existing, AC6 Context]**
+- Documented claim: "serialisation failure swallowed, so registration still commits"
+- **Actual behavior:** Exception thrown → `TransactionAspectSupport.doSetRollbackOnly()` called before catch runs → registration rolls back with 500
+- **Why AC6 still works:** `Objects.requireNonNull` placed OUTSIDE try/catch prevents silent nulls from being swallowed — correct placement, but justification is false
+- **Fix required:** Update javadoc to accurately state both paths roll back
+- **Files affected:** `CoachRegistrationEmailListener.java`, `ParentRegistrationEmailListener.java`, `PlayerRegistrationEmailListener.java` (AC6)
+
+#### **H2 — SesSendRateLimiter Throttle Re-Arms Every Refresh Period [AC5 REGRESSION]**
+- `throttled.set(false)` unconditional on every success; rate limiter grants permits every refresh period
+- **Observable failure:** At 1/s sandboxed rate, ~1 success per second clears flag → next rejection logs WARN → observable output is ~60 WARN lines per minute during sustained burst, not "only on transition"
+- **Fix required:** Gate WARN on elapsed time (suppress for N seconds after first transition) or require sustained success before clearing flag
+- **Files affected:** `src/main/java/com/softropic/skillars/infrastructure/ses/SesSendRateLimiter.java` (AC5)
+
+#### **H3 — LoggingEmailSender's Both-Bodies Path Re-Arms Throttle [AC2 REGRESSION]**
+- When sending both HTML and text bodies, first `writeOneFile` exhausts collisions; second succeeds and resets flag
+- **Observable failure:** Reused correlationId with both bodies WARNs on second send (flag was reset by second body success)
+- **Test gap:** `LoggingEmailSenderCollisionTest.exhaustingCollisionRetriesTwice_logsOnlyOneWarn` tests html-only sends; both-bodies variant would go RED
+- **Fix required:** Coordinate the throttle flag across both `writeOneFile` calls, or use per-correlation-id tracking
+- **Files affected:** `src/main/java/com/softropic/skillars/infrastructure/email/log/LoggingEmailSender.java` (AC2)
+
+### ⚠️ MEDIUM SEVERITY ISSUES
+
+#### **M1 — MailManager Error Log Lost Structured Exception Field [AC11]**
+- AC11 changed trailing SLF4J argument from `Throwable` to `String` (`envelopeEntity.getError()`)
+- Appenders declare `<stackTrace/>` expecting `IThrowableProxy` → field disappears from JSON/Loki records
+- **Impact:** Loki queries keyed on `stack_trace` fail; error trackers can't match by exception class; alerts fail
+- **Fix required:** Update Loki queries, alerts, error trackers to search `message` field instead
+
+#### **M2 — Health Indicator TTL Config Unvalidated [AC4]**
+- `SmtpHealthProperties.downTtl` and `SesHealthProperties` lack `@DurationMin` / `@Positive` validation
+- `down-ttl: 0s` → `now - computedAtMillis < 0` always false → re-probes on every scrape (SES calls `GetAccount` per scrape inside synchronized block with 5s timeout; Prometheus scrapes serialize)
+- No enforcement that `downTtl <= ttl` — `down-ttl: 120s, ttl: 60s` inverts AC4's intent
+- **Fix required:** Add `@DurationMin(millis=100)` and validator to ensure `downTtl <= ttl`
+
+#### **M3 — Health Indicators Use Wall-Clock Time [AC4]**
+- Both indicators use `System.currentTimeMillis()` (not monotonic)
+- NTP backward correction: clock jumps backward → `now - computedAtMillis` becomes negative → cache passes TTL check indefinitely
+- **Impact:** AC4's entire purpose ("DOWN visible sooner") defeated by clock step
+- **Fix required:** Use `System.nanoTime()` (monotonic) instead
+
+#### **M4 — SesHealthIndicator.ttlFor Javadoc Self-Contradictory [AC4]**
+- Javadoc claims SdkException branch uses `getTtl()`, but code shows it returns `Health.down()` → gets `downTtl()`
+- Will mislead next reviewer
+- **Fix required:** Correct javadoc to state SdkException also gets `downTtl`
+
+#### **M5 — Dump Directory Filename Suffixes Ambiguous [AC1/AC2]**
+- `sanitize()` permits `-`, and collision suffix also uses `-` → names are ambiguous
+- **Observable failure:** correlationId='x' → cid-2.html on collision; correlationId='cid-2' → same cid-2.html file
+- Operators can't reliably find file for given correlationId
+- **Fix required:** Use distinct collision separator (e.g., `~` instead of `-`)
+
+#### **M6 — MailManager.scrubDataIfSentAndSensitive Missing Null Guard [AC11]**
+- `SENSITIVE_DATA_TEMPLATES.contains(entity.getEmailTemplate())` NPEs on null template
+- **Why latent (not active today):** Only called on `status==SENT` rows; null template can't produce successful send
+- **But inconsistent:** `loggableEnvelope()` and `loggableData()` both null-check; this one doesn't
+- **Fix required:** Add null guard for consistency
+
+### ✅ VERIFIED SAFE IMPLEMENTATIONS
+
+- **AC3** — SmtpErrorClassifier cause-chain unwrap: One-level unwrap correct; circular reference guard `cause != t` handles self-cycles ✓
+- **AC4** — Health indicator TTL logic: DOWN vs UP TTL selected at cache-write, travels with `Cached` record ✓
+- **AC6** — Registration listener null checks: `Objects.requireNonNull` outside try/catch correctly propagates without rollback ✓
+- **AC7** — RegistrationEmailDurabilityIT scoping: Scoped to `sendId` via `findBySendId` ✓
+- **AC8** — Dev-docs update: Accurately reflects V136 migration ✓
+- **AC9** — SMTP auth password: Correctly added to NON_REPAIRABLE_ERRORS ✓
+- **AC10** — MailSenderProvider implicit TLS: Property namespace move correct ✓
+- **AC11** — PII sanitizer: Regex-based masking applied at three points ✓
+- **AC12** — envelope_entity_recipients PK: Composite PK sound ✓
+- **All atomicity/concurrency:** LoggingEmailSender atomicity (CREATE_NEW syscall), MailManager findBySendId (PESSIMISTIC_WRITE + @Version), SesSendRateLimiter DCL all correct ✓
+
+### ACTION PRIORITY
+
+**Before Merge:**
+1. **C1** — Add `@SchedulerLock` to EmailRetryScheduler
+2. **C2** — Separate collision-exhaustion flag
+3. **C3** — Add hostname verification to TLS probe
+
+**Before Production:**
+4. **H2, H3** — Implement time-gated or sustained-success throttling
+5. **M1** — Update Loki queries/alerts post-AC11
+6. **M3, M5** — Monotonic clock + distinct collision separator
+
+**Documentation/Polish:**
+7. **H1, M4, M6** — Fix javadoc, add null guard
+- `src/test/java/com/softropic/skillars/platform/notification/infrastructure/listener/RegistrationEmailDurabilityIT.java` (modified — AC7)
+
+### Resolution (2026-09-15)
+
+Every finding above (C1–C3, H1–H3, M1–M6) was independently re-verified against the current code —
+per this pass's own instruction to watch for false positives — before being acted on. **None turned
+out to be false positives**; all 12 were confirmed genuine by direct code/behavior tracing (not taken
+on the review's word) and fixed, except M1 which has no in-repo artifact to change (see below).
+
+- **C1** — `@SchedulerLock` added to `EmailRetryScheduler.retryFailedEmails()`
+  (`lockAtMostFor=PT10M`, `lockAtLeastFor=PT10S`), matching the codebase-wide ShedLock convention
+  confirmed via `BookingExpiryScheduler` and `SchedulerLockTransactionOrderingIT` (ShedLock advisor
+  pinned outermost, so the lock covers the synchronous post-commit SMTP dispatch too). Verified live
+  against real Postgres/ShedLock via `EmailRetrySchedulerIT` (9/9 passing, including the two
+  same-test double-invocation cases).
+- **C2 + H3** — `LoggingEmailSender` now resolves both bodies' write outcomes (`WriteOutcome`
+  record) before touching either throttle flag, and collision-exhaustion got its own
+  `collisionAttemptsExhausted` `AtomicBoolean` separate from `directoryWritable`. Two new tests added
+  (`exhaustingCollisionRetriesTwice_bothBodiesPresent_logsOnlyOneWarn`,
+  `collisionExhaustion_doesNotSuppressALaterGenuineIoFailureWarn`) closing exactly the gaps the review
+  named.
+- **C3** — `SmtpHealthIndicator.probeImplicitTlsConnection` now sets
+  `setEndpointIdentificationAlgorithm("HTTPS")` on the `SSLParameters` before `startHandshake()`.
+- **H1** — `NotificationOutboxSupport`'s "Failure semantics" javadoc (and the three registration
+  listeners that cite it, plus `CoachRegistrationEmailListenerTest`'s docstring) corrected: `MANDATORY`
+  propagation joins the caller's transaction, so `TransactionInterceptor` marks it rollback-only as the
+  exception unwinds from `enqueueEmail` — before any listener's `catch (Exception)` runs. Both failure
+  branches (outbox-INSERT vs. serialisation) behave identically; there is no non-atomic case.
+- **H2** — `SesSendRateLimiter` no longer clears `throttled` unconditionally on every success; it now
+  requires `THROTTLE_LOG_COOLDOWN` (3s) of sustained non-rejection since the last rejection. New test
+  `isolatedSuccessDuringABurst_doesNotReArmWarnBeforeCooldown` reproduces H2's exact 1/s scenario.
+- **M2** — `@Validated` + `@DurationMin(millis=100)` + a cross-field `@AssertTrue` (`downTtl <= ttl`)
+  added to both `SmtpHealthProperties` and `SesHealthProperties`. New
+  `SmtpHealthPropertiesValidationTest`/`SesHealthPropertiesValidationTest` (4 cases each) confirm
+  defaults bind, `down-ttl=0s` fails to bind, `down-ttl > ttl` fails to bind, and `down-ttl == ttl`
+  binds.
+- **M3** — Both health indicators switched from `System.currentTimeMillis()` to the monotonic
+  `System.nanoTime()` for their TTL-cache clock (`Cached` record fields renamed `computedAtNanos`/
+  `appliedTtlNanos`).
+- **M4** — `SesHealthIndicator.ttlFor`'s javadoc corrected: the `SdkException` catch branch also
+  returns `Health.down()`, so it gets `downTtl` like every other `DOWN` result, not `getTtl()`.
+- **M5** — Collision-suffix separator changed from `-` to `~` (`sanitize()` permits `-` in a
+  correlationId, so `cid-2.html` was ambiguous between `correlationId="cid"` colliding twice and
+  `correlationId="cid-2"`; `~` is not permitted in a sanitized correlationId).
+- **M6** — Null guard added to `MailManager.scrubDataIfSentAndSensitive` (`Set.of(...).contains(null)`
+  throws) for consistency with `loggableEnvelope`/`loggableData`'s existing null-checks, even though
+  the review confirmed this path is latent, not reachable today.
+- **M1** — No in-repo artifact to change: this repo has no committed Loki query/alert/dashboard
+  definitions referencing `stack_trace` (`deploy/lgtm/loki.yml` is server config only). Flagged for
+  whoever owns the external Loki dashboards/alerts to repoint from the `stack_trace` field to
+  `message` post-AC11.
+
+All new/changed tests plus the full `infrastructure.email`, `infrastructure.ses`,
+`platform.notification`, and `platform.security.infrastructure.listener` package suites were run
+locally (`mvn -DskipFrontend test`, not `verify`) and pass. `mvn -DskipFrontend compile test-compile`
+confirms a clean compile.
 
 ### Owner Decisions (surfaced before implementation, per the story's own Dev Note instruction)
 
-_(to be filled in by dev-story — AC4, AC11, AC12 each need an explicit decision before/at dev-story time,
-per this project's established pattern)_
+- **AC4 — SES/SMTP health indicator DOWN-result caching:** Configurable DOWN TTL (Recommended option),
+  mirroring `SmtpHealthIndicator`'s existing pattern, with the SES side's TTL also added to config for
+  symmetry (see Completion Notes for the shipped shape).
+- **AC11 — recipient-address/OTP exposure in SMTP exception messages and persisted stacktraces:** Full
+  sanitizer, applied at both logging call sites AND before `envelope_entity.error` persistence (see
+  Completion Notes for exact scope and the explicitly-still-open OTP-via-serialization-failure sub-gap).
+- **AC12 — `envelope_entity_recipients` missing PK/index:** Composite PRIMARY KEY on
+  `(envelope_entity_id, email)`, applied directly with no prior empirical dedup pass — owner confirmed no
+  dev/uat/prod data exists in this table today, so the stronger duplicate-rejecting guarantee was chosen over
+  a weaker surrogate-PK-plus-index alternative.
+
+## Review Findings
+
+**Code Review Status:** All 12 ACs verified implemented per Dev Agent Record.
+
+### Decision-Needed Findings (Resolved)
+
+- [x] **AC4 — Health indicator DOWN-TTL** → Implemented: configurable DOWN TTL added to both `SmtpHealthProperties` (default 15s) and new `SesHealthProperties` (defaults 60s/15s). Cached result TTL determined at cache-write time based on result status.
+
+- [x] **AC11 — PII/recipient exposure in SMTP errors** → Implemented: new `EmailPiiSanitizer` (regex-masks email-address-shaped substrings) applied at `SmtpErrorClassifier.build()`, `MailManager` failure-path logging, and persisted `envelope_entity.error`. Explicitly excludes OTP serialization-failure sub-gap (deferred as infeasible via text-only sanitizer).
+
+- [x] **AC12 — `envelope_entity_recipients` schema (no PK/FK index)** → Implemented: composite PRIMARY KEY on `(envelope_entity_id, email)` via new `V137__envelope_entity_recipients_composite_pk.sql`. `RecipientEntity.email` annotated `@Column(nullable = false)`. Verified via new schema tests in `EnvelopeEntitySchemaIT`.
+
+### Patch Findings (Implemented)
+
+- [x] **AC1 — `LoggingEmailSender` collision-exhaustion WARN unthrottled** → Fixed: refactored `writeToDumpDir` to per-extension `writeOneFile` helper; collision-exhausted WARN now shares `directoryWritable` transition-throttle with `IOException` branch.
+
+- [x] **AC2 — `LoggingEmailSender` silently drops text body** → Fixed: `writeToDumpDir` now writes both `.html` and `.txt` companions independently with separate collision counters when both bodies present. Asymmetric-collision case tested explicitly.
+
+- [x] **AC3 — Adapter wrap-depth untested against real adapters** → Fixed: new `AdapterWrapDepthTest` drives real `SmtpEmailSender`+`SmtpErrorClassifier` via `FakeSmtpServer` with RCPT TO hard 550, and real `SesEmailSender`+`SesErrorClassifier`. Notably caught and fixed genuine production bug: SMTP RCPT TO rejections were misclassified transient (wrapped `SendFailedException` was not being unwrapped to expose typed rejection).
+
+- [x] **AC5 — `SesSendRateLimiter` logs WARN per rejection** → Fixed: added `AtomicBoolean throttled` transition-guard; logs WARN only on `false → true` transition, DEBUG on every rejection thereafter. Flag cleared on successful acquire.
+
+- [x] **AC6 — Registration listeners accept null OTP/verifyUrl** → Fixed: added `Objects.requireNonNull()` checks in all three listeners before map insertion (`CoachRegistrationEmailListener`, `PlayerRegistrationEmailListener`, `ParentRegistrationEmailListener`; six call sites total). Restores `Map.of()` fail-fast behavior.
+
+- [x] **AC7 — `RegistrationEmailDurabilityIT` scans full `envelope_entity` table** → Fixed: test now captures `sendId` after listener fires, uses `envelopeEntityRepository.findBySendId()` for scoped assertions instead of `findAll()` + in-memory filter. Removes `findAll()` cost and suite-accumulation fragility.
+
+- [x] **AC8 — Dev-doc `envelope_entity` callout is stale** → Fixed: reworded `docs/dev-docs/notification/index.html:336` callout to reference `V136__pin_envelope_entity_schema.sql` shipped by `skillars-deferred-110`. Added missing `<a href>` to `deferred-work.md` matching page's cross-reference convention.
+
+- [x] **AC9 — Wrong/expired SMTP password retried forever** → Fixed: `MailAuthenticationException` and `AuthenticationFailedException` added to `SmtpErrorClassifier.NON_REPAIRABLE_ERRORS`. Classified as permanent per `skillars-deferred-110` precedent.
+
+- [x] **AC10 — `MailSenderProvider` ignores `implicitTls`** → Fixed: `MailSenderProvider.toMailSender()` now honors `implicitTls` via `ProviderConfig.isImplicitTls()` helper; re-keys all properties under `mail.smtps.*` for implicit-TLS providers (not just dropping `starttls.enable`).
+
+## Change Log
+
+| Date | Change | Author |
+| --- | --- | --- |
+| 2026-09-14 | All 12 ACs implemented per owner decisions above; see Dev Agent Record for the full breakdown, including a genuine production bug (SMTP RCPT TO rejections misclassified transient) found and fixed while writing AC3's real-adapter test. | claude-sonnet-5 (dev-story) |
+| 2026-09-14 | Code review complete: all 12 ACs verified implemented against spec. All decision-needed and patch items confirmed. Story status → `done`. | claude-haiku-4-5 (bmad-code-review) |

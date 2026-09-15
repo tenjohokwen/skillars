@@ -61,21 +61,45 @@ public class MailSenderProvider {
      * from an {@code @TransactionalEventListener(AFTER_COMMIT)} with no {@code @Async}, so a
      * blackholed/unreachable SMTP host would otherwise hang the calling request thread indefinitely
      * (code review 2026-09-11).
+     *
+     * <p>skillars-deferred-111 AC10: this previously hardcoded {@code protocol = "smtp"} and
+     * {@code mail.smtp.starttls.enable = true} for EVERY provider, never reading {@link
+     * ProviderConfig#isImplicitTls}, even though {@link SmtpHealthIndicator} already probed a
+     * port-465 provider with a real TLS handshake and reported it UP — the actual send path would
+     * still speak plaintext-plus-STARTTLS to that same endpoint and fail. When implicit TLS applies,
+     * the protocol becomes {@code "smtps"} and every property moves to the {@code mail.smtps.*}
+     * namespace instead of {@code mail.smtp.*} — confirmed by disassembling the pinned {@code
+     * org.eclipse.angus:angus-mail:2.0.5} jar that {@code smtps} resolves to {@code
+     * SMTPSSLTransport}, which passes the literal string {@code "smtps"} as its OWN property-prefix
+     * name to the shared {@code SMTPTransport} base, so it reads {@code mail.smtps.auth}/{@code
+     * connectiontimeout}/{@code timeout}/{@code writetimeout} and does NOT fall back to {@code
+     * mail.smtp.*} for these. {@code starttls.enable} is dropped entirely for this branch, not
+     * merely renamed — implicit TLS needs no STARTTLS upgrade.
      */
     private JavaMailSenderImpl toMailSender(final ProviderConfig providerConfig) {
         JavaMailSenderImpl javaMailSender = new JavaMailSenderImpl();
         javaMailSender.setDefaultEncoding(String.valueOf(StandardCharsets.UTF_8));
         javaMailSender.setHost(providerConfig.getHost());
-        javaMailSender.setPort(Integer.parseInt(providerConfig.getPort()));
+        int port = Integer.parseInt(providerConfig.getPort());
+        javaMailSender.setPort(port);
         javaMailSender.setPassword(providerConfig.getPassword());
         javaMailSender.setUsername(providerConfig.getUsername());
-        javaMailSender.setProtocol("smtp");
+
         Properties props = javaMailSender.getJavaMailProperties();
-        props.put("mail.smtp.auth", "true");
-        props.put("mail.smtp.starttls.enable", "true");
-        props.put("mail.smtp.connectiontimeout", "5000");
-        props.put("mail.smtp.timeout", "5000");
-        props.put("mail.smtp.writetimeout", "5000");
+        if (providerConfig.isImplicitTls(port)) {
+            javaMailSender.setProtocol("smtps");
+            props.put("mail.smtps.auth", "true");
+            props.put("mail.smtps.connectiontimeout", "5000");
+            props.put("mail.smtps.timeout", "5000");
+            props.put("mail.smtps.writetimeout", "5000");
+        } else {
+            javaMailSender.setProtocol("smtp");
+            props.put("mail.smtp.auth", "true");
+            props.put("mail.smtp.starttls.enable", "true");
+            props.put("mail.smtp.connectiontimeout", "5000");
+            props.put("mail.smtp.timeout", "5000");
+            props.put("mail.smtp.writetimeout", "5000");
+        }
         return javaMailSender;
     }
 

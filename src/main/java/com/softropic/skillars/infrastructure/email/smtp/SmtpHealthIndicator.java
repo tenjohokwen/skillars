@@ -5,17 +5,20 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.actuate.health.AbstractHealthIndicator;
 import org.springframework.boot.actuate.health.Health;
+import org.springframework.boot.actuate.health.Status;
 import org.springframework.boot.autoconfigure.condition.AllNestedConditions;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
 
+import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -94,7 +97,6 @@ public class SmtpHealthIndicator extends AbstractHealthIndicator {
 
 	private static final int SOCKET_TIMEOUT_MS = 5000;
 	private static final int CONNECT_TIMEOUT_MS = 5000;
-	private static final int IMPLICIT_TLS_PORT = 465;
 
 	private final SmtpProperties smtpProperties;
 	private final SmtpHealthProperties healthProperties;
@@ -127,23 +129,38 @@ public class SmtpHealthIndicator extends AbstractHealthIndicator {
 	@Override
 	protected void doHealthCheck(Health.Builder builder) {
 		Cached current = cache.get();
-		long now = System.currentTimeMillis();
-		if (current != null && now - current.computedAtMillis() < healthProperties.getTtl().toMillis()) {
+		long now = System.nanoTime();
+		if (current != null && now - current.computedAtNanos() < current.appliedTtlNanos()) {
 			copyInto(builder, current.health());
 			return;
 		}
 		synchronized (cache) {
 			// Double-check after acquiring lock: another thread may have just refreshed the cache
 			current = cache.get();
-			now = System.currentTimeMillis();
-			if (current != null && now - current.computedAtMillis() < healthProperties.getTtl().toMillis()) {
+			now = System.nanoTime();
+			if (current != null && now - current.computedAtNanos() < current.appliedTtlNanos()) {
 				copyInto(builder, current.health());
 				return;
 			}
 			Health fresh = computeAggregate();
-			cache.set(new Cached(fresh, System.currentTimeMillis()));
+			cache.set(new Cached(fresh, System.nanoTime(), ttlFor(fresh)));
 			copyInto(builder, fresh);
 		}
+	}
+
+	/**
+	 * skillars-deferred-111 AC4 (owner decision): a freshly-computed {@code DOWN} result is cached
+	 * for {@link SmtpHealthProperties#getDownTtl()}, shorter than the {@code UP} {@link
+	 * SmtpHealthProperties#getTtl()}, so a recovery becomes visible sooner than a full {@code UP}
+	 * window would allow. {@code UNKNOWN} (no providers configured, or the probe round was
+	 * interrupted) is treated like {@code UP} here — it is not the "actively failing" state this AC
+	 * targets, and re-probing it aggressively would defeat the point of caching at all.
+	 */
+	private long ttlFor(Health health) {
+		Duration ttl = Status.DOWN.equals(health.getStatus())
+			? healthProperties.getDownTtl()
+			: healthProperties.getTtl();
+		return ttl.toNanos();
 	}
 
 	private static void copyInto(Health.Builder builder, Health source) {
@@ -210,7 +227,7 @@ public class SmtpHealthIndicator extends AbstractHealthIndicator {
 			if (port < 0 || port > 65535) {
 				return new ProviderStatus(config.getName(), "UNKNOWN", "Port out of range: " + portStr);
 			}
-			if (isImplicitTls(config, port)) {
+			if (config.isImplicitTls(port)) {
 				return probeImplicitTlsConnection(host, port)
 					? new ProviderStatus(config.getName(), "UP", "TLS handshake successful")
 					: new ProviderStatus(config.getName(), "DOWN", "TLS handshake failed");
@@ -224,10 +241,6 @@ public class SmtpHealthIndicator extends AbstractHealthIndicator {
 			String detail = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
 			return new ProviderStatus(config.getName(), "DOWN", detail);
 		}
-	}
-
-	private static boolean isImplicitTls(ProviderConfig config, int port) {
-		return config.getImplicitTls() != null ? config.getImplicitTls() : port == IMPLICIT_TLS_PORT;
 	}
 
 	/**
@@ -289,6 +302,19 @@ public class SmtpHealthIndicator extends AbstractHealthIndicator {
 	 * a completed handshake as reachable — the correct probe for an implicit-TLS (port 465) endpoint,
 	 * which expects TLS immediately and sends no plaintext {@code 220}.
 	 *
+	 * <p><strong>Hostname verification (code review 2026-09-15, C3):</strong> connecting via {@code
+	 * connect(InetSocketAddress)} rather than {@code factory.createSocket(host, port)} means the
+	 * socket never carries a peer hostname for the handshake to check against — chain validation
+	 * alone accepts any certificate trusted by the default trust store, CN/SAN mismatch included.
+	 * The send path (angus-mail) enables {@code mail.smtps.ssl.checkserveridentity} by default and
+	 * does perform that check, so without this a misconfigured cert (TLS-terminating proxy, wrong
+	 * CN) reported this probe UP while every real send threw {@code SSLPeerUnverifiedException} —
+	 * {@code SmtpErrorClassifier} has no permanent-error match for that, so it retried forever. {@code
+	 * setEndpointIdentificationAlgorithm("HTTPS")} is the standard JSSE way to opt a plain {@link
+	 * SSLSocket} into the same hostname check {@code HttpsURLConnection} always performed — it
+	 * matches CN/SAN against the given hostname despite the "HTTPS" name, per {@code
+	 * javax.net.ssl.SSLParameters} javadoc.
+	 *
 	 * <p>Package-private seam: tests against a self-signed stub override this rather than making the
 	 * production probe trust every certificate.
 	 */
@@ -297,6 +323,9 @@ public class SmtpHealthIndicator extends AbstractHealthIndicator {
 		try (SSLSocket socket = (SSLSocket) factory.createSocket()) {
 			socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
 			socket.setSoTimeout(SOCKET_TIMEOUT_MS);
+			SSLParameters sslParameters = socket.getSSLParameters();
+			sslParameters.setEndpointIdentificationAlgorithm("HTTPS");
+			socket.setSSLParameters(sslParameters);
 			socket.startHandshake();
 			return socket.getSession() != null && socket.getSession().isValid();
 		} catch (SocketTimeoutException e) {
@@ -340,8 +369,22 @@ public class SmtpHealthIndicator extends AbstractHealthIndicator {
 		}
 	}
 
-	/** Aggregate {@link Health} plus the {@link System#currentTimeMillis()} it was computed at. */
-	private record Cached(Health health, long computedAtMillis) {
+	/**
+	 * Aggregate {@link Health} plus the {@link System#nanoTime()} it was computed at, and the TTL (in
+	 * nanos) that applied to THIS result at write time — skillars-deferred-111 AC4: {@code DOWN} and
+	 * {@code UP}/{@code UNKNOWN} results can carry different TTLs, so the applicable one must travel
+	 * with the cached entry rather than being re-read from current config at check time (which would
+	 * silently use the wrong TTL for an already-cached result if config changed, and more importantly
+	 * wouldn't know which of the two TTLs a given cached entry was computed under).
+	 *
+	 * <p><strong>Monotonic clock (code review 2026-09-15, M3):</strong> {@link System#nanoTime()}, not
+	 * {@link System#currentTimeMillis()} — the latter is wall-clock and can step backward (NTP
+	 * correction, manual adjustment), which would make {@code now - computedAtNanos} negative and the
+	 * TTL check pass indefinitely, serving a stale {@code DOWN} result forever and defeating AC4's
+	 * entire point of surfacing recovery sooner. {@code nanoTime()} values are only meaningful as
+	 * differences between calls in this same JVM run, which is exactly how they're used here.
+	 */
+	private record Cached(Health health, long computedAtNanos, long appliedTtlNanos) {
 	}
 
 	/**

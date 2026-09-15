@@ -216,4 +216,52 @@ class SesHealthIndicatorTest {
         assertThat(second.getStatus()).isEqualTo(Status.UP);
         verify(client, times(1)).getAccount(any(GetAccountRequest.class));
     }
+
+    // ---------------------------------------------------------------- skillars-deferred-111 AC4
+
+    /**
+     * skillars-deferred-111 AC4 (owner decision): a DOWN result must re-probe after the shorter
+     * {@code downTtl}, not the longer {@code ttl}. {@code // Mutation:} making {@code ttlFor} always
+     * return {@code healthProperties.getTtl()} turns this red (the second call would still be served
+     * from the stale DOWN cache instead of re-probing).
+     */
+    @Test
+    @DisplayName("AC4: a DOWN result re-probes after downTtl, not the longer ttl")
+    void downResult_reProbesAfterTheShorterDownTtl() throws InterruptedException {
+        stubResponse(healthyResponseBuilder().sendingEnabled(false).build());
+        SesHealthProperties props = new SesHealthProperties();
+        props.setTtl(java.time.Duration.ofSeconds(60));
+        props.setDownTtl(java.time.Duration.ofMillis(1));
+        SesHealthIndicator downIndicator = new SesHealthIndicator(client, props);
+
+        Health first = downIndicator.health();
+        Thread.sleep(20);
+        Health second = downIndicator.health();
+
+        assertThat(first.getStatus()).isEqualTo(Status.DOWN);
+        assertThat(second.getStatus()).isEqualTo(Status.DOWN);
+        verify(client, times(2)).getAccount(any(GetAccountRequest.class));
+    }
+
+    /**
+     * The counterpart that makes the case above non-vacuous: an UP result keeps honouring the
+     * (longer) {@code ttl}, unaffected by however short {@code downTtl} is configured.
+     */
+    @Test
+    @DisplayName("AC4: an UP result still honours the original (longer) ttl, unaffected by downTtl")
+    void upResult_stillHonoursTheOriginalTtl() throws InterruptedException {
+        stubResponse(healthyResponseBuilder().build());
+        SesHealthProperties props = new SesHealthProperties();
+        props.setTtl(java.time.Duration.ofSeconds(60));
+        props.setDownTtl(java.time.Duration.ofMillis(1));
+        SesHealthIndicator upIndicator = new SesHealthIndicator(client, props);
+
+        Health first = upIndicator.health();
+        Thread.sleep(20);
+        Health second = upIndicator.health();
+
+        assertThat(first.getStatus()).isEqualTo(Status.UP);
+        assertThat(second.getStatus()).isEqualTo(Status.UP);
+        verify(client, times(1)).getAccount(any(GetAccountRequest.class));
+    }
 }

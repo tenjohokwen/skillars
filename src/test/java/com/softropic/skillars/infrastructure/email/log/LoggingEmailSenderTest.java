@@ -208,6 +208,48 @@ class LoggingEmailSenderTest {
         assertThat(tempDir.resolve("cid-mask.html")).content().contains("jane.doe@example.com");
     }
 
+    /**
+     * skillars-deferred-111 AC2. Before this fix, {@code writeToDumpDir} picked HTML whenever it was
+     * present and never wrote a {@code .txt} companion, silently dropping the text part whenever a
+     * caller sent both bodies. {@code // Mutation:} reverting {@code writeToDumpDir} to its
+     * single-branch {@code isHtml ? htmlBody : textBody} form turns this red (the {@code .txt}
+     * assertion fails to find a file).
+     */
+    @Test
+    void bothBodiesPresent_writesBothFiles(@TempDir Path tempDir) {
+        LoggingEmailSender sender = new LoggingEmailSender(propsWithDumpDir(tempDir.toString()));
+        sender.createDumpDirectory();
+
+        sender.send(new OutboundEmailRequest(
+            "to@example.com", "subject", "<p>html body</p>", "plain body", "cid-both"));
+
+        assertThat(tempDir.resolve("cid-both.html")).hasContent("<p>html body</p>");
+        assertThat(tempDir.resolve("cid-both.txt")).hasContent("plain body");
+    }
+
+    /**
+     * skillars-deferred-111 AC2's asymmetric case: each extension's collision counter must advance
+     * independently, so a pre-existing collision on one extension does not skip a suffix on the
+     * other.
+     */
+    @Test
+    void bothBodiesPresent_collisionOnOneExtensionOnly_advancesThatExtensionsCounterIndependently(
+        @TempDir Path tempDir) throws IOException {
+        Files.writeString(tempDir.resolve("cid-asym.html"), "pre-existing html");
+
+        LoggingEmailSender sender = new LoggingEmailSender(propsWithDumpDir(tempDir.toString()));
+        sender.createDumpDirectory();
+
+        sender.send(new OutboundEmailRequest(
+            "to@example.com", "subject", "<p>new html</p>", "plain body", "cid-asym"));
+
+        assertThat(tempDir.resolve("cid-asym.html")).hasContent("pre-existing html");
+        assertThat(tempDir.resolve("cid-asym~2.html")).hasContent("<p>new html</p>");
+        assertThat(tempDir.resolve("cid-asym.txt"))
+            .as("the .txt counter must not skip a suffix just because .html collided")
+            .hasContent("plain body");
+    }
+
     @Test
     void maskAddress_handlesValuesWithNoUsableLocalPart() {
         assertThat(LoggingEmailSender.maskAddress("a@b.com")).isEqualTo("a***@b.com");

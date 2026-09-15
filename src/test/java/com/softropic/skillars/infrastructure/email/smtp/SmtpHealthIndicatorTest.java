@@ -349,4 +349,70 @@ class SmtpHealthIndicatorTest {
 		assertThat(providers(health)).singleElement()
 			.satisfies(s -> assertThat(s.detail).isEqualTo("TLS handshake failed"));
 	}
+
+	// ------------------------------------------------------------------ skillars-deferred-111 AC4
+
+	/**
+	 * skillars-deferred-111 AC4 (owner decision): a DOWN result must re-probe after the shorter
+	 * {@code downTtl}, not the longer {@code ttl}. {@code // Mutation:} making {@code ttlFor} always
+	 * return {@code healthProperties.getTtl()} turns this red (the second call would still be served
+	 * from the stale DOWN cache instead of re-probing).
+	 */
+	@Test
+	@DisplayName("AC4: a DOWN result re-probes after downTtl, not the longer ttl")
+	void downResult_reProbesAfterTheShorterDownTtl() throws InterruptedException {
+		smtpProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
+		java.util.concurrent.atomic.AtomicInteger probeCount = new java.util.concurrent.atomic.AtomicInteger();
+		var props = new SmtpHealthProperties();
+		props.setTtl(java.time.Duration.ofSeconds(60));
+		props.setDownTtl(java.time.Duration.ofMillis(1));
+		SmtpHealthIndicator indicator = new SmtpHealthIndicator(smtpProperties, props) {
+			@Override
+			boolean probeSmtpConnection(String host, int port) {
+				probeCount.incrementAndGet();
+				return false;
+			}
+		};
+
+		Health first = indicator.health();
+		Thread.sleep(20);
+		Health second = indicator.health();
+
+		assertThat(first.getStatus()).isEqualTo(Status.DOWN);
+		assertThat(second.getStatus()).isEqualTo(Status.DOWN);
+		assertThat(probeCount.get())
+			.as("a DOWN result must re-probe once downTtl elapses, not wait out the full ttl")
+			.isEqualTo(2);
+	}
+
+	/**
+	 * The counterpart that makes the case above non-vacuous: an UP result keeps honouring the
+	 * (longer) {@code ttl}, unaffected by however short {@code downTtl} is configured.
+	 */
+	@Test
+	@DisplayName("AC4: an UP result still honours the original (longer) ttl, unaffected by downTtl")
+	void upResult_stillHonoursTheOriginalTtl() throws InterruptedException {
+		smtpProperties.setProviderConfigs(List.of(provider("gmx", "mail.gmx.net", "587")));
+		java.util.concurrent.atomic.AtomicInteger probeCount = new java.util.concurrent.atomic.AtomicInteger();
+		var props = new SmtpHealthProperties();
+		props.setTtl(java.time.Duration.ofSeconds(60));
+		props.setDownTtl(java.time.Duration.ofMillis(1));
+		SmtpHealthIndicator indicator = new SmtpHealthIndicator(smtpProperties, props) {
+			@Override
+			boolean probeSmtpConnection(String host, int port) {
+				probeCount.incrementAndGet();
+				return true;
+			}
+		};
+
+		Health first = indicator.health();
+		Thread.sleep(20);
+		Health second = indicator.health();
+
+		assertThat(first.getStatus()).isEqualTo(Status.UP);
+		assertThat(second.getStatus()).isEqualTo(Status.UP);
+		assertThat(probeCount.get())
+			.as("an UP result must not re-probe just because downTtl is tiny — only ttl governs it")
+			.isEqualTo(1);
+	}
 }

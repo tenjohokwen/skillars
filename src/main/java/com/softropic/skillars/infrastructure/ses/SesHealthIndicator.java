@@ -1,8 +1,10 @@
 package com.softropic.skillars.infrastructure.ses;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.actuate.health.AbstractHealthIndicator;
 import org.springframework.boot.actuate.health.Health;
+import org.springframework.boot.actuate.health.Status;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.exception.SdkException;
@@ -69,9 +71,14 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p><strong>TTL-cached</strong>, mirroring — in structure only — the double-checked-locking
  * {@code AtomicReference<Cached>} pattern this project's other transport health indicator already
  * uses. Deliberately simpler here: there is exactly one account to check, not N providers, so there
- * is no parallel-probe thread pool and no new {@code @ConfigurationProperties} class — the TTL is a
- * hardcoded constant matching that indicator's own default. The {@code getAccount} call is bounded
- * by {@code SesConfig}'s shared client-level {@code apiCallTimeout(5s)}.
+ * is no parallel-probe thread pool. skillars-deferred-111 AC4 (owner decision) gave this indicator
+ * the same {@link SesHealthProperties} config surface {@code SmtpHealthProperties} already had,
+ * replacing what used to be a single hardcoded {@code CACHE_TTL} constant: a freshly-computed
+ * {@code DOWN} result is now cached for {@link SesHealthProperties#getDownTtl()} (default 15s),
+ * shorter than an {@code UP} result's {@link SesHealthProperties#getTtl()} (default 60s, matching
+ * the old constant), so a recovery becomes visible sooner than a full 60s window would allow. The
+ * {@code getAccount} call is bounded by {@code SesConfig}'s shared client-level
+ * {@code apiCallTimeout(5s)}.
  *
  * <p><strong>Ops note:</strong> this indicator requires the {@code ses:GetAccount} IAM permission,
  * which is distinct from {@code ses:SendEmail} — see {@code docs/deployment/secrets-reference.md}.
@@ -81,36 +88,58 @@ import java.util.concurrent.atomic.AtomicReference;
 @ConditionalOnProperty(name = "app.email.transport", havingValue = "ses")
 public class SesHealthIndicator extends AbstractHealthIndicator {
 
-    private static final Duration CACHE_TTL = Duration.ofSeconds(60);
     private static final String ENFORCEMENT_STATUS_SHUTDOWN = "SHUTDOWN";
 
     private final SesV2Client sesV2Client;
+    private final SesHealthProperties healthProperties;
     private final AtomicReference<Cached> cache = new AtomicReference<>();
 
-    public SesHealthIndicator(SesV2Client sesV2Client) {
+    @Autowired
+    public SesHealthIndicator(SesV2Client sesV2Client, SesHealthProperties healthProperties) {
         this.sesV2Client = sesV2Client;
+        this.healthProperties = healthProperties;
+    }
+
+    /** Retains the pre-AC4 single-arg shape for the hermetic unit tests, with default tuning. */
+    SesHealthIndicator(SesV2Client sesV2Client) {
+        this(sesV2Client, new SesHealthProperties());
     }
 
     @Override
     protected void doHealthCheck(Health.Builder builder) {
         Cached current = cache.get();
-        long now = System.currentTimeMillis();
-        if (current != null && now - current.computedAtMillis() < CACHE_TTL.toMillis()) {
+        long now = System.nanoTime();
+        if (current != null && now - current.computedAtNanos() < current.appliedTtlNanos()) {
             copyInto(builder, current.health());
             return;
         }
         synchronized (cache) {
             // Double-check after acquiring the lock: another thread may have just refreshed the cache.
             current = cache.get();
-            now = System.currentTimeMillis();
-            if (current != null && now - current.computedAtMillis() < CACHE_TTL.toMillis()) {
+            now = System.nanoTime();
+            if (current != null && now - current.computedAtNanos() < current.appliedTtlNanos()) {
                 copyInto(builder, current.health());
                 return;
             }
             Health fresh = computeHealth();
-            cache.set(new Cached(fresh, System.currentTimeMillis()));
+            cache.set(new Cached(fresh, System.nanoTime(), ttlFor(fresh)));
             copyInto(builder, fresh);
         }
+    }
+
+    /**
+     * skillars-deferred-111 AC4 (owner decision): a freshly-computed {@code DOWN} result gets the
+     * shorter {@link SesHealthProperties#getDownTtl()}; everything else uses {@link
+     * SesHealthProperties#getTtl()}.
+     *
+     * <p><strong>Code review 2026-09-15 (M4):</strong> this previously claimed the {@code
+     * SdkException} catch branch in {@link #computeHealth} used {@code getTtl()} — wrong. That branch
+     * also returns {@code Health.down()}, so it is decided by the same {@code Status.DOWN} check
+     * below and gets {@code getDownTtl()} like every other {@code DOWN} result.
+     */
+    private long ttlFor(Health health) {
+        Duration ttl = Status.DOWN.equals(health.getStatus()) ? healthProperties.getDownTtl() : healthProperties.getTtl();
+        return ttl.toNanos();
     }
 
     private static void copyInto(Health.Builder builder, Health source) {
@@ -163,7 +192,18 @@ public class SesHealthIndicator extends AbstractHealthIndicator {
         }
     }
 
-    /** Aggregate {@link Health} plus the {@link System#currentTimeMillis()} it was computed at. */
-    private record Cached(Health health, long computedAtMillis) {
+    /**
+     * Aggregate {@link Health} plus the {@link System#nanoTime()} it was computed at, and the TTL (in
+     * nanos) that applied to THIS result at write time — skillars-deferred-111 AC4: {@code DOWN} and
+     * {@code UP} results can carry different TTLs, so the applicable one must travel with the cached
+     * entry rather than being re-read from current config at check time.
+     *
+     * <p><strong>Monotonic clock (code review 2026-09-15, M3):</strong> {@link System#nanoTime()}, not
+     * {@link System#currentTimeMillis()} — the latter is wall-clock and can step backward (NTP
+     * correction, manual adjustment), which would make {@code now - computedAtNanos} negative and the
+     * TTL check pass indefinitely, serving a stale {@code DOWN} result forever and defeating AC4's
+     * entire point of surfacing recovery sooner.
+     */
+    private record Cached(Health health, long computedAtNanos, long appliedTtlNanos) {
     }
 }
