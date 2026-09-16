@@ -265,8 +265,11 @@ documented "not cluster-safe across multiple instances" limitation (which this A
 fix — this deployment runs a single app instance today, confirmed via the docker-compose service stack;
 cluster-safety is a distinct, larger architectural change out of scope here).
 
-**Fix:** wrap each stored `Bucket` with a `lastAccess` timestamp, updated on every `tryConsume` call, and
-add a `@Scheduled` sweep that evicts entries idle past a configurable TTL. Because every `Bucket4j` bucket
+**Fix:** wrap each stored `Bucket` with a `lastAccess` timestamp (`volatile long` or `AtomicLong` — the
+sweep only needs "was this accessed recently," not a precise instant, but a bare non-volatile `long` risks
+a compiler-reordering/visibility surprise across the request thread that updates it and the scheduler
+thread that reads it; either wrapper closes that at negligible cost), updated on every `tryConsume` call,
+and add a `@Scheduled` sweep that evicts entries idle past a configurable TTL. Because every `Bucket4j` bucket
 fully refills after its own configured `duration` elapses (confirmed: the longest `duration` in use
 anywhere in this codebase is 60 minutes — `AccountManagementFacade`'s `account_registration`/`change_email`
 and the three `*_register` keys — see the grep in Dev Notes), evicting an idle bucket and letting it be
@@ -321,9 +324,14 @@ approach rather than a general-purpose static-analysis dependency) that:
    `)`.
 3. Asserts the extracted lambda body contains **no** call matching a denylist of side-effecting patterns:
    `.save(`, `.saveAndFlush(`, `.delete(`, `.deleteAll`, `publishEvent(`, `new .*Event(`, `.send(`,
-   `RestTemplate`, `.enqueue(`, `Client.` (HTTP/external-service client calls) — refine the exact list
-   against what the current 28 call sites actually contain, so the test starts green, then fails the moment
-   a future call site's lambda body matches one of these patterns.
+   `RestTemplate`, `.enqueue(` — refine the exact list against what the current 28 call sites actually
+   contain, so the test starts green, then fails the moment a future call site's lambda body matches one of
+   these patterns. **Do not add a bare `Client.` pattern** for HTTP/external-service client calls — it
+   over-matches any local variable or entity named `client`/`Client` (e.g. a field access on a domain
+   `Client` type would false-positive with no client call involved); if an HTTP/external-client denylist
+   entry is needed, match a real SDK/client type name or method actually present at a call site (confirm
+   whether one exists at implementation time — none of the 28 sites reviewed at story-creation used a raw
+   HTTP client) rather than a generic substring.
 4. Fails loudly (naming the offending file/line) rather than silently skipping an unparseable lambda shape.
 
 Do **not** attempt to change `withBoundedRetry`'s signature (e.g. a marker interface) — this project's own
@@ -576,6 +584,22 @@ above for the exact section/bullet to remove]
   test-fragility bullet — on inspection, `skillars-deferred-111` AC7 already narrowed nearly every lookup
   in that file to an indexed `findBySendId` call, leaving only one genuinely-unavoidable `findAll()` (paid
   once per test, not per assertion) — not worth a dedicated AC on top of the five above.
+- 2026-09-16: Pre-implementation quality review (`story-review.md`) processed. All five ACs confirmed
+  well-justified against HEAD with no false positives and no missed corner cases — the reviewer
+  independently re-derived the same root causes (AC1's expand/contract non-hazard, AC2's `ORDER BY` +
+  `LIMIT` starvation mechanism, AC3's `extendPack`/`pausePack` race window, AC4's 7 call sites and safe TTL
+  margin, AC5's 28 call sites and denylist approach) rather than merely restating the story's own claims.
+  Two genuine, non-blocking refinements adopted: AC4's `lastAccess` field should be `volatile`/`AtomicLong`,
+  not a bare `long`, to close a compiler-reordering/visibility gap between the request thread that updates
+  it and the scheduler thread that reads it during the sweep (added to AC4's Fix). AC5's proposed denylist
+  entry `Client.` was dropped — it over-matches any domain type/variable named `client`/`Client` with no
+  actual client call involved (e.g. a field access on this codebase's own `Client`-suffixed entities), and
+  none of the 28 call sites reviewed at story-creation time use a raw HTTP/external client inside a
+  `withBoundedRetry` lambda in the first place; AC5 now says to match a real SDK/client type name only if
+  one is actually found at implementation time (added to AC5's step 3). The review's other two "critical
+  pre-implementation steps" (read `MigrationLint.lintDropOrdering` before writing V141/V142; verify
+  Postgres's sequence auto-drop behavior) were already present in AC1/Dev Notes verbatim — no change
+  needed. No blockers found; story proceeds to `ready-for-dev` as originally scoped.
 
 ---
 
