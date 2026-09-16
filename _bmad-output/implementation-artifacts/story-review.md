@@ -1,203 +1,304 @@
-# Senior Dev Audit: skillars-deferred-114 Story Review
+# Story Audit: Deferred-115 Scheduler Transaction Isolation Hardening
 
-**Review Date:** 2026-09-16  
-**Reviewer:** Senior Engineer  
-**Status:** Audit complete — findings documented below
+**Auditor:** Senior dev review  
+**Date:** 2026-09-16  
+**Story:** skillars-deferred-115-scheduler-transaction-isolation-hardening
 
 ---
 
 ## Summary
 
-Story is **well-scoped and implementable**. The design is sound, testing strategy is clear, and corner cases are mostly addressed. **5 findings below** (3 clarifications needed, 2 minor gaps); none are false positives. **Recommend approve with these clarifications merged before dev starts.**
+The story is well-scoped and grounded in real findings. **AC1 and AC2 are well-written, but three medium-severity gaps require clarification before implementation.** AC3 (ledger hygiene) has one minor vagueness. No false positives detected; all issues below are actionable.
 
 ---
 
-## Findings
+## AC1: ModerationSlaMonitorService — Batch Lock/Entity-Lifetime Decision
 
-### 1. **AC3 — Verify complete caller inventory for `resolvePlayerTierKey`**
+### ✅ Strengths
+- Correctly identifies the "outer transaction holds all locks" antipattern
+- Both options are genuinely viable; appropriately punts to owner for business/risk tradeoff
+- Correctly flags that the existing `REQUIRES_NEW`-per-video mitigation is intentional, not an oversight
+- Correctly externalized the hardcoded `50` as a separate config task
 
-**Category:** Completeness  
-**Severity:** Medium (low practical risk, high clarity benefit)
+### ⚠️ Issues
 
-**Finding:**  
-Story identifies `VideoResource.java:123-124` (storage + bandwidth quota calls, fires twice per request) as the primary caller but doesn't explicitly verify this is the *only* caller of `resolvePlayerTierKey` or list any other known callers. The story correctly documents the double-fire, but a dev implementing AC3 should verify there are no other hot-path callers that would also fire the counter unexpectedly.
+#### Issue 1.1: Heap assumption doesn't account for entity relationships
+**Location:** Page 2, "at 50 rows...this will not exhaust heap"
 
-**Why it matters:**  
-If AC3's new counter fires in an unexpected location (e.g., a background job calling quota check for every player weekly), the metric becomes uninterpretable without documentation. Visible in a dashboard as "fired 1000x overnight" and someone assumes it's a production data-integrity signal, when it's actually a batch job.
+The story assumes 50 `Video` rows fit in heap. **But**: does `Video` have `@OneToMany` collections (e.g., `List<VideoAsset>`, `List<PlaybackEvent>`) with eager loading or cascade fetch? If so:
+- 50 videos × N related entities per video exceeds heap risk assessment
+- Hibernate's dirty-checking on a managed persistence context scales with loaded entities, not just rows
 
-**Fix:**  
-Before starting AC3 implementation, grep for all callers of `resolvePlayerTierKey` and `QuotaConfigService.resolve*Tier*` — document in the story's Dev Notes exactly which callers exist and which ones fire the counter (if any beyond VideoResource). If there are others, either:
-- Narrow the counter to VideoResource's call path specifically (requires refactoring), or  
-- Update the metric description + dashboard to explicitly note the double-fire *and* list all known callers
+**Recommendation**: Before presenting options to owner, verify `Video.java`'s relationships. If there are non-lazy collections, either:
+- Mention this in Option 2's documented tradeoff, or
+- Factor it into sizing the batch smaller if Option 1 is chosen
 
-**Not a blocker:** The story's documented behavior (fires 2x per VideoResource request) is correct and defensive. Just need to confirm no *other* unexpected callers exist.
-
----
-
-### 2. **AC5 — Response schema and test-email outcome distinction need documentation**
-
-**Category:** Clarity  
-**Severity:** Low
-
-**Finding:**  
-Story specifies "structured JSON result: the account-check outcome, the test-send outcome, and an overall ready/not-ready verdict" but doesn't document:
-1. Exact field names / structure (e.g., `{ accountStatus: {...}, sendTestResult: {...}, isReady: bool }`)
-2. How to distinguish between "SES account is fully configured but email send failed" vs "account check itself threw an exception (missing ses:GetAccount permission)"
-
-The story says "distinguishing an `SdkException` here (missing `ses:GetAccount`) in the response from a send failure below" but the response structure should make this explicit.
-
-**Why it matters:**  
-An admin running the preflight tool needs to know:
-- Is the problem "account setup incomplete" (getAccount failed) → fix IAM permissions
-- Or "account is fine, but sending broke" (send failed) → check email format / rate limits / recipient validation
-- Or "both passed" (ready to proceed)
-
-Without a clear response schema, the dev will either guess or create ambiguous output.
-
-**Fix:**  
-Document the response schema in AC5 as part of the story (before or after the story). Example structure:
-```json
-{
-  "accountStatus": {
-    "sendingEnabled": bool,
-    "productionAccessEnabled": bool,
-    "enforcementStatus": "str",
-    "error": null | "SdkException message if getAccount threw"
-  },
-  "testSendResult": {
-    "envelopeStatus": "SENT" | "FAILED",
-    "errorDetails": null | "error message if send failed"
-  },
-  "isReady": bool,
-  "summary": "human-readable one-liner"
-}
-```
-
-Add this to the story's AC5 section under "Returns one structured JSON result" — this ensures the implementation matches the intent and the runbook can reference exact field names.
+**Not a blocker**: Small heap impact is plausible, but assumption should be verified, not stated.
 
 ---
 
-### 3. **AC1 — Advisory lock doesn't prevent silent recipient-list overwrites; document or guard**
+#### Issue 1.2: Deadlock risk not mentioned if nested per-video queries depend on locked batch
+**Location:** Lines 80-88, 106-113 (the `requiresNewTemplate.execute(...)` calls)
 
-**Category:** Edge case (pre-existing, not introduced by this AC)  
-**Severity:** Medium (low practical risk, high clarity benefit)
+The `REQUIRES_NEW` per-video transactions call back to `videoLifecycleService.*` methods. **Question**: Do those methods issue queries that touch `Video` rows or tables that the outer transaction is also holding locks on?
 
-**Finding:**  
-Story correctly notes in the Design Consideration that `applyDeliveryFlags` rebuilds `EnvelopeEntity.recipients` from the **calling envelope's own** recipient list, not merged with persisted state. This means:
+**Example scenario** (hypothetical deadlock):
+1. Outer transaction locks 50 `Video` rows via `FOR UPDATE SKIP LOCKED`
+2. Per-video REQUIRES_NEW tries to read from a related table that has a foreign-key constraint back to `Video`
+3. Another writer attempts to update a locked `Video` row, waiting for the lock
+4. The per-video query needs a lock on the related table that the other writer holds
+5. Deadlock: outer transaction blocked on the other writer; per-video transaction blocked on the other writer's dependent lock
 
-```
-First call: sendEmailSync(sendId=X, recipients=[alice@test.com])
-            → persists EnvelopeEntity with recipients=[alice@test.com]
+**Recommendation**: In the "Files to Read Before Implementation," add a check:
+- Read `videoLifecycleService.archiveForLifecycle()` and `markPurged()` call chains
+- Verify they do not query tables with FK constraints back to `Video`
+- Verify they do not indirectly lock the same `Video` rows
 
-Second call: sendEmailSync(sendId=X, recipients=[bob@test.com])  (different recipient, same sendId — caller misuse)
-            → acquires advisory lock, finds existing row
-            → calls applyDeliveryFlags([bob@test.com]) 
-            → **overwrites recipients to [bob@test.com], silently losing alice**
-```
-
-The story says "This is pre-existing behavior once the race window closes rather than something this AC needs to newly guard against" — **correct, but this AC's new advisory lock actually *widens* the window where this can happen silently**, because the second call now blocks, waits for the first to commit, then proceeds to the update instead of throwing on DB unique constraint.
-
-**Why it matters:**  
-Today (without advisory lock): two calls racing with different recipients throws → operator notices → caller misuse is caught.  
-After AC1: two calls race, second blocks, first commits, second silently overwrites → no error, audit trail is lost unless someone manually inspects the DB.
-
-**Status:** This is **not a bug in AC1's design** (the design is correct; caller misuse should not send duplicate emails), but it's a **behavior change** that should be tested and documented explicitly.
-
-**Fix:**  
-1. AC1's test suite should include: two calls with **same** sendId but **different** recipients (caller misuse scenario) — assert the second call blocks, completes successfully (no throw), and the final row contains the **second** call's recipient list. Document this behavior in a code comment: "Silent overwrite of recipient list on re-call with same sendId but different recipients — acceptable since this indicates caller misuse, not legitimate retry."
-2. Update AC1's Dev Notes to note: "Advisory lock changes duplicate-sendId behavior from 'throws on unique constraint' to 'updates silently' — verify this is acceptable for your use case before proceeding."
-
-Not a blocker, but this test + comment are required before the story ships.
+**Likelihood**: Low in practice (good schema design prevents this), but worth a check.
 
 ---
 
-### 4. **AC5 — Isolated circuit breaker initialization and test-send logging need clarity**
+#### Issue 1.3: Option 1's claim/double-pick strategy deferred without owner input
+**Location:** AC1, Option 1, "decide whether this needs an explicit 'claim' step"
 
-**Category:** Implementation detail  
-**Severity:** Low
+The story correctly identifies that removing the outer lock opens a double-pick race: a second pod could select the same row between the SELECT's commit and the per-row write. The story offers two sub-options:
+- Add an explicit PENDING→PROCESSING write (like `WebhookEventProcessorScheduler`)
+- Rely on state-machine validation (like `ReconciliationWorkerScheduler`)
 
-**Finding:**  
-Two sub-issues in AC5:
+**Problem**: This sub-decision is deferred to implementation time, but it's architectural: it changes whether per-video retries are safe, whether a manual recovery step exists, whether the state machine is a robust guard or just luck.
 
-**4a. Isolated circuit breaker ("sesPreflightService"):**  
-Story correctly requires a 3-arg `EmailTemplate` constructor with isolated breaker name, and explains why (don't trip shared "emailService" breaker during preflight failure). But doesn't specify:
-- What if this is the first time the preflight endpoint is called, and the "sesPreflightService" circuit breaker hasn't been initialized yet? (It will be, via CircuitBreakerFactory.create(), but not explicitly called out.)
-- If CircuitBreakerFactory is injected or retrieved statically — should verify this is consistent with existing EmailTemplate usage.
+**Recommendation**: Clarify in Task 1 (or in the owner-presentation step) whether the developer should:
+- Option A: Ask owner for a second sub-decision (claim step or not?), or
+- Option B: Make this judgment call based on `Video`'s state machine robustness (recommend reading `Video.java` + state-transition code to decide)
 
-**4b. Test-send logging:**  
-The preflight endpoint sends a real email via `MailManager.sendEmailSync`. This email will go through the normal MailService/SES SDK logging pipeline. Is this desirable? The email logs will show "test email sent to admin@example.com" which is fine, but should the test email be marked/tagged distinctly in logs (e.g., with a special EmailTemplate template name or a logging context var) so an operator can filter them out of production dashboards?
-
-**Why it matters:**  
-4a: Not a functional issue (CircuitBreakerFactory handles lazy init), but if the dev isn't familiar with that pattern, they might try to eagerly initialize the breaker or worry it's missing.  
-4b: If preflight tests fire real MailService logging, they could pollute error dashboards / false-alert integrations ("New email recipient: preflight@test.com").
-
-**Fix:**  
-4a: Add a one-line Dev Note confirming CircuitBreakerFactory.create() lazy-initializes the breaker on first use.  
-4b: Document that preflight test emails go through normal logging (this is correct behavior) and note in the runbook that operators should exclude "sesPreflightService" template name or use the isolated breaker name for filtering if needed.
+Current text suggests Option A (owner decides), but it's implicit.
 
 ---
 
-### 5. **AC4 — Ledger annotation location not specified**
-
-**Category:** Process / Clarity  
-**Severity:** Low
-
-**Finding:**  
-AC4 says "The only output of this AC is a ledger annotation re-confirming the decision, dated to this story, so a future audit doesn't re-litigate it from scratch."  
-AC6 (Ledger hygiene) says "Retag 'No transactional consistency tier/quota lookup' as `[DECIDED 2026-09-16 (skillars-deferred-114): accepted tradeoff, re-confirmed — see AC4]`."
-
-This clearly goes in `deferred-work.md`, but AC4 should also specify **whether** to add an inline code comment in `QuotaConfigService.java` itself. Currently, someone reading that file has no hint that the check-then-use race is a *known, accepted tradeoff* rather than a bug waiting for AC4 to come along and add one.
-
-**Why it matters:**  
-Without a code comment, the next person who touches that method might "fix" the race by adding a read lock or inline check, unaware it's deliberately left as-is.
-
-**Fix:**  
-Clarify in AC4: "Ledger annotation goes in `deferred-work.md`'s AC6 section. **Additionally**, add a one-line code comment to `QuotaConfigService.resolvePlayerTierKey` (around line 82) like: `// Note: tier lookup and quota enforcement are non-transactional — intentional tradeoff (skillars-deferred-114 AC4)`."
+### ✅ Non-Issues (verified correct)
+- "SKIP LOCKED means a second concurrent run could pick up already-claimed-but-not-yet-advanced row" — correctly identifies the race
+- Batch size `50` is a hardcoded literal confirmed at the specified line
+- Config externalization tied to `platform.video.reconciliation.batch-size` pattern is real and findable
 
 ---
 
-## Absence of False Positives
+## AC2: VideoLifecycleScheduler — Per-Item Failure Isolation + Cluster-Wide Mutual Exclusion
 
-Reviewed the existing audit findings mentioned in the changelog (lines 524-537). All four prior Low findings were justified and are now incorporated:
-1. ✓ Missing caller (NotificationEmailOutboxHandler) — now in Files to Read  
-2. ✓ AC1 rollback test case added  
-3. ✓ AC1 hashtext() collision caveat documented  
-4. ✓ AC5 Jakarta Validation + @Observed requirements added  
+### ✅ Strengths
+- Correctly identifies that optimistic-lock exceptions propagate out of the `for` loop
+- Correctly notes that phase 2 is skipped if phase 1 fails (real impact, no recovery until next day)
+- `@SchedulerLock` remedy is well-grounded in `EmailRetryScheduler` precedent
+- Recommended approach (per-item try/catch + `@SchedulerLock`) mirrors working pattern in same module
 
-No pushback needed on any of these.
+### ⚠️ Issues
+
+#### Issue 2.1: "Any other expected/recoverable failure" is too vague
+**Location:** AC2, "catch (ObjectOptimisticLockingFailureException and any other expected/recoverable failure)"
+
+The story says "don't guess; read the methods," which is correct advice, but doesn't list what those exceptions are. **Problem**: The developer must:
+1. Read `videoLifecycleService.archiveForLifecycle()` and `markPurged()`
+2. Trace their callee chains (`quotaService` calls, etc.)
+3. Decide which exceptions are "expected/recoverable" (should skip and continue) vs. "unexpected" (should propagate and abort)
+
+If the developer guesses wrong, a skipped exception could mask a genuine bug.
+
+**Recommendation**: Add to "Files to Read Before Implementation" or Task 2:
+- Read `VideoLifecycleService.archiveForLifecycle()` and `markPurged()` completely
+- **List the exception types** they throw (don't just say "check it")
+- Document expected ones in the method's javadoc or task notes before writing the catch clause
+
+**Example**: The task should say something like:
+> "Confirm that `archiveForLifecycle` throws only `OptimisticLockingFailureException`, `VideoNotFoundException`, and `IllegalStateException`. Only catch the recoverable ones (the first two); allow `IllegalStateException` to propagate."
 
 ---
 
-## Unaddressed but Acceptable
+#### Issue 2.2: Partially-processed batch state recovery is not specified
+**Location:** AC2, "the recovery window for a dropped batch is a full day"
 
-**These are known, documented decisions — not oversights:**
+The story correctly notes a full-day gap between ticks, but doesn't clarify:
+- **If phase 1 partially succeeds** (videos 1–30 move to ARCHIVED, but video 31 throws an exception):
+  - Videos 32–100 remain in BLOCKED state (not processed)
+  - What state should the ledger record to ensure videos 1–30 and 32–100 are both picked up tomorrow?
+  - **Is there a risk that videos 1–30 are double-processed** if phase 2 runs on them before the next day's phase 1 re-runs?
 
-1. **AC1 Hash collision odds:** Story correctly asserts they're negligible at this codebase's concurrency. ✓
-2. **AC3 double-fire per request:** Story documents this explicitly in the Files to Read and verification. ✓
-3. **AC2 diagnostics-only scope:** Owner decision stands. ✓
-4. **AC5 admin-only endpoint:** @PreAuthorize/403 enforcement required. ✓
-5. **Connection pool / lock exhaustion from held advisory locks:** Not a practical concern at skillars concurrency levels; acceptable to leave as unaddressed. ✓
+- **If this is the intended behavior**: the story should say so explicitly (e.g., "re-running phase 1 tomorrow will re-process the entire batch, including already-archived videos; they are idempotent").
+- **If this is not safe**: the story should recommend a "claim" step (similar to Issue 1.3) or a checkpoint.
+
+**Recommendation**: Clarify the partially-processed recovery guarantee:
+> "If phase 1 processes videos 1–30 successfully then fails on video 31, tomorrow's run will re-process all 100. Videos 1–30 will be re-checked and idempotently re-archived (or skipped if already archived). This is safe because `videoLifecycleService.archiveForLifecycle()` is idempotent."
+
+(Or specify that it's NOT safe and recommend a different strategy.)
+
+---
+
+#### Issue 2.3: Potential race between VideoLifecycleScheduler and ReconciliationWorkerScheduler not mentioned
+**Location:** AC2, references `ReconciliationWorkerScheduler` but doesn't discuss interactions
+
+Both `VideoLifecycleScheduler` and `ReconciliationWorkerScheduler` perform state-transition writes to `Video`. **Question**: Can they race on the same video?
+
+**Example race**:
+1. `VideoLifecycleScheduler.runBlockedToArchivedPhase()` tries to archive video #123
+2. Concurrently, `ReconciliationWorkerScheduler.reconcile()` tries to clean up the same video
+3. One throws `OptimisticLockingFailureException`; the story says skip it
+4. **Result**: Video #123 is neither archived nor cleaned up; it's stuck
+
+The story doesn't address:
+- Do these schedulers run at different times (no overlap risk)?
+- Is the optimistic lock sufficient to ensure one succeeds and the other fails safely?
+- Should there be an ordering guarantee (lifecycle before reconciliation, or vice versa)?
+
+**Likelihood**: Low (different jobs, different schedules), but worth verifying.
+
+**Recommendation**: Check `VideoLifecycleScheduler`'s cron schedule (`cron = "0 0 3 * * *"` mentioned in the story) and `ReconciliationWorkerScheduler`'s schedule. If they could overlap, add a note about the expected behavior (one aborts, the next tick cleans up, etc.).
+
+---
+
+#### Issue 2.4: @SchedulerLock sizing guidance is vague
+**Location:** AC2, "size generously, since the consequence of... mid-run... is a genuine double-archive/double-delete"
+
+The story says "size generously" but doesn't give concrete guidance:
+- What is "generous"? 2× the expected duration? 10×?
+- The cron runs "once/day" (`0 0 3 * * *`), but how long does a single run take?
+  - A 100-video batch with 2 phases could take seconds to minutes depending on asset cleanup latency
+- What are `EmailRetryScheduler`'s actual `lockAtMostFor`/`lockAtLeastFor` values?
+
+**Recommendation**: Task 2 should include a sub-step:
+> "Check `EmailRetryScheduler.java:86-131` for its `@SchedulerLock` values and sizing rationale. Size `VideoLifecycleScheduler`'s lock to cover 2 phases × 100 rows, plus a safety margin. Document the sizing choice in a comment."
+
+**Example bounds** (not part of this story, but illustrative):
+- If a single `archiveAsset` call takes ~100ms and phase 1 processes 100 videos: ~10s baseline
+- Add phase 2 and variance: 30s plausible
+- Set `lockAtMostFor = "PT2M"` (2 minutes) to be safe
+
+---
+
+### ✅ Non-Issues (verified correct)
+- `ObjectOptimisticLockingFailureException` is the right exception to catch (confirmed by `@Version` annotation on `Video`)
+- Full-day recovery window is correctly calculated (`cron = "0 0 3 * * *"` = once daily)
+- `@SchedulerLock` precedent in `EmailRetryScheduler` is real and appropriate
+
+---
+
+## AC3: Ledger Hygiene
+
+### ⚠️ Issue
+
+#### Issue 3.1: Exact lines to edit in deferred-work.md are not specified
+**Location:** AC3, "update that section per this file's own stated convention"
+
+The story says to delete bullets if closed by a real fix, or retag them as `[DECIDED <date> (skillars-deferred-115): ...]` if AC1 lands as Option 2. **But**: The story doesn't quote the exact bullets from `deferred-work.md` that should be edited.
+
+The story references `_bmad-output/implementation-artifacts/deferred-work.md` but the developer must hunt for the `## Deferred from: ad-hoc audit of notification + video modules (2026-09-16)` section and find the two bullets (presumably listing `ModerationSlaMonitorService` and `VideoLifecycleScheduler` findings) themselves.
+
+**Risk**: The developer might:
+- Edit the wrong section (if there are multiple audits on 2026-09-16)
+- Miss a bullet that should be deleted
+- Accidentally edit surrounding context
+
+**Recommendation**: Quote the exact bullets from `deferred-work.md` in AC3, or add a task step:
+> "Read `_bmad-output/implementation-artifacts/deferred-work.md:line-number` (the `## Deferred from: ad-hoc audit...` section). Locate the two bullets for `ModerationSlaMonitorService` and `VideoLifecycleScheduler`. Delete/retag per AC1's outcome."
+
+**Workaround for dev**: The story does say "Reconstruction check: every surviving line in the target section must match the pre-edit content, in order, with only the specified deletions/retags applied." This catches mistakes, but it's a check, not a prevention.
+
+---
+
+### ✅ Non-Issues
+- Retag format `[DECIDED <date> (skillars-deferred-115): ...]` is clear
+- "Reconstruction check" approach (diff before/after) is sound
+
+---
+
+## General Issues (Cross-Cutting)
+
+### Issue G.1: Logging/alerting strategy for skipped rows not mentioned
+**Location:** AC2 implementation, but not in story text
+
+After the fix, per-item failures are silently skipped (logged as `continue` in the for loop). **Questions for implementation**:
+- Should each skipped video emit a `log.warn()`?
+- Should there be a metric (e.g., `lifecycle.scheduler.skipped.count`)?
+- What should on-call see in logs to realize a batch partially failed?
+
+**Recommendation**: Add a note in AC2 Task 2:
+> "Decide logging level for skipped videos (recommend `log.warn("Skipped video {}: {}", videoId, exception.getMessage())`). Verify that logging exists before marking complete."
+
+**Not a blocker**: This is implementation taste, but worth calling out explicitly.
+
+---
+
+### Issue G.2: Testing pattern for "concurrent access not blocked" (AC1, Option 1) is complex
+**Location:** AC1, "Verified by: A concurrent-access test showing a second reader/writer is not blocked once the load completes"
+
+This test is non-trivial:
+- Must run two threads/pods concurrently
+- First thread does SELECT FOR UPDATE SKIP LOCKED (in its own short transaction)
+- Second thread tries to write the same row (must block, then unblock once first thread commits)
+- Third thread tries to write *after* SELECT commits but *before* per-row processing starts (should succeed if load is in its own transaction, should block if not)
+
+**Recommendation**: If Option 1 is chosen, check if `ReconciliationWorkerScheduler` or `WebhookEventProcessorScheduler` already have a test for this pattern. If yes, extend it; if no, recommend a simpler test (e.g., mock the TransactionTemplate and assert it's called twice, not once).
+
+**Not a blocker**: The story correctly identifies the need; implementation can figure out the test harness.
+
+---
+
+### Issue G.3: File List and Change Log are empty
+**Location:** Story template sections
+
+Expected for a ready-for-dev story. Not an issue, just noting: the story should remind the developer to fill these in at completion time.
+
+**Current state**: Correct (empty is OK for ready-for-dev).
+
+---
+
+## False Positives Checked (and Rejected)
+
+### ❌ "Option 1's restructure might regress per-video failure handling"
+- The story says "re-verify per-video failure handling" — this is a good reminder, not a missing issue
+- Existing tests should catch this; no new risk introduced
+
+### ❌ "VideoLifecycleScheduler batch size (default 100) is too large"
+- The story mentions "up to `platform.video.lifecycle.batch_size` (default 100, ceiling 10000)"
+- No issue here; it's configurable and sized appropriately for a once-daily job
+
+### ❌ "Shedlock table doesn't exist"
+- The story says "@SchedulerLock (`net.javacrumbs.shedlock.spring.annotation.SchedulerLock`) is already a project dependency"
+- If the dependency exists and 4 other schedulers use `@SchedulerLock`, the shedlock table and migrations are already in place
+- No new risk
+
+---
+
+## Summary Table
+
+| Issue | Severity | Type | Recommendation |
+|-------|----------|------|-----------------|
+| 1.1: Heap assumption + entity relationships | Medium | Assumption gap | Verify Video.java relationships before presenting options to owner |
+| 1.2: Deadlock risk in nested per-video queries | Low | Missed flow | Check videoLifecycleService call chains for FK-back queries |
+| 1.3: Option 1's claim/double-pick sub-decision deferred | Medium | Scope ambiguity | Clarify whether owner also decides claim strategy, or dev does |
+| 2.1: Exception types not specified | Medium | Assumption gap | Read and list exceptions from videoLifecycleService methods; don't guess in catch clause |
+| 2.2: Partially-processed batch recovery guarantee missing | Medium | Missed flow | Clarify idempotency guarantee for phase 1 re-runs and phase 2 double-processing risk |
+| 2.3: Race between Lifecycle and Reconciliation schedulers | Low | Missed flow | Check cron schedules; verify no overlapping state-transition races |
+| 2.4: @SchedulerLock sizing guidance vague | Low | Implementation detail | Reference EmailRetryScheduler's actual sizing; add sizing comment to code |
+| 3.1: Exact deferred-work.md lines not specified | Low | Process clarity | Quote the bullets to delete/retag, or add line numbers |
+| G.1: Logging strategy for skipped rows | Low | Implementation detail | Decide log level (recommend warn); document before completion |
+| G.2: Concurrent-access test harness complexity | Low | Testing risk | Check existing patterns first; adapt rather than invent |
 
 ---
 
 ## Recommendation
 
-**Approve story for dev with these 5 findings incorporated:**
-1. Before AC3 dev starts: verify `resolvePlayerTierKey` caller inventory (grep).
-2. Add response schema documentation to AC5 before implementation starts.
-3. Add test case to AC1 for silent recipient-list overwrite (same sendId, different recipients) + code comment.
-4. Add clarifications to AC4 and AC5 Dev Notes (circuit breaker init, test-send logging filter note, code comment in QuotaConfigService).
-5. Update AC5 response schema doc.
+**Proceed with implementation**, with these before-dev steps:
 
-**Risk level:** Low. Core designs (advisory lock, isolated circuit breaker, audit trail logging) are sound. Findings are process/clarity, not blockers.
+1. **Read `Video.java` and `VideoLifecycleService` in full** (already in story's file list, but emphasis them)
+2. **Resolve Issue 1.1** (heap + relationships) before owner presentation
+3. **Clarify Issue 1.3** (claim/double-pick decision ownership) in Task 1
+4. **Document Issue 2.1** (exception list) as a sub-step of Task 2
+5. **Verify Issue 2.2** (recovery guarantee) by reading Video's state machine; add a note to Task 2 about idempotency confirmation
+6. **Quick check Issue 2.3** (Lifecycle vs. Reconciliation race) — likely safe, but a 30-second grep for cron schedules is worth it
+
+**Non-blocking notes**:
+- Issues 2.4, 3.1, G.1, G.2 are implementation details or process clarity — not false positives, just nice-to-clarify before starting
 
 ---
 
-## Verification After Implementation
+## Conclusion
 
-Recommend re-checking:
-- AC1 mutation test actually fails when advisory lock is removed
-- AC3 counter fires exactly 2x per VideoResource.java:123-124 call (and nowhere else unexpectedly)
-- AC5 preflight endpoint is unreachable when SES is not the active transport (404 or spring-error response is acceptable)
-
-All are called out in the story's verification checklist already.
+This is a well-scoped, grounded story. The two main issues (AC1 options, AC2 failure handling) are correctly identified and remedied. **No red flags; three medium-severity assumptions need verification, but none are blockers.** Estimated 1–2 hours to address these before development begins.

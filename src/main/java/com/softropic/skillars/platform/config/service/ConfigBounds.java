@@ -175,6 +175,15 @@ public final class ConfigBounds {
         new BoundedKey("platform.video.lifecycle.batch_size", 1L, 10000L, false,
             "0 → lifecycle scheduler makes no progress; huge → load spike");
 
+    /**
+     * {@code ModerationSlaMonitorService} — skillars-deferred-115 AC1: was a hardcoded literal (50)
+     * at the call site, externalized to config. Same code-default/low-severity shape as
+     * {@link #VIDEO_LIFECYCLE_BATCH_SIZE}, not registered until now.
+     */
+    public static final BoundedKey MODERATION_SLA_BATCH_SIZE =
+        new BoundedKey("platform.moderation_sla_batch_size", 1L, 500L, false,
+            "0 → SLA monitor makes no progress on stuck videos; huge → batch lock-contention spike");
+
     /** {@code VideoSubscriptionLifecycleListener} — 0/neg → outbox never drains or loop underflows. */
     public static final BoundedKey VIDEO_LIFECYCLE_OUTBOX_MAX_ATTEMPTS =
         new BoundedKey("platform.video.lifecycle.outbox_max_attempts", 1L, 100L, false,
@@ -240,6 +249,7 @@ public final class ConfigBounds {
         VIDEO_LIFECYCLE_BLOCKED_TO_ARCHIVED_DAYS.key(),
         VIDEO_LIFECYCLE_ARCHIVED_TO_DELETED_DAYS.key(),
         VIDEO_LIFECYCLE_BATCH_SIZE.key(),
+        MODERATION_SLA_BATCH_SIZE.key(),
         VIDEO_PLAYBACK_SIGNED_URL_TTL_MINUTES.key(),
         VIDEO_ACCESS_COACH_WINDOW_DAYS.key(),
         VIDEO_DELETION_MAX_ATTEMPTS.key(),
@@ -276,6 +286,7 @@ public final class ConfigBounds {
             REVIEWS_SUBMISSION_WINDOW_DAYS,
             REVIEWS_AUTO_HOLD_FLAG_THRESHOLD,
             VIDEO_LIFECYCLE_BATCH_SIZE,
+            MODERATION_SLA_BATCH_SIZE,
             VIDEO_LIFECYCLE_OUTBOX_MAX_ATTEMPTS,
             VIDEO_DELETION_MAX_ATTEMPTS,
             RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS));
