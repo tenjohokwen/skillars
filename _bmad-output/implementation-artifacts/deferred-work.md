@@ -2258,3 +2258,51 @@ Six findings from the 3-layer code review (`bmad-review-adversarial-general` + `
 
 The runbook's SES cutover gate now references an executable preflight endpoint (`POST /v1/admin/ses/preflight`, `SesCutoverPreflightResource`, `skillars-deferred-114` AC5) for step 3, closing the two bullets that used to name this gap ("Runbook checklist manual, not code-enforced" and "No automated health check integration") — both deleted outright, per this file's own convention for a real fix rather than a decision.
 
+
+## Deferred from: ad-hoc audit of notification + video modules (2026-09-16)
+
+`skillars-deferred-115-scheduler-transaction-isolation-hardening` (2026-09-16) was created to work both
+findings below — AC1 needs an explicit owner decision before implementation (restructure vs. document as
+an accepted tradeoff), AC2 is a direct fix mirroring an existing sibling pattern.
+
+Requested directly (not tied to a code review of a specific story), scoped to transaction-boundary,
+TOCTOU, and batch-memory patterns across every `@Scheduled`/batch-processing class in the notification
+and video modules, following `skillars-deferred-114`'s implementation. Every other scheduler/batch
+processor surveyed (`MailManager`, `EnvelopeEntityRepository`, `EmailRetryScheduler`,
+`OutboxRowProcessor`, `ReconciliationWorkerScheduler`, `WebhookEventProcessorScheduler`,
+`UploadSessionExpiryScheduler`, `QuotaReservationBatchExpirer`/`TimeoutService`,
+`BandwidthResetChunkProcessor`, `VideoDeletionService.cascadeDeleteForAccount`) already loads its batch
+in a short, separate transaction and processes/writes each row in its own later transaction — these two
+are the exceptions.
+
+- **`ModerationSlaMonitorService.detectSlaViolations()` holds a batch of `Video` rows locked and
+  managed for the whole method, not just the read** (`ModerationSlaMonitorService.java:56-58`). The
+  method-level `@Transactional` wraps the entire loop over up to 50 `stuckVideos`; `findScanningOlderThan`
+  (`VideoRepository.java:47-57`, `SELECT ... FOR UPDATE SKIP LOCKED`) is itself only `@Transactional`
+  (default `REQUIRED`), so it *joins* the outer transaction instead of opening its own. Result: those
+  ≤50 `Video` rows stay row-locked, and their entities stay managed in one Hibernate persistence
+  context, for the full duration of the loop — including every nested `REQUIRES_NEW` per-video
+  round-trip — unlike every sibling scheduler in this module, which all deliberately keep the batch
+  SELECT in a short, separate transaction for exactly this reason. At 50 rows this will not exhaust
+  heap, but it blocks any other writer touching those videos for the whole sweep, and it is the one
+  place in these two modules that reproduces the "batch loaded inside one long transaction" shape. The
+  class's own comment (`ModerationSlaMonitorService.java:38-40`) shows the author knew the outer
+  transaction holds these locks and added `REQUIRES_NEW` per-video writes to stop one failure rolling
+  back the batch, but did not change the outer shape itself — may be a deliberate, if debatable,
+  choice rather than an oversight; needs an owner decision, not just a fix.
+
+- **`VideoLifecycleScheduler.runLifecycleJob()` has no per-item exception isolation and no
+  `@SchedulerLock`** (`VideoLifecycleScheduler.java:38,57-90,92-117`). Both
+  `runBlockedToArchivedPhase`/`runArchivedToDeletedPhase` wrap only the external provider call
+  (`archiveAsset`/`deleteAsset`) in try/catch; the actual state-transition write
+  (`transactionTemplate.execute(...)` calling `videoLifecycleService.archiveForLifecycle`/`markPurged`)
+  is unguarded. `Video` carries `@Version`, so a genuine concurrent write does throw — and nothing
+  catches it, unlike `ReconciliationWorkerScheduler.reconcile()`, which explicitly catches
+  `VideoStateConflictException`/`VideoNotFoundException` per video for this exact reason. One
+  optimistic-lock conflict or state-machine violation on video *N* propagates out of the loop, silently
+  dropping the rest of that phase's batch *and* skipping the entire second phase (`runArchivedToDeletedPhase`
+  never runs if phase one throws). This scheduler also carries no `@SchedulerLock`, unlike every sibling
+  scheduler sharing its "short `FOR UPDATE SKIP LOCKED` SELECT, then separate per-row transactions"
+  shape (`EmailRetryScheduler` added `@SchedulerLock` specifically to close this exact window, per its
+  own 2026-09-15 code-review comment). Since this job runs once/day (`cron`), a dropped batch costs a
+  full day, not a 30-60s retry.
