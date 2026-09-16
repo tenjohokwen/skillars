@@ -87,8 +87,43 @@ public class MailManager {
         sendEmailSync(envelope);
     }
 
+    /**
+     * skillars-deferred-114 code review (MEDIUM, AC1 exception handling): if {@link
+     * #acquireSendIdLock} itself throws (e.g. pool exhaustion, DB unavailable — the lock acquisition
+     * runs before anything is persisted), this method exits immediately and nothing is recorded: no
+     * {@link EnvelopeEntity} row, no log line from this class. A direct caller that swallows the
+     * exception rather than propagating/logging it will silently lose the send entirely. All three
+     * real callers today already propagate or log any exception from this method (see the AC1 class
+     * comment below), but this is not structurally enforced for a future direct caller — handle
+     * exceptions from this method explicitly.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void sendEmailSync(final Envelope envelope) {
+        // skillars-deferred-114 code review (HIGH): every real producer only ever passes a real,
+        // non-null sendId (ShortCode.shortenInt(...), UUID.randomUUID().toString(), or
+        // EnvelopeEntity.getSendId(), a NOT NULL DB column — see Envelope's producers), but nothing
+        // here structurally prevented a null one from a future direct caller. Confirmed against a
+        // real Postgres 16 instance: hashtext(...) and pg_advisory_xact_lock(...) are both STRICT
+        // functions, so `SELECT pg_advisory_xact_lock(hashtext(NULL))` returns a null row WITHOUT
+        // acquiring any lock and WITHOUT error — a null sendId would silently skip this method's
+        // entire AC1 serialization guarantee rather than fail loudly. Fail fast instead.
+        if (envelope.sendId() == null) {
+            throw new IllegalArgumentException("envelope.sendId() must not be null — required for "
+                + "cluster-wide send serialization (see acquireSendIdLock) and sendId-based dedup");
+        }
+        // skillars-deferred-114 AC1: cluster-wide serialization on this sendId, independent of the
+        // caller. findBySendId's PESSIMISTIC_WRITE lock (below) only serializes concurrent calls
+        // once an EnvelopeEntity row already exists for this sendId — it has nothing to lock against
+        // on the first-ever send. This Postgres advisory transaction lock closes that gap: it
+        // serializes both the "no row yet" and "row exists" cases uniformly, is released
+        // automatically at this method's REQUIRES_NEW commit/rollback, and must run first, before
+        // findBySendId, so the second racing caller blocks here rather than also reading a
+        // not-yet-committed "no row" snapshot. Today's three real callers
+        // (sendEmailFromTemplate's AFTER_COMMIT self-invocation, EmailRetryScheduler's
+        // @SchedulerLock-protected redrive, NotificationEmailOutboxHandler.handle via
+        // OutboxRowProcessor.claimAndHandle's own outbox-row claim) never collide with each other
+        // today, but nothing here protected a future direct caller of this method — this does.
+        envelopeEntityRepository.acquireSendIdLock(envelope.sendId());
         logger.info("sendEmailFrom template called:  Envelope {}", loggableEnvelope(envelope));
         final List<Recipient> recipients = envelope.recipients();
         if (recipients == null || recipients.isEmpty()) {
@@ -200,6 +235,28 @@ public class MailManager {
             entityBySendId.setStatus(envelopeEntity.getStatus());
             entityBySendId.setError(envelopeEntity.getError());
             entityBySendId.setRetry(envelopeEntity.isRetry());
+            // skillars-deferred-114 AC1 (Design Consideration): a same-sendId-different-recipients
+            // race now resolves silently instead of via a DB collision. Before this story's advisory
+            // lock, two CONCURRENT calls with different recipient lists for the same sendId both
+            // attempted an INSERT and one lost loudly on the DB unique constraint
+            // (MailManagerDuplicateSendIdIT's exact scenario). Now the second call blocks on the
+            // advisory lock, then lands here and takes this update branch — silently overwriting the
+            // first call's delivered-recipient record with its own (different) recipient list, the
+            // same silent path a SEQUENTIAL second call for this sendId already took even before this
+            // story. This indicates caller misuse, not a legitimate retry — no real producer sends
+            // the same sendId with a different recipient list — and is an accepted trade for closing
+            // the real first-send race this AC targets, not an unnoticed side effect. See
+            // MailManagerDuplicateSendIdIT for the test covering this exact scenario post-fix.
+            //
+            // skillars-deferred-114 code review (MEDIUM): this overwrite has no runtime visibility —
+            // surface it, since a mismatch between entityBySendId's persisted recipients and this
+            // call's recipients indicates caller misuse (no legitimate producer reuses a sendId with
+            // a different recipient list).
+            if (!recipientEmails(entityBySendId).equals(recipientEmails(recipients))) {
+                logger.warn("Recipient list for sendId={} was silently overwritten — indicates caller "
+                        + "misuse (different recipients for same sendId)",
+                    entityBySendId.getSendId());
+            }
             applyDeliveryFlags(entityBySendId, recipients, deliveredThisAttempt);
             scrubDataIfSentAndSensitive(entityBySendId);
         } else {
@@ -273,6 +330,26 @@ public class MailManager {
         return entity.getRecipients().stream()
             .filter(RecipientEntity::isDelivered)
             .map(RecipientEntity::getEmail)
+            .collect(Collectors.toUnmodifiableSet());
+    }
+
+    /**
+     * skillars-deferred-114 code review (MEDIUM): the set of recipient emails currently persisted on
+     * {@code entity}, used only to detect (and log) whether the incoming recipient list differs from
+     * what is about to be silently overwritten — see the "existing row" branch above.
+     */
+    private static Set<String> recipientEmails(final EnvelopeEntity entity) {
+        if (entity.getRecipients() == null) {
+            return Set.of();
+        }
+        return entity.getRecipients().stream()
+            .map(RecipientEntity::getEmail)
+            .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private static Set<String> recipientEmails(final List<Recipient> recipients) {
+        return recipients.stream()
+            .map(Recipient::getEmail)
             .collect(Collectors.toUnmodifiableSet());
     }
 

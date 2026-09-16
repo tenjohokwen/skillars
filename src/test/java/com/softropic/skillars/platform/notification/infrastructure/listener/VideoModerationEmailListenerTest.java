@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntity;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntityRepository;
 import com.softropic.skillars.platform.notification.service.MailManager;
+import com.softropic.skillars.platform.notification.service.MailMetrics;
 import com.softropic.skillars.platform.notification.service.MailService;
 import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
 
@@ -68,6 +69,7 @@ class VideoModerationEmailListenerTest {
     private FeatureToggleService featureToggleService;
     private MailManager mailManager;
     private EnvelopeEntityRepository envelopeEntityRepository;
+    private MailMetrics mailMetrics;
     private VideoModerationEmailListener listener;
 
     private ListAppender<ILoggingEvent> logAppender;
@@ -83,8 +85,9 @@ class VideoModerationEmailListenerTest {
         featureToggleService = mock(FeatureToggleService.class);
         mailManager = mock(MailManager.class);
         envelopeEntityRepository = mock(EnvelopeEntityRepository.class);
+        mailMetrics = mock(MailMetrics.class);
         listener = new VideoModerationEmailListener(
-            publisher, configService, featureToggleService, mailManager, envelopeEntityRepository);
+            publisher, configService, featureToggleService, mailManager, envelopeEntityRepository, mailMetrics);
 
         when(configService.find(ADMIN_EMAIL_KEY)).thenReturn(Optional.of("admin@skillars-test.com"));
 
@@ -165,6 +168,8 @@ class VideoModerationEmailListenerTest {
             .isFalse();
         assertThat(loggedAt(Level.ERROR, "[VIDEO_MODERATION_ADMIN_ALERT_UNDELIVERABLE]")).isFalse();
         // Mutation: merge the null/SENT branches into one log.warn → this assertion goes RED.
+        verify(mailMetrics, never())
+            .recordAdminAlertOutcomeUnknown();
     }
 
     @Test
@@ -187,6 +192,8 @@ class VideoModerationEmailListenerTest {
         // Mutation: merge the null/SENT branches into one log.info → this assertion goes RED.
         // Mutation (AC2): revert the throw back to a plain `return` → this test's assertThatThrownBy
         // goes RED, proving the outbox row would otherwise be silently released on an unknown outcome.
+        // skillars-deferred-114 AC2: the diagnostics-only occurrence counter fires alongside the WARN.
+        verify(mailMetrics).recordAdminAlertOutcomeUnknown();
     }
 
     /**
@@ -283,7 +290,7 @@ class VideoModerationEmailListenerTest {
             when(cfg.find(ADMIN_EMAIL_KEY)).thenReturn(Optional.of("admin@skillars-test.com"));
             listenerOverRealManager = new VideoModerationEmailListener(
                 mock(ApplicationEventPublisher.class), cfg, mock(FeatureToggleService.class),
-                realMailManager, repo);
+                realMailManager, repo, mock(MailMetrics.class));
         }
 
         @Test

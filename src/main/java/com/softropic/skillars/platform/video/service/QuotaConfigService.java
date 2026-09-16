@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -24,6 +25,9 @@ public class QuotaConfigService {
     // findOrCreatePlayerSubscription (writes a new subscription row on a miss, a side effect a quota
     // *check* must never have).
     private final PaymentPlayerSubscriptionRepository paymentPlayerSubscriptionRepository;
+    // skillars-deferred-114 AC3: distinguishes the no-subscription-row fallback from the other two
+    // fallback shapes below (each already has its own log statement) in both logs and a metric.
+    private final VideoMetrics videoMetrics;
 
     // skillars-deferred-107 AC2: floor 0, not 1 — scout is seeded storageBytes/bandwidth = 0
     // deliberately ("no upload", V53). A negative quota is the only genuinely broken state; the
@@ -87,7 +91,35 @@ public class QuotaConfigService {
             log.debug("Non-UUID, non-Long ownerId '{}' — defaulting to athlete tier for quota lookup", ownerId);
             return "athlete";
         }
-        return paymentPlayerSubscriptionRepository.findByPlayerId(playerId)
+        // skillars-deferred-114 AC4: tier lookup and the caller's actual quota enforcement are two
+        // separate, non-transactional reads — a player's subscription tier can change in the window
+        // between them. Accepted, low-impact race (a brief quota-mismatch window, not a monetary-
+        // consistency or security concern), re-confirmed this story; do not add a lock/re-check here
+        // without revisiting that decision. See deferred-work.md's matching [DECIDED] annotation.
+        Optional<PaymentPlayerSubscription> subscription = paymentPlayerSubscriptionRepository.findByPlayerId(playerId);
+        if (subscription.isEmpty()) {
+            // skillars-deferred-114 AC3: distinct from the two other fallback shapes above/below (a
+            // non-Long ownerId; an unrecognised stored tier string) — this one means no subscription
+            // row exists at all for a syntactically-valid player id, a genuine data-integrity signal
+            // (every player should have one, seeded or created at registration).
+            //
+            // skillars-deferred-114 code review (MEDIUM): confirmed caller inventory (grepped every
+            // caller of getStorageQuotaBytes/getBandwidthQuotaBytesMonthly — the only two callers of
+            // this method — as of this story) so this fallback's fan-out is a documented fact, not an
+            // estimate:
+            //   - QuotaService.check(ownerId, requestedBytes)   -> getStorageQuotaBytes only  (1 fire)
+            //   - QuotaService.reserve(ownerId, bytes[, type])  -> getStorageQuotaBytes only  (1 fire)
+            //   - VideoResource.getMyQuota() [GET /quotas/me]   -> BOTH quota methods         (2 fires)
+            // Neither QuotaService method calls getBandwidthQuotaBytesMonthly. A single upload
+            // (check then reserve) therefore fires this metric twice, not once — the raw counter value
+            // is not "distinct players" or "distinct requests." Re-grep both call sites before relying
+            // on this breakdown if either method's callers change.
+            log.warn("Player id '{}' has no subscription row at all — defaulting to athlete tier for "
+                    + "quota lookup. This is a data-integrity signal, not an expected shape.", playerId);
+            videoMetrics.recordQuotaTierFallback("no_subscription_row");
+            return "athlete";
+        }
+        return subscription
             .map(PaymentPlayerSubscription::getTier)
             .map(this::playerTierToQuotaSegment)
             .orElse("athlete");

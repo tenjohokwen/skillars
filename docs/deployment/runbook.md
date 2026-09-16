@@ -653,20 +653,26 @@ Before flipping `app.email.transport` to `ses` in production, verify **all** of 
    `SesHealthIndicator` calls `GetAccount` on every health check; `SesEmailSender` calls `SendEmail`
    on every send. A missing permission on either surfaces as a health-check/send failure only after
    the flip — verify both are attached beforehand, not discovered afterward.
-3. **Immediately after flipping the property, send one real test email to an internal address**
-   and confirm both (a) the email is actually delivered, and (b) `GET /actuator/health/notification`
-   reports `status: UP` (i.e. `sendingEnabled && productionAccessEnabled && notShutDown`, per
-   `SesHealthIndicator`'s composite check). Do not rely on the health check alone — a stale cached
-   `UP` (this indicator caches a healthy result for `SesHealthProperties.getTtl()`, default 60s) is
-   not proof a send just worked; a cached `DOWN` clears faster (`getDownTtl()`, default 15s) but the
-   only real proof either way is a delivered test email.
-4. **Roll back to `smtp`/`log` immediately if either check in step 3 fails.** There is no
-   config-gated grace path for a half-verified SES cutover — this is an accepted deploy risk, not a
-   feature to build.
-
-Optional, left to the implementer's judgement rather than mandated by this gate: a manually-triggered
-(not scheduled) admin/ops probe that sends one test email through the live `SesEmailSender` on
-demand, so step 3 doesn't require improvising a real user-facing flow just to get an email sent.
+3. **Immediately after flipping the property, run the SES cutover preflight endpoint** —
+   `POST /v1/admin/ses/preflight` (`SesCutoverPreflightResource`, `skillars-deferred-114` AC5;
+   admin-only, `@ConditionalOnProperty(app.email.transport=ses)` so it only exists once this flip is
+   live), body `{"recipientEmail": "<an internal address you can check>"}`. One call replaces the
+   rest of this step: it calls `SesV2Client.getAccount(...)` **directly, bypassing
+   `SesHealthIndicator`'s TTL cache** (that indicator caches a healthy result for up to
+   `SesHealthProperties.getTtl()`, default 60s, and a `DOWN` result for `getDownTtl()`, default 15s —
+   exactly the staleness this step used to warn against relying on), then sends one real test email
+   through the actual production send path (`MailManager.sendEmailSync`, isolated
+   `"sesPreflightService"` circuit breaker so a failing probe cannot trip the shared breaker real
+   booking traffic uses) and reads back its delivery outcome. The JSON response distinguishes three
+   outcomes without reading source: `accountCheck.error` set means `GetAccount` itself failed (fix
+   IAM); `accountCheck.error` null but `testSend.status == "FAILED"` (with `testSend.error` set) means
+   the account looks fine but the send itself broke; `ready: true` means both passed. Confirm the
+   test email actually arrived at the recipient address too — the endpoint reports what the send API
+   returned, not a mailbox-level delivery confirmation. Re-running the tool after fixing a config
+   issue is safe: it generates a fresh `sendId` every call, so each run is an independent probe.
+4. **Roll back to `smtp`/`log` immediately if the preflight endpoint reports `ready: false`.** There
+   is no config-gated grace path for a half-verified SES cutover — this is an accepted deploy risk,
+   not a feature to build.
 
 Revisit this gate only if a later change adds a non-production environment that genuinely exercises
 the SES path end-to-end (at which point this cutover stops being this codebase's first-ever

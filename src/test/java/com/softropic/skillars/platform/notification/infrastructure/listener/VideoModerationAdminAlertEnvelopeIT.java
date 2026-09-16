@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.notification.repo.EnvelopeEntity;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntityRepository;
 import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.platform.notification.contract.Envelope;
+import com.softropic.skillars.platform.notification.service.MailMetrics;
 import com.softropic.skillars.platform.notification.service.MailService;
 import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
 
@@ -34,6 +35,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -106,6 +108,7 @@ class VideoModerationAdminAlertEnvelopeIT extends AbstractIntegrationTest {
     @Autowired private RetryTemplate retryTemplate;
     @Autowired private ApplicationEventPublisher publisher;
     @Autowired private PlatformTransactionManager transactionManager;
+    @Autowired private MailMetrics mailMetrics;
 
     private MailService seamMailService;
     private MailManager realMailManager;
@@ -131,7 +134,8 @@ class VideoModerationAdminAlertEnvelopeIT extends AbstractIntegrationTest {
             }
         };
         listener = new VideoModerationEmailListener(
-            publisher, configService, featureToggleService, realMailManager, envelopeEntityRepository);
+            publisher, configService, featureToggleService, realMailManager, envelopeEntityRepository,
+            mailMetrics);
     }
 
     @AfterEach
@@ -234,8 +238,10 @@ class VideoModerationAdminAlertEnvelopeIT extends AbstractIntegrationTest {
 
         EnvelopeEntityRepository blindRepository = mock(EnvelopeEntityRepository.class);
         when(blindRepository.findBySendId(any())).thenReturn(null);
+        MailMetrics blindMailMetrics = mock(MailMetrics.class);
         VideoModerationEmailListener blindListener = new VideoModerationEmailListener(
-            publisher, configService, featureToggleService, realMailManager, blindRepository);
+            publisher, configService, featureToggleService, realMailManager, blindRepository,
+            blindMailMetrics);
 
         assertThatThrownBy(() -> runListener(blindListener, videoId))
             .as("an unknown outcome must be treated as retain-the-row, not release-it")
@@ -250,5 +256,9 @@ class VideoModerationAdminAlertEnvelopeIT extends AbstractIntegrationTest {
         // Mutation: revert VideoModerationEmailListener's persisted==null branch to a plain `return`
         // → assertThatThrownBy above goes RED, proving the outbox row would otherwise be silently
         // released for a send whose real outcome (SENT, right here) was never actually seen.
+
+        // skillars-deferred-114 AC2: the diagnostics-only occurrence counter fires alongside the WARN
+        // on this exact real, container-backed persisted==null occurrence.
+        verify(blindMailMetrics).recordAdminAlertOutcomeUnknown();
     }
 }

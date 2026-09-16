@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntity;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntityRepository;
 import com.softropic.skillars.platform.notification.service.MailManager;
+import com.softropic.skillars.platform.notification.service.MailMetrics;
 import com.softropic.skillars.platform.security.contract.util.ShortCode;
 import com.softropic.skillars.platform.video.contract.ModerationAdminAlertSender;
 import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
@@ -43,6 +44,7 @@ public class VideoModerationEmailListener implements ModerationAdminAlertSender 
     private final FeatureToggleService featureToggleService;
     private final MailManager mailManager;
     private final EnvelopeEntityRepository envelopeEntityRepository;
+    private final MailMetrics mailMetrics;
 
     @PostConstruct
     void checkAdminAlertConfig() {
@@ -126,6 +128,11 @@ public class VideoModerationEmailListener implements ModerationAdminAlertSender 
                 TransactionSynchronizationManager.isCurrentTransactionReadOnly(),
                 TransactionSynchronizationManager.getCurrentTransactionIsolationLevel(),
                 Thread.currentThread().getName());
+            // skillars-deferred-114 AC2 (owner decision: diagnostics only): a real occurrence must be
+            // visible as a Grafana-queryable metric, not only discoverable by grepping logs for
+            // [VIDEO_MODERATION_ADMIN_ALERT]. No structural fix attempted — see this branch's WARN
+            // log comment above for why.
+            mailMetrics.recordAdminAlertOutcomeUnknown();
             // skillars-deferred-113 AC2 (Option B, owner risk assessment): the root cause of a
             // persisted==null read-back remains unconfirmed (AC5 above already disproved the only
             // theory anyone has had for it), so this is precautionary defense-in-depth against an
