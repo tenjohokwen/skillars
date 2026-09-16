@@ -16,13 +16,19 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -40,6 +46,7 @@ class TierEntitlementGatingTest {
     @Mock StripeClient stripeClient;
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock ParentPlayerLinkRepository parentPlayerLinkRepository;
+    @Mock TransactionTemplate transactionTemplate;
 
     @InjectMocks SubscriptionService service;
 
@@ -127,6 +134,13 @@ class TierEntitlementGatingTest {
     @Test
     void configServiceCalledPerGracePeriodInvocation() {
         when(configService.getBoundedLong("subscription.pastDue.gracePeriodDays", 0L, 365L)).thenReturn(7L);
+        // skillars-deferred-116: checkPastDueGracePeriod's batch loads now go through
+        // TransactionTemplate.execute(...) — stub it to actually invoke the callback (a bare mock
+        // returns null without running it, which would silently no-op the two empty-list reads here).
+        when(transactionTemplate.execute(any())).thenAnswer(inv -> {
+            TransactionCallback<?> callback = inv.getArgument(0);
+            return callback.doInTransaction(null);
+        });
 
         service.checkPastDueGracePeriod();
         service.checkPastDueGracePeriod();

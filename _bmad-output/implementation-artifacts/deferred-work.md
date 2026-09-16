@@ -2325,26 +2325,6 @@ to `skillars-deferred-115`, which explicitly scoped its own audit to `platform.n
 `platform.video.*` and declared booking/payment/messaging out of scope. Applying the same audit lens
 (transaction-boundary/TOCTOU patterns on `@Scheduled`/batch-processing classes) to the payment module's
 two subscription schedulers found the identical bug class deferred-115 just fixed for
-`VideoLifecycleScheduler` — none of the three findings below were previously in this ledger.
-
-- **`SubscriptionService.applyPendingChanges()`** (`SubscriptionService.java:445-465`, driven by
-  `SubscriptionChangeApplicator` `@Scheduled(cron = "0 0 2 * * *")`) wraps the whole day's batch of
-  pending coach *and* player tier downgrades in one `@Transactional` method, with no per-row transaction
-  boundary and no per-item `try/catch`. `payment.coach_subscription_changes.to_tier` /
-  `player_subscription_changes.to_tier` are both unconstrained `VARCHAR(20)` (`V138__baseline_schema.sql:1780,1844`
-  — no CHECK/FK tying them to `CoachSubscriptionTier`), fed straight into
-  `CoachSubscriptionTier.valueOf(tier)` inside `syncMarketplaceTier` (`SubscriptionService.java:631-643`).
-  One malformed/stale `to_tier` value throws and rolls back the entire transaction — every other coach's
-  and player's scheduled downgrade for that day is silently lost, with no domain-specific ERROR log or
-  metric (no custom `TaskScheduler` `ErrorHandler` is configured anywhere in the codebase, so Spring's
-  default `LoggingErrorHandler` is all that fires).
-- **`SubscriptionService.checkPastDueGracePeriod()`** (`SubscriptionService.java:481-501`, driven by
-  `SubscriptionGracePeriodChecker` `@Scheduled(cron = "0 0 3 * * *")`) has the identical shape: one
-  `@Transactional` wraps the loop over every past-due coach and player being downgraded/cancelled. One
-  bad row aborts the whole day's grace-period sweep for every subscriber.
-- **Missing `@SchedulerLock` on both scheduler wrapper classes** (`SubscriptionChangeApplicator.java`,
-  `SubscriptionGracePeriodChecker.java`) — every other stateful `@Scheduled` job in booking/payment
-  (`BookingExpiryScheduler`, `BookingReminderScheduler`, `PaymentPendingSweeper`,
-  `SessionPackExpiryNotifier`, `SessionPackForfeitureScheduler`) carries `@SchedulerLock`; these two do
-  not, and carry no comment reasoning about concurrent execution either.
+`VideoLifecycleScheduler` — none of the three findings below were previously in this ledger. All three
+closed by the story's own AC1/AC2/AC3 — bullets deleted outright per this file's own convention.
 

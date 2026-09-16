@@ -3,7 +3,7 @@
 **Story Key:** `skillars-deferred-116-subscription-scheduler-transaction-isolation-hardening`
 **Epic:** Deferred Work
 **Priority:** Medium (one silent-batch-rollback resilience gap, one cluster-safety gap — same bug class as an already-fixed sibling)
-**Status:** ready-for-dev
+**Status:** review
 **Created:** 2026-09-16
 
 ---
@@ -286,35 +286,35 @@ changes; grep confirms no other section of `deferred-work.md` was touched.
 
 ## Tasks/Subtasks
 
-- [ ] **Task 1 — AC1: `applyPendingChanges()` hardening**
-  - [ ] Add `TransactionTemplate` as a new constructor dependency to `SubscriptionService`
-  - [ ] Restructure into short-transaction batch load + per-item `transactionTemplate.execute(...)` +
+- [x] **Task 1 — AC1: `applyPendingChanges()` hardening**
+  - [x] Add `TransactionTemplate` as a new constructor dependency to `SubscriptionService`
+  - [x] Restructure into short-transaction batch load + per-item `transactionTemplate.execute(...)` +
         `try/catch (Exception e) { log.error(...); }`, mirroring `SessionPackForfeitureScheduler`
-  - [ ] Confirm a failed change's `applied` flag stays `false` (naturally re-selected next run)
-  - [ ] Add `@Mock TransactionTemplate transactionTemplate` to `PastDueGracePeriodTest.java` (and
+  - [x] Confirm a failed change's `applied` flag stays `false` (naturally re-selected next run)
+  - [x] Add `@Mock TransactionTemplate transactionTemplate` to `PastDueGracePeriodTest.java` (and
         `TierEntitlementGatingTest.java` if it turns out to need it), stubbed to invoke its callback —
         verify all pre-existing tests in both files still pass unmodified otherwise
-  - [ ] Test(s) per AC1's "Verified by" (including the both-coach-and-player-fail case)
+  - [x] Test(s) per AC1's "Verified by" (including the both-coach-and-player-fail case)
 
-- [ ] **Task 2 — AC2: `checkPastDueGracePeriod()` hardening**
-  - [ ] Identical restructure to Task 1 (same `TransactionTemplate` dependency, already added in Task 1)
-  - [ ] Test(s) per AC2's "Verified by" (including the both-fail case)
+- [x] **Task 2 — AC2: `checkPastDueGracePeriod()` hardening**
+  - [x] Identical restructure to Task 1 (same `TransactionTemplate` dependency, already added in Task 1)
+  - [x] Test(s) per AC2's "Verified by" (including the both-fail case)
 
-- [ ] **Task 3 — AC3: `@SchedulerLock` on both wrapper classes**
-  - [ ] Add `@SchedulerLock` to `SubscriptionChangeApplicator.applyPendingChanges()` and
+- [x] **Task 3 — AC3: `@SchedulerLock` on both wrapper classes**
+  - [x] Add `@SchedulerLock` to `SubscriptionChangeApplicator.applyPendingChanges()` and
         `SubscriptionGracePeriodChecker.checkGracePeriods()`, sized and documented per AC3
-  - [ ] Test(s)/verification per AC3's "Verified by"
+  - [x] Test(s)/verification per AC3's "Verified by"
 
-- [ ] **Task 4 — AC4: ledger updates**
-  - [ ] Delete all three bullets from the target `deferred-work.md` section
-  - [ ] Reconstruction check
+- [x] **Task 4 — AC4: ledger updates**
+  - [x] Delete all three bullets from the target `deferred-work.md` section
+  - [x] Reconstruction check
 
-- [ ] **Task 5 — Final validation**
-  - [ ] Run all new/modified targeted test classes together; confirm zero regressions in the payment
+- [x] **Task 5 — Final validation**
+  - [x] Run all new/modified targeted test classes together; confirm zero regressions in the payment
         module's subscription test suites (`SubscriptionLifecycleIT`, `PastDueGracePeriodTest`,
         `TierEntitlementGatingTest`, `SubscriptionResourceIT`, `PlayerSubscriptionOwnershipIT`)
-  - [ ] Update Verification Checklist, File List, Change Log, Dev Agent Record
-  - [ ] Mark story Status → review
+  - [x] Update Verification Checklist, File List, Change Log, Dev Agent Record
+  - [x] Mark story Status → review
 
 ---
 
@@ -412,21 +412,21 @@ changes; grep confirms no other section of `deferred-work.md` was touched.
 
 ## Verification Checklist
 
-- [ ] AC1: `applyPendingChanges()` no longer carries a method-level `@Transactional` wrapping the whole
+- [x] AC1: `applyPendingChanges()` no longer carries a method-level `@Transactional` wrapping the whole
       batch; a malformed/failing `to_tier` on one pending change no longer prevents other coach or player
       changes in the same run from applying; the failing change's `applied` flag stays `false`; both-fail
       (coach + player) case tested, not just single-loop failures
-- [ ] AC2: `checkPastDueGracePeriod()` restructured identically; one row's failure no longer aborts other
+- [x] AC2: `checkPastDueGracePeriod()` restructured identically; one row's failure no longer aborts other
       coaches'/players' grace-period downgrades in the same run; both-fail case tested
-- [ ] AC3: both `SubscriptionChangeApplicator.applyPendingChanges()` and
+- [x] AC3: both `SubscriptionChangeApplicator.applyPendingChanges()` and
       `SubscriptionGracePeriodChecker.checkGracePeriods()` carry `@SchedulerLock` with a documented
       sizing basis (arithmetic, not a production-DB query); landed in the same change as AC1/AC2
-- [ ] AC4: `deferred-work.md`'s `ad-hoc audit of payment module subscription schedulers` section has all
+- [x] AC4: `deferred-work.md`'s `ad-hoc audit of payment module subscription schedulers` section has all
       three bullets deleted outright; reconstruction check passed
-- [ ] `PastDueGracePeriodTest.java`'s existing 8 tests still pass unmodified after `TransactionTemplate`
+- [x] `PastDueGracePeriodTest.java`'s existing 8 tests still pass unmodified after `TransactionTemplate`
       is added as a new `SubscriptionService` constructor dependency (mock stubbed to invoke its
       callback, not left to return `null`)
-- [ ] No regressions in existing payment module subscription test suites
+- [x] No regressions in existing payment module subscription test suites
 
 ---
 
@@ -446,11 +446,88 @@ changes; grep confirms no other section of `deferred-work.md` was touched.
 
 ### Agent Model Used
 
+Claude Sonnet 5 (`claude-sonnet-5`), via `/bmad-dev-story`.
+
 ### Debug Log References
+
+None — no failures requiring a debug session. Targeted test runs (Mockito unit suites, then the real
+Testcontainers-backed ITs) all passed on first correct attempt after two test-authoring corrections
+caught by the unit runs themselves (documented in Completion Notes below).
 
 ### Completion Notes List
 
+- **AC1/AC2**: Added `TransactionTemplate` as a new `SubscriptionService` constructor dependency.
+  Restructured `applyPendingChanges()` and `checkPastDueGracePeriod()` from a single method-level
+  `@Transactional` wrapping the whole batch into: short-transaction batch load
+  (`transactionTemplate.execute(...)`) + per-item `transactionTemplate.executeWithoutResult(...)`
+  wrapped in `try/catch (Exception e) { log.error(...); }`, mirroring
+  `SessionPackForfeitureScheduler`'s established pattern exactly. Both methods lost their
+  `@Transactional` annotation entirely, per the sibling pattern. A `null` guard defaults each batch
+  load to an empty list (matches `TransactionTemplate.execute`'s nullable return contract).
+- **AC1**: Confirmed via a real Testcontainers-backed IT (`SubscriptionLifecycleIT`, unmodified) that
+  the restructured `applyPendingChanges()` still applies a real scheduled downgrade end-to-end.
+  Confirmed via new unit tests (`SubscriptionSchedulerIsolationTest`) that a malformed `to_tier`
+  (`CoachSubscriptionTier.valueOf(...)` throwing) on one coach change leaves that change's `applied`
+  flag `false` while a sibling valid coach change and a sibling valid player change both still apply
+  in the same run; symmetric player-side-failure case; and a both-coach-and-player-fail case proving
+  neither loop aborts the other.
+- **AC2**: Identical restructure. New unit tests confirm one coach's (or, in the combined test, one
+  coach's and one player's) downgrade write failing does not prevent sibling coach/player downgrades
+  in the same run from completing. Note: unlike AC1's `applied` flag (a separate row only stamped
+  `true` after the whole per-item block succeeds), the *failing* row's in-memory tier/status fields
+  are mutated before the throwing `save()` call in these tests — a real transaction rollback discards
+  that uncommitted write, but a Mockito `save()` stub cannot reproduce rollback on a plain POJO, so
+  these two new tests deliberately assert only on the succeeding siblings (documented inline in the
+  test file) rather than making a claim the mock can't actually verify.
+- **AC3**: Added `@SchedulerLock` to `SubscriptionChangeApplicator.applyPendingChanges()`
+  (`lockAtMostFor = "PT30M"`, `lockAtLeastFor = "PT2M"`) and
+  `SubscriptionGracePeriodChecker.checkGracePeriods()` (identical values), each with a Javadoc sizing
+  comment documenting the worst-case arithmetic basis (no config-bound batch-size ceiling exists on
+  either query — noted as a known, out-of-scope gap per the story's own Dev Notes — so sizing is based
+  on an assumed worst-case daily volume order-of-magnitude above any plausible near-term scale, at a
+  pessimistic per-row DB-round-trip cost, with no external HTTP call in either loop). New
+  `SubscriptionSchedulerLockTest` (reflection/annotation check, mirroring
+  `VideoLifecycleSchedulerTest`'s established precedent for this exact assertion shape) confirms both
+  annotations are present with sensible values.
+- **Test-authoring corrections caught by the unit test runs themselves** (both fixed before any test
+  was accepted as passing): (1) `PastDueGracePeriodTest`'s new `TransactionTemplate` mock stub for
+  `executeWithoutResult` needed `lenient()` — several pre-existing tests in that file have no past-due
+  rows at all, so the stub goes unused in them and strict Mockito stubbing flagged it; (2) two new
+  `checkPastDueGracePeriod` isolation tests originally asserted the *failing* entity's tier stayed
+  unmutated after a thrown `save()` — factually wrong for a plain Mockito POJO mock (see AC2 note
+  above); corrected to assert only what the restructure actually guarantees and what a mock can
+  actually prove.
+- **AC4**: Deleted all three bullets from `deferred-work.md`'s
+  `## Deferred from: ad-hoc audit of payment module subscription schedulers (2026-09-16)` section,
+  keeping the section's intro paragraph (now with a one-sentence closing note) — same treatment the
+  sibling `notification + video` section received when `skillars-deferred-115` closed it. `git diff`
+  confirms only those three bullets were removed; no other section touched.
+- **Final validation**: `PastDueGracePeriodTest` (6), `TierEntitlementGatingTest` (10),
+  `SubscriptionSchedulerIsolationTest` (5, new), `SubscriptionSchedulerLockTest` (2, new) — 23/23
+  green. `SubscriptionLifecycleIT` (15), `SubscriptionResourceIT` (13), `PlayerSubscriptionOwnershipIT`
+  (4) — 32/32 green against a real Testcontainers Postgres, zero regressions. No local `mvn verify`
+  per project convention (GitHub CI is the sole full-verification gate).
+
 ### File List
+
+- `src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java` — AC1/AC2:
+  added `TransactionTemplate` dependency; restructured `applyPendingChanges()` and
+  `checkPastDueGracePeriod()` into short-transaction batch load + per-item transaction + try/catch
+- `src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionChangeApplicator.java` —
+  AC3: added `@SchedulerLock` with sizing-basis Javadoc
+- `src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionGracePeriodChecker.java`
+  — AC3: added `@SchedulerLock` with sizing-basis Javadoc
+- `src/test/java/com/softropic/skillars/platform/payment/service/PastDueGracePeriodTest.java` — added
+  `TransactionTemplate` mock + stubbing so the 6 pre-existing tests keep passing after the AC1/AC2
+  dependency change
+- `src/test/java/com/softropic/skillars/platform/payment/service/TierEntitlementGatingTest.java` —
+  added `TransactionTemplate` mock + local stubbing in the one test exercising
+  `checkPastDueGracePeriod()`
+- `src/test/java/com/softropic/skillars/platform/payment/service/SubscriptionSchedulerIsolationTest.java`
+  (new) — AC1/AC2 per-item failure-isolation tests, including both-loops-fail cases
+- `src/test/java/com/softropic/skillars/platform/payment/service/SubscriptionSchedulerLockTest.java`
+  (new) — AC3 `@SchedulerLock` presence/sizing reflection tests
+- `_bmad-output/implementation-artifacts/deferred-work.md` — AC4: three closed bullets deleted
 
 ---
 
@@ -508,3 +585,127 @@ changes; grep confirms no other section of `deferred-work.md` was touched.
   added as an explicit task and Verification Checklist item. The review's own "Sign-Off: No false
   positives identified" was itself inaccurate — at least Issue #1 and part of Issue #2 were false/wrong
   as stated, corrected above.
+- 2026-09-16: Dev implementation complete (`/bmad-dev-story`). AC1/AC2: `SubscriptionService` gained a
+  `TransactionTemplate` constructor dependency; `applyPendingChanges()` and `checkPastDueGracePeriod()`
+  restructured from one method-level `@Transactional` wrapping the whole batch into short-transaction
+  batch load + per-item transaction + `try/catch`, mirroring `SessionPackForfeitureScheduler` exactly.
+  AC3: `@SchedulerLock(lockAtMostFor = "PT30M", lockAtLeastFor = "PT2M")` added to both
+  `SubscriptionChangeApplicator.applyPendingChanges()` and
+  `SubscriptionGracePeriodChecker.checkGracePeriods()`, each with a worst-case-arithmetic sizing
+  comment (no config-bound batch-size ceiling exists on either query — a known, explicitly out-of-scope
+  gap). AC4: the three closed bullets deleted from `deferred-work.md`'s ad-hoc-audit section;
+  reconstruction check passed via `git diff`. New tests: `SubscriptionSchedulerIsolationTest` (5 —
+  per-item failure isolation for both methods, including both-coach-and-player-fail cases) and
+  `SubscriptionSchedulerLockTest` (2 — `@SchedulerLock` presence/sizing, mirroring
+  `VideoLifecycleSchedulerTest`'s established reflection-check pattern); `PastDueGracePeriodTest` and
+  `TierEntitlementGatingTest` updated with a `TransactionTemplate` mock so their pre-existing tests
+  keep passing (and don't silently no-op) after the new constructor dependency. Two test-authoring
+  mistakes were self-caught by the unit runs before being accepted: a missing `lenient()` on one mock
+  stub, and two assertions claiming a failed-and-rolled-back entity mutation that a plain Mockito POJO
+  mock cannot actually reproduce (corrected to assert only what the restructure and the mock together
+  can prove). Full targeted validation: 23/23 unit tests green
+  (`PastDueGracePeriodTest`/`TierEntitlementGatingTest`/`SubscriptionSchedulerIsolationTest`/`SubscriptionSchedulerLockTest`)
+  plus 32/32 green against a real Testcontainers Postgres
+  (`SubscriptionLifecycleIT`/`SubscriptionResourceIT`/`PlayerSubscriptionOwnershipIT`, all run
+  unmodified), zero regressions. No local `mvn verify` per project convention. Status → review.
+- 2026-09-16: Code review response complete. **Every line citation in the review below was checked
+  against the actual code and none of them matched** — `PastDueGracePeriodTest.java:325` doesn't exist
+  (file is 167 lines), `SubscriptionService.java:159,196,245,268` land in unrelated pre-existing methods
+  this story never touched, `:444-145` isn't a valid range. Evidently run against a stale/different
+  snapshot. Each of the 7 Patch findings was independently re-judged on its semantic merit against the
+  real code regardless of its citation: 2 were genuine, low-risk gaps and were fixed (batch-load
+  row-count logging, added mirroring `PaymentPendingSweeper`'s own convention; a one-line comment on
+  each player loop explaining the pre-existing, intentional `syncMarketplaceTier` asymmetry, which this
+  story's own Dev Notes already explained but not in-code). 5 were dismissed as false positives with
+  reasons recorded per finding (batch-load try/catch — matches `SessionPackForfeitureScheduler`'s own
+  established pattern exactly, not a regression; entity-ID null guards — `coach_id`/`player_id` are
+  `NOT NULL` DB columns, cannot be null in practice; test-mocking-too-lenient — misreads what Mockito's
+  `lenient()` does, it doesn't gate callback invocation; hardcoded-tier-defaults — a re-ask of the
+  pre-implementation review's own Issue #8, already dismissed below; null-check-brittle-contract —
+  matches `PaymentPendingSweeper`'s identical existing convention). Of the 4 Defer findings (already
+  checked off, no action requested), 3 were accurate and 1 was factually wrong on its premise (claimed
+  `FOR UPDATE SKIP LOCKED` was "never shown/verified" — it was, both at story-creation time and during
+  implementation, by directly reading the repository files) though harmless since it carried no action
+  item. See the corrected "Review Findings" section below for the full per-finding disposition. 23/23
+  targeted unit tests re-run green after the two fixes; no functional/test-observable behavior changed
+  by either fix.
+
+### Review Findings
+
+**Note on this review's reliability:** every single line citation below was checked against the actual
+code and **none of them match**. `PastDueGracePeriodTest.java:325` doesn't exist — the file is 167
+lines long. `SubscriptionService.java:159,196,245,268` (cited for the per-item loops this story added)
+land in `persistCoachSubscription`/`changeCoachTier`/`cancelCoachSubscription`/`persistCoachCancellation`
+— pre-existing methods this story never touched. `:444-145` isn't even a valid ascending range. This
+review was evidently run against a stale or different snapshot of the code, not the file as implemented.
+Each finding below was therefore re-judged on its own semantic merit against the real code (not
+dismissed on citation-mismatch alone), same standard the pre-implementation review response applied.
+
+**Patch findings — all 7 reviewed, 2 fixed, 5 dismissed:**
+
+- [x] [Review][Patch][FIXED] No logging of batch-load row counts — real gap, low-risk, cheap. Added
+  `log.info(...)` after all four batch loads (`applyPendingChanges()`'s coach/player loads,
+  `checkPastDueGracePeriod()`'s coach/player loads), mirroring `PaymentPendingSweeper`'s existing
+  `"{} booking(s) ..."` convention (confirmed present there; confirmed **absent** from
+  `SessionPackForfeitureScheduler`, so not universal in this module — added because it's genuinely
+  useful, not because omitting it would have been wrong).
+
+- [x] [Review][Patch][FIXED] `syncMarketplaceTier` called asymmetrically (coach only) — real gap in
+  *code* comments specifically (the asymmetry itself is intentional and was already explained in this
+  story's own Dev Notes — "players have no marketplace-visible tier" — just not inline). Added a
+  one-line comment at both player loops (`applyPendingChanges()` and `checkPastDueGracePeriod()`)
+  pointing future readers at the reason, at zero behavioral risk.
+
+- [x] [Review][Patch][DISMISSED — false positive] Batch-load exceptions unhandled (catch missing) —
+  cited lines don't exist at the batch loads. On the merits: mirrors `SessionPackForfeitureScheduler`'s
+  own established pattern exactly (`List<SessionPackPurchase> expired = transactionTemplate.execute(...); if (expired == null) return;`
+  — no try/catch there either, confirmed by reading it). A batch-SELECT failure was a total-run failure
+  before this story (inside the old method-level `@Transactional`) and is a total-run failure after —
+  unrelated to AC1/AC2's per-item isolation, which is what this story targets. Not a regression, not
+  in scope.
+
+- [x] [Review][Patch][DISMISSED — false positive] Entity ID null guards missing in per-item loops —
+  cited lines (159/196/245/268) are in unrelated, untouched methods. On the merits: `coach_id`/`player_id`
+  are `NOT NULL` columns (confirmed in `V138__baseline_schema.sql`) on rows already loaded from the DB
+  — cannot be null in practice. No sibling scheduler in this module null-checks its entity IDs either.
+
+- [x] [Review][Patch][DISMISSED — false positive] Test mocking is too lenient — cited line doesn't
+  exist (file is 167 lines). On the merits, this misreads what Mockito's `lenient()` does: it does
+  **not** affect whether the stub's callback runs — the `doAnswer` unconditionally invokes
+  `action.accept(null)` every time `executeWithoutResult(...)` is called. `lenient()` only suppresses
+  strict-stubbing's "unnecessary stubbing" check for the handful of tests with an empty batch (where
+  `executeWithoutResult` is never reached at all). The "batch-load failures are untested" sub-claim is
+  true but out-of-scope for the same reason as the batch-load-try/catch finding above.
+
+- [x] [Review][Patch][DISMISSED — false positive, already litigated] Hardcoded tier defaults lack
+  validation — cited lines land elsewhere entirely. This is a re-ask of the pre-implementation review's
+  own Issue #8, already dismissed in this file's Change Log below: `"SCOUT"`/`"ATHLETE"` are hardcoded
+  literal constants (not user input), so `CoachSubscriptionTier.valueOf("SCOUT")` cannot ever throw —
+  it's a compile-time-guaranteed-valid literal, not a value carrying uncertainty. The player-side
+  `sub.setTier("ATHLETE")` calls don't invoke any `valueOf(...)` at all (`PaymentPlayerSubscription.tier`
+  is a plain `String` field).
+
+- [x] [Review][Patch][DISMISSED — matches existing convention] Null-check defensive pattern suggests
+  brittle contract — cited lines land elsewhere. `PaymentPendingSweeper.sweepStrandedPayments()` uses
+  the identical `if (x == null) ...` guard on its own `TransactionTemplate.execute(...)` result
+  (confirmed by reading it) — this is an established codebase convention this story is consistent with,
+  not a new brittleness.
+
+**Defer findings** (as left by the reviewer — re-checked, 3 accurate, 1 factually wrong but harmless
+since it carries no action item):
+
+- [x] [Review][Defer] Per-item exception handling is generic (no type distinction) — accurate, correctly
+  deferred; matches every sibling scheduler's identical `catch (Exception e)` shape.
+
+- [x] [Review][Defer] Idempotency of tier reapplication unverified — accurate, correctly deferred;
+  matches AC3's own defense-in-depth note in this story.
+
+- [x] [Review][Defer][CORRECTION] FOR UPDATE SKIP LOCKED assumption undocumented — the premise is
+  **wrong**, not merely low-priority: this *was* shown and verified, both at story-creation time (AC1's
+  own text quotes the exact clause from the native query) and independently during implementation (the
+  repository files were read directly — see Dev Agent Record). No action needed regardless, since this
+  finding carried no patch request, but noting the correction so it isn't mistaken for an open gap.
+
+- [x] [Review][Defer] No aggregated metrics on partial batch failures — accurate, correctly deferred;
+  no metrics infrastructure exists for this to hook into, consistent with the rest of this module's
+  schedulers.
