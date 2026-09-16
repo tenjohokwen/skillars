@@ -11,7 +11,6 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -44,6 +43,15 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
     @Query("SELECT v FROM Video v WHERE v.id IN :ids AND v.operationalState = com.softropic.skillars.platform.video.contract.OperationalState.READY AND v.accessState = com.softropic.skillars.platform.video.contract.AccessState.ACTIVE")
     List<Video> findReadyAndActiveByIds(@Param("ids") List<UUID> ids);
 
+    // skillars-deferred-115 AC1: no longer @Transactional here — the caller
+    // (ModerationSlaMonitorService.detectSlaViolations()) now wraps this call in its own short
+    // TransactionTemplate, mirroring this same interface's findNonTerminalForUpdate (no explicit
+    // @Transactional either) and VideoWebhookEventRepository.findPendingForUpdate (used the same way
+    // by WebhookEventProcessorScheduler) — code review 2026-09-16: the latter is a different
+    // repository interface, clarified here since a reader grepping only this file wouldn't find it.
+    // So the FOR UPDATE locks below release as soon as the load returns rather than being held
+    // (implicitly, via a method-level @Transactional that used to wrap the whole scheduler body) for
+    // the entire per-video processing loop.
     @Query(value = """
         SELECT * FROM main.videos
         WHERE operational_state = 'SCANNING'
@@ -53,7 +61,6 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
         LIMIT :batchSize
         FOR UPDATE SKIP LOCKED
         """, nativeQuery = true)
-    @Transactional
     List<Video> findScanningOlderThan(@Param("threshold") Instant threshold, @Param("now") Instant now, @Param("batchSize") int batchSize);
 
     @Query(value = """

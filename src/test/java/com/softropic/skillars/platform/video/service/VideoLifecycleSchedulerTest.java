@@ -6,18 +6,23 @@ import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.LifecycleTrigger;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.PlayerSubscriptionQueryPort;
+import com.softropic.skillars.platform.video.contract.exception.VideoStateConflictException;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoLifecycleLog;
 import com.softropic.skillars.platform.video.repo.VideoLifecycleLogRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.lang.reflect.Method;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -28,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -54,9 +60,12 @@ class VideoLifecycleSchedulerTest {
             }
         };
 
-        when(configService.getBoundedLong("platform.video.lifecycle.blocked_to_archived_days", 30L, 1L, 3650L)).thenReturn(30L);
-        when(configService.getBoundedLong("platform.video.lifecycle.archived_to_deleted_days", 90L, 1L, 36500L)).thenReturn(90L);
-        when(configService.getBoundedInt("platform.video.lifecycle.batch_size", 100, 1, 10000)).thenReturn(100);
+        // lenient(): runLifecycleJob_carriesSchedulerLockSizedOffTheConfiguredCeiling() below is a
+        // pure reflection/annotation check that never calls the scheduler, so these three would
+        // otherwise fail strict-stubbing's UnnecessaryStubbingException in that one test.
+        lenient().when(configService.getBoundedLong("platform.video.lifecycle.blocked_to_archived_days", 30L, 1L, 3650L)).thenReturn(30L);
+        lenient().when(configService.getBoundedLong("platform.video.lifecycle.archived_to_deleted_days", 90L, 1L, 36500L)).thenReturn(90L);
+        lenient().when(configService.getBoundedInt("platform.video.lifecycle.batch_size", 100, 1, 10000)).thenReturn(100);
 
         scheduler = new VideoLifecycleScheduler(videoRepository, videoLifecycleLogRepository,
             videoLifecycleService, videoProviderAdapter, configService, txTemplate, quotaService, playerSubscriptionQueryPort);
@@ -147,6 +156,95 @@ class VideoLifecycleSchedulerTest {
         verify(videoLifecycleService).archiveForLifecycle(videoId);
         // Phase 2 never called deleteAsset — batch-skip guard holds
         verify(videoProviderAdapter, never()).deleteAsset(any());
+    }
+
+    // skillars-deferred-115 AC2: one video's failure during phase 1 must no longer abort the rest of
+    // that phase's batch, nor skip phase 2 entirely.
+    @Test
+    void runBlockedToArchivedPhase_oneVideoThrows_remainingVideosStillProcessed_andPhaseTwoStillRuns() {
+        Video ok1 = blockedVideo(UUID.randomUUID(), "11001", Instant.now().minus(35, ChronoUnit.DAYS));
+        Video failing = blockedVideo(UUID.randomUUID(), "11002", Instant.now().minus(35, ChronoUnit.DAYS));
+        Video ok2 = blockedVideo(UUID.randomUUID(), "11003", Instant.now().minus(35, ChronoUnit.DAYS));
+        when(videoRepository.findBlockedExceedingThreshold(any(), anyInt()))
+            .thenReturn(List.of(ok1, failing, ok2));
+        when(playerSubscriptionQueryPort.hasActiveYearlySubscription(any())).thenReturn(false);
+        // Mockito strict stubs: once archiveForLifecycle has ANY stub, every other exact-argument
+        // call must also be stubbed explicitly (doNothing is the void-method equivalent of
+        // thenReturn), or it's flagged as a likely test bug (PotentialStubbingProblem) instead of
+        // genuinely exercising the success path this test is meant to prove.
+        doNothing().when(videoLifecycleService).archiveForLifecycle(ok1.getId());
+        doNothing().when(videoLifecycleService).archiveForLifecycle(ok2.getId());
+        doThrow(new ObjectOptimisticLockingFailureException(Video.class, failing.getId()))
+            .when(videoLifecycleService).archiveForLifecycle(failing.getId());
+        when(videoRepository.findArchivedExceedingThreshold(any(), anyInt())).thenReturn(List.of());
+
+        scheduler.runLifecycleJob();
+
+        verify(videoLifecycleService).archiveForLifecycle(ok1.getId());
+        verify(videoLifecycleService).archiveForLifecycle(failing.getId());
+        verify(videoLifecycleService).archiveForLifecycle(ok2.getId());
+        // The two successful transitions actually completed (wrote their lifecycle log row) — the
+        // failing one never reached that line.
+        verify(videoLifecycleLogRepository, times(2)).save(argThat(l ->
+            l.getVideoId().equals(ok1.getId()) || l.getVideoId().equals(ok2.getId())));
+        verify(videoLifecycleLogRepository, never()).save(argThat(l -> l.getVideoId().equals(failing.getId())));
+        // Phase 2 was still invoked, even though phase 1 hit a per-video failure.
+        verify(videoRepository).findArchivedExceedingThreshold(any(), anyInt());
+    }
+
+    // skillars-deferred-115 AC2: same isolation guarantee for phase 2 (ARCHIVED→DELETED) — a
+    // conflicting concurrent purge (VideoStateConflictException, mirroring markPurged's own thrown
+    // type) on one video must not drop the remaining candidates in that phase.
+    @Test
+    void runArchivedToDeletedPhase_oneVideoThrows_remainingVideosStillProcessed() {
+        UUID okId1 = UUID.randomUUID();
+        UUID failingId = UUID.randomUUID();
+        UUID okId2 = UUID.randomUUID();
+        Video ok1 = archivedVideo(okId1, UUID.randomUUID().toString(), Instant.now().minus(95, ChronoUnit.DAYS));
+        Video failing = archivedVideo(failingId, UUID.randomUUID().toString(), Instant.now().minus(95, ChronoUnit.DAYS));
+        Video ok2 = archivedVideo(okId2, UUID.randomUUID().toString(), Instant.now().minus(95, ChronoUnit.DAYS));
+        when(videoRepository.findArchivedExceedingThreshold(any(), anyInt()))
+            .thenReturn(List.of(ok1, failing, ok2));
+        when(videoRepository.findById(okId1)).thenReturn(Optional.of(ok1));
+        when(videoRepository.findById(failingId)).thenReturn(Optional.of(failing));
+        when(videoRepository.findById(okId2)).thenReturn(Optional.of(ok2));
+        // Mockito strict stubs: once markPurged has ANY stub, every other exact-argument call must
+        // also be stubbed explicitly, or it's flagged as a likely test bug (PotentialStubbingProblem)
+        // rather than silently falling back to the 0L default.
+        when(videoLifecycleService.markPurged(okId1)).thenReturn(1024L);
+        when(videoLifecycleService.markPurged(okId2)).thenReturn(2048L);
+        when(videoLifecycleService.markPurged(failingId))
+            .thenThrow(new VideoStateConflictException(
+                failingId, OperationalState.READY.name(), OperationalState.DELETED.name()));
+
+        scheduler.runLifecycleJob();
+
+        verify(videoLifecycleService).markPurged(okId1);
+        verify(videoLifecycleService).markPurged(failingId);
+        verify(videoLifecycleService).markPurged(okId2);
+        // Only the two successful purges released quota — the failing one never reached that line.
+        verify(quotaService).decrementStorageBytes(ok1.getOwnerId(), 1024L);
+        verify(quotaService).decrementStorageBytes(ok2.getOwnerId(), 2048L);
+        verify(quotaService, times(2)).decrementStorageBytes(any(), anyLong());
+    }
+
+    // skillars-deferred-115 AC2: no existing test in this module covers @SchedulerLock directly
+    // (checked EmailRetryScheduler's/ReconciliationWorkerScheduler's suites first, per the story) —
+    // a plain reflection/annotation check confirms the lock is present with a sensible sizing, per
+    // AC2's "Verified by".
+    @Test
+    void runLifecycleJob_carriesSchedulerLockSizedOffTheConfiguredCeiling() throws NoSuchMethodException {
+        Method method = VideoLifecycleScheduler.class.getMethod("runLifecycleJob");
+        SchedulerLock lock = method.getAnnotation(SchedulerLock.class);
+
+        assertThat(lock).as("runLifecycleJob() must carry @SchedulerLock, mirroring every sibling "
+            + "scheduler sharing this module's short-SELECT/per-row-transaction shape").isNotNull();
+        assertThat(lock.name()).isNotBlank();
+        // lockAtMostFor exists specifically to cover a ceiling-sized (10000-row, two-phase) run,
+        // which is expected to take on the order of hours, not minutes — so it must comfortably
+        // exceed a default-sized (100-row) run's realistic duration.
+        assertThat(Duration.parse(lock.lockAtMostFor())).isGreaterThan(Duration.ofHours(1));
+        assertThat(Duration.parse(lock.lockAtLeastFor())).isPositive();
     }
 
     private Video blockedVideo(UUID id, String ownerId, Instant lifecycleLockedAt) {

@@ -2258,3 +2258,26 @@ Six findings from the 3-layer code review (`bmad-review-adversarial-general` + `
 
 The runbook's SES cutover gate now references an executable preflight endpoint (`POST /v1/admin/ses/preflight`, `SesCutoverPreflightResource`, `skillars-deferred-114` AC5) for step 3, closing the two bullets that used to name this gap ("Runbook checklist manual, not code-enforced" and "No automated health check integration") — both deleted outright, per this file's own convention for a real fix rather than a decision.
 
+
+## Deferred from: ad-hoc audit of notification + video modules (2026-09-16)
+
+`skillars-deferred-115-scheduler-transaction-isolation-hardening` (2026-09-16) was created to work both
+findings below — AC1 needs an explicit owner decision before implementation (restructure vs. document as
+an accepted tradeoff), AC2 is a direct fix mirroring an existing sibling pattern.
+
+Requested directly (not tied to a code review of a specific story), scoped to transaction-boundary,
+TOCTOU, and batch-memory patterns across every `@Scheduled`/batch-processing class in the notification
+and video modules, following `skillars-deferred-114`'s implementation. Every other scheduler/batch
+processor surveyed (`MailManager`, `EnvelopeEntityRepository`, `EmailRetryScheduler`,
+`OutboxRowProcessor`, `ReconciliationWorkerScheduler`, `WebhookEventProcessorScheduler`,
+`UploadSessionExpiryScheduler`, `QuotaReservationBatchExpirer`/`TimeoutService`,
+`BandwidthResetChunkProcessor`, `VideoDeletionService.cascadeDeleteForAccount`) already loads its batch
+in a short, separate transaction and processes/writes each row in its own later transaction — these two
+are the exceptions.
+
+## Deferred from: code review of story-115 (2026-09-16)
+
+**@SchedulerLock PT12H sizing insufficient for realistic provider timeout scenarios** — `VideoLifecycleScheduler.runLifecycleJob()` sized for success-case ceiling-batch runtime (~5.5 hours), but realistic scenario with 10% provider timeout rate on 10000-row batch could take 20+ hours. If lock expires and second pod starts, double-archive/double-delete attempts. Story acknowledges as known risk, tunable by operator; no code change needed, documented in AC2.
+
+**markPurged() does not change accessState, creating daily re-selection** — `VideoLifecycleScheduler` phase 2 `markPurged()` sets `operationalState=DELETED` but leaves `accessState=ARCHIVED`. Deleted video remains matched by `findArchivedExceedingThreshold()` on every run, re-attempting idempotent `deleteAsset` and hitting caught `VideoStateConflictException`. Story notes at lines 213-215 as pre-existing, low-severity, unrelated to this story's scope; confirmed inefficiency not data loss.
+
