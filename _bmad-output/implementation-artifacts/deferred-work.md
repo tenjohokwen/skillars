@@ -17,6 +17,24 @@ One bullet = one open item. Grouped by the review that raised it; the heading ca
   Verify against the code before trusting an unannotated forward-reference.
 - **File paths and line numbers age fast.** They were accurate at the review date in the heading.
 
+## Last audit: 2026-09-16 (post-merge prune after skillars-deferred-115, narrow scope)
+
+Routine sweep after `skillars-deferred-115` (PR #194) merged to master, per this file's own
+delete-outright-when-closed convention. Not a full-file re-audit — checked only what this story
+could plausibly have closed: the `## Deferred from: ad-hoc audit of notification + video modules
+(2026-09-16)` section (the story's own origin) and any other bullet naming
+`ModerationSlaMonitorService`, `VideoLifecycleScheduler`, `VideoRepository`, or `@SchedulerLock`.
+
+- **Confirmed already closed by the story's own AC3**, not this pass: the ad-hoc-audit section's
+  two original findings (batch lock/entity-lifetime shape; missing per-item isolation) were deleted
+  outright during story implementation, leaving only narrative provenance text — verified by direct
+  read, no bullets remain under that header.
+- **`## Deferred from: code review of story-115 (2026-09-16)`** — its two bullets (`@SchedulerLock`
+  `PT12H` sizing vs. realistic provider-timeout duration; `markPurged()` not flipping `accessState`)
+  are genuinely open, not done — both are explicitly "no code change needed" / "pre-existing,
+  low-severity, unrelated to this story's scope" per their own text. Left in place.
+- No other bullet in the file names any of the four grepped symbols.
+
 ## Last audit: 2026-09-15 (full-file re-audit + premature-prune correction)
 
 Two parts, both requested directly (not tied to a merge): (1) correct a process violation from the
