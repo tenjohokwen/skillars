@@ -1,304 +1,228 @@
-# Story Audit: Deferred-115 Scheduler Transaction Isolation Hardening
+# Audit Review: skillars-deferred-116 Story
 
-**Auditor:** Senior dev review  
+**Reviewer:** Senior Engineer Audit  
 **Date:** 2026-09-16  
-**Story:** skillars-deferred-115-scheduler-transaction-isolation-hardening
+**Status:** FINDINGS IDENTIFIED — see below for actionable clarifications needed before dev starts
 
 ---
 
-## Summary
+## Executive Summary
 
-The story is well-scoped and grounded in real findings. **AC1 and AC2 are well-written, but three medium-severity gaps require clarification before implementation.** AC3 (ledger hygiene) has one minor vagueness. No false positives detected; all issues below are actionable.
-
----
-
-## AC1: ModerationSlaMonitorService — Batch Lock/Entity-Lifetime Decision
-
-### ✅ Strengths
-- Correctly identifies the "outer transaction holds all locks" antipattern
-- Both options are genuinely viable; appropriately punts to owner for business/risk tradeoff
-- Correctly flags that the existing `REQUIRES_NEW`-per-video mitigation is intentional, not an oversight
-- Correctly externalized the hardcoded `50` as a separate config task
-
-### ⚠️ Issues
-
-#### Issue 1.1: Heap assumption doesn't account for entity relationships
-**Location:** Page 2, "at 50 rows...this will not exhaust heap"
-
-The story assumes 50 `Video` rows fit in heap. **But**: does `Video` have `@OneToMany` collections (e.g., `List<VideoAsset>`, `List<PlaybackEvent>`) with eager loading or cascade fetch? If so:
-- 50 videos × N related entities per video exceeds heap risk assessment
-- Hibernate's dirty-checking on a managed persistence context scales with loaded entities, not just rows
-
-**Recommendation**: Before presenting options to owner, verify `Video.java`'s relationships. If there are non-lazy collections, either:
-- Mention this in Option 2's documented tradeoff, or
-- Factor it into sizing the batch smaller if Option 1 is chosen
-
-**Not a blocker**: Small heap impact is plausible, but assumption should be verified, not stated.
+The story correctly identifies a real bug class (batch-level transaction isolation) and proposes the right pattern (per-item transacted processing + try/catch), mirrored from an established in-module sibling. **However, several corner cases and implementation ambiguities need clarification before dev work starts**, particularly around data consistency assumptions, transaction boundaries for side effects, and testing coverage gaps.
 
 ---
 
-#### Issue 1.2: Deadlock risk not mentioned if nested per-video queries depend on locked batch
-**Location:** Lines 80-88, 106-113 (the `requiresNewTemplate.execute(...)` calls)
+## Critical Issues (Dev-Blocking)
 
-The `REQUIRES_NEW` per-video transactions call back to `videoLifecycleService.*` methods. **Question**: Do those methods issue queries that touch `Video` rows or tables that the outer transaction is also holding locks on?
+### 1. **AC1 & AC2: Event Publishing & Side Effect Isolation**
 
-**Example scenario** (hypothetical deadlock):
-1. Outer transaction locks 50 `Video` rows via `FOR UPDATE SKIP LOCKED`
-2. Per-video REQUIRES_NEW tries to read from a related table that has a foreign-key constraint back to `Video`
-3. Another writer attempts to update a locked `Video` row, waiting for the lock
-4. The per-video query needs a lock on the related table that the other writer holds
-5. Deadlock: outer transaction blocked on the other writer; per-video transaction blocked on the other writer's dependent lock
+**Issue:** The story does not clarify how `SubscriptionExpiredEvent` logging and `syncMarketplaceTier`'s side effects (marketplace tier creation) interact with per-item transaction boundaries.
 
-**Recommendation**: In the "Files to Read Before Implementation," add a check:
-- Read `videoLifecycleService.archiveForLifecycle()` and `markPurged()` call chains
-- Verify they do not query tables with FK constraints back to `Video`
-- Verify they do not indirectly lock the same `Video` rows
+**Current assumption:** Implicitly assumes both are fired/committed inside the per-item transaction.
 
-**Likelihood**: Low in practice (good schema design prevents this), but worth a check.
+**Why this matters:** If `SubscriptionExpiredEvent` is published synchronously via `ApplicationEventPublisher`, it fires within the transaction and is rolled back if the transaction fails — this is safe. But if any listener tries to access the newly-applied change via a separate lookup (e.g., "fetch the change I just applied"), it will fail because the transaction hasn't committed yet in the listener's context. More concretely: if another component is observing `SubscriptionExpiredEvent` and assumes the change is already committed to the DB, per-item isolation breaks that assumption.
+
+**Fix required before dev:** 
+- Confirm `syncMarketplaceTier` is idempotent and safe to retry (the story mentions it creates a new `CoachSubscription` if none exists — what if a concurrent write created one between the initial read and the per-item transaction write?). 
+- Confirm `SubscriptionExpiredEvent` listeners do not assume transactional consistency across the change AND any marketplace effects.
+- Document in the story whether events are fired inside or outside the per-item transaction, and justify the choice.
 
 ---
 
-#### Issue 1.3: Option 1's claim/double-pick strategy deferred without owner input
-**Location:** AC1, Option 1, "decide whether this needs an explicit 'claim' step"
+### 2. **AC2: Concurrent Modification Race Between Read & Write**
 
-The story correctly identifies that removing the outer lock opens a double-pick race: a second pod could select the same row between the SELECT's commit and the per-row write. The story offers two sub-options:
-- Add an explicit PENDING→PROCESSING write (like `WebhookEventProcessorScheduler`)
-- Rely on state-machine validation (like `ReconciliationWorkerScheduler`)
+**Issue:** AC2 acknowledges concurrent modifications are possible (webhook-driven status updates mid-sweep) and calls out optimistic-lock failures, but does not address a critical case.
 
-**Problem**: This sub-decision is deferred to implementation time, but it's architectural: it changes whether per-video retries are safe, whether a manual recovery step exists, whether the state machine is a robust guard or just luck.
+**Scenario:** The batch read filters on `status = 'PAST_DUE'` and `dueDate < cutoffTime`. Between the read and the per-item downgrade write:
+- A concurrent webhook updates `dueDate` (e.g., customer made a payment, extending the due date) or changes `status` to something other than `PAST_DUE`.
+- The per-item transaction throws an optimistic-lock error (version mismatch) or the write silently succeeds but leaves the row in an inconsistent state.
 
-**Recommendation**: Clarify in Task 1 (or in the owner-presentation step) whether the developer should:
-- Option A: Ask owner for a second sub-decision (claim step or not?), or
-- Option B: Make this judgment call based on `Video`'s state machine robustness (recommend reading `Video.java` + state-transition code to decide)
+**Why this matters:** The story assumes "a row that failed to downgrade is still `PAST_DUE` and still past the cutoff, so it stays eligible with no extra bookkeeping needed" — but this breaks if the concurrent update changed the filtering criteria (e.g., `dueDate` now in the future). The row would be excluded from tomorrow's run, creating a gap.
 
-Current text suggests Option A (owner decides), but it's implicit.
-
----
-
-### ✅ Non-Issues (verified correct)
-- "SKIP LOCKED means a second concurrent run could pick up already-claimed-but-not-yet-advanced row" — correctly identifies the race
-- Batch size `50` is a hardcoded literal confirmed at the specified line
-- Config externalization tied to `platform.video.reconciliation.batch-size` pattern is real and findable
+**Fix required before dev:**
+- Read `PastDueGracePeriodTest.java` to understand the expected concurrency model. Is optimistic locking the intended defense? If so, what version field is used?
+- Clarify: If a row's `dueDate` is updated concurrently to after the cutoff, is it acceptable for that row to be skipped indefinitely (no longer `PAST_DUE`, no longer retried)?
+- If the answer is "yes, that's fine because a payment landed and extended the due date," explicitly document this assumption in AC2. If "no, we need to handle this," add a task to the story.
 
 ---
 
-## AC2: VideoLifecycleScheduler — Per-Item Failure Isolation + Cluster-Wide Mutual Exclusion
+### 3. **AC1: Applied Flag Re-Selection Assumption Not Verified**
 
-### ✅ Strengths
-- Correctly identifies that optimistic-lock exceptions propagate out of the `for` loop
-- Correctly notes that phase 2 is skipped if phase 1 fails (real impact, no recovery until next day)
-- `@SchedulerLock` remedy is well-grounded in `EmailRetryScheduler` precedent
-- Recommended approach (per-item try/catch + `@SchedulerLock`) mirrors working pattern in same module
+**Issue:** AC1 assumes leaving `applied = false` on failure is sufficient for re-selection "once the underlying data issue is fixed." But there's no verification that the batch read query actually filters on `applied = false` or that someone will fix the underlying data issue.
 
-### ⚠️ Issues
+**Why this matters:** If the batch query is something like `findPendingForScheduler(now)` and `pending` is defined by a composite condition (e.g., `applied = false AND status = 'PENDING'`), then:
+- If a malformed `to_tier` row is left with `applied = false`, will it be re-selected tomorrow? Only if its `status` is still `PENDING`.
+- What if the data issue is never fixed (e.g., a legacy row with an invalid tier that was never supposed to exist)? It would be re-selected forever, log errors forever, and clutter error streams.
 
-#### Issue 2.1: "Any other expected/recoverable failure" is too vague
-**Location:** AC2, "catch (ObjectOptimisticLockingFailureException and any other expected/recoverable failure)"
-
-The story says "don't guess; read the methods," which is correct advice, but doesn't list what those exceptions are. **Problem**: The developer must:
-1. Read `videoLifecycleService.archiveForLifecycle()` and `markPurged()`
-2. Trace their callee chains (`quotaService` calls, etc.)
-3. Decide which exceptions are "expected/recoverable" (should skip and continue) vs. "unexpected" (should propagate and abort)
-
-If the developer guesses wrong, a skipped exception could mask a genuine bug.
-
-**Recommendation**: Add to "Files to Read Before Implementation" or Task 2:
-- Read `VideoLifecycleService.archiveForLifecycle()` and `markPurged()` completely
-- **List the exception types** they throw (don't just say "check it")
-- Document expected ones in the method's javadoc or task notes before writing the catch clause
-
-**Example**: The task should say something like:
-> "Confirm that `archiveForLifecycle` throws only `OptimisticLockingFailureException`, `VideoNotFoundException`, and `IllegalStateException`. Only catch the recoverable ones (the first two); allow `IllegalStateException` to propagate."
+**Fix required before dev:**
+- Read the actual repository method `coachSubscriptionChangeRepository.findPendingForScheduler(now)` and its database query. Verify the query selects on `applied = false` (or equivalent).
+- Confirm whether indefinite retry of malformed data is acceptable or if there should be a retry-limit + alert mechanism.
+- If indefinite retry is unacceptable, document in the story that this is a known limitation and propose a follow-up task (e.g., add a `retry_count` column, skip after N failures).
 
 ---
 
-#### Issue 2.2: Partially-processed batch state recovery is not specified
-**Location:** AC2, "the recovery window for a dropped batch is a full day"
+## High Priority Issues (Should Clarify Before Dev)
 
-The story correctly notes a full-day gap between ticks, but doesn't clarify:
-- **If phase 1 partially succeeds** (videos 1–30 move to ARCHIVED, but video 31 throws an exception):
-  - Videos 32–100 remain in BLOCKED state (not processed)
-  - What state should the ledger record to ensure videos 1–30 and 32–100 are both picked up tomorrow?
-  - **Is there a risk that videos 1–30 are double-processed** if phase 2 runs on them before the next day's phase 1 re-runs?
+### 4. **AC3: `lockAtMostFor` Sizing Not Grounded**
 
-- **If this is the intended behavior**: the story should say so explicitly (e.g., "re-running phase 1 tomorrow will re-process the entire batch, including already-archived videos; they are idempotent").
-- **If this is not safe**: the story should recommend a "claim" step (similar to Issue 1.3) or a checkpoint.
+**Issue:** AC3 says "Size `lockAtMostFor` generously relative to realistic batch sizes" but provides no concrete baseline.
 
-**Recommendation**: Clarify the partially-processed recovery guarantee:
-> "If phase 1 processes videos 1–30 successfully then fails on video 31, tomorrow's run will re-process all 100. Videos 1–30 will be re-checked and idempotently re-archived (or skipped if already archived). This is safe because `videoLifecycleService.archiveForLifecycle()` is idempotent."
+**Current assumption:** "Generous" means something like 15 minutes (by analogy to `SessionPackForfeitureScheduler`).
 
-(Or specify that it's NOT safe and recommend a different strategy.)
+**Why this matters:** 
+- If a run takes 14 minutes today but data grows 10x in the next quarter, the same `PT15M` lock might not be "generous" anymore, and the method could silently start overlapping runs.
+- Conversely, `PT15M` might be overkill if typical runs are under 30 seconds, wasting lock resources.
+- The story explicitly notes "there is no config-bound batch-size ceiling on either query today" as a "known gap" but chooses not to add one. This is a reasonable scope decision, but it means `lockAtMostFor` is a fragile proxy for "max realistic runtime."
 
----
-
-#### Issue 2.3: Potential race between VideoLifecycleScheduler and ReconciliationWorkerScheduler not mentioned
-**Location:** AC2, references `ReconciliationWorkerScheduler` but doesn't discuss interactions
-
-Both `VideoLifecycleScheduler` and `ReconciliationWorkerScheduler` perform state-transition writes to `Video`. **Question**: Can they race on the same video?
-
-**Example race**:
-1. `VideoLifecycleScheduler.runBlockedToArchivedPhase()` tries to archive video #123
-2. Concurrently, `ReconciliationWorkerScheduler.reconcile()` tries to clean up the same video
-3. One throws `OptimisticLockingFailureException`; the story says skip it
-4. **Result**: Video #123 is neither archived nor cleaned up; it's stuck
-
-The story doesn't address:
-- Do these schedulers run at different times (no overlap risk)?
-- Is the optimistic lock sufficient to ensure one succeeds and the other fails safely?
-- Should there be an ordering guarantee (lifecycle before reconciliation, or vice versa)?
-
-**Likelihood**: Low (different jobs, different schedules), but worth verifying.
-
-**Recommendation**: Check `VideoLifecycleScheduler`'s cron schedule (`cron = "0 0 3 * * *"` mentioned in the story) and `ReconciliationWorkerScheduler`'s schedule. If they could overlap, add a note about the expected behavior (one aborts, the next tick cleans up, etc.).
+**Fix required before dev:**
+- Query the production DB to estimate actual batch sizes at today's scale: how many pending coach changes, pending player changes, and past-due subscriptions are there on a typical day?
+- Calculate realistic runtimes based on measured query performance and processing time per item.
+- Document the sizing basis in code comments (exact format shown in the story: "This runs daily at 02:00 UTC, typically processing ~N items in ~M seconds under current load; PT15M is 10x the expected max. If batch sizes exceed X items, revisit this value.").
+- Consider adding a TODO comment flagging the missing batch-size ceiling as a follow-up.
 
 ---
 
-#### Issue 2.4: @SchedulerLock sizing guidance is vague
-**Location:** AC2, "size generously, since the consequence of... mid-run... is a genuine double-archive/double-delete"
+### 5. **AC1 & AC2: Testing Coverage Gaps**
 
-The story says "size generously" but doesn't give concrete guidance:
-- What is "generous"? 2× the expected duration? 10×?
-- The cron runs "once/day" (`0 0 3 * * *`), but how long does a single run take?
-  - A 100-video batch with 2 phases could take seconds to minutes depending on asset cleanup latency
-- What are `EmailRetryScheduler`'s actual `lockAtMostFor`/`lockAtLeastFor` values?
+**Issue:** Test verification sections specify "at least one valid coach change and at least one valid player change" but don't enumerate all failure scenarios.
 
-**Recommendation**: Task 2 should include a sub-step:
-> "Check `EmailRetryScheduler.java:86-131` for its `@SchedulerLock` values and sizing rationale. Size `VideoLifecycleScheduler`'s lock to cover 2 phases × 100 rows, plus a safety margin. Document the sizing choice in a comment."
+**Current assumptions:**
+- Testing when coach fails, then player succeeds → both loops function independently ✓
+- Testing when player fails, then coach succeeds → covered by symmetry ✓
+- Testing when BOTH fail in the same run → **NOT explicitly mentioned**
 
-**Example bounds** (not part of this story, but illustrative):
-- If a single `archiveAsset` call takes ~100ms and phase 1 processes 100 videos: ~10s baseline
-- Add phase 2 and variance: 30s plausible
-- Set `lockAtMostFor = "PT2M"` (2 minutes) to be safe
+**Why this matters:** If the first coach change fails and causes an early return before processing players, the test would pass but the implementation would be wrong. The story doesn't say to test both failing simultaneously.
 
----
-
-### ✅ Non-Issues (verified correct)
-- `ObjectOptimisticLockingFailureException` is the right exception to catch (confirmed by `@Version` annotation on `Video`)
-- Full-day recovery window is correctly calculated (`cron = "0 0 3 * * *"` = once daily)
-- `@SchedulerLock` precedent in `EmailRetryScheduler` is real and appropriate
+**Fix required before dev:**
+- Expand the verification section to explicitly list test matrix:
+  - Valid coach + valid player (baseline, should both apply)
+  - Invalid coach + valid player (coach fails, player still applies)
+  - Valid coach + invalid player (player fails, coach still applies)
+  - Invalid coach + invalid player (both fail, both stay unapplied/eligible for retry)
+- Similarly for AC2: if the coach downgrade throws but player hasn't been processed yet, confirm player still processes.
 
 ---
 
-## AC3: Ledger Hygiene
+### 6. **AC1: `syncMarketplaceTier` Side Effects Under Per-Item Isolation**
 
-### ⚠️ Issue
+**Issue:** `syncMarketplaceTier` is called inside the `for` loop and creates a new `CoachSubscription` row if one doesn't exist. The story says "keep working identically inside the new per-item transaction" but doesn't address a race.
 
-#### Issue 3.1: Exact lines to edit in deferred-work.md are not specified
-**Location:** AC3, "update that section per this file's own stated convention"
+**Scenario:**
+- Thread A reads pending coach change for Coach #1.
+- Thread A calls `syncMarketplaceTier(Coach#1, ATHLETE)` → no `CoachSubscription` exists, so it creates one.
+- Before Thread A commits, Thread B (a concurrent API request or another scheduler instance) also tries to create a `CoachSubscription` for Coach #1.
+- One of them gets a unique constraint violation.
 
-The story says to delete bullets if closed by a real fix, or retag them as `[DECIDED <date> (skillars-deferred-115): ...]` if AC1 lands as Option 2. **But**: The story doesn't quote the exact bullets from `deferred-work.md` that should be edited.
+**Current assumption:** The `@SchedulerLock` in AC3 prevents two scheduler instances from running simultaneously, so Thread B's write is delayed. But within the same scheduler instance, per-item `transactionTemplate.execute(...)` creates new DB connections, which means isolation level matters.
 
-The story references `_bmad-output/implementation-artifacts/deferred-work.md` but the developer must hunt for the `## Deferred from: ad-hoc audit of notification + video modules (2026-09-16)` section and find the two bullets (presumably listing `ModerationSlaMonitorService` and `VideoLifecycleScheduler` findings) themselves.
+**Why this matters:** If isolation level is `READ_COMMITTED`, Thread A's uncommitted `INSERT` is not visible to Thread B inside a separate transaction, and if Thread B also tries to insert, both might try to create the same row.
 
-**Risk**: The developer might:
-- Edit the wrong section (if there are multiple audits on 2026-09-16)
-- Miss a bullet that should be deleted
-- Accidentally edit surrounding context
-
-**Recommendation**: Quote the exact bullets from `deferred-work.md` in AC3, or add a task step:
-> "Read `_bmad-output/implementation-artifacts/deferred-work.md:line-number` (the `## Deferred from: ad-hoc audit...` section). Locate the two bullets for `ModerationSlaMonitorService` and `VideoLifecycleScheduler`. Delete/retag per AC1's outcome."
-
-**Workaround for dev**: The story does say "Reconstruction check: every surviving line in the target section must match the pre-edit content, in order, with only the specified deletions/retags applied." This catches mistakes, but it's a check, not a prevention.
+**Fix required before dev:**
+- Verify `transactionTemplate.execute(...)` uses the same isolation level as `@Transactional` (which defaults to `READ_COMMITTED`).
+- If `syncMarketplaceTier` uses an explicit `INSERT ... ON CONFLICT DO UPDATE` (upsert) pattern, this is safe. Confirm this by reading the implementation.
+- If it uses a read-then-insert pattern, document the assumption that within a single scheduler instance, no two per-item transactions will concurrently try to insert the same `CoachSubscription` (true due to single-threaded scheduler, but worth stating).
 
 ---
 
-### ✅ Non-Issues
-- Retag format `[DECIDED <date> (skillars-deferred-115): ...]` is clear
-- "Reconstruction check" approach (diff before/after) is sound
+## Medium Priority Issues (Good to Clarify)
+
+### 7. **AC1 & AC2: Initial Batch Read Not Protected**
+
+**Issue:** The batch read (`coachSubscriptionChangeRepository.findPendingForScheduler(now)`) is the first thing that happens. If it fails (DB connection timeout, disk full, etc.), the entire method fails and is caught by Spring's default `LoggingErrorHandler`.
+
+**Why this matters:** The story doesn't discuss whether the batch read itself should be wrapped in try/catch or if it's acceptable to fail the entire run. For other schedulers (e.g., `SessionPackForfeitureScheduler`), this is probably fine because the read is fast. But if the pending-changes query is expensive, should it have a timeout?
+
+**Clarification:** This is probably not an issue, and the default behavior is fine. But the story doesn't mention it, leaving it ambiguous.
 
 ---
 
-## General Issues (Cross-Cutting)
+### 8. **AC2: Missing Downgrade Logic Clarity**
 
-### Issue G.1: Logging/alerting strategy for skipped rows not mentioned
-**Location:** AC2 implementation, but not in story text
+**Issue:** AC2 describes downgrading coaches to `SCOUT`/`CANCELLED` based on status, but the story doesn't specify which status gets which tier.
 
-After the fix, per-item failures are silently skipped (logged as `continue` in the for loop). **Questions for implementation**:
-- Should each skipped video emit a `log.warn()`?
-- Should there be a metric (e.g., `lifecycle.scheduler.skipped.count`)?
-- What should on-call see in logs to realize a batch partially failed?
+**Current assumption:** Implicitly, the code determines which tier based on the subscription's current status. But is this in the DB row itself, or is there a state machine?
 
-**Recommendation**: Add a note in AC2 Task 2:
-> "Decide logging level for skipped videos (recommend `log.warn("Skipped video {}: {}", videoId, exception.getMessage())`). Verify that logging exists before marking complete."
+**Why this matters:** Knowing whether the tier is determined by a column or a function affects what gets tested. If it's a function, the test should verify the function logic is called correctly.
 
-**Not a blocker**: This is implementation taste, but worth calling out explicitly.
+**Clarification:** Read `checkPastDueGracePeriod()` in `SubscriptionService.java` to see the actual logic. The story should mention this explicitly in AC2's "Files to Read Before Implementation" section (it does mention the method, but not which part of the code determines the tier).
 
 ---
 
-### Issue G.2: Testing pattern for "concurrent access not blocked" (AC1, Option 1) is complex
-**Location:** AC1, "Verified by: A concurrent-access test showing a second reader/writer is not blocked once the load completes"
+### 9. **AC3: `lockAtLeastFor` Timing Assumption**
 
-This test is non-trivial:
-- Must run two threads/pods concurrently
-- First thread does SELECT FOR UPDATE SKIP LOCKED (in its own short transaction)
-- Second thread tries to write the same row (must block, then unblock once first thread commits)
-- Third thread tries to write *after* SELECT commits but *before* per-row processing starts (should succeed if load is in its own transaction, should block if not)
+**Issue:** AC3 proposes `lockAtLeastFor = "PT2M"`, mirroring `SessionPackForfeitureScheduler`. But the scheduler runs daily (`0 0 2 * * *` and `0 0 3 * * *`), so why is a 2-minute minimum lock needed?
 
-**Recommendation**: If Option 1 is chosen, check if `ReconciliationWorkerScheduler` or `WebhookEventProcessorScheduler` already have a test for this pattern. If yes, extend it; if no, recommend a simpler test (e.g., mock the TransactionTemplate and assert it's called twice, not once).
+**Current assumption:** The 2-minute minimum is to prevent back-to-back lock acquisitions if the method completes very quickly, preventing thrashing. But on a daily scheduler, this seems overly conservative.
 
-**Not a blocker**: The story correctly identifies the need; implementation can figure out the test harness.
+**Why this matters:** If `lockAtLeastFor = PT2M` and the method completes in 5 seconds, the lock is held for 2 minutes anyway, delaying potential re-runs (though re-runs shouldn't happen for 24 hours anyway on a daily job). This might be an over-engineering, or it might be a defensive measure for future changes.
+
+**Clarification:** The story should justify why `PT2M` is appropriate for a daily job. If it's just "follow the pattern for consistency," say so. If it's defensive, document that.
 
 ---
 
-### Issue G.3: File List and Change Log are empty
-**Location:** Story template sections
+## Low Priority Issues (FYI / Nice to Have)
 
-Expected for a ready-for-dev story. Not an issue, just noting: the story should remind the developer to fill these in at completion time.
+### 10. **AC4: Ledger Hygiene Not Fully Specified**
 
-**Current state**: Correct (empty is OK for ready-for-dev).
+**Issue:** AC4 says to delete the three bullets from `deferred-work.md` but doesn't specify exactly which section or what "reconstruction check" means precisely.
 
----
+**Clarification:** The story does reference the section name (`## Deferred from: ad-hoc audit of payment module subscription schedulers (2026-09-16)`), so this is clear enough. The "reconstruction check" is "diff before/after shows only deletions, no unrelated changes" — reasonable.
 
-## False Positives Checked (and Rejected)
-
-### ❌ "Option 1's restructure might regress per-video failure handling"
-- The story says "re-verify per-video failure handling" — this is a good reminder, not a missing issue
-- Existing tests should catch this; no new risk introduced
-
-### ❌ "VideoLifecycleScheduler batch size (default 100) is too large"
-- The story mentions "up to `platform.video.lifecycle.batch_size` (default 100, ceiling 10000)"
-- No issue here; it's configurable and sized appropriately for a once-daily job
-
-### ❌ "Shedlock table doesn't exist"
-- The story says "@SchedulerLock (`net.javacrumbs.shedlock.spring.annotation.SchedulerLock`) is already a project dependency"
-- If the dependency exists and 4 other schedulers use `@SchedulerLock`, the shedlock table and migrations are already in place
-- No new risk
+**Recommendation:** No action needed; this is a style point.
 
 ---
 
-## Summary Table
+### 11. **AC1 & AC2: Logging Granularity**
 
-| Issue | Severity | Type | Recommendation |
-|-------|----------|------|-----------------|
-| 1.1: Heap assumption + entity relationships | Medium | Assumption gap | Verify Video.java relationships before presenting options to owner |
-| 1.2: Deadlock risk in nested per-video queries | Low | Missed flow | Check videoLifecycleService call chains for FK-back queries |
-| 1.3: Option 1's claim/double-pick sub-decision deferred | Medium | Scope ambiguity | Clarify whether owner also decides claim strategy, or dev does |
-| 2.1: Exception types not specified | Medium | Assumption gap | Read and list exceptions from videoLifecycleService methods; don't guess in catch clause |
-| 2.2: Partially-processed batch recovery guarantee missing | Medium | Missed flow | Clarify idempotency guarantee for phase 1 re-runs and phase 2 double-processing risk |
-| 2.3: Race between Lifecycle and Reconciliation schedulers | Low | Missed flow | Check cron schedules; verify no overlapping state-transition races |
-| 2.4: @SchedulerLock sizing guidance vague | Low | Implementation detail | Reference EmailRetryScheduler's actual sizing; add sizing comment to code |
-| 3.1: Exact deferred-work.md lines not specified | Low | Process clarity | Quote the bullets to delete/retag, or add line numbers |
-| G.1: Logging strategy for skipped rows | Low | Implementation detail | Decide log level (recommend warn); document before completion |
-| G.2: Concurrent-access test harness complexity | Low | Testing risk | Check existing patterns first; adapt rather than invent |
+**Issue:** The fix says to `log.error(...)` with the change's id and the exception, but doesn't specify the log level or message format.
+
+**Why this matters:** If you log a hundred errors per day, ops might set the log level to WARN or ERROR to filter noise. But then you miss the change id in structured logging.
+
+**Recommendation:** Before dev, add a note to the story about structured logging format (e.g., "log.error('Failed to apply pending change: {}', changeId, exception)") to match the project's logging conventions.
+
+---
+
+### 12. **Missing Idempotency Confirmation for `applyPendingChanges`**
+
+**Issue:** AC3 acknowledges that applying the same `toTier` twice is a "no-op in outcome" but notes the `change.setApplied(true)` write and event logging would race.
+
+**Why this matters:** This implies idempotency is "good enough," but `@SchedulerLock` is meant to prevent that. Once `@SchedulerLock` is added, the race goes away. But what if someone later removes `@SchedulerLock` by accident? The idempotency check becomes important as a defense-in-depth.
+
+**Recommendation:** Add a note to the story: "Idempotency is achieved via the tier change itself being a no-op + `@SchedulerLock` preventing concurrent runs. If `@SchedulerLock` is ever removed or misconfigured, idempotency of the tier application is the last line of defense."
+
+---
+
+## Questions for the Developer to Resolve During Implementation
+
+These are questions the dev should investigate and document answers in the code:
+
+1. **Does `SubscriptionExpiredEvent` get published inside the per-item transaction, or can it leak?** If it leaks, do listeners assume transactional consistency?
+
+2. **What is the actual transaction isolation level for `transactionTemplate.execute(...)`?** Confirm it's `READ_COMMITTED` and safe for concurrent writes.
+
+3. **If a pending change's `to_tier` is malformed (never fixed), will it be retried forever?** Is this acceptable, or should there be a retry limit?
+
+4. **What are the actual batch sizes at current scale?** Measure and use real numbers to justify `lockAtMostFor = PT15M`.
+
+5. **Does `syncMarketplaceTier` use an upsert pattern, or could concurrent writes to `CoachSubscription` fail?** Read the implementation and document your findings.
+
+6. **What determines whether a past-due coach is downgraded to `SCOUT` vs `CANCELLED`?** Is it a column, enum, or state machine?
 
 ---
 
 ## Recommendation
 
-**Proceed with implementation**, with these before-dev steps:
+**This story is ready for dev to start, subject to clarifications above.** The three main issues (event/side-effect isolation, concurrent race in AC2, testing coverage) should be resolved during implementation and documented via code comments or tests. The dev should:
 
-1. **Read `Video.java` and `VideoLifecycleService` in full** (already in story's file list, but emphasis them)
-2. **Resolve Issue 1.1** (heap + relationships) before owner presentation
-3. **Clarify Issue 1.3** (claim/double-pick decision ownership) in Task 1
-4. **Document Issue 2.1** (exception list) as a sub-step of Task 2
-5. **Verify Issue 2.2** (recovery guarantee) by reading Video's state machine; add a note to Task 2 about idempotency confirmation
-6. **Quick check Issue 2.3** (Lifecycle vs. Reconciliation race) — likely safe, but a 30-second grep for cron schedules is worth it
-
-**Non-blocking notes**:
-- Issues 2.4, 3.1, G.1, G.2 are implementation details or process clarity — not false positives, just nice-to-clarify before starting
+1. Before touching code: Read `SessionPackForfeitureScheduler` in full and confirm its pattern handles all edge cases the story relies on.
+2. During implementation: Resolve questions 1–6 above and leave breadcrumbs in comments.
+3. During testing: Execute the full test matrix (AC1: coach-only-fail, player-only-fail, both-fail; AC2: coach-only-fail, player-only-fail, both-fail).
+4. Before review: Verify `@SchedulerLock` sizing with real batch-size data.
 
 ---
 
-## Conclusion
+## Sign-Off
 
-This is a well-scoped, grounded story. The two main issues (AC1 options, AC2 failure handling) are correctly identified and remedied. **No red flags; three medium-severity assumptions need verification, but none are blockers.** Estimated 1–2 hours to address these before development begins.
+No false positives identified. The story's core diagnosis (batch-level isolation bug) is correct, and the proposed fix pattern is proven (already in use by 5 other schedulers). The issues flagged above are clarifications, not blockers.
+
+**Approved for dev with noted caveats.**

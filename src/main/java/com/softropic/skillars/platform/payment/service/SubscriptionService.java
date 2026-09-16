@@ -25,6 +25,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.Arrays;
@@ -48,6 +49,7 @@ public class SubscriptionService {
     private final StripeClient stripeClient;
     private final ApplicationEventPublisher eventPublisher;
     private final ParentPlayerLinkRepository parentPlayerLinkRepository;
+    private final TransactionTemplate transactionTemplate;
 
     /** Self-reference so @Transactional on persist* methods is honoured via the Spring proxy. */
     @Autowired @Lazy
@@ -442,43 +444,76 @@ public class SubscriptionService {
 
     // ─── Scheduled: Apply Pending Changes ────────────────────────────────────────
 
-    @Transactional
+    // skillars-deferred-116 AC1/AC2: restructured from a single method-level @Transactional wrapping
+    // the whole batch (one bad row rolled back every sibling coach/player change for the entire run)
+    // to short-transaction batch load + per-item transactionTemplate.execute(...) wrapped in
+    // try/catch, mirroring SessionPackForfeitureScheduler's established pattern in this same module.
+    // The batch-load transaction's commit is also what releases findPendingForScheduler's
+    // `FOR UPDATE SKIP LOCKED` row locks before per-item writes begin — see AC3's @SchedulerLock,
+    // which closes the resulting concurrent-re-selection gap.
     public void applyPendingChanges() {
         Instant now = Instant.now();
 
-        List<CoachSubscriptionChange> coachChanges =
-            coachSubscriptionChangeRepository.findPendingForScheduler(now);
+        List<CoachSubscriptionChange> coachChanges = transactionTemplate.execute(
+            status -> coachSubscriptionChangeRepository.findPendingForScheduler(now));
+        if (coachChanges == null) coachChanges = List.of();
+        log.info("[SUBSCRIPTION_CHANGE_APPLICATOR] {} pending coach downgrade(s) loaded", coachChanges.size());
         for (CoachSubscriptionChange change : coachChanges) {
-            paymentCoachSubscriptionRepository.findByCoachId(change.getCoachId()).ifPresent(sub -> {
-                sub.setTier(change.getToTier());
-                paymentCoachSubscriptionRepository.save(sub);
-                syncMarketplaceTier(change.getCoachId(), change.getToTier());
-            });
-            change.setApplied(true);
-            coachSubscriptionChangeRepository.save(change);
-            log.info("[COACH_SCHEDULED_DOWNGRADE_APPLIED coachId={} toTier={}]",
-                change.getCoachId(), change.getToTier());
+            try {
+                transactionTemplate.executeWithoutResult(status -> {
+                    paymentCoachSubscriptionRepository.findByCoachId(change.getCoachId()).ifPresent(sub -> {
+                        sub.setTier(change.getToTier());
+                        paymentCoachSubscriptionRepository.save(sub);
+                        syncMarketplaceTier(change.getCoachId(), change.getToTier());
+                    });
+                    change.setApplied(true);
+                    coachSubscriptionChangeRepository.save(change);
+                    log.info("[COACH_SCHEDULED_DOWNGRADE_APPLIED coachId={} toTier={}]",
+                        change.getCoachId(), change.getToTier());
+                });
+            } catch (Exception e) {
+                // Deliberately left with applied=false: findPendingForScheduler filters on exactly
+                // that column, so a malformed/stale to_tier (or any other failure) is naturally
+                // re-selected on tomorrow's run once the underlying data issue is fixed.
+                log.error("Failed to apply scheduled coach subscription downgrade {}",
+                    change.getChangeId(), e);
+            }
         }
 
-        List<PlayerSubscriptionChange> playerChanges =
-            playerSubscriptionChangeRepository.findPendingForScheduler(now);
+        List<PlayerSubscriptionChange> playerChanges = transactionTemplate.execute(
+            status -> playerSubscriptionChangeRepository.findPendingForScheduler(now));
+        if (playerChanges == null) playerChanges = List.of();
+        log.info("[SUBSCRIPTION_CHANGE_APPLICATOR] {} pending player downgrade(s) loaded", playerChanges.size());
         for (PlayerSubscriptionChange change : playerChanges) {
-            paymentPlayerSubscriptionRepository.findByPlayerId(change.getPlayerId()).ifPresent(sub -> {
-                sub.setTier(change.getToTier());
-                paymentPlayerSubscriptionRepository.save(sub);
-            });
-            change.setApplied(true);
-            playerSubscriptionChangeRepository.save(change);
-            log.info("[PLAYER_SCHEDULED_DOWNGRADE_APPLIED playerId={} toTier={}]",
-                change.getPlayerId(), change.getToTier());
-            // Only publish SubscriptionExpiredEvent for WEBHOOK_DELETED source (scheduled downgrades
-            // are tier changes, not subscription deletions; video lifecycle only triggers on deletion)
+            try {
+                transactionTemplate.executeWithoutResult(status -> {
+                    // No syncMarketplaceTier equivalent here, deliberately: players have no
+                    // marketplace-visible tier (marketplace.coach_subscriptions only models coaches).
+                    // Confirmed intentional at skillars-deferred-116 story creation, not an oversight.
+                    paymentPlayerSubscriptionRepository.findByPlayerId(change.getPlayerId()).ifPresent(sub -> {
+                        sub.setTier(change.getToTier());
+                        paymentPlayerSubscriptionRepository.save(sub);
+                    });
+                    change.setApplied(true);
+                    playerSubscriptionChangeRepository.save(change);
+                    log.info("[PLAYER_SCHEDULED_DOWNGRADE_APPLIED playerId={} toTier={}]",
+                        change.getPlayerId(), change.getToTier());
+                    // Only publish SubscriptionExpiredEvent for WEBHOOK_DELETED source (scheduled
+                    // downgrades are tier changes, not subscription deletions; video lifecycle only
+                    // triggers on deletion)
+                });
+            } catch (Exception e) {
+                log.error("Failed to apply scheduled player subscription downgrade {}",
+                    change.getChangeId(), e);
+            }
         }
     }
 
     // ─── Scheduled: Grace Period Check ───────────────────────────────────────────
 
-    @Transactional
+    // skillars-deferred-116 AC2: identical restructure to applyPendingChanges() above, for the same
+    // reason. A row that fails to downgrade stays PAST_DUE and past the cutoff, so it stays eligible
+    // and is naturally re-selected on tomorrow's run with no extra bookkeeping needed.
     public void checkPastDueGracePeriod() {
         // Read per invocation — never cache (ConfigService has its own internal TTL cache).
         // skillars-deferred-107 AC2: neg → grace cutoff moves into the future (nobody / everybody
@@ -486,25 +521,41 @@ public class SubscriptionService {
         long gracePeriodDays = configService.getBoundedLong("subscription.pastDue.gracePeriodDays", 0L, 365L);
         Instant graceCutoff = Instant.now().minus(gracePeriodDays, java.time.temporal.ChronoUnit.DAYS);
 
-        List<PaymentCoachSubscription> pastDueCoaches =
-            paymentCoachSubscriptionRepository.findByStatusAndPastDueSinceBefore("PAST_DUE", graceCutoff);
-
+        List<PaymentCoachSubscription> pastDueCoaches = transactionTemplate.execute(
+            status -> paymentCoachSubscriptionRepository.findByStatusAndPastDueSinceBefore("PAST_DUE", graceCutoff));
+        if (pastDueCoaches == null) pastDueCoaches = List.of();
+        log.info("[SUBSCRIPTION_GRACE_PERIOD_CHECKER] {} past-due coach subscription(s) loaded", pastDueCoaches.size());
         for (PaymentCoachSubscription sub : pastDueCoaches) {
-            sub.setTier("SCOUT");
-            sub.setStatus("CANCELLED");
-            paymentCoachSubscriptionRepository.save(sub);
-            syncMarketplaceTier(sub.getCoachId(), "SCOUT");
-            log.warn("[COACH_GRACE_PERIOD_EXPIRED coachId={} downgradedTo=SCOUT]", sub.getCoachId());
+            try {
+                transactionTemplate.executeWithoutResult(status -> {
+                    sub.setTier("SCOUT");
+                    sub.setStatus("CANCELLED");
+                    paymentCoachSubscriptionRepository.save(sub);
+                    syncMarketplaceTier(sub.getCoachId(), "SCOUT");
+                    log.warn("[COACH_GRACE_PERIOD_EXPIRED coachId={} downgradedTo=SCOUT]", sub.getCoachId());
+                });
+            } catch (Exception e) {
+                log.error("Failed to apply grace-period downgrade for coach {}", sub.getCoachId(), e);
+            }
         }
 
-        List<PaymentPlayerSubscription> pastDuePlayers =
-            paymentPlayerSubscriptionRepository.findByStatusAndPastDueSinceBefore("PAST_DUE", graceCutoff);
-
+        List<PaymentPlayerSubscription> pastDuePlayers = transactionTemplate.execute(
+            status -> paymentPlayerSubscriptionRepository.findByStatusAndPastDueSinceBefore("PAST_DUE", graceCutoff));
+        if (pastDuePlayers == null) pastDuePlayers = List.of();
+        log.info("[SUBSCRIPTION_GRACE_PERIOD_CHECKER] {} past-due player subscription(s) loaded", pastDuePlayers.size());
         for (PaymentPlayerSubscription sub : pastDuePlayers) {
-            sub.setTier("ATHLETE");
-            sub.setStatus("CANCELLED");
-            paymentPlayerSubscriptionRepository.save(sub);
-            log.warn("[PLAYER_GRACE_PERIOD_EXPIRED playerId={} downgradedTo=ATHLETE]", sub.getPlayerId());
+            try {
+                transactionTemplate.executeWithoutResult(status -> {
+                    // No syncMarketplaceTier equivalent here, deliberately — see the identical note
+                    // in applyPendingChanges()'s player loop: players have no marketplace-visible tier.
+                    sub.setTier("ATHLETE");
+                    sub.setStatus("CANCELLED");
+                    paymentPlayerSubscriptionRepository.save(sub);
+                    log.warn("[PLAYER_GRACE_PERIOD_EXPIRED playerId={} downgradedTo=ATHLETE]", sub.getPlayerId());
+                });
+            } catch (Exception e) {
+                log.error("Failed to apply grace-period downgrade for player {}", sub.getPlayerId(), e);
+            }
         }
     }
 

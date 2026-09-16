@@ -17,14 +17,20 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -43,6 +49,7 @@ class PastDueGracePeriodTest {
     @Mock StripeClient stripeClient;
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock ParentPlayerLinkRepository parentPlayerLinkRepository;
+    @Mock TransactionTemplate transactionTemplate;
 
     @InjectMocks SubscriptionService service;
 
@@ -52,6 +59,22 @@ class PastDueGracePeriodTest {
     @BeforeEach
     void setUp() {
         when(configService.getBoundedLong("subscription.pastDue.gracePeriodDays", 0L, 365L)).thenReturn(7L);
+        // skillars-deferred-116: SubscriptionService now drives its batch load and per-item writes
+        // through TransactionTemplate.execute(...)/executeWithoutResult(...); a bare @Mock with no
+        // stub returns null from every call WITHOUT invoking the callback, which would make every
+        // test below silently no-op rather than fail loudly. Stub both to actually run the callback.
+        when(transactionTemplate.execute(any())).thenAnswer(inv -> {
+            TransactionCallback<?> callback = inv.getArgument(0);
+            return callback.doInTransaction(null);
+        });
+        // lenient(): a handful of tests below have no past-due rows at all (batch load returns an
+        // empty list), so executeWithoutResult() is never reached in them — strict stubbing would
+        // otherwise flag this as unnecessary in those cases.
+        lenient().doAnswer(inv -> {
+            Consumer<TransactionStatus> action = inv.getArgument(0);
+            action.accept(null);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
     }
 
     @Test

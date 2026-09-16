@@ -17,6 +17,28 @@ One bullet = one open item. Grouped by the review that raised it; the heading ca
   Verify against the code before trusting an unannotated forward-reference.
 - **File paths and line numbers age fast.** They were accurate at the review date in the heading.
 
+## Last audit: 2026-09-16 (skillars-deferred-116 story creation)
+
+While mining the next deferred story, re-verified two untagged bullets from the old, largely-picked-over
+2026-06/2026-08 range (lines ~908-1550) against current code, per the ledger's own repeated finding that
+this range is "heavily picked over" but not fully exhausted:
+
+- **`code review of skillars-6-5-video-privacy-rbac-account-deletion-cascades` W4** (ownerId format
+  ambiguity, `VideoAccessGuard.java`) — **CLOSED, deleted.** `VideoAccessGuard.java`'s class javadoc now
+  carries an explicit "ownerId format (confirmed Task 0 investigation)" block documenting exactly the
+  resolution this bullet was waiting on. That was the section's only remaining bullet — header kept (the
+  W9 bullet below it is untouched and still open).
+- **`code review of skillars-3-10-session-pack-expiry-pause-management` D2** (`@TransactionalEventListener
+  (AFTER_COMMIT)` silently losing coach cancellation notifications, `BookingEmailListener.java`/
+  `SessionPackEmailListener.java`) — **CLOSED, deleted.** Both classes are now uniformly
+  `@TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)` (verified by direct read), per
+  the deferred-91/92 migration already documented elsewhere in this file (~line 1370). This was the only
+  bullet under its header — **header removed with it**.
+
+`skillars-deferred-116-subscription-scheduler-lock` was created from a fresh finding (not a pre-existing
+ledger bullet) — see the new `## Deferred from: ad-hoc audit of payment module subscription schedulers
+(2026-09-16)` section below for its provenance.
+
 ## Last audit: 2026-09-16 (post-merge prune after skillars-deferred-115, narrow scope)
 
 Routine sweep after `skillars-deferred-115` (PR #194) merged to master, per this file's own
@@ -949,7 +971,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D4: `PerformanceReportsPanel` wrapped in extra `q-card` in parent portal may produce a double-card visual artifact — requires runtime visual verification [`ParentDevelopmentPortalPage.vue`]
 
 ## Deferred from: code review of skillars-6-5-video-privacy-rbac-account-deletion-cascades (2026-06-23)
-- W4: ownerId format ambiguity for mixed-type strings — Task 0 Identity Bridge investigation was a mandatory gate; deferred on assumption Task 0 was completed and format confirmed [`VideoAccessGuard.java`]
 <!-- skillars-deferred-100 AC7: verified closed by AC3 at WORKTREE:src/main/java/com/softropic/skillars/platform/video/repo/VideoRepository.java:118 (version = version + 1 added; NativeModifyingVersionAuditTest guards); by AC5 at WORKTREE:src/main/java/com/softropic/skillars/platform/video/service/VideoLifecycleService.java:40 (READY removed from PROCESSING transitions) -->
 <!-- skillars-deferred-100 AC7 (2026-09-08): W3 (native @Modifying bypasses @Version) closed by AC3 — audit produced (Dev Agent Record), VideoRepository.resetLifecycleLockedAt gained `version = version + 1`, RefreshTokenRepository.markAllUsedByUserId allow-listed with reason, NativeModifyingVersionAuditTest guards new cases. W5 (PROCESSING→READY backward-compat bypass) closed by AC5 — READY removed from PROCESSING in VALID_TRANSITIONS; the two legitimate reconciliation-correction callers moved to VideoLifecycleService.reconcileToReady() (no bypass counter/WARN); belt-and-suspenders ERROR+counter+throw kept on the plain path. -->
 - W9: `canDelete(null, videoId)` belt-and-suspenders is a no-op for non-HTTP callers — null auth causes broad catch to swallow the re-check; `@PreAuthorize` is the primary enforceable gate; acceptable for current call sites [`VideoDeletionService.java:117`]
@@ -1107,9 +1128,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 ## Deferred from: code review of skillars-3-8-rescheduling-duplication-reminders (2026-06-16)
 - D1: `completionLoading` shared across all reschedule/duplicate store actions — consumers cannot distinguish which operation is in-flight; per-booking scoping refs partially mitigate; pre-existing [`booking.store.js`]
 - D6: Service-layer tests use Mockito unit test pattern (`@ExtendWith(MockitoExtension.class)`) — story spec Task 20/21 explicitly defined unit tests; integration coverage provided by `RescheduleResourceIT` [`RescheduleServiceTest.java`, `BookingDuplicationServiceTest.java`]
-
-## Deferred from: code review of skillars-3-10-session-pack-expiry-pause-management (2026-06-17)
-- D2: `@TransactionalEventListener(AFTER_COMMIT)` failure silently loses coach cancellation notifications — if email dispatch fails after commit, the coach is never notified even though bookings are `CANCELLED`. Event delivery reliability (retry/DLQ) is an infrastructure-wide concern not introduced by this change. [`BookingEmailListener.java`, `SessionPackEmailListener.java`]
 
 ## Deferred from: code review of skillars-6-1-video-module-foundation-quota-system (2026-06-20)
 - Def2: `VideoQuotaReservation.status` as raw String vs enum — intentional per story notes to avoid JPA enum binding complexity with raw SQL paths; values DB-constrained via CHECK constraint. [`VideoQuotaReservation.java:status`]
@@ -2298,4 +2316,15 @@ are the exceptions.
 **@SchedulerLock PT12H sizing insufficient for realistic provider timeout scenarios** — `VideoLifecycleScheduler.runLifecycleJob()` sized for success-case ceiling-batch runtime (~5.5 hours), but realistic scenario with 10% provider timeout rate on 10000-row batch could take 20+ hours. If lock expires and second pod starts, double-archive/double-delete attempts. Story acknowledges as known risk, tunable by operator; no code change needed, documented in AC2.
 
 **markPurged() does not change accessState, creating daily re-selection** — `VideoLifecycleScheduler` phase 2 `markPurged()` sets `operationalState=DELETED` but leaves `accessState=ARCHIVED`. Deleted video remains matched by `findArchivedExceedingThreshold()` on every run, re-attempting idempotent `deleteAsset` and hitting caught `VideoStateConflictException`. Story notes at lines 213-215 as pre-existing, low-severity, unrelated to this story's scope; confirmed inefficiency not data loss.
+
+## Deferred from: ad-hoc audit of payment module subscription schedulers (2026-09-16)
+
+`skillars-deferred-116-subscription-scheduler-lock` (2026-09-16) was created to work all three findings
+below. Requested directly (not tied to a code review of a specific story) — this is the natural sequel
+to `skillars-deferred-115`, which explicitly scoped its own audit to `platform.notification.*` and
+`platform.video.*` and declared booking/payment/messaging out of scope. Applying the same audit lens
+(transaction-boundary/TOCTOU patterns on `@Scheduled`/batch-processing classes) to the payment module's
+two subscription schedulers found the identical bug class deferred-115 just fixed for
+`VideoLifecycleScheduler` — none of the three findings below were previously in this ledger. All three
+closed by the story's own AC1/AC2/AC3 — bullets deleted outright per this file's own convention.
 
