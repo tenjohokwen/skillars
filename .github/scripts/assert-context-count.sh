@@ -94,7 +94,20 @@ LOG="${1:?usage: assert-context-count.sh <build-log> [ceiling]}"
 # ContextCustomizer set from every other `enable.test.mail=true` IT and therefore forks its own
 # context, the same one-new-config-forks-one-context shape as SmtpTransportBootIT above.
 # Measured on PR #183 (run 34808851693): missCount went 39 -> 40.
-CEILING="${2:-40}"
+#
+# CEILING = 41, deliberate +1 (story skillars-deferred-114, SesCutoverPreflightResourceIT).
+# A @WebMvcTest slice for the new admin-only SES cutover preflight endpoint
+# (POST /v1/admin/ses/preflight), forced onto `app.email.transport=ses` via
+# @TestPropertySource (the shared integration context runs `transport=log`) plus its own
+# hand-rolled TestSecurityConfig and a five-@MockitoBean set unique to this class
+# (SesAccountChecker, MailManager, EnvelopeEntityRepository, plus VideoMetrics/JwtSecretService
+# for the global VideoApiAdvice/SecurityAdviceFilter beans every @WebMvcTest slice pulls in) --
+# the same one-new-config-forks-one-context shape SmtpTransportBootIT and
+# RegistrationEmailDurabilityIT above already document, not ordering-dependent thrashing: this
+# is the first and only @PreAuthorize-enforcement test in this codebase (no existing slice to
+# extend instead), so a new fork was unavoidable. Measured on PR #193 (run 35073092775):
+# missCount went 40 -> 41.
+CEILING="${2:-41}"
 
 if [ ! -f "$LOG" ]; then
   echo "assert-context-count: build log not found: $LOG" >&2
