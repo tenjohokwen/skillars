@@ -61,7 +61,17 @@ public enum EmailTemplate {
     BOOKING_CANCELLED_BY_COACH("email.booking.cancelled_by_coach.title"),
     COACH_NO_SHOW("email.booking.coach_no_show.title"),
     PLAYER_NO_SHOW("email.booking.player_no_show.title"),
-    COACH_VISIBILITY_REDUCED("email.reliability.visibility_reduced.title");
+    COACH_VISIBILITY_REDUCED("email.reliability.visibility_reduced.title"),
+    /**
+     * skillars-deferred-114 AC5: the SES cutover preflight endpoint's probe email — a one-line
+     * "this is a test" body, not a user-facing template. Isolated circuit breaker name
+     * ({@code "sesPreflightService"}, not the shared {@code "emailService"}): a preflight tool must
+     * be able to report a failing probe as the point of testing an unverified config, and a failing
+     * probe against the shared breaker would trip it for real production traffic during the exact
+     * cutover window this tool exists to protect. Mirrors the six registration/OTP templates' own
+     * isolated {@code "registrationEmailService"} breaker, above.
+     */
+    SES_CUTOVER_PREFLIGHT("email.ses.cutover_preflight.title", Duration.ofMinutes(10), "sesPreflightService");
 
     private final String subjectKey;
     private final Duration deliveryDeadline;

@@ -115,4 +115,14 @@ public class VideoMetrics {
     public void updateActiveUploadSessions(long count) {
         activeUploadSessions.set(count);
     }
+
+    /**
+     * skillars-deferred-114 AC3: {@code QuotaConfigService.resolvePlayerTierKey} falls back to
+     * {@code "athlete"} for several distinct unmapped shapes — tagged by {@code reason} so an
+     * operator can tell them apart on a dashboard (e.g. {@code "no_subscription_row"}, a genuine
+     * data-integrity signal, versus an unrecognised stored tier string).
+     */
+    public void recordQuotaTierFallback(String reason) {
+        meterRegistry.counter("video.quota.tier_fallback", "reason", reason).increment();
+    }
 }

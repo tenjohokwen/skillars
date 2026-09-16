@@ -17,6 +17,10 @@ import java.util.concurrent.TimeUnit;
 public class MailMetrics {
 
     public static final String MAIL_SEND = "mail.send";
+    // skillars-deferred-114 code review (LOW): extracted to a constant for the same reason as
+    // MAIL_SEND above — a typo in an inline string literal would silently create a second,
+    // never-incremented metric name instead of failing to compile.
+    public static final String MAIL_ADMIN_ALERT_OUTCOME_UNKNOWN = "mail.admin_alert.outcome_unknown";
 
     private final MeterRegistry meterRegistry;
 
@@ -30,5 +34,17 @@ public class MailMetrics {
             .tag("outcome", outcome)
             .register(meterRegistry)
             .record(nanos, TimeUnit.NANOSECONDS);
+    }
+
+    /**
+     * skillars-deferred-114 AC2: {@code VideoModerationEmailListener.sendAdminAlertSync}'s
+     * {@code persisted == null} branch already logs a rich diagnostic WARN — this makes a real
+     * occurrence Grafana-queryable too, without waiting for someone to grep logs for
+     * {@code [VIDEO_MODERATION_ADMIN_ALERT]}. Diagnostics only, by owner decision — see that
+     * method's own javadoc for why no structural fix (bounded retry / forced flush / re-read) is
+     * attempted here.
+     */
+    public void recordAdminAlertOutcomeUnknown() {
+        meterRegistry.counter(MAIL_ADMIN_ALERT_OUTCOME_UNKNOWN).increment();
     }
 }

@@ -2250,16 +2250,11 @@ full-file re-mine.
 
 ## Deferred from: code review of skillars-deferred-113 (2026-09-15)
 
-Six findings from the 3-layer code review (`bmad-review-adversarial-general` + `edge-case-hunter` + acceptance auditor) are deferred — pre-existing patterns or acceptable tradeoffs, not code bugs blocking the story:
+Six findings from the 3-layer code review (`bmad-review-adversarial-general` + `edge-case-hunter` + acceptance auditor) were deferred — pre-existing patterns or acceptable tradeoffs, not code bugs blocking the story. `skillars-deferred-114` (2026-09-16) worked all six: two closed by a real fix, two decided and retagged (no code change), two closed together by a new tool.
 
-- **Concurrent retry from multiple instances** (`MailManager.java:106,195-203`). The per-recipient delivery tracking doesn't prevent concurrent calls with same `sendId` from multiple threads. Mitigated by `@SchedulerLock` cluster-wide serialization — the scheduler is the only real caller — but not enforced at method level. Acceptable; if direct calls ever become a caller, they'd need to handle their own locking.
+- **Throw-on-null is defensive, not curative** (`VideoModerationEmailListener.java:143-145`). `[DECIDED 2026-09-16 (skillars-deferred-114): diagnostics-only — added an occurrence counter (AC2); root-cause investigation remains deliberately out of scope, per the existing Option-B risk assessment]`
 
-- **Throw-on-null is defensive, not curative** (`VideoModerationEmailListener.java:143-145`). The fix (Option B: throw `IllegalStateException` to retain the outbox row) retains the row but doesn't diagnose why `persisted==null` occurs. Root-cause analysis remains unaddressed. Defensive approach correct per AC2 risk assessment; future investigation may uncover a real transaction-isolation race or confirm it's a false alarm.
+- **No transactional consistency tier/quota lookup** (`QuotaConfigService.java:82-94`). `[DECIDED 2026-09-16 (skillars-deferred-114): accepted tradeoff, re-confirmed — see AC4]`
 
-- **Missing subscription row silently downgrades tier** (`QuotaConfigService.java:90-94`). Players without a subscription row fall back to "athlete" quota with DEBUG logging only. No audit trail or explicit alert. Acceptable operational concern; the fallback is intentional and matches the method's fail-open posture for every other unrecognised shape.
+The runbook's SES cutover gate now references an executable preflight endpoint (`POST /v1/admin/ses/preflight`, `SesCutoverPreflightResource`, `skillars-deferred-114` AC5) for step 3, closing the two bullets that used to name this gap ("Runbook checklist manual, not code-enforced" and "No automated health check integration") — both deleted outright, per this file's own convention for a real fix rather than a decision.
 
-- **No transactional consistency tier/quota lookup** (`QuotaConfigService.java:82-94`). Subscription tier can be updated between the `findByPlayerId` lookup and actual quota enforcement, leading to a brief window where returned quota doesn't match current tier. Acceptable check-then-use pattern; not a code bug, known tradeoff.
-
-- **Runbook checklist manual, not code-enforced** (`docs/deployment/runbook.md:644-665`). Pre-production SES checks are textual procedures with no deployment blocker. AC6 scope: runbook documentation only; enforcement is procedural by design, matching `skillars-deferred-100`'s analogous webhook-events gate precedent.
-
-- **No automated health check integration** (`docs/deployment/runbook.md:657-662`). Health check is documented but optional in the runbook; a cached `/actuator/health/notification` response (up to 60s TTL per line 660) doesn't prove the current transport is live. Acceptable given manual pre-production review gate model; automated CI/pipeline integration is a separate concern.
