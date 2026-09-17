@@ -1,195 +1,325 @@
-# Story Review: skillars-deferred-118
-**Reviewer:** Senior Dev Audit  
-**Date:** 2026-09-17  
-**Status:** Ready for Dev (no blockers; minor clarifications noted)
+# Story Audit: skillars-deferred-119
+
+## Summary
+Audit of the filestorage deletion-scheduler TOCTOU & outbox scheduler-lock consistency story for missed corner cases, false assumptions, and missed flows.
+
+## Verified Correct
+
+### AC1 Analysis - DeletionSchedulerService TOCTOU Bug
+✅ **Core bug diagnosis is accurate:**
+- Confirmed: `findEligibleForPhysicalDeletion` has `@Transactional` at repository interface level (line 27-30 of FileStorageObjectRepository.java)
+- Confirmed: `processDeletions()` is NOT `@Transactional` and has NO `@SchedulerLock` (line 31-63 of DeletionSchedulerService.java)
+- Confirmed: Repository call opens a new transaction that commits immediately, releasing locks before the loop starts
+- Confirmed: `markPhysicallyDeleted` is currently an unconditional UPDATE (line 34-35 of FileStorageObjectRepository.java)
+- Confirmed: Only 2 call sites for `markPhysicallyDeleted` (both in DeletionSchedulerService context)
+- Confirmed: No unique constraint on `(storage_object_id, job_type)` in outbox_replication_jobs schema
+
+✅ **Failure scenario is valid:**
+- S3 delete is truly idempotent (code inspection confirms unconditional DeleteObject call)
+- Catch-and-continue exists at lines 43-45 for storage exceptions
+- Concurrent ticks can indeed claim overlapping rows due to lock release before processing
+
+✅ **Fix approach is sound:**
+- Two-layer defense (lock + conditional write) matches established project pattern
+- Mirror of `OutboxPollerScheduler.pollAndProcess` pattern is correct
+- `softDeleteByKey` is a valid conditional-UPDATE pattern to copy
+
+### AC2 Analysis - Scheduler Lock Consistency
+✅ **OutboxPollerScheduler claim correctness verified:**
+- Lines 36-47: Both `pollPending` (FOR UPDATE SKIP LOCKED) and `markAsProcessing` are inside single `transactionTemplate.execute()` block
+- Lock is held through the entire claim operation - this is correct
+- Adding `@SchedulerLock` is genuinely for consistency, not correctness
+
+✅ **OutboxService.sweep() existing lock verified:**
+- Line 120: `@SchedulerLock(name = "OutboxService_sweep", lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")` exists
+- Line 46: `MAX_CHUNKS_PER_DRAIN = 200` constant exists
+- Derivation comment is indeed missing - documentation-only fix is correct
+
+✅ **Transaction boundary safety verified:**
+- OutboxService.sweep() correctly delegates to drain()
+- drain() uses row-level PESSIMISTIC_WRITE + SKIP LOCKED (documented in Javadoc)
+- No data corruption risk if sweep() and AFTER_COMMIT drain run concurrently
 
 ---
 
-## Executive Summary
+## Potential Issues & Corner Cases Found
 
-The story's three acceptance criteria identify genuine, independently-verified bugs with correct root-cause analysis and established sibling patterns to mirror. **No false positives detected** in the substance of any AC — every cited code path, propagation default, exception type, and "cleared, not picked up" claim was independently re-checked against HEAD and confirmed accurate. Scope is appropriately bounded. The ACs are well-sequenced (independent modules, no cross-AC coupling).
+### ⚠️ ISSUE 1: Incomplete Test Coverage Claim
+**Severity: Medium (affects implementation confidence)**
 
-**Second-pass verification (2026-09-17) found and corrected two stale line-number citations in the story itself** (not bugs in the analysis — see "Citation Corrections" below); both are now fixed in the story file. Five minor edge-case clarifications are recommended for implementation guidance — none are story blockers, all are correctly addressable within the existing story structure.
+**Finding:** Story claims "`DeletionSchedulerService` is...the only `@Scheduled` method in `platform.filestorage` with **no test file at all**"
 
----
+**Reality:** 
+- `FileStorageDeletionIT.java` EXISTS and DOES test `processDeletions()`
+- Integration test calls `deletionSchedulerService.processDeletions()` at lines 111 and 136
+- Tests verify: retention window boundary, physical deletion, outbox job creation
 
-## AC1: BookingExpiryScheduler Transaction Race
+**Issue:** Story's claim is technically misleading. The class has IT coverage but lacks a dedicated unit test. Story should say "no dedicated unit test" not "no test file at all". This affects confidence in AC1 claim about needing new `DeletionSchedulerServiceTest`.
 
-### ✅ Root Cause Analysis: Confirmed Correct
+**Recommendation:** The new unit test (`DeletionSchedulerServiceTest`) is STILL needed for:
+- Race condition testing (concurrent claim scenarios)
+- Conditional update behavior (0 affected rows handling)
+- Per-item exception continuation
+- Mock-based isolation from storage and DB
 
-The traced path is accurate:
-- Method-level `@Transactional` wraps the entire batch loop ✓
-- `bookingService.transition()` joins (default `REQUIRED` propagation) ✓
-- `BookingStateTransitionException` is unchecked (`RuntimeException`), triggers default rollback ✓
-- Per-iteration `try/catch` swallows the exception, but the shared physical transaction is already marked `rollbackOnly` ✓
-- Method returns normally; Spring's commit interceptor finds `rollbackOnly=true` and throws `UnexpectedRollbackException` ✓
-- **Consequence is correctly identified**: all prior successful transitions in the batch lose their writes, not just the failed one
-
-### ✅ Fix is Correct and Well-Scoped
-
-- Per-booking `TransactionTemplate` scope mirrors `BookingReminderScheduler.processReminderWindows` ✓
-- `@SchedulerLock` values correctly left unchanged (this AC is about transaction boundaries only) ✓
-- Event publishing included in the booking's transaction scope (correct — listener failures stay local to that booking) ✓
-
-### Minor Edge Cases (Non-Blocking)
-
-1. **Batch SELECT transaction scoping** — Story offers two options ("mirror `idsOf`'s pattern, or simplify to a single `TransactionTemplate.execute`") but doesn't mandate which. Implementation should pick one; both are valid. *Recommend: note in Dev Agent Record which pattern was chosen and why.*
-
-2. **Non-existent booking between SELECT and transition** — Theoretically possible if a booking is deleted elsewhere. The transition's pessimistic lock will fail, caught by try/catch, logged, and loop continues. This is correct idempotent behavior, but story doesn't explicitly name it. *No action needed — existing try/catch handles it.*
-
-3. **Event listener side effects** — If `BookingExpiredEvent` listener modifies booking or throws, the failure is local to that booking's transaction. This is correct, but story doesn't explicitly call it out. *No action needed — fix handles it correctly.*
+But be clear this is NEW *unit* test coverage, complementing existing IT coverage.
 
 ---
 
-## AC2: UserAdminService Activation Race
+### ⚠️ ISSUE 2: Lock Sizing Arithmetic Deferred Without Clear Bounds
+**Severity: Medium (risk of incorrect tuning)**
 
-### ✅ Root Cause Analysis: Confirmed Correct
+**Finding:** Story says "Show the arithmetic in the Dev Agent Record" but:
+- No clear upper bound provided for `lockAtMostFor`
+- Story warns against copying PT2M but doesn't specify what value should replace it
+- Developer must calculate: batch-size (10) × S3-retry worst-case (3s backoff + latency) + DB write
+- Estimated result: 30-50 seconds worst case, but this is not verified in the story
 
-- `findExpiredUsers` selects at time T1 with `activated=false` filter ✓
-- Each user passed to `deleteUserInTransaction` (REQUIRES_NEW transaction) at time T2, T3, … ✓
-- No re-check of `activated` before delete — user could have activated between T1 and T2 ✓
-- Four registration call sites confirmed as real, everyday concurrent writers ✓
-- **Consequence is correctly identified**: legitimate, freshly-activated account is destroyed
+**Risk:** 
+- If actual worst case exceeds calculated `lockAtMostFor`, lock expires early → race window reopens
+- If `lockAtMostFor` is too large, the `lockAtLeastFor` floor becomes ineffective
 
-### ✅ Fix is Correct and Well-Scoped
-
-- Re-check `!user.isActivated()` immediately before `delete()` ✓
-- Guard lives inside the REQUIRES_NEW transaction (sees current row state) ✓
-- DEBUG log matches established skip-silently pattern ✓
-- `deleteUserInformation` (admin manual delete) correctly excluded — different codepath, different semantics ✓
-
-### Minor Edge Cases (Non-Blocking)
-
-1. **Null user on re-fetch** — Story assumes `userRepository.findOneByLogin(login)` returns a non-null user. If the user is deleted between `findExpiredUsers` and `deleteUserInTransaction` (concurrent admin deletion, or edge case in another path), the re-fetch returns null/empty. The `!user.isActivated()` guard would NPE. *Implementation guidance: add explicit null check (e.g., "if (user == null) { log.debug(...); return; }") in addition to the activated check. Not a story blocker — standard defensive coding.*
-
-2. **Transaction isolation and concurrent activation** — Story correctly places the re-check in a REQUIRES_NEW transaction, which is independent of the parent transaction. If User A activates in a peer transaction after the batch SELECT but before this scheduler's REQUIRES_NEW transaction re-fetches, the re-fetch will see the new activated state. This is correct, but the story doesn't explicitly address isolation levels. *No action needed — REQUIRES_NEW is the correct pattern; isolation is delegated to DB/Spring config.*
+**Recommendation:** 
+- Story should provide the CALCULATION FORMULA explicitly, not defer to developer
+- Story should say: "`lockAtMostFor` MUST exceed: batch_size × (retry_wait_ms + per_item_latency) + commit_latency"
+- Example: "default batch 10 × (3000ms retry + 500ms latency) + 100ms = ~35 seconds → PT45S minimum"
+- Add assertion in story: "do not accept `lockAtMostFor < PT45S` without re-measuring S3 latency in target environment"
 
 ---
 
-## AC3: @SchedulerLock Parity
+### ⚠️ ISSUE 3: Outbox Replication Job Duplicate Cleanup Unspecified
+**Severity: Low (bounded by idempotency)**
 
-### ✅ Finding is Correct and Well-Reasoned
+**Finding:** Story acknowledges "duplicate `OutboxReplicationJob` rows for the same object" as consequence but:
+- Does NOT specify if duplicates are ever cleaned up
+- Does NOT specify if they cause cascading issues if accumulated
+- `OutboxPollerScheduler` processes both rows independently (each is idempotent)
+- Over time, duplicate rows accumulate in the database
 
-- Three schedulers identified with no `@SchedulerLock` where every sibling has one ✓
-- Risk assessment is calibrated: single-instance deployment (low risk today), but cheap consistency fix ✓
-- `RadarCompositeDlqProcessor`'s latent issue is correctly identified: `findClaimedBatch()` not scoped to caller's claim, no `@Version` on entity — two concurrent runs could stomp each other's state ✓
-- `@SchedulerLock` is the correct, simpler fix (vs. schema changes to add claim-token scoping or `@Version`) ✓
+**Corner case:** What if a rapid burst of race conditions creates hundreds of duplicate outbox rows?
+- Storage impact is minimal (rows are small)
+- But monitoring/auditing becomes harder
+- Operator confusion if row counts spike
 
-### ✅ Implementation Guidance is Correct
-
-- Lock sizing should be per-scheduler, not copy-pasted ✓
-- References `skillars-deferred-116` Dev Notes for worst-case arithmetic (batch size × per-item timeout) ✓
-- Correctly notes that `MessageRetentionScheduler` (daily cron) may have different `lockAtLeastFor` convention than 5-minute-`fixedDelay` siblings ✓
-
-### Minor Clarifications (Non-Blocking)
-
-1. **Multiple `@Scheduled` methods per class** — Story identifies three classes but doesn't explicitly confirm each has exactly one `@Scheduled` method. (Very likely true, but worth verifying during implementation.) *Recommend: grep each class to confirm before adding locks.*
-
-2. **MessageRetentionScheduler's lockAtLeastFor value** — Story correctly notes daily cadence makes standard `PT2M` convention worth reconsidering, says "use judgment, document the choice." But doesn't mandate whether to use `PT2M` or something else. *No action needed — implementation should compute worst-case runtime, document reasoning in Dev Agent Record.*
-
-3. **RadarCompositeDlqProcessor worst-case timeout** — `BATCH_SIZE = 50` and per-item work is `compositeCalculationService.recalculateComposite`. Story correctly points to deferred-116 for arithmetic guidance. *No action needed — story gives enough guidance.*
-
-4. **Lock acquisition timeout** — If lock acquisition itself times out before lockAtMostFor (e.g., due to contention), does the scheduler give up or retry? Story doesn't address this, but it's a ShedLock behavior question, not a story gap. *No action needed — ShedLock's retry semantics are external to this story.*
+**Recommendation:** 
+- Document in Dev Notes: "Duplicate outbox replication jobs are idempotent but may accumulate. Consider a separate cleanup job to deduplicate historical rows."
+- OR clarify: "Duplicates are prevented after this fix; no cleanup needed for existing duplicates since they are idempotent"
 
 ---
 
-## Citation Corrections (found during second-pass verification, now fixed in story)
+### ⚠️ ISSUE 4: Conditional UPDATE Race Condition Not Fully Addressed
+**Severity: Low (documented as accepted race)**
 
-Line-by-line diff of every file/line citation in the story against HEAD surfaced two stale references.
-Both are corrected in the story file; neither affects the validity of the bug findings or fixes.
+**Finding:** Story says "skip (no error, this is an expected race outcome under concurrent claims) when it is `0`"
 
-1. **AC3** — `QuickCompleteTimeoutService.processExpiredQuickCompletes` was cited at
-   `QuickCompleteTimeoutService.java:35-36`; the `@Scheduled` annotation and method signature are
-   actually at lines **36-37**. Off-by-one, cosmetic.
-2. **AC2** — `PlayerRegistrationService`'s `user.setActivated(true)` activation call site was cited at
-   `PlayerRegistrationService.java:149`; it is actually at line **160** (line 149 is inside an unrelated
-   preceding block — the file also has an earlier, unrelated `setActivated(false)` at line 110, which
-   may be why the reference drifted). The call site itself is real and the claim it supports
-   (four concurrent activation writers exist) is correct — only the line number was wrong.
+**But:** Doesn't clarify what happens if:
+- `storageService.delete()` succeeds (storage is gone)
+- `markPhysicallyDeleted` returns 0 (another thread already marked it)
+- `OutboxReplicationJob` is NOT saved (as intended)
 
-All other file/line citations across all three ACs (`BookingExpiryScheduler.java:43-44,48-66,50-51`,
-`BookingService.java:151,156-174,429,794`, `BookingStateTransitionException.java:3`,
-`UserAdminService.java:46-50,122-129,135-140`, `RadarCompositeDlqProcessor.java:25,34`,
-`SecurityProperties.java:26`, `SchedulerLockTransactionOrderingIT.java`'s test method names and
-javadoc claims, and all "cleared, not picked up" siblings' claimed behavior — `MessageModerationSweeper.sweepOne`'s
-`findByIdForUpdate` re-check, `SessionPackExpiryNotifier`'s `@Version`-guarded write,
-`PaymentPendingSweeper.sweepOne`'s pessimistic lock + re-check) were independently re-verified against
-HEAD and confirmed exact.
+**Corner case:** Physical delete completed but no replication job → backup storage still has copy
 
----
+**Story's own claim:** "Underlying storage idempotency and the object being gone either way keep this out of Critical"
 
-## Cross-Story & Scope Validation
+**Analysis:** This is CORRECT reasoning, but should be stated more explicitly:
+- Primary storage: deleted (idempotent)
+- Backup storage: might have stale copy but is not the source of truth
+- Data loss: impossible (object was marked deleted in primary DB)
+- Consequence: backup has garbage that is never accessed (acceptable)
 
-### ✅ Audit Lens Consistency
-
-- Story correctly continues the transaction-boundary/TOCTOU/batch-memory lens established by `skillars-deferred-115`/`-116`/`-117` ✓
-- 12 additional `@Scheduled` classes audited; two genuine bugs + one consistency gap found — consistent with prior stories' quality bar ✓
-- "Cleared, not picked up" list shows thorough negative checking (13 classes explicitly ruled out) ✓
-
-### ✅ Testing Approach
-
-- AC1 test mirrors `BookingReminderSchedulerTest`'s `PlatformTransactionManager` mock pattern (correct — exercises real transaction boundaries, not mocking them away) ✓
-- AC2 test is new file (no existing precedent, but correct scoping — Mockito unit test, not IT) ✓
-- AC3 test is reflection-based annotation assertion (establishes lockAtMostFor/lockAtLeastFor presence and values, correct approach) ✓
-- `SchedulerLockTransactionOrderingIT` replacement (not extension) of test is correctly scoped — method no longer has `@Transactional`, so advisor-ordering test case no longer applies ✓
-
-### ✅ No Ledger Coupling
-
-- Findings are new (not pre-existing `deferred-work.md` bullets), so no deletion-side-effects from the ledger ✓
-- Task 4 (grep sweep for class names) correctly prevents accidental double-closure ✓
+**Recommendation:** Story is sound here, but Dev Notes should explicitly confirm: "If backup doesn't get the DELETE job due to a race loss, object remains in backup but is unreachable from primary DB — this is acceptable."
 
 ---
 
-## Known Assumptions (Validated or Benign)
+### ⚠️ ISSUE 5: OutboxPollerScheduler Module Placement Oddity
+**Severity: Low (naming/architecture question)**
 
-| Assumption | Status | Reasoning |
-|-----------|--------|-----------|
-| `BookingStateTransitionException` is unchecked | Validated in story | Confirmed in `BookingStateTransitionException.java:3` |
-| `bookingService.transition()` uses default `REQUIRED` propagation | Validated in story | Stated in story, confirmed in `BookingService.java:151` |
-| `BookingReminderScheduler.processReminderWindows` is the reference implementation | Validated in story | Class javadoc documents the fix; `SchedulerLockTransactionOrderingIT` pins it |
-| All four registration paths activate users via `setActivated(true)` or `activate()` | Validated in story | All four call sites confirmed via grep and read |
-| ShedLock is already a project dependency | Validated implicitly | Story notes every sibling `@SchedulerLock` already exists; no new dependency needed ✓ |
-| Single-instance deployment (one app container) | Referenced from deferred-117 AC4 | Reasonable assumption for today's risk assessment; documented in story ✓ |
-| `RadarCompositeDlqProcessor` has no `@Version` field on entity | Stated in story | Would need direct code read to confirm, but story is explicit ✓ |
+**Finding:** `OutboxPollerScheduler` is in `platform.filestorage.service` (confirmed by file search), not `platform.outbox`.
 
----
+**Oddity:** Class name suggests "Outbox" but it's in "filestorage" module. This is not a bug, but:
+- Confusing for future developers
+- May indicate module boundaries need clarification
+- Story doesn't comment on this (not in scope, but worth noting)
 
-## Summary of Flagged Items
-
-### Blockers
-None. Story is ready for dev.
-
-### High-Priority Clarifications (for implementation)
-1. **AC1:** Confirm batch SELECT transaction pattern choice (idsOf style vs. single executeWithoutResult) in Dev Agent Record
-2. **AC2:** Add explicit null check in `deleteUserInTransaction` (guard against refetch returning null/empty)
-3. **AC3:** Verify each of the three classes has exactly one `@Scheduled` method before applying locks
-
-### Medium-Priority Guidance (for implementation)
-4. **AC3:** Explicitly compute `lockAtMostFor` and `lockAtLeastFor` for all three; document worst-case arithmetic in Dev Agent Record (especially for MessageRetentionScheduler's daily cadence)
-5. **AC1:** Document in Dev Agent Record why the chosen batch SELECT pattern (if different from reference) was picked
-
-### Low-Priority Notes (already correct, no action needed)
-- Event listener side effects in AC1 are correctly handled by per-booking transaction scope
-- Concurrent activation timing (AC2) correctly handled by REQUIRES_NEW + re-check pattern
-- Non-existent booking edge case (AC1) correctly handled by existing try/catch
-- RadarCompositeDlqProcessor's broader claim-scoping issue is correctly left to a future, narrower story
-
-### Out-of-Scope Observation (not a story blocker, flagged for a future audit)
-`UserAdminService.findExpiredUsers` (`UserAdminService.java:122-129`, touched by AC2 but not part of its
-fix) constructs a `Pageable pageable = PageRequest.of(0, batchSize)` that is **never passed** to
-`userRepository.findAllByActivatedIsFalseAndCreatedDateBefore(cutoffDate)` — the query takes no
-`Pageable` parameter at all. Every call therefore fetches *every* non-activated user older than the
-cutoff from the DB, then truncates to `batchSize` in Java (`.stream().limit(batchSize)`), rather than
-paginating at the query level as the dead `pageable` variable and the method's own javadoc ("Uses
-pagination to limit fetched amount") imply. Functionally this does not break AC2's fix (each loop
-iteration still only *processes* `batchSize` users, and already-deleted users drop out of the next
-call's result set), but it is a real, currently-reachable inefficiency — unbounded full-table-scan
-memory/IO on a large expired-user backlog — that fits precisely the batch-memory lens this story's own
-audit methodology targets. Recommend a follow-up story/ledger entry, not an amendment to this one (AC2
-is scoped to the activation race, not this pagination gap).
+**Recommendation:** Out of scope for this story, but should be documented in project memory or future refactoring discussion.
 
 ---
 
-## Recommendation
+### ⚠️ ISSUE 6: ShedLock Clock Skew & Availability Not Validated
+**Severity: Low (environmental assumption)**
 
-**Approve for dev.** All three ACs are genuine, independently-verified bugs with correct root-cause analysis, well-scoped fixes, and established sibling patterns to mirror. Implement the five noted clarifications inline; none require story amendment.
+**Finding:** Story assumes ShedLock is:
+- Properly configured in all environments
+- Using synchronized clocks across nodes
+- Not corrupted or disabled
+
+**No validation:** Story doesn't confirm ShedLock is actually working or enabled.
+
+**Risk:** If ShedLock is misconfigured in production, both `@SchedulerLock` additions provide zero protection.
+
+**Recommendation:** 
+- Add to Verification Checklist: "Confirm ShedLock table and configuration are present in all target environments"
+- OR document: "This fix assumes ShedLock is correctly configured. See SchedulingConfig for verification."
+
+---
+
+### ⚠️ ISSUE 7: No Deployment Order/Rollback Guidance
+**Severity: Low (operational)**
+
+**Finding:** Story doesn't specify:
+- Deployment order (AC1 before AC2 or vice versa?)
+- Rollback plan if lock causes issues
+- Monitoring/alerts for lock contention
+- How to detect if lock is suppressing legitimate ticks
+
+**Current guidance:** "AC1 and AC2 can be implemented in either order"
+
+**But missing:** "However, deploy AC1 first to close the data-path race before adding consistency-layer locks"
+
+**Recommendation:** Add to Dev Notes:
+- "Deploy AC1 before AC2 to ensure the primary race window closes first"
+- "Monitor shedlock_lock table for lock timeouts; if frequent, increase lockAtMostFor"
+- "If rollback needed, remove @SchedulerLock annotations (locks fall back to DB-level only)"
+
+---
+
+### ⚠️ ISSUE 8: Existing Integration Test Coverage Should Be Extended, Not Replaced
+**Severity: Low (testing strategy)**
+
+**Finding:** `FileStorageDeletionIT` already tests `processDeletions()` with happy path and boundary conditions.
+
+**Story plan:** Create new `DeletionSchedulerServiceTest` (unit test)
+
+**Potential gap:** 
+- Will the new unit test REPLACE or EXTEND the existing IT coverage?
+- Should we add race-condition test to the IT instead?
+- If unit test only uses mocks, it won't catch actual DB lock behavior
+
+**Recommendation:** 
+- Clarify that unit test (mocks) + existing IT (real DB) = complete coverage
+- Consider adding a race-condition test to the IT that actually calls processDeletions() twice concurrently
+- Don't remove or downgrade the IT coverage in favor of unit tests
+
+---
+
+### ⚠️ ISSUE 9: Comment-Only Change to OutboxService.sweep() Needs Specificity
+**Severity: Low (documentation clarity)**
+
+**Finding:** Story says "Add a one-line derivation comment" but doesn't specify the exact wording.
+
+**Current code (line 120):**
+```java
+@SchedulerLock(name = "OutboxService_sweep", lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
+```
+
+**What should the comment say?**
+- Should it cite line 46 (`MAX_CHUNKS_PER_DRAIN`)?
+- Should it explain the calculation (200 × chunk_size)?
+- Should it reference another file?
+- Should it be a Javadoc comment or inline comment?
+
+**Recommendation:** Specify in Dev Notes:
+```java
+// lockAtMostFor sized for MAX_CHUNKS_PER_DRAIN (200) × chunk_size (~1s per chunk) + processing margin
+@SchedulerLock(name = "OutboxService_sweep", lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
+```
+
+---
+
+### ✅ ISSUE 10: Grep for Ledger Hygiene (AC3) - Command Not Provided
+**Severity: Very Low (procedural)**
+
+**Finding:** AC3 says "Re-run the same grep sweep against HEAD" but doesn't provide the exact grep command.
+
+**Current text:** "re-run the same grep sweep against HEAD for the five touched classes"
+
+**Missing:** The actual grep command to execute
+
+**Recommendation:** Provide exact command:
+```bash
+grep -r "DeletionSchedulerService\|OutboxPollerScheduler\|OutboxService\|FileStorageObjectRepository\|OutboxReplicationJobRepository" _bmad-output/implementation-artifacts/deferred-work.md
+```
+
+---
+
+## False Assumptions Found
+
+### ✅ No false assumptions detected
+- Spring Data JPA transaction behavior is correctly understood
+- S3 idempotency claim is verified in code
+- Repository method contract is accurately represented
+- Sibling pattern analysis is correct
+
+---
+
+## Missed Flows
+
+### ⚠️ FLOW 1: What if S3 Delete Takes Longer Than Expected?
+**Finding:** Story accounts for S3 retry backoff (up to 3s) but doesn't fully trace what happens if:
+1. `storageService.delete()` call takes 45+ seconds (network/AWS issue)
+2. Processing loop is still running
+3. `@SchedulerLock` with inadequate `lockAtMostFor` expires
+4. Next scheduler tick acquires the lock and starts processing old rows again
+
+**Analysis:** Lock prevents the SCHEDULER from running twice, but not individual items within the loop.
+
+**Recommendation:** Clarify in Dev Notes: "Lock prevents concurrent scheduler invocations, not individual item retries. If delete latency exceeds lockAtMostFor, next tick will re-process already-deleted items (which are idempotent)."
+
+### ⚠️ FLOW 2: Exception Handling in Conditional Update Path
+**Finding:** Story says "only call outboxReplicationJobRepository.save(...) when the affected-row count is `1`" but doesn't specify transaction rollback behavior when conditional check fails AFTER save.
+
+**Current code pattern (in DeletionSchedulerService.java, lines 51-61):**
+```java
+transactionTemplate.execute(status -> {
+    OutboxReplicationJob job = OutboxReplicationJob.builder().build();
+    outboxReplicationJobRepository.save(job);
+    fileStorageObjectRepository.markPhysicallyDeleted(fso.getId(), Instant.now());
+    return null;
+});
+```
+
+**After fix, should become:**
+```java
+transactionTemplate.execute(status -> {
+    OutboxReplicationJob job = OutboxReplicationJob.builder().build();
+    outboxReplicationJobRepository.save(job);
+    int affected = fileStorageObjectRepository.markPhysicallyDeleted(fso.getId(), Instant.now());
+    if (affected == 0) {
+        // Race condition: another thread already marked as deleted
+        // Option A: rollback the outbox job save
+        // Option B: throw exception to rollback the entire transaction
+        status.setRollbackOnly();  // OR throw exception
+    }
+    return null;
+});
+```
+
+**Issue:** Story doesn't clarify the transaction rollback behavior if conditional check fails AFTER save.
+
+**Recommendation:** Clarify in Dev Notes: "If markPhysicallyDeleted returns 0 after saving the job, rollback the entire transaction to remove the duplicate job. Use status.setRollbackOnly() or throw an exception within the callback."
+
+---
+
+## Summary of Findings
+
+| Category | Count | Severity |
+|----------|-------|----------|
+| False Assumptions | 0 | - |
+| Incomplete Specification | 3 | Med, Low, Very Low |
+| Missing Documentation | 2 | Low, Low |
+| Corner Cases Identified | 3 | Low, Low, Low |
+| Missed Flow Details | 2 | Low, Low |
+| **Total Issues** | **10** | Mostly Low |
+
+## Overall Assessment
+
+✅ **Story is fundamentally sound.** The core bug diagnosis is accurate, the fix approach is appropriate, and the acceptance criteria are clear.
+
+⚠️ **Refinements needed:** 
+1. Clarify lock sizing arithmetic (provide formula, not just "show the math")
+2. Specify exact comment text for OutboxService.sweep()
+3. Clarify conditional update rollback behavior
+4. Add deployment order guidance
+5. Provide exact grep command for AC3
+
+❌ **False positives:** None detected. All identified issues are legitimate corner cases or documentation gaps, not errors in story logic.

@@ -69,8 +69,14 @@ sibling in the same module, `OutboxPollerScheduler`, which correctly wraps its o
 LOCKED` claim (`pollPending`) *and* the status flip (`markAsProcessing`) inside one
 `transactionTemplate.execute(...)` block (`OutboxPollerScheduler.java:36-47`) — the lock is held exactly
 until the claim becomes durable. `DeletionSchedulerService` is the only one of the two filestorage
-pollers that gets this wrong, and it is also the only `@Scheduled` method in `platform.filestorage`
-with **no test file at all** (confirmed by search — `DeletionSchedulerServiceTest` does not exist).
+pollers that gets this wrong. **Correction from an earlier draft of this story:** `processDeletions()`
+is not untested — `FileStorageDeletionIT` (`FileStorageDeletionIT.java:96-147`) already exercises it
+end-to-end against a real DB + storage backend (retention-window boundary, physical deletion, and
+outbox-job creation), so the dev agent is not implementing this class's very first test. What is
+genuinely missing is (a) a dedicated **unit** test (mock-isolated, fast, able to exercise the
+`markPhysicallyDeleted`-returns-`0` branch this AC adds, which an IT can't easily force), and (b) any
+coverage at all — unit or IT — of the **race** this AC fixes. See this AC's "Verified by" section below
+for how the two are meant to fit together.
 
 **Failure scenario:** Two ticks — either the same instance if one run takes longer than the 5-second
 `fixedDelay` (`app.storage.poller.fixed-delay-ms`), or, once this deployment scales horizontally, two
@@ -113,23 +119,50 @@ conditional write is an independent backstop against any future call path that b
    mirroring `skillars-deferred-118` AC3's precedent of scheduler-specific, non-copy-pasted sizing (see
    that story's Dev Notes for the reasoning shape, and `RadarCompositeDlqProcessor`'s `PT30S`
    `lockAtLeastFor` — sized below its own 60-second cadence — as the closest existing precedent for a
-   sub-`PT2M` value).
+   sub-`PT2M` value). The `~3s` retry-backoff figure above is illustrative, derived from the
+   `@Retryable` config alone — it does not include actual S3 round-trip latency, which this story does
+   not measure. If the target environment's observed S3 delete latency is available (logs, metrics,
+   local testing against the real provider), use that instead of guessing; if not, size generously
+   above the illustrative figure rather than treating it as a tight bound — an oversized
+   `lockAtMostFor` only delays detecting a truly stuck scheduler, while an undersized one reopens the
+   exact race this AC closes.
 2. Change `FileStorageObjectRepository.markPhysicallyDeleted` from `void` to a conditional `UPDATE
    FileStorageObject f SET f.physicalDeletedAt = :ts WHERE f.id = :id AND f.physicalDeletedAt IS NULL`
    returning `int` (mirror `softDeleteByKey` in the same interface, `FileStorageObjectRepository.java:23-26`
-   — same conditional-`WHERE`-clause shape, already returns `int`). In `DeletionSchedulerService`, only
-   call `outboxReplicationJobRepository.save(...)` when the affected-row count is `1`; skip (no error,
-   this is an expected race outcome under concurrent claims) when it is `0`.
+   — same conditional-`WHERE`-clause shape, already returns `int`). **Order matters — call
+   `markPhysicallyDeleted` FIRST and inspect its return value BEFORE calling
+   `outboxReplicationJobRepository.save(...)`, never the reverse.** Only call `save(...)` when the
+   affected-row count is `1`; skip it entirely (no error, no rollback needed — this is an expected race
+   outcome under concurrent claims) when the count is `0`. Doing the check first means `save()` is never
+   called speculatively, so there is no scenario where an already-persisted outbox job needs to be undone
+   — do not add `status.setRollbackOnly()` or a thrown exception for this case; that machinery is only
+   needed if you get the ordering backwards.
 
 **Verified by:**
-- New `DeletionSchedulerServiceTest` (first-ever coverage for this class — mirror
+- New `DeletionSchedulerServiceTest` — a **unit** test (mock-isolated, new file, mirror
   `OutboxPollerSchedulerTest`'s Mockito shape and its `transactionTemplate.execute(any())` /
-  `TransactionCallback` stubbing pattern, `OutboxPollerSchedulerTest.java:78-88`): (a) a single eligible
-  row is deleted from storage, replicated (`OutboxReplicationJob` saved), and marked
-  physically-deleted — happy path; (b) `markPhysicallyDeleted` returning `0` affected rows (simulating a
-  losing race) skips the `OutboxReplicationJob` save entirely; (c) `storageService.delete` throwing for
-  one row does not stop the loop from processing the next row (existing catch-and-continue behavior at
-  `DeletionSchedulerService.java:43-45` — must not regress).
+  `TransactionCallback` stubbing pattern, `OutboxPollerSchedulerTest.java:78-88`), **complementing**
+  `FileStorageDeletionIT`'s existing real-DB/real-storage coverage, not replacing it. Do not remove or
+  weaken any `FileStorageDeletionIT` test. Cover: (a) a single eligible row is deleted from storage,
+  replicated (`OutboxReplicationJob` saved), and marked physically-deleted — happy path; (b)
+  `markPhysicallyDeleted` returning `0` affected rows (simulating a losing race) skips the
+  `OutboxReplicationJob` save entirely, and `save()` is verified as never invoked in that case (this is
+  the one branch `FileStorageDeletionIT` cannot easily force, since it needs a real second writer to hit
+  the `0`-rows case) — this is also why item 2 of the Fix above requires `markPhysicallyDeleted` to run
+  *before* `save()`, not after; (c) `storageService.delete` throwing for one row does not stop the loop
+  from processing the next row (existing catch-and-continue behavior at `DeletionSchedulerService.java:43-45`
+  — must not regress).
+- **Recommended, not required:** extend `FileStorageDeletionIT` with a real concurrent-invocation test —
+  two threads racing `deletionSchedulerService.processDeletions()` against the same eligible row via a
+  `CountDownLatch` + `ExecutorService`, mirroring `ReliabilityStrikeConcurrencyIT`'s established pattern
+  in this codebase (`ReliabilityStrikeConcurrencyIT.java` — same latch-release-both-at-once shape). This
+  race's window is comparatively wide (it spans a full per-row S3 delete + DB write, not a single
+  lock-then-insert), so unlike `PaymentPendingSweeper`'s previously-documented microsecond-window case
+  (`deferred-work.md`, under "code review of skillars-uat-3-payment-capture-integrity-and-backup-retention",
+  note D11 — a real IT proved unable to reliably exercise it), this one may actually be reproducible with
+  real threads against the real Testcontainers Postgres `FileStorageDeletionIT` already uses. If it
+  proves flaky after a genuine attempt, fall back to documenting the reasoning inline (per that same D11
+  precedent) rather than landing a flaky test — do not spend excessive time forcing it.
 - Reflection-based `@SchedulerLock` presence test on `processDeletions`, matching
   `skillars-deferred-118`'s established pattern for the schedulers it added locks to.
 - `FileStorageObjectRepository`'s other query methods (`sumSizeBytesByOwnerId`, `findByKey`,
@@ -173,8 +206,8 @@ documentation/consistency fix — **no value or behavior change**.
 **Verified by:**
 - Extend existing `OutboxPollerSchedulerTest` with a reflection-based `@SchedulerLock` presence test,
   matching AC1's and `skillars-deferred-118`'s pattern.
-- Confirm whether an `OutboxServiceTest` exists; if so, re-run it green (only a comment is added, no
-  assertion should need to change). If none exists, no new test is required for this documentation-only
+- `OutboxServiceTest` (confirmed to exist — `src/test/java/.../platform/outbox/service/OutboxServiceTest.java`)
+  re-run green; only a comment is added to `sweep()`'s existing annotation, no assertion should need to
   change.
 
 ---
@@ -186,7 +219,10 @@ existing `deferred-work.md` bullet — confirmed by grep at story-creation time:
 `DeletionSchedulerService`, `OutboxPollerScheduler`, `OutboxService`, `FileStorageObjectRepository`, or
 `OutboxReplicationJobRepository` anywhere in the file. **No ledger deletion needed.** Before marking this
 story done, re-run the same grep sweep against HEAD to confirm no bullet was added in the interim that
-overlaps this story's scope.
+overlaps this story's scope:
+```bash
+grep -n "DeletionSchedulerService\|OutboxPollerScheduler\|OutboxService\|FileStorageObjectRepository\|OutboxReplicationJobRepository" _bmad-output/implementation-artifacts/deferred-work.md
+```
 
 ---
 
@@ -194,23 +230,27 @@ overlaps this story's scope.
 
 - [ ] **Task 1 — AC1: `DeletionSchedulerService` claim-then-process fix**
   - [ ] Add `@SchedulerLock` to `processDeletions()`, sized from real worst-case arithmetic (batch size
-        × per-item S3-retry cost), `lockAtLeastFor` re-derived from the 5-second cadence — show the
-        math in the Dev Agent Record
+        × per-item S3-retry cost, using measured latency if available), `lockAtLeastFor` re-derived
+        from the 5-second cadence — show the math in the Dev Agent Record
   - [ ] Change `FileStorageObjectRepository.markPhysicallyDeleted` to a conditional `UPDATE ... WHERE
         id = ? AND physicalDeletedAt IS NULL` returning `int`, mirroring `softDeleteByKey`
-  - [ ] Update `DeletionSchedulerService.processDeletions` to only save the `OutboxReplicationJob` when
-        the affected-row count is `1`
-  - [ ] Add `DeletionSchedulerServiceTest` (new file): happy path, race-skip (0 affected rows), and
-        per-item exception continuation
+  - [ ] Update `DeletionSchedulerService.processDeletions` to call `markPhysicallyDeleted` FIRST and
+        only save the `OutboxReplicationJob` when its returned affected-row count is `1` (order matters
+        — see AC1's Fix section)
+  - [ ] Add `DeletionSchedulerServiceTest` (new **unit** test file, complementing — not replacing —
+        `FileStorageDeletionIT`'s existing coverage): happy path, race-skip (`0` affected rows, `save()`
+        verified never called), and per-item exception continuation
+  - [ ] Attempt the recommended (not required) concurrency test extending `FileStorageDeletionIT`,
+        mirroring `ReliabilityStrikeConcurrencyIT`'s `CountDownLatch`/`ExecutorService` pattern; fall
+        back to documenting the reasoning inline if it proves flaky
 
 - [ ] **Task 2 — AC2: scheduler-lock consistency**
   - [ ] Add `@SchedulerLock` to `OutboxPollerScheduler.pollAndProcess`, sized from its own worst-case
         arithmetic (batch size × per-item `REPLICATE`-branch cost), `lockAtLeastFor` re-derived from
         its own 5-second cadence
   - [ ] Add a reflection-based `@SchedulerLock` presence test to `OutboxPollerSchedulerTest`
-  - [ ] Add a one-line derivation comment to `OutboxService.sweep()`'s existing `@SchedulerLock`
-        (`MAX_CHUNKS_PER_DRAIN` × chunk-size arithmetic) — no value change; re-run any existing
-        `OutboxServiceTest` green if one exists
+  - [ ] Add the derivation comment to `OutboxService.sweep()`'s existing `@SchedulerLock` (suggested
+        wording in Dev Notes) — no value change; re-run `OutboxServiceTest` green
 
 - [ ] **Task 3 — AC3: ledger closeout**
   - [ ] Re-run the grep sweep against HEAD for the five touched classes; confirm still zero open
@@ -250,13 +290,51 @@ overlaps this story's scope.
 - **AC1 — `SchedulingConfig`'s Javadoc also confirms both `DeletionSchedulerService` and
   `OutboxPollerScheduler` already run at a real 5-second delay inside the consolidated integration test
   suite, with ShedLock deliberately left enabled during tests** (`@EnableSchedulerLock` stays on
-  `AsyncConfig`, not gated by `app.scheduling.enabled`). If any integration test invokes either
-  scheduler's method directly through the Spring proxy and depends on back-to-back invocations not being
-  suppressed by a lock, check whether `BasePaymentIT.releaseSchedulerLock` (or an equivalent helper) is
-  needed — search for existing IT coverage of these two classes before assuming none exists.
+  `AsyncConfig`, not gated by `app.scheduling.enabled`), and that a per-test reset already backdates
+  every `main.shedlock` row before each test method. `FileStorageDeletionIT` (`BaseStorageIT` →
+  `AbstractIntegrationTest`) already has `releaseSchedulerLock(String lockName)` available by inheritance
+  (`AbstractIntegrationTest.java:141` — not `BasePaymentIT`-specific, despite that being the module
+  where it's most visibly used) if you need it. Given the automatic per-test reset, `FileStorageDeletionIT`'s
+  three *existing* tests (each calls `processDeletions()` exactly once per method) should keep passing
+  unmodified once `@SchedulerLock` is added — no call to `releaseSchedulerLock` should be needed for
+  them. The recommended new concurrency test is different: it deliberately wants the lock to stay held
+  between its two racing calls, so it should **not** call `releaseSchedulerLock` either — that helper is
+  only relevant if some *other* new test needs two sequential (not concurrent) invocations within one
+  method.
+- **AC1 — duplicate `OutboxReplicationJob` rows are a going-forward concern only, not a cleanup task.**
+  No production deploy has ever happened (`docs/deployment/runbook.md`,
+  `docs/deployment/migration-rebaseline.md:137` — the same fact `skillars-deferred-114`/`-117` cite for
+  `main.pending_blob_deletions`), so there is no pre-existing accumulated duplicate data in any real
+  environment to clean up. After this AC's fix (lock + conditional write), the race that creates
+  duplicates cannot occur going forward. Do not add a deduplication job or migration for this — it would
+  be solving a problem that does not exist.
+- **AC1 — backup-storage semantics under the skip branch, stated explicitly:** when `markPhysicallyDeleted`
+  returns `0` and the `OutboxReplicationJob` save is skipped, the object is already gone from *primary*
+  storage (the earlier `storageService.delete()` call, unconditional and idempotent) — the skip only
+  means *this* invocation does not enqueue a *backup*-storage delete. That is correct, not a gap: the
+  invocation that actually won the race (affected-row count `1`) already enqueued its own
+  `OutboxReplicationJob` for the same key, which `OutboxPollerScheduler` will drain into
+  `backupStorageService.delete(key)` regardless of which invocation's job it was. No key is ever left
+  undeleted in backup storage because of this skip.
+- **AC1 — what happens if `lockAtMostFor` is undersized and a run genuinely exceeds it:** the lock's
+  ceiling exists to bound how long a truly stuck/dead scheduler instance can block every other instance,
+  not to guarantee no reprocessing ever happens. If a real run takes longer than `lockAtMostFor`, the
+  next tick can acquire the lock and re-select rows the still-running prior tick hasn't finished with
+  yet. This is safe, not a new bug: `storageService.delete()` is idempotent, and AC1's conditional
+  `markPhysicallyDeleted` means at most one of the two overlapping runs' database writes actually lands
+  — the loser's `save()` never happens. Size `lockAtMostFor` generously (per the note above) to make
+  this rare, not to make it provably impossible; the conditional write is what makes it safe even when it
+  does happen.
 - **AC2 — `OutboxService.sweep()`'s fix is comment-only.** Do not change `lockAtMostFor="PT10M"` or
   `lockAtLeastFor="PT1M"` — the audit that produced this story explicitly found the *values* were not
-  wrong, only undocumented. Changing them is out of scope.
+  wrong, only undocumented. Changing them is out of scope. Suggested wording (verified against the real
+  constants — do not reuse an unverified per-chunk timing guess):
+  ```java
+  // lockAtMostFor sized well above MAX_CHUNKS_PER_DRAIN (200) x OutboxChunkProcessor.CHUNK_SIZE (25)
+  // = 5000 row-attempts worst case; correctness does not depend on this lock (see claimNextDue's
+  // PESSIMISTIC_WRITE + SKIP LOCKED below), so PT10M's margin needs no tighter derivation than this.
+  @SchedulerLock(name = "OutboxService_sweep", lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
+  ```
 - **Project structure:** two independent modules touched (`platform.filestorage`, `platform.outbox`) —
   no cross-AC coupling; AC1 and AC2 can be implemented and tested in either order.
 - **Testing approach:** `DeletionSchedulerServiceTest` (AC1, new file, mirror
@@ -293,6 +371,13 @@ overlaps this story's scope.
 - `src/test/java/com/softropic/skillars/platform/filestorage/service/OutboxPollerSchedulerTest.java`
   (AC1/AC2 — the Mockito + `TransactionTemplate`-stubbing pattern to copy for the new
   `DeletionSchedulerServiceTest`, and to extend directly for AC2's lock-presence test)
+- `src/test/java/com/softropic/skillars/platform/filestorage/service/FileStorageDeletionIT.java` (AC1 —
+  whole file; this is the **existing** IT coverage of `processDeletions()` that the new unit test
+  complements, not replaces — read it before writing `DeletionSchedulerServiceTest` so the two don't
+  duplicate each other's cases, and before extending it with the recommended concurrency test)
+- `src/test/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeConcurrencyIT.java`
+  (AC1 — only if attempting the recommended concurrency test; the `CountDownLatch`/`ExecutorService`
+  dual-thread pattern to mirror)
 - `src/main/java/com/softropic/skillars/platform/filestorage/service/OutboxPollerScheduler.java` (AC1
   reference / AC2 — whole file, the already-correct claim-then-process shape and the fix target)
 - `src/main/java/com/softropic/skillars/platform/outbox/service/OutboxService.java:40-131` (AC2 —
@@ -311,9 +396,10 @@ overlaps this story's scope.
 
 - [ ] AC1: `processDeletions` carries `@SchedulerLock` sized from real worst-case arithmetic (shown in
       Dev Agent Record), not a copy-pasted constant; `markPhysicallyDeleted` is a conditional `UPDATE`
-      returning the affected-row count; `DeletionSchedulerService` only saves the `OutboxReplicationJob`
-      when that count is `1`; new `DeletionSchedulerServiceTest` covers happy path, race-skip, and
-      per-item exception continuation
+      returning the affected-row count, called BEFORE the conditional `save()`; `DeletionSchedulerService`
+      only saves the `OutboxReplicationJob` when that count is `1`; new `DeletionSchedulerServiceTest`
+      (unit) covers happy path, race-skip (`save()` verified never called), and per-item exception
+      continuation; existing `FileStorageDeletionIT` still passes unmodified
 - [ ] AC2: `OutboxPollerScheduler.pollAndProcess` carries `@SchedulerLock` sized the same way;
       `OutboxService.sweep()`'s existing lock values are unchanged, with a derivation comment added
 - [ ] AC3: grep sweep re-confirmed zero open `deferred-work.md` bullets for the five touched classes
@@ -357,6 +443,32 @@ overlaps this story's scope.
   see Provenance & Scoping for the per-class reasoning. Branch: `story/deferred-119-filestorage-scheduler-fixes`
   (to be created), off `master` post-`skillars-deferred-118`-merge (PR #206) and post-Dependabot-batch-merge
   (PRs #199-#205).
+- 2026-09-17: Story revised post-review (`story-review.md`, 10 findings, reviewed for false positives
+  before applying). One genuine factual error corrected: AC1's original draft claimed
+  `DeletionSchedulerService` had "no test file at all" — false; `FileStorageDeletionIT` already exercises
+  `processDeletions()` end-to-end (confirmed by direct read, not just the review's grep). AC1 revised to
+  correctly scope the new `DeletionSchedulerServiceTest` as a complementary **unit** test (covering what
+  the existing IT can't easily force — the race-skip branch), not first-ever coverage; a recommended
+  (not required) concurrency test extending `FileStorageDeletionIT` was added, mirroring
+  `ReliabilityStrikeConcurrencyIT`'s established latch pattern. Also fixed a real ordering ambiguity the
+  review's "Flow 2" surfaced: the Fix section now states explicitly that `markPhysicallyDeleted` must be
+  called *before* the conditional `save()`, which eliminates any need for rollback-after-save logic
+  entirely (simpler than the review's own suggested fix, which was to add `status.setRollbackOnly()`
+  after a speculative save). Added: a measured-vs-illustrative-latency caveat on the lock-sizing
+  arithmetic; an explicit "no cleanup job needed" note (no production deploy has ever happened, so no
+  duplicate data exists to clean up — the fix prevents new duplicates outright); explicit backup-storage
+  and lock-exceeded-duration safety reasoning; verified suggested wording for `OutboxService.sweep()`'s
+  derivation comment against the real `CHUNK_SIZE=25`/`MAX_CHUNKS_PER_DRAIN=200` constants rather than
+  the review's unverified per-chunk timing guess; the exact `AC3` grep command; and a corrected,
+  fact-checked note on `releaseSchedulerLock`'s actual location (`AbstractIntegrationTest`, inherited by
+  `FileStorageDeletionIT` via `BaseStorageIT`, not `BasePaymentIT`-specific as the story's first draft
+  implied). Declined from the review, with reasoning: prescribing an exact `lockAtMostFor` formula/value
+  in the story (would contradict this series' established convention of leaving worst-case arithmetic to
+  the Dev Agent Record); a separate outbox-duplicate cleanup job (no accumulated data exists pre-launch);
+  generic ShedLock-availability/clock-skew caveats (not applied to any of the four prior stories in this
+  series, which add locks under the same assumption ShedLock already works); and deployment-order/rollback
+  guidance between AC1 and AC2 (both land in one squash-merged deploy together in this project's actual
+  release model — there is no independent deployment order to sequence).
 
 ---
 
