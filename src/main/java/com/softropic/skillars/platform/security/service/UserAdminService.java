@@ -131,11 +131,27 @@ public class UserAdminService {
     /**
      * Deletes a user in its own transaction to minimize lock duration.
      * Uses REQUIRES_NEW to ensure each deletion is independent.
+     * <p>
+     * skillars-deferred-118 AC2: re-checks {@code !activated} on the fresh re-fetch before deleting.
+     * {@link #findExpiredUsers} reads a batch snapshot; a user can complete email verification (any
+     * of {@code ParentRegistrationService}/{@code PlayerRegistrationService}/
+     * {@code CoachRegistrationService}/{@code UserRegistrationService}) in the window between that
+     * batch select and this specific user's turn in the delete loop. Without this guard, the
+     * re-fetch here reads the current, now-activated row and deletes it anyway — a legitimate,
+     * freshly-activated account destroyed by a stale batch read. The guard must live here, not in
+     * {@link #findExpiredUsers}: the race window is between the batch select and each individual
+     * delete call, not before the batch read, and this method already re-fetches a live row for
+     * exactly this reason.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     protected void deleteUserInTransaction(String login) {
         userRepository.findOneByLogin(login).ifPresent(user -> {
-            userRepository.delete(user);
+            if (!user.isActivated()) {
+                userRepository.delete(user);
+            } else {
+                log.debug("Skipping non-activated-user cleanup — user activated since the sweep's "
+                    + "batch select: login={}", login);
+            }
         });
     }
 }

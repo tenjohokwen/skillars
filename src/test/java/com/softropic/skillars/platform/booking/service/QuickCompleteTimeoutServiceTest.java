@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.SessionCompletionData;
 import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,6 +18,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.lang.reflect.Method;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -109,5 +112,18 @@ class QuickCompleteTimeoutServiceTest {
 
         assertThat(dependencyTypeNames)
             .doesNotContain("PackSessionService", "SessionPackPurchaseRepository", "SessionPackService");
+    }
+
+    @Test
+    void processExpiredQuickCompletes_carriesSchedulerLock() throws NoSuchMethodException {
+        // skillars-deferred-118 AC3: this scheduler had no @SchedulerLock before this story, unlike
+        // every other stateful @Scheduled job in this module.
+        Method method = QuickCompleteTimeoutService.class.getMethod("processExpiredQuickCompletes");
+        SchedulerLock lock = method.getAnnotation(SchedulerLock.class);
+
+        assertThat(lock).as("processExpiredQuickCompletes() must carry @SchedulerLock").isNotNull();
+        assertThat(lock.name()).isNotBlank();
+        assertThat(Duration.parse(lock.lockAtMostFor())).isPositive();
+        assertThat(Duration.parse(lock.lockAtLeastFor())).isPositive();
     }
 }
