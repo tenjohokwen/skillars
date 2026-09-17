@@ -1098,7 +1098,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - W2: `verifyPhone` accepts caller-supplied `userId` with no ownership binding — spec-required field; risk mitigated by rate limiting [VerifyPhoneRequest.java]
 - W4: `BaseEntity` TSID + V21 `BIGINT PRIMARY KEY` with no sequence — direct SQL inserts in future migrations or test fixtures require manual TSID generation [V21__skillars_security_extension.sql]
 - W5: `ContactDetailSanitizer.PHONE_PATTERN` may redact digit-heavy name segments (e.g. "Type 2 Analyst") — pattern is spec-prescribed; refine when real-world false positives are observed [ContactDetailSanitizer.java]
-- W6: `RateLimitingService` uses in-process `ConcurrentHashMap` — not cluster-safe, no eviction; pre-existing infrastructure issue not introduced by this story
 - W7: `TokenErrorResponse.errorKey` field alignment with `useErrorHandler` composable — confirm when applying patches; likely aligned by naming convention [ApiAdvice.java]
 
 ## Deferred from: code review of skillars-1-2-skillars-design-system-foundation (2026-06-11)
@@ -1167,7 +1166,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 ## Deferred from: code review of skillars-11-1-payment-path-parity-gaps (2026-08-03)
 - D1: Partial/mismatched `confirmedCancellationIds` lets `PackSessionService.pausePack()` apply the pause even when not all currently-conflicting bookings are confirmed for cancellation (or the confirmed ids don't match any real conflict) — verified byte-for-byte identical to legacy `SessionPackService.pausePack()`; AC4 explicitly requires mirroring legacy here. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
 - D5: `pausePack` holds a pessimistic row lock across booking cancellations and event publishing within one `@Transactional` method — same single-transaction shape as the legacy method this story mirrors. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
-- D7: `SessionPackForfeitureScheduler` doesn't re-verify `expiresAt` immediately before forfeiting inside the per-row transaction, leaving a window where a concurrent extension could still get forfeited — inherent to the legacy-mirrored select-then-per-row-transaction scheduler shape. [`src/main/java/com/softropic/skillars/platform/payment/service/SessionPackForfeitureScheduler.java`]
 - D8: TOCTOU between the conflicting-bookings query and the per-booking `cancelDueToPause` calls in `pausePack` — same risk shape as the legacy method being mirrored. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
 - D9: Stringly-typed computed `status` field and hardcoded `CONFLICT_STATUSES` list rather than shared enums — consistent with existing codebase convention; legacy also uses string status constants. [`src/main/java/com/softropic/skillars/platform/payment/contract/SessionPackPurchaseResponse.java`, `PackSessionService.java`]
 
@@ -1334,7 +1332,6 @@ above rather than duplicated here. This section holds only what the story-creati
 
 ## Deferred from: code review of skillars-deferred-62-postgres-lock-timeout-bounded-wait-fix (2026-08-24)
 
-- **`PessimisticLockRetryer.withBoundedRetry`'s `Supplier<T>` idempotency/side-effect-free contract is documented only in a javadoc comment, not enforced by the method signature.** Nothing stops a future caller from passing a supplier with real side effects (an external call, an event publish, a write) that would then be silently re-executed on every retry attempt. All 16 current call sites are read-only (a `findByIdForUpdate` plus optional `refresh`), confirmed by this story's own code review — speculative future-risk, not a current violation. [`src/main/java/com/softropic/skillars/infrastructure/persistence/PessimisticLockRetryer.java`]
 - **A JDBC `setSavepoint`/rollback-to-savepoint call itself failing (e.g. genuine connection loss) propagates unretried as an opaque 500**, since `PessimisticLockRetryer` only catches `PessimisticLockingFailureException`. Arguably acceptable — this represents genuine infrastructure failure rather than lock contention — noted for awareness rather than as a defect. [`src/main/java/com/softropic/skillars/infrastructure/persistence/PessimisticLockRetryer.java:63-64,72`]
 
 ## Deferred from: code review of skillars-deferred-65-pack-selection-parity-timezone-validation-strictness-and-availability-week-scoping-fixes (2026-08-25)
@@ -1542,20 +1539,10 @@ W3 → AC3), the `BookingBatchStatusListener` transactionless lookup (`skillars-
 `PROCESSING→READY` backward-compat hole (`skillars-6-5` W5 → AC5), and the `PendingBlobDeletionService`
 → generic-outbox consolidation (AC6). It also deleted two stale lines (`skillars-3-9` W1 — closed by
 `skillars-deferred-69 AC6`; `skillars-7-1` D2 — `payment.providerUnavailable` no longer on any
-pack-purchase path). The follow-up it owes:
-
-- **Drop `main.pending_blob_deletions` + `PendingBlobDeletion` entity/repo +
-  `PendingBlobDeletionResidualDrainRunner` in a LATER release.** skillars-deferred-100 AC6 stopped
-  writing the table (folded onto the generic `platform.outbox`) but kept the entity/repo so
-  `PendingBlobDeletionResidualDrainRunner` (a startup `ApplicationRunner`) can migrate any rows a
-  prior release left behind onto the generic outbox — verified as the residual-drain path (the
-  one-shot re-enqueue, not a retained bespoke scheduler). `DROP TABLE` in the same release that
-  stops using it is exactly the `DROP_WITHOUT_PRIOR_RELEASE_PREP` hazard
-  `docs/deployment/migration-conventions.md` + `MigrationLint` exist to prevent, and `IF EXISTS`
-  does not help a concurrent old-release drain mid-transaction. Once deferred-100 is confirmed
-  deployed and `pending_blob_deletions` is provably empty in every environment: `DROP TABLE
-  main.pending_blob_deletions` (guarded, `IF EXISTS`, its own migration `> V131`), delete
-  `PendingBlobDeletion` / `PendingBlobDeletionRepository` / `PendingBlobDeletionResidualDrainRunner`.
+pack-purchase path). The follow-up it owed — dropping `main.pending_blob_deletions` and its
+now-unused Java/JPA surface in a later release — was closed by `skillars-deferred-117` AC1
+(2026-09-16), per this file's own convention for a real fix: bullet deleted outright, not kept with
+a tag.
 
 ## Deferred from: code review of skillars-deferred-100-concurrency-reconciliation-and-lifecycle-hardening (2026-09-08)
 
@@ -2314,8 +2301,6 @@ are the exceptions.
 ## Deferred from: code review of story-115 (2026-09-16)
 
 **@SchedulerLock PT12H sizing insufficient for realistic provider timeout scenarios** — `VideoLifecycleScheduler.runLifecycleJob()` sized for success-case ceiling-batch runtime (~5.5 hours), but realistic scenario with 10% provider timeout rate on 10000-row batch could take 20+ hours. If lock expires and second pod starts, double-archive/double-delete attempts. Story acknowledges as known risk, tunable by operator; no code change needed, documented in AC2.
-
-**markPurged() does not change accessState, creating daily re-selection** — `VideoLifecycleScheduler` phase 2 `markPurged()` sets `operationalState=DELETED` but leaves `accessState=ARCHIVED`. Deleted video remains matched by `findArchivedExceedingThreshold()` on every run, re-attempting idempotent `deleteAsset` and hitting caught `VideoStateConflictException`. Story notes at lines 213-215 as pre-existing, low-severity, unrelated to this story's scope; confirmed inefficiency not data loss.
 
 ## Deferred from: ad-hoc audit of payment module subscription schedulers (2026-09-16)
 

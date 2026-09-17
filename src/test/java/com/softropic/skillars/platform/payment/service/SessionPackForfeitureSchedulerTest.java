@@ -157,6 +157,51 @@ class SessionPackForfeitureSchedulerTest {
     }
 
     @Test
+    void forfeitExpiredPacks_concurrentExtendBetweenBatchLoadAndPerItemTransaction_skipsForfeiture() {
+        // skillars-deferred-117 AC3: simulates SessionPackPaymentService.extendPack committing in
+        // the gap between the batch-load transaction and this purchase's own per-item transaction.
+        // The stale in-memory object from the batch load is still expired, but the re-fetch inside
+        // the per-item transaction sees the extended (no-longer-expired) row and must skip.
+        SessionPackPurchase staleFromBatch = buildPurchase(COACH_ID);
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of(staleFromBatch));
+
+        SessionPackPurchase extended = buildPurchase(COACH_ID);
+        extended.setPurchaseId(staleFromBatch.getPurchaseId());
+        extended.setExpiresAt(Instant.now().plus(29, ChronoUnit.DAYS)); // extendPack: +30 days
+        when(sessionPackPurchaseRepository.findById(staleFromBatch.getPurchaseId()))
+            .thenReturn(Optional.of(extended));
+
+        scheduler.forfeitExpiredPacks();
+
+        assertThat(staleFromBatch.getExpiredNotifiedAt()).isNull();
+        assertThat(extended.getExpiredNotifiedAt()).isNull();
+        verify(sessionPackPurchaseRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void forfeitExpiredPacks_concurrentFullConsumptionBetweenBatchLoadAndPerItemTransaction_skipsForfeiture() {
+        // skillars-deferred-117 AC3: symmetric case — the pack's remainingSessions drops to 0
+        // (fully consumed) in the same commit gap. The re-fetch's remainingSessions > 0 guard must
+        // also catch this, not just the expiresAt guard.
+        SessionPackPurchase staleFromBatch = buildPurchase(COACH_ID);
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of(staleFromBatch));
+
+        SessionPackPurchase consumed = buildPurchase(COACH_ID);
+        consumed.setPurchaseId(staleFromBatch.getPurchaseId());
+        consumed.setRemainingSessions(0);
+        when(sessionPackPurchaseRepository.findById(staleFromBatch.getPurchaseId()))
+            .thenReturn(Optional.of(consumed));
+
+        scheduler.forfeitExpiredPacks();
+
+        assertThat(staleFromBatch.getExpiredNotifiedAt()).isNull();
+        assertThat(consumed.getExpiredNotifiedAt()).isNull();
+        verify(sessionPackPurchaseRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
     void forfeitExpiredPacks_noExpiredPacks_doesNothing() {
         when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of());
 
@@ -174,6 +219,13 @@ class SessionPackForfeitureSchedulerTest {
         purchase.setCoachId(coachId);
         purchase.setRemainingSessions(3);
         purchase.setExpiresAt(Instant.now().minus(1, ChronoUnit.DAYS));
+        // skillars-deferred-117 AC3: forfeitExpiredPacks() now re-fetches by id inside the per-item
+        // transaction before doing anything else. Every existing test's purchase is still eligible
+        // (unchanged expiresAt/expiredNotifiedAt/remainingSessions), so stubbing findById to return
+        // the SAME mutable purchase object mirrors "nothing changed underneath since the batch load"
+        // — the re-check is a no-op and every existing assertion below is unaffected.
+        lenient().when(sessionPackPurchaseRepository.findById(purchase.getPurchaseId()))
+            .thenReturn(Optional.of(purchase));
         return purchase;
     }
 }

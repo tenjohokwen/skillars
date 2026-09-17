@@ -38,9 +38,28 @@ public class SessionPackForfeitureScheduler {
             status -> sessionPackPurchaseRepository.findExpiredNotYetNotified(now));
         if (expired == null) return;
 
-        for (SessionPackPurchase purchase : expired) {
+        for (SessionPackPurchase staleFromBatch : expired) {
             try {
                 transactionTemplate.execute(status -> {
+                    // skillars-deferred-117 AC3: the batch-load transaction above commits (releasing
+                    // any row lock) before this per-item transaction even starts, so extendPack /
+                    // pausePack can legitimately commit against this exact purchase in that gap.
+                    // Re-fetch fresh and re-check the same three conditions the batch query itself
+                    // filters on before touching anything else — using the freshly-fetched entity,
+                    // never the stale `staleFromBatch` snapshot, for every subsequent read/write.
+                    SessionPackPurchase purchase = sessionPackPurchaseRepository
+                        .findById(staleFromBatch.getPurchaseId()).orElse(null);
+                    if (purchase == null
+                        || !purchase.getExpiresAt().isBefore(now)
+                        || purchase.getExpiredNotifiedAt() != null
+                        || purchase.getRemainingSessions() <= 0) {
+                        // Expected, correct outcome of a legitimate concurrent action (extendPack,
+                        // pausePack, an already-finalized run, or sessions fully consumed) — not an
+                        // error, so this logs at debug rather than warn/error.
+                        log.debug("Skipping session pack forfeiture — no longer eligible on re-check: "
+                            + "purchaseId={}", staleFromBatch.getPurchaseId());
+                        return null;
+                    }
                     // skillars-deferred-103 AC7: explicit error handling for missing/blank records
                     CoachProfile coach = coachProfileRepository.findById(purchase.getCoachId()).orElse(null);
                     if (coach == null) {
@@ -84,7 +103,7 @@ public class SessionPackForfeitureScheduler {
                     return null;
                 });
             } catch (Exception e) {
-                log.error("Failed to forfeit session pack purchase {}", purchase.getPurchaseId(), e);
+                log.error("Failed to forfeit session pack purchase {}", staleFromBatch.getPurchaseId(), e);
             }
         }
     }

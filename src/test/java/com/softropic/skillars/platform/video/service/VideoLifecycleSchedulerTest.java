@@ -228,6 +228,45 @@ class VideoLifecycleSchedulerTest {
         verify(quotaService, times(2)).decrementStorageBytes(any(), anyLong());
     }
 
+    // skillars-deferred-117 AC2: findArchivedExceedingThreshold's own WHERE clause (fixed in
+    // VideoRepository, mechanically proven by VideoRepositoryIT against a real Postgres) is what
+    // excludes an already-purged video from the batch. This test proves the scheduler-side half of
+    // that contract: given a batch that — as the fixed query now guarantees — contains only
+    // genuinely-due videos, the scheduler's deleteAsset/markPurged call sequence touches only what
+    // it was handed. An already-purged video's id, deliberately absent from the mocked batch (since
+    // the real query would never return it post-fix), is never re-fetched and never has
+    // deleteAsset/markPurged invoked on it — i.e. it is never even looked at, not merely that a
+    // markPurged call against it would be caught.
+    //
+    // Code review: why the already-purged video isn't ALSO placed in this mocked batch's returned
+    // list. runArchivedToDeletedPhase has no filtering of its own — it iterates whatever
+    // findArchivedExceedingThreshold hands it — so putting both videos in the SAME mocked list would
+    // make the scheduler call deleteAsset/findById/markPurged on BOTH, which would only re-prove
+    // skillars-deferred-115's existing per-video try/catch (an already-covered, different guarantee)
+    // and would contradict the "never even re-fetched" claim this test exists to make. "Never
+    // re-fetched" can only be true because the (separately, mechanically, VideoRepositoryIT-proven)
+    // query never returns such a video in the first place — there is no scheduler-level check to
+    // test here by design (AC2's fix is entirely in the query, not the scheduler).
+    @Test
+    void runArchivedToDeletedPhase_mixedBatch_alreadyPurgedVideoExcludedByQuery_neverRefetchedOrTouched() {
+        UUID dueVideoId = UUID.randomUUID();
+        UUID alreadyPurgedVideoId = UUID.randomUUID(); // never returned by the fixed query — see AC2
+        Video due = archivedVideo(dueVideoId, UUID.randomUUID().toString(), Instant.now().minus(95, ChronoUnit.DAYS));
+        due.setStorageBytes(512L);
+
+        when(videoRepository.findArchivedExceedingThreshold(any(), anyInt())).thenReturn(List.of(due));
+        when(videoRepository.findById(dueVideoId)).thenReturn(Optional.of(due));
+        when(videoLifecycleService.markPurged(dueVideoId)).thenReturn(512L);
+
+        scheduler.runLifecycleJob();
+
+        verify(videoProviderAdapter, times(1)).deleteAsset(any());
+        verify(videoProviderAdapter).deleteAsset(due.getProviderAssetId());
+        verify(videoLifecycleService).markPurged(dueVideoId);
+        verify(videoRepository, never()).findById(alreadyPurgedVideoId);
+        verify(videoLifecycleService, never()).markPurged(alreadyPurgedVideoId);
+    }
+
     // skillars-deferred-115 AC2: no existing test in this module covers @SchedulerLock directly
     // (checked EmailRetryScheduler's/ReconciliationWorkerScheduler's suites first, per the story) —
     // a plain reflection/annotation check confirms the lock is present with a sensible sizing, per
