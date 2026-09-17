@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -69,7 +70,7 @@ public class SessionPackExpiryNotifier {
         for (SessionPackPurchase pack : expiring) {
             // Per pack, as in SessionPackForfeitureScheduler: one bad pack must not abort the run.
             try {
-                transactionTemplate.execute(status -> {
+                Boolean warned = transactionTemplate.execute(status -> {
                     CoachProfile coach = coachProfileRepository.findById(pack.getCoachId()).orElse(null);
                     if (coach == null) {
                         // Deliberately left unstamped: this pack keeps being selected, so the ERROR
@@ -80,7 +81,7 @@ public class SessionPackExpiryNotifier {
                         log.error("Session pack expiry warning skipped — coach profile missing: "
                             + "purchaseId={} coachId={} parentId={} expiresAt={}",
                             pack.getPurchaseId(), pack.getCoachId(), pack.getParentId(), pack.getExpiresAt());
-                        return null;
+                        return false;
                     }
 
                     String parentEmail = userRepository.findById(pack.getParentId())
@@ -104,10 +105,42 @@ public class SessionPackExpiryNotifier {
                         "14_DAYS",
                         coach.getCanonicalTimezone()
                     ));
+                    return true;
+                });
+                // skillars-deferred-120 code review (2026-09-17, Patch #11): logged only after
+                // transactionTemplate.execute returns — i.e. after the transaction has actually
+                // committed. The prior placement logged success from inside the callback, before
+                // commit; a commit-time failure (e.g. the optimistic-lock race below, which Hibernate
+                // usually — but not always — detects earlier, at merge time) would have left a
+                // "warning sent" INFO line immediately followed by a "skipped" line for the same
+                // purchaseId, misrepresenting what actually happened.
+                if (Boolean.TRUE.equals(warned)) {
                     log.info("Pack expiry warning sent: purchaseId={} expiresAt={}",
                         pack.getPurchaseId(), pack.getExpiresAt());
-                    return null;
-                });
+                }
+            } catch (OptimisticLockingFailureException e) {
+                // skillars-deferred-120 AC3 Finding 3: benign and self-correcting, mirroring
+                // PaymentPendingSweeper's identical split — a legitimate concurrent write on this
+                // pack (most likely ordinary session consumption, pausePack, or extendPack) won the
+                // race between this scheduler's batch load and its own save(pack). The pack will
+                // either be excluded from future selection or simply re-selected and warned on the
+                // next run, still inside the 14-day window. Logging this at ERROR alongside the
+                // genuinely unrecoverable cases below would dilute the signal an ERROR here exists
+                // to produce — an operator should only see ERROR when something needs reconciling.
+                //
+                // skillars-deferred-120 code review (2026-09-17, Patch #12): this catch wraps the
+                // whole per-pack transaction (coach/user lookups, save, publish), not narrowly
+                // save(pack) alone — a version conflict from any entity flushed in this transaction
+                // would land here. In practice `pack` (SessionPackPurchase, the only @Version entity
+                // touched) is the only realistic source: the two findById calls are pure reads, and
+                // the BEFORE_COMMIT-enqueued outbox row is a fresh INSERT with no version to
+                // conflict on. Narrowing the try to wrap only save(pack) would need restructuring
+                // this method's single-transaction delivery/dedupe guarantee (see this method's own
+                // class Javadoc) for a benefit that is theoretical today — left as-is, with the
+                // exception attached below so a future case that violates this assumption leaves
+                // evidence instead of none.
+                log.info("Session pack {} changed concurrently during the expiry-warning sweep — skipped",
+                    pack.getPurchaseId(), e);
             } catch (Exception e) {
                 log.error("Failed to send expiry warning for session pack purchase {}", pack.getPurchaseId(), e);
             }

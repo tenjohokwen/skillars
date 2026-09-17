@@ -184,7 +184,7 @@ services:
     # `app`/`postgres`/`redis` (which inherit `logging: *default-logging` from there),
     # these would otherwise use Docker's unbounded default log driver — fine short-term,
     # but a real disk-fill risk left running for a while on a small VPS (see
-    # local-deployment.md's own "no space left on device" troubleshooting entry for
+    # local/deployment.md's own "no space left on device" troubleshooting entry for
     # exactly this class of problem with the LGTM containers).
     logging: *default-logging
 

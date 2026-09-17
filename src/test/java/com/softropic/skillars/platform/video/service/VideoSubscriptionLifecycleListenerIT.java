@@ -206,6 +206,13 @@ class VideoSubscriptionLifecycleListenerIT extends BaseVideoIT {
         // Seed a new video so the second attempt can find it
         seedActiveReadyVideo(PLAYER_ID);
 
+        // skillars-deferred-120 AC1: @SchedulerLock's lockAtLeastFor would otherwise silently
+        // skip this second same-method-invocation call (this test invokes processOutbox() twice
+        // inside one test method, going through the @Autowired Spring proxy both times).
+        // NOTE (code review 2026-09-17, Patch #17): if you add a THIRD processOutbox() call to
+        // this test method, add another releaseSchedulerLock call immediately before it too — this
+        // one only covers the 1st-to-2nd-call gap.
+        releaseSchedulerLock("VideoSubscriptionLifecycleListener_processOutbox");
         listener.processOutbox(); // second attempt — succeeds
         SubscriptionLifecycleOutbox afterSecond = outboxRepository.findById(entry.getId()).orElseThrow();
         assertThat(afterSecond.getStatus()).isEqualTo("PROCESSED");
@@ -226,6 +233,10 @@ class VideoSubscriptionLifecycleListenerIT extends BaseVideoIT {
         listener.processOutbox(); // attempt 1
 
         seedActiveReadyVideo(PLAYER_ID);
+        // skillars-deferred-120 AC1: see processOutbox_failureOnFirstAttempt_retriedOnSecondCall's
+        // comment above — same second-invocation-in-one-test-method release requirement (and the
+        // same third-call caveat, code review 2026-09-17 Patch #17).
+        releaseSchedulerLock("VideoSubscriptionLifecycleListener_processOutbox");
         listener.processOutbox(); // attempt 2 >= maxAttempts → DEAD_LETTER
 
         SubscriptionLifecycleOutbox afterMax = outboxRepository.findById(entry.getId()).orElseThrow();

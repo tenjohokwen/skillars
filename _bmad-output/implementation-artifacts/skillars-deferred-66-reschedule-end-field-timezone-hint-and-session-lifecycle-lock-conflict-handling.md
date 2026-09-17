@@ -1,6 +1,6 @@
 # Story Deferred-66: Reschedule End-Field Timezone Hint & Session-Lifecycle Lock-Conflict Handling
 
-Status: review
+Status: done
 
 ## Story
 

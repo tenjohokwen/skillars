@@ -1,9 +1,11 @@
 -- ============================================================================
--- seed-local-test-accounts.sql
+-- seed-accounts.sql
 --
 -- Promotes already-registered LOCAL accounts to a "paid" state without ever
--- calling Stripe. See local-manual-testing.md in this directory for the full
+-- calling Stripe. See manual-testing.md in this directory for the full
 -- walkthrough and for why each statement is safe.
+--
+-- EXECUTION TIME: ~1-2 seconds
 --
 -- PREREQUISITES — this script only *upgrades* accounts, it does not create them:
 --   1. Coach registered, email verified, and profile PUBLISHED via the
@@ -18,13 +20,26 @@
 --   dcl exec -T postgres psql -U postgres -d skillars \
 --     -v coach_email=coach@example.com \
 --     -v owner_email=parent@example.com \
---     < requirements/deployment/local/seed-local-test-accounts.sql
+--     < docs/deployment/local/seed-accounts.sql
 --
 -- Or edit the \set defaults below and pipe the file in with no -v flags.
 -- NEVER run this against UAT or production — it fabricates payment state.
 -- ============================================================================
 
 \set ON_ERROR_STOP on
+
+-- ============================================================================
+-- SAFETY CHECK: Refuse to run against non-local databases
+-- ============================================================================
+-- This check prevents accidental runs against UAT or production. Add this one
+-- time to /etc/hosts to avoid false positives:
+--   127.0.0.1 localhost.local
+DO $$
+BEGIN
+  IF current_database() NOT IN ('skillars', 'skillars_dev', 'skillars_local') THEN
+    RAISE EXCEPTION 'SAFETY CHECK FAILED: This script only runs against local databases (skillars, skillars_dev, skillars_local). Current database: %', current_database();
+  END IF;
+END $$;
 
 -- Defaults. A -v flag on the psql command line takes precedence over these.
 \if :{?coach_email}
@@ -120,9 +135,11 @@ ON CONFLICT (coach_id) DO UPDATE
 -- The chk_ledger_amount_sign CHECK only permits a positive amount for
 -- BOOKING_REFUND / BOOKING_DEDUCTION_REVERSAL / CASH_OUT_REVERSAL, hence the type.
 --
--- The table is append-only (V79 triggers reject UPDATE and DELETE), so there is
--- no ON CONFLICT form here and no way to correct a row. Re-running this file
--- ADDS another credit row rather than replacing the previous one.
+-- IDEMPOTENCY WARNING: The table is append-only (V79 triggers reject UPDATE
+-- and DELETE), so there is NO ON CONFLICT form here and NO way to correct a row.
+-- Re-running this file ADDS another credit row rather than replacing the previous
+-- one. If you mis-seed, you can only add more credit to offset the mistake, never
+-- delete or correct it. Be careful with email addresses.
 -- ---------------------------------------------------------------------------
 INSERT INTO payment.parent_credit_ledger (parent_id, amount, type, description)
 SELECT u.id, :credit_amount, 'BOOKING_REFUND', 'local manual-test seed'
@@ -160,6 +177,11 @@ COMMIT;
 
 -- ---------------------------------------------------------------------------
 -- Verification — read back what was seeded.
+-- SUCCESS looks like:
+--   - Coach payment readiness: onboarding_status = 'COMPLETE', charges_enabled = true
+--   - Parent credit: balance_eur > coach's per-session price (check marketplace.coach_pricing)
+--   - Player subscriptions: status = 'ACTIVE', tier matches coach_tier passed above
+-- If any row is empty or shows NULL/false, re-check the prerequisites above.
 -- ---------------------------------------------------------------------------
 \echo ''
 \echo '--- Coach payment readiness + tier ---'

@@ -1,6 +1,6 @@
 # skillars-deferred-96: Deployment Visibility — Smoke Test Error Handling & Channel Health
 
-**Status:** review | **Epic:** deferred | **Priority:** high
+**Status:** done | **Epic:** deferred | **Priority:** high
 
 ---
 

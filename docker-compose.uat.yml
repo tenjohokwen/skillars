@@ -11,7 +11,7 @@ services:
       - APP_PAYMENT_STRIPE_WEBHOOK_SECRET=${APP_PAYMENT_STRIPE_WEBHOOK_SECRET}
       - APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID=${APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID}
       # Same VideoProviderConfig gotcha documented in docker-compose.local.yml /
-      # local-deployment.md: app.video.bunny.library-id is eagerly validated as numeric
+      # local/deployment.md: app.video.bunny.library-id is eagerly validated as numeric
       # by a non-lazy bean, so a blank value fails the *entire* app context on boot,
       # not just video features. BUNNY_LIBRARY_ID isn't a secret (just a numeric account
       # ID), so it's the one variable here allowed a literal placeholder fallback.

@@ -1,6 +1,6 @@
 # Story Deferred-28: Booking Error Messaging, Subscription REST Coverage & Coach-Media Timestamp Test
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
