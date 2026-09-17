@@ -29,10 +29,13 @@ public interface FileStorageObjectRepository extends JpaRepository<FileStorageOb
            nativeQuery = true)
     List<FileStorageObject> findEligibleForPhysicalDeletion(@Param("cutoff") Instant cutoff, @Param("limit") int limit);
 
+    // skillars-deferred-119 AC1: conditional WHERE clause (mirrors softDeleteByKey above) so the
+    // caller can detect a losing race — see DeletionSchedulerService.processDeletions, which only
+    // enqueues an OutboxReplicationJob when this returns 1.
     @Modifying
     @Transactional
-    @Query("UPDATE FileStorageObject f SET f.physicalDeletedAt = :ts WHERE f.id = :id")
-    void markPhysicallyDeleted(@Param("id") Long id, @Param("ts") Instant ts);
+    @Query("UPDATE FileStorageObject f SET f.physicalDeletedAt = :ts WHERE f.id = :id AND f.physicalDeletedAt IS NULL")
+    int markPhysicallyDeleted(@Param("id") Long id, @Param("ts") Instant ts);
 
     List<FileStorageObject> findAllByOwnerIdAndDeletedAtIsNull(String ownerId);
 }
