@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.development.service;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.development.repo.RadarCompositeDlqEntry;
 import com.softropic.skillars.platform.development.repo.RadarCompositeDlqRepository;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -10,6 +11,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.lang.reflect.Method;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -109,5 +112,20 @@ class RadarCompositeDlqProcessorTest {
         processor.process();
 
         verify(configService).getBoundedLong("platform.development.radar_composite_dlq.max_attempts", 5L, 1L, 100L);
+    }
+
+    @Test
+    void process_carriesSchedulerLock() throws NoSuchMethodException {
+        // skillars-deferred-118 AC3: findClaimedBatch() is not scoped to the calling invocation's
+        // own claim and RadarCompositeDlqEntry carries no @Version, so a concurrent invocation could
+        // overwrite another's status/attempts/lastError/nextRetryAt with no optimistic-lock
+        // protection — @SchedulerLock closes this by preventing the concurrent invocation entirely.
+        Method method = RadarCompositeDlqProcessor.class.getMethod("process");
+        SchedulerLock lock = method.getAnnotation(SchedulerLock.class);
+
+        assertThat(lock).as("process() must carry @SchedulerLock").isNotNull();
+        assertThat(lock.name()).isNotBlank();
+        assertThat(Duration.parse(lock.lockAtMostFor())).isPositive();
+        assertThat(Duration.parse(lock.lockAtLeastFor())).isPositive();
     }
 }

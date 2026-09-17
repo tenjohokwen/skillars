@@ -3,7 +3,7 @@
 **Story Key:** `skillars-deferred-118-booking-expiry-transaction-race-user-cleanup-toctou-and-scheduler-lock-parity`
 **Epic:** Deferred Work
 **Priority:** High (AC1 is an active correctness bug with misleading logs and needless churn on every run that hits it; AC2 is a real cross-account data-loss race)
-**Status:** ready-for-dev
+**Status:** done
 **Created:** 2026-09-17
 
 ---
@@ -148,7 +148,7 @@ row (`userRepository.findOneByLogin(login)`) — but never re-checks `user.isAct
 `userRepository.delete(user)`.
 
 A real, everyday concurrent writer exists: every registration flow's email-verification step —
-`ParentRegistrationService.java:149`, `PlayerRegistrationService.java:149`,
+`ParentRegistrationService.java:149`, `PlayerRegistrationService.java:160`,
 `CoachRegistrationService.java:145` (`user.setActivated(true)`), and
 `UserRegistrationService.java:85` (`user.activate()`) — can run at any time, including in the narrow
 window between this scheduler's batch select and a specific user's turn in the per-user delete loop.
@@ -185,7 +185,7 @@ established skip-silently-on-no-longer-eligible convention, e.g.
 ### AC3 — `@SchedulerLock` parity for the three `@Scheduled` classes that lack it
 
 **Finding:** `QuickCompleteTimeoutService.processExpiredQuickCompletes`
-(`QuickCompleteTimeoutService.java:35-36`), `MessageRetentionScheduler.runRetention`
+(`QuickCompleteTimeoutService.java:36-37`), `MessageRetentionScheduler.runRetention`
 (`MessageRetentionScheduler.java:28`), and `RadarCompositeDlqProcessor.process`
 (`RadarCompositeDlqProcessor.java:34`) are the only three `@Scheduled` classes in the codebase with no
 `@SchedulerLock`, while every sibling scheduler with the same fixed-delay/cron shape does carry one
@@ -233,44 +233,44 @@ already uses unless a scheduler's own cadence makes that wrong).
 
 ## Tasks/Subtasks
 
-- [ ] **Task 1 — AC1: `BookingExpiryScheduler` per-booking transaction scope**
-  - [ ] Add a `TransactionTemplate` dependency to `BookingExpiryScheduler`, remove the method-level
+- [x] **Task 1 — AC1: `BookingExpiryScheduler` per-booking transaction scope**
+  - [x] Add a `TransactionTemplate` dependency to `BookingExpiryScheduler`, remove the method-level
         `@Transactional`, wrap the batch `SELECT` and each per-booking `transition()` +
         `eventPublisher.publishEvent(...)` in their own `TransactionTemplate` scopes, mirroring
         `BookingReminderScheduler` exactly
-  - [ ] Update `SchedulerLockTransactionOrderingIT`: replace
+  - [x] Update `SchedulerLockTransactionOrderingIT`: replace
         `bookingExpiryScheduler_shedLockAdvisorIsOutsideTheTransactionAdvisor` with an
         `assertNotTransactional` call; update the class-level javadoc's claim that
         `BookingExpiryScheduler` keeps the old shape
-  - [ ] Add the new regression test proving a mid-batch `BookingStateTransitionException` no longer
+  - [x] Add the new regression test proving a mid-batch `BookingStateTransitionException` no longer
         rolls back an earlier booking's successful expiry
-  - [ ] Update `BookingExpirySchedulerTest`'s constructor call for the new dependency; full suite
+  - [x] Update `BookingExpirySchedulerTest`'s constructor call for the new dependency; full suite
         re-run green
 
-- [ ] **Task 2 — AC2: `UserAdminService` re-check before delete**
-  - [ ] Add an `!user.isActivated()` guard inside `deleteUserInTransaction`, skip with a DEBUG log if
+- [x] **Task 2 — AC2: `UserAdminService` re-check before delete**
+  - [x] Add an `!user.isActivated()` guard inside `deleteUserInTransaction`, skip with a DEBUG log if
         the user has since activated
-  - [ ] Create `UserAdminServiceTest` covering: expired-and-unactivated deleted; race-activated-between-
+  - [x] Create `UserAdminServiceTest` covering: expired-and-unactivated deleted; race-activated-between-
         select-and-delete skipped; batch loop continues past a per-user exception
 
-- [ ] **Task 3 — AC3: `@SchedulerLock` parity**
-  - [ ] Add `@SchedulerLock` to `QuickCompleteTimeoutService.processExpiredQuickCompletes`,
+- [x] **Task 3 — AC3: `@SchedulerLock` parity**
+  - [x] Add `@SchedulerLock` to `QuickCompleteTimeoutService.processExpiredQuickCompletes`,
         `MessageRetentionScheduler.runRetention`, `RadarCompositeDlqProcessor.process`, each sized from
         its own real batch-size/per-item-timeout arithmetic (show the arithmetic in the Dev Agent
         Record, per `skillars-deferred-116`'s precedent)
-  - [ ] Add/extend tests asserting each new `@SchedulerLock`'s presence and configured values
-  - [ ] Re-run `RadarCompositeDlqProcessorTest`, `QuickCompleteTimeoutServiceTest` suites green
+  - [x] Add/extend tests asserting each new `@SchedulerLock`'s presence and configured values
+  - [x] Re-run `RadarCompositeDlqProcessorTest`, `QuickCompleteTimeoutServiceTest` suites green
 
-- [ ] **Task 4 — AC4: ledger updates**
-  - [ ] This story's findings are new (not pre-existing `deferred-work.md` bullets) — no ledger
+- [x] **Task 4 — AC4: ledger updates**
+  - [x] This story's findings are new (not pre-existing `deferred-work.md` bullets) — no ledger
         deletion needed; confirm no other bullet in the file names `BookingExpiryScheduler`,
         `UserAdminService`, `QuickCompleteTimeoutService`, `MessageRetentionScheduler`, or
         `RadarCompositeDlqProcessor` before closing this story (grep sweep)
 
-- [ ] **Task 5 — Final validation**
-  - [ ] Run every touched module's targeted test suites together; confirm zero regressions
-  - [ ] Update Verification Checklist, File List, Change Log, Dev Agent Record
-  - [ ] Mark story Status → review
+- [x] **Task 5 — Final validation**
+  - [x] Run every touched module's targeted test suites together; confirm zero regressions
+  - [x] Update Verification Checklist, File List, Change Log, Dev Agent Record
+  - [x] Mark story Status → review
 
 ---
 
@@ -379,19 +379,19 @@ already uses unless a scheduler's own cadence makes that wrong).
 
 ## Verification Checklist
 
-- [ ] AC1: `expireStaleRequests` no longer carries a method-level `@Transactional`; each booking's
+- [x] AC1: `expireStaleRequests` no longer carries a method-level `@Transactional`; each booking's
       `transition()` + event publish runs in its own `TransactionTemplate` scope; a mid-batch
       `BookingStateTransitionException` on one booking no longer rolls back an earlier booking's
       already-committed expiry; `SchedulerLockTransactionOrderingIT` updated to assert absence of
       `@Transactional` (matching its `BookingReminderScheduler`/`BandwidthResetService` siblings);
       `@SchedulerLock` values unchanged
-- [ ] AC2: `deleteUserInTransaction` re-checks `!user.isActivated()` on the fresh re-fetch before
+- [x] AC2: `deleteUserInTransaction` re-checks `!user.isActivated()` on the fresh re-fetch before
       deleting; a user who activates between the batch select and their own delete call is skipped,
       not deleted; `deleteUserInformation` (admin manual delete) unchanged
-- [ ] AC3: `QuickCompleteTimeoutService`, `MessageRetentionScheduler`, `RadarCompositeDlqProcessor` all
+- [x] AC3: `QuickCompleteTimeoutService`, `MessageRetentionScheduler`, `RadarCompositeDlqProcessor` all
       carry `@SchedulerLock` with values derived from each scheduler's own worst-case arithmetic (shown
       in the Dev Agent Record), not copy-pasted constants
-- [ ] No regressions in any touched module's existing test suites
+- [x] No regressions in any touched module's existing test suites
 
 ---
 
@@ -435,3 +435,166 @@ already uses unless a scheduler's own cadence makes that wrong).
   are direct fixes with an established sibling pattern already in this codebase. Branch:
   `story/deferred-118-booking-user-scheduler-fixes` (to be created), off `master` post-`skillars-deferred-117`-merge
   (PR #197) and post-`deferred-work.md` prune (PR #198).
+- 2026-09-17: Dev complete via `/bmad-dev-story`. All three ACs implemented and independently
+  verified. AC1: `BookingExpiryScheduler.expireStaleRequests` restructured to a per-booking
+  `TransactionTemplate` scope mirroring `BookingReminderScheduler` exactly, method-level
+  `@Transactional` removed; new `BookingExpirySchedulerTest` regression test proves a mid-batch
+  `BookingStateTransitionException` on one booking no longer discards an earlier booking's
+  already-committed expiry; `SchedulerLockTransactionOrderingIT`'s
+  `bookingExpiryScheduler_shedLockAdvisorIsOutsideTheTransactionAdvisor` replaced with
+  `bookingExpiryScheduler_isNotTransactional_soOneRacedBookingCannotRollBackTheBatch`
+  (`assertNotTransactional`, mirroring the `BookingReminderScheduler`/`BandwidthResetService`
+  siblings) — since no scheduler in the codebase still stacks `@SchedulerLock` +
+  method-level `@Transactional` after this fix, the now-fully-unused advisor-ordering assertion
+  helper (`assertShedLockOutermost` and its four exclusive-use helper methods) was removed rather
+  than left as dead code, and the class javadoc rewritten to state this plainly. AC2: added an
+  `!user.isActivated()` guard inside `UserAdminService.deleteUserInTransaction`'s existing re-fetch,
+  skipping with a DEBUG log (matching `SessionPackForfeitureScheduler`'s established
+  skip-silently-on-no-longer-eligible convention) if the user has since activated;
+  `deleteUserInformation` (admin manual delete) left untouched per the story's own scoping. New
+  `UserAdminServiceTest` (no prior coverage existed) covers the happy-path delete, the race-skip,
+  and per-user-exception batch continuation. AC3: added `@SchedulerLock` to all three schedulers,
+  each sized from its own worst-case arithmetic (shown in Dev Agent Record below) rather than a
+  copy-pasted constant — `RadarCompositeDlqProcessor`'s and `MessageRetentionScheduler`'s
+  `lockAtLeastFor` were deliberately NOT the 5-minute-siblings' `PT2M` (their own cadences don't
+  call for it); reflection-based annotation-presence tests added to
+  `QuickCompleteTimeoutServiceTest`/`RadarCompositeDlqProcessorTest` and a new minimal
+  `MessageRetentionSchedulerTest`, mirroring `SubscriptionSchedulerLockTest`'s established pattern.
+  AC4: grep sweep confirmed `deferred-work.md`'s three incidental mentions of the touched classes
+  are all inside already-shipped stories' historical "Implementation outcome" narrative — no open
+  bullet named any of the five classes, so no ledger edit was needed. 18 new/updated unit tests +
+  3 `SchedulerLockTransactionOrderingIT` integration tests green; full `booking.service` package
+  (346 tests) plus every other touched module re-run together, zero regressions. No local
+  `mvn verify` per project convention (GitHub CI is the sole full-verification gate). Status →
+  review.
+
+---
+
+## Dev Agent Record
+
+### Agent Model Used
+
+Claude Sonnet 5 (`claude-sonnet-5`), via `/bmad-dev-story`.
+
+### Debug Log References
+
+One test-authoring correction caught by the unit test run itself, fixed before any test was accepted
+as passing: `BookingExpirySchedulerTest`'s new AC1 regression test originally stubbed only the
+second booking's `bookingService.transition(...)` call (via `doThrow`, matched by `eq(second.getId())`
++ `eq(BookingEvent.DECLINE)` + `any()`). Mockito's strict-stubs mode (`MockitoExtension` default)
+raised `PotentialStubbingProblem: Strict stubbing argument mismatch` on the first booking's
+unstubbed invocation of the same method, because a `doThrow` stub already exists for that method
+with a different, "close enough" argument combination — strict stubbing treats an unstubbed call
+that partially matches an existing stub as a likely mistake rather than silently no-op-ing it.
+Fixed by adding an explicit `doNothing().when(bookingService).transition(eq(first.getId()), ...)`
+stub alongside the `doThrow` one, so both invocations are unambiguously stubbed.
+
+### Completion Notes List
+
+- **AC1**: `BookingExpiryScheduler` gained a `TransactionTemplate` constructor dependency; the batch
+  `SELECT` now runs in its own short `transactionTemplate.execute(...)` scope, and each booking's
+  `transition()` + `coachProfileRepository`/`resolveEmail` reads + `eventPublisher.publishEvent(...)`
+  run inside their own `transactionTemplate.executeWithoutResult(...)` scope — the exact shape
+  `BookingReminderScheduler.processReminderWindows` already uses. The `log.info("Auto-expired
+  booking...")` line moved to after the per-booking transaction block closes (matching
+  `BookingReminderScheduler`'s "log after commit, not before" convention: a line claiming a booking
+  was expired must not precede the commit that actually expired it). `@SchedulerLock`'s
+  `lockAtMostFor="PT15M"`/`lockAtLeastFor="PT2M"` left untouched, as scoped.
+- **AC1 test**: `BookingExpirySchedulerTest` updated to the `@Mock PlatformTransactionManager` +
+  `new TransactionTemplate(transactionManager)` pattern (real template over a stubbed manager, not
+  a mocked template), mirroring `BookingReminderSchedulerTest` exactly. New test
+  `expireStaleRequests_secondBookingRacesAndThrows_firstBookingsExpiryStillCommits` seeds two stale
+  bookings, makes the second throw `BookingStateTransitionException` on `transition()`, and asserts
+  (a) `expireStaleRequests()` throws nothing, (b) both `transition()` calls were attempted, and
+  (c) exactly one `BookingExpiredEvent` was published, for the first booking — proving the first
+  booking's expiry is no longer discarded by the second booking's race.
+- **AC1 IT**: `SchedulerLockTransactionOrderingIT`'s `bookingExpiryScheduler_...` test replaced with
+  `bookingExpiryScheduler_isNotTransactional_soOneRacedBookingCannotRollBackTheBatch`, calling the
+  same `assertNotTransactional` helper its two siblings already use. Since no scheduler bean in this
+  codebase still stacks `@SchedulerLock` + method-level `@Transactional` after this change, the
+  advisor-ordering assertion machinery (`assertShedLockOutermost`, `isShedLock`, `pointcutMatches`,
+  `indexOfFirst`, `adviceClassNames` — five methods, ~90 lines) had no remaining caller; removed
+  rather than kept as dead code with a "for the next scheduler" comment, and the now-unused
+  `Advisor`/`PointcutAdvisor`/`Advised`/`Ordered`/`TransactionInterceptor`/`List` imports removed
+  with it. Class javadoc rewritten to describe the current state (no scheduler bean exercises the
+  advisor-ordering shape) rather than the historical one.
+- **AC2**: The guard sits inside `deleteUserInTransaction`'s existing `findOneByLogin` re-fetch
+  (not in `findExpiredUsers`, per the story's own Dev Notes — the race window is between the batch
+  select and each individual delete call, not before the batch read). `deleteUserInformation` (the
+  admin-manual-delete path) is untouched, as scoped. New `UserAdminServiceTest`: (a) an
+  expired-and-still-unactivated user is deleted; (b) a user whose batch-read copy shows
+  `activated=false` but whose `deleteUserInTransaction` re-fetch returns a distinct, fresher
+  `activated=true` instance (modeling two separate reads across two separate transactions, which is
+  what actually happens under `REQUIRES_NEW`) is skipped, not deleted; (c) a `delete()` failure on
+  one user in a two-user batch does not stop the second user's deletion. `SecurityProperties` is a
+  plain `@Data` POJO (not a Spring bean requiring mocking) — instantiated directly with its real
+  defaults (`userCleanupBatchSize=100`, `accountActivationExpirationDays=3`).
+- **AC3 sizing arithmetic** (shown in each scheduler's own Javadoc, per `skillars-deferred-116`'s
+  precedent):
+  - `QuickCompleteTimeoutService.processExpiredQuickCompletes` (`lockAtMostFor="PT15M"`,
+    `lockAtLeastFor="PT2M"`): same shape as `BookingExpiryScheduler`/`BookingReminderScheduler`
+    (5-minute `fixedDelay`, no config-bound batch ceiling, per-row cost = transition + reload +
+    event publish, no external HTTP). Assumed worst-case volume 1500 rows (order of magnitude above
+    plausible near-term scale — bounded below total booking volume) × 500ms pessimistic/row =
+    12.5 minutes; `PT15M` matches the two siblings' identical-cadence convention.
+  - `MessageRetentionScheduler.runRetention` (`lockAtMostFor="PT30M"`, `lockAtLeastFor="PT1M"`):
+    daily cron, two single bulk `DELETE ... NOT IN (subquery)` statements — no per-row loop, so
+    sizing is bounded by table-scan/delete duration under contention, not row-count × per-item
+    latency. `PT30M` gives generous margin for a heavy bulk delete under real load.
+    `lockAtLeastFor` deliberately NOT the 5-minute-siblings' `PT2M` (per the story's own Dev Notes):
+    a once-daily cron has no tight fixed-delay window to protect, so `PT1M` is a re-derived
+    defensive floor against a pathological fast-fail-and-immediately-refire, not a blind copy.
+  - `RadarCompositeDlqProcessor.process` (`lockAtMostFor="PT10M"`, `lockAtLeastFor="PT30S"`):
+    fixed `BATCH_SIZE=50`; per-row work is a pessimistic-lock-retried read-then-upsert across up to
+    three repositories, no external HTTP. At a pessimistic 5s/row: 50 × 5s ≈ 4.2 minutes; `PT10M`
+    gives real margin. `lockAtLeastFor` deliberately NOT `PT2M`: this scheduler's own cadence
+    (`poll_delay_ms`, default 60000ms = 1 minute) is tighter than the 5-minute siblings', and a
+    2-minute floor would force every-other-tick skipping — roughly halving its effective DLQ retry
+    cadence, a real behavior change not called for by this AC. `PT30S` sits below the default 60s
+    cadence so it never blocks the next scheduled tick under normal operation.
+- **AC3 tests**: `QuickCompleteTimeoutServiceTest` and `RadarCompositeDlqProcessorTest` each gained
+  one reflection-based `..._carriesSchedulerLock` test (name non-blank, both durations parse and are
+  positive) — no constructor changes needed since `@SchedulerLock` is annotation-only. New minimal
+  `MessageRetentionSchedulerTest` (no prior test file existed) added the same reflection check,
+  mirroring `SubscriptionSchedulerLockTest`'s established pattern for this exact assertion shape.
+- **AC4**: grep sweep for `BookingExpiryScheduler`, `UserAdminService`, `QuickCompleteTimeoutService`,
+  `MessageRetentionScheduler`, `RadarCompositeDlqProcessor` across `deferred-work.md` found three
+  incidental mentions, all inside already-shipped stories' "Implementation outcome" historical
+  narrative sections (`skillars-deferred-15`/`-16`, both 2026-08-05) — none is an open bullet
+  describing current work. No ledger edit made.
+- **Final validation**: `BookingExpirySchedulerTest` (3), `BookingReminderSchedulerTest` (2),
+  `UserAdminServiceTest` (3, new), `QuickCompleteTimeoutServiceTest` (4),
+  `RadarCompositeDlqProcessorTest` (5), `MessageRetentionSchedulerTest` (1, new) — 18/18 green.
+  `SchedulerLockTransactionOrderingIT` (3) green against a real Testcontainers Postgres. Entire
+  `platform.booking.service` package (346 tests across 16 classes) re-run together with the other
+  touched-module suites — zero regressions anywhere. No local `mvn verify` per project convention
+  (GitHub CI is the sole full-verification gate).
+
+### File List
+
+- `src/main/java/com/softropic/skillars/platform/booking/service/BookingExpiryScheduler.java` — AC1:
+  added `TransactionTemplate` dependency; removed method-level `@Transactional`; restructured into
+  short-transaction batch load + per-booking `TransactionTemplate` scope; added class javadoc
+- `src/test/java/com/softropic/skillars/platform/booking/service/BookingExpirySchedulerTest.java` —
+  AC1: switched to the `PlatformTransactionManager`/`TransactionTemplate` mock pattern; added the
+  mid-batch-exception regression test
+- `src/test/java/com/softropic/skillars/platform/scheduler/SchedulerLockTransactionOrderingIT.java`
+  — AC1: replaced the `BookingExpiryScheduler` advisor-ordering test with an `assertNotTransactional`
+  call; removed the now-fully-unused advisor-ordering assertion helpers; rewrote class javadoc
+- `src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java` — AC2:
+  added `!user.isActivated()` guard inside `deleteUserInTransaction`
+- `src/test/java/com/softropic/skillars/platform/security/service/UserAdminServiceTest.java` (new)
+  — AC2: covers happy-path delete, race-skip, and per-user-exception batch continuation
+- `src/main/java/com/softropic/skillars/platform/booking/service/QuickCompleteTimeoutService.java`
+  — AC3: added `@SchedulerLock` with sizing-basis Javadoc
+- `src/test/java/com/softropic/skillars/platform/booking/service/QuickCompleteTimeoutServiceTest.java`
+  — AC3: added `@SchedulerLock` presence test
+- `src/main/java/com/softropic/skillars/platform/messaging/service/MessageRetentionScheduler.java`
+  — AC3: added `@SchedulerLock` with sizing-basis Javadoc
+- `src/test/java/com/softropic/skillars/platform/messaging/service/MessageRetentionSchedulerTest.java`
+  (new) — AC3: `@SchedulerLock` presence test
+- `src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeDlqProcessor.java`
+  — AC3: added `@SchedulerLock` with sizing-basis Javadoc and class-comment on the correctness gap it
+  closes
+- `src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeDlqProcessorTest.java`
+  — AC3: added `@SchedulerLock` presence test

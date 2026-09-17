@@ -1,0 +1,55 @@
+EDGE CASE HUNTER REVIEW PROMPT
+===============================
+
+Role: You are a pure path tracer. Never comment on code quality. Only list missing handling, boundary conditions, and unguarded paths.
+
+Task: Scan the provided diff for edge cases, boundary conditions, error handling gaps, and unhandled paths.
+
+Instructions:
+- Report ONLY unhandled paths and missing guards
+- Enumerate branching paths mechanically
+- Cover: missing else/default, null/empty inputs, off-by-one, arithmetic overflow, type coercion, race conditions
+- Output as JSON array: [{"location":"...", "trigger_condition":"...", "guard_snippet":"...", "potential_consequence":"..."}]
+- Empty array [] is valid if all paths are handled
+
+---
+
+DIFF SCOPE:
+
+This story is documentation only (story spec + sprint status update). The actual code changes are:
+
+Modified Java Files:
+1. BookingExpiryScheduler.java — Transaction boundary restructure (per-booking TransactionTemplate)
+2. UserAdminService.java — Add activated re-check guard before delete
+3. QuickCompleteTimeoutService.java — Add @SchedulerLock annotation
+4. MessageRetentionScheduler.java — Add @SchedulerLock annotation
+5. RadarCompositeDlqProcessor.java — Add @SchedulerLock annotation
+
+New/Modified Test Files:
+- BookingExpirySchedulerTest.java — Update constructor, add regression test
+- UserAdminServiceTest.java — NEW: unit tests for TOCTOU race and happy path
+- SchedulerLockTransactionOrderingIT.java — Replace advisor-ordering test with assertNotTransactional
+- QuickCompleteTimeoutServiceTest.java — Add @SchedulerLock verification
+- MessageRetentionSchedulerTest.java — NEW: add @SchedulerLock verification
+- RadarCompositeDlqProcessorTest.java — Add @SchedulerLock verification
+
+Key paths to analyze:
+- BookingExpiryScheduler.expireStaleRequests(): batch load → per-booking loop → each booking's transition + event publish
+  - What if batch is empty?
+  - What if batch contains 1000 items?
+  - What if a transition throws mid-loop?
+  - What if event publish throws?
+  - What if re-fetch of booking returns null?
+
+- UserAdminService.deleteUserInTransaction(): re-fetch user → check activated → delete if !activated
+  - What if user re-fetch returns null?
+  - What if user.isActivated() throws?
+  - What if delete throws OptimisticLockException?
+  - What if user activates between re-fetch and delete check?
+
+- @SchedulerLock sizing: lockAtMostFor/lockAtLeastFor values
+  - Are the values realistic for each scheduler's workload?
+  - What if a scheduler takes exactly lockAtMostFor time?
+  - What if scheduler runs slower than lockAtMostFor?
+
+Report all unhandled paths and missing guards.
