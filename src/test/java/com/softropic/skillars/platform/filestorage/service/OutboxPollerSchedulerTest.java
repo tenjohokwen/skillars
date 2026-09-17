@@ -8,6 +8,7 @@ import com.softropic.skillars.infrastructure.blobstore.service.StorageService;
 import com.softropic.skillars.platform.filestorage.repo.FileStorageObject;
 import com.softropic.skillars.platform.filestorage.repo.OutboxReplicationJob;
 import com.softropic.skillars.platform.filestorage.repo.OutboxReplicationJobRepository;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,9 +19,12 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.ByteArrayInputStream;
+import java.lang.reflect.Method;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -221,5 +225,18 @@ class OutboxPollerSchedulerTest {
         verify(outboxReplicationJobRepository, never()).markAsCompleted(any());
         verify(outboxReplicationJobRepository, never()).markAsFailed(any(), anyInt(), any(), any());
         verify(outboxReplicationJobRepository, never()).markAsPendingForRetry(any(), anyInt(), any(), any());
+    }
+
+    @Test
+    void pollAndProcess_carriesSchedulerLock() throws NoSuchMethodException {
+        // skillars-deferred-119 AC2: this scheduler's claim was already correctly scoped, but it was
+        // the last @Scheduled method in the codebase without @SchedulerLock — added for consistency.
+        Method method = OutboxPollerScheduler.class.getMethod("pollAndProcess");
+        SchedulerLock lock = method.getAnnotation(SchedulerLock.class);
+
+        assertThat(lock).as("pollAndProcess() must carry @SchedulerLock").isNotNull();
+        assertThat(lock.name()).isNotBlank();
+        assertThat(Duration.parse(lock.lockAtMostFor())).isPositive();
+        assertThat(Duration.parse(lock.lockAtLeastFor())).isPositive();
     }
 }

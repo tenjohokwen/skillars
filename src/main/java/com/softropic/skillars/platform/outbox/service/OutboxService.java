@@ -117,6 +117,9 @@ public class OutboxService {
      * tests call {@link #drain()} directly.
      */
     @Scheduled(fixedDelayString = "${app.outbox.sweep-ms:300000}")
+    // lockAtMostFor sized well above MAX_CHUNKS_PER_DRAIN (200) x OutboxChunkProcessor.CHUNK_SIZE (25)
+    // = 5000 row-attempts worst case; correctness does not depend on this lock (see claimNextDue's
+    // PESSIMISTIC_WRITE + SKIP LOCKED below), so PT10M's margin needs no tighter derivation than this.
     @SchedulerLock(name = "OutboxService_sweep", lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
     public void sweep() {
         drain();
