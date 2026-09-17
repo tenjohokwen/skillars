@@ -23,7 +23,7 @@ differ from a straight production deploy, and only in the ways this doc
 calls out.
 
 For a trimmed-down, no-domain/no-TLS setup on your own machine instead, see
-[`local-deployment.md`](local-deployment.md).
+[`local/deployment.md`](local/deployment.md).
 
 ---
 
@@ -53,7 +53,7 @@ the Stripe test-key safety check) never apply.
 through every secret-bearing `app.*`/`skillars.*` config value UAT needs,
 each with a comment explaining the specific startup failure it works around
 (mirroring gotchas already found and documented for `dev` in
-`docker-compose.local.yml` / `local-deployment.md`, plus two more this doc
+`docker-compose.local.yml` / `local/deployment.md`, plus two more this doc
 found while writing it — see Step 4). It deliberately does **not** trim
 anything from the base `docker-compose.yml` (unlike
 `docker-compose.local.yml`, which strips Traefik/host paths for a laptop) —
@@ -163,7 +163,7 @@ ssh -L 9501:localhost:9501 root@<UAT_NODE_IP>
 
 Following the same pattern as `.env` (production) and `.env.local` (dev) —
 a separate file per environment, so copying one never silently overwrites
-another (see `local-deployment.md` Step 2 for why this matters). **Every
+another (see `local/deployment.md` Step 2 for why this matters). **Every
 password, secret, and PIN this environment needs lives in this one file** —
 `docker-compose.uat.yml` passes each through explicitly, and none of them
 have insecure hardcoded fallbacks baked into the compose file itself (the
@@ -321,7 +321,7 @@ profile photo) and confirm:
 
 And confirm Grafana/observability is live: `https://<MONITORING_DOMAIN>`
 loads and the Prometheus/Tempo datasources return data for the traffic you
-just generated (same as `first-time-setup.md` Step 7 / `local-deployment.md`
+just generated (same as `first-time-setup.md` Step 7 / `local/deployment.md`
 Step 6.1).
 
 ---
@@ -423,7 +423,7 @@ yet. Say so in the UAT brief.
   the explicit SHA tag** — that is what `docs/deployment/rollback.md` pins to, and `latest` by
   definition does not point at an older build.
 - Seeding bootstrap data (the JWT signing key row, optional sample users)
-  works the same as `local-deployment.md` Step 5 — run the same SQL fixture
+  works the same as `local/deployment.md` Step 5 — run the same SQL fixture
   against the UAT Postgres container.
 - `docker-compose.yml` itself still doesn't set `SPRING_PROFILES_ACTIVE` for
   a plain production deploy (`docker compose up -d` with no `-f` overrides) —
@@ -440,7 +440,7 @@ yet. Say so in the UAT brief.
   `APP_PAYMENT_STRIPE_*`/`APP_STORAGE_*`. Worth reconciling separately from
   this doc.
 - This guide was assembled from the verified `first-time-setup.md` /
-  `local-deployment.md` content plus the actual current `PaymentConfig`,
+  `local/deployment.md` content plus the actual current `PaymentConfig`,
   `application-uat.yaml`, and compose files, and `docker compose config` was
   used to confirm the merged `docker-compose.yml` + `docker-compose.uat.yml`
   parses cleanly end-to-end — but unlike those two guides, it has not yet

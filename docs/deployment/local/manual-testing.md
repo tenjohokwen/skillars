@@ -5,7 +5,7 @@ workflow with a fully paid coach and a fully paid parent/player, while making
 zero calls to Stripe.
 
 This is the *manual testing* companion to
-[`docs/deployment/local-deployment.md`](../../../docs/deployment/local-deployment.md),
+[`deployment.md`](./deployment.md),
 which covers bringing the Docker stack up. Read that one for the infrastructure
 detail (volumes, MinIO, Grafana, log tailing, teardown); this one covers
 choosing a run mode, getting accounts through registration without a working
@@ -29,6 +29,15 @@ comment in `pom.xml`). **The packaged jar therefore serves the UI itself** — t
 Docker image is the whole product, not just an API.
 
 That gives two clean modes. Pick by whether you are testing or changing things.
+
+| Aspect | Mode A (all-Docker) | Mode B (dev machine + infra) |
+|--------|-----|-----|
+| When to use | Pure manual testing | Iterating on code |
+| Rebuild on change | Full Maven + npm + quasar build (slow) | Partial backend/frontend only (fast) |
+| Hot reload | No | Yes (frontend HMR, backend restarts in seconds) |
+| Debugger attach | Via `docker compose exec` | Direct IDE attachment |
+| UI + API ports | 9990 (both together) | 9000 (UI, with proxy to 9990 API) |
+| Closest to production | Yes | No (but faster iteration) |
 
 ### Mode A — all-Docker (recommended for pure manual testing)
 
@@ -71,9 +80,43 @@ for anything you intend to deploy — the resulting jar ships with no UI at all.
 
 ---
 
+## Environment variables reference
+
+These are all the variables you may need to set depending on your mode. Defaults are provided in `docker-compose.local.yml` and `application-dev.yaml` where applicable.
+
+| Variable | Used in | Required? | Mode A | Mode B | Purpose |
+|----------|---------|-----------|--------|--------|---------|
+| `APP_PAYMENT_STRIPE_API_KEY` | Both | Yes | Already in compose | Export before `mvn` | Placeholder to satisfy PaymentConfig validation |
+| `GMX_PASSWORD` | Both | No (with defaults) | Optional in `.env.local` | Export if real mail needed | GMX SMTP credentials for registration email |
+| `GMAIL_PASSWORD` | Both | No (with defaults) | Optional in `.env.local` | Export if real mail needed | Gmail SMTP credentials for registration email |
+| `APP_VIDEO_BUNNY_LIBRARY_ID` | Both | Yes | Already in compose (123456) | Already in dev profile | Bunny CDN library ID |
+| `MANAGEMENT_HEALTH_MAIL_ENABLED` | Both | Yes | Already in compose | Already in dev profile | Disable Mail health check |
+| `APP_STORAGE_ENDPOINT_URL` | Mode A | Yes | Already in compose | N/A | MinIO endpoint for file uploads |
+| `APP_STORAGE_S3_ACCESS_KEY` | Both | Yes | Already in compose | Already in dev profile | MinIO access key |
+| `APP_STORAGE_S3_SECRET_KEY` | Both | Yes | Already in compose | Already in dev profile | MinIO secret key |
+| `GEMINI_API_KEY` | Both | No | Already in compose (dev-key) | Already in dev profile | For AI features |
+| `127.0.0.1 minio` | Both | Yes | Add to `/etc/hosts` | Add to `/etc/hosts` | Required for browser to reach MinIO presigned URLs |
+
+**Mode A quick setup:**
+```bash
+echo "127.0.0.1 minio" | sudo tee -a /etc/hosts
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d app postgres redis minio minio-init
+```
+
+**Mode B quick setup:**
+```bash
+echo "127.0.0.1 minio" | sudo tee -a /etc/hosts
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres redis minio minio-init
+export APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder
+mvn spring-boot:run -Dspring-boot.run.profiles=dev -DskipFrontend
+cd src/frontend && npx quasar dev
+```
+
+---
+
 ## Startup blockers not covered by the deployment guide
 
-`docs/deployment/local-deployment.md` was last updated 2026-08-11. Several
+[`deployment.md`](./deployment.md) was last updated 2026-09-14. Several
 things have changed since. Running it surfaced three separate hard crash loops,
 which surfaced one at a time in the order below. Two of them were real bugs
 affecting production as much as local, and have been fixed in the code; only the
@@ -323,14 +366,14 @@ curl -s -X POST http://localhost:9990/api/auth/login \
 
 ## Making them paid, without Stripe
 
-Run [`seed-local-test-accounts.sql`](seed-local-test-accounts.sql) once the
+Run [`seed-accounts.sql`](./seed-accounts.sql) once the
 accounts above exist:
 
 ```bash
 dcl exec -T postgres psql -U postgres -d skillars \
   -v coach_email=coach@example.com \
   -v owner_email=parent@example.com \
-  < requirements/deployment/local/seed-local-test-accounts.sql
+  < docs/deployment/local/seed-accounts.sql
 ```
 
 It prints back what it seeded. Four pieces of state, and it is worth knowing why
@@ -450,6 +493,61 @@ So if you later want the card flows, set a real `sk_test_...` key plus the
 matching `APP_PAYMENT_STRIPE_PUBLISHABLE_KEY` and run the CLI alongside the
 stack. The seeding approach in this document exists to keep manual testing fast
 and offline, not because Stripe is unreachable.
+
+---
+
+## Setup verification checklist
+
+Run through this to confirm your local environment is ready:
+
+- [ ] **Infrastructure up:**
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.local.yml ps
+  # Should show postgres, redis, minio, and (Mode A) app all with status "running"
+  ```
+
+- [ ] **App health:**
+  ```bash
+  curl http://localhost:8367/manage/health
+  # Should return 200 with {"status":"UP",...}
+  # (Mode A) or after mvn spring-boot:run (Mode B)
+  ```
+
+- [ ] **Frontend reachable:**
+  - Mode A: http://localhost:9990 (loads UI + API)
+  - Mode B: http://localhost:9000 (Quasar dev server)
+
+- [ ] **Can register as coach:**
+  - Navigate to registration page
+  - Email must use valid TLD (e.g., `coach@example.com`, not `coach@local`)
+  - Verify email link (fetch token from DB or use real SMTP credentials)
+  - Login succeeds
+
+- [ ] **Can register as parent + player:**
+  - Parent registration works
+  - Can create a player profile (parent-created shadow account)
+  - Player visible in parent dashboard
+
+- [ ] **Coach profile builder:**
+  - Complete all 5 steps (display name, specialty, age group, pricing, availability)
+  - Click "Publish" at end (this is load-bearing — creates marketplace rows)
+
+- [ ] **Seed accounts:**
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.local.yml exec -T postgres psql -U postgres -d skillars \
+    -v coach_email=coach@example.com \
+    -v owner_email=parent@example.com \
+    < docs/deployment/local/seed-accounts.sql
+  ```
+  - Output should show coach payment readiness, credit balance, and player subscriptions
+
+- [ ] **Test a booking:**
+  - Parent searches for coach
+  - Parent requests a session
+  - Coach accepts
+  - Booking settles to `CONFIRMED` (no Stripe charge, paid from seeded credit)
+
+If any step fails, jump to [Troubleshooting](#troubleshooting) below.
 
 ---
 

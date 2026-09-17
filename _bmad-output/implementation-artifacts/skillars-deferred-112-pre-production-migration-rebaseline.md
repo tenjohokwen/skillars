@@ -3,7 +3,7 @@
 **Story Key:** `skillars-deferred-112-pre-production-migration-rebaseline`
 **Epic:** Deferred Work
 **Priority:** Pre-production blocker (must complete before first production deploy)
-**Status:** review
+**Status:** done
 **Created:** 2026-09-15
 **Last Updated:** 2026-09-15 (dev complete via `/bmad-dev-story`; see Dev Agent Record for the D3/AC5 correction found during implementation)
 **Story File Version:** 2.0

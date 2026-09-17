@@ -1,6 +1,6 @@
 # Story skillars-deferred-92: Outbox enqueue atomicity for the 23 transactional-email producers, graceful shutdown for every executor pool, the rolling-deploy hazards the convention doc names but does not enforce (expand/contract ordering, `SET lock_timeout`, unbatched DML, `platform_config` hand-assigned ids), the default-message-bundle parity hole, a full fr-FR idiom pass plus a frontend hardcoded-English sweep, repo-wide Prettier conformance with a CI gate, and the genuine one-off bugs still open in `deferred-work.md`
 
-Status: review
+Status: done
 
 <!-- v0.1 — story-creation pass (2026-09-04), immediately after skillars-deferred-91 merged (PR #146,
      master clean at c2c47c1). Project-owner-selected large cross-cutting bundle, same standing

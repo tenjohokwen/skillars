@@ -12,10 +12,12 @@ import com.softropic.skillars.platform.video.repo.VideoDeletionOutboxRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -29,6 +31,26 @@ public class VideoDeletionOutboxProcessor {
 
     private static final int BATCH_SIZE = 50;
 
+    /**
+     * skillars-deferred-120 code review (2026-09-17, Decision 1): {@code STALE_CLAIM_WINDOW} MUST
+     * stay strictly greater than {@link #LOCK_AT_MOST_FOR}'s {@code Duration} equivalent — if it
+     * does not, lock expiry actively triggers the double-processing {@code @SchedulerLock} exists to
+     * prevent (see {@link #process()}'s Javadoc for the mechanism). A 5-minute buffer above the
+     * {@code PT15M} lock (rather than matching {@code RadarCompositeDlqProcessor}'s knife's-edge
+     * equality between its own 10-minute window and its {@code PT10M} lock — an accepted, unfixed
+     * weakness recorded in {@code deferred-work.md}, not a pattern to copy into a new lock) keeps
+     * this class's own margin real instead of nominal.
+     */
+    private static final Duration STALE_CLAIM_WINDOW = Duration.ofMinutes(20);
+
+    /**
+     * Kept as a named constant (not just the {@code @SchedulerLock} annotation literal) solely so
+     * {@link #STALE_CLAIM_WINDOW}'s Javadoc can point at it and the invariant between the two is
+     * documented in one place. {@code @SchedulerLock(lockAtMostFor = ...)} requires a compile-time
+     * constant expression, which is exactly what this is.
+     */
+    private static final String LOCK_AT_MOST_FOR = "PT15M";
+
     private final VideoDeletionOutboxRepository outboxRepository;
     private final VideoDeletionLogRepository deletionLogRepository;
     private final VideoRepository videoRepository;
@@ -37,11 +59,52 @@ public class VideoDeletionOutboxProcessor {
     private final ConfigService configService;
     private final TransactionTemplate transactionTemplate;
 
+    /**
+     * skillars-deferred-120 AC2 sizing basis: {@code findClaimedBatch()} is unscoped to this
+     * invocation's own claim (global {@code WHERE status = 'CLAIMED'}, no per-run filter) — two
+     * concurrent invocations (only reachable once this deployment scales to multiple instances;
+     * {@code fixedDelay} cannot overlap itself within one instance) each claim genuinely disjoint
+     * rows via {@code claimPendingBatch}, then each instance's {@code findClaimedBatch()} returns
+     * both batches, so each processes rows the other is concurrently processing — real duplicate
+     * {@code videoProviderAdapter.deleteAsset} calls and duplicate {@code video_deletion_log} rows,
+     * not merely a shared-field race. Same fix and reasoning {@code skillars-deferred-118} AC3 used
+     * to close {@code RadarCompositeDlqProcessor}'s identical bug shape (same {@code BATCH_SIZE = 50}
+     * constant).
+     *
+     * <p><strong>{@code lockAtMostFor} MUST stay strictly less than {@link #STALE_CLAIM_WINDOW}
+     * (code review 2026-09-17, Decision 1).</strong> {@code resetStaleClaimed} below keys on
+     * <em>eligibility</em> time, not claim time ({@code claimPendingBatch} never stamps {@code
+     * next_retry_at} when it claims), so once a run has held its claim for longer than that window,
+     * a second instance's very first statement un-claims the still-in-flight rows and {@code
+     * findClaimedBatch()} (unscoped, no {@code LIMIT}) hands them straight back over — the exact
+     * double-processing this lock exists to prevent. An initial {@code PT15M} lock paired with the
+     * pre-existing 10-minute window left a 5-minute range where lock expiry would have actively
+     * triggered that outcome; {@link #STALE_CLAIM_WINDOW} was raised to 20 minutes (rather than
+     * lowering the lock to match the window, which would have thinned this lock's own margin to
+     * ~1.2x over its worst-case runtime) specifically to restore a real buffer between the two.
+     * Worst case: {@code BATCH_SIZE} (50) × per-item {@code deleteAsset} cost — an external
+     * Bunny.net HTTP call, no retries at this layer. Per {@code skillars-deferred-119} AC1's
+     * S3-delete sizing precedent (~10s/item realistic worst case, not the full 10s-connect +
+     * 30s-read hard timeout sum), 50 × 10s = 500s (~8.3 min). {@code PT15M} gives ~1.8x margin above
+     * that, and a genuine 5-minute buffer below {@link #STALE_CLAIM_WINDOW} — unlike {@code
+     * RadarCompositeDlqProcessor}, whose own 10-minute window and {@code PT10M} lock are exactly
+     * equal (an accepted, unfixed weakness of the shared claim idiom, recorded in {@code
+     * deferred-work.md}; not a pattern to copy into a new lock). {@code lockAtLeastFor} mirrors
+     * {@code RadarCompositeDlqProcessor}'s identical 60s-cadence reasoning (this scheduler's own
+     * cadence, {@code outbox_poll_delay_ms}, defaults to 60000ms) — {@code PT30S} sits comfortably
+     * below it while still guarding the pathological fast-fail-and-immediately-refire edge case.
+     * Crash-recovery latency (how long a stuck row from a genuinely crashed instance waits before
+     * {@code resetStaleClaimed} frees it) moves from 10 to 20 minutes as a result — immaterial for a
+     * deletion outbox polled every 60 seconds under normal operation.
+     */
     @Scheduled(fixedDelayString   = "${platform.video.deletion.outbox_poll_delay_ms:60000}",
                initialDelayString = "${platform.video.deletion.outbox_initial_delay_ms:0}")
+    @SchedulerLock(name = "VideoDeletionOutboxProcessor_process",
+                   lockAtMostFor = LOCK_AT_MOST_FOR, lockAtLeastFor = "PT30S")
     public void process() {
-        // Reset any rows stuck in CLAIMED state for > 10 minutes (crashed run recovery)
-        outboxRepository.resetStaleClaimed(Instant.now().minus(10, ChronoUnit.MINUTES));
+        // Reset any rows stuck in CLAIMED state for longer than STALE_CLAIM_WINDOW (crashed run
+        // recovery) — see STALE_CLAIM_WINDOW's own Javadoc for the invariant this must respect.
+        outboxRepository.resetStaleClaimed(Instant.now().minus(STALE_CLAIM_WINDOW));
         // Atomically claim a batch of PENDING rows; row locks released after the UPDATE commits
         outboxRepository.claimPendingBatch(Instant.now(), BATCH_SIZE);
         List<VideoDeletionOutbox> rows = outboxRepository.findClaimedBatch();

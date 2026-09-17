@@ -296,7 +296,7 @@ on the host, will confirm which it was).
 
 Same fixture as every other environment — without this row, login fails
 with `AppSetupException: JWT secret key has not been set in DB` (see
-[`local-deployment.md` Step 5](local-deployment.md#step-5-seed-required-bootstrap-data)):
+[`local/deployment.md` Step 5](local/deployment.md#step-5-seed-required-bootstrap-data)):
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.uat-hostwinds.yml \
@@ -305,7 +305,7 @@ docker compose -f docker-compose.yml -f docker-compose.uat-hostwinds.yml \
 
 (Substitute `-U`/`-d` if `.env.uat`'s `POSTGRES_USER`/`POSTGRES_DB` differ.
 Use `initTestData.sql` instead if you also want ready-made sample logins —
-see `local-deployment.md` Step 5 for the account list, same file either
+see `local/deployment.md` Step 5 for the account list, same file either
 environment.)
 
 ## Step 9: Verify
@@ -352,7 +352,7 @@ compose logs` just work.
 **One thing this stripped-down setup does need to turn off, though:**
 `docker-compose.yml` hardcodes `LOKI_ENABLED=true`/`LOKI_URL=http://loki:3100`
 on the `app` service unconditionally, and — unlike an older assumption
-recorded in `local-deployment.md`'s own Logs section — `logback-spring.xml`
+recorded in `local/deployment.md`'s own Logs section — `logback-spring.xml`
 *does* attach a real `Loki4jAppender` to the root logger when
 `loki.enabled=true`.
 
@@ -374,7 +374,7 @@ disappearing or lagging, confirm that override is actually in place with
 `docker compose ... exec app env | grep LOKI_ENABLED`.
 
 There's also no Grafana here to browse logs visually (that only exists in
-the full `uat-deployment.md`/`local-deployment.md` stacks) — `docker
+the full `uat-deployment.md`/`local/deployment.md` stacks) — `docker
 logs`/`docker compose logs` against the container directly is the only way
 to see them in this setup, which in practice is also the faster path for a
 quick one-off look.
@@ -460,7 +460,7 @@ logs at 10MB × 3 files (`x-logging` in `docker-compose.yml`, mirrored for
 containers don't exist in the base file and would otherwise get Docker's
 unbounded default driver). If disk usage still looks off after running for a
 while, `docker system df` and `df -h` are the first things to check — the
-same class of problem `local-deployment.md`'s Troubleshooting section
+same class of problem `local/deployment.md`'s Troubleshooting section
 describes for the LGTM stack applies here too (repeated image rebuilds
 filling Docker's build cache, not just log growth).
 

@@ -231,7 +231,7 @@ as local ones, and both are now fixed in the code — no override required:
   `httpclient5` at *test* scope, stripping it from the shipped jar even though
   `software.amazon.awssdk:apache5-client` needs it at runtime.
 
-See `requirements/deployment/local/local-manual-testing.md` for the full
+See [`manual-testing.md`](./manual-testing.md) for the full
 write-up, including the two latent logback problems the first crash was masking.
 
 A third problem sat alongside those, visible on every start as:
@@ -337,7 +337,7 @@ environment variables instead (`APP_BOOTSTRAP_ADMIN_EMAIL`,
 
 For the full manual-testing path — getting a paid coach and a paid
 parent/player through every workflow without Stripe — see
-[`requirements/deployment/local/local-manual-testing.md`](../../requirements/deployment/local/local-manual-testing.md).
+[`manual-testing.md`](./manual-testing.md).
 
 ---
 

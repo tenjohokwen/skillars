@@ -135,6 +135,12 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
 
         // Second drain: Bunny succeeds
         doNothing().when(videoProviderAdapter).deleteAsset(eq("asset-retry"));
+        // skillars-deferred-120 AC2: @SchedulerLock's lockAtLeastFor would otherwise silently
+        // skip this second same-method-invocation call (this test invokes process() twice inside
+        // one test method, going through the @Autowired Spring proxy both times).
+        // NOTE (code review 2026-09-17, Patch #17): if you add a THIRD process() call to this test
+        // method, add another releaseSchedulerLock call immediately before it too.
+        releaseSchedulerLock("VideoDeletionOutboxProcessor_process");
         processor.process();
 
         VideoDeletionOutbox afterSecond = outboxRepository.findById(row.getId()).orElseThrow();

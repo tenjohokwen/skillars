@@ -2336,3 +2336,94 @@ two subscription schedulers found the identical bug class deferred-115 just fixe
 `VideoLifecycleScheduler` — none of the three findings below were previously in this ledger. All three
 closed by the story's own AC1/AC2/AC3 — bullets deleted outright per this file's own convention.
 
+
+## Deferred from: code review of skillars-deferred-120 (2026-09-17)
+
+- **`skillars-deferred-118` AC2's activated-re-check TOCTOU is narrowed, not closed.**
+  `UserAdminService.deleteUserInTransaction` (`:194-204`) is `protected` and reached by a plain
+  self-call from `removeNotActivatedUsers` (`:137`), so its `@Transactional(propagation = REQUIRES_NEW)`
+  never applies — Spring's proxy is bypassed by the self-invocation, and proxy-mode
+  `AnnotationTransactionAttributeSource` ignores non-public methods regardless. With the caller at
+  `NOT_SUPPORTED` there is no ambient transaction either, so `findOneByLogin` and `delete` each run in
+  their own `SimpleJpaRepository` transaction. The `!user.isActivated()` guard therefore reads a row
+  that is committed and released before the delete transaction opens: a user who completes email
+  verification inside that window can still have their freshly-activated account deleted. Pre-existing
+  since `skillars-deferred-118`; the fix is to make the method public and invoke it through the proxy
+  (a `self` reference, as `VideoSubscriptionLifecycleListener` already does), or to fold the re-check
+  and delete into one explicit `TransactionTemplate` scope.
+
+- **`UserAdminService.findExpiredUsers` builds a `Pageable` it never uses and loads the whole expired
+  set on every iteration.** `:171-177` constructs `PageRequest.of(0, batchSize)` and then calls
+  `findAllByActivatedIsFalseAndCreatedDateBefore(cutoffDate)` (`UserRepository:27`) — no `LIMIT`, no
+  `Pageable` parameter — materialising every expired `User` entity before applying `.limit(batchSize)`
+  in Java. The method Javadoc's "Uses pagination to limit fetched amount" is false. Newly amplified by
+  `skillars-deferred-120`'s `MAX_BATCHES_PER_RUN = 100`: up to 100 full materialisations of the entire
+  expired set per run, a cost the new `PT1H` `lockAtMostFor` arithmetic does not account for at all.
+
+- **`lockAtLeastFor` values are hardcoded against tunable `fixedDelayString` cadences.**
+  `VideoDeletionOutboxProcessor.java:63-66` pairs `${platform.video.deletion.outbox_poll_delay_ms:60000}`
+  with a literal `lockAtLeastFor = "PT30S"` derived from the *default*. Lowering the property below 30s
+  — a legitimate ops action — silently drops runs with no error, no warning and no config validation.
+  Codebase-wide shape (`RadarCompositeDlqProcessor` and others are identical), so worth one sweep rather
+  than a per-site fix.
+
+- **`UserAdminService.MAX_BATCHES_PER_RUN` is hardcoded while the batch size it multiplies is
+  configurable.** `:46` fixes the cap at 100 while `SecurityProperties.getUserCleanupBatchSize()`
+  (default 100) is tunable, so lowering the batch size to 10 silently caps the daily sweep at 1,000
+  users where it previously drained fully. The safety valve doubles as an undeclared throughput limit;
+  scale the cap by batch size or assert a floor.
+
+- **`resetStaleClaimed`/`claimPendingBatch`'s shared claim idiom keys stale-claim recovery on
+  eligibility time, not claim time — a genuine weakness in `RadarCompositeDlqProcessor`
+  (`skillars-deferred-118` AC3) that `skillars-deferred-120` AC2 confirmed also existed in
+  `VideoDeletionOutboxProcessor`.** Both classes' `resetStaleClaimed` matches `status = 'CLAIMED' AND
+  next_retry_at < :deadline`, but `claimPendingBatch` never stamps `next_retry_at` when it claims a
+  row — so the "crashed run recovery" deadline actually means "this row has been *eligible* for N
+  minutes," not "claimed for N minutes." For any row whose original eligibility predates the claim by
+  more than the deadline (a real backlog, or a row that waited behind a full batch), a concurrent
+  tick's `resetStaleClaimed` un-claims it while the first instance is still mid-flight, and
+  `claimPendingBatch` immediately re-claims it — genuine double processing of the same row, not merely
+  a disjoint-batch race. `@SchedulerLock` closes the *concurrent-invocation* path both classes were
+  fixed for, but does **not** close this path if `lockAtMostFor` is ever exceeded (crash recovery, a
+  run that legitimately overruns) — that residual exposure is what the invariant below bounds, not
+  removes. `skillars-deferred-120`'s 2026-09-17 code review (Decision 1) went one step further for
+  `VideoDeletionOutboxProcessor` specifically: it raised `STALE_CLAIM_WINDOW` to 20 minutes against a
+  `PT15M` lock, restoring a real 5-minute buffer so ordinary lock-timing jitter cannot trigger this
+  path — `RadarCompositeDlqProcessor` still has zero buffer (its own window and lock are exactly
+  `PT10M`), so it remains the more exposed of the two. Add a `claimed_at` column to key the stale
+  check on claim time, not eligibility time, the next time either class's claim mechanism is touched —
+  that is the only fix that removes the path rather than narrowing when it can trigger.
+  `RadarCompositeDlqProcessor.java:59`, `VideoDeletionOutboxProcessor.java`
+  (`STALE_CLAIM_WINDOW`/`resetStaleClaimed` call site).
+
+- **`ModerationSlaMonitorService.detectSlaViolations` carries no `@SchedulerLock` — a now-permanent
+  accepted risk, not a temporary gap.** `skillars-deferred-115` AC1 restructured this method to a
+  short-batch-load + per-item `REQUIRES_NEW` shape and accepted its one remaining double-pick cost (a
+  duplicate admin-alert enqueue, bounded and non-corrupting) as a deliberate tradeoff, in its own class
+  Javadoc (`ModerationSlaMonitorService.java:90-94`). `skillars-deferred-120`'s AC-scoping audit
+  re-confirmed and closed the `@Scheduled`-method sweep `skillars-deferred-115` began — after that
+  story, every `@Scheduled` method in the codebase has been examined under the transaction-boundary/
+  TOCTOU/scheduler-lock-parity lens at least once, and this is the one method the sweep deliberately
+  left unlocked. Recording explicitly here (per the 2026-09-17 code review's Patch finding #5) rather
+  than only in two stories' prose, since the sweep's closure makes this a durable, not provisional,
+  decision: **[DECIDED]** no `@SchedulerLock` — the accepted duplicate-alert cost does not warrant one.
+
+- **`resetStaleClaimed` keys on eligibility time, not claim time — add a `claimed_at` column.**
+  Both `VideoDeletionOutboxRepository.resetStaleClaimed` (`:43-48`) and
+  `RadarCompositeDlqProcessor`'s identical idiom (`:59`) compare `next_retry_at < :deadline`, but
+  neither `claimPendingBatch` stamps `next_retry_at` when it claims. `next_retry_at` is therefore the
+  row's *eligibility* timestamp: any backlog row is already older than the stale window at the moment
+  it is claimed, so the "crashed run recovery" predicate means "this row has been eligible a long
+  time", not "this row has been claimed a long time". `skillars-deferred-120`'s code review closed the
+  immediate hazard by making the stale window exceed `lockAtMostFor`, but the predicate itself is still
+  wrong on both processors. Proper fix is a `claimed_at` column stamped by `claimPendingBatch` and
+  cleared on completion, with the stale check keyed on it — a Flyway migration, deliberately out of
+  scope for a lock-parity story.
+
+- **`UserAdminService` non-activated-user cleanup has no cross-run record of undeletable users.**
+  `skillars-deferred-120`'s code review added a per-run skip set so a deterministically-undeletable
+  user (uncovered FK, trigger, constraint) no longer blocks the rest of that run's backlog. It still
+  re-reads and re-fails the same users on every subsequent daily run, producing a recurring ERROR with
+  no operator-queryable list of what is stuck. A persisted `cleanup_failed_at` marker on the user row,
+  filtered out by the batch query, would stop permanently-stuck rows consuming sweep capacity across
+  runs and give operators something to query. Needs a Flyway migration and a query change.
