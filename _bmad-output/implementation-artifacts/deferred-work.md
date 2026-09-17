@@ -17,6 +17,29 @@ One bullet = one open item. Grouped by the review that raised it; the heading ca
   Verify against the code before trusting an unannotated forward-reference.
 - **File paths and line numbers age fast.** They were accurate at the review date in the heading.
 
+## Last audit: 2026-09-17 (post-merge prune after skillars-deferred-117, narrow scope)
+
+Routine sweep after `skillars-deferred-117` (PR #197) merged to master, per this file's own
+delete-outright-when-closed convention. Not a full-file re-audit — grepped the whole file for every
+symbol this story touched (`PendingBlobDeletion`/`pending_blob_deletions`, `VideoLifecycleScheduler`,
+`VideoRepository`, `markPurged`, `SessionPackForfeitureScheduler`, `RateLimitingService`,
+`PessimisticLockRetryer`, `withBoundedRetry`, `DrillUploadService`) and checked every live hit.
+
+- The story's own AC6 already deleted all five bullets it targeted (the `pending_blob_deletions`
+  follow-up under `## Deferred from: skillars-deferred-100 implementation`, and the `markPurged()`
+  bullet formerly under `## Deferred from: code review of story-115` — confirmed gone, only the
+  unrelated `@SchedulerLock` `PT12H` sizing bullet remains under that header).
+- Every other hit is either historical `## Last audit` narrative text (not a live bullet) or an
+  unrelated pre-existing item that names the same class/file for a different concern this story
+  didn't touch: `SessionPackForfeitureScheduler` D2-era mention in the 2026-08-05 deferred-15 audit
+  (a different scheduler's delivery bug, used only as a working-precedent citation); `RateLimitingService`
+  D2 under Group B (IP-keyed timing-oracle limitation — unrelated to AC4's eviction-sweep fix);
+  `PessimisticLockRetryer`'s `setSavepoint`-failure note under the deferred-62 review (unrelated to
+  AC5's idempotency call-site audit); `DrillUploadService` W9 (hypothetical `@TransactionalEventListener`
+  outside a transaction — still true, `DrillUploadService` is still `@Transactional`, unaffected by
+  AC5's refactor). None closed by this story; all left in place.
+- No other bullet in the file names any of the nine grepped symbols.
+
 ## Last audit: 2026-09-16 (skillars-deferred-116 story creation)
 
 While mining the next deferred story, re-verified two untagged bullets from the old, largely-picked-over
