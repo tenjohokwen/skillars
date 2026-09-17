@@ -58,8 +58,11 @@ violate that established, explicitly-documented invariant.
 - `ReviewFlagService.flag`'s unlocked `review.getModerationStatus()` re-check before auto-holding at the
   flag threshold — two concurrent flags at the exact threshold boundary can both pass the guard and both
   call `coachRatingService.recompute()` / set the identical `UNDER_REVIEW` terminal state redundantly.
-  Duplicate idempotent work, not corruption — the DB-level `review_flags_unique_flagger` unique index
-  already prevents the more serious concern (same user double-flagging). Not worth its own AC.
+  Duplicate idempotent work, not corruption — `recompute()` (`CoachRatingService.java:21-29`) is a pure
+  recalculation from the current `COUNT`/`AVG` of approved reviews followed by an unconditional
+  `UPDATE`, confirmed idempotent by direct read, not assumed — and the DB-level
+  `review_flags_unique_flagger` unique index already prevents the more serious concern (same user
+  double-flagging). Not worth its own AC.
 - `GdprRequestService.requestErasure`/`requestExport`'s unlocked `existsBy...PENDING/PROCESSING` check —
   looked like the same TOCTOU shape, but `V138__baseline_schema.sql:3202` already has a **unique partial
   index** (`idx_gdpr_requests_unique_active` on `(user_id, request_type) WHERE status IN ('PENDING',
@@ -160,11 +163,11 @@ just gated by a different condition (`count < visibilityThreshold`).
   and the status decision are consistent for the winner"). The strike deletion itself (`:218`) can stay
   where it is — it doesn't touch the coach row.
 
-**Verified by:** a new integration test proving the race is closed, mirroring
-`ReliabilityStrikeConcurrencyIT`'s two-thread `CountDownLatch`/`ExecutorService` shape (see Dev Notes and
-Files to Read) — race `suspendCoach` against `reinstateCoach` for the same coach and assert the coach
-ends `SUSPENDED`, not `ACTIVE`, with `suspendCoach`'s booking-cancellation side effects intact regardless
-of which thread's HTTP/service call returns first.
+**Verified by:** a new integration test that forces a *deterministic* interleaving rather than racing two
+threads and hoping the scheduler cooperates — see Task 3 for why an uncontrolled simultaneous-release
+race (the `ReliabilityStrikeConcurrencyIT` shape) does not actually discriminate pre-fix from post-fix
+behavior here, and what to build instead (the `RescheduleServiceConcurrencyIT` holder-thread shape,
+combined with an event/action-log assertion, not an elapsed-time one).
 
 ---
 
@@ -192,35 +195,69 @@ of which thread's HTTP/service call returns first.
 
 - [ ] **Task 2 — AC1: lock `deleteStrike`**
   - [ ] Replace the plain `findById` at `:224` with the same `lockRetryer.withBoundedRetry(...
-        findByIdForUpdate...)` call
+        findByIdForUpdate...)` call, keeping the exact same `.orElseThrow(() -> new
+        ResourceNotFoundException("Coach profile not found", "coach_profile"))` the plain `findById` at
+        `:224-225` already throws today — same exception, same message, as Task 1 does for `reinstateCoach`
   - [ ] Move that locked read to before the `count` computation currently at `:220`, so `count` and the
         `reverted` decision are both computed after the lock is held (mirroring
         `ReliabilityStrikeService.issue`'s ordering) — leave the strike-delete call at `:218` where it is
 
 - [ ] **Task 3 — AC1: regression test proving the fix**
+  - **Why a `ReliabilityStrikeConcurrencyIT`-style simultaneous-release race is the wrong shape here:**
+    that test's correctness property is order-*independent* — `issue()` converges to the same final state
+    (`PENDING_REVIEW`, one event) no matter which of two identical concurrent calls wins, so a bare
+    `CountDownLatch` release proves the fix regardless of scheduler timing. `reinstateCoach` vs.
+    `suspendCoach` is order-*dependent by design* — they write opposite states, and whichever one's
+    transaction genuinely commits last is *correctly* the one that should win once the lock is real,
+    both before and after this fix (Postgres row locks make every writer's `UPDATE` block on a
+    concurrent `SELECT ... FOR UPDATE` regardless of whether the *reader* took a lock — only the
+    *decision* differs). A test that races both with a bare latch and asserts "final status matches
+    whoever won" cannot prove anything: it can't observe which thread the DB scheduler actually favored,
+    and the elapsed-time trick `RescheduleServiceConcurrencyIT` uses to prove *its* fix (see below)
+    doesn't discriminate here either, because the blocking point — the eventual `UPDATE` — exists on the
+    unfixed code path too. Do not build the test this way.
+  - **What actually discriminates pre-fix from post-fix:** whether `reinstateCoach`'s *decision* (not
+    just its final write) is computed from stale or fresh data. Use a scenario where a stale read and a
+    fresh read produce *different outcomes*, not just a different-timed version of the same outcome:
+    - Seed a coach at `PENDING_REVIEW` (a legal `reinstateCoach` source state).
+    - **Holder thread** (mirror `RescheduleServiceConcurrencyIT.acceptReschedule_briefContentionOnRescheduleRequestRow_succeedsAfterBoundedRetry`'s
+      shape exactly): inside `transactionTemplate.execute`, run raw JDBC
+      `SELECT id FROM marketplace.coach_profiles WHERE id = ? FOR UPDATE`, count down a `CountDownLatch`,
+      `Thread.sleep(holdMillis)`, then raw-SQL `UPDATE marketplace.coach_profiles SET status = 'ACTIVE',
+      status_changed_at = ? WHERE id = ?` before the transaction block returns (committing `ACTIVE` —
+      simulating "this coach was already reinstated/activated by another concurrent process while my
+      `reinstateCoach` call was in flight").
+    - Wait on the latch, then call `enforcementService.reinstateCoach(coachId, "test", adminId)` as the
+      contender, from the main thread (no second thread needed — the holder already ran concurrently).
+    - **Pre-fix:** the contender's plain `findById` executes *while the holder's transaction is still
+      open* (MVCC serves the last-committed value, `PENDING_REVIEW`, not blocked by the holder's `FOR
+      UPDATE`), so it passes the legal-source check on stale data, later blocks at its own `save()`
+      flush until the holder commits, then unconditionally writes `ACTIVE` again — publishing a second
+      `CoachReinstatedEvent` and inserting a second `admin_action_log` row with
+      `action_type = 'COACH_REINSTATE'`, even though the coach was already `ACTIVE`.
+    - **Post-fix:** the contender's `findByIdForUpdate` blocks until the holder commits, then reads the
+      *fresh* `ACTIVE` row and hits the method's own `if (coach.getStatus() == ACTIVE) return;` early-out
+      — no write, no event, no action-log row.
+    - **Assert (post-fix):** zero `CoachReinstatedEvent`s captured for this coach (mirror
+      `ReliabilityStrikeConcurrencyIT`'s `@EventListener`-based capture-component pattern) and zero new
+      `admin_action_log` rows with `reference_id = coachId AND action_type = 'COACH_REINSTATE'` — not an
+      elapsed-time assertion, which proves nothing here.
   - [ ] Add a new `AdminCoachEnforcementConcurrencyIT` (package `platform.admin.service`, extending
-        `AbstractIntegrationTest` directly — mirror `ReinstateIT`'s raw-SQL coach-profile seeding, not an
-        HTTP client call, since the test calls `AdminCoachEnforcementService` directly like
-        `ReliabilityStrikeConcurrencyIT` calls `ReliabilityStrikeService`)
-  - [ ] Seed one coach at `PENDING_REVIEW`
-  - [ ] Race two threads via the `CountDownLatch`/`ExecutorService` pattern from
-        `ReliabilityStrikeConcurrencyIT`: one calling `enforcementService.suspendCoach(...)`, the other
-        calling `enforcementService.reinstateCoach(...)`, released together
-  - [ ] Assert the coach's final status is deterministic and matches whichever transaction's row-lock
-        acquisition actually won (not silently `ACTIVE` regardless of ordering) — the concrete, most
-        useful assertion is that when `suspendCoach` is the one to actually persist last, the coach ends
-        `SUSPENDED` and `reinstateCoach`'s write did not silently clobber it; confirm by asserting the
-        final DB row matches one of the two legal terminal states consistently, not a state that
-        contradicts the winning transaction's own commit
+        `AbstractIntegrationTest` directly, calling `AdminCoachEnforcementService` methods directly — not
+        an HTTP client) implementing the scenario above
   - [ ] **Mutation check** (write this into the test's own Javadoc, matching
         `ReliabilityStrikeConcurrencyIT`'s convention): revert the fix (plain `findById` again) and
-        confirm the test fails — i.e. prove the test would have caught this bug before the fix, not just
-        that it passes after
-  - [ ] Add a second, simpler test: a direct call to `deleteStrike` that reverts a coach to `ACTIVE` still
-        reads a fresh `count` after acquiring the lock (can be a lighter-weight unit/Mockito-style
-        assertion of call order if a second full concurrency IT is disproportionate — use judgement, but
-        at minimum confirm `deleteStrike`'s revert path still passes its existing behavior unchanged for
-        the non-concurrent case)
+        confirm the test fails deterministically — this scenario is 100% reproducible, not
+        timing-flaky, because the contender's stale read is guaranteed to happen while the holder's
+        transaction is still open (the test only starts the contender after the latch confirms the
+        holder's lock is held)
+  - [ ] Add a second, analogous test (or a lighter-weight unit/Mockito-style assertion of read-then-decide
+        ordering if a second full concurrency IT is disproportionate — use judgement) for `deleteStrike`'s
+        revert path: use the same holder-thread technique to concurrently insert enough fresh strikes
+        (raw SQL) to push the rolling count back *above* `visibilityThreshold` while `deleteStrike` is
+        in flight — pre-fix, a stale count read wrongly reverts the coach to `ACTIVE`; post-fix, the
+        fresh post-lock count read correctly leaves it un-reverted. At minimum, confirm `deleteStrike`'s
+        revert path still passes its existing non-concurrent behavior unchanged.
 
 - [ ] **Task 4 — AC2: ledger closeout**
   - [ ] Re-run the grep sweep against HEAD; confirm the one historical `deferred-work.md` hit needs no
@@ -285,8 +322,16 @@ of which thread's HTTP/service call returns first.
   confirm `findByIdForUpdate`'s existing signature/lock mode; no repository change needed, just a new
   call site)
 - `src/test/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeConcurrencyIT.java`
-  (AC1 — the exact two-thread race shape, `StrikeEventCapture` event-listener pattern, and mutation-check
-  Javadoc convention to mirror)
+  (AC1 — the `StrikeEventCapture` `@EventListener` capture-component pattern and mutation-check Javadoc
+  convention to mirror; **do not** mirror its bare-`CountDownLatch`-simultaneous-release race shape — see
+  Task 3 for why that shape doesn't discriminate pre-fix from post-fix for an order-dependent write)
+- `src/test/java/com/softropic/skillars/platform/booking/service/RescheduleServiceConcurrencyIT.java:155-198`
+  (AC1 — `acceptReschedule_briefContentionOnRescheduleRequestRow_succeedsAfterBoundedRetry`'s holder-thread
+  shape to mirror instead: a raw-JDBC `SELECT ... FOR UPDATE` + `CountDownLatch` + `Thread.sleep` +
+  committed raw-SQL write, giving the test a *deterministic* forced interleaving instead of an
+  uncontrolled race — the elapsed-time assertion in that specific test does not carry over to this story's
+  fix (its blocking point exists on both sides of this story's fix, so it doesn't discriminate here); only
+  the holder-thread *mechanism* is the reusable part)
 - `src/test/java/com/softropic/skillars/platform/admin/api/ReinstateIT.java` (AC1 — the raw-SQL
   coach-profile seeding pattern for a coach starting at a specific `CoachProfileStatus`, and the
   `@BeforeEach`/`@AfterEach` cleanup shape for `marketplace.coach_profiles` rows in this module)
@@ -308,9 +353,12 @@ of which thread's HTTP/service call returns first.
       `lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(...))`, matching
       `suspendCoach`'s existing pattern; `deleteStrike`'s locked read happens before its `count`
       computation, not after
-- [ ] AC1: new `AdminCoachEnforcementConcurrencyIT` proves `suspendCoach` racing `reinstateCoach` no
-      longer allows the reinstate to silently overwrite a concurrently-committed suspension; the test's
-      Javadoc states what reverting the fix does to the test (mutation check)
+- [ ] AC1: new `AdminCoachEnforcementConcurrencyIT` proves `reinstateCoach` no longer acts on a stale
+      pre-lock read — a holder thread commits a concurrent status change mid-flight and the test asserts
+      `reinstateCoach`'s decision reflects the post-holder fresh state (no duplicate `CoachReinstatedEvent`,
+      no duplicate `admin_action_log` row when the fresh state makes the transition a no-op), not an
+      elapsed-time proxy; the test's Javadoc states what reverting the fix does to the test (mutation
+      check), and the failure is deterministic, not timing-flaky
 - [ ] AC2: ledger grep sweep re-run against HEAD; the one historical hit confirmed to need no edit
 - [ ] No regressions in `AdminCoachEnforcementConcurrencyIT`, `ReinstateIT`, `CoachSuspensionIT`,
       `ManualStrikeIT`, `CoachEnforcementListIT`, or any other test touching
@@ -337,6 +385,22 @@ _To be filled in during implementation._
   index already prevents the serious case, remainder is idempotent duplicate work; `GdprRequestService` —
   already backstopped by a DB partial unique index + a global exception handler). Branched off master
   post-`skillars-deferred-120`-merge (PR #208).
+- 2026-09-18: Story reviewed post-creation (`story-review.md`) — PASS, no false positives, bug premise
+  and all three false-lead dismissals independently re-confirmed against the actual code (including a
+  fresh direct read of `CoachRatingService.recompute()` to confirm its idempotency rather than assume
+  it). One substantive gap found in the review and fixed: Task 3's original test design (an uncontrolled
+  simultaneous-release race between `suspendCoach` and `reinstateCoach`, mirroring
+  `ReliabilityStrikeConcurrencyIT`) does not actually discriminate pre-fix from post-fix behavior for an
+  *order-dependent* write — unlike `issue()`'s order-*independent* convergence, and unlike
+  `RescheduleServiceConcurrencyIT`'s elapsed-time proof (whose blocking point exists on both sides of
+  *this* fix, so timing alone proves nothing here). Replaced with a deterministic holder-thread design
+  (mirroring `RescheduleServiceConcurrencyIT`'s raw-SQL-lock-then-sleep mechanism, but discriminating via
+  a duplicate-event/duplicate-action-log assertion instead of elapsed time) that is 100% reproducible,
+  not timing-flaky, both as a bug demonstration and as a regression guard. Minor fixes: `deleteStrike`'s
+  fix task now states the exact exception to preserve (previously only implied by "the same call");
+  added a concrete, equally deterministic discriminator for `deleteStrike`'s own optional concurrency
+  test (concurrent strikes pushing the count back above threshold, instead of an unspecified "call
+  order" assertion).
 
 ---
 
