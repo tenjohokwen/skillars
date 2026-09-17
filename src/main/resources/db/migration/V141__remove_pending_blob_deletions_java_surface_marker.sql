@@ -1,0 +1,15 @@
+-- skillars-deferred-117 AC1: release-boundary marker for dropping main.pending_blob_deletions.
+--
+-- This migration is deliberately a no-op — header comment only, no functional DDL. Its sole
+-- purpose is to exist as a distinct, lower Flyway version than V142, representing the release at
+-- which the application's Java code stops reading main.pending_blob_deletions:
+-- PendingBlobDeletion (entity), PendingBlobDeletionRepository and
+-- PendingBlobDeletionResidualDrainRunner are all deleted in this same story/commit
+-- (skillars-deferred-117 AC1).
+--
+-- MigrationConventionLintTest's DROP_WITHOUT_PRIOR_RELEASE_PREP rule (docs/deployment/
+-- migration-conventions.md, expand/contract convention) mechanically requires the migration that
+-- drops a table to cite, via a '-- migration-lint: drop-prepared-in: V<n>' marker, an earlier
+-- migration version that removed the table's last reader. No earlier migration did that — nothing
+-- in this codebase stopped reading main.pending_blob_deletions before this story — so V142's own
+-- guarded DROP TABLE cites this migration (V141) as that release boundary instead.

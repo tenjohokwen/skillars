@@ -73,8 +73,11 @@ class ReportGenerationServiceTest {
     // skillars-deferred-92 AC18: a real instance, not a mock. The per-coach limit is the
     // point of the AC, and a mock would return false for tryConsume and silently reject
     // every call, or be stubbed to always allow and prove nothing.
+    // skillars-deferred-117 AC4: RateLimitingService now needs a ConfigService for its
+    // eviction-sweep TTL — nothing in this test triggers the sweep, so an unstubbed mock suffices.
     private final com.softropic.skillars.infrastructure.security.RateLimitingService rateLimitingService =
-        new com.softropic.skillars.infrastructure.security.RateLimitingService();
+        new com.softropic.skillars.infrastructure.security.RateLimitingService(
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.config.service.ConfigService.class));
 
     private ReportGenerationService service;
 

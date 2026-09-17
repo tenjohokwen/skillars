@@ -59,8 +59,6 @@ class GdprErasureIT extends AbstractIntegrationTest {
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private com.softropic.skillars.platform.outbox.service.OutboxService outboxService;
-    @Autowired private com.softropic.skillars.platform.filestorage.service.PendingBlobDeletionResidualDrainRunner residualDrainRunner;
-    @Autowired private com.softropic.skillars.platform.filestorage.repo.PendingBlobDeletionRepository legacyPendingBlobDeletionRepository;
 
     @LocalServerPort private int randomServerPort;
 
@@ -97,7 +95,6 @@ class GdprErasureIT extends AbstractIntegrationTest {
             // platform.outbox. Scope the reset to this test family's aggregate_type so a leftover
             // BLOB_DELETION row from a prior test cannot be drained (and its mock key deleted) here.
             jdbcTemplate.update("DELETE FROM main.outbox_messages WHERE aggregate_type = 'BLOB_DELETION'");
-            jdbcTemplate.update("DELETE FROM main.pending_blob_deletions");
 
             return null;
         });
@@ -405,30 +402,6 @@ class GdprErasureIT extends AbstractIntegrationTest {
                 + "WHERE aggregate_type = 'BLOB_DELETION' AND payload->>'storageKey' = ?",
             storageKey));
         outboxService.drain();
-        assertThat(blobOutboxRowCount(storageKey)).isZero();
-    }
-
-    /**
-     * skillars-deferred-100 AC6: any {@code main.pending_blob_deletions} rows a prior release left
-     * behind are migrated onto the generic outbox by {@code PendingBlobDeletionResidualDrainRunner}
-     * at startup — nothing lost.
-     */
-    @Test
-    void residualPendingBlobDeletionRows_areReEnqueuedOntoTheGenericOutbox() {
-        String storageKey = "reports/" + UUID.randomUUID() + "/legacy-residual.pdf";
-        transactionTemplate.execute(s -> {
-            jdbcTemplate.update(
-                "INSERT INTO main.pending_blob_deletions (storage_key, attempts) VALUES (?, 0)", storageKey);
-            return null;
-        });
-
-        residualDrainRunner.run(new org.springframework.boot.DefaultApplicationArguments());
-
-        assertThat(legacyPendingBlobDeletionRepository.count())
-            .as("the legacy table is drained by the one-shot runner").isZero();
-
-        outboxService.drain();
-        verify(fileStorageService).deleteRawBytes(storageKey);
         assertThat(blobOutboxRowCount(storageKey)).isZero();
     }
 

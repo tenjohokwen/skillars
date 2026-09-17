@@ -199,6 +199,21 @@ public final class ConfigBounds {
         new BoundedKey("platform.development.radar_composite_dlq.max_attempts", 1L, 100L, false,
             "0/neg → radar-composite DLQ dead-letters on the first attempt (or never)");
 
+    /**
+     * {@code RateLimitingService} — skillars-deferred-117 AC4: how long an idle in-process rate-limit
+     * bucket survives before the eviction sweep removes it. Every {@code Bucket4j} bucket fully
+     * refills after its own configured {@code duration} elapses (the longest in use anywhere in this
+     * codebase today is 60 minutes), so evicting an idle bucket and letting it be recreated fresh on
+     * next use is behaviorally identical to keeping it around idle, as long as the TTL comfortably
+     * exceeds any in-use duration — the 24h default does, with wide margin.
+     */
+    public static final BoundedKey RATE_LIMIT_BUCKET_TTL_HOURS =
+        new BoundedKey("security.rate_limiting.bucket_ttl_hours", 1L, 8760L, false,
+            "too low → an actively-cycled bucket could be evicted mid-window (harmless — a fresh "
+                + "bucket behaves identically — but defeats the point of keeping it); too high → the "
+                + "eviction sweep provides less protection against the unbounded-map growth it exists "
+                + "to fix");
+
     // ── Templated per-enum key segments — DELIBERATELY hand-listed ──────────────────────────────
     // skillars-deferred-108 AC9 (owner decision 2026-09-10, was deferred-107 code review): these
     // segments are hand-listed on purpose. Deriving them by iterating CoachSubscriptionTier
@@ -258,7 +273,8 @@ public final class ConfigBounds {
         MESSAGE_RETENTION_MONTHS.key(),
         REVIEWS_SUBMISSION_WINDOW_DAYS.key(),
         REVIEWS_AUTO_HOLD_FLAG_THRESHOLD.key(),
-        TIMELINE_COACH_ACCESS_EXPIRY_DAYS.key());
+        TIMELINE_COACH_ACCESS_EXPIRY_DAYS.key(),
+        RATE_LIMIT_BUCKET_TTL_HOURS.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -289,7 +305,8 @@ public final class ConfigBounds {
             MODERATION_SLA_BATCH_SIZE,
             VIDEO_LIFECYCLE_OUTBOX_MAX_ATTEMPTS,
             VIDEO_DELETION_MAX_ATTEMPTS,
-            RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS));
+            RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS,
+            RATE_LIMIT_BUCKET_TTL_HOURS));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

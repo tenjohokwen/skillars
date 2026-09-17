@@ -84,8 +84,19 @@ public class DrillUploadService {
         // existing/READY check before either commits its video-ref write. The provider call
         // (videoService.initializeUpload) stays inside the locked region so a second, lock-waiting
         // caller sees the first caller's committed write and correctly hits the READY/
-        // DRILL_VIDEO_ALREADY_LINKED guard instead of also creating a provider video.
-        return lockRetryer.withBoundedRetry(() -> {
+        // DRILL_VIDEO_ALREADY_LINKED guard instead of also creating a provider video. "Locked region"
+        // means "while this method's transaction — and so the Postgres row lock findByIdForUpdate
+        // took — is still open", not "inside the withBoundedRetry lambda": the lock is a DB-level
+        // lock held until commit/rollback, so it is unaffected by where in this same transactional
+        // method a statement runs.
+        //
+        // skillars-deferred-117 AC5: PessimisticLockRetryer.withBoundedRetry's contract requires the
+        // retried supplier be read-only/side-effect-free — it can legitimately run more than once.
+        // The writes (setVideoId/upsertVideoId) and the event publish used to be inside that lambda;
+        // moved out to below (still inside this same @Transactional method, so "stays inside the
+        // locked region" continues to hold exactly as before) so the supplier is now genuinely
+        // read-only, not merely safe-by-luck via statement ordering.
+        LockedDrillState locked = lockRetryer.withBoundedRetry(() -> {
             drillRepository.findByIdForUpdate(drill.getId())
                 .orElseThrow(() -> new ResourceNotFoundException(
                     "Drill was deleted by another user or no longer accessible", "drill"));
@@ -122,28 +133,37 @@ public class DrillUploadService {
                 }
             }
 
-            InitializeUploadResponse resp = videoService.initializeUpload(
-                new InitializeUploadRequest(coachId.toString(), req.fileName(), req.fileSizeBytes(),
-                    req.mimeType(), VideoType.DRILL_DEMO));
-
-            if (existing.isPresent()) {
-                drillVideoRefRepository.setVideoId(drillId, resp.videoId());
-                // Replacing a non-READY video's ref (PROCESSING/FAILED — a READY one already threw
-                // above): the old reservation is otherwise orphaned until the reaper's timeout.
-                // Mirrors deleteVideo's own check-and-publish ordering. Deferred-89 AC3: also gate on
-                // lockedVideo.isPresent() (the videos row held under the lock above) so an
-                // already-soft-deleted / absent video is not re-queued for physical deletion.
-                if (existingVideoId != null
-                        && lockedVideo.isPresent()
-                        && !drillVideoRefRepository.existsByVideoId(existingVideoId)) {
-                    eventPublisher.publishEvent(new VideoPhysicalDeletionEvent(existingVideoId, drillId));
-                }
-            } else {
-                drillVideoRefRepository.upsertVideoId(drillId, resp.videoId());
-            }
-
-            return new DrillUploadInitiateResponse(resp.videoId(), resp.sessionId(), resp.signedUploadUrl(), resp.expiresAt());
+            return new LockedDrillState(existing, existingVideoId, lockedVideo.isPresent());
         });
+
+        InitializeUploadResponse resp = videoService.initializeUpload(
+            new InitializeUploadRequest(coachId.toString(), req.fileName(), req.fileSizeBytes(),
+                req.mimeType(), VideoType.DRILL_DEMO));
+
+        if (locked.existing().isPresent()) {
+            drillVideoRefRepository.setVideoId(drillId, resp.videoId());
+            // Replacing a non-READY video's ref (PROCESSING/FAILED — a READY one already threw
+            // above): the old reservation is otherwise orphaned until the reaper's timeout.
+            // Mirrors deleteVideo's own check-and-publish ordering. Deferred-89 AC3: also gate on
+            // lockedVideoPresent (the videos row held under the lock above) so an already-
+            // soft-deleted / absent video is not re-queued for physical deletion.
+            if (locked.existingVideoId() != null
+                    && locked.lockedVideoPresent()
+                    && !drillVideoRefRepository.existsByVideoId(locked.existingVideoId())) {
+                eventPublisher.publishEvent(new VideoPhysicalDeletionEvent(locked.existingVideoId(), drillId));
+            }
+        } else {
+            drillVideoRefRepository.upsertVideoId(drillId, resp.videoId());
+        }
+
+        return new DrillUploadInitiateResponse(resp.videoId(), resp.sessionId(), resp.signedUploadUrl(), resp.expiresAt());
+    }
+
+    /**
+     * skillars-deferred-117 AC5: everything {@code initiateUpload}'s locked reads need to hand off
+     * to the writes/publish that now run after {@code withBoundedRetry} returns.
+     */
+    private record LockedDrillState(Optional<DrillVideoRef> existing, UUID existingVideoId, boolean lockedVideoPresent) {
     }
 
     public void deleteVideo(UUID drillId, Long coachUserId) {
@@ -158,38 +178,51 @@ public class DrillUploadService {
 
         // Story Deferred-75 AC5: locks the Drill row so two concurrent deletes on the same drillId
         // cannot both observe existsByVideoId()==false before either commits its own clear, closing
-        // the ledger's Def14 double-publish race.
-        lockRetryer.withBoundedRetry(() -> {
+        // the ledger's Def14 double-publish race. "Locked region" reasoning mirrors initiateUpload's
+        // comment above — the Postgres row lock is held for this whole transaction, not just for the
+        // duration of the withBoundedRetry lambda.
+        //
+        // skillars-deferred-117 AC5: only the locked reads run inside withBoundedRetry now; the
+        // clearVideoId write and event publish moved to below (still inside this same
+        // @Transactional method) so the retried supplier is genuinely read-only.
+        LockedVideoRef locked = lockRetryer.withBoundedRetry(() -> {
             drillRepository.findByIdForUpdate(drill.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Drill not found", "drill"));
             entityManager.refresh(drill, LockModeType.PESSIMISTIC_WRITE);
 
-            drillVideoRefRepository.findByDrillId(drillId).ifPresent(ref -> {
-                if (ref.getVideoId() == null) return;
-                UUID videoId = ref.getVideoId();
+            Optional<DrillVideoRef> ref = drillVideoRefRepository.findByDrillId(drillId);
+            if (ref.isEmpty() || ref.get().getVideoId() == null) {
+                return new LockedVideoRef(null, false);
+            }
+            UUID videoId = ref.get().getVideoId();
 
-                // Deferred-81 AC3. LOCK ORDERING: Drill (already held above) then Video, inside
-                // this same retry block — mirrors initiateUpload's identical ordering above, so
-                // the two methods cannot deadlock against each other. Taken before clearVideoId
-                // and the existsByVideoId check below, since those are exactly the check-then-act
-                // pair this AC closes for a videoId shared across two Drill rows (see
-                // initiateUpload's own comment for the full race description). Deferred-89 AC3: the
-                // result is now captured (was discarded) — used for its locking side effect AND its
-                // presence.
-                Optional<Video> lockedVideo = videoRepository.findByIdForUpdate(videoId);
-
-                drillVideoRefRepository.clearVideoId(drillId);
-
-                // Deferred-89 AC3: gate the re-publish on the videos row still existing.
-                // drill_video_refs.video_id has no FK (V38), so a ref can outlive its videos row;
-                // without this check an already-soft-deleted / absent video is re-queued for physical
-                // deletion (downstream: a caught VideoNotFoundException + log noise).
-                if (lockedVideo.isPresent() && !drillVideoRefRepository.existsByVideoId(videoId)) {
-                    eventPublisher.publishEvent(new VideoPhysicalDeletionEvent(videoId, drillId));
-                }
-            });
-            return null;
+            // Deferred-81 AC3. LOCK ORDERING: Drill (already held above) then Video, inside
+            // this same retry block — mirrors initiateUpload's identical ordering above, so
+            // the two methods cannot deadlock against each other. Taken before clearVideoId
+            // and the existsByVideoId check below, since those are exactly the check-then-act
+            // pair this AC closes for a videoId shared across two Drill rows (see
+            // initiateUpload's own comment for the full race description). Deferred-89 AC3: the
+            // result is now captured (was discarded) — used for its locking side effect AND its
+            // presence.
+            Optional<Video> lockedVideo = videoRepository.findByIdForUpdate(videoId);
+            return new LockedVideoRef(videoId, lockedVideo.isPresent());
         });
+
+        if (locked.videoId() != null) {
+            drillVideoRefRepository.clearVideoId(drillId);
+
+            // Deferred-89 AC3: gate the re-publish on the videos row still existing.
+            // drill_video_refs.video_id has no FK (V38), so a ref can outlive its videos row;
+            // without this check an already-soft-deleted / absent video is re-queued for physical
+            // deletion (downstream: a caught VideoNotFoundException + log noise).
+            if (locked.lockedVideoPresent() && !drillVideoRefRepository.existsByVideoId(locked.videoId())) {
+                eventPublisher.publishEvent(new VideoPhysicalDeletionEvent(locked.videoId(), drillId));
+            }
+        }
+    }
+
+    /** skillars-deferred-117 AC5: hand-off record for {@code deleteVideo}'s locked-then-write split. */
+    private record LockedVideoRef(UUID videoId, boolean lockedVideoPresent) {
     }
 
     @Transactional(readOnly = true)

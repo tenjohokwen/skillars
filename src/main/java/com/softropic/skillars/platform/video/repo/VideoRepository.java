@@ -73,9 +73,17 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
         """, nativeQuery = true)
     List<Video> findBlockedExceedingThreshold(@Param("threshold") Instant threshold, @Param("batchSize") int batchSize);
 
+    // skillars-deferred-117 AC2: operational_state = 'READY' added. markPurged() sets
+    // operationalState=DELETED on a successful purge but never touches accessState, which stays
+    // ARCHIVED forever. Without this predicate, every already-purged video permanently re-qualifies
+    // for this query — ORDER BY archived_at ASC sorts the oldest purged videos first, and the hard
+    // LIMIT :batchSize means their accumulation eventually starves genuinely-due videos out of every
+    // batch slot entirely. READY mirrors the exact precondition markPurged() itself enforces
+    // (VideoLifecycleService.markPurged), so a video this query returns can never fail that check.
     @Query(value = """
         SELECT * FROM main.videos
         WHERE access_state = 'ARCHIVED'
+          AND operational_state = 'READY'
           AND archived_at < :threshold
         ORDER BY archived_at ASC
         LIMIT :batchSize

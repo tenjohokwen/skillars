@@ -8,6 +8,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -32,6 +38,34 @@ class VideoRepositoryIT extends BaseVideoIT {
 
         assertThatCode(() -> videoRepository.saveAndFlush(seedVideo(null)))
             .doesNotThrowAnyException();
+    }
+
+    // skillars-deferred-117 AC2: findArchivedExceedingThreshold must not permanently re-select a
+    // video markPurged() already purged. No existing test in this file covered this query at all —
+    // this is new coverage, not an extension.
+    @Test
+    void findArchivedExceedingThreshold_returnsReadyArchivedVideo_excludesAlreadyPurgedVideo() {
+        Instant threshold = Instant.now().minus(90, ChronoUnit.DAYS);
+        Instant pastThreshold = threshold.minus(1, ChronoUnit.DAYS);
+
+        Video dueForDeletion = seedArchivedVideo("asset-9311-due", OperationalState.READY, pastThreshold);
+        Video alreadyPurged = seedArchivedVideo("asset-9311-purged", OperationalState.DELETED, pastThreshold);
+        videoRepository.saveAndFlush(dueForDeletion);
+        videoRepository.saveAndFlush(alreadyPurged);
+
+        List<Video> candidates = videoRepository.findArchivedExceedingThreshold(threshold, 100);
+        List<UUID> candidateIds = candidates.stream().map(Video::getId).toList();
+
+        assertThat(candidateIds).contains(dueForDeletion.getId());
+        assertThat(candidateIds).doesNotContain(alreadyPurged.getId());
+    }
+
+    private Video seedArchivedVideo(String providerAssetId, OperationalState operationalState, Instant archivedAt) {
+        Video v = seedVideo(providerAssetId);
+        v.setOperationalState(operationalState);
+        v.setAccessState(AccessState.ARCHIVED);
+        v.setArchivedAt(archivedAt);
+        return v;
     }
 
     private Video seedVideo(String providerAssetId) {

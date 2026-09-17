@@ -3,7 +3,7 @@
 **Story Key:** `skillars-deferred-117-legacy-table-drop-and-scheduler-lock-hardening-sweep`
 **Epic:** Deferred Work
 **Priority:** Medium-High (one confirmed, worsening production bug — AC2 — plus a real cross-user race, a real memory leak, and closing a long-blocked cleanup item)
-**Status:** ready-for-dev
+**Status:** done
 **Created:** 2026-09-16
 
 ---
@@ -379,48 +379,48 @@ above for the exact section/bullet to remove]
 
 ## Tasks/Subtasks
 
-- [ ] **Task 1 — AC1: drop `main.pending_blob_deletions`**
-  - [ ] Write `V141__remove_pending_blob_deletions_java_surface_marker.sql` (header-comment-only)
-  - [ ] Write `V142__drop_pending_blob_deletions.sql` with the `drop-prepared-in: V141` marker
-  - [ ] Delete `PendingBlobDeletion.java`, `PendingBlobDeletionRepository.java`,
+- [x] **Task 1 — AC1: drop `main.pending_blob_deletions`**
+  - [x] Write `V141__remove_pending_blob_deletions_java_surface_marker.sql` (header-comment-only)
+  - [x] Write `V142__drop_pending_blob_deletions.sql` with the `drop-prepared-in: V141` marker
+  - [x] Delete `PendingBlobDeletion.java`, `PendingBlobDeletionRepository.java`,
         `PendingBlobDeletionResidualDrainRunner.java`
-  - [ ] Update `GdprErasureIT.java`: remove the residual-drain test + its two now-dead `@Autowired` fields
-  - [ ] Run `MigrationConventionLintTest`; run a fresh-Testcontainers boot IT; confirm zero live references
+  - [x] Update `GdprErasureIT.java`: remove the residual-drain test + its two now-dead `@Autowired` fields
+  - [x] Run `MigrationConventionLintTest`; run a fresh-Testcontainers boot IT; confirm zero live references
         remain (grep)
 
-- [ ] **Task 2 — AC2: `findArchivedExceedingThreshold` starvation fix**
-  - [ ] Add `operational_state = 'READY'` to the native query's `WHERE` clause
-  - [ ] New `VideoRepositoryIT` coverage (returned vs. not-returned cases)
-  - [ ] New/extended `VideoLifecycleSchedulerTest` coverage (mixed-batch, already-purged video never
+- [x] **Task 2 — AC2: `findArchivedExceedingThreshold` starvation fix**
+  - [x] Add `operational_state = 'READY'` to the native query's `WHERE` clause
+  - [x] New `VideoRepositoryIT` coverage (returned vs. not-returned cases)
+  - [x] New/extended `VideoLifecycleSchedulerTest` coverage (mixed-batch, already-purged video never
         re-touched)
-  - [ ] Full `VideoLifecycleSchedulerTest` suite re-run green
+  - [x] Full `VideoLifecycleSchedulerTest` suite re-run green
 
-- [ ] **Task 3 — AC3: `SessionPackForfeitureScheduler` re-check race fix**
-  - [ ] Re-fetch by id + re-check `expiresAt`/`expiredNotifiedAt`/`remainingSessions` inside the per-item
+- [x] **Task 3 — AC3: `SessionPackForfeitureScheduler` re-check race fix**
+  - [x] Re-fetch by id + re-check `expiresAt`/`expiredNotifiedAt`/`remainingSessions` inside the per-item
         transaction; skip silently (debug log) if no longer eligible
-  - [ ] New tests: concurrent-extend case, concurrent-consume case
-  - [ ] Full `SessionPackForfeitureSchedulerTest` suite re-run green, unmodified assertions
+  - [x] New tests: concurrent-extend case, concurrent-consume case
+  - [x] Full `SessionPackForfeitureSchedulerTest` suite re-run green, unmodified assertions
 
-- [ ] **Task 4 — AC4: `RateLimitingService` eviction**
-  - [ ] Wrap `Bucket` with a `lastAccess` timestamp; add `@Scheduled` TTL-based eviction sweep
-  - [ ] New `ConfigBounds.BoundedKey` for the TTL; wire via `ConfigService.getBoundedLong(...)`
-  - [ ] New tests: idle-past-TTL evicted, within-TTL not evicted / not reset
-  - [ ] `ConfigBoundsEnumCoverageTest` + existing `RateLimitingServiceTest` re-run green
+- [x] **Task 4 — AC4: `RateLimitingService` eviction**
+  - [x] Wrap `Bucket` with a `lastAccess` timestamp; add `@Scheduled` TTL-based eviction sweep
+  - [x] New `ConfigBounds.BoundedKey` for the TTL; wire via `ConfigService.getBoundedLong(...)`
+  - [x] New tests: idle-past-TTL evicted, within-TTL not evicted / not reset
+  - [x] `ConfigBoundsEnumCoverageTest` + existing `RateLimitingServiceTest` re-run green
 
-- [ ] **Task 5 — AC5: `PessimisticLockRetryer` call-site audit test**
-  - [ ] New hand-rolled source-scan test class over all `.withBoundedRetry(` call sites
-  - [ ] Confirm it passes against all current (re-verify exact count) call sites
-  - [ ] Manual mutation check (inject a denylisted pattern locally, confirm RED, revert); document in Dev
+- [x] **Task 5 — AC5: `PessimisticLockRetryer` call-site audit test**
+  - [x] New hand-rolled source-scan test class over all `.withBoundedRetry(` call sites
+  - [x] Confirm it passes against all current (re-verify exact count) call sites
+  - [x] Manual mutation check (inject a denylisted pattern locally, confirm RED, revert); document in Dev
         Agent Record
 
-- [ ] **Task 6 — AC6: ledger updates**
-  - [ ] Delete all five bullets (plus any emptied headers) from `deferred-work.md`
-  - [ ] Reconstruction check
+- [x] **Task 6 — AC6: ledger updates**
+  - [x] Delete all five bullets (plus any emptied headers) from `deferred-work.md`
+  - [x] Reconstruction check
 
-- [ ] **Task 7 — Final validation**
-  - [ ] Run every touched module's targeted test suites together; confirm zero regressions
-  - [ ] Update Verification Checklist, File List, Change Log, Dev Agent Record
-  - [ ] Mark story Status → review
+- [x] **Task 7 — Final validation**
+  - [x] Run every touched module's targeted test suites together; confirm zero regressions
+  - [x] Update Verification Checklist, File List, Change Log, Dev Agent Record
+  - [x] Mark story Status → review
 
 ---
 
@@ -538,21 +538,21 @@ above for the exact section/bullet to remove]
 
 ## Verification Checklist
 
-- [ ] AC1: `V141`/`V142` land, `MigrationConventionLintTest` passes, `PendingBlobDeletion`/`-Repository`/
+- [x] AC1: `V141`/`V142` land, `MigrationConventionLintTest` passes, `PendingBlobDeletion`/`-Repository`/
       `-ResidualDrainRunner` deleted, `GdprErasureIT` updated (one test removed, rest pass), zero remaining
       `pending_blob_deletions`/`PendingBlobDeletion` references in `src/main`/`src/test`
-- [ ] AC2: `findArchivedExceedingThreshold` filters `operational_state = 'READY'`; new repository + scheduler
+- [x] AC2: `findArchivedExceedingThreshold` filters `operational_state = 'READY'`; new repository + scheduler
       tests prove an already-purged video is never re-selected; BLOCKED→ARCHIVED phase unchanged
-- [ ] AC3: per-item re-fetch + re-check lands inside `forfeitExpiredPacks`'s transaction; concurrent-extend
+- [x] AC3: per-item re-fetch + re-check lands inside `forfeitExpiredPacks`'s transaction; concurrent-extend
       and concurrent-consume tests both prove no forfeiture on a no-longer-eligible row; all pre-existing
       `SessionPackForfeitureSchedulerTest` assertions unchanged
-- [ ] AC4: `RateLimitingService` buckets carry a `lastAccess` timestamp and an eviction sweep; new
+- [x] AC4: `RateLimitingService` buckets carry a `lastAccess` timestamp and an eviction sweep; new
       `ConfigBounds.BoundedKey` registered and covered by `ConfigBoundsEnumCoverageTest`; idle-eviction and
       within-TTL-no-eviction both tested; no cluster-safety claim implied anywhere in code/comments
-- [ ] AC5: new call-site audit test passes against all current `withBoundedRetry` call sites; a manual
+- [x] AC5: new call-site audit test passes against all current `withBoundedRetry` call sites; a manual
       mutation check (documented in Dev Agent Record) confirms the test actually catches a violation
-- [ ] AC6: all five ledger bullets (plus any emptied headers) deleted; reconstruction check passed
-- [ ] No regressions in any touched module's existing test suites
+- [x] AC6: all five ledger bullets (plus any emptied headers) deleted; reconstruction check passed
+- [x] No regressions in any touched module's existing test suites
 
 ---
 
@@ -600,6 +600,35 @@ above for the exact section/bullet to remove]
   pre-implementation steps" (read `MigrationLint.lintDropOrdering` before writing V141/V142; verify
   Postgres's sequence auto-drop behavior) were already present in AC1/Dev Notes verbatim — no change
   needed. No blockers found; story proceeds to `ready-for-dev` as originally scoped.
+- 2026-09-17: Dev implementation complete via `/bmad-dev-story`. All 6 ACs done; targeted suites green
+  (no regressions) against a real Testcontainers Postgres where the AC required it. AC5 surfaced a
+  genuine finding beyond the story's own premise — `DrillUploadService`'s two `withBoundedRetry` call
+  sites had writes/an event publish inside the retried lambda, safe today only by a fragile statement-
+  ordering invariant, not by the documented contract. Flagged to the user directly; user chose to
+  refactor `DrillUploadService` (move the writes/publish to run after the lock is acquired, still inside
+  the same transaction, preserving the original locking guarantee) over documenting-as-accepted or
+  deferring as a new ledger item — verified behavior-preserving via the full `DrillUploadServiceTest`
+  (21/21) and `DrillUploadServiceConcurrencyIT` (5/5, real Postgres) suites. `deferred-work.md` closed:
+  all five targeted bullets deleted outright (no headers emptied); reconstruction check passed via
+  `git diff`. Status → review.
+- 2026-09-17: `/bmad-code-review` response processed. Of 14 findings (1 decision-needed + 10 patches +
+  1 pre-deferred + 2 pre-dismissed... see Review Findings below for the exact breakdown), each was
+  independently re-verified against the actual code rather than accepted on the review's assertion
+  alone — several findings cited line numbers/ranges that do not exist in the real files (a 266-line
+  file cited at lines 421-472; a 110-line file cited at line 384), indicating the review tool ran
+  against a stale or reconstructed view rather than the real diff. Outcome: 2 genuine (low-severity)
+  findings patched — a narrow TOCTOU race in `RateLimitingService`'s bucket-eviction sweep (closed via
+  `computeIfPresent`) and a defensive `volatile` on its `clock` field; 1 finding investigated and found
+  to have a suggested fix that would not actually work (a "mixed batch" scheduler test would contradict
+  its own claim, since `runArchivedToDeletedPhase` has no filtering of its own by AC2's own design) —
+  comment strengthened, no behavior change; 7 dismissed as false positives with reasons recorded per
+  finding (misunderstood `getBoundedLong` overload semantics, JPA `@Id` non-nullability,
+  `@EnableScheduling` already present globally, `BoundedKey`'s record shape not tracking defaults by
+  design, `platform_config` being DB-backed runtime config rather than a static properties file, a
+  transaction-boundary claim that ignores the class-level `@Transactional` already covering both before
+  and after this story's AC5 refactor, and a null-safety-required log statement flagged as "stale").
+  All touched-module suites re-run green after the two patches. Status remains review.
+- 2026-09-17: All code review findings resolved and re-verified, no open items remain. Status → done.
 
 ---
 
@@ -607,8 +636,221 @@ above for the exact section/bullet to remove]
 
 ### Agent Model Used
 
+Claude Sonnet 5 (`claude-sonnet-5`), via `/bmad-dev-story`.
+
 ### Debug Log References
+
+- `MigrationConventionLintTest`: 13/13 green (includes `realMigrations_aboveBaseline_areClean` against
+  the new V141/V142).
+- `GdprErasureIT` (fresh Testcontainers Postgres boot, `main.pending_blob_deletions` absent): 17/17 green.
+- `VideoRepositoryIT` (Testcontainers): 3/3 green, including the new
+  `findArchivedExceedingThreshold_returnsReadyArchivedVideo_excludesAlreadyPurgedVideo`.
+- `VideoLifecycleSchedulerTest`: 9/9 green (8 pre-existing + 1 new mixed-batch test).
+- `SessionPackForfeitureSchedulerTest`: 8/8 green (6 pre-existing + 2 new concurrent-extend/-consume tests).
+- `RateLimitingServiceTest`: 5/5 green (3 pre-existing + 2 new eviction tests).
+- `RateLimitingAspectIT` (SpringBootTest, no DB): 2/2 green.
+- `ConfigBoundsEnumCoverageTest`: 5/5 green.
+- `ReportGenerationServiceTest`: 17/17 green (real `RateLimitingService` instance, updated constructor call).
+- `PessimisticLockRetryerCallSiteAuditTest` (new): 1/1 green — 28 call sites found, zero denylist matches.
+  Manual mutation check performed and reverted (see Completion Notes).
+- `DrillUploadServiceTest`: 21/21 green (post-refactor).
+- `DrillUploadServiceConcurrencyIT` (Testcontainers): 5/5 green (post-refactor, confirms the lock/race
+  behavior the AC5 restructuring must preserve is unchanged).
+- No `mvn verify` run — per project convention (`docs/validation-strategy.md`), GitHub CI is the sole
+  full-verification gate. All suites above run against a real Testcontainers Postgres where the AC
+  requires it (AC1/AC2/AC5's `DrillUploadServiceConcurrencyIT`), not mocked.
 
 ### Completion Notes List
 
+- **AC1**: `V141` (no-op marker) + `V142` (`DROP TABLE IF EXISTS main.pending_blob_deletions`, citing
+  `drop-prepared-in: V141`) land above the `V139` rebaseline boundary, so `MigrationLint`'s full
+  deferred-92 rule set (including `DROP_WITHOUT_PRIOR_RELEASE_PREP`) applies with no grandfather
+  exception — confirmed by `MigrationConventionLintTest`'s `realMigrations_aboveBaseline_areClean`
+  passing. Confirmed via `V138__baseline_schema.sql`'s DDL that `id` is a `GENERATED ALWAYS AS IDENTITY`
+  column, so Postgres drops `pending_blob_deletions_id_seq` automatically with the table — no separate
+  `DROP SEQUENCE` added. `PendingBlobDeletion`/`PendingBlobDeletionRepository`/
+  `PendingBlobDeletionResidualDrainRunner` deleted; `GdprErasureIT`'s one residual-drain test + its two
+  dead `@Autowired` fields removed, all other tests in that file untouched and re-run green (17/17)
+  against a real fresh-Testcontainers boot with the table already dropped. Final grep sweep of
+  `src/main`/`src/test` for `PendingBlobDeletion`/`pending_blob_deletions` returns only pre-existing,
+  unrelated historical comments in `outbox`/`video`/`filestorage` javadocs that reference *different*,
+  already-deleted (by `skillars-deferred-100`) sibling classes (`PendingBlobDeletionService`,
+  `PendingBlobDeletionChunkProcessor`) sharing a name prefix — not the classes/table this AC removes,
+  and not touched by this story (out of scope, pre-existing before this story).
+- **AC2**: confirmed by direct reading that `markPurged()` never touches `accessState` and
+  `archiveForLifecycle()` (the BLOCKED→ARCHIVED phase) does — the asymmetry is real, not assumed. Added
+  `operational_state = 'READY'` to `findArchivedExceedingThreshold`'s native query only; did not touch
+  `findBlockedExceedingThreshold`. New `VideoRepositoryIT` test proves a `READY`+`ARCHIVED` video is
+  returned and a `DELETED`+`ARCHIVED` (already-purged) video is not. New
+  `VideoLifecycleSchedulerTest` proves the scheduler never even re-fetches/re-touches an
+  already-purged video id that (per the fixed query) was never in its batch.
+- **AC3**: re-fetch is a plain `findById` inside the per-item `TransactionTemplate.execute(...)` block —
+  no `findByIdForUpdate`/`PessimisticLockRetryer` added, per Dev Notes (this scheduler already runs
+  under its own `@SchedulerLock`; the race is against ordinary user writes, not a second scheduler run).
+  All existing tests needed one addition — `buildPurchase()` now stubs `findById` to return the same
+  mutable purchase object, mirroring "nothing changed underneath" — so every pre-existing assertion is
+  unchanged. Two new tests simulate a committed `extendPack`/full-consumption in the batch-load-to-
+  per-item-transaction gap by stubbing `findById` to return a different (extended/consumed) snapshot.
+- **AC4**: `RateLimitingService` now takes a `ConfigService` constructor dependency (updated the 3 call
+  sites that construct it directly: `RateLimitingServiceTest`, `RateLimitingAspectIT`,
+  `ReportGenerationServiceTest`). `lastAccess` is an `AtomicLong` per the pre-implementation review's
+  refinement. TTL is `security.rate_limiting.bucket_ttl_hours` via the 4-arg `getBoundedLong` (survivable/
+  code-default site — added to `ConfigBounds.HAS_CODE_DEFAULT`), default 24h, comfortably above the
+  60-minute longest in-use `Bucket4j` duration. Sweep runs hourly via `@Scheduled`; a package-private
+  `sweepIdleBuckets()` plus an injectable `clock` field let the tests drive eviction deterministically
+  (no real sleeps). The "not cluster-safe" limitation is documented in a class-level comment, explicitly
+  separate from the eviction fix.
+- **AC5 — genuine finding, not just a test-writing exercise.** Building the source-scan test surfaced a
+  real violation: `DrillUploadService.initiateUpload`/`deleteVideo`'s `withBoundedRetry` lambdas
+  contained writes (`setVideoId`/`upsertVideoId`/`clearVideoId`) and an `eventPublisher.publishEvent(...)`
+  — a real hit against the story's own proposed `publishEvent(`/`new .*Event(` denylist entries. Traced
+  carefully: no double-execution was actually reachable (every `PessimisticLockingFailureException`-
+  throwing statement in those lambdas precedes every write/publish), so this was safe by a fragile
+  statement-ordering invariant, not by the documented contract. **Flagged to the user via
+  AskUserQuestion**; user selected "refactor DrillUploadService" over documenting-as-accepted or
+  filing as a new deferred-work item. Both methods restructured so only the locked reads run inside
+  `withBoundedRetry`; the writes/publish now run after it returns, still inside the same
+  `@Transactional` method — the Postgres row lock is held for the whole transaction (not just the
+  lambda's duration), so this preserves the original Deferred-75 AC5 locking guarantee exactly (this
+  reasoning is documented inline in `DrillUploadService`). Verified behavior-preserving:
+  `DrillUploadServiceTest` (21/21) and `DrillUploadServiceConcurrencyIT` (5/5, real Testcontainers
+  Postgres, the concurrency behavior this refactor must not change) both green post-refactor.
+  Re-verified exact call-site count by grep at implementation time: **28** real `.withBoundedRetry(`
+  call sites (not 16, the ledger's stale figure) — matches the story's own story-creation-time count.
+  The new `PessimisticLockRetryerCallSiteAuditTest` extracts each call site's argument via balanced-
+  paren matching (comment/string-literal-aware, including Java text blocks) so the block-form
+  ({@code () -> { ... }}) and single-expression forms are both handled, and a call chained AFTER
+  `withBoundedRetry(...)` returns (e.g. `BookingBatchService`'s `withBoundedRetry(() -> repo.findByIdForUpdate(id)).ifPresent(...)`
+  pattern, 2 call sites) is correctly excluded from the extracted lambda text. **Manual mutation check**
+  (documented per AC5's "Verified by"): temporarily edited `PlaybackService.java:140`'s lambda to wrap a
+  `.save(...)` call, ran the new test, confirmed it failed with the exact file/line/pattern named in the
+  assertion message, then reverted the edit (confirmed via `git diff` showing no residual change) and
+  re-ran the test green. No production changes to `PessimisticLockRetryer.java` itself.
+- **Code review response (2026-09-17)**: see "Review Findings" below for the full per-finding
+  breakdown. Two genuine low-severity issues found and fixed in `RateLimitingService`: a TOCTOU race
+  in the eviction sweep (`entrySet().removeIf(...)` decided-then-removed non-atomically; switched to
+  per-key `computeIfPresent` so a concurrently-refreshed bucket survives) and a missing `volatile` on
+  the `clock` field (no live production risk since it's never reassigned there, but free and
+  consistent with the same reasoning already applied to `lastAccessMillis`). Seven findings were false
+  positives — two of them citing line numbers/ranges that don't exist in the actual files (266-line
+  and 110-line files cited at lines 421-472 and 384 respectively), so every finding was independently
+  re-verified against the real code before acting, not accepted on the review's own assertion. One
+  finding's suggested fix was investigated and found unworkable as stated (a literal "mixed batch"
+  scheduler test would contradict the very claim it was meant to prove, since AC2's fix is entirely at
+  the query layer, not the scheduler) — left the test as designed, strengthened its comment instead.
+- **AC6**: all five bullets deleted outright (no `[DONE ...]` tag — matches this file's own stated
+  convention that a real fix is deleted outright, not kept with a tag, unlike a `[DECIDED]`/`[DISMISSED]`
+  entry). AC1's bullet lived under a dangling "The follow-up it owes:" intro sentence with no other
+  bullet under it — reworded that one sentence to state the follow-up was closed (precedent: this file's
+  own SES-preflight closure narrative does the same for closed items with surrounding prose). All four
+  other headers had sibling bullets remaining, so no header was removed. Confirmed via `git diff` that
+  no unrelated line changed (reconstruction check).
+- **Cross-cutting**: five independent modules touched (`filestorage`, `video`, `payment`,
+  `infrastructure.security`, `infrastructure.persistence`/`session`), implemented in AC order; no
+  cross-AC coupling encountered, matching the story's own Dev Notes.
+
 ### File List
+
+**Migrations (new):**
+- `src/main/resources/db/migration/V141__remove_pending_blob_deletions_java_surface_marker.sql`
+- `src/main/resources/db/migration/V142__drop_pending_blob_deletions.sql`
+
+**Deleted:**
+- `src/main/java/com/softropic/skillars/platform/filestorage/repo/PendingBlobDeletion.java`
+- `src/main/java/com/softropic/skillars/platform/filestorage/repo/PendingBlobDeletionRepository.java`
+- `src/main/java/com/softropic/skillars/platform/filestorage/service/PendingBlobDeletionResidualDrainRunner.java`
+
+**Main — modified:**
+- `src/main/java/com/softropic/skillars/platform/video/repo/VideoRepository.java` (AC2)
+- `src/main/java/com/softropic/skillars/platform/payment/service/SessionPackForfeitureScheduler.java` (AC3)
+- `src/main/java/com/softropic/skillars/infrastructure/security/RateLimitingService.java` (AC4)
+- `src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java` (AC4)
+- `src/main/java/com/softropic/skillars/platform/session/service/DrillUploadService.java` (AC5 — refactor)
+
+**Test — new:**
+- `src/test/java/com/softropic/skillars/infrastructure/persistence/PessimisticLockRetryerCallSiteAuditTest.java` (AC5)
+
+**Test — modified:**
+- `src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java` (AC1)
+- `src/test/java/com/softropic/skillars/platform/video/repo/VideoRepositoryIT.java` (AC2)
+- `src/test/java/com/softropic/skillars/platform/video/service/VideoLifecycleSchedulerTest.java` (AC2)
+- `src/test/java/com/softropic/skillars/platform/payment/service/SessionPackForfeitureSchedulerTest.java` (AC3)
+- `src/test/java/com/softropic/skillars/infrastructure/security/RateLimitingServiceTest.java` (AC4)
+- `src/test/java/com/softropic/skillars/infrastructure/security/RateLimitingAspectIT.java` (AC4 — constructor call-site fix)
+- `src/test/java/com/softropic/skillars/platform/development/service/ReportGenerationServiceTest.java` (AC4 — constructor call-site fix)
+
+**Docs/tracking — modified:**
+- `_bmad-output/implementation-artifacts/deferred-work.md` (AC6)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (status tracking)
+- `_bmad-output/implementation-artifacts/skillars-deferred-117-legacy-table-drop-and-scheduler-lock-hardening-sweep.md` (this file)
+
+---
+
+## Review Findings
+
+**Code Review Complete** via `/bmad-code-review` (2026-09-17). Three-layer analysis (Blind Adversarial, Edge Case Hunter, Acceptance Auditor) found 14 actionable findings.
+
+**Response processed 2026-09-17 (independently re-verified against the actual code, not accepted on the
+review's assertion alone — several findings cite line numbers/ranges that don't exist in the actual files,
+suggesting the review ran against a stale or reconstructed view of the diff rather than the real files;
+each finding below was checked directly).** Outcome: **2 patched** (both a genuine, if low-severity,
+finding), **1 already-correctly-designed** (comment strengthened, no behavior change), **7 dismissed as
+false positives** (reasons recorded per finding), **1 deferred item left as-is** (already correctly scoped
+by the review itself), **3 pre-dismissed items reconfirmed correct**.
+
+### Decision-Needed
+
+- [x] [Review][Decision] **@EnableScheduling May Be Missing** — @Scheduled on evictIdleBuckets requires @EnableScheduling on a Spring configuration class. Diff doesn't show this annotation. If missing, the sweep never runs and AC4's memory-leak fix is defeated. **Action Required:** Verify whether any `*Config.java` or similar already has `@EnableScheduling`. If not, it must be added before commit.
+  - **FALSE POSITIVE.** `@EnableScheduling` is already present globally on `infrastructure.config.SchedulingConfig` (confirmed by reading the file directly — it predates this story and is what every other `@Scheduled` method in this codebase, e.g. `SessionPackForfeitureScheduler.forfeitExpiredPacks`, `VideoLifecycleScheduler.runLifecycleJob`, already relies on). `evictIdleBuckets()` is covered by the same global config; no change needed.
+
+### Patches (10 findings)
+
+- [x] [Review][Patch] **CRITICAL: Migration Files Not Staged** [git staging]
+  - V141 and V142 exist on disk but show as untracked (`??`). AC1 requires same commit. Fix: `git add src/main/resources/db/migration/V14{1,2}*.sql`
+  - **Not a code defect — expected mid-development state.** The review ran before anything in this story was committed, so every changed/new file shows as untracked/unstaged in `git status`, not just the migrations. All files (including both migrations) will be staged together in the single commit this story lands as, per the usual release workflow. No action needed beyond the normal `git add` at commit time.
+
+- [x] [Review][Patch] **RateLimitingService TOCTOU Race in Bucket Eviction** [RateLimitingService.java:119]
+  - Between removeIf check and removal, concurrent tryConsume can update lastAccessMillis, causing active buckets to be evicted. Fix: Use atomic check-and-remove (e.g., `computeIfPresent` with conditional return).
+  - **CONFIRMED, genuine (low severity) — PATCHED.** `Collection.removeIf`'s default implementation (which `ConcurrentHashMap.EntrySetView` inherits) reads the predicate once via the iterator and then unconditionally removes via `it.remove()`, regardless of whether the entry's `lastAccessMillis` changed in between. Worst-case consequence was always benign (an actively-used bucket gets reset to full — an availability-favoring outcome, not a security bypass), but the fix is cheap and closes it for real: `sweepIdleBuckets()` now uses `buckets.computeIfPresent(key, ...)` per key, re-reading `lastAccessMillis` atomically with the removal decision. `RateLimitingServiceTest` re-run green (5/5) after the change.
+
+- [x] [Review][Patch] **RateLimitingService Exception Handling in Sweep** [RateLimitingService.java:115-116]
+  - If `configService.getBoundedLong()` throws, entire sweep fails silently (@Scheduled catches). Eviction stops, unbounded growth resumes. Fix: Add explicit exception handling.
+  - **FALSE POSITIVE.** Read `ConfigService.getBoundedLong(String, long, long, long)` (the 4-arg, default-supplying overload actually used here) directly: it delegates to `getLong(key, defaultValue)`, which catches `NumberFormatException` and handles an absent/blank key by returning `defaultValue` with a WARN log — this overload cannot throw, by design. (The *different*, 3-arg `getBoundedLong(key, min, max)` overload — not used here — is the one that can throw on a missing key.) No exception handling needed.
+
+- [x] [Review][Patch] **SessionPackForfeitureScheduler Null-Pointer Risk** [SessionPackForfeitureScheduler.java:50-51]
+  - `staleFromBatch.getPurchaseId()` could return null, passed to `findById`. Fix: Add null-guard.
+  - **FALSE POSITIVE.** `staleFromBatch` is a `SessionPackPurchase` entity loaded by `findExpiredNotYetNotified(now)` — a JPQL query against a persisted row. `purchaseId` is that entity's `@Id` (primary key); Hibernate always populates the `@Id` field when hydrating a query result, and a PK is `NOT NULL` by definition. A null `purchaseId` on a row returned by a repository query is not structurally possible. No guard needed.
+
+- [x] [Review][Patch] **DrillUploadService Partial Transaction Execution** [DrillUploadService.java:421-472]
+  - Exception after lockRetryer completes but before writes can leave inconsistent state. Fix: Ensure all writes execute within same transaction as locked read.
+  - **FALSE POSITIVE — and the cited range doesn't exist** (the file is 266 lines total; there is no line 421 or 472). Substantively: `DrillUploadService` is class-level `@Transactional`, so `initiateUpload`/`deleteVideo` each run as ONE Spring-managed transaction both before and after this story's AC5 refactor — moving the writes/publish to run textually after `withBoundedRetry(...)` returns did not create a new transaction boundary. An exception anywhere in the method — before, during, or after the locked reads — still rolls back the whole transaction exactly as it always did; there is no window where a partial write survives. This is precisely the property the refactor's own inline comment documents ("stays inside the locked region" — the Postgres row lock and the transaction both span the whole method either way).
+
+- [x] [Review][Patch] **VideoLifecycleSchedulerTest Incomplete Coverage** [VideoLifecycleSchedulerTest.java:228-258]
+  - AC2 "Verified by" requires "batch containing both genuinely-due and already-purged videos." Test mocks only single video. Comment contradicts requirement. Fix: Update test to mock mixed batch with both `operationalState=READY` and `operationalState=DELETED` videos.
+  - **Investigated — the suggested fix would not work, current design is correct; comment strengthened.** `runArchivedToDeletedPhase` has no filtering logic of its own — it blindly iterates whatever `findArchivedExceedingThreshold` returns. Putting both videos in the SAME mocked list would make the scheduler call `deleteAsset`/`findById`/`markPurged` on the already-purged one too, which would only re-prove `skillars-deferred-115`'s pre-existing per-video try/catch (a different, already-covered guarantee) and would directly contradict this test's actual claim ("never even re-fetched"). That guarantee can only be true because the query (proven separately by `VideoRepositoryIT`) never returns such a video in the first place — by AC2's own design, there is no scheduler-level filter to test. Added an explicit code-review-reasoning comment to the test so this isn't re-litigated later. No behavior change; `VideoLifecycleSchedulerTest` re-run green (9/9).
+
+- [x] [Review][Patch] **RateLimitingService Clock Field Lacks Volatile** [RateLimitingService.java:53]
+  - Clock accessed by request threads (tryConsume) and scheduler thread (evictIdleBuckets) without synchronization. Fix: Add `volatile` modifier or mark `final` if never reassigned.
+  - **CONFIRMED (defensive, not a live production bug) — PATCHED.** In production `clock` is set once at construction and never reassigned, so there's no real visibility gap there (`final` was rejected — `RateLimitingServiceTest` intentionally reassigns it to a fixed clock to avoid real sleeps). Added `volatile`: free, and consistent with the same request-thread/scheduler-thread reasoning already applied to `lastAccessMillis` (`AtomicLong`).
+
+- [x] [Review][Patch] **ConfigBounds Default Value Split** [ConfigBounds.java + RateLimitingService.java:116]
+  - Default TTL (24L) lives only in call site, not in ConfigBounds entry. Maintenance risk. Fix: Extract to ConfigBounds constant, reference in both places.
+  - **FALSE POSITIVE.** `ConfigBounds.BoundedKey` is `record BoundedKey(String key, long min, long max, boolean failFast, String note)` — it has no `defaultValue` field at all, by design; every one of the other 26 existing `BoundedKey` entries in this file ALSO keeps its default solely at its own call site (e.g. `PACK_PAUSE_MAX_DAYS`'s default lives only in `PackSessionService.pausePack`'s call). This is the established, universal convention this file already documents (`ConfigService.getBoundedLong(...)` call sites still pass their own default literally per the class javadoc), not something this story's code does differently. Changing it would mean changing the record shape for all 26+ existing entries — out of scope.
+
+- [x] [Review][Patch] **Missing Application Configuration** [application.properties or application-dev.yml]
+  - New config key `security.rate_limiting.bucket_ttl_hours` not added to externalized config files. TTL fixed at 24h, no deployment-time override. Fix: Add entry to application.properties/profiles.
+  - **FALSE POSITIVE.** This key is a `platform_config` DB-table-backed runtime setting read via `ConfigService`, not a Spring `application.yaml`/`@Value` property — the same mechanism as every other `ConfigBounds` entry. Per `ConfigBounds.HAS_CODE_DEFAULT`'s own javadoc, an absent key is explicitly survivable ("the code default applies") for exactly this class of key; it is not pre-seeded in any config file until an operator chooses to override it via the runtime config API (`PUT /api/config`). Absence is by design, not a gap.
+
+- [x] [Review][Patch] **SessionPackForfeitureScheduler Log Message Uses Stale ID** [SessionPackForfeitureScheduler.java:384]
+  - Skip decision based on fresh purchase row, but log uses staleFromBatch id. Semantically confusing. Fix: Use fresh purchase id in log message.
+  - **FALSE POSITIVE — and the cited line doesn't exist** (the file is 110 lines total; there is no line 384). Substantively: the log statement sits inside the branch where `purchase` (the fresh re-fetch) may be `null` (row deleted), so `staleFromBatch.getPurchaseId()` is the only null-safe choice there — using `purchase.getPurchaseId()` as suggested would NPE in that exact case. And when `purchase` is non-null, its id is identical to `staleFromBatch`'s by construction (`findById(staleFromBatch.getPurchaseId())` — a primary key cannot change), so there is no actual "staleness" in the id itself, only in the other fields.
+
+### Deferred (Pre-Existing, Not This Story)
+
+- [x] [Review][Defer] **RateLimitingServiceTest Bounds Verification Gap** [RateLimitingServiceTest.java] — deferred, pre-existing test quality gap (mock doesn't verify ConfigService bounds enforcement; good to fix but optional for this story). Reconfirmed: reasonable as scoped by the review itself; left as-is.
+
+### Dismissed (False Positives / Acceptable Trade-offs)
+
+- **RateLimitingService Timestamp Precision Boundary** — Sweep runs hourly; millisecond granularity not a real risk. Dismissed. Reconfirmed correct.
+- **EXPECTED_CALL_SITE_COUNT Stale** — Not stale; it's a checkpoint. If new call sites added, test fails (intentional). Dismissed. Reconfirmed correct.
+- **Eviction Concurrent Creation Metric** — Debug log accuracy is best-effort acceptable trade-off. Dismissed. Reconfirmed correct.
