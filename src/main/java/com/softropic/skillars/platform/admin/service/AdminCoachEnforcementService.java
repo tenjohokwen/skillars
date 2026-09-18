@@ -148,8 +148,26 @@ public class AdminCoachEnforcementService {
 
     @Transactional
     public void reinstateCoach(UUID coachId, String reason, Long adminId) {
-        CoachProfile coach = coachProfileRepository.findById(coachId)
-            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        // skillars-deferred-121 AC1: locked read, mirroring suspendCoach's :107-108. A plain
+        // findById let this method's transition decision be computed from a stale pre-lock read
+        // while a concurrent locked writer (suspendCoach, or ReliabilityStrikeService.issue) was
+        // still in flight. Note what this specifically fixes: SUSPENDED is (and remains) a legal
+        // source status below, so a fresh SUSPENDED read does not block a reinstate — that is
+        // intended, an explicit admin reinstate call takes precedence regardless of when the
+        // suspension landed. What the lock actually closes is the case where the concurrent
+        // writer's fresh state is ACTIVE: pre-fix, a stale non-ACTIVE read would sail past the
+        // early-return below and re-run the write, publishing a second CoachReinstatedEvent and a
+        // second COACH_REINSTATE admin_action_log row for a coach that was already reinstated.
+        // Review note (2026-09-18, /bmad-code-review): findByIdForUpdate's SELECT ... FOR UPDATE
+        // takes Postgres's FOR UPDATE lock, which (unlike the plain findById + save()'s implicit
+        // FOR NO KEY UPDATE this replaces) conflicts with the FOR KEY SHARE any in-flight FK child
+        // insert into this row holds (coach_reliability_strikes, bookings, coach_pricing, etc.) —
+        // a new 409 surface if such an insert's transaction outlives PessimisticLockRetryer's
+        // ~3.2s budget. suspendCoach has carried this exact property since skillars-deferred-15
+        // without incident; accepted here for consistency rather than introducing a narrower,
+        // asymmetric lock strategy for these two methods alone.
+        CoachProfile coach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
 
         if (coach.getStatus() == CoachProfileStatus.ACTIVE) {
             return;
@@ -184,6 +202,15 @@ public class AdminCoachEnforcementService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid strike reason");
         }
 
+        // Deliberately unlocked (existence check only). Do NOT "complete the pattern" by locking
+        // this read: reliabilityStrikeService.issue() below is Propagation.REQUIRES_NEW, which
+        // suspends this method's transaction and opens a second one on a separate connection. If
+        // this line also took findByIdForUpdate, the outer transaction would hold FOR UPDATE on
+        // the same coach row that issue()'s own findByIdForUpdate (NOWAIT) then tries to acquire
+        // from its suspended-but-not-yet-committed sibling — a guaranteed self-block that
+        // PessimisticLockRetryer's ~3.2s budget can never resolve, since the outer lock can't
+        // release until issue() returns. Every manual strike call would fail after the full retry
+        // budget. Review note (2026-09-18, /bmad-code-review).
         coachProfileRepository.findById(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
 
@@ -217,12 +244,15 @@ public class AdminCoachEnforcementService {
 
         strikeRepository.deleteById(strikeId);
 
+        // skillars-deferred-121 AC1: locked read moved before the count computation, mirroring
+        // ReliabilityStrikeService.issue's ordering — the count and the revert decision must be
+        // read consistently under the same lock, not just the final write guarded by it.
+        CoachProfile coach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
+
         long count = strikeRepository.countByCoachIdAndCreatedAtAfter(coachId, OffsetDateTime.now().minusDays(30));
         long visibilityThreshold = configService.getBoundedLong(
             ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, ReliabilityStrikeConfig.DEFAULT_VISIBILITY_THRESHOLD, 1L, Long.MAX_VALUE);
-
-        CoachProfile coach = coachProfileRepository.findById(coachId)
-            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
 
         AdminActionLog actionLog = new AdminActionLog();
         actionLog.setAdminId(adminId);
