@@ -25,6 +25,7 @@ import org.springframework.web.client.HttpClientErrorException;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -139,7 +140,12 @@ class ManualStrikeIT extends AbstractIntegrationTest {
      */
     @Test
     void issueManualStrike_againstSuspendedCoach_recordsStrikeWithoutEscalation() {
-        Timestamp originalStatusChangedAt = Timestamp.from(Instant.now().minusSeconds(600));
+        // Truncated to microseconds: Postgres timestamptz has microsecond precision, so a
+        // nanosecond-precision Instant.now() round-tripped through the DB below would compare
+        // unequal on its trailing sub-microsecond digits (observed in CI: expected ...440412Z, was
+        // ...440000Z) even though no write actually moved the value.
+        Timestamp originalStatusChangedAt = Timestamp.from(
+            Instant.now().minusSeconds(600).truncatedTo(ChronoUnit.MICROS));
         transactionTemplate.execute(status -> {
             for (int i = 0; i < 4; i++) {
                 jdbcTemplate.update(

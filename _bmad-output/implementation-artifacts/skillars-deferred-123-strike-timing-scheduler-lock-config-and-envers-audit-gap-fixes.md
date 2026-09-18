@@ -773,7 +773,7 @@ happening once already.
 - `docs/deployment/scheduler-lock-tuning.md` (AC4, new; ceiling column + ordering constraint added by Review Decision 4; exclusion-paragraph fix by Review Patch)
 
 **Tests:**
-- `src/test/java/com/softropic/skillars/platform/admin/api/ManualStrikeIT.java` (AC1, +3 tests)
+- `src/test/java/com/softropic/skillars/platform/admin/api/ManualStrikeIT.java` (AC1, +3 tests; CI fix — nanosecond-vs-microsecond precision truncation, see Change Log)
 - `src/test/java/com/softropic/skillars/platform/admin/api/ReinstateIT.java` (Review Decision 2 — `reinstateCoach_withStrikesStillInWindow_setsActiveButLeavesAlertOpen` + teardown hardening)
 - `src/test/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeServiceTest.java` (AC1, +2 tests)
 - `src/test/java/com/softropic/skillars/platform/config/service/ConfigStartupAssertionTest.java` (Review Decision 4, new — 6 fixture-driven tests for the scheduler-lock floor/ceiling cross-check)
@@ -787,6 +787,10 @@ happening once already.
 - `src/test/java/com/softropic/skillars/platform/security/repo/UserEnversAuditGapIT.java` (AC5, new file)
 - `src/test/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementIsolationRuntimeIT.java` (AC6, new file, 3 tests; Review Patch — vacuous-pass guard + characterization-test relabel)
 - `src/test/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementServiceIsolationTest.java` (AC6, Javadoc only)
+
+**CI (found by running the actual GitHub Actions gate, not locally):**
+- `.github/workflows/pr-build.yml` (Spring-context ceiling call site bumped 42 -> 43)
+- `.github/scripts/assert-context-count.sh` (ceiling history comment + default bumped to match)
 
 **Documentation / tracking:**
 - `_bmad-output/implementation-artifacts/deferred-work.md` (AC8; Review Patch — restored 2 wrongly-deleted `[DECIDED]` bullets, added the new Hibernate-DDL-bypass and `main."user"` cleanup-index items)
@@ -827,7 +831,35 @@ happening once already.
   above), 3 review-layer claims independently disproved and not carried forward. File List and Change
   Log reconciled against the final diff (added `application.yaml`, `ConfigStartupAssertion`/
   `ConfigStartupAssertionTest`, `ReinstateIT`, and migrations V146-V148, none of which were captured when
-  the Decision resolutions above first landed). Status → done.
+  the Decision resolutions above first landed).
+- 2026-09-18: PR #211 CI run (`pr-build.yml`) surfaced 2 issues neither local runs nor the review layers
+  caught, since both are properties of the real GitHub Actions environment rather than the code path
+  under review:
+  1. **`ManualStrikeIT.issueManualStrike_againstSuspendedCoach_recordsStrikeWithoutEscalation` failed**
+     (`expected: ...440412Z but was: ...440000Z`) — not a production bug. The test's own
+     `originalStatusChangedAt` was captured via bare `Instant.now()` (nanosecond precision) and later
+     compared for exact equality against the same value read back through a raw-JDBC round trip through
+     Postgres `timestamptz`, which only stores microsecond precision — an assertion that was never
+     reliably true regardless of environment, not a flake specific to CI. Fixed by truncating the
+     captured instant to `ChronoUnit.MICROS` before use, matching this codebase's own
+     `RescheduleResourceIT`/`RescheduleServiceConcurrencyIT`/`SoftDeleteIT` precedent for the same class
+     of Postgres-precision mismatch. `ReliabilityStrikeService.issue`'s production logic that this test
+     exercises (the `alreadyOffMarketplace` guard added by AC1) was independently re-verified correct —
+     it never calls `coachProfileRepository.save()` at all when the coach is already
+     `SUSPENDED`/`DEACTIVATED`, so `statusChangedAt` genuinely cannot move; the assertion was failing on
+     its own precision, not on a real regression.
+  2. **`assert-context-count.sh`'s Spring-context ceiling gate failed** (`missCount` 43 > ceiling 42) —
+     `AdminCoachEnforcementIsolationRuntimeIT` (AC6) is the first and only class in the suite to
+     `@MockitoSpyBean` `CoachProfileRepository`, which forks a new Spring context by the same
+     one-new-config-forks-one-context mechanism `assert-context-count.sh`'s own header already documents
+     for `AccountDeletionCascadeIT`/`SmtpTransportBootIT`/`SesCutoverPreflightResourceIT`. Ceiling bumped
+     42 -> 43 at both the `pr-build.yml` call site and the script's own default/history comment, with a
+     dated justification matching the file's established convention. In passing, noted (but did not
+     re-investigate) that the prior 41 -> 42 bump from `skillars-deferred-121` had never been appended to
+     that history comment — not this story's regression to fix, flagged only.
+  Both fixes are test/CI-infrastructure only; no production code changed as a result. `ManualStrikeIT`
+  re-run locally against real Testcontainers Postgres after the fix: 13/13 green (56.09s). `mvn
+  test-compile` (`-DskipFrontend`) BUILD SUCCESS. Status → done.
 
 ## Dev Agent Record
 

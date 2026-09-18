@@ -107,7 +107,22 @@ LOG="${1:?usage: assert-context-count.sh <build-log> [ceiling]}"
 # is the first and only @PreAuthorize-enforcement test in this codebase (no existing slice to
 # extend instead), so a new fork was unavoidable. Measured on PR #193 (run 35073092775):
 # missCount went 40 -> 41.
-CEILING="${2:-41}"
+#
+# CEILING = 42 at pr-build.yml's call site by skillars-deferred-121 (PR #209, new
+# AdminCoachEnforcementConcurrencyIT), but that bump was never appended here -- caught in
+# passing while adding the entry below; not re-investigated further since it is not this
+# story's regression to fix.
+#
+# CEILING = 43, deliberate +1 (story skillars-deferred-123, AdminCoachEnforcementIsolationRuntimeIT).
+# The first (and only) class in the suite to @MockitoSpyBean CoachProfileRepository -- needed to
+# read the *effective* Postgres isolation level from inside a real getEnforcementProfile/
+# getCoachesUnderEnforcement call (the story's own correction of an originally-specified
+# two-JDBC-connection design that could not have observed Spring's `validateExistingTransaction
+# = false` hazard at all), replacing what AdminCoachEnforcementServiceIsolationTest could only
+# prove by reflection. Same one-new-config-forks-one-context shape as
+# AccountDeletionCascadeIT/SmtpTransportBootIT/SesCutoverPreflightResourceIT above, not
+# ordering-dependent thrashing. Measured in CI: missCount went 42 -> 43.
+CEILING="${2:-43}"
 
 if [ ! -f "$LOG" ]; then
   echo "assert-context-count: build log not found: $LOG" >&2
