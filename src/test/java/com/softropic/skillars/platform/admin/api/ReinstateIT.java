@@ -89,7 +89,13 @@ class ReinstateIT extends AbstractIntegrationTest {
     void tearDown() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM admin.admin_action_log WHERE reference_id = ?", coachProfileId.toString());
-            jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE alert_id = ?", strikeAlertId);
+            // skillars-deferred-123 code review 2026-09-18: delete by reference_id, not just the
+            // seeded alert_id — reinstateCoach_withStrikesStillInWindow_setsActiveButLeavesAlertOpen
+            // can cause a second STRIKE_THRESHOLD alert to be inserted if the seeded one is ever
+            // resolved first, and a leaked OPEN alert would break the other tests' assertions.
+            jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE reference_id = ?", coachProfileId.toString());
+            // FK from coach_reliability_strikes -> coach_profiles: strikes must go first.
+            jdbcTemplate.update("DELETE FROM marketplace.coach_reliability_strikes WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
             jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
             jdbcTemplate.execute("DELETE FROM main.login_attempts");
@@ -99,6 +105,74 @@ class ReinstateIT extends AbstractIntegrationTest {
             jdbcTemplate.execute("DELETE FROM main.sec");
             return null;
         });
+    }
+
+    /**
+     * skillars-deferred-123 code review 2026-09-18 (Decision 2). Sibling of
+     * {@link #reinstateCoach_setsActiveAndResolvesAlert()}, which seeds no strikes and therefore
+     * always took the resolve branch. This one seeds {@code DEFAULT_VISIBILITY_THRESHOLD} (3)
+     * in-window strikes to prove the other branch.
+     *
+     * <p>What it pins: AC1 suppresses escalation outright for a coach already off the marketplace, and
+     * {@code StrikeThresholdReachedEvent} is published only inside {@code issue()}'s
+     * {@code status != PENDING_REVIEW} branch — so strikes accrued while a coach is SUSPENDED raise no
+     * alert at all, where pre-AC1 they did. Without the fix, {@code reinstateCoach} would then clear
+     * the alert and return the coach to full marketplace visibility carrying an at-or-above-threshold
+     * strike count, invisible to {@code getCoachesUnderEnforcement} (which lists only PENDING_REVIEW
+     * and SUSPENDED) until a further strike landed — possibly never, on a 30-day window.
+     *
+     * <p>The status assertion is deliberately {@code ACTIVE}, not a de-escalated tier: the
+     * {@code [DECIDED 2026-09-18, skillars-deferred-122]} note on {@code reinstateCoach} is binding —
+     * explicit admin intent wins. Only the alert, not the status, is driven by the re-evaluated count.
+     */
+    @Test
+    void reinstateCoach_withStrikesStillInWindow_setsActiveButLeavesAlertOpen() {
+        transactionTemplate.execute(status -> {
+            for (int i = 0; i < 3; i++) {
+                jdbcTemplate.update(
+                    "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, acknowledged, created_at) " +
+                    "VALUES (?, ?, ?, 'COACH_NO_SHOW', false, ?)",
+                    UUID.randomUUID(), coachProfileId, UUID.randomUUID(),
+                    Timestamp.from(Instant.now().minusSeconds(3600L * (i + 1))));
+            }
+            return null;
+        });
+
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        ResponseEntity<Void> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/coaches/" + coachProfileId + "/reinstate",
+            HttpMethod.POST,
+            Map.of("reason", "Reviewed and cleared"),
+            authenticatedHeaders(adminCookies), Void.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        // Admin intent still wins — the coach is reinstated.
+        String coachStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
+        assertThat(coachStatus).isEqualTo("ACTIVE");
+
+        // ...but the enforcement signal survives: the alert is NOT resolved.
+        String alertStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.admin_alerts WHERE alert_id = ?", String.class, strikeAlertId);
+        assertThat(alertStatus).isEqualTo("OPEN");
+
+        Instant resolvedAt = jdbcTemplate.queryForObject(
+            "SELECT resolved_at FROM admin.admin_alerts WHERE alert_id = ?", Instant.class, strikeAlertId);
+        assertThat(resolvedAt).isNull();
+
+        // Exactly one OPEN STRIKE_THRESHOLD alert for this coach — re-publishing the event must be
+        // idempotent (AdminAlertEventListener.insertAlert short-circuits on an existing OPEN alert).
+        Long openAlertCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM admin.admin_alerts WHERE reference_id = ? AND type = 'STRIKE_THRESHOLD' AND status = 'OPEN'",
+            Long.class, coachProfileId.toString());
+        assertThat(openAlertCount).isEqualTo(1L);
+
+        // The elevated count is recorded on the audit row rather than left implicit.
+        String logReason = jdbcTemplate.queryForObject(
+            "SELECT reason FROM admin.admin_action_log WHERE reference_id = ? AND action_type = 'COACH_REINSTATE'",
+            String.class, coachProfileId.toString());
+        assertThat(logReason).contains("3 in-window strikes");
     }
 
     @Test

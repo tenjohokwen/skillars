@@ -2337,39 +2337,44 @@ two subscription schedulers found the identical bug class deferred-115 just fixe
 closed by the story's own AC1/AC2/AC3 — bullets deleted outright per this file's own convention.
 
 
-## Deferred from: code review of skillars-deferred-120 (2026-09-17)
+## Last audit: 2026-09-18 (skillars-deferred-123 story creation and dev-story completion)
 
-- **`lockAtLeastFor` values are hardcoded against tunable `fixedDelayString` cadences.**
-  `VideoDeletionOutboxProcessor.java:63-66` pairs `${platform.video.deletion.outbox_poll_delay_ms:60000}`
-  with a literal `lockAtLeastFor = "PT30S"` derived from the *default*. Lowering the property below 30s
-  — a legitimate ops action — silently drops runs with no error, no warning and no config validation.
-  Codebase-wide shape (`RadarCompositeDlqProcessor` and others are identical), so worth one sweep rather
-  than a per-site fix.
+Mined the two most recent, still-open code-review deferrals below (`code review of
+skillars-deferred-121…` and `code review of skillars-deferred-122…`), plus two older still-open items
+those reviews cross-referenced (`skillars-deferred-120`'s `lockAtLeastFor`-vs-cadence gap; the
+`claimed_at`/eligibility-vs-claim-time gap). See `skillars-deferred-123-strike-timing-scheduler-lock-
+config-and-envers-audit-gap-fixes.md`'s Provenance & Scoping section for the full scoping narrative
+rather than duplicating it here. Two items' original framing was corrected before/during
+implementation, not just closed as originally stated — recorded so a future reader doesn't quote the
+original (wrong) framing from git history:
 
-- **`resetStaleClaimed`/`claimPendingBatch`'s shared claim idiom keys stale-claim recovery on
-  eligibility time, not claim time — a genuine weakness in `RadarCompositeDlqProcessor`
-  (`skillars-deferred-118` AC3) that `skillars-deferred-120` AC2 confirmed also existed in
-  `VideoDeletionOutboxProcessor`.** Both classes' `resetStaleClaimed` matches `status = 'CLAIMED' AND
-  next_retry_at < :deadline`, but `claimPendingBatch` never stamps `next_retry_at` when it claims a
-  row — so the "crashed run recovery" deadline actually means "this row has been *eligible* for N
-  minutes," not "claimed for N minutes." For any row whose original eligibility predates the claim by
-  more than the deadline (a real backlog, or a row that waited behind a full batch), a concurrent
-  tick's `resetStaleClaimed` un-claims it while the first instance is still mid-flight, and
-  `claimPendingBatch` immediately re-claims it — genuine double processing of the same row, not merely
-  a disjoint-batch race. `@SchedulerLock` closes the *concurrent-invocation* path both classes were
-  fixed for, but does **not** close this path if `lockAtMostFor` is ever exceeded (crash recovery, a
-  run that legitimately overruns) — that residual exposure is what the invariant below bounds, not
-  removes. `skillars-deferred-120`'s 2026-09-17 code review (Decision 1) went one step further for
-  `VideoDeletionOutboxProcessor` specifically: it raised `STALE_CLAIM_WINDOW` to 20 minutes against a
-  `PT15M` lock, restoring a real 5-minute buffer so ordinary lock-timing jitter cannot trigger this
-  path — `RadarCompositeDlqProcessor` still has zero buffer (its own window and lock are exactly
-  `PT10M`), so it remains the more exposed of the two. Add a `claimed_at` column to key the stale
-  check on claim time, not eligibility time, the next time either class's claim mechanism is touched —
-  that is the only fix that removes the path rather than narrowing when it can trigger.
-  `RadarCompositeDlqProcessor.java:59`, `VideoDeletionOutboxProcessor.java`
-  (`STALE_CLAIM_WINDOW`/`resetStaleClaimed` call site).
+- **AC3 (`claimed_at`)**: adding the column and rekeying `resetStaleClaimed` alone would **not** have
+  closed the double-processing path this item describes — `findClaimedBatch()` on both repositories was
+  *also* globally scoped (`WHERE status = 'CLAIMED'`, no per-run filter), so a second instance's fetch
+  would still return a first instance's still-in-flight rows even with a correct `claimed_at` check.
+  The shipped fix scopes `findClaimedBatch` to `claimed_at = :claimedAt` too, closing the fetch half of
+  the path, not just the `resetStaleClaimed` half.
+- **AC4 (scheduler-lock config)**: the premise "`lockAtLeastFor`/`lockAtMostFor` values are hardcoded
+  against tunable cadences, so no boot-time check can catch a lowered cadence outrunning a fixed floor"
+  was itself wrong — ShedLock *does* resolve `${...}` Spring property placeholders in these attributes
+  (verified by decompiling the resolved `shedlock-spring:7.10.1` artifact:
+  `SpringLockConfigurationExtractor.getValue()` routes both through
+  `embeddedValueResolver.resolveStringValue(...)` before converting to a `Duration`). The fix shipped is
+  therefore property-izing the 10 affected floors at their declaration site (giving the operator the
+  matching knob), not a boot-time detector for a problem that was never structurally undetectable-only.
 
-- **`ModerationSlaMonitorService.detectSlaViolations` carries no `@SchedulerLock` — a now-permanent
+**skillars-deferred-123 code review 2026-09-18 (Patch — self-correction).** The section this replaced
+(`## Deferred from: code review of skillars-deferred-120`) originally held four bullets. Three were
+genuinely superseded by this story's own fixes (the `lockAtLeastFor`-vs-cadence gap → AC4; the
+`resetStaleClaimed` eligibility-vs-claim-time gap and the duplicate "add a `claimed_at` column" bullet →
+AC3) and were correctly deleted. The fourth — `ModerationSlaMonitorService`'s `[DECIDED]` no-
+`@SchedulerLock` note — was **not** superseded by anything in this story and was deleted along with the
+other three by mistake when the whole section header was removed wholesale rather than pruned bullet by
+bullet. Restored below rather than left dropped.
+
+## Deferred from: code review of skillars-deferred-120 (2026-09-17) — remaining item
+
+- **`ModerationSlaMonitorService.detectSlaViolations` carries no `@SchedulerLock` — a permanent
   accepted risk, not a temporary gap.** `skillars-deferred-115` AC1 restructured this method to a
   short-batch-load + per-item `REQUIRES_NEW` shape and accepted its one remaining double-pick cost (a
   duplicate admin-alert enqueue, bounded and non-corrupting) as a deliberate tradeoff, in its own class
@@ -2377,21 +2382,9 @@ closed by the story's own AC1/AC2/AC3 — bullets deleted outright per this file
   re-confirmed and closed the `@Scheduled`-method sweep `skillars-deferred-115` began — after that
   story, every `@Scheduled` method in the codebase has been examined under the transaction-boundary/
   TOCTOU/scheduler-lock-parity lens at least once, and this is the one method the sweep deliberately
-  left unlocked. Recording explicitly here (per the 2026-09-17 code review's Patch finding #5) rather
-  than only in two stories' prose, since the sweep's closure makes this a durable, not provisional,
-  decision: **[DECIDED]** no `@SchedulerLock` — the accepted duplicate-alert cost does not warrant one.
-
-- **`resetStaleClaimed` keys on eligibility time, not claim time — add a `claimed_at` column.**
-  Both `VideoDeletionOutboxRepository.resetStaleClaimed` (`:43-48`) and
-  `RadarCompositeDlqProcessor`'s identical idiom (`:59`) compare `next_retry_at < :deadline`, but
-  neither `claimPendingBatch` stamps `next_retry_at` when it claims. `next_retry_at` is therefore the
-  row's *eligibility* timestamp: any backlog row is already older than the stale window at the moment
-  it is claimed, so the "crashed run recovery" predicate means "this row has been eligible a long
-  time", not "this row has been claimed a long time". `skillars-deferred-120`'s code review closed the
-  immediate hazard by making the stale window exceed `lockAtMostFor`, but the predicate itself is still
-  wrong on both processors. Proper fix is a `claimed_at` column stamped by `claimPendingBatch` and
-  cleared on completion, with the stale check keyed on it — a Flyway migration, deliberately out of
-  scope for a lock-parity story.
+  left unlocked. **[DECIDED]** no `@SchedulerLock` — the accepted duplicate-alert cost does not warrant
+  one. **Re-confirmed still correctly out of scope by skillars-deferred-123** (2026-09-18) — that
+  story's own scope explicitly excluded this decision (see its Provenance & Scoping section).
 
 ## Deferred from: code review of skillars-deferred-121-coach-enforcement-status-toctou-lock-gap (2026-09-18)
 
@@ -2400,52 +2393,116 @@ that the skillars-deferred-121 lock fix neither introduced nor was scoped to add
 surfaced by the Edge Case Hunter and Blind Hunter review layers; item 9 surfaced during the
 review-response pass itself). skillars-deferred-122 closed five by direct fix (deleted below) and one
 more by explicit `[DECIDED]` annotation rather than deletion (see the disposition table in that story's
-AC10) — the three remaining un-annotated bullets below are still open, correctly out of scope for
-skillars-deferred-122.
-
-- **The strike DELETE's wait is outside the retry/savepoint guarantee.** `deleteById` is queued, then
-  `withBoundedRetry`'s `entityManager.flush()` issues the DELETE *before* the savepoint is taken
-  (`PessimisticLockRetryer:132-134`). That DELETE carries no `NO_WAIT` and blocks indefinitely if
-  another transaction holds the strike row, and the wait is neither retried, bounded, nor separately
-  attributable — it is folded into the `persistence.lock_retry` timer, which makes the metric
-  misleading. skillars-deferred-121 relocated this wait; it did not create it.
-
-- **`issueManualStrike` applies no coach-status guard.** Its unlocked `findById` (`:192-193`) only
-  proves existence. The coach can be `DEACTIVATED` or `SUSPENDED` between that check and
-  `ReliabilityStrikeService.issue`'s locked read, and nothing rejects the strike. Note that the
-  *absence* of a lock on that line is load-bearing — see the review-findings patch item about
-  `issue` being `REQUIRES_NEW`.
-
-- **The 30-day count window origin slides with contention.**
-  `OffsetDateTime.now().minusDays(30)` (`:231`) is evaluated after the lock wait, so a strike within
-  seconds of the boundary can be inside the window for an uncontended call and outside it for a
-  contended one. Same shape in `ReliabilityStrikeService.issue:90`. Capturing the timestamp once at
-  method entry would make the decision input independent of lock-wait duration.
+AC10) — the three remaining un-annotated bullets plus that one `[DECIDED]` bullet were the four left
+here for skillars-deferred-123. **Corrected 2026-09-18 code review (Patch — self-correction):** this
+preamble previously said all four were "closed ... by skillars-deferred-123", which is only true of the
+three un-annotated ones (strike-status-guard → AC1, 30-day-window-origin → AC2, the strike-DELETE-wait
+bullet → its own `[DECIDED]` annotation below) — the fourth, `reinstateCoach`'s already-`[DECIDED]`
+bullet from skillars-deferred-122, was never something for this story to "close"; it was supposed to be
+left untouched, and was deleted by mistake along with the three that genuinely were resolved. Restored
+below. (Unrelated to that restored bullet's own question: this story's own code review separately found
+and fixed a *different* `reinstateCoach` gap — AC1's suppression silently dropping the enforcement alert
+— see this file's own AC1/Decision-needed write-up and the story's Decision 2. That fix touched
+`reinstateCoach`'s alerting, not the stale-vs-fresh-suspension question the restored bullet below is
+about.)
 
 - **`reinstateCoach` cannot distinguish a stale suspension from one that just landed.**
   **[DECIDED: explicit admin intent wins — skillars-deferred-122]** `SUSPENDED` is (and after
-  skillars-deferred-121's fix remains) an explicitly legal source status (`:162-163`) — an admin's
-  reinstate call proceeds to `ACTIVE` whether the coach was suspended before the admin loaded the
-  enforcement screen or by a *different* admin's concurrent `suspendCoach` call that committed moments
-  ago, fully applying that suspension's side effects (cancelled `REQUESTED` bookings,
-  `CoachSuspendedEvent`, an `AdminActionLog` row) in the process. skillars-deferred-121's lock fix makes
-  the read fresh, not the *decision* suspension-aware — it only prevents a stale-`ACTIVE`
-  double-reinstate, not a fresh-`SUSPENDED` override. skillars-deferred-122 took this decision live with
-  the owner: keep current behavior, "explicit admin intent always wins" stays the rule. No code change;
-  `AdminCoachEnforcementService.reinstateCoach`'s inline comment now states the decision explicitly.
+  skillars-deferred-121's fix remains) an explicitly legal source status — an admin's reinstate call
+  proceeds to `ACTIVE` whether the coach was suspended before the admin loaded the enforcement screen or
+  by a *different* admin's concurrent `suspendCoach` call that committed moments ago, fully applying that
+  suspension's side effects (cancelled `REQUESTED` bookings, `CoachSuspendedEvent`, an `AdminActionLog`
+  row) in the process. skillars-deferred-121's lock fix makes the read fresh, not the *decision*
+  suspension-aware — it only prevents a stale-`ACTIVE` double-reinstate, not a fresh-`SUSPENDED`
+  override. skillars-deferred-122 took this decision live with the owner: keep current behavior,
+  "explicit admin intent always wins" stays the rule. No code change for this specific question;
+  `AdminCoachEnforcementService.reinstateCoach`'s inline comment states the decision explicitly.
+  **Re-confirmed still correctly out of scope by skillars-deferred-123** (2026-09-18) — see the note
+  above this bullet.
 
-- **Pre-existing `main.user_aud` Envers-coverage gap: `skillars_role`/`verification_status` have no
-  matching audit column.** Surfaced by skillars-deferred-122 AC9 while adding `User.cleanupFailedAt`
-  (resolved for that field via `@NotAudited`, sidestepping the question for the new column). `User` is
-  `@Audited` and both `skillars_role` and `verification_status` are declared on it with **no**
-  `@NotAudited` (`User.java`), yet `main.user_aud` (`V138__baseline_schema.sql:1314-1346`) has no
-  `skillars_role`/`verification_status` columns — a mismatch this story's investigation surfaced, not
-  introduced, and did not run down further (out of scope for a cleanup-marker story). Something about
-  this project's actual Envers runtime behavior does not match the naive "every `@Audited` field needs
-  a matching `user_aud` column" reading; worth a future audit to determine whether these two fields
-  silently fail to audit, or whether Envers tolerates the mismatch in some way not yet understood here.
+- **The strike DELETE's wait is outside the retry/savepoint guarantee.**
+  **[DECIDED: accepted risk — skillars-deferred-123]** Corrected citation (the original
+  `PessimisticLockRetryer.java:132-134` citation described the pre-`skillars-deferred-122` code path):
+  at HEAD, `AdminCoachEnforcementService.deleteStrike`'s bulk `@Modifying` JPQL delete
+  (`CoachReliabilityStrikeRepository.deleteByIdAndCoachId`) executes immediately at `:285`, eight lines
+  before `:293`'s `lockRetryer.withBoundedRetry` — nothing is folded into the `persistence.lock_retry`
+  timer any more. The DELETE still carries no `NOWAIT`/lock-timeout: two admins deleting the same strike
+  concurrently makes the second block on Postgres's ordinary row lock until the first transaction
+  commits or rolls back, then affect 0 rows (a clean 404, already correct per skillars-deferred-122
+  AC2). Accepted as documented, not fixed: the wait is naturally bounded by the winning transaction's
+  own work, which is itself lock-retry-bounded (`PessimisticLockRetryer`'s ~3.2s worst-case budget for
+  the coach-row lock inside that same winning transaction) — this codebase's current call shape cannot
+  make this wait open-ended. Would need revisiting if a future change to `deleteStrike` or its callees
+  makes the winning transaction's own work unbounded. Documented at
+  `CoachReliabilityStrikeRepository.deleteByIdAndCoachId` (`:45-47`).
 
 ## Deferred from: code review of skillars-deferred-122-coach-enforcement-round-2-and-user-cleanup-fixes (2026-09-18)
 
-- **AC3's REPEATABLE_READ coverage is annotation reflection only.** `AdminCoachEnforcementServiceIsolationTest` asserts `tx.isolation() == Isolation.REPEATABLE_READ` via reflection on the `@Transactional` annotation. That assertion stays green in precisely the failure mode `AdminCoachEnforcementService`'s own comment warns about: if any upstream caller (a facade, an interceptor, a `TransactionTemplate` in a batch/export path) already holds a transaction, Spring's default `validateExistingTransaction = false` silently discards the requested isolation level and the torn read AC3 exists to prevent returns — with both tests still passing. The documented rule "do not invoke from inside a test-level `@Transactional`/`TransactionTemplate` block" is prose, not a control. A real test would need two concurrent connections observing a writer's mid-flight status+count change through `getEnforcementProfile`. Deferred: writing a genuine multi-connection snapshot test is a meaningfully larger piece of work than this story's scope, and the test's own Javadoc already labels the limitation honestly.
-- **`main."user"` has no index supporting the cleanup sweep predicate.** `V138__baseline_schema.sql` defines no index on `(activated, created_date)`, so `UserRepository.findByActivatedFalseAndCreatedDateBeforeAndCleanupFailedAtIsNullOrderByIdAsc` resolves as a PK-index walk with a filter. AC6's paging change did not introduce the gap, but it changes the access pattern from one unpaged query per batch to a `LIMIT`-ed ordered query per batch iteration (up to `maxBatches + 1` per run), so a large backlog night holds the `PT1H` ShedLock longer than necessary. A partial index (`CREATE INDEX CONCURRENTLY ... ON main."user" (id) WHERE activated = false AND cleanup_failed_at IS NULL`) would suit the query shape. Deferred: needs production row-count and `EXPLAIN` evidence before choosing an index shape, and per `docs/deployment/migration-conventions.md` an index on a hot table must go in as `CREATE INDEX CONCURRENTLY` in its own migration.
+- **Schema drift from `spring.jpa.generate-ddl: true` — CLOSED AT SOURCE by the skillars-deferred-123 code review (2026-09-18); one frozen divergence remains to reconcile.** Surfaced by skillars-deferred-123 AC5's investigation into a `main.user_aud`/`User.skillarsRole`+`verificationStatus` Envers-coverage gap. Empirically confirmed: raising `org.hibernate.SQL` to DEBUG showed Hibernate issuing `alter table if exists ... add column ... varchar(255) check (... in (...))` and `alter table if exists ... alter column ... set data type varchar(255)` at application boot — for both the audit table's missing enum columns and the *entity's own* `main."user".skillars_role`/`verification_status` columns (silently widening them from their declared `varchar(20)`) — while `main.flyway_schema_history` showed no migration responsible. **Cause, corrected:** the story originally attributed this to Hibernate acting "regardless of `hibernate.ddl-auto`" and proposed hunting for "a schema-generation property beyond simple `none`, if one exists". No such property is needed and no such Hibernate behaviour exists. The cause was `spring.jpa.generate-ddl: true` sitting one line above `ddl-auto: none` in `application.yaml`. Decompiled chain: `HibernateProperties.getAdditionalProperties` (spring-boot-autoconfigure 3.5.16) *removes* the `hibernate.hbm2ddl.auto` key when `ddl-auto` is `none` rather than setting it; `HibernateJpaVendorAdapter.getJpaPropertyMap` (spring-orm 6.2.19) then puts it as `"update"` because `isGenerateDdl()` is true; `AbstractEntityManagerFactoryBean` merges vendor properties only when the key is absent, so `"update"` won. Effective `hbm2ddl.auto=update` in every profile, production and test alike — which is also why no IT had ever caught Flyway/entity drift. The line has been removed. **Pre-removal audit (done before the change, not assumed):** every `@Table` entity has a `CREATE TABLE` in a Flyway migration, and `main.user_aud`'s only two missing columns are supplied by `V145`, so nothing depended on auto-DDL to boot. **`main.user_aud`'s own `CHECK`-constraint divergence CLOSED** (2026-09-18, code review Patch pass on skillars-deferred-123): `V145` now adds `user_aud_skillars_role_check`/`user_aud_verification_status_check` as `NOT VALID` constraints, named to match Postgres's own default naming for Hibernate's unnamed inline CHECK — a no-op on an already-Hibernate-patched database, a genuine fix on a Flyway-only one. **Still open — one divergence remains, deliberately not touched by this pass:** `main."user".skillars_role`/`verification_status` are `varchar(255)` on pre-fix databases (Hibernate silently widened them) and `varchar(20)` per `V138`'s baseline migration — narrowing a populated, live column carries real risk (a value beyond 20 chars would fail the ALTER) and needs its own migration and evidence pass, not a drive-by fix alongside an audit-table CHECK constraint. Note the ordinary closing condition does not apply here: per skillars-deferred-117's owner decision no production deploy has ever happened, so the only "pre-fix databases" in existence are development and CI ones.
+
+## Explicitly out of scope (skillars-deferred-123, 2026-09-18)
+
+Confirmed still correctly out of scope for this story, left untouched — recorded explicitly per this
+story's own disposition table so neither item is mistaken for silently dropped:
+
+- **`main."user"` has no index supporting the cleanup sweep predicate.** `V138__baseline_schema.sql` defines no index on `(activated, created_date)`, so `UserRepository.findByActivatedFalseAndCreatedDateBeforeAndCleanupFailedAtIsNullOrderByIdAsc` resolves as a PK-index walk with a filter. AC6's paging change did not introduce the gap, but it changes the access pattern from one unpaged query per batch to a `LIMIT`-ed ordered query per batch iteration (up to `maxBatches + 1` per run), so a large backlog night holds the `PT1H` ShedLock longer than necessary. A partial index (`CREATE INDEX CONCURRENTLY ... ON main."user" (id) WHERE activated = false AND cleanup_failed_at IS NULL`) would suit the query shape. Deferred: needs production row-count and `EXPLAIN` evidence before choosing an index shape, and per `docs/deployment/migration-conventions.md` an index on a hot table must go in as `CREATE INDEX CONCURRENTLY` in its own migration. This story's scope was strike-timing/scheduler-lock/Envers-audit findings, not this one.
+- **`ModerationSlaMonitorService.detectSlaViolations`'s no-`@SchedulerLock` `[DECIDED]` note** (see the restored bullet under "code review of skillars-deferred-120" above) — confirmed still correctly out of scope, untouched by this story.
+
+## Deferred from: code review of skillars-deferred-123-strike-timing-scheduler-lock-config-and-envers-audit-gap-fixes (2026-09-18)
+
+_Four-layer review (Blind Hunter, Edge Case Hunter, Acceptance Auditor, `txn-and-concurrency-audit`). Each item below was independently re-verified against the working tree before being recorded._
+
+- **`ReliabilityStrikeService`'s pre-lock strike INSERT can mutually lock out two concurrent `issue()`
+  calls.** `strikeRepository.save(strike)` at `:62` runs before `withBoundedRetry` at `:98`.
+  `coach_reliability_strikes_coach_id_fkey` (`V138__baseline_schema.sql:4427`) makes PostgreSQL take
+  `FOR KEY SHARE` on the parent `coach_profiles` row for the child INSERT, held until commit, while
+  `CoachProfileRepository.findByIdForUpdate` is `PESSIMISTIC_WRITE` + `jakarta.persistence.lock.timeout = 0`
+  — i.e. `FOR UPDATE NOWAIT`, which conflicts with `FOR KEY SHARE`. `PessimisticLockRetryer:132-134`
+  flushes *before* taking its savepoint (deliberately, per its own Javadoc), so rollback-to-savepoint
+  does not release the FK lock the flush acquired. Two threads that both flush before either locks are
+  then permanently mutually blocked: every retry fails identically and the loser's strike is discarded
+  after the ~3.2s budget with a 409. Fix is to move the `save` after `withBoundedRetry`, or take the
+  savepoint before the flush. Pre-existing (the INSERT-before-lock ordering predates
+  `skillars-deferred-123`); surfaced by that story's review.
+- **V144-shaped `ALTER TABLE` migrations race the pollers that own the table.** `V144` adds columns to
+  `main.video_deletion_outbox` and `development.radar_composite_dlq` under `SET lock_timeout = '5s'`.
+  Both tables are polled every 60s by default, so an `ACCESS EXCLUSIVE` request can collide with an
+  in-flight processing transaction and abort the migration, failing the deploy and leaving a failed
+  `flyway_schema_history` row to repair by hand. No retry wrapper. Applies to any future migration
+  touching an actively-polled table, not just V144.
+- **Neither outbox/DLQ processor loop has a per-row `try`/`catch`.** In
+  `VideoDeletionOutboxProcessor.process` (`:119-121`) and `RadarCompositeDlqProcessor.process`
+  (`:68-70`), an exception raised outside the inner `try` (e.g. `drillVideoRefRepository.findByVideoId`,
+  `completeRowWithNullAsset`'s `transactionTemplate.execute`, or `configService.getBoundedLong` inside
+  `handleFailure`) abandons every remaining claimed row in the batch. `skillars-deferred-123` AC3 makes
+  this worse for the non-crash case: those rows were previously re-eligible on essentially the next
+  tick via the `next_retry_at` predicate, and are now invisible until a full stale window elapses
+  (20 min video / 10 min radar). A permanently-throwing row also buries the rest of its batch behind it
+  every window.
+- **Envers reconstruction of pre-V145 revisions returns `null` for `User.verificationStatus`.** V145 adds
+  `main.user_aud.verification_status` with no backfill, and the audit column is nullable while
+  `main."user".verification_status` is `NOT NULL DEFAULT 'UNVERIFIED'` — so the audit table can hold a
+  state the live table cannot, and a reconstructed entity silently defeats the field initialiser
+  (`User.java:355-357`). Latent only: no `AuditReader`/`AuditQuery` usage exists in `src/main` today.
+- **`AdminCoachEnforcementService.issueManualStrike` commits the strike before its audit log.** `issue()`
+  is `REQUIRES_NEW` (`ReliabilityStrikeService.java:49`), so the strike row, the `CoachProfile` status
+  change and the threshold/visibility events all commit at `:253`, while the `AdminActionLog` is written
+  at `:260` in the outer transaction. An outer rollback (constraint violation on `admin_action_log`,
+  connection reset, pod kill between the two commits) leaves a durable, publicly-visible enforcement
+  action with no record of which admin issued it. The `REQUIRES_NEW` choice is deliberate and well-argued
+  for the refund path; this consequence on the admin path is not covered by that reasoning.
+- **`findClaimedBatch` uses exact timestamp equality as a run-identity token.** Both repositories key the
+  claimed-batch fetch on `claimed_at = :claimedAt`, a value comparison standing in for run identity,
+  round-tripped through a microsecond-precision `timestamptz` column from a nanosecond-precision
+  `Instant`. Correct today — both statements bind the same `Instant` through the same path, so Postgres
+  rounds both identically — but brittle: any change to the binding makes the equality never match, and
+  the failure mode is silent (rows claimed, batch fetched empty, rows stranded until the stale window).
+  A per-invocation `claimed_by UUID` column is the robust shape.
+- **`deleteStrike`'s 30-day cutoff is compared at different precisions in Java and SQL.**
+  `AdminCoachEnforcementService:317` evaluates `strikeCreatedAt.isAfter(cutoff)` at nanosecond precision
+  in the JVM, while `:318`'s `countByCoachIdAndCreatedAtAfter(coachId, cutoff)` binds the same object
+  through pgjdbc, which rounds to microseconds. A strike landing in the sub-microsecond gap is judged
+  in-window by the guard and out-of-window by the count, so the tiering can de-escalate one tier too far.
+  Probability ~1e-9 per call; recorded only because the comment added at `:296-297` explicitly asserts
+  "a boundary strike is judged identically wherever this local is used below", which does not hold across
+  the Java/SQL boundary.

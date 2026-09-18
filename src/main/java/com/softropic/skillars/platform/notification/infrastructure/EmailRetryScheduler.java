@@ -100,8 +100,10 @@ public class EmailRetryScheduler {
      */
     @Observed(name = "scheduler.email-retry")
     @Scheduled(fixedDelayString = "${email.retry.interval-ms:60000}")
+    // skillars-deferred-123 AC4: lockAtLeastFor property-ized — see OutboxService.sweep's identical
+    // comment for the rationale.
     @SchedulerLock(name = "EmailRetryScheduler_retryFailedEmails",
-                   lockAtMostFor = "PT10M", lockAtLeastFor = "PT10S")
+                   lockAtMostFor = "PT10M", lockAtLeastFor = "${email.retry.lock-at-least:PT10S}")
     @Transactional(timeout = 600)
     public void retryFailedEmails() {
         List<EnvelopeEntity> candidates = envelopeEntityRepository.fetchFailedEmails();

@@ -28,6 +28,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrike;
 import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrikeRepository;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
+import com.softropic.skillars.platform.payment.contract.event.StrikeThresholdReachedEvent;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeConfig;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeService;
 import lombok.RequiredArgsConstructor;
@@ -195,6 +196,10 @@ public class AdminCoachEnforcementService {
         // method threw BAD_REQUEST for REDUCED, leaving a REDUCED coach whose strikes have all aged
         // out with no admin path back to ACTIVE at all: deleteStrike's guard changes nothing for an
         // out-of-window delete, and this method rejected the status outright.
+        // skillars-deferred-123 code review 2026-09-18 (Decision 2): captured before the lock wait
+        // below, per AC2's own rule and mirroring deleteStrike/ReliabilityStrikeService.issue.
+        OffsetDateTime cutoff = OffsetDateTime.now().minusDays(30);
+
         CoachProfile coach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
 
@@ -212,7 +217,46 @@ public class AdminCoachEnforcementService {
         coach.setStatusChangedAt(Instant.now());
         coachProfileRepository.save(coach);
 
-        resolveOpenStrikeAlert(coachId, adminId);
+        // skillars-deferred-123 code review 2026-09-18 (Decision 2): re-evaluate the live in-window
+        // strike count under the lock already held, and let it decide the ALERT, not the status.
+        //
+        // Why the status write above stays unconditional: the [DECIDED 2026-09-18,
+        // skillars-deferred-122] note earlier in this method is binding — explicit admin intent wins.
+        // Porting deleteStrike's three tiers to the status here would make a reinstate of a coach who
+        // still has >= suspensionThreshold in-window strikes a silent no-op (tier 1 leaves the status
+        // untouched), i.e. the admin presses reinstate and nothing happens, with no feedback. So only
+        // the half of deleteStrike's three-tier pattern that transfers cleanly is reused: its alert
+        // discipline, where `resolveOpenStrikeAlert` is called ONLY in the tier that lands on a
+        // genuinely clean ACTIVE (:352-365), and deliberately NOT called while the count is still
+        // elevated because "a coach still ... remains at an elevated strike count worth the admin's
+        // attention" (:349-351).
+        //
+        // What this closes: AC1 suppresses escalation entirely for a SUSPENDED/DEACTIVATED coach, and
+        // StrikeThresholdReachedEvent is published inside issue()'s `status != PENDING_REVIEW` branch
+        // — so strikes accrued while a coach is off the marketplace now raise NO alert at all, where
+        // pre-AC1 they did (while also wrongly demoting SUSPENDED -> PENDING_REVIEW, which is the bug
+        // AC1 correctly fixes). Without this block, reinstateCoach would then resolve a
+        // non-existent alert and return the coach to full marketplace visibility carrying an
+        // at-or-above-threshold strike count, invisible to getCoachesUnderEnforcement (:384 lists only
+        // PENDING_REVIEW/SUSPENDED) until a further strike lands — which at a 30-day window may never
+        // happen. Re-publishing here is safe and idempotent: AdminAlertEventListener.insertAlert
+        // short-circuits on an existing OPEN alert for the same (referenceId, type) and is backed by a
+        // unique index for the concurrent case.
+        long inWindowStrikes = strikeRepository.countByCoachIdAndCreatedAtAfter(coachId, cutoff);
+        long visibilityThreshold = configService.getBoundedLong(
+            ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY,
+            ReliabilityStrikeConfig.DEFAULT_VISIBILITY_THRESHOLD, 1L, Long.MAX_VALUE);
+
+        if (inWindowStrikes < visibilityThreshold) {
+            resolveOpenStrikeAlert(coachId, adminId);
+        } else {
+            eventPublisher.publishEvent(
+                new StrikeThresholdReachedEvent(this, coachId, null, inWindowStrikes));
+            log.warn("Coach reinstated with strike count still at or above the visibility threshold: "
+                    + "coachId={} adminId={} inWindowStrikes={} visibilityThreshold={} — "
+                    + "STRIKE_THRESHOLD alert left open for review",
+                coachId, adminId, inWindowStrikes, visibilityThreshold);
+        }
 
         eventPublisher.publishEvent(new CoachReinstatedEvent(this, coachId, adminId));
 
@@ -220,10 +264,13 @@ public class AdminCoachEnforcementService {
         actionLog.setAdminId(adminId);
         actionLog.setActionType(AdminActionType.COACH_REINSTATE);
         actionLog.setReferenceId(coachId.toString());
-        actionLog.setReason(reason);
+        actionLog.setReason(inWindowStrikes < visibilityThreshold
+            ? reason
+            : reason + " (reinstated with " + inWindowStrikes + " in-window strikes)");
         adminActionLogRepository.save(actionLog);
 
-        log.info("Coach reinstated by admin: coachId={} adminId={}", coachId, adminId);
+        log.info("Coach reinstated by admin: coachId={} adminId={} inWindowStrikes={}",
+            coachId, adminId, inWindowStrikes);
     }
 
     @Transactional
@@ -287,6 +334,18 @@ public class AdminCoachEnforcementService {
             throw new ResourceNotFoundException("Strike not found", "coach_reliability_strike");
         }
 
+        // skillars-deferred-123 AC2: cutoff captured before the lock wait below (was previously
+        // captured after it, alongside the out-of-window-guard use). Under lock contention
+        // (PessimisticLockRetryer's ~3.2s worst-case budget) the window's start would otherwise
+        // silently slide, so a strike created seconds before the 30-day boundary could be counted
+        // for an uncontended call and excluded for a contended one on the same coach. Matches
+        // countByCoachIdAndCreatedAtAfter's own strict `>` (a derived ...After query), so a boundary
+        // strike is judged identically wherever this local is used below. strikeCreatedAt (:279,
+        // captured before either) is unaffected by this move either way. Regression guard:
+        // AdminCoachEnforcementConcurrencyIT / AdminCoachEnforcementServiceIsolationTest — no
+        // dedicated ordering test is added (no Clock seam exists today; see the story's AC2 Task 3).
+        OffsetDateTime cutoff = OffsetDateTime.now().minusDays(30);
+
         // skillars-deferred-121 AC1: locked read moved before the count computation, mirroring
         // ReliabilityStrikeService.issue's ordering — the count and the revert decision must be
         // read consistently under the same lock, not just the final write guarded by it.
@@ -296,11 +355,6 @@ public class AdminCoachEnforcementService {
         AdminActionLog actionLog = new AdminActionLog();
         actionLog.setAdminId(adminId);
         actionLog.setReferenceId(coachId.toString());
-
-        // skillars-deferred-122 AC1 Fix step 2: one cutoff local, reused below for both the
-        // out-of-window guard and the count query — matches countByCoachIdAndCreatedAtAfter's own
-        // strict `>` (a derived ...After query), so a boundary strike is judged identically by both.
-        OffsetDateTime cutoff = OffsetDateTime.now().minusDays(30);
         boolean isPendingOrReduced = coach.getStatus() == CoachProfileStatus.PENDING_REVIEW
             || coach.getStatus() == CoachProfileStatus.REDUCED;
 

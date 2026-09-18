@@ -8,11 +8,19 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.boot.convert.DurationStyle;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationListener;
+import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
+import org.springframework.util.ClassUtils;
+import org.springframework.util.ReflectionUtils;
 
+import java.lang.reflect.Method;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -60,6 +68,10 @@ public class ConfigStartupAssertion implements ApplicationListener<ApplicationRe
     private final ConfigService configService;
     private final MeterRegistry meterRegistry;
     private final Environment env;
+    // skillars-deferred-123 code review 2026-09-18 (Decision 4): needed to read @SchedulerLock
+    // annotations off the live beans, so the ordering check has no second source of truth to drift
+    // from — see assertSchedulerLockOrdering's Javadoc.
+    private final ApplicationContext applicationContext;
 
     @Override
     public void onApplicationEvent(ApplicationReadyEvent event) {
@@ -153,9 +165,12 @@ public class ConfigStartupAssertion implements ApplicationListener<ApplicationRe
                 + " must not exceed " + ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY + " = " + suspensionThreshold);
         }
 
+        int locksChecked = assertSchedulerLockOrdering(failFastViolations);
+
         // Logged before the fail-fast throw so a blocked boot still records what was checked.
-        log.info("ConfigStartupAssertion: {} bounded platform config keys checked, {} fail-fast violation(s)",
-            checked, failFastViolations.size());
+        log.info("ConfigStartupAssertion: {} bounded platform config keys and {} @SchedulerLock pair(s) "
+                + "checked, {} fail-fast violation(s)",
+            checked, locksChecked, failFastViolations.size());
 
         if (!failFastViolations.isEmpty()) {
             String message = "Platform config values would silently disable core flows: "
@@ -167,6 +182,129 @@ public class ConfigStartupAssertion implements ApplicationListener<ApplicationRe
                 throw new AppSetupException(message);
             }
         }
+    }
+
+    /**
+     * skillars-deferred-123 code review 2026-09-18 (Decision 4): fail-fast cross-field check that no
+     * scheduler's {@code lockAtLeastFor} exceeds its own {@code lockAtMostFor}.
+     *
+     * <p><strong>This deliberately overrides AC4's stated decision</strong> ("There is deliberately no
+     * boot-time check, no {@code failFast}, no new record type, and no second source of truth in this
+     * AC"). That decision was reasonable when both attributes were compile-time literals and the pair
+     * could not be wrong. AC4 itself changed that: making {@code lockAtLeastFor} operator-settable
+     * against a ceiling that mostly stayed a hardcoded literal created a new, reachable
+     * misconfiguration with an unusually bad failure mode. {@code shedlock-core:7.10.1}'s
+     * {@code LockConfiguration} constructor throws {@code IllegalArgumentException} when
+     * {@code lockAtLeastFor > lockAtMostFor}, and {@code SpringLockConfigurationExtractor} builds that
+     * object <em>per invocation</em>, not at startup — so the app boots cleanly and then every single
+     * tick throws before the method body runs. Spring's {@code LOG_AND_SUPPRESS_ERROR_HANDLER} swallows
+     * it and reschedules, so the job simply never runs again: failed emails never retried, deletion
+     * outbox never drained, DLQ never replayed. No metric, no health signal, one log line per tick.
+     * That clears this class's existing {@code failFast} bar ("a bad value causes data loss or halts a
+     * core flow entirely") comfortably.
+     *
+     * <p><strong>No second source of truth.</strong> AC4's objection to a boot check was that it would
+     * duplicate the annotation values somewhere they could drift. This check does not: it reads the
+     * {@code @SchedulerLock} annotations themselves off the live beans and resolves their {@code ${...}}
+     * expressions through the same {@link Environment} ShedLock will use, so the annotation stays the
+     * only place the values are written. It also therefore covers every scheduler in the application,
+     * not just the ten AC4 converted, and any added later for free.
+     *
+     * <p>Durations are parsed with {@link DurationStyle#detectAndParse}, which accepts both the
+     * ISO-8601 ({@code PT30S}) and Spring shorthand ({@code 30s}) forms that ShedLock's own
+     * {@code StringToDurationConverter} accepts. An unparseable or negative value is reported too — it
+     * fails the same way, per invocation, for the same reason.
+     *
+     * @return the number of {@code @SchedulerLock} methods inspected
+     */
+    private int assertSchedulerLockOrdering(List<String> failFastViolations) {
+        int inspected = 0;
+
+        for (String beanName : applicationContext.getBeanDefinitionNames()) {
+            Class<?> beanType;
+            try {
+                beanType = applicationContext.getType(beanName);
+            } catch (RuntimeException e) {
+                // A bean whose type cannot be resolved cannot carry a @SchedulerLock we can read.
+                continue;
+            }
+            if (beanType == null) {
+                continue;
+            }
+            Class<?> targetClass = ClassUtils.getUserClass(beanType);
+
+            for (Method method : ReflectionUtils.getAllDeclaredMethods(targetClass)) {
+                SchedulerLock lock = AnnotatedElementUtils.findMergedAnnotation(method, SchedulerLock.class);
+                if (lock == null) {
+                    continue;
+                }
+                inspected++;
+
+                String lockName = lock.name().isBlank()
+                    ? targetClass.getSimpleName() + "." + method.getName()
+                    : lock.name();
+
+                Duration atLeast = parseLockDuration(lock.lockAtLeastFor(), lockName, "lockAtLeastFor", failFastViolations);
+                Duration atMost = parseLockDuration(lock.lockAtMostFor(), lockName, "lockAtMostFor", failFastViolations);
+                if (atLeast == null || atMost == null) {
+                    continue;
+                }
+
+                if (atLeast.compareTo(atMost) > 0) {
+                    log.error("@SchedulerLock '{}' has lockAtLeastFor ({}) greater than lockAtMostFor ({}) — "
+                            + "ShedLock throws IllegalArgumentException on EVERY invocation, so this job would "
+                            + "never run again and the failure would be swallowed by Spring's scheduler error "
+                            + "handler. Resolved from lockAtLeastFor='{}', lockAtMostFor='{}'.",
+                        lockName, atLeast, atMost, lock.lockAtLeastFor(), lock.lockAtMostFor());
+                    incrementLockViolation(lockName, "lock_at_least_exceeds_at_most");
+                    failFastViolations.add("@SchedulerLock " + lockName + " has lockAtLeastFor " + atLeast
+                        + " > lockAtMostFor " + atMost);
+                }
+            }
+        }
+        return inspected;
+    }
+
+    /**
+     * Resolves a {@code @SchedulerLock} duration attribute through the {@link Environment} and parses
+     * it. Returns {@code null} (after recording a violation) when the value cannot be used, so the
+     * caller skips the ordering comparison rather than comparing against a bogus duration.
+     */
+    private Duration parseLockDuration(String rawValue, String lockName, String attribute,
+                                       List<String> failFastViolations) {
+        String resolved = env.resolvePlaceholders(rawValue);
+        if (resolved.isBlank()) {
+            // ShedLock treats an empty attribute as "not set" and falls back to its own defaults —
+            // nothing to validate, and not a misconfiguration.
+            return null;
+        }
+        try {
+            Duration parsed = DurationStyle.detectAndParse(resolved);
+            if (parsed.isNegative()) {
+                log.error("@SchedulerLock '{}' attribute {} resolved to a negative duration ({} -> {}) — "
+                        + "ShedLock rejects this on every invocation.", lockName, attribute, rawValue, parsed);
+                incrementLockViolation(lockName, "negative_duration");
+                failFastViolations.add("@SchedulerLock " + lockName + " " + attribute + " is negative (" + parsed + ")");
+                return null;
+            }
+            return parsed;
+        } catch (RuntimeException e) {
+            log.error("@SchedulerLock '{}' attribute {} = '{}' resolved to '{}', which is not a valid duration — "
+                    + "ShedLock throws on every invocation and the job would never run.",
+                lockName, attribute, rawValue, resolved);
+            incrementLockViolation(lockName, "unparseable_duration");
+            failFastViolations.add("@SchedulerLock " + lockName + " " + attribute + " = '" + resolved
+                + "' is not a valid duration");
+            return null;
+        }
+    }
+
+    private void incrementLockViolation(String lockName, String reason) {
+        Counter.builder("config.value.misconfigured")
+            .tag("key", "scheduler.lock." + lockName)
+            .tag("reason", reason)
+            .register(meterRegistry)
+            .increment();
     }
 
     /**

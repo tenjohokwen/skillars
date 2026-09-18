@@ -237,6 +237,17 @@ class OutboxPollerSchedulerTest {
         assertThat(lock).as("pollAndProcess() must carry @SchedulerLock").isNotNull();
         assertThat(lock.name()).isNotBlank();
         assertThat(Duration.parse(lock.lockAtMostFor())).isPositive();
-        assertThat(Duration.parse(lock.lockAtLeastFor())).isPositive();
+        // skillars-deferred-123 AC4: lockAtLeastFor is now a property expression (an operator
+        // lowering app.storage.poller.fixed-delay-ms now has a matching knob to raise this floor) —
+        // pin the exact expression AND assert the embedded default resolves to a positive duration
+        // (code review 2026-09-18 Patch: the latter was previously missing).
+        assertThat(lock.lockAtLeastFor()).isEqualTo("${app.storage.poller.lock-at-least:PT2S}");
+        assertThat(Duration.parse(defaultOf(lock.lockAtLeastFor()))).isPositive();
+    }
+
+    /** Extracts the {@code default} out of a {@code ${property:default}} SchedulerLock expression. */
+    private static String defaultOf(String springPropertyExpression) {
+        String withoutBraces = springPropertyExpression.replace("${", "").replace("}", "");
+        return withoutBraces.substring(withoutBraces.indexOf(':') + 1);
     }
 }

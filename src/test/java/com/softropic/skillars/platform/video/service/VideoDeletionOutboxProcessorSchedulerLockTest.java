@@ -37,6 +37,54 @@ class VideoDeletionOutboxProcessorSchedulerLockTest {
         // VideoDeletionOutboxProcessor.STALE_CLAIM_WINDOW (20 minutes) — see that constant's own
         // Javadoc for why the window was raised rather than the lock lowered to match it.
         assertThat(Duration.parse(lock.lockAtMostFor())).isEqualTo(Duration.ofMinutes(15));
-        assertThat(Duration.parse(lock.lockAtLeastFor())).isEqualTo(Duration.ofSeconds(30));
+        // skillars-deferred-123 AC4: lockAtLeastFor is now a property expression, not a bare literal
+        // (an operator lowering platform.video.deletion.outbox_poll_delay_ms now has a matching knob
+        // to raise this floor) — pin the exact expression AND assert the embedded default resolves to
+        // a positive duration (code review 2026-09-18 Patch: the latter was previously missing).
+        assertThat(lock.lockAtLeastFor()).isEqualTo("${platform.video.deletion.outbox_lock_at_least:PT30S}");
+        assertThat(Duration.parse(defaultOf(lock.lockAtLeastFor()))).isPositive();
+    }
+
+    /** Extracts the {@code default} out of a {@code ${property:default}} SchedulerLock expression. */
+    private static String defaultOf(String springPropertyExpression) {
+        String withoutBraces = springPropertyExpression.replace("${", "").replace("}", "");
+        return withoutBraces.substring(withoutBraces.indexOf(':') + 1);
+    }
+
+    /**
+     * skillars-deferred-123 code review 2026-09-18 (Decision 3). The bail-out branch itself needs a
+     * clock seam to exercise directly (the budget is 12 minutes), and this story deliberately declined
+     * to introduce one — see AC2 Task 3. What is cheaply and usefully testable is the ordering these
+     * three constants must satisfy, which is the thing a future edit would actually break:
+     *
+     * <pre>MAX_RUN_DURATION (12m) &lt; lockAtMostFor (PT15M) &lt; STALE_CLAIM_WINDOW (20m)</pre>
+     *
+     * <p>Each inequality is load-bearing for a different reason. The left one is what makes the run
+     * self-terminate before ShedLock could force-expire the lock, so a second instance can never start
+     * while this one is still going. The right one is skillars-deferred-120 Decision 1: the window must
+     * outlast the lock, or lock expiry actively triggers the double-processing the lock exists to
+     * prevent. Prior to this fix the left inequality did not exist at all and the run's real worst case
+     * (BATCH_SIZE 50 x the adapter's 30s read timeout = 25 minutes) exceeded both of the others.
+     */
+    @Test
+    void runtimeBudget_staysStrictlyInsideLockAndStaleWindow() throws Exception {
+        Duration maxRun = readDuration("MAX_RUN_DURATION");
+        Duration staleWindow = readDuration("STALE_CLAIM_WINDOW");
+        Duration lockAtMostFor = Duration.parse(
+            VideoDeletionOutboxProcessor.class.getMethod("process")
+                .getAnnotation(SchedulerLock.class).lockAtMostFor());
+
+        assertThat(maxRun)
+            .as("the run must self-terminate strictly before its own lock can expire")
+            .isLessThan(lockAtMostFor);
+        assertThat(lockAtMostFor)
+            .as("skillars-deferred-120 Decision 1: the stale-claim window must strictly outlast the lock")
+            .isLessThan(staleWindow);
+    }
+
+    private static Duration readDuration(String fieldName) throws Exception {
+        java.lang.reflect.Field field = VideoDeletionOutboxProcessor.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return (Duration) field.get(null);
     }
 }

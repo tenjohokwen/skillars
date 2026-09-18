@@ -70,8 +70,12 @@ public class VideoLifecycleScheduler {
      * {@code fixedDelay} job, there is no back-to-back-tick throughput concern for a job that only
      * fires once a day.
      */
+    // skillars-deferred-123 AC4: both floors property-ized (this scheduler's cadence,
+    // app.video.lifecycle.cron, is also operator-tunable) — see OutboxService.sweep's identical
+    // comment for the rationale.
     @SchedulerLock(name = "VideoLifecycleScheduler_runLifecycleJob",
-                   lockAtMostFor = "PT12H", lockAtLeastFor = "PT30S")
+                   lockAtMostFor = "${app.video.lifecycle.lock-at-most:PT12H}",
+                   lockAtLeastFor = "${app.video.lifecycle.lock-at-least:PT30S}")
     @Scheduled(cron = "${app.video.lifecycle.cron:0 0 3 * * *}")
     public void runLifecycleJob() {
         // skillars-deferred-107 AC2: 0/neg would archive/delete immediately (or never); 0 batch size

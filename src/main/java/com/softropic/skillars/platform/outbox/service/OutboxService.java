@@ -120,7 +120,12 @@ public class OutboxService {
     // lockAtMostFor sized well above MAX_CHUNKS_PER_DRAIN (200) x OutboxChunkProcessor.CHUNK_SIZE (25)
     // = 5000 row-attempts worst case; correctness does not depend on this lock (see claimNextDue's
     // PESSIMISTIC_WRITE + SKIP LOCKED below), so PT10M's margin needs no tighter derivation than this.
-    @SchedulerLock(name = "OutboxService_sweep", lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
+    // skillars-deferred-123 AC4: lockAtLeastFor property-ized so an operator lowering
+    // app.outbox.sweep-ms has a matching knob to raise the floor — ShedLock resolves ${...} in
+    // @SchedulerLock attributes (verified by decompiling shedlock-spring:7.10.1's
+    // SpringLockConfigurationExtractor). Default unchanged; see docs/deployment/scheduler-lock-tuning.md.
+    @SchedulerLock(name = "OutboxService_sweep", lockAtMostFor = "PT10M",
+                   lockAtLeastFor = "${app.outbox.lock-at-least:PT1M}")
     public void sweep() {
         drain();
         final long stuck = repository.countByAttemptsGreaterThanEqual(STUCK_ATTEMPTS_THRESHOLD);

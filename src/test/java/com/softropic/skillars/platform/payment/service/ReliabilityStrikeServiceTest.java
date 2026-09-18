@@ -123,6 +123,40 @@ class ReliabilityStrikeServiceTest {
         assertThat(since).isAfter(expected.minusMinutes(1)).isBefore(expected.plusMinutes(1));
     }
 
+    /**
+     * skillars-deferred-123 AC1: a SUSPENDED coach still gets the strike saved (compliance record)
+     * but escalation is suppressed — no status change, no event. This is the automatic-path coverage
+     * (CancellationRefundService's no-show/cancellation listeners call issue() directly); the manual
+     * path (issueManualStrike) is covered by ManualStrikeIT.
+     */
+    @Test
+    void suspendedCoach_strikeStillSaved_butNoEscalation() {
+        coach.setStatus(CoachProfileStatus.SUSPENDED);
+        when(strikeRepository.countByCoachIdAndCreatedAtAfter(eq(COACH_ID), any(OffsetDateTime.class))).thenReturn(5L);
+
+        CoachReliabilityStrike result = service.issue(COACH_ID, BOOKING_ID, "COACH_NO_SHOW");
+
+        assertThat(result).isNotNull();
+        verify(strikeRepository).save(any(CoachReliabilityStrike.class));
+        assertThat(coach.getStatus()).isEqualTo(CoachProfileStatus.SUSPENDED);
+        verify(coachProfileRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    /** Mirrors {@link #suspendedCoach_strikeStillSaved_butNoEscalation()} for DEACTIVATED. */
+    @Test
+    void deactivatedCoach_strikeStillSaved_butNoEscalation() {
+        coach.setStatus(CoachProfileStatus.DEACTIVATED);
+        when(strikeRepository.countByCoachIdAndCreatedAtAfter(eq(COACH_ID), any(OffsetDateTime.class))).thenReturn(3L);
+
+        service.issue(COACH_ID, BOOKING_ID, "COACH_CANCELLATION_UNEXCUSED");
+
+        verify(strikeRepository).save(any(CoachReliabilityStrike.class));
+        assertThat(coach.getStatus()).isEqualTo(CoachProfileStatus.DEACTIVATED);
+        verify(coachProfileRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
     @Test
     void fifthStrike_doesNotAlsoSetReduced() {
         when(strikeRepository.countByCoachIdAndCreatedAtAfter(eq(COACH_ID), any(OffsetDateTime.class))).thenReturn(5L);

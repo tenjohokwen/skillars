@@ -48,8 +48,10 @@ public class OutboxPollerScheduler {
      * {@code PT2S} (not the 5-minute-siblings' {@code PT2M}) is used here too.
      */
     @Scheduled(fixedDelayString = "${app.storage.poller.fixed-delay-ms:5000}")
+    // skillars-deferred-123 AC4: lockAtLeastFor property-ized — see OutboxService.sweep's identical
+    // comment for the rationale.
     @SchedulerLock(name = "OutboxPollerScheduler_pollAndProcess",
-                   lockAtMostFor = "PT10M", lockAtLeastFor = "PT2S")
+                   lockAtMostFor = "PT10M", lockAtLeastFor = "${app.storage.poller.lock-at-least:PT2S}")
     public void pollAndProcess() {
         int batchSize = properties.getPoller().getBatchSize();
         storageMetrics.updateQueueDepth(
