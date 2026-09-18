@@ -24,6 +24,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * behavior, annotation only</strong> — this test proves the {@code @Transactional} declaration is
  * correct, not that a concurrent writer's torn read is actually prevented at runtime.
  *
+ * <p><strong>Runtime-behavior proof (skillars-deferred-123 AC6):</strong> {@code
+ * AdminCoachEnforcementIsolationRuntimeIT} now covers exactly the gap this Javadoc used to describe as
+ * open — it reads the *effective* isolation level from inside a real transactional call (via a
+ * repository spy, no hand-written SQL), for both a fresh top-level call and the ambient-transaction
+ * hazard this class's own Javadoc names below. This test is not superseded by that one — it still
+ * usefully pins the annotation itself against silent removal, which the runtime test does not check.
+ *
  * <p>Both existing HTTP-driven ITs ({@code CoachEnforcementListIT}, {@code ManualStrikeIT}) already
  * exercise these two methods outside of any enclosing transaction (via {@code HttpTestClient}, never
  * a directly-injected transaction-wrapped service call) — see this AC's own isolation warning about

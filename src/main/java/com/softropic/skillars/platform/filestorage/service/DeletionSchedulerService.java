@@ -51,8 +51,13 @@ public class DeletionSchedulerService {
      * mirroring {@code RadarCompositeDlqProcessor}'s {@code PT30S}-under-60s-cadence precedent.
      */
     @Scheduled(fixedDelayString = "${app.storage.poller.fixed-delay-ms:5000}")
+    // skillars-deferred-123 AC4: lockAtLeastFor property-ized with its OWN key (deliberately NOT
+    // OutboxPollerScheduler's app.storage.poller.lock-at-least, even though both share
+    // app.storage.poller.fixed-delay-ms as their cadence property today — these are two independent
+    // schedulers/locks, and an operator must be able to raise one floor without the other) — see
+    // OutboxService.sweep's identical comment for the rationale.
     @SchedulerLock(name = "DeletionSchedulerService_processDeletions",
-                   lockAtMostFor = "PT5M", lockAtLeastFor = "PT2S")
+                   lockAtMostFor = "PT5M", lockAtLeastFor = "${app.storage.deletion.lock-at-least:PT2S}")
     public void processDeletions() {
         Instant cutoff = Instant.now().minus(properties.getDeletion().getRetentionDays(), ChronoUnit.DAYS);
         List<FileStorageObject> eligible = fileStorageObjectRepository

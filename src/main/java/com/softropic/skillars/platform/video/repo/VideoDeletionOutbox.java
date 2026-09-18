@@ -50,6 +50,16 @@ public class VideoDeletionOutbox {
     @Column(name = "triggered_by", nullable = false, length = 32)
     private String triggeredBy;
 
+    /**
+     * skillars-deferred-123 AC3: stamped by {@code claimPendingBatch} with the tick's own claim
+     * instant, and cleared back to {@code null} on every transition out of {@code CLAIMED}
+     * (completion or either failure outcome). Lets {@code resetStaleClaimed} key staleness on how
+     * long a row has actually been claimed rather than {@code nextRetryAt}'s eligibility time, and
+     * lets {@code findClaimedBatch} scope its fetch to this run's own claim.
+     */
+    @Column(name = "claimed_at")
+    private Instant claimedAt;
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();

@@ -66,6 +66,16 @@ public class ReliabilityStrikeService {
         long visibilityThreshold = configService.getBoundedLong(
             ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, ReliabilityStrikeConfig.DEFAULT_VISIBILITY_THRESHOLD, 1L, Long.MAX_VALUE);
 
+        // skillars-deferred-123 AC2: captured before the lock wait below, not inline at the count
+        // query. AdminCoachEnforcementConcurrencyIT / AdminCoachEnforcementServiceIsolationTest are
+        // the regression guard for this ordering — no dedicated ordering test is added (see the
+        // story's AC2 Task 3: no Clock seam exists today and adding one solely for this is a larger
+        // refactor than this fix warrants). Do not move this back below withBoundedRetry: under lock
+        // contention (PessimisticLockRetryer's ~3.2s worst-case budget) the window's start would
+        // silently slide, so a strike created seconds before the 30-day boundary could be counted for
+        // an uncontended call and excluded for a contended one on the same coach.
+        OffsetDateTime cutoff = OffsetDateTime.now().minusDays(30);
+
         // skillars-deferred-100 AC1: serialize the count -> threshold -> status decision on the
         // coach row. Two concurrent issue() calls for the same coach previously both read an
         // unlocked count = N and an unlocked status = ACTIVE, both passed the guard, and both
@@ -88,10 +98,24 @@ public class ReliabilityStrikeService {
         CoachProfile coach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach not found", "coach_profile")));
 
-        long count = strikeRepository.countByCoachIdAndCreatedAtAfter(coachId, OffsetDateTime.now().minusDays(30));
+        // skillars-deferred-123 AC1: a coach already off the marketplace has no enforcement value in
+        // further escalation — a SUSPENDED coach cannot be knocked further, and could otherwise be
+        // demoted PENDING_REVIEW->wrongly-not-suspended via a stale status guard; a DEACTIVATED coach
+        // is gone. This is a deny-list (only these two statuses suppress), not a reject: the strike
+        // save() above is unconditional, so the strike remains a durable compliance record even when
+        // it can't change status right now — and every other status, including any added later, keeps
+        // today's escalation behaviour by default (the safer failure mode for an
+        // admin/automated-enforcement action). This is the single point both the manual
+        // (AdminCoachEnforcementService.issueManualStrike) and automatic
+        // (CancellationRefundService's no-show/cancellation listeners) strike paths converge on, so a
+        // future third caller of issue() gets the same suppression for free.
+        boolean alreadyOffMarketplace = coach.getStatus() == CoachProfileStatus.SUSPENDED
+            || coach.getStatus() == CoachProfileStatus.DEACTIVATED;
+
+        long count = strikeRepository.countByCoachIdAndCreatedAtAfter(coachId, cutoff);
 
         // Check PENDING_REVIEW threshold first (mutually exclusive per AC 9)
-        if (count >= suspensionThreshold) {
+        if (!alreadyOffMarketplace && count >= suspensionThreshold) {
             if (coach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
                 coach.setStatus(CoachProfileStatus.PENDING_REVIEW);
                 coach.setStatusChangedAt(java.time.Instant.now());
@@ -99,7 +123,7 @@ public class ReliabilityStrikeService {
                 eventPublisher.publishEvent(new StrikeThresholdReachedEvent(this, coachId, bookingId, count));
                 log.warn("Coach suspended for review: coachId={} rollingCount={}", coachId, count);
             }
-        } else if (count >= visibilityThreshold) {
+        } else if (!alreadyOffMarketplace && count >= visibilityThreshold) {
             if (coach.getStatus() != CoachProfileStatus.REDUCED && coach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
                 coach.setStatus(CoachProfileStatus.REDUCED);
                 coach.setStatusChangedAt(java.time.Instant.now());

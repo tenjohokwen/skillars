@@ -26,8 +26,10 @@ public class QuotaReservationTimeoutService {
     private final QuotaReservationBatchExpirer batchExpirer;
 
     @Scheduled(fixedDelayString = "${app.video.reservation-check-interval-ms:60000}")
+    // skillars-deferred-123 AC4: lockAtLeastFor property-ized — see OutboxService.sweep's identical
+    // comment for the rationale (ShedLock resolves ${...} in @SchedulerLock attributes).
     @SchedulerLock(name = "QuotaReservationTimeoutService_expire",
-                   lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
+                   lockAtMostFor = "PT10M", lockAtLeastFor = "${app.video.reservation-lock-at-least:PT1M}")
     public void expireStaleReservations() {
         Instant deadline = Instant.now().plus(MAX_RUN_DURATION);
         int totalExpired = 0;

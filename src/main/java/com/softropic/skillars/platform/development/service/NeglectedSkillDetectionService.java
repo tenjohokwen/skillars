@@ -44,8 +44,12 @@ public class NeglectedSkillDetectionService {
     }
 
     @Scheduled(cron = "${app.development.neglected-detection-cron:0 0 6 * * MON}")
+    // skillars-deferred-123 AC4: both floors property-ized (this scheduler's cadence,
+    // app.development.neglected-detection-cron, is also operator-tunable) — see OutboxService.sweep's
+    // identical comment for the rationale.
     @SchedulerLock(name = "NeglectedSkillDetectionService_detect",
-                   lockAtMostFor = "PT30M", lockAtLeastFor = "PT5M")
+                   lockAtMostFor = "${app.development.neglected-detection.lock-at-most:PT30M}",
+                   lockAtLeastFor = "${app.development.neglected-detection.lock-at-least:PT5M}")
     public void detectNeglectedSkills() {
         BigDecimal threshold = readThreshold();
         if (threshold == null) {

@@ -279,11 +279,22 @@ class VideoLifecycleSchedulerTest {
         assertThat(lock).as("runLifecycleJob() must carry @SchedulerLock, mirroring every sibling "
             + "scheduler sharing this module's short-SELECT/per-row-transaction shape").isNotNull();
         assertThat(lock.name()).isNotBlank();
-        // lockAtMostFor exists specifically to cover a ceiling-sized (10000-row, two-phase) run,
-        // which is expected to take on the order of hours, not minutes — so it must comfortably
+        // skillars-deferred-123 AC4: both floors are now property expressions (this scheduler's
+        // cadence, app.video.lifecycle.cron, is also operator-tunable) — pin the exact expressions
+        // and assert against their embedded defaults instead of Duration.parse-ing the raw strings.
+        assertThat(lock.lockAtMostFor()).isEqualTo("${app.video.lifecycle.lock-at-most:PT12H}");
+        assertThat(lock.lockAtLeastFor()).isEqualTo("${app.video.lifecycle.lock-at-least:PT30S}");
+        // lockAtMostFor's default exists specifically to cover a ceiling-sized (10000-row, two-phase)
+        // run, which is expected to take on the order of hours, not minutes — so it must comfortably
         // exceed a default-sized (100-row) run's realistic duration.
-        assertThat(Duration.parse(lock.lockAtMostFor())).isGreaterThan(Duration.ofHours(1));
-        assertThat(Duration.parse(lock.lockAtLeastFor())).isPositive();
+        assertThat(Duration.parse(defaultOf(lock.lockAtMostFor()))).isGreaterThan(Duration.ofHours(1));
+        assertThat(Duration.parse(defaultOf(lock.lockAtLeastFor()))).isPositive();
+    }
+
+    /** Extracts the {@code default} out of a {@code ${property:default}} SchedulerLock expression. */
+    private static String defaultOf(String springPropertyExpression) {
+        String withoutBraces = springPropertyExpression.replace("${", "").replace("}", "");
+        return withoutBraces.substring(withoutBraces.indexOf(':') + 1);
     }
 
     private Video blockedVideo(UUID id, String ownerId, Instant lifecycleLockedAt) {

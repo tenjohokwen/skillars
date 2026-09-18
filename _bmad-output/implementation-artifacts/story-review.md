@@ -1,438 +1,616 @@
-# Senior-Dev Story Audit — `skillars-deferred-122-coach-enforcement-round-2-and-user-cleanup-fixes`
+# Senior-Dev Audit — `skillars-deferred-123-strike-timing-scheduler-lock-config-and-envers-audit-gap-fixes`
 
 **Reviewed:** 2026-09-18
-**Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-122-coach-enforcement-round-2-and-user-cleanup-fixes.md`
-**Baseline:** working tree on `story/deferred-122-...`, source files identical to `master@aa920c49`
-**Method:** every claim in the story was re-checked against the actual source. Findings below are only
-those I could reproduce from code I read; a "Verified accurate" section at the end lists the story
-claims I checked and found **correct**, so the absence of a finding is a deliberate result, not a gap
-in coverage.
+**Story revision reviewed:** as committed in `550125b7`
+**Codebase verified against:** working tree at `550125b7` (story-creation commit; `master@6ce2827c` + story file)
+**Method:** every factual claim, line citation, table row and prescribed fix in the story was checked
+against source. ShedLock behaviour was verified by decompiling the resolved artifact
+(`~/.m2/.../shedlock-spring-7.10.1.jar`), not from documentation or memory. Findings below are only
+those I could reproduce from the code; each carries its evidence so it can be re-checked cheaply.
 
-**Verdict:** the story is well-researched and its *diagnoses* are almost all correct. The problems are
-in the *prescriptions*: four of them are wrong or incomplete in ways that will either produce
-incorrect behavior, silently not work at all, or break CI. **Do not start AC1 or AC8 as written.**
+**Verdict: do not start AC3, AC4 or AC6 as written.** AC4 rests on a premise that is verifiably
+false, AC3 does not close the hole it is written to close, and AC6's test does not exercise the risk
+it cites. AC1, AC2, AC5, AC7 and AC8 are directionally sound with the corrections noted.
 
-| # | AC | Severity | Summary |
-|---|----|----------|---------|
-| 1 | AC1 | **Blocker** | Prescribed tiering is not a mirror of `issue()`; de-escalates coaches still above `suspensionThreshold` |
-| 2 | AC1 | **Blocker** | Fix step 2 and Task 3 contradict each other on the `admin_action_log` row |
-| 3 | AC1 | **Blocker** | Stated assumption about `AdminCoachEnforcementConcurrencyIT` is factually false — that test will go red |
-| 4 | AC8 | **Blocker** | Prescribed fix does not work: `@Transactional` is ignored on non-public methods under proxy AOP |
-| 5 | AC9 | Major | `User` is `@Audited`; migration/entity change omits `user_aud` entirely |
-| 6 | AC9 | Major | The catch-block stamp as described is a no-op — the `User` is detached |
-| 7 | AC9 | Major | `timestamptz` contradicts the table's own convention and the story's own instruction |
-| 8 | AC9 | Major | Migration as specified will fail the repo's migration-lint suite |
-| 9 | AC4 | Major | A boot-only check does not close a runtime-mutable config gap; the AC claims it does |
-| 10 | AC7 | Moderate | Divide-by-zero on an unvalidated config property |
-| 11 | AC6 | Moderate | Pushing `excludeLogins` server-side creates an unbounded `NOT IN` list |
-| 12 | AC1 | Moderate | 30-day window computed from two separate `now()` calls |
-| 13 | AC1 | Moderate | Out-of-window guard silently removes the system's only de-escalation-on-ageout path |
-| 14 | AC2 | Moderate | Bulk JPQL delete leaves the already-loaded strike managed |
-| 15 | AC3 | Minor | Isolation is silently dropped inside an ambient transaction — directly affects AC3's own test |
-| 16 | AC3 | Minor | Sibling reader `getCoachesUnderEnforcement` has the identical torn-read shape and is not covered |
-| 17 | AC10 | Minor | Bullet arithmetic and instructions contradict themselves |
-| 18 | Dev Notes | Minor | "No cross-AC dependency except AC6/AC9" is wrong |
+---
+
+## Summary table
+
+| # | AC | Severity | Finding |
+|---|---|---|---|
+| B1 | AC4 | **Blocker** | "ShedLock does not resolve `${...}` in `lockAtLeastFor`" is false — it does. AC4's entire design rests on it. |
+| B2 | AC3 | **Blocker** | `findClaimedBatch()` is unscoped, so `claimed_at` alone does not close the double-processing path. Task 6 would replace a correct warning with a false one. |
+| H1 | AC3 | High | Prescribed `timestamp without time zone` contradicts both target tables' actual convention (`timestamp with time zone`). |
+| H2 | AC6 | High | The proposed two-connection JDBC test cannot detect the failure mode it is written for. |
+| H3 | AC6 | High | The two methods do not share a query pair; "two near-identical tests" understates the work. |
+| M1 | AC4 | Medium | Scope table is incomplete — property-tunable **cron** schedulers have the identical exposure and are excluded by assertion, not by evidence. |
+| M2 | AC4 | Medium | `failFast` boot-block punishes the exact operator action the check is about; the predicate is a heuristic, not a proof. |
+| M3 | AC4 | Medium | Duplicates every `lockAtLeastFor` literal into a second source of truth with no drift guard. |
+| M4 | AC4 | Medium | `env.getProperty(..., Long.class, ...)` is unguarded against duration-format values, and breaks every existing `ConfigStartupAssertionTest` case. |
+| M5 | AC3 | Medium | Task 5 is self-contradictory on `handleFailure`, and omits the `DEAD` branch. |
+| M6 | AC1 | Medium | Deny-list and allow-list in adjacent sentences disagree; `DRAFT` is never resolved. |
+| M7 | AC1 | Medium | Guard is asymmetric — the automatic strike path keeps no guard at all; record-keeping flow not considered. |
+| L1 | AC7/AC8 | Low | The ledger bullet AC7 preserves describes a mechanism that no longer exists at HEAD, and AC8 leaves it uncorrected. |
+| L2 | AC2 | Low | Severity overstated; the fix reduces variance rather than removing it, and leaves three capture points. |
+| L3 | AC2 | Low | Task 3 is unfalsifiable as an acceptance criterion. |
+| L4 | AC5 | Low | Omits the `@NotAudited` outcome the codebase's own precedent points to; branch (a) has no history story. |
+| L5 | AC3 | Low | Index coverage for the changed `resetStaleClaimed` predicate is never considered. |
+| L6 | AC3 | Low | No rollout story for rows already `CLAIMED` at migration time. |
+| L7 | AC8 | Low | Sweep silently drops a still-open deferred-122 ledger item. |
+| L8 | — | Low | Minor citation drift despite the "re-verified against HEAD" claim. |
 
 ---
 
 ## Blockers
 
-### 1. AC1 — The prescribed three-tier logic is *not* a mirror of `issue()`; it de-escalates coaches who should stay `PENDING_REVIEW`
+### B1 — AC4's stated premise is false: ShedLock 7.10.1 *does* resolve `${...}` in `lockAtLeastFor`
 
-**Evidence.** `ReliabilityStrikeService.issue`'s escalation (`ReliabilityStrikeService.java:93-110`):
+The story asserts this as verified fact:
 
-```java
-if (count >= suspensionThreshold)      { ... PENDING_REVIEW ... }
-else if (count >= visibilityThreshold) { ... REDUCED ... }
+> ShedLock does not resolve `${...}` placeholders in `lockAtLeastFor`/`lockAtMostFor` — verified:
+> neither `MethodProxyScheduledLockAdvisor` nor `SchedulerProxyScheduledLockAdvisor` in
+> `shedlock-spring:7.10.1` performs any property-placeholder or `Environment` resolution on these
+> annotation attributes.
+
+The two advisor classes were the wrong place to look — they delegate to the extractor. In
+`shedlock-spring-7.10.1.jar`:
+
+- `SpringLockConfigurationExtractor` holds a field
+  `private final org.springframework.util.StringValueResolver embeddedValueResolver`.
+- Both `getLockAtMostFor(AnnotationData)` and `getLockAtLeastFor(AnnotationData)` route through
+  `private Duration getValue(long, String, Duration, String)`.
+- `getValue`'s bytecode calls
+  `StringValueResolver.resolveStringValue(...)` on the annotation's String attribute when the
+  resolver is non-null, then hands the result to `StringToDurationConverter.convert(...)`.
+- `LockConfigurationExtractorConfiguration` is `EmbeddedValueResolverAware` and passes that resolver
+  into the extractor's constructor, so it *is* non-null in a Spring app.
+- `StringToDurationConverter` accepts both ISO-8601 (`^[+-]?P.*$` → `Duration.parse`) and the
+  Spring-style `<number><unit>` form (`60000ms`, `30s`).
+
+Reproduce:
+
+```
+unzip -q ~/.m2/repository/net/javacrumbs/shedlock/shedlock-spring/7.10.1/shedlock-spring-7.10.1.jar
+javap -p -c net/javacrumbs/shedlock/spring/aop/SpringLockConfigurationExtractor.class \
+  | sed -n '/private java.time.Duration getValue/,/Exception table/p'
 ```
 
-The top tier is gated on `suspensionThreshold`. AC1's prescribed de-escalation (Fix step 3) is gated
-only on `visibilityThreshold`:
-
-> `count >= visibilityThreshold` (and, transitively, `< suspensionThreshold` once AC4's config
-> validation is in place) and current status is `PENDING_REVIEW` → **new:** `REDUCED`
-
-The parenthetical is a non sequitur. AC4 enforces `visibilityThreshold <= suspensionThreshold`. That
-says nothing about where `count` falls. `count >= visibilityThreshold` does **not** imply
-`count < suspensionThreshold`.
-
-**Concrete failure.** Seeded defaults are `suspensionThreshold=5`, `visibilityThreshold=3`
-(`V139__baseline_seed_data.sql:137-138`). A coach at `PENDING_REVIEW` with 7 in-window strikes; an
-admin deletes one → `count = 6`. AC1's rule fires (`6 >= 3`, status `PENDING_REVIEW`) and writes
-`REDUCED`. But `issue()` would have written `PENDING_REVIEW` for a count of 6. The coach is
-de-escalated out of admin review while still two strikes past the suspension bar — the exact class of
-wrong-status-write this story exists to fix, newly introduced by its own fix.
-
-**Also note** `deleteStrike` currently reads *only* `visibilityThreshold`
-(`AdminCoachEnforcementService.java:254-255`). It has no `suspensionThreshold` read at all, and AC1
-never tells the dev to add one.
-
-**Required change to AC1.** Add the `suspensionThreshold` read and make the tiering a true reverse
-mirror, top tier first:
+**Impact.** AC4 exists only because the lock floor is assumed to be un-tunable. It is tunable. The
+whole prescribed apparatus — a `record SchedulerLockConfig`, a hand-maintained 7-row literal, a
+per-row `failFast` judgement call, boot-blocking, and the test matrix for it — is an elaborate
+runtime detector for a problem that can be removed at the declaration site. A `${...}` string is
+still a compile-time constant expression, so this is legal exactly where the current literal sits:
 
 ```java
-if (count >= suspensionThreshold)       -> no change (stay PENDING_REVIEW)
-else if (count >= visibilityThreshold)  -> REDUCED (from PENDING_REVIEW; no-op if already REDUCED)
-else                                    -> ACTIVE (existing behaviour)
+@Scheduled(fixedDelayString = "${platform.video.deletion.outbox_poll_delay_ms:60000}")
+@SchedulerLock(name = "VideoDeletionOutboxProcessor_process",
+               lockAtMostFor  = "${platform.video.deletion.outbox_lock_at_most:PT15M}",
+               lockAtLeastFor = "${platform.video.deletion.outbox_lock_at_least:PT30S}")
 ```
 
-and add a test for the `PENDING_REVIEW` + `count still >= suspensionThreshold` case, which the current
-task list does not cover.
+**Recommendation.** Rewrite AC4 against the corrected premise before any code is written. Two
+defensible shapes, both far smaller than what is currently specified:
+
+1. Make each lock floor a property with the current literal as its default, so one operator changing
+   cadence can change the floor in the same place. Residual risk: they still have to remember —
+   which is a documentation problem, not a boot-assertion problem.
+2. If a cross-check is still wanted after (1), keep it to an ERROR log + metric (see M2) and derive
+   *both* sides from `Environment` so there is no duplicated literal (see M3).
+
+Whichever is chosen, the story's "ShedLock cannot do this" sentence must be deleted, not softened —
+it will otherwise be quoted as settled fact by the next story, exactly as the deferred-120 ledger
+bullet was quoted by this one.
 
 ---
 
-### 2. AC1 — Fix step 2 and Task 3 contradict each other on the audit-log row
+### B2 — AC3 does not close the double-processing path, and Task 6 would document a false invariant
 
-Fix step 2 routes an out-of-window deletion to "the existing 'no status change' `else` branch". That
-branch **writes an action-log row** (`AdminCoachEnforcementService.java:275-278`):
+AC3's problem statement frames `resetStaleClaimed` as the entry point to duplicate work:
+
+> A concurrent tick's `resetStaleClaimed` can then free it while the first instance is still
+> processing it, and `claimPendingBatch` immediately re-claims it.
+
+That is one path. It is not the only one, and it is not the load-bearing one. Both repositories'
+batch fetch is globally scoped:
 
 ```java
-} else {
-    actionLog.setActionType(AdminActionType.COACH_STRIKE_DELETED);
-    actionLog.setReason("Strike deleted (no status change): " + reason);
+// VideoDeletionOutboxRepository:33-38  (RadarCompositeDlqRepository:31-36 is identical)
+@Query(value = """
+    SELECT * FROM main.video_deletion_outbox
+    WHERE status = 'CLAIMED'
+    ORDER BY next_retry_at ASC
+    """, nativeQuery = true)
+List<VideoDeletionOutbox> findClaimedBatch();
 ```
 
-Task 3 asserts the opposite:
+No owner column, no run token, no `LIMIT`. Walk the exact scenario AC3 names — a run that
+legitimately overruns `lockAtMostFor` — **with AC3 already applied**:
 
-> assert **no** status change, **no** alert resolution, **no** new `admin_action_log` row — the
-> deletion must be a pure no-op on coach state
+1. Instance A holds rows in `CLAIMED`, `claimed_at` = 3 minutes ago, still calling `deleteAsset`.
+2. A's ShedLock lock expires. Instance B's tick fires.
+3. B: `resetStaleClaimed` — correctly matches nothing (`claimed_at` is recent). *AC3 working.*
+4. B: `claimPendingBatch` — matches nothing (those rows are `CLAIMED`, not `PENDING`).
+5. B: `findClaimedBatch()` — **returns A's in-flight rows**, because their status is `CLAIMED`.
+6. B processes them. Duplicate `deleteAsset` / `recalculateComposite`, duplicate
+   `video_deletion_log` rows.
 
-The test as written will fail against the implementation as written. Beyond the contradiction,
-suppressing the row is the wrong call: an admin destroying a strike record with no audit-log entry is
-an audit regression, and `AdminCoachEnforcementConcurrencyIT:367-372` already asserts exactly one
-`COACH_STRIKE_DELETED` row on the no-revert path.
+`claimed_at` removed step 3 and changed nothing about step 5. The codebase already knows this — it
+is written down in the class the story is about:
 
-**Resolution:** keep the log row, fix Task 3's wording to "no status change, no alert resolution, and
-a `COACH_STRIKE_DELETED` (not `COACH_REINSTATE`) action-log row".
+> `VideoDeletionOutboxProcessor.java:63-67` — "`findClaimedBatch()` is unscoped to this invocation's
+> own claim (global `WHERE status = 'CLAIMED'`, no per-run filter) … so each processes rows the other
+> is concurrently processing — real duplicate `videoProviderAdapter.deleteAsset` calls and duplicate
+> `video_deletion_log` rows, not merely a shared-field race."
 
----
+AC3 Task 6 then instructs:
 
-### 3. AC1 — The stated assumption about `AdminCoachEnforcementConcurrencyIT` is false; that test will break
+> Update both classes' existing Javadoc … to state the invariant now holds structurally
+> (claim-time-keyed), not just "restored via a buffer" — the `skillars-deferred-120` 20-minute-buffer
+> reasoning becomes a secondary safety margin, not the primary fix, once this lands.
 
-AC1's last task says:
+Both halves are wrong. The `STALE_CLAIM_WINDOW > lockAtMostFor` invariant is not demoted by
+`claimed_at`; it is *re-based onto a correct clock* and remains the only thing keeping
+`resetStaleClaimed` from freeing live rows (a run that overruns by more than 20 minutes still gets
+its rows freed, now measured from claim time instead of eligibility time — better, not eliminated).
+And nothing becomes structural while step 5 exists. Following Task 6 deletes an accurate warning
+(`VideoDeletionOutboxProcessor.java:74-84`) and replaces it with a false assurance, which is a worse
+outcome than not doing AC3 at all.
 
-> the concurrency IT's `deleteStrike` tests assert on the `ACTIVE` path specifically … (they seed
-> counts that land below `visibilityThreshold`, not in the new `REDUCED` band …)
+**Recommendation.** Keep the `claimed_at` column — it is the right primitive — and extend AC3 to
+actually use it for scoping:
 
-That is not what the test seeds. `deleteStrike_concurrentStrikesPushCountAboveThreshold_doesNotRevertOnStaleCount`
-(`AdminCoachEnforcementConcurrencyIT.java:300-372`):
+- `claimPendingBatch` stamps `claimed_at = :now` (as specified), and the processor passes a single
+  `Instant runClaimedAt` for the whole tick.
+- Add `findClaimedBatch(@Param("claimedAt") Instant claimedAt)` filtering
+  `status = 'CLAIMED' AND claimed_at = :claimedAt`, and give it a `LIMIT :batchSize`. That makes the
+  batch genuinely this run's own claim and closes step 5. (A `claimed_by` token is the more
+  conventional shape if a future run could ever share a timestamp; a single `Instant.now()` per tick
+  is sufficient here and cheaper.)
+- Rewrite Task 6 to say the *claim scope* is now structural and the window-vs-lock invariant is
+  still primary and still load-bearing — do not weaken it.
 
-- coach seeded `PENDING_REVIEW` (`:105`)
-- `visibilityThreshold - 1` = **2** strikes, plus the target strike = 3 (`:308-312`)
-- holder thread inserts **2** more while holding the lock (`:328-329`) → 5
-- target strike deleted → **`count = 4`**
-
-With `visibilityThreshold=3`, `suspensionThreshold=5`, a count of 4 lands **squarely inside the new
-`REDUCED` band**. Post-AC1 the coach becomes `REDUCED`; the test asserts `PENDING_REVIEW` (`:357-361`)
-and goes red. If Fix step 5's "new enum constant" option is taken, the `COACH_STRIKE_DELETED` count
-assertion (`:367-372`) goes red too.
-
-Worse, the test's *premise* is invalidated, not just its expectation: it proves "the fresh post-lock
-count was used" by observing *no status change*. Under AC1 there is always a status change in that
-scenario, so flipping the expectation to `REDUCED` would no longer distinguish a fresh count from a
-stale one. The test needs a redesign — e.g. have the holder insert enough strikes that the fresh count
-lands `>= suspensionThreshold`, so "no change" remains the correct fresh-count outcome.
-
-This must be a first-class task in AC1, not a sanity check appended to the end.
-
----
-
-### 4. AC8 — The prescribed fix does not work; `@Transactional` is ignored on non-public methods
-
-`deleteUserInTransaction` is **`protected`** (`UserAdminService.java:239`). `DataSourceConfig.java:20`
-uses `@EnableTransactionManagement` in the default `PROXY` mode, which builds an
-`AnnotationTransactionAttributeSource` with `publicMethodsOnly = true`.
-`AbstractFallbackTransactionAttributeSource.computeTransactionAttribute` returns `null` for any
-non-public method under that setting, so no `TransactionInterceptor` advice is ever applied —
-**regardless of whether the call arrives through the proxy**. Adding an `@Autowired @Lazy self` field
-changes nothing on its own.
-
-The precedent the story tells the dev to copy "exactly" —
-`VideoSubscriptionLifecycleListener.processAndSaveEntry` (`:120`) — is **`public`**. The story copied
-the field declaration but not the method visibility, which is the part that actually makes the pattern
-work.
-
-**Required change to AC8:** make `deleteUserInTransaction` `public` *and* route the call through
-`self`. Both, or the AC delivers nothing.
-
-Two knock-ons:
-
-- `findExpiredUsers` is also `protected` with `@Transactional(readOnly = true)` (`:198-199`) — equally
-  inert today. Relevant to AC6/AC9: entities it returns are detached (see finding 6). Decide
-  explicitly whether to make it public too, or drop its misleading annotation.
-- AC8's verification bar ("test proves the transaction boundary, not just the call-site change") is
-  correct and should be treated as mandatory here: a `verify(self).deleteUserInTransaction(...)` test
-  would pass green on a fix that still does nothing.
-
-Separately, note that even with `REQUIRES_NEW` genuinely applied, the read-then-delete inside
-`deleteUserInTransaction` is a `SELECT` followed by a `DELETE` at READ COMMITTED with no row lock — the
-TOCTOU window narrows sharply but does not close. AC8's Verification Checklist line should say
-"narrows", not imply closure; the closing fix would be a conditional delete
-(`DELETE ... WHERE login = ? AND activated = false`) or a locked re-read.
+If the owner decides scoping `findClaimedBatch` is out of scope, then AC3 must say plainly in the
+Javadoc that the duplicate-processing path remains open via the unscoped fetch, and the ledger bullet
+must **not** be deleted by AC8 — only narrowed.
 
 ---
 
-## Major
+## High
 
-### 5. AC9 — `User` is Envers-audited; the migration and entity change omit `user_aud`
+### H1 — AC3 prescribes the wrong timestamp type for both tables
 
-`User` carries `@Audited` (`User.java:44`), `AbstractAuditingEntity` too (`:34`), Envers is on the
-classpath (`pom.xml:370-372`, 6.6.57.Final) and configured (`application.yaml:79-80`), and
-`main.user_aud` exists (`V138__baseline_schema.sql:1314`). `hibernate.ddl-auto: none`, so nothing
-creates the audit column for you.
+AC3 Task 1:
 
-AC9's task list mentions only `main."user"`. Adding an audited field without a matching `user_aud`
-column is the classic way to break every `User` write at runtime with a missing-column SQL error.
+> two additive `ALTER TABLE ... ADD COLUMN IF NOT EXISTS claimed_at timestamp without time zone`
+> … mirror `V143__user_cleanup_failed_at.sql`'s own header-comment style (explain what, why, and the
+> **timestamp type choice matching this table's existing convention**).
 
-**Caveat worth resolving first, not a reason to skip this:** `user_aud` already lacks `skillars_role`
-and `verification_status`, which are declared on `User` with no `@NotAudited`
-(`V138:1314-1346` vs `User.java:92-96`). Something about this project's actual Envers behavior does
-not match the naive reading, and that should be established before writing the migration. Either way
-AC9 must make an explicit decision — add the `user_aud` column, or annotate the new field
-`@NotAudited` — and it currently makes none.
+Applying the story's own stated criterion to the actual tables gives the opposite answer
+(`V138__baseline_schema.sql:452-461` and `:1390-1398`):
 
-### 6. AC9 — The catch-block stamp as described is a no-op
+```sql
+CREATE TABLE development.radar_composite_dlq (
+    ...
+    next_retry_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_at    timestamp with time zone DEFAULT now() NOT NULL
+);
 
-`removeNotActivatedUsers` is `@Transactional(propagation = Propagation.NOT_SUPPORTED)` (`:132`). There
-is no ambient persistence context, so the `User` objects returned by `findExpiredUsers` are **detached**
-the moment the repository call's own transaction closes. AC9 step 2 says "stamp
-`cleanup_failed_at = now()` on that user row" without naming a mechanism; the natural JPA reflex —
-`user.setCleanupFailedAt(Instant.now())` — dirty-checks nothing and silently does nothing. The whole AC
-would ship green and deliver an always-empty column.
+CREATE TABLE main.video_deletion_outbox (
+    ...
+    next_retry_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_at    timestamp with time zone DEFAULT now() NOT NULL
+);
+```
 
-**Required:** an explicit `@Modifying @Query` update on `UserRepository` (which carries
-`SimpleJpaRepository`'s own transaction), called inside its own `try/catch` so a stamp failure cannot
-abort the sweep. Spell this out in the AC.
+Both tables are uniformly `timestamptz`; both entities map them as `Instant`
+(`VideoDeletionOutbox.java:41-48`). V143 chose `timestamp without time zone` because that is
+`main."user"`'s convention — its own header says so explicitly — and that rationale does not
+transfer. Adding a `timestamp` column next to two `timestamptz` columns, then comparing it against an
+`Instant`-bound parameter in `resetStaleClaimed`, is a gratuitous inconsistency in a staleness
+predicate.
 
-Positive note, worth stating in the story so nobody "fixes" it later: because the sweep is
-`NOT_SUPPORTED`, a failed delete never marks an ambient transaction rollback-only, so the stamp *can*
-commit. That property is load-bearing for AC9 and depends on AC8 keeping `REQUIRES_NEW` (not
-`REQUIRED`).
+**Fix:** `claimed_at timestamp with time zone` on both tables. Adjust the header comment's rationale
+accordingly instead of copying V143's sentence.
 
-### 7. AC9 — `timestamptz` contradicts the table's own convention and the story's own instruction
+### H2 — AC6's test cannot fail in the scenario AC6 exists for
 
-AC9 step 1 prescribes `cleanup_failed_at timestamptz` while in the same sentence saying to "mirror this
-project's existing nullable timestamp column conventions in that table, e.g.
-`activation_date`/`reset_expiration`". Those columns — and `account_expiration`, `created_date`,
-`last_modified_date` — are all `timestamp without time zone` (`V138:1281-1296`). Pick one. Given
-`hibernate.jdbc.time_zone: UTC` and `Instant`-typed fields, matching the existing
-`timestamp without time zone` is the lower-risk choice.
+AC6 names the risk precisely:
 
-### 8. AC9 — The migration as specified will fail the repo's migration-lint suite
+> it cannot catch the torn-read AC3 exists to prevent if Spring's `validateExistingTransaction = false`
+> default ever silently discards the isolation request (documented risk: a future caller wrapping
+> either method in an ambient `@Transactional`/`TransactionTemplate` block).
 
-`src/test/resources/migration-lint/invalid/V912__missing_lock_timeout.sql` and
-`V919__lock_timeout_zero.sql` show the lint rejects an `ALTER TABLE` migration without a valid
-`SET lock_timeout`. The story's own nearest precedent, `V140__envelope_entity_recipients_delivered_flag.sql`,
-opens with a rationale header and `SET lock_timeout = '5s';`. AC9's task says only "adding the nullable
-column". Add the header + `SET lock_timeout` + `ADD COLUMN IF NOT EXISTS` to the task, or CI fails on a
-detail nobody will think to look for.
+The prescribed test then drives two raw JDBC connections with hand-written
+`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ` and hand-written SELECTs. It never calls
+`getEnforcementProfile`, never goes through Spring's transaction manager, and therefore cannot
+observe whether that method's requested isolation was honoured or discarded. It asserts that
+PostgreSQL implements REPEATABLE READ — which it does, and will keep doing, while
+`AdminCoachEnforcementService` silently runs at READ COMMITTED. The story half-notices this
+("the guarantee is the database's, not the service method's") and spends the AC anyway.
 
-(`V143` is confirmed the next free number as of now — V142 is HEAD.)
-
-### 9. AC4 — A boot-only check does not close a runtime-mutable config gap
-
-`ConfigService` holds a `ConcurrentHashMap` cache refreshed by
-`@Scheduled(fixedDelayString = "${app.config.cache-ttl-seconds:300}")` (`ConfigService.java:38,56`). An
-operator `UPDATE`ing `platform_config` takes effect on a running system within ~5 minutes, no restart.
-`ConfigStartupAssertion` fires once, on `ApplicationReadyEvent` (`:64`).
-
-So AC4 catches exactly one path — "boot with a bad pair already stored" — and leaves untouched the path
-that actually produces this bug in practice: an operator tuning a threshold live.
-`ConfigStartupAssertion`'s own Javadoc already concedes the analogous timing hole (`:47-51`).
-
-This is an owner decision and I am not relitigating the choice of venue. But AC4's text claims it
-"close[s] this", and AC10 will delete the ledger bullet on that basis. Either:
-
-- **(a)** add a two-line read-time guard in `deleteStrike` alongside the boot check —
-  `visibilityThreshold = Math.min(visibilityThreshold, suspensionThreshold)` — which you need the
-  `suspensionThreshold` read for anyway once finding 1 is fixed; or
-- **(b)** keep AC4 as-is but state plainly in the AC and in the `deferred-work.md` annotation that the
-  runtime-mutation path is knowingly left open.
-
-(a) is essentially free given finding 1. Silently deleting the bullet is the option to avoid.
-
-Two smaller AC4 notes, both fine as written but worth pinning down:
-- `configService.getBoundedLong(key, default, min, max)` never throws (`:108-117`) — absent, blank and
-  non-numeric all fall back to the default. The sketch is safe.
-- The existing `ConfigStartupAssertionTest` mocks `configService`, so unstubbed `getBoundedLong` calls
-  return `0L` for both keys; `0 > 0` is false, so no existing test spuriously trips. Good.
-- Keep the metric's tag keys as `{key, reason}` exactly — `ConfigStartupAssertion:134-140` documents
-  that `PrometheusMeterRegistry` rejects a second registration of `config.value.misconfigured` under a
-  different tag-key set.
-
----
-
-## Moderate
-
-### 10. AC7 — Divide-by-zero on an unvalidated config property
-
-`SecurityProperties.userCleanupBatchSize` is a bare `int` with no `@Min`/`@Validated`
-(`SecurityProperties.java:32`, class has only `@ConfigurationProperties` + `@Data`). AC7's
-`MAX_DELETE_ATTEMPTS_PER_RUN / batchSize` throws `ArithmeticException` at `app.security.user-cleanup-batch-size: 0`.
-(`PageRequest.of(0, 0)` already throws today, so this failure mode is pre-existing in kind — but AC7
-should not add a second one.)
-
-Clamp once and use it everywhere:
+**Recommendation.** Replace the two-connection JDBC test with one that observes the real thing. The
+cheap, direct version: from inside the service call, read the isolation level the transaction
+actually got.
 
 ```java
-int effectiveBatch = Math.max(1, batchSize);
-int maxBatches = Math.max(1, MAX_DELETE_ATTEMPTS_PER_RUN / effectiveBatch);
+// Assert the *effective* level, not the annotation. Fails exactly when
+// validateExistingTransaction=false silently drops the request.
+int level = DataSourceUtils.getConnection(dataSource).getTransactionIsolation();
+assertThat(level).isEqualTo(Connection.TRANSACTION_REPEATABLE_READ);
 ```
 
-Also: `batchSize > 10_000` yields `maxBatches == 1` while that single batch already exceeds the
-10,000-attempt ceiling the cap exists to enforce. Clamp the batch size upward too, or document that
-the ceiling is best-effort above that size.
+Wire it via a test-scoped `@Transactional`-aware probe (a `TransactionSynchronization`, or a spy on
+one of the injected repositories that records the isolation on first call — the latter needs no
+production change at all). Then add the negative case that gives the test its value: invoke
+`getEnforcementProfile` from inside an ambient `TransactionTemplate` block and assert it is *not*
+REPEATABLE_READ, pinning the documented hazard as observed behaviour rather than prose. That is
+strictly more coverage than the proposed IT, at a fraction of the cost, and it does not require a
+second raw connection at all.
 
-### 11. AC6 — Pushing `excludeLogins` into the query creates an unbounded `NOT IN` list
+If a genuine two-connection snapshot test is still wanted on top, it should call the **service
+method** on connection A, not hand-written SQL.
 
-`failedLogins` accumulates across the whole run and can reach `batchSize × maxBatches` (10,000) entries.
-Every `findExpiredUsers` call would then render a differently-sized `IN` list — large bind lists plus
-Hibernate query-plan-cache churn from the varying arity. Today the set costs nothing (Java-side filter),
-so this is a new cost that AC6 introduces while claiming to be a pure efficiency win.
+### H3 — AC6 Task 2's "shared torn-read shape" is not shared
 
-Note also that AC9's `cleanup_failed_at` exclusion largely supersedes the need for a server-side
-`failedLogins` filter. Cleanest shape: let the persisted marker do the cross-call exclusion, and keep
-`failedLogins` as the in-run, Java-side belt-and-braces for the case where the stamp itself failed.
-Make that an explicit decision in AC6 rather than leaving both mechanisms fighting for the same job.
+> Cover both `getEnforcementProfile` and `getCoachesUnderEnforcement`'s shared torn-read shape — a
+> single parameterized test or two near-identical tests.
 
-Separately, AC6's empty-collection worry is worth keeping but is likely moot under the above shape.
-Hibernate 6 renders an empty `IN ()` safely, but the `excludeLogins.isEmpty()` overload branch the
-story already suggests is cheap insurance.
+They read through different queries:
 
-**Index coverage:** there is no index on `main."user"(activated, created_date)` — only `user_pkey` and
-`user_login_key` (`V138:2716-2734`). `ORDER BY id ASC … LIMIT n` will walk the PK index and filter,
-stopping after `n` matches. That is still a large win over materializing the full expired set, but if
-AC6 is being sold as a performance fix, either measure it or add a partial index
-(`WHERE activated = false`) as part of the same migration AC9 already introduces.
+| Method | Status read | Count read |
+|---|---|---|
+| `getEnforcementProfile:88-91` | `coachProfileRepository.findById` | `countByCoachIdAndCreatedAtAfter` (derived, single id) |
+| `getCoachesUnderEnforcement:387-394` | `findByStatusInOrderByStatusChangedAtAsc` (**paged**, `Pageable` of 20) | `countByCoachIdInAndCreatedAtAfter` (**`@Query` returning `List<Object[]>`, `GROUP BY s.coachId`**) |
 
-### 12. AC1 — The 30-day window is computed from two separate `now()` calls
-
-AC1 Fix step 2 compares the deleted strike's `createdAt` against `now().minusDays(30)`; `count` is
-computed from its own `OffsetDateTime.now().minusDays(30)` at `:253`. A strike sitting on the boundary
-can be judged out-of-window by the guard while still being included in `count`, or vice versa. Hoist a
-single `OffsetDateTime cutoff` local and use it for both. `countByCoachIdAndCreatedAtAfter` uses strict
-`>` (`CoachReliabilityStrikeRepository.java:16`), so match that comparison exactly in the guard.
-
-### 13. AC1 — The out-of-window guard removes the system's only de-escalation-on-ageout path
-
-Nothing in the codebase re-evaluates a coach's status when strikes age out of the 30-day window:
-`ReliabilityStrikeService.issue` runs only on a *new* strike, and `deleteStrike` is the only other
-writer of that status pair. Today, deleting any stale strike accidentally triggers a re-evaluation and
-can clear a coach whose strikes have all aged out. After AC1, that accidental self-heal is gone and
-`reinstateCoach` becomes the only remedy.
-
-That is probably the right design call — but it is a real behavior change for admins and should be an
-explicit, documented consequence in the AC (and a line for whoever maintains the admin runbook), not a
-silent side effect of a bug fix.
-
-### 14. AC2 — The bulk JPQL delete leaves the already-loaded strike managed
-
-`findById` at `:238` puts the entity in the persistence context; a `@Modifying` JPQL delete bypasses it,
-so the managed instance survives the row. Nothing in `deleteStrike` re-reads it today, so the fix is
-safe **as currently shaped** — but AC1 is simultaneously editing this method, and "capture `createdAt`
-before deleting" (AC1 Fix step 1) must be into a **local variable**, not a later read of the entity.
-State the constraint in the AC so a future edit does not accidentally flush a resurrected row. Do not
-reach for `clearAutomatically = true` as a blanket fix — it would detach everything mid-method for no
-benefit here.
+Hand-writing the second pair's SQL means reproducing Spring Data's pagination SQL and an `IN`-list
+`GROUP BY` projection by hand, then keeping it in sync. That is not "near-identical" to the first,
+and it is the part of AC6 most likely to rot silently. Under H2's recommendation this disappears —
+the isolation probe is method-agnostic and genuinely is two near-identical tests.
 
 ---
 
-## Minor
+## Medium
 
-### 15. AC3 — The isolation level is silently dropped inside an ambient transaction
+### M1 — AC4's scope table is incomplete; the "7 sites" claim does not hold
 
-Production is fine: the only caller is `AdminCoachEnforcementResource.java:47`, with no enclosing
-transaction. But Spring's `validateExistingTransaction` defaults to `false`, so a *participating* call
-silently keeps `READ_COMMITTED` instead of failing loudly.
+> This story's own audit found the true risk surface is 7 sites (not "all `@Scheduled` methods" — a
+> scheduler with no `@SchedulerLock`, or a `lockAtLeastFor` of `PT0S`, cannot be undercut by any
+> cadence value)
 
-This matters directly for AC3's own test. If the test invokes `getEnforcementProfile` from an
-`@Transactional` test method or inside a `TransactionTemplate`, it will be exercising `READ_COMMITTED`
-and its result will mean nothing. Drive it through HTTP (as `CoachEnforcementListIT` does) or via a
-plainly non-transactional call.
+The exclusion criteria are right; the filter applied is not. The story narrowed to `fixedDelayString`
+only, which drops three schedulers whose cadence is *also* operator-tunable via a Spring property and
+whose `lockAtLeastFor` is *also* a hardcoded non-zero literal:
 
-Also, AC3's accepted fallback — "assert the annotation is present" — verifies nothing about behavior.
-If that path is taken, the Verification Checklist should record it as *unverified behavior, annotation
-only*, not as "AC3 verified".
+| Scheduler.method | Tunable cadence | Hardcoded `lockAtLeastFor` |
+|---|---|---|
+| `VideoLifecycleScheduler` (`:74-75`) | `${app.video.lifecycle.cron:0 0 3 * * *}` | `PT30S` |
+| `SluSnapshotAppliedRetentionService` (`:45-47`) | `${app.slu.snapshot-applied.prune-cron:0 30 3 * * *}` | `PT1M` |
+| `NeglectedSkillDetectionService` (`:46-48`) | `${app.development.neglected-detection-cron:0 0 6 * * MON}` | `PT5M` |
 
-### 16. AC3 — The sibling reader with the identical defect is not covered
+An operator setting `app.video.lifecycle.cron=*/10 * * * * *` is undercut by `PT30S` exactly the way
+lowering `outbox_poll_delay_ms` below `PT30S` is. Nothing about `fixedDelayString` is load-bearing to
+the failure mode — *property-tunable cadence* is.
 
-`getCoachesUnderEnforcement` (`:284-313`) reads `coach.getStatus()` (via `:298`) and the strike counts
-(`:304`) as two separate statements under plain `@Transactional(readOnly = true)` — the exact torn-read
-shape AC3 describes, feeding the exact same admin decision from the list view instead of the profile
-view. Either include it in AC3 or state why it is excluded; otherwise AC10 deletes a ledger bullet that
-is only half closed.
+I confirmed the story's two stated exclusions are correct:
+`ReconciliationWorkerScheduler.sweepOrphanedProviderAssets` is `lockAtLeastFor = "PT0S"` (`:175`), and
+`ReconciliationWorkerScheduler.reconcile` (`:49`) carries no `@SchedulerLock` at all — so neither
+belongs in the table. The remaining ~16 `@SchedulerLock` sites use literal `fixedDelay`/`cron`
+values, so they are genuinely not operator-tunable and are correctly out.
 
-### 17. AC10 — The bullet arithmetic and the instructions contradict themselves
+Under B1's placeholder fix this finding mostly evaporates (a cron property and a lock property are
+tuned in the same file). If AC4 survives as a boot check in any form, the three rows above belong in
+it, and the selection criterion in the AC text must be corrected to "property-tunable cadence", not
+"`fixedDelayString`".
 
-- "Delete the four closed bullets from … `skillars-deferred-121` (AC1's two, AC2's, AC3's)" names
-  **three** ACs covering four bullets, then adds four more from `-120`, then concludes "seven bullets
-  total". The numbers do not reconcile.
-- The next line says "Annotate (not delete) the **two** decided-not-fixed bullets: AC4's … (closed by a
-  real fix — **delete it**, it is not merely decided) and AC5's". It instructs annotating two items and
-  then immediately says one of them should be deleted. Only AC5 is decided-not-fixed.
+### M2 — `failFast` boot-blocking is the wrong response, and the predicate is a heuristic
 
-Rewrite AC10 as an explicit bullet → action table. As written, a dev will either miscount or annotate
-the wrong item.
+AC4:
 
-### 18. Dev Notes — "No cross-AC dependency except AC6 and AC9" is wrong
+> a dropped run whose effect is a growing backlog with a compliance/cost dimension (video/DLQ
+> deletion, retry processing) should block boot.
 
-Two more couplings exist and both affect ordering:
+Two problems.
 
-- **AC9 depends on AC8's analysis.** Whether the per-user delete runs in its own transaction determines
-  whether the catch-block stamp can commit (see finding 6). The answer happens to be "yes, because the
-  sweep is `NOT_SUPPORTED`" — but that is a conclusion the dev has to reach, not an absence of
-  dependency.
-- **AC9 largely supersedes AC6's `excludeLogins` push-down** (see finding 11). Implementing AC6's
-  server-side `NOT IN` first and then layering AC9 on top produces two overlapping exclusion mechanisms.
+**The trigger is the remedy.** The scenario in which an operator lowers
+`platform.video.deletion.outbox_poll_delay_ms` below 30s is: there is a deletion backlog and they are
+trying to drain it faster. AC4's response is to refuse to start the application. The check would fire
+during an incident, on the change intended to resolve it, and the operator's only recourse is to
+revert the mitigation. An ERROR log plus the `config.value.misconfigured` metric tells them exactly
+what they need (*"your 10s poll is being floored to 30s — raise the floor too"*) without taking the
+service down.
 
-Also, once finding 1 is fixed, AC1 needs a `suspensionThreshold` read — which is independent of AC4, but
-the story's current text implies AC1 is relying on AC4 for correctness. It must not.
+**`configuredDelay < lockAtLeastForMs` does not prove a dropped run.** `fixedDelay` is measured from
+*completion*, so the effective interval is `executionTime + fixedDelay`. A processor whose batch
+takes 25s with a 10s delay never contends with a `PT30S` floor. The check as specified reports a
+violation there and, under the AC's own severity rule, blocks boot on it. It is a useful warning
+heuristic; it is not a sound fail-fast predicate.
+
+**Recommendation.** ERROR + metric for all rows; no `failFast` for any of them. If the owner wants a
+hard gate, it belongs at build time against the annotations (see M3), not at boot against the
+environment.
+
+### M3 — AC4 creates a second source of truth for every `lockAtLeastFor` value
+
+> a `private static final List<SchedulerLockConfig>` literal for the 7 rows above
+
+Each row re-states a `lockAtLeastFor` that already exists in a `@SchedulerLock` annotation. Nothing
+ties them together. The next person who tunes `VideoDeletionOutboxProcessor`'s floor from `PT30S` to
+`PT45S` and does not know `ConfigStartupAssertion` exists leaves the check validating `PT30S` — the
+assertion then reports "healthy" for a configuration it is no longer describing, which is worse than
+having no check, because the ERROR's absence now reads as a clean bill of health.
+
+If a check is kept, read the annotation rather than transcribing it:
+scan `@Scheduled` + `@SchedulerLock` bean methods reflectively, resolve both attributes through the
+same `Environment`, and compare. That has no drift surface and automatically covers M1's three cron
+schedulers and anything added later. A `*Test`-phase reflective scan (in the spirit of
+`MigrationConventionLintTest`) would catch it at build time with no runtime cost at all.
+
+### M4 — `env.getProperty(..., Long.class, ...)` is unguarded, and it breaks the existing test class
+
+AC4 prescribes `env.getProperty(key, Long.class, defaultMs)`. Two concrete problems:
+
+1. **Format.** `@Scheduled(fixedDelayString = ...)` accepts a duration string as well as a bare
+   millisecond count — `"30s"` and `"PT30S"` are both legal cadence values. `getProperty(key,
+   Long.class, …)` throws `ConversionFailedException` on those. Thrown from
+   `onApplicationEvent`, outside `dev`, that is an unhandled startup crash with a stack trace instead
+   of the `AppSetupException` message the class is built to produce. `ConfigStartupAssertion` already
+   models the right handling for its DB path (`:94-105` catches `NumberFormatException`, logs, emits
+   a `non_numeric` metric, continues); the new block must do the same, and should accept duration
+   strings rather than reject them.
+2. **Existing tests.** `ConfigStartupAssertionTest:35` supplies `Environment` as a Mockito `@Mock`.
+   An unstubbed `getProperty(String, Class<Long>, Long)` returns `null`, so the new loop NPEs on
+   unboxing in **every existing test in that class**, not just the new ones. The AC's test task
+   (extend with at-floor / below-floor / shared-property cases) does not mention that the shared
+   fixture at `:45-48` needs a lenient default stub first. Budget for it.
+
+Also minor: the `log.info("… {} bounded platform config keys checked …")` line at `:157` reports
+against `ConfigBounds.ALL`; the new checks are not in that count. Either extend the message or leave
+it — but decide deliberately, since the deferred-122 cross-field check already set the precedent of
+*not* counting (`:119-124`).
+
+One thing the AC gets right and should keep: the proposed `{key, reason}` tag set matches the
+existing `config.value.misconfigured` registration, so the `PrometheusMeterRegistry` tag-key
+collision warned about at `:172-178` will not occur.
+
+### M5 — AC3 Task 5 contradicts itself, and omits the `DEAD` branch
+
+> Leave `handleFailure` paths alone in both classes — a row still legitimately `PENDING`/retrying
+> should keep `claimed_at` cleared too (it is no longer claimed once `handleFailure` sets status back
+> to `PENDING`) — apply the same clear-on-non-CLAIMED-transition rule there as well, not just on
+> `COMPLETED`.
+
+"Leave alone" and "apply the rule there as well" are opposite instructions in one sentence. A dev
+cannot implement this without guessing.
+
+The correct rule is the second one, and it needs to name all three exits.
+`VideoDeletionOutboxProcessor.handleFailure:185-202` and
+`RadarCompositeDlqProcessor.handleFailure:81-100` set status to either `DEAD` (retries exhausted) or
+`PENDING` (backoff) — the AC names only `PENDING`. A `DEAD` row with a stale non-null `claimed_at` is
+exactly the false claim-age reading the AC's own rationale warns about.
+
+**Rewrite as:** clear `claimed_at` on *every* transition out of `CLAIMED` — `COMPLETED` (both
+`completeRow` / `completeRowWithNullAsset` / the drill-refCount branch), `PENDING`, and `DEAD`. One
+sentence, no exceptions, no "leave alone".
+
+The AC's enumeration of the success paths is otherwise correct and complete — I verified the three
+video write sites (`:138-139`, `:166-167`, `:179-180`) and the single radar one (`:72-73`).
+
+### M6 — AC1's deny-list and allow-list disagree, and `DRAFT` is unresolved
+
+> reject with `ResponseStatusException(HttpStatus.CONFLICT, ...)` **if the status is `SUSPENDED` or
+> `DEACTIVATED`**. **Allow `ACTIVE`, `PENDING_REVIEW`, and `REDUCED`**
+
+`CoachProfileStatus` has six values:
+
+```java
+public enum CoachProfileStatus { DRAFT, ACTIVE, REDUCED, PENDING_REVIEW, SUSPENDED, DEACTIVATED }
+```
+
+The first sentence is a deny-list (`DRAFT` allowed); the second is an allow-list (`DRAFT` rejected).
+The test matrix in Task 3 covers `SUSPENDED`, `DEACTIVATED`, `PENDING_REVIEW`, `REDUCED`, `ACTIVE` —
+five of six — so it cannot arbitrate either. Whichever behaviour is intended, say it once and pin
+`DRAFT` in `ManualStrikeIT`.
+
+(A deny-list is the safer default here: it fails open for any status added later, which for an
+admin-initiated action is the right bias.)
+
+### M7 — AC1's guard is asymmetric, and the record-keeping flow is not considered
+
+Two things AC1 asserts without checking:
+
+**The automatic path keeps no guard.** `ReliabilityStrikeService.issue` has exactly two callers:
+`AdminCoachEnforcementService:253` (the manual path AC1 guards) and
+`CancellationRefundService:94` (the cancellation/no-show listeners). After AC1, a `SUSPENDED` coach
+still accrues automatic strikes from the listener path while an admin's manual strike on the same
+coach is rejected 409. AC1's rationale — *"no enforcement value — the coach is already off the
+marketplace"* — applies identically to the listener path, so either the rationale is wrong or the
+guard is in the wrong place. Decide explicitly; do not leave the asymmetry undocumented.
+
+**A strike is also a record, not only an enforcement trigger.** The concrete flow AC1 blocks: a coach
+is suspended on Monday; on Tuesday an admin processes a no-show for Sunday's session. Under AC1 that
+is a 409 and the no-show cannot be recorded at all, which also means it never counts toward the
+rolling window if the coach is later reinstated. If the intent is "no *new enforcement effect* for an
+already-suspended coach", the correct shape is to record the strike and suppress the escalation —
+not to refuse the call. Worth an explicit owner decision, since AC1 currently states the trade-off
+as self-evident.
 
 ---
 
-## Verified accurate — checked, no action needed
+## Low
 
-Listed so the absence of a finding is legible as a result.
+### L1 — AC7 preserves a ledger bullet whose mechanism no longer exists
 
-- **`CoachReliabilityStrike` has no `@Version`, no `@Audited`, no cascades** (`CoachReliabilityStrike.java:16-40`).
-  AC2's `StaleStateException` diagnosis and its "this is not optimistic locking, it is Hibernate's
-  unconditional post-delete row-count check" caveat are both correct, and the bulk-delete fix carries no
-  hidden audit/cascade loss.
-- **`ManualStrikeIT.deleteStrike_noStatusChange_doesNotResolveAlert`** (`:167-204`) does seed 5 strikes,
-  delete 1, and assert `PENDING_REVIEW` + alert `OPEN`. The story's characterization is exact, and its
-  warning that "still green" proves nothing here is the right call-out.
-- **`deleteStrike_thatWasFinalStrike_revertsStatusToActiveAndResolvesAlert`** (`:127-165`) seeds 3 and
-  deletes 1 → count 2 < visibility 3 → unchanged `ACTIVE` path. Genuinely unaffected by AC1.
-- **`deleteStrike_prolongedContentionOnCoachRow_…`** (`:215-278`) asserts the strike row survives
-  rollback. AC2's bulk delete still executes inside the same transaction, so rollback still restores it.
-  Unaffected.
-- **AC6's premise is correct.** `findExpiredUsers` builds `PageRequest.of(0, batchSize)` at `:200` and
-  never passes it — `UserRepository:27`'s `findAllByActivatedIsFalseAndCreatedDateBefore` takes no
-  `Pageable`. The Javadoc's "Uses pagination to limit fetched amount" (`:89`) is false, exactly as stated.
-- **AC7's premise is correct.** `MAX_BATCHES_PER_RUN = 100` (`:49`) multiplies a configurable batch size
-  (`:138`) with no enforced relationship. The 10,000-attempt derivation in the Javadoc (`:95-108`) is
-  what the fix should preserve.
-- **AC4's supporting facts check out:** `ConfigBounds`'s "add them if/when" invitation, the
-  `{key, reason}` Prometheus tag constraint (`ConfigStartupAssertion:134-140`), the dev/non-dev
-  `failFastViolations` branching (`:122-131`), and `getBoundedLong`'s non-throwing contract
-  (`ConfigService:108-117`).
-- **Line numbers.** Every `:NNN` citation in the story I spot-checked matches HEAD. The Provenance
-  section's warning about stale ledger citations was warranted and was acted on correctly.
-- **`V143` is the next free migration number.**
-- **`reinstateCoach`'s `SUSPENDED`-is-a-legal-source behavior (AC5)** is exactly as described
-  (`:172-179`), and the documentation-only closure is a reasonable call. The only nit: that comment
-  block is already 18 lines (`:151-168`); prefer consolidating into one sentence over appending a third
-  annotation layer.
+The bullet AC8 instructs to keep (annotated, not deleted) says:
+
+> `deleteById` is queued, then `withBoundedRetry`'s `entityManager.flush()` issues the DELETE *before*
+> the savepoint is taken (`PessimisticLockRetryer:132-134`) … it is folded into the
+> `persistence.lock_retry` timer, which makes the metric misleading.
+
+That described the pre-deferred-122 code. At HEAD, `deleteStrike` uses the bulk `@Modifying` JPQL
+delete, executed immediately at `AdminCoachEnforcementService:285` — **eight lines before**
+`withBoundedRetry` at `:293`, and therefore before `Timer.start` inside it. Nothing is folded into
+the timer any more.
+
+Note the story's own Group A table says the opposite of the ledger ("**invisible to** the
+`persistence.lock_retry` metric") — which is the correct reading for HEAD — yet still cites
+`PessimisticLockRetryer.java:132-134` as its evidence, and AC7 Task 2 then annotates the stale bullet
+without correcting it. The result is a permanently-wrong record that the next story will mine, which
+is precisely the failure this story's Provenance section was written to avoid.
+
+**Fix:** in AC7, drop the `PessimisticLockRetryer:132-134` citation (replace with
+`AdminCoachEnforcementService:285` + `CoachReliabilityStrikeRepository:45-47`); in AC8, correct the
+bullet's mechanism text in the same edit that adds the `[DECIDED: accepted risk]` annotation.
+
+For the record, AC7's self-bounding argument itself checks out: `findByIdForUpdate` is
+`jakarta.persistence.lock.timeout = 0` (NOWAIT) with a documented ~3.2s / 8-attempt retry budget
+(`CoachProfileRepository:30-38`), so the winning transaction's own work genuinely is bounded. The
+accepted-risk decision is sound; only its citation and its ledger text are stale.
+
+### L2 — AC2's severity is overstated and the fix leaves three capture points
+
+The story's Priority line calls this one of "two live timing/consistency bugs". The actual exposure
+is a window-origin skew bounded by the ~3.2s retry budget against a **30-day** window — it changes an
+outcome only for a strike whose `created_at` falls inside that specific sub-second-to-3-second band,
+30 days back. That is a real nondeterminism and worth removing; calling it a live bug at High
+priority is not supported by the mechanism.
+
+More substantively: hoisting the capture above `withBoundedRetry` reduces the variance, it does not
+remove it — the cutoff is still `OffsetDateTime.now()` at an arbitrary point in the method. After
+AC2 there will be three different capture points for the same conceptual window:
+`deleteStrike` (pre-lock), `getEnforcementProfile:91` (inline, explicitly left alone), and
+`getCoachesUnderEnforcement:389` (inline, explicitly left alone). The count an admin reads off the
+enforcement screen can therefore still disagree with the count `deleteStrike` acts on moments later.
+Leaving the two read-only sites unchanged is a defensible call (and the AC's reasoning for it is
+sound — neither takes a lock), but the AC should state the residual plainly rather than implying the
+fix makes the decision input deterministic.
+
+### L3 — AC2 Task 3 is not a testable acceptance criterion
+
+> Add a unit or IT-level assertion … or, if no such seam exists, a code-comment-anchored regression
+> note plus reliance on the existing concurrency ITs continuing to pass.
+
+The second branch is satisfied by writing a comment and changing no tests, which means the task can
+never fail. Either commit to the seam or state outright: *"no new test — the ordering is covered by
+code comment only; `AdminCoachEnforcementConcurrencyIT` remains the regression guard."* The AC's
+instinct not to introduce an injectable `Clock` for this alone is right; it just needs to say so as a
+decision rather than as an option.
+
+### L4 — AC5 omits the outcome the codebase's own precedent points to
+
+AC5 forks into (a) Envers is broken → add `user_aud` columns, or (b) Envers tolerates it → document.
+There is a third outcome, and it is the one this repository already chose for the same entity:
+**mark the fields `@NotAudited`.** `V143__user_cleanup_failed_at.sql`'s header records exactly that
+decision for the four `cleanup_*` columns on `main."user"` ("all four new/existing columns here are
+annotated `@NotAudited` on the entity — they are operational marker state, not user-facing auditable
+history — so no matching `user_aud` column is needed"). Whether `skillars_role` /
+`verification_status` are auditable history is a real product question — a role change plausibly is —
+but AC5 should present it as a decision, not exclude it.
+
+Branch (a) also has no history story: newly-added `user_aud` columns are `NULL` for every existing
+revision, indistinguishable from "was genuinely null at that revision". Say whether that is accepted
+(it probably is) so the next reader does not treat the NULLs as data.
+
+The premise itself is confirmed. `User` is `@Audited` (`User.java:45`); `skillarsRole` (`:138-140`)
+and `verificationStatus` (`:142-144`) carry no `@NotAudited`; `main.user_aud`
+(`V138__baseline_schema.sql:1314-1346`) has neither column, while `main."user"` has both (`:1289-1290`).
+Envers is on the classpath (`pom.xml`) and configured (`application.yaml:79-80`), and
+`hibernate.ddl-auto: none` (`:66`) means no schema validation would have surfaced it at boot. AC5's
+investigate-first instruction is the right call.
+
+### L5 — AC3 never considers index coverage for the changed predicate
+
+`resetStaleClaimed` moves from `next_retry_at < :deadline` to `claimed_at < :deadline`. Existing
+indexes (`V138__baseline_schema.sql:3340`, `:3664`, `:3670`):
+
+- `idx_radar_composite_dlq_status_retry ON (status, next_retry_at)` — currently serves this query;
+  after the change it serves only the `status` prefix.
+- `idx_vdoutbox_status_claimed ON (status) WHERE status = 'CLAIMED'` — still covers the video side's
+  status predicate, so that one degrades less.
+
+Both tables are small enough that this is very likely fine. State that as an accepted call in the
+migration header, or add a matching partial index — don't leave it unexamined.
+
+### L6 — AC3 has no rollout story for rows already `CLAIMED` at migration time
+
+Immediately after `V144`, every existing row has `claimed_at IS NULL`. The new predicate
+(`claimed_at IS NOT NULL AND claimed_at < :deadline`) therefore never matches a row that was
+`CLAIMED` when the migration ran — including rows left behind by an instance that crashed before the
+deploy. In the current design `findClaimedBatch()`'s unscoped SELECT picks them up anyway, so the
+effect is masked rather than absent — but under B2's recommended scoping fix it stops being masked
+and those rows are stranded permanently.
+
+Decide explicitly, and state it in the migration header. If a backfill is chosen
+(`UPDATE ... SET claimed_at = now() WHERE status = 'CLAIMED'`), note that it will trip
+`MigrationLint.Rule.UNBATCHED_DML` and needs either a bounded form or a
+`-- migration-lint: allow-*` opt-out with a reason.
+
+### L7 — AC8's sweep silently drops a still-open deferred-122 item
+
+The deferred-122 ledger section contains **two** un-annotated bullets, not one. AC8's disposition
+table accounts for the REPEATABLE_READ item (→ AC6) but never mentions:
+
+> **`main."user"` has no index supporting the cleanup sweep predicate.**
+
+Not picked up, not listed under "Explicitly out of scope", not in the disposition table. Leaving it
+unmentioned is a legitimate scoping choice; leaving it *unnamed* is not, given AC8 also asks for a
+`## Last audit: 2026-09-18` narrative "summarizing what was checked and closed" — that block would
+misrepresent the section's state. Add it to the out-of-scope list with a one-line reason (the ledger
+already supplies one: it needs production `EXPLAIN` evidence and a `CREATE INDEX CONCURRENTLY`
+migration of its own).
+
+Separately, the deferred-121 section's own preamble says "the three remaining un-annotated bullets
+below are still open" when there are four. The story correctly picked up all four (AC7, AC1, AC2,
+AC5); AC8 may as well fix the stale count while editing that section.
+
+### L8 — Minor citation drift despite the "re-verified against HEAD" claim
+
+The story states all line numbers were re-verified, and the significant ones check out — I confirmed
+`AdminCoachEnforcementService` `:86-112`, `:235-243`, `:244-245`, `:285`, `:293`, `:303`, `:389`;
+`ReliabilityStrikeService` `:88`, `:91`; `VideoDeletionOutboxRepository:43-48`;
+`RadarCompositeDlqRepository:38-45`; `V138__baseline_schema.sql:1289-1290`; and the existence of every
+referenced test class (`ManualStrikeIT`, `AdminCoachEnforcementConcurrencyIT`,
+`AdminCoachEnforcementServiceIsolationTest`, `VideoDeletionOutboxProcessorIT`,
+`RadarCompositeDlqProcessorTest`, `ConfigStartupAssertionTest`, `BookingServiceConcurrencyIT`,
+`MigrationConventionLintTest`). Two small drifts:
+
+- `CoachReliabilityStrikeRepository.deleteByIdAndCoachId` is at `:45-47` (`:44` is a comment line).
+- `User.skillarsRole` / `verificationStatus` are at `:138-144`, not `:139-146`.
+
+Harmless in themselves; flagged only because the story leans on the re-verification claim to tell
+implementers not to trust the ledger.
 
 ---
 
-## Recommended sequencing
+## What I checked and found sound
 
-1. **Fix the story before coding.** Findings 1, 2, 3, 4 change what the code should be, not just how it
-   is described. Amend AC1 and AC8 first.
-2. **Group B before Group A.** AC8 (now: make public + `self`) → AC6 → AC9, deciding the
-   `excludeLogins` vs `cleanup_failed_at` overlap up front (finding 11) and resolving the Envers
-   question (finding 5) before writing the migration.
-3. **Group A.** AC1 with the corrected tiering and the `AdminCoachEnforcementConcurrencyIT` redesign as
-   a named task; then AC2, AC3 (+ decide on finding 16), AC4 (+ decide on finding 9), AC5.
-4. **AC10 last**, rewritten as an explicit bullet → action table.
+Recorded so the implementer does not re-derive it:
+
+- **AC4's two stated exclusions are correct.** `ReconciliationWorkerScheduler.sweepOrphanedProviderAssets`
+  is `lockAtLeastFor = "PT0S"` (`:175`) and `ReconciliationWorkerScheduler.reconcile` (`:49`) carries
+  no `@SchedulerLock` — neither belongs in AC4's table. The `QuotaReservationTimeoutService`
+  "zero margin at defaults" row is real (`app.video.reservation-check-interval-ms:60000` vs `PT1M`)
+  and, under a strict `<` comparison, correctly does *not* fire at defaults.
+- **AC4's shared-property pair is real.** `OutboxPollerScheduler:50` and `DeletionSchedulerService:53`
+  both read `${app.storage.poller.fixed-delay-ms:5000}` (set to `5000` at `application.yaml:244`);
+  one operator change does affect both.
+- **AC3's `:now` assumption holds.** Both `claimPendingBatch` methods already take `@Param("now")`,
+  so adding `claimed_at = :now` to the `SET` clause needs no signature change.
+- **AC7's self-bounding argument holds** — see L1.
+- **AC5's premise holds** — see L4.
+- **AC2's reasoning for leaving `getCoachesUnderEnforcement:389` alone is correct**: that method takes
+  no `findByIdForUpdate`, so there is no lock wait for the cutoff to slide across.
+
+---
+
+## Recommended disposition
+
+| AC | Action |
+|---|---|
+| AC1 | Resolve M6 (deny-list vs allow-list, `DRAFT`) and take an owner decision on M7 before implementing. Small once settled. |
+| AC2 | Proceed. Fix L3 (pick one, state it) and soften the severity framing per L2. |
+| AC3 | **Rewrite.** Extend scope to `findClaimedBatch` (B2), correct the column type (H1), fix Task 5 (M5), add L5/L6 to the migration header. |
+| AC4 | **Rewrite from the corrected premise (B1).** Likely collapses to "make the lock floors properties" + an optional build-time reflective lint (M3), with no boot-blocking (M2). If any runtime check survives, apply M1 and M4. |
+| AC5 | Proceed as investigate-first. Add `@NotAudited` as an explicit third outcome (L4). |
+| AC6 | **Rewrite the test design (H2).** The isolation-probe form also dissolves H3. |
+| AC7 | Proceed. Correct the citation and the ledger text (L1). |
+| AC8 | Proceed, plus L1's ledger correction, L7's out-of-scope entry, and whatever B2 decides about the `resetStaleClaimed` bullet (narrow vs delete). |

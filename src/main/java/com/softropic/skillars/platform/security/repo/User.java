@@ -135,10 +135,31 @@ public class User extends Customer implements Serializable {
 
     private boolean otpEnabled;
 
+    /**
+     * skillars-deferred-123 AC5: audited (no {@code @NotAudited}) — a role change is plausibly
+     * meaningful history, unlike {@code cleanup_*}'s operational-marker fields above. {@code
+     * main.user_aud} had no matching column ({@code V138__baseline_schema.sql}) until
+     * {@code V145__user_aud_role_verification_status.sql}. Investigated empirically (see
+     * {@code UserEnversAuditGapIT}), not guessed: Hibernate/Envers issued its own
+     * {@code alter table ... add column ... check (...)} DDL for the missing audit column at boot —
+     * confirmed by raising {@code org.hibernate.SQL} to DEBUG. This means the column already existed
+     * and already round-tripped values correctly in every environment that had booted the app since
+     * this field was added.
+     *
+     * <p><strong>Cause, corrected by the {@code skillars-deferred-123} code review (2026-09-18).</strong>
+     * This Javadoc originally said the boot-time DDL happened "independent of
+     * {@code hibernate.ddl-auto: none}". That is not a real Hibernate behaviour. The actual cause was
+     * {@code spring.jpa.generate-ddl: true} in {@code application.yaml}, which defeated the
+     * {@code ddl-auto: none} on the following line and left the application running with effective
+     * {@code hibernate.hbm2ddl.auto=update} in every profile. That line has been removed; see the
+     * comment left in its place in {@code application.yaml} for the decompiled three-step mechanism.
+     * With auto-DDL now off, {@code V145} is what creates these columns in a Flyway-only database.
+     */
     @Enumerated(EnumType.STRING)
     @Column(name = "skillars_role")
     private SkillarsRole skillarsRole;
 
+    /** skillars-deferred-123 AC5: see {@link #skillarsRole}'s Javadoc — identical finding and fix. */
     @Enumerated(EnumType.STRING)
     @Column(name = "verification_status")
     private SkillarsVerificationStatus verificationStatus = SkillarsVerificationStatus.UNVERIFIED;

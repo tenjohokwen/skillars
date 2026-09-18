@@ -62,7 +62,23 @@ spring:
   main.allow-circular-references: false
   jmx.enabled: false
   jpa:
-    generate-ddl: true
+    # skillars-deferred-123 code review 2026-09-18: `generate-ddl: true` was REMOVED here, and must not
+    # be reinstated. It silently defeated the `ddl-auto: none` on the line below, so the application ran
+    # with effective `hibernate.hbm2ddl.auto=update` in every profile, including production and every
+    # Testcontainers IT. Verified by decompiling the resolved artifacts, not from documentation:
+    #   1. HibernateProperties.getAdditionalProperties (spring-boot-autoconfigure 3.5.16) *removes* the
+    #      `hibernate.hbm2ddl.auto` key when ddl-auto resolves to `none` — it does not set it to "none".
+    #   2. HibernateJpaVendorAdapter.getJpaPropertyMap (spring-orm 6.2.19) then puts
+    #      `hibernate.hbm2ddl.auto = "update"` whenever isGenerateDdl() is true.
+    #   3. AbstractEntityManagerFactoryBean merges vendor properties with `if (!containsKey(k)) put(k,v)`
+    #      — and step 1 removed the key, so the vendor's "update" won.
+    # This is what skillars-deferred-123 AC5 actually observed when it saw Hibernate emit
+    # `alter table main.user_aud add column ...` at boot; the cause was this line, not any Hibernate
+    # behaviour that ignores ddl-auto. Auditing before removal confirmed the drift is bounded: every
+    # @Table entity has a CREATE TABLE in a Flyway migration, and main.user_aud's last two missing
+    # columns are supplied by V145. What fresh databases no longer inherit are the `check (col in (...))`
+    # constraints Hibernate generated for @Enumerated(STRING) columns — those must come from migrations
+    # now, which is the project's own rule ("Do not use DDL statements in Java code; use Flyway").
     hibernate.ddl-auto: none #none #update #create #create-drop #validate
     open-in-view: false #is enabled by default. Therefore, database queries may be performed during view rendering.
     properties:

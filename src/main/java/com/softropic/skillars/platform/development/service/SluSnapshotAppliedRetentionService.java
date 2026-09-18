@@ -43,8 +43,12 @@ public class SluSnapshotAppliedRetentionService {
     private int retentionDays;
 
     @Scheduled(cron = "${app.slu.snapshot-applied.prune-cron:0 30 3 * * *}")
+    // skillars-deferred-123 AC4: both floors property-ized (this scheduler's cadence,
+    // app.slu.snapshot-applied.prune-cron, is also operator-tunable) — see OutboxService.sweep's
+    // identical comment for the rationale.
     @SchedulerLock(name = "SluSnapshotAppliedRetentionService_prune",
-                   lockAtMostFor = "PT15M", lockAtLeastFor = "PT1M")
+                   lockAtMostFor = "${app.slu.snapshot-applied.lock-at-most:PT15M}",
+                   lockAtLeastFor = "${app.slu.snapshot-applied.lock-at-least:PT1M}")
     public void prune() {
         try {
             int deleted = pruneOlderThanRetention();

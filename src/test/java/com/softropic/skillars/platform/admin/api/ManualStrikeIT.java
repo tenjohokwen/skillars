@@ -25,6 +25,7 @@ import org.springframework.web.client.HttpClientErrorException;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -126,6 +127,128 @@ class ManualStrikeIT extends AbstractIntegrationTest {
             "SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ?",
             Long.class, coachProfileId);
         assertThat(strikeCount).isEqualTo(1L);
+    }
+
+    /**
+     * skillars-deferred-123 AC1: a coach already off the marketplace has no enforcement value in
+     * further escalation. Seeds 4 in-window strikes (suspensionThreshold=5 default) against a coach
+     * manually set to SUSPENDED, then issues one more via the manual (admin) path — the fresh count
+     * (5) would, pre-fix, flip the coach to PENDING_REVIEW and publish a StrikeThresholdReachedEvent
+     * (which resolveOpenStrikeAlert's sibling would surface as a new OPEN admin_alerts row). Post-fix
+     * the strike is still recorded (compliance record, not a rejected call — 201, not 409) but the
+     * coach's status and statusChangedAt are unchanged and no alert is created.
+     */
+    @Test
+    void issueManualStrike_againstSuspendedCoach_recordsStrikeWithoutEscalation() {
+        // Truncated to microseconds: Postgres timestamptz has microsecond precision, so a
+        // nanosecond-precision Instant.now() round-tripped through the DB below would compare
+        // unequal on its trailing sub-microsecond digits (observed in CI: expected ...440412Z, was
+        // ...440000Z) even though no write actually moved the value.
+        Timestamp originalStatusChangedAt = Timestamp.from(
+            Instant.now().minusSeconds(600).truncatedTo(ChronoUnit.MICROS));
+        transactionTemplate.execute(status -> {
+            for (int i = 0; i < 4; i++) {
+                jdbcTemplate.update(
+                    "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
+                    UUID.randomUUID(), coachProfileId, bookingId, Timestamp.from(Instant.now()));
+            }
+            jdbcTemplate.update(
+                "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED', status_changed_at = ? WHERE id = ?",
+                originalStatusChangedAt, coachProfileId);
+            return null;
+        });
+
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/coaches/" + coachProfileId + "/strikes",
+            HttpMethod.POST,
+            Map.of("bookingId", bookingId.toString(), "reason", "COACH_NO_SHOW"),
+            authenticatedHeaders(adminCookies), Map.class);
+
+        assertThat(resp.getStatusCode())
+            .as("a strike against an already-off-marketplace coach is suppressed, not rejected")
+            .isEqualTo(HttpStatus.CREATED);
+
+        Long strikeCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ?",
+            Long.class, coachProfileId);
+        assertThat(strikeCount).as("the strike remains a durable compliance record").isEqualTo(5L);
+
+        Map<String, Object> coachRow = jdbcTemplate.queryForMap(
+            "SELECT status, status_changed_at FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
+        assertThat(coachRow.get("status")).isEqualTo("SUSPENDED");
+        assertThat(((Timestamp) coachRow.get("status_changed_at")).toInstant())
+            .as("no escalation side effect — statusChangedAt must not move")
+            .isEqualTo(originalStatusChangedAt.toInstant());
+
+        Long alertCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM admin.admin_alerts WHERE reference_id = ? AND type = 'STRIKE_THRESHOLD'",
+            Long.class, coachProfileId.toString());
+        assertThat(alertCount).as("no StrikeThresholdReachedEvent was published").isEqualTo(0L);
+    }
+
+    /** Mirrors {@link #issueManualStrike_againstSuspendedCoach_recordsStrikeWithoutEscalation()} for DEACTIVATED. */
+    @Test
+    void issueManualStrike_againstDeactivatedCoach_recordsStrikeWithoutEscalation() {
+        transactionTemplate.execute(status -> {
+            for (int i = 0; i < 4; i++) {
+                jdbcTemplate.update(
+                    "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
+                    UUID.randomUUID(), coachProfileId, bookingId, Timestamp.from(Instant.now()));
+            }
+            jdbcTemplate.update("UPDATE marketplace.coach_profiles SET status = 'DEACTIVATED' WHERE id = ?", coachProfileId);
+            return null;
+        });
+
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/coaches/" + coachProfileId + "/strikes",
+            HttpMethod.POST,
+            Map.of("bookingId", bookingId.toString(), "reason", "COACH_NO_SHOW"),
+            authenticatedHeaders(adminCookies), Map.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        Long strikeCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ?",
+            Long.class, coachProfileId);
+        assertThat(strikeCount).isEqualTo(5L);
+
+        String coachStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
+        assertThat(coachStatus).isEqualTo("DEACTIVATED");
+    }
+
+    /**
+     * Regression guard for AC1: an ACTIVE coach (not off the marketplace) must still escalate exactly
+     * as before — the deny-list guard must not suppress escalation for any status other than SUSPENDED
+     * or DEACTIVATED.
+     */
+    @Test
+    void issueManualStrike_againstActiveCoach_stillEscalatesAtThreshold() {
+        transactionTemplate.execute(status -> {
+            for (int i = 0; i < 4; i++) {
+                jdbcTemplate.update(
+                    "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
+                    UUID.randomUUID(), coachProfileId, bookingId, Timestamp.from(Instant.now()));
+            }
+            return null;
+        });
+
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/coaches/" + coachProfileId + "/strikes",
+            HttpMethod.POST,
+            Map.of("bookingId", bookingId.toString(), "reason", "COACH_NO_SHOW"),
+            authenticatedHeaders(adminCookies), Map.class);
+
+        String coachStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
+        assertThat(coachStatus)
+            .as("count(5) >= suspensionThreshold(5) for an ACTIVE coach must still escalate")
+            .isEqualTo("PENDING_REVIEW");
+
+        jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE reference_id = ?", coachProfileId.toString());
     }
 
     @Test

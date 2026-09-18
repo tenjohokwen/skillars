@@ -42,6 +42,20 @@ public interface CoachReliabilityStrikeRepository extends JpaRepository<CoachRel
     // a local before calling this method and a comment there forbids re-reading it. Clearing the
     // context after this @Modifying query enforces that structurally instead of by convention: any
     // future re-read of a stale managed entity from this same transaction now re-fetches from the DB.
+    //
+    // skillars-deferred-123 AC7 (accepted risk, documented not fixed — see deferred-work.md
+    // [DECIDED: accepted risk — skillars-deferred-123]): this DELETE carries no NOWAIT/lock-timeout.
+    // If two admins call deleteStrike for the *same* strike concurrently, the second DELETE blocks on
+    // Postgres's ordinary row lock until the first transaction commits or rolls back, then affects 0
+    // rows (translated to a clean 404 by the AC2 fix above). This wait sits outside
+    // AdminCoachEnforcementService.deleteStrike's lockRetryer.withBoundedRetry (:293/its own
+    // Timer.start) — the DELETE runs immediately at :285, eight lines before that call — so it is not
+    // measured by the persistence.lock_retry metric. Accepted because the wait is naturally bounded by
+    // the winning transaction's own work, which is itself lock-retry-bounded (PessimisticLockRetryer's
+    // ~3.2s worst-case budget for the coach-row lock inside that same winning transaction) — this
+    // codebase's current call shape cannot make this wait open-ended. This would need revisiting if a
+    // future change to deleteStrike or its callees makes the winning transaction's own work unbounded
+    // (e.g. an external network call added inside that transaction).
     @Modifying(clearAutomatically = true)
     @Query("DELETE FROM CoachReliabilityStrike s WHERE s.id = :id AND s.coachId = :coachId")
     int deleteByIdAndCoachId(@Param("id") UUID id, @Param("coachId") UUID coachId);
