@@ -2339,39 +2339,12 @@ closed by the story's own AC1/AC2/AC3 — bullets deleted outright per this file
 
 ## Deferred from: code review of skillars-deferred-120 (2026-09-17)
 
-- **`skillars-deferred-118` AC2's activated-re-check TOCTOU is narrowed, not closed.**
-  `UserAdminService.deleteUserInTransaction` (`:194-204`) is `protected` and reached by a plain
-  self-call from `removeNotActivatedUsers` (`:137`), so its `@Transactional(propagation = REQUIRES_NEW)`
-  never applies — Spring's proxy is bypassed by the self-invocation, and proxy-mode
-  `AnnotationTransactionAttributeSource` ignores non-public methods regardless. With the caller at
-  `NOT_SUPPORTED` there is no ambient transaction either, so `findOneByLogin` and `delete` each run in
-  their own `SimpleJpaRepository` transaction. The `!user.isActivated()` guard therefore reads a row
-  that is committed and released before the delete transaction opens: a user who completes email
-  verification inside that window can still have their freshly-activated account deleted. Pre-existing
-  since `skillars-deferred-118`; the fix is to make the method public and invoke it through the proxy
-  (a `self` reference, as `VideoSubscriptionLifecycleListener` already does), or to fold the re-check
-  and delete into one explicit `TransactionTemplate` scope.
-
-- **`UserAdminService.findExpiredUsers` builds a `Pageable` it never uses and loads the whole expired
-  set on every iteration.** `:171-177` constructs `PageRequest.of(0, batchSize)` and then calls
-  `findAllByActivatedIsFalseAndCreatedDateBefore(cutoffDate)` (`UserRepository:27`) — no `LIMIT`, no
-  `Pageable` parameter — materialising every expired `User` entity before applying `.limit(batchSize)`
-  in Java. The method Javadoc's "Uses pagination to limit fetched amount" is false. Newly amplified by
-  `skillars-deferred-120`'s `MAX_BATCHES_PER_RUN = 100`: up to 100 full materialisations of the entire
-  expired set per run, a cost the new `PT1H` `lockAtMostFor` arithmetic does not account for at all.
-
 - **`lockAtLeastFor` values are hardcoded against tunable `fixedDelayString` cadences.**
   `VideoDeletionOutboxProcessor.java:63-66` pairs `${platform.video.deletion.outbox_poll_delay_ms:60000}`
   with a literal `lockAtLeastFor = "PT30S"` derived from the *default*. Lowering the property below 30s
   — a legitimate ops action — silently drops runs with no error, no warning and no config validation.
   Codebase-wide shape (`RadarCompositeDlqProcessor` and others are identical), so worth one sweep rather
   than a per-site fix.
-
-- **`UserAdminService.MAX_BATCHES_PER_RUN` is hardcoded while the batch size it multiplies is
-  configurable.** `:46` fixes the cap at 100 while `SecurityProperties.getUserCleanupBatchSize()`
-  (default 100) is tunable, so lowering the batch size to 10 silently caps the daily sweep at 1,000
-  users where it previously drained fully. The safety valve doubles as an undeclared throughput limit;
-  scale the cap by batch size or assert a floor.
 
 - **`resetStaleClaimed`/`claimPendingBatch`'s shared claim idiom keys stale-claim recovery on
   eligibility time, not claim time — a genuine weakness in `RadarCompositeDlqProcessor`
@@ -2420,50 +2393,15 @@ closed by the story's own AC1/AC2/AC3 — bullets deleted outright per this file
   cleared on completion, with the stale check keyed on it — a Flyway migration, deliberately out of
   scope for a lock-parity story.
 
-- **`UserAdminService` non-activated-user cleanup has no cross-run record of undeletable users.**
-  `skillars-deferred-120`'s code review added a per-run skip set so a deterministically-undeletable
-  user (uncovered FK, trigger, constraint) no longer blocks the rest of that run's backlog. It still
-  re-reads and re-fails the same users on every subsequent daily run, producing a recurring ERROR with
-  no operator-queryable list of what is stuck. A persisted `cleanup_failed_at` marker on the user row,
-  filtered out by the batch query, would stop permanently-stuck rows consuming sweep capacity across
-  runs and give operators something to query. Needs a Flyway migration and a query change.
-
 ## Deferred from: code review of skillars-deferred-121-coach-enforcement-status-toctou-lock-gap (2026-09-18)
 
-All nine items are pre-existing behaviour in `AdminCoachEnforcementService` that the
-skillars-deferred-121 lock fix neither introduced nor was scoped to address. Items 1-8 surfaced by the
-Edge Case Hunter and Blind Hunter review layers; item 9 surfaced during the review-response pass itself
-(a false-positive check on the review's own Patch finding about `reinstateCoach`'s justification
-comment led to tracing the actual business-logic consequence, not just the doc inaccuracy).
-
-- **`deleteStrike` has no path back to `REDUCED`.** The revert decision is only
-  `count < visibilityThreshold` (`:239-241`). A coach at 5 strikes is `PENDING_REVIEW`; delete one and
-  the fresh count is 4, still `>= visibilityThreshold` (3), so `reverted == false` and no status is
-  written at all. `ReliabilityStrikeService.issue:102-109` would have placed that coach in `REDUCED`.
-  `deleteStrike` is ACTIVE-or-nothing, so the coach stays in `PENDING_REVIEW` with a strike count that
-  no longer justifies it. Mitigated in practice by `PENDING_REVIEW` coaches remaining bookable
-  (`BookingService:199,259`) and publicly visible (`CoachProfileService:359`), so this is a
-  reporting/administrative inconsistency rather than a lockout.
-
-- **`visibilityThreshold > suspensionThreshold` is an accepted configuration.**
-  `ConfigService.getBoundedLong` bounds both independently at `1..Long.MAX_VALUE` with no
-  cross-threshold ordering guard. With `visibilityThreshold=10`, `suspensionThreshold=5`, deleting one
-  strike from a coach at 8 gives `7 < 10` → flipped to `ACTIVE` with 7 in-window strikes, and
-  `resolveOpenStrikeAlert` closes the admin alert too. A validated ordering invariant on the two
-  config keys would close this.
-
-- **Deleting an out-of-window strike still fires a full revert.** `count` is recomputed only over
-  `now()-30d`, but `reverted` never requires the deleted strike to have been inside that window
-  (`:231-246`). A coach whose in-window count has already decayed to 2 gets a revert-to-`ACTIVE`,
-  alert resolution and a `COACH_REINSTATE` log entry from deleting a 60-day-old strike that was
-  already not counting.
-
-- **Concurrent duplicate `deleteStrike` surfaces `StaleStateException`, not 404.**
-  `findById(strikeId)` (`:216-223`) takes no lock, so both callers pass the existence and ownership
-  checks. The loser's DELETE affects 0 rows and Hibernate's row-count expectation throws
-  `StaleStateException`/`ObjectOptimisticLockingFailureException` out of `flush()` — not a
-  `PessimisticLockingFailureException`, so `PessimisticLockRetryer` records `outcome=error` and
-  rethrows. A post-lock `existsById` re-check would turn this into the intended 404.
+All nine items originally listed here were pre-existing behaviour in `AdminCoachEnforcementService`
+that the skillars-deferred-121 lock fix neither introduced nor was scoped to address (items 1-8
+surfaced by the Edge Case Hunter and Blind Hunter review layers; item 9 surfaced during the
+review-response pass itself). skillars-deferred-122 closed five by direct fix (deleted below) and one
+more by explicit `[DECIDED]` annotation rather than deletion (see the disposition table in that story's
+AC10) — the three remaining un-annotated bullets below are still open, correctly out of scope for
+skillars-deferred-122.
 
 - **The strike DELETE's wait is outside the retry/savepoint guarantee.** `deleteById` is queued, then
   `withBoundedRetry`'s `entityManager.flush()` issues the DELETE *before* the savepoint is taken
@@ -2478,13 +2416,6 @@ comment led to tracing the actual business-logic consequence, not just the doc i
   *absence* of a lock on that line is load-bearing — see the review-findings patch item about
   `issue` being `REQUIRES_NEW`.
 
-- **`getEnforcementProfile` composes an inconsistent view.** Status (`:75-76`) and the rolling strike
-  count (`:78`) are two unlocked statements under READ COMMITTED, while every writer of the pair now
-  takes a lock. A `deleteStrike` committing between them yields `status=PENDING_REVIEW` with
-  `activeStrikes=2`, or `status=ACTIVE` with `activeStrikes=5` — the exact pairing the admin UI uses
-  to decide whether to reinstate. A `@Transactional(readOnly = true)` REPEATABLE READ or a single
-  joined query would fix it.
-
 - **The 30-day count window origin slides with contention.**
   `OffsetDateTime.now().minusDays(30)` (`:231`) is evaluated after the lock wait, so a strike within
   seconds of the boundary can be inside the window for an uncontended call and outside it for a
@@ -2492,14 +2423,29 @@ comment led to tracing the actual business-logic consequence, not just the doc i
   method entry would make the decision input independent of lock-wait duration.
 
 - **`reinstateCoach` cannot distinguish a stale suspension from one that just landed.**
-  `SUSPENDED` is (and after skillars-deferred-121's fix remains) an explicitly legal source status
-  (`:162-163`) — an admin's reinstate call proceeds to `ACTIVE` whether the coach was suspended before
-  the admin loaded the enforcement screen or by a *different* admin's concurrent `suspendCoach` call
-  that committed moments ago, fully applying that suspension's side effects (cancelled `REQUESTED`
-  bookings, `CoachSuspendedEvent`, an `AdminActionLog` row) in the process. skillars-deferred-121's lock
-  fix makes the read fresh, not the *decision* suspension-aware — it only prevents a stale-`ACTIVE`
-  double-reinstate, not a fresh-`SUSPENDED` override. Whether an explicit reinstate *should* reject or
-  warn when it discovers a just-landed concurrent suspension (vs. today's "explicit admin intent always
-  wins") is a genuine product question, not a locking bug — surfaced during skillars-deferred-121's own
-  code-review response after the review flagged the story's original failure-scenario narrative as
-  overstating what the fix closes.
+  **[DECIDED: explicit admin intent wins — skillars-deferred-122]** `SUSPENDED` is (and after
+  skillars-deferred-121's fix remains) an explicitly legal source status (`:162-163`) — an admin's
+  reinstate call proceeds to `ACTIVE` whether the coach was suspended before the admin loaded the
+  enforcement screen or by a *different* admin's concurrent `suspendCoach` call that committed moments
+  ago, fully applying that suspension's side effects (cancelled `REQUESTED` bookings,
+  `CoachSuspendedEvent`, an `AdminActionLog` row) in the process. skillars-deferred-121's lock fix makes
+  the read fresh, not the *decision* suspension-aware — it only prevents a stale-`ACTIVE`
+  double-reinstate, not a fresh-`SUSPENDED` override. skillars-deferred-122 took this decision live with
+  the owner: keep current behavior, "explicit admin intent always wins" stays the rule. No code change;
+  `AdminCoachEnforcementService.reinstateCoach`'s inline comment now states the decision explicitly.
+
+- **Pre-existing `main.user_aud` Envers-coverage gap: `skillars_role`/`verification_status` have no
+  matching audit column.** Surfaced by skillars-deferred-122 AC9 while adding `User.cleanupFailedAt`
+  (resolved for that field via `@NotAudited`, sidestepping the question for the new column). `User` is
+  `@Audited` and both `skillars_role` and `verification_status` are declared on it with **no**
+  `@NotAudited` (`User.java`), yet `main.user_aud` (`V138__baseline_schema.sql:1314-1346`) has no
+  `skillars_role`/`verification_status` columns — a mismatch this story's investigation surfaced, not
+  introduced, and did not run down further (out of scope for a cleanup-marker story). Something about
+  this project's actual Envers runtime behavior does not match the naive "every `@Audited` field needs
+  a matching `user_aud` column" reading; worth a future audit to determine whether these two fields
+  silently fail to audit, or whether Envers tolerates the mismatch in some way not yet understood here.
+
+## Deferred from: code review of skillars-deferred-122-coach-enforcement-round-2-and-user-cleanup-fixes (2026-09-18)
+
+- **AC3's REPEATABLE_READ coverage is annotation reflection only.** `AdminCoachEnforcementServiceIsolationTest` asserts `tx.isolation() == Isolation.REPEATABLE_READ` via reflection on the `@Transactional` annotation. That assertion stays green in precisely the failure mode `AdminCoachEnforcementService`'s own comment warns about: if any upstream caller (a facade, an interceptor, a `TransactionTemplate` in a batch/export path) already holds a transaction, Spring's default `validateExistingTransaction = false` silently discards the requested isolation level and the torn read AC3 exists to prevent returns — with both tests still passing. The documented rule "do not invoke from inside a test-level `@Transactional`/`TransactionTemplate` block" is prose, not a control. A real test would need two concurrent connections observing a writer's mid-flight status+count change through `getEnforcementProfile`. Deferred: writing a genuine multi-connection snapshot test is a meaningfully larger piece of work than this story's scope, and the test's own Javadoc already labels the limitation honestly.
+- **`main."user"` has no index supporting the cleanup sweep predicate.** `V138__baseline_schema.sql` defines no index on `(activated, created_date)`, so `UserRepository.findByActivatedFalseAndCreatedDateBeforeAndCleanupFailedAtIsNullOrderByIdAsc` resolves as a PK-index walk with a filter. AC6's paging change did not introduce the gap, but it changes the access pattern from one unpaged query per batch to a `LIMIT`-ed ordered query per batch iteration (up to `maxBatches + 1` per run), so a large backlog night holds the `PT1H` ShedLock longer than necessary. A partial index (`CREATE INDEX CONCURRENTLY ... ON main."user" (id) WHERE activated = false AND cleanup_failed_at IS NULL`) would suit the query shape. Deferred: needs production row-count and `EXPLAIN` evidence before choosing an index shape, and per `docs/deployment/migration-conventions.md` an index on a hot table must go in as `CREATE INDEX CONCURRENTLY` in its own migration.

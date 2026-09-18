@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.security.contract.SkillarsRole;
 import com.softropic.skillars.platform.security.contract.SkillarsVerificationStatus;
 
 import org.hibernate.envers.Audited;
+import org.hibernate.envers.NotAudited;
 
 import java.io.Serializable;
 import java.time.Instant;
@@ -86,6 +87,51 @@ public class User extends Customer implements Serializable {
 
     @Column(name = "account_expiration")
     private Instant accountExpiration = null;
+
+    /**
+     * skillars-deferred-122 AC9: a marker set once {@code UserAdminService}'s daily non-activated-user
+     * cleanup sweep has failed to delete this user on
+     * {@link #cleanupFailedAttempts}/CLEANUP_FAILURE_THRESHOLD separate scheduled runs (code review
+     * 2026-09-18: not on the first failure — see {@link #cleanupFailedAttempts}'s Javadoc for why).
+     * Excludes the row from every subsequent run's candidate set so a deterministically-undeletable
+     * user no longer produces the identical recurring ERROR log on every run, and gives operators
+     * something to query: {@code SELECT * FROM main."user" WHERE cleanup_failed_at IS NOT NULL}. No
+     * automatic retry/clear mechanism — an operator fixes the underlying issue or clears the marker
+     * manually. {@code @NotAudited}: this is operational marker state, not user-facing auditable
+     * history — {@code main.user_aud} (Envers) has no matching column and none is added by this story.
+     */
+    @NotAudited
+    @Column(name = "cleanup_failed_at")
+    private Instant cleanupFailedAt;
+
+    /**
+     * skillars-deferred-122 AC9 code review 2026-09-18: consecutive separate-run cleanup-delete
+     * failure count for this user, incremented once per scheduled run this user fails to delete (never
+     * more than once per run — {@code UserAdminService}'s in-run {@code failedLogins} set already
+     * excludes an already-failed login from the rest of that same run). Replaces a one-shot {@link
+     * #cleanupFailedAt} stamp on first failure, which could not distinguish a deterministically-
+     * undeletable user from a transient one (a lock timeout, deadlock, or connection reset) — see
+     * {@code UserAdminService.recordCleanupFailure}'s Javadoc for the full rationale. Follows this
+     * repo's established idiom for repeatedly-failing work ({@code OutboxReplicationJob.attemptCount},
+     * {@code VideoWebhookEvent.attemptCount}, {@code Video.moderationRetryCount}).
+     */
+    @NotAudited
+    @Column(name = "cleanup_failed_attempts", nullable = false)
+    private int cleanupFailedAttempts = 0;
+
+    /** skillars-deferred-122 AC9 code review 2026-09-18: when {@link #cleanupFailedAttempts} was last incremented. */
+    @NotAudited
+    @Column(name = "cleanup_last_attempted_at")
+    private Instant cleanupLastAttemptedAt;
+
+    /**
+     * skillars-deferred-122 AC9 code review 2026-09-18: the most recent cleanup-delete failure's
+     * exception message — operator-diagnostic only, truncated by the writer
+     * ({@code UserAdminService.MAX_CLEANUP_ERROR_MESSAGE_LENGTH}), not a full stack trace.
+     */
+    @NotAudited
+    @Column(name = "cleanup_last_error", columnDefinition = "text")
+    private String cleanupLastError;
 
     private boolean otpEnabled;
 
@@ -207,6 +253,38 @@ public class User extends Customer implements Serializable {
 
     public boolean hasAccountExpired() {
         return accountExpiration != null && Instant.now(ClockProvider.getClock()).isAfter(accountExpiration);
+    }
+
+    public Instant getCleanupFailedAt() {
+        return cleanupFailedAt;
+    }
+
+    public void setCleanupFailedAt(final Instant cleanupFailedAt) {
+        this.cleanupFailedAt = cleanupFailedAt;
+    }
+
+    public int getCleanupFailedAttempts() {
+        return cleanupFailedAttempts;
+    }
+
+    public void setCleanupFailedAttempts(final int cleanupFailedAttempts) {
+        this.cleanupFailedAttempts = cleanupFailedAttempts;
+    }
+
+    public Instant getCleanupLastAttemptedAt() {
+        return cleanupLastAttemptedAt;
+    }
+
+    public void setCleanupLastAttemptedAt(final Instant cleanupLastAttemptedAt) {
+        this.cleanupLastAttemptedAt = cleanupLastAttemptedAt;
+    }
+
+    public String getCleanupLastError() {
+        return cleanupLastError;
+    }
+
+    public void setCleanupLastError(final String cleanupLastError) {
+        this.cleanupLastError = cleanupLastError;
     }
 
     public boolean isOtpEnabled() {

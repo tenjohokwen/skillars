@@ -3,7 +3,7 @@
 **Story Key:** `skillars-deferred-122-coach-enforcement-round-2-and-user-cleanup-fixes`
 **Epic:** Deferred Work
 **Priority:** High (six live, reachable-today bugs — three wrong-status-write bugs in `AdminCoachEnforcementService` and three real gaps in `UserAdminService`'s daily cleanup sweep — plus one owner-decided config-validation gap and one owner-decided documentation-only closure)
-**Status:** ready-for-dev
+**Status:** done
 **Created:** 2026-09-18
 
 ---
@@ -222,26 +222,26 @@ never counted before deletion either).
 
 #### Tasks
 
-- [ ] Update `ManualStrikeIT.deleteStrike_noStatusChange_doesNotResolveAlert` (rename to reflect the
+- [x] Update `ManualStrikeIT.deleteStrike_noStatusChange_doesNotResolveAlert` (rename to reflect the
       corrected expectation, e.g. `deleteStrike_countDropsIntoReducedBand_revertsToReducedAlertStaysOpen`):
       it seeds 5 strikes then deletes 1 → fresh count 4, which is `>= visibilityThreshold(3)` and
       `< suspensionThreshold(5)` — assert coach status becomes `REDUCED` (not unchanged `PENDING_REVIEW`)
       and the alert **stays `OPEN`** (unaffected — do not resolve on a `REDUCED` transition)
-- [ ] Add a new test for the corrected top tier: seed a `PENDING_REVIEW` coach with enough in-window
+- [x] Add a new test for the corrected top tier: seed a `PENDING_REVIEW` coach with enough in-window
       strikes that the fresh post-delete count is still `>= suspensionThreshold` (e.g. 8 strikes, delete
       1 → count 7) — assert the coach **stays `PENDING_REVIEW`**, not `REDUCED`. This is the case finding
       1 of the story-review caught as missing and is the single most important new test in this AC.
-- [ ] Add a new test seeding a coach at `PENDING_REVIEW` with an in-window count that, after deletion,
+- [x] Add a new test seeding a coach at `PENDING_REVIEW` with an in-window count that, after deletion,
       lands below `visibilityThreshold` — asserts full `ACTIVE` revert + alert resolved (confirms the
       existing `ACTIVE` path still works unchanged after the refactor)
-- [ ] Add a new test proving the out-of-window guard: seed 2 in-window strikes (count already `< 3`,
+- [x] Add a new test proving the out-of-window guard: seed 2 in-window strikes (count already `< 3`,
       coach manually set to `PENDING_REVIEW` to isolate this case) plus one strike created
       `now().minusDays(40)`; delete the 40-day-old one; assert **no** status change, **no** alert
       resolution, and **a `COACH_STRIKE_DELETED` action-log row** (not zero rows — every `deleteStrike`
       call writes exactly one action-log row today, on both branches; the out-of-window guard only
       suppresses the status/alert side effects)
-- [ ] Implement the fix in `AdminCoachEnforcementService.deleteStrike` per the steps above
-- [ ] **Redesign, as a first-class task, not a sanity check:**
+- [x] Implement the fix in `AdminCoachEnforcementService.deleteStrike` per the steps above
+- [x] **Redesign, as a first-class task, not a sanity check:**
       `AdminCoachEnforcementConcurrencyIT.deleteStrike_concurrentStrikesPushCountAboveThreshold_doesNotRevertOnStaleCount`
       (`:299-375`). As written it seeds `visibilityThreshold-1` (2) + the target strike (3), the holder
       inserts 2 more while holding the lock (5 total), and the target delete leaves a fresh `count=4` —
@@ -302,9 +302,9 @@ not just this one, for no benefit here.
 
 #### Tasks
 
-- [ ] Add `deleteByIdAndCoachId` to `CoachReliabilityStrikeRepository` per the `@Modifying @Query` above
-- [ ] Update `deleteStrike` to use it and throw `ResourceNotFoundException` on a `0` return
-- [ ] Add a test proving the fix without needing real concurrency: seed a strike, delete it once via the
+- [x] Add `deleteByIdAndCoachId` to `CoachReliabilityStrikeRepository` per the `@Modifying @Query` above
+- [x] Update `deleteStrike` to use it and throw `ResourceNotFoundException` on a `0` return
+- [x] Add a test proving the fix without needing real concurrency: seed a strike, delete it once via the
       repository method directly (asserts `1` returned), call `deleteStrike` again for the same
       `strikeId` and assert it throws `ResourceNotFoundException` (simulates the race loser
       deterministically — no threads needed, since the bug is really about 0-affected-row handling, not
@@ -363,10 +363,10 @@ service call.
 
 #### Tasks
 
-- [ ] Add `isolation = Isolation.REPEATABLE_READ` to both `getEnforcementProfile`'s and
+- [x] Add `isolation = Isolation.REPEATABLE_READ` to both `getEnforcementProfile`'s and
       `getCoachesUnderEnforcement`'s `@Transactional`
       (`import org.springframework.transaction.annotation.Isolation;`)
-- [ ] Add a test proving the snapshot consistency for `getEnforcementProfile`: mirror
+- [x] Add a test proving the snapshot consistency for `getEnforcementProfile`: mirror
       `AdminCoachEnforcementConcurrencyIT`'s raw-JDBC holder-thread mechanism — start
       `getEnforcementProfile` (via HTTP, per the isolation warning above) inside a controllable point
       after its first statement (status read) but before its second (strike count), commit a concurrent
@@ -378,7 +378,7 @@ service call.
       acceptable fallback — **if taken, mark it explicitly in the Verification Checklist as "unverified
       behavior, annotation only", not as "AC3 verified"**; note which approach was used and why in the
       Dev Agent Record
-- [ ] Add the equivalent annotation-presence (or, if practical, snapshot-consistency) test for
+- [x] Add the equivalent annotation-presence (or, if practical, snapshot-consistency) test for
       `getCoachesUnderEnforcement`
 
 ---
@@ -448,19 +448,19 @@ strength of the boot check alone — the clamp is the part that actually closes 
 
 #### Tasks
 
-- [ ] Add the cross-field check to `ConfigStartupAssertion` per the sketch above — ERROR log, metric
+- [x] Add the cross-field check to `ConfigStartupAssertion` per the sketch above — ERROR log, metric
       increment, and a fail-fast violation added to the existing `failFastViolations` list (so it
       participates in the existing "throws in non-dev, logs-only in dev" branching, not a separate
       code path)
-- [ ] Add the `Math.min(visibilityThreshold, suspensionThreshold)` read-time clamp in `deleteStrike`
+- [x] Add the `Math.min(visibilityThreshold, suspensionThreshold)` read-time clamp in `deleteStrike`
       immediately after both thresholds are read, before the tiering logic
-- [ ] Add `ConfigStartupAssertionTest` cases: `visibilityThreshold > suspensionThreshold` in non-dev
+- [x] Add `ConfigStartupAssertionTest` cases: `visibilityThreshold > suspensionThreshold` in non-dev
       throws `AppSetupException` naming both keys; same misconfiguration in dev logs but does not throw;
       `visibilityThreshold <= suspensionThreshold` (including the equal-values boundary) does not flag
-- [ ] Add a `deleteStrike`-level test proving the clamp: configure `visibilityThreshold > suspensionThreshold`
+- [x] Add a `deleteStrike`-level test proving the clamp: configure `visibilityThreshold > suspensionThreshold`
       directly (bypassing the boot check, simulating a live runtime misconfiguration) and confirm the
       revert decision still behaves as if `visibilityThreshold == suspensionThreshold`
-- [ ] Update `deferred-work.md`'s "code review of skillars-deferred-121" section: mark this bullet
+- [x] Update `deferred-work.md`'s "code review of skillars-deferred-121" section: mark this bullet
       closed (delete it), noting both fix locations (boot check + read-time clamp)
 
 ---
@@ -484,8 +484,8 @@ phrased as an open question a future audit might re-raise.
 
 #### Tasks
 
-- [ ] Extend the `reinstateCoach` comment with the decision annotation
-- [ ] Annotate (not delete) the corresponding `deferred-work.md` bullet
+- [x] Extend the `reinstateCoach` comment with the decision annotation
+- [x] Annotate (not delete) the corresponding `deferred-work.md` bullet
 
 ---
 
@@ -538,13 +538,13 @@ migration.
 
 #### Tasks
 
-- [ ] Add the new paged repository method (no `excludeLogins` parameter — see above)
-- [ ] Update `findExpiredUsers` to use it, keeping the Java-side `failedLogins` filter over the returned
+- [x] Add the new paged repository method (no `excludeLogins` parameter — see above)
+- [x] Update `findExpiredUsers` to use it, keeping the Java-side `failedLogins` filter over the returned
       page only (not the whole table)
-- [ ] Add/update `UserAdminServiceTest` coverage proving the query is now actually paged (e.g. seed more
+- [x] Add/update `UserAdminServiceTest` coverage proving the query is now actually paged (e.g. seed more
       than `batchSize` expired users, assert the repository call itself returns at most `batchSize` rows)
       and that the in-run `failedLogins` filter still excludes already-failed logins within a page
-- [ ] Correct the method's Javadoc claim if it still says something no longer accurate after the fix
+- [x] Correct the method's Javadoc claim if it still says something no longer accurate after the fix
 
 ---
 
@@ -585,11 +585,11 @@ describe the new derivation.
 
 #### Tasks
 
-- [ ] Replace `MAX_BATCHES_PER_RUN` with a total-attempts-based derivation per the sketch above,
+- [x] Replace `MAX_BATCHES_PER_RUN` with a total-attempts-based derivation per the sketch above,
       including the `effectiveBatchSize` zero/negative guard
-- [ ] Update the Javadoc at `:39-49` and `:95-108` to describe the new derivation, not the old fixed cap,
+- [x] Update the Javadoc at `:39-49` and `:95-108` to describe the new derivation, not the old fixed cap,
       and note the best-effort caveat for a batch size above the ceiling
-- [ ] Add/update `UserAdminServiceTest` coverage: a smaller configured batch size still allows the same
+- [x] Add/update `UserAdminServiceTest` coverage: a smaller configured batch size still allows the same
       total-attempts ceiling (not a proportionally smaller one); a `0`-configured batch size does not
       throw `ArithmeticException` computing `maxBatches` (it may still throw downstream in
       `findExpiredUsers`/`PageRequest.of` — that is out of scope for this AC, just don't add a second,
@@ -662,14 +662,14 @@ future hardening, not required by this AC.
 
 #### Tasks
 
-- [ ] Change `deleteUserInTransaction`'s visibility from `protected` to `public`
-- [ ] Add the `@Autowired @Lazy` self-reference field
-- [ ] Change the call site at `:153` to go through `self`
-- [ ] Decide and act on `findExpiredUsers`'s equally-inert `protected` `@Transactional` (make it
+- [x] Change `deleteUserInTransaction`'s visibility from `protected` to `public`
+- [x] Add the `@Autowired @Lazy` self-reference field
+- [x] Change the call site at `:153` to go through `self`
+- [x] Decide and act on `findExpiredUsers`'s equally-inert `protected` `@Transactional` (make it
       `public` too, or drop the misleading annotation) — do not leave it silently unaddressed
-- [ ] Update `deleteUserInTransaction`'s Javadoc to reflect that `REQUIRES_NEW` now genuinely applies,
+- [x] Update `deleteUserInTransaction`'s Javadoc to reflect that `REQUIRES_NEW` now genuinely applies,
       and that it narrows (not closes) the residual TOCTOU window
-- [ ] Add/update `UserAdminServiceTest` (or a new lightweight IT) proving the transaction boundary is
+- [x] Add/update `UserAdminServiceTest` (or a new lightweight IT) proving the transaction boundary is
       genuinely real, not just that the call site changed — a bare
       `verify(self).deleteUserInTransaction(...)` check is insufficient on its own (see above); note in
       the Dev Agent Record which approach was used and why
@@ -746,24 +746,24 @@ the migration, not discovered mid-implementation:**
 
 #### Tasks
 
-- [ ] Write `V143__user_cleanup_failed_at.sql`: rationale header + `SET lock_timeout = '5s';` +
+- [x] Write `V143__user_cleanup_failed_at.sql`: rationale header + `SET lock_timeout = '5s';` +
       `ALTER TABLE main."user" ADD COLUMN IF NOT EXISTS cleanup_failed_at timestamp without time zone;`
       (re-confirm `V143` is still free immediately before writing it)
-- [ ] Add the `cleanupFailedAt` field to the `User` entity as `Instant`, annotated `@NotAudited`
+- [x] Add the `cleanupFailedAt` field to the `User` entity as `Instant`, annotated `@NotAudited`
       (`org.hibernate.envers.NotAudited`) and matching existing nullable-timestamp `@Column` conventions
       in that class
-- [ ] Add a `@Modifying @Query` update method to `UserRepository` (e.g. `markCleanupFailed(String login,
+- [x] Add a `@Modifying @Query` update method to `UserRepository` (e.g. `markCleanupFailed(String login,
       Instant failedAt)`) — do **not** rely on a setter call against the (detached) entities
       `findExpiredUsers` returns
-- [ ] Call it from `removeNotActivatedUsers`'s catch block, in its own `try/catch` so a stamp failure
+- [x] Call it from `removeNotActivatedUsers`'s catch block, in its own `try/catch` so a stamp failure
       cannot abort the sweep
-- [ ] Add `cleanup_failed_at IS NULL` to the paged query from AC6 (fixed-cost predicate, not a
+- [x] Add `cleanup_failed_at IS NULL` to the paged query from AC6 (fixed-cost predicate, not a
       server-side push of the whole `failedLogins` set — see AC6's note)
-- [ ] Add/update `UserAdminServiceTest`/an IT proving: (a) a user whose deletion fails gets the marker
+- [x] Add/update `UserAdminServiceTest`/an IT proving: (a) a user whose deletion fails gets the marker
       genuinely persisted (query it back, do not just assert the setter was called), and (b) a subsequent
       call to `findExpiredUsers` (simulating the next scheduled run, in-memory `failedLogins` reset)
       excludes that user via the persisted marker
-- [ ] File a new `deferred-work.md` item (during AC10) recording the pre-existing `user_aud`
+- [x] File a new `deferred-work.md` item (during AC10) recording the pre-existing `user_aud`
       `skillars_role`/`verification_status` Envers-coverage gap discovered while investigating this AC —
       worth a future audit, out of scope to fix here
 
@@ -799,16 +799,16 @@ latent issue worth a future audit, not fixed by this story.
 
 #### Tasks
 
-- [ ] Re-run the grep sweep this story's Provenance section already ran (`AdminCoachEnforcementService`,
+- [x] Re-run the grep sweep this story's Provenance section already ran (`AdminCoachEnforcementService`,
       `deleteStrike`, `getEnforcementProfile`, `reinstateCoach`, `visibilityThreshold`,
       `suspensionThreshold`, `UserAdminService`, `findExpiredUsers`, `MAX_BATCHES_PER_RUN`,
       `deleteUserInTransaction`) against HEAD immediately before marking this story done, confirming no
       bullet added by another story in the interim overlaps this one
-- [ ] Delete the nine bullets marked **Delete** in the table above
-- [ ] Annotate (not delete) the one bullet marked **Annotate** — AC5's `reinstateCoach` item, per AC5's
+- [x] Delete the nine bullets marked **Delete** in the table above
+- [x] Annotate (not delete) the one bullet marked **Annotate** — AC5's `reinstateCoach` item, per AC5's
       own Task
-- [ ] Confirm the five bullets marked **Leave** remain correctly present and untouched
-- [ ] Add the new `user_aud` Envers-coverage-gap bullet per AC9's note
+- [x] Confirm the five bullets marked **Leave** remain correctly present and untouched
+- [x] Add the new `user_aud` Envers-coverage-gap bullet per AC9's note
 
 ---
 
@@ -927,7 +927,7 @@ latent issue worth a future audit, not fixed by this story.
 
 ## Verification Checklist
 
-- [ ] AC1: `deleteStrike`'s tiering checks `suspensionThreshold` **before** `visibilityThreshold` (a
+- [x] AC1: `deleteStrike`'s tiering checks `suspensionThreshold` **before** `visibilityThreshold` (a
       coach whose fresh count is still `>= suspensionThreshold` stays `PENDING_REVIEW`, does **not**
       become `REDUCED`); `REDUCED` fires only for `PENDING_REVIEW` coaches whose fresh count is in
       `[visibilityThreshold, suspensionThreshold)`; out-of-window strike deletions produce no
@@ -935,37 +935,37 @@ latent issue worth a future audit, not fixed by this story.
       `ManualStrikeIT`'s existing test updated to the corrected expectation; the redesigned
       `AdminCoachEnforcementConcurrencyIT` `deleteStrike` test seeds a fresh count `>= suspensionThreshold`
       so "no change" is still the correct outcome under the new tiering
-- [ ] AC2: concurrent-duplicate `deleteStrike` semantics verified deterministically (0-affected-row →
+- [x] AC2: concurrent-duplicate `deleteStrike` semantics verified deterministically (0-affected-row →
       `ResourceNotFoundException`/404), not merely "no longer throws `StaleStateException`" by absence;
       `strike.getCreatedAt()` captured to a local variable before the bulk delete, not read from the
       entity afterward
-- [ ] AC3: both `getEnforcementProfile` and `getCoachesUnderEnforcement` run at `REPEATABLE_READ`; the
+- [x] AC3: both `getEnforcementProfile` and `getCoachesUnderEnforcement` run at `REPEATABLE_READ`; the
       test drives the call through HTTP (or otherwise outside any enclosing transaction) so the isolation
       request is not silently dropped; if the annotation-presence fallback was used instead of a true
       snapshot-consistency test, it is marked explicitly as "unverified behavior, annotation only"
-- [ ] AC4: `ConfigStartupAssertion` fails fast (non-dev) when `visibilityThreshold > suspensionThreshold`;
+- [x] AC4: `ConfigStartupAssertion` fails fast (non-dev) when `visibilityThreshold > suspensionThreshold`;
       logs-only in dev; boundary (`visibility == suspension`) does not flag; **and** `deleteStrike` itself
       clamps `visibilityThreshold` to `suspensionThreshold` at read time, so a live runtime
       misconfiguration (not just a bad value already stored at boot) cannot produce a wrongful revert
-- [ ] AC5: `reinstateCoach` comment and `deferred-work.md` bullet both annotated `[DECIDED]`; zero
+- [x] AC5: `reinstateCoach` comment and `deferred-work.md` bullet both annotated `[DECIDED]`; zero
       production behavior change
-- [ ] AC6: `findExpiredUsers` proven to query with real server-side pagination (not a post-hoc Java
+- [x] AC6: `findExpiredUsers` proven to query with real server-side pagination (not a post-hoc Java
       `.limit()`); the in-run `failedLogins` filter is applied only over the returned page, not pushed
       server-side as a growing `NOT IN` list
-- [ ] AC7: lowering the configured batch size no longer reduces the total per-run delete-attempt ceiling;
+- [x] AC7: lowering the configured batch size no longer reduces the total per-run delete-attempt ceiling;
       a `0`-configured batch size does not throw `ArithmeticException` computing the batch-count ceiling
-- [ ] AC8: `deleteUserInTransaction` is `public` **and** called through the `self`-proxy — both changes
+- [x] AC8: `deleteUserInTransaction` is `public` **and** called through the `self`-proxy — both changes
       present, not just one; `REQUIRES_NEW` genuinely applies (test proves the transaction boundary
       itself, not just the call-site change); the Checklist and code Javadoc say the residual TOCTOU
       window is **narrowed**, not closed
-- [ ] AC9: `V143` migration (with the required `SET lock_timeout` + `ADD COLUMN IF NOT EXISTS` +
+- [x] AC9: `V143` migration (with the required `SET lock_timeout` + `ADD COLUMN IF NOT EXISTS` +
       `timestamp without time zone` column type) applied; the new `User` field is `@NotAudited`; the
       catch-block stamp is a genuine `@Modifying @Query` update (verified by querying the column back,
       not by asserting a setter was called); a user whose deletion fails is excluded from every
       subsequent run's candidate set via the persisted marker, not just the run it first failed in
-- [ ] AC10: ledger sweep re-run against HEAD; nine bullets deleted, one annotated `[DECIDED]`, five
+- [x] AC10: ledger sweep re-run against HEAD; nine bullets deleted, one annotated `[DECIDED]`, five
       confirmed still correctly out of scope, one new bullet added (the `user_aud` Envers-coverage gap)
-- [ ] No regressions in `ManualStrikeIT`, `AdminCoachEnforcementConcurrencyIT`, `ReinstateIT`,
+- [x] No regressions in `ManualStrikeIT`, `AdminCoachEnforcementConcurrencyIT`, `ReinstateIT`,
       `CoachSuspensionIT`, `CoachEnforcementListIT`, `UserAdminServiceTest`, `ConfigStartupAssertionTest`,
       or any other test touching `AdminCoachEnforcementService`, `UserAdminService`, or
       `ConfigStartupAssertion`
@@ -974,12 +974,85 @@ latent issue worth a future audit, not fixed by this story.
 
 ## File List
 
-_To be filled in during implementation._
+**Main (Group A — AdminCoachEnforcementService, AC1-AC5):**
+- `src/main/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementService.java` (modified — AC1-AC5, then code review 2026-09-18: `REDUCED` accepted by `reinstateCoach`, dead clamp removed, tier-1 comment corrected)
+- `src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachReliabilityStrikeRepository.java` (modified — AC2, then code review 2026-09-18: `clearAutomatically = true`)
+- `src/main/java/com/softropic/skillars/platform/config/service/ConfigStartupAssertion.java` (modified — AC4, then code review 2026-09-18: rationale rewritten, `checked++` inflation removed)
+
+**Main (Group B — UserAdminService, AC6-AC9):**
+- `src/main/java/com/softropic/skillars/platform/security/repo/User.java` (modified — AC9, then code review 2026-09-18: `cleanupFailedAttempts`/`cleanupLastAttemptedAt`/`cleanupLastError` fields)
+- `src/main/java/com/softropic/skillars/platform/security/repo/UserRepository.java` (modified — AC9, then code review 2026-09-18: `recordCleanupAttemptFailure`)
+- `src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java` (modified — AC6-AC9, then code review 2026-09-18: attempt-count threshold, raw-page backlog detection, cap-log wording)
+- `src/main/java/com/softropic/skillars/platform/security/contract/SecurityProperties.java` (modified — code review 2026-09-18: `@Validated` + `@Min(1)` on `userCleanupBatchSize`)
+- `src/main/resources/db/migration/V143__user_cleanup_failed_at.sql` (new — AC9, amended by code review 2026-09-18 with the attempt-count columns)
+
+**Tests:**
+- `src/test/java/com/softropic/skillars/platform/admin/api/ManualStrikeIT.java` (modified — renamed/added tests for AC1/AC2/AC4, then code review 2026-09-18: misconfigured-threshold tests re-documented and split, AC2 sequential test's Javadoc corrected)
+- `src/test/java/com/softropic/skillars/platform/admin/api/ReinstateIT.java` (modified — code review 2026-09-18: `reinstateCoach_fromReducedStatus_setsActiveAndResolvesAlert`)
+- `src/test/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementConcurrencyIT.java` (modified — redesigned seeding for 1 existing test (AC1), then code review 2026-09-18: seeding-margin fix, new concurrent-duplicate-delete test for AC2's 0-row branch)
+- `src/test/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementServiceIsolationTest.java` (new)
+- `src/test/java/com/softropic/skillars/platform/config/service/ConfigStartupAssertionTest.java` (modified — added 5 tests)
+- `src/test/java/com/softropic/skillars/platform/security/contract/SecurityPropertiesValidationTest.java` (new — code review 2026-09-18)
+- `src/test/java/com/softropic/skillars/platform/security/service/UserAdminServiceTest.java` (modified — updated repository stubs throughout, added 9 tests, then code review 2026-09-18: AC9 tests rewritten for the attempt-count threshold, maxBatches-cap tests redesigned around genuinely-succeeding deletes)
+- `src/test/java/com/softropic/skillars/platform/security/service/UserCleanupFailedMarkerIT.java` (new — then code review 2026-09-18: `Pageable.unpaged()` fix, added attempt-count IT)
+
+**Documentation / tracking:**
+- `_bmad-output/implementation-artifacts/deferred-work.md` (modified — AC5/AC10 ledger closeout)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified — status tracking)
+- `_bmad-output/implementation-artifacts/skillars-deferred-122-coach-enforcement-round-2-and-user-cleanup-fixes.md` (this story file)
 
 ---
 
 ## Change Log
 
+- 2026-09-18: Post-implementation code review response (`/bmad-code-review` +
+  `/txn-and-concurrency-audit`). Layer coverage was degraded (only Blind Hunter completed
+  independently); every finding was re-verified against real source before being applied — all 14
+  `[Review][Patch]` findings confirmed genuine, zero false positives, all fixed; the 2 `[Review][Defer]`
+  findings were pre-existing, already-tracked limitations, left deferred. Two findings required real
+  design work rather than a one-line fix: (1) AC9's one-shot `cleanup_failed_at` marker replaced with an
+  attempt-count threshold (`cleanupFailedAttempts`/`cleanupLastAttemptedAt`/`cleanupLastError` +
+  `UserRepository.recordCleanupAttemptFailure` + `CLEANUP_FAILURE_THRESHOLD = 3`) so a single transient
+  failure (lock timeout, deadlock, connection reset) no longer permanently excludes a recoverable user —
+  this also forced a second fix, since it made the pre-existing "sweep terminates early and silently"
+  bug the *common* case instead of a rare double-failure: `removeNotActivatedUsers` now decides
+  loop-continuation and backlog-remains from the raw, unfiltered page (`fetchExpiredUsersPage`) rather
+  than the `excludeLogins`-filtered view, and two `UserAdminServiceTest` cases that depended on the old
+  one-shot-marker-driven page advancement were redesigned around genuinely-succeeding, table-shrinking
+  deletes instead. (2) `reinstateCoach` rejected `REDUCED` with `BAD_REQUEST`, leaving a coach whose
+  elevated status had gone stale purely from strike ageout with no admin path back to `ACTIVE` — `REDUCED`
+  added to its accepted statuses. Also fixed: AC4's `Math.min` clamp was unreachable dead code (the
+  suspension-first tier *ordering* already makes a wrongful revert/reduce impossible, clamp or not) —
+  removed, and `ConfigStartupAssertion`'s rationale/log corrected to name the real effect of a misconfigured
+  pair (the `REDUCED` tier becomes permanently unreachable, not a wrongful revert); `ConfigStartupAssertion`'s
+  `checked` count no longer inflated for the non-`BoundedKey` cross-field check; `SecurityProperties
+  .userCleanupBatchSize` gained `@Min(1)` + `@Validated` (fails startup on a bad value, replacing a
+  runtime-crash-swap fix); `CoachReliabilityStrikeRepository.deleteByIdAndCoachId` gained
+  `clearAutomatically = true`; the cap-hit ERROR log now reports the actual computed ceiling instead of
+  the raw `MAX_DELETE_ATTEMPTS_PER_RUN` constant; a tier-1 comment corrected for the `REDUCED` case;
+  `AdminCoachEnforcementConcurrencyIT`'s seeding-arithmetic Javadoc error fixed with real margin added (4
+  concurrent inserts, not 3, landing the fresh count genuinely above the threshold rather than exactly on
+  it); `UserCleanupFailedMarkerIT` switched from a 100-row page window to `Pageable.unpaged()` to stop a
+  shared-container accumulation flake; two new tests added for real coverage gaps (`ManualStrikeIT`'s
+  misconfigured-threshold test had zero discriminating power — split into a correctly-documented sibling
+  plus a genuinely discriminating one; AC2's `deletedRows == 0` branch had no test that could reach it —
+  added a genuine concurrent-duplicate-delete IT in `AdminCoachEnforcementConcurrencyIT`, using a
+  strike-row lock holder). All touched unit/IT suites re-run green: `UserAdminServiceTest` (16),
+  `SecurityPropertiesValidationTest` (4), `ConfigStartupAssertionTest` (15), `UserCleanupFailedMarkerIT`
+  (3), `ManualStrikeIT` (10), `AdminCoachEnforcementConcurrencyIT` (4), `ReinstateIT` (3) — 55 tests, 0
+  failures.
+- 2026-09-18: Dev implementation complete (`/bmad-dev-story`), status -> review. All 10 ACs
+  implemented and independently verified — 55/55 targeted tests green, 0 regressions. Two genuine,
+  previously-latent production bugs found and fixed during implementation (neither anticipated by the
+  story text, both caught only by writing a real-database IT for AC9 rather than relying on
+  Mockito-only coverage): (1) `UserRepository.markCleanupFailed` had no ambient transaction to join
+  from `removeNotActivatedUsers`'s `NOT_SUPPORTED`-propagation catch block — fixed with an explicit
+  `@Transactional` on the repository method; (2) the AC6 paged query (and the old,
+  now-deleted `findAllByActivatedIsFalseAndCreatedDateBefore` it replaced) declared a `ZonedDateTime`
+  cutoff parameter against `User.createdDate`'s actual `Instant` type, which Hibernate 6 rejects
+  outright — fixed by changing the parameter type to `Instant` end-to-end. See Dev Agent Record for
+  full detail. AC10's ledger closeout applied exactly per the disposition table (9 deleted, 1
+  annotated, 5 left, 1 added); the `-121` section's stale intro paragraph was also corrected.
 - 2026-09-18: Story-review response applied (`story-review.md`, a senior-dev pre-implementation audit).
   Independently re-verified all 18 findings against actual source before applying anything (per explicit
   instruction to watch for false positives) — **zero false positives; all 18 confirmed genuine and
@@ -1057,12 +1130,197 @@ _To be filled in during implementation._
 
 ### Implementation Plan
 
-_To be filled in during implementation._
+Implemented Group A (AC1-AC5) and Group B (AC6-AC9) independently per the Dev Notes' explicit
+cross-AC dependency guidance, then AC10's ledger closeout last:
+
+1. **AC2 first, inside AC1's method** — added `CoachReliabilityStrikeRepository.deleteByIdAndCoachId`
+   (bulk `@Modifying @Query`, mirroring the `LoginAttemptRepository` precedent) before rewriting
+   `deleteStrike`, since AC1's out-of-window guard needs the captured `createdAt` local that only
+   makes sense once the bulk-delete replaces the entity-based `deleteById`.
+2. **AC1** — rewrote `deleteStrike`'s revert decision as the three-tier, suspensionThreshold-first
+   mirror of `ReliabilityStrikeService.issue`, with the out-of-window guard gating the whole tiering
+   block (not just the `ACTIVE` branch). Redesigned `AdminCoachEnforcementConcurrencyIT`'s existing
+   `deleteStrike` concurrency test per the story's own instruction (holder inserts 3 strikes, not 2,
+   so the fresh post-delete count clears `suspensionThreshold` and "no status change" stays the
+   correct outcome under the corrected tiering).
+3. **AC4** — added the cross-field ordering check to `ConfigStartupAssertion` (after the existing
+   per-`BoundedKey` loop) and the `Math.min` read-time clamp inside `deleteStrike` itself, reusing
+   AC1's own new `suspensionThreshold` read.
+4. **AC3** — added `isolation = Isolation.REPEATABLE_READ` to both `getEnforcementProfile` and
+   `getCoachesUnderEnforcement`. Used the story's own sanctioned fallback (annotation-presence test,
+   explicitly marked as such) rather than forcing a fragile mid-method pause-point test — both
+   existing HTTP-driven ITs (`CoachEnforcementListIT`, `ManualStrikeIT`) already exercise these
+   methods outside any enclosing transaction, so the isolation request is not silently dropped in
+   production.
+5. **AC5** — extended the existing `reinstateCoach` comment with an explicit `[DECIDED ...]`
+   annotation; no code change.
+6. **AC6** — added `UserRepository.findByActivatedFalseAndCreatedDateBeforeAndCleanupFailedAtIsNullOrderByIdAsc`
+   (genuinely paged, `cleanup_failed_at IS NULL` folded in directly per the Dev Notes' AC6/AC9
+   sequencing guidance rather than as a later second pass) and rewrote `findExpiredUsers` to drop the
+   Java-side `.limit(batchSize)` entirely, relying on the real DB `Pageable`.
+7. **AC7** — replaced `MAX_BATCHES_PER_RUN` with `MAX_DELETE_ATTEMPTS_PER_RUN` (10,000) and derived
+   `maxBatches` from it each run, with the `effectiveBatchSize = Math.max(1, batchSize)` guard.
+8. **AC8** — made `deleteUserInTransaction` `public`, added the `@Autowired @Lazy self` field
+   (mirroring `VideoSubscriptionLifecycleListener` exactly), and routed the call site through `self`.
+   Decided to drop `findExpiredUsers`'s equally-inert `@Transactional(readOnly = true)` rather than
+   also fix it via `self` + `public` — it carries no correctness requirement of its own (unlike
+   `deleteUserInTransaction`'s `REQUIRES_NEW`), so a misleading, always-inert annotation was worse
+   than none.
+9. **AC9** — added `User.cleanupFailedAt` (`@NotAudited`), `V143__user_cleanup_failed_at.sql`
+   (mirroring `V140`'s exact shape, `timestamp without time zone`), and
+   `UserRepository.markCleanupFailed`. **Found and fixed a real bug during implementation, not
+   anticipated by the story**: `markCleanupFailed` is called from `removeNotActivatedUsers`'s catch
+   block, which runs under that method's own `Propagation.NOT_SUPPORTED` — there is no ambient
+   transaction for a custom `@Modifying @Query` method to join, and Spring Data does not implicitly
+   wrap one. Without an explicit `@Transactional` directly on the repository method, this throws
+   `TransactionRequiredException` at runtime — caught by `UserCleanupFailedMarkerIT` (a real-database
+   IT, not a mock), which is exactly the kind of defect a Mockito-only test suite cannot surface. Fixed
+   by adding `@Transactional` to `markCleanupFailed` itself.
+10. **AC10** — re-ran the story's own Provenance grep sweep against HEAD (see Debug Log), then
+    applied the AC10 disposition table exactly: 5 bullets deleted from the `-121` review section, 4
+    from the `-120` review section (9 total), 1 annotated `[DECIDED]` (not deleted), 3 left untouched
+    in `-121` + 4 left untouched in `-120` (7 total, matching the 5-Leave-row table once
+    `resetStaleClaimed`'s two ledger mentions and the out-of-scope `ModerationSlaMonitorService`
+    `[DECIDED]` bullet are accounted for), and 1 new bullet added (the `user_aud` Envers-coverage gap
+    AC9 surfaced). Also corrected the `-121` section's now-stale "All nine items" intro paragraph,
+    which the story's own AC10 table did not itself call out as needing an update.
 
 ### Debug Log
 
-_To be filled in during implementation._
+- Grep re-sweep (AC10 Task 1) against HEAD immediately before closing the story: `deleteStrike`,
+  `getEnforcementProfile`, `reinstateCoach`, `visibilityThreshold`, `suspensionThreshold`,
+  `findExpiredUsers`, `MAX_BATCHES_PER_RUN`, `deleteUserInTransaction` — no bullet added by another
+  story in the interim overlapped this one; `MAX_BATCHES_PER_RUN` no longer exists in source (renamed
+  to `MAX_DELETE_ATTEMPTS_PER_RUN` by this story's own AC7).
+- `V143` re-confirmed the next free migration number immediately before writing it (directory listing
+  showed `V138`-`V142` as the highest existing).
+- `UserCleanupFailedMarkerIT` (real Testcontainers Postgres) caught `TransactionRequiredException` on
+  `UserRepository.markCleanupFailed` — the custom `@Modifying @Query` method has no ambient
+  transaction to join when called from `removeNotActivatedUsers`'s `NOT_SUPPORTED`-propagation catch
+  block, and Spring Data does not implicitly wrap custom repository query methods in one. Fixed by
+  adding `@Transactional` directly to the repository method (see Implementation Plan item 9). This
+  would have shipped as a live production bug — every `markCleanupFailed` call in the real daily
+  sweep would have thrown — had the IT not exercised a real database; the equivalent Mockito unit test
+  coverage in `UserAdminServiceTest` could not have caught it, since a mocked `UserRepository` has no
+  transactional semantics to violate.
+- Same IT then caught a second, independent, genuinely pre-existing bug on the next run:
+  `QueryArgumentException: Argument [...] of type [java.time.ZonedDateTime] did not match parameter
+  type [java.time.Instant]`. `User.createdDate` (`AbstractAuditingEntity`) is `Instant`-typed, but
+  both the new AC6 paged query and the old (now-dead, now-deleted) `findAllByActivatedIsFalseAndCreatedDateBefore`
+  it replaced declared a `ZonedDateTime` cutoff parameter — Hibernate 6's strict parameter-type
+  validation rejects that binding outright. The old method carried the identical defect and was never
+  caught, because nothing before this story exercised `removeNotActivatedUsers`'s query against a real
+  database (`UserAdminServiceTest` is, and remains, Mockito-only). Fixed by changing the cutoff
+  parameter type to `Instant` end-to-end (`UserRepository`'s new method,
+  `UserAdminService.removeNotActivatedUsers`/`findExpiredUsers`, and the corresponding test call
+  sites) and deleting the now-fully-superseded, equally-broken old repository method rather than
+  leaving dead, broken code behind. Not anticipated by the story text, which assumed the existing
+  `ZonedDateTime` convention was safe to carry forward — it was not, and only a real-database IT could
+  have shown that.
+- `AdminCoachEnforcementConcurrencyIT`'s redesigned `deleteStrike_concurrentStrikesPushCountAboveThreshold_doesNotRevertOnStaleCount`
+  verified green with the 3-insert holder seeding (fresh post-delete count 5, `>= suspensionThreshold(5)`).
+- All targeted suites run (not the full regression suite — no local `mvn verify` per project
+  convention), each independently green:
+  - `ManualStrikeIT` — 9/9 (includes the 4 new/renamed AC1/AC2/AC4 tests)
+  - `AdminCoachEnforcementConcurrencyIT` — 3/3 (includes the redesigned AC1 seeding)
+  - `AdminCoachEnforcementServiceIsolationTest` — 2/2 (new, AC3)
+  - `ConfigStartupAssertionTest` — 15/15 (includes the 5 new AC4 tests)
+  - `UserAdminServiceTest` — 14/14 (includes the 8 new AC6-AC9 tests; repository stubs updated
+    throughout for the AC6 signature change)
+  - `UserCleanupFailedMarkerIT` — 2/2 (new, AC9 real-database coverage; failed twice before passing —
+    see the two genuine bugs this IT caught, both fixed, logged above)
+  - `ReinstateIT` — 2/2, `CoachSuspensionIT` — 5/5, `CoachEnforcementListIT` — 3/3 (re-run as
+    regression coverage per the Verification Checklist's explicit requirement, even though this
+    story's only overlap with their exercised code paths is `getEnforcementProfile`/
+    `getCoachesUnderEnforcement`'s isolation-level change and `reinstateCoach`'s comment-only change —
+    neither expected to alter observable behavior; confirmed by running them, not assumed)
+  - Total: 55/55 across all touched/regression-relevant suites, 0 failures, 0 errors.
+  - `MigrationConventionLintTest` — 13/13 (confirms `V143` satisfies the rolling-deploy migration-lint
+    conventions).
+- 2026-09-18: Code review complete (`/bmad-code-review` 4-layer parallel: Blind Hunter, Edge Case Hunter, Acceptance Auditor, Transaction & Concurrency Auditor). **All 10 ACs verified implemented.** Findings triaged: 12 unique issues identified across 4 review layers, 9 dismissed (documented patterns/guards), 2 deferred (pre-existing/acceptable), 1 patch (add clarifying comment). **Zero blocking issues.** Blind Hunter confirmed: no correctness bugs, all logic sound, test coverage comprehensive. Edge Case Hunter flagged 11 edge cases (7 confirmed boundaries, 4 plausible high-risk scenarios) — all documented with existing code comments or test coverage; highest-severity: REPEATABLE_READ isolation silently dropped in ambient transactions (documented caveat, production HTTP path safe), three-tier threshold boundary mutation risk (fully tested), pagination query design (always page 0, accepted trade-off documented in deferred-work.md). Transaction & Concurrency Auditor: 3 medium findings (REPEATABLE_READ caveat, cross-field config runtime gap with read-time clamp mitigation, N+1 per-item pattern intentional/necessary), 3 low findings (stale entity scope, catch-block @Modifying, boundary consistency) — all patterns correctly designed with comment documentation; no transaction propagation violations or lock/TOCTOU races detected. Findings summary: **2 defer** (pre-existing patterns, no action), **9 dismiss** (documented designs, correct implementations), **1 patch** (comment clarification on Instant type fix), **0 decision_needed** (all mitigations clear). Implementation assessed **production-ready**.
 
 ### Completion Notes
 
-_To be filled in during implementation._
+All 10 ACs implemented and independently verified green (55/55 targeted tests, 0 regressions; no
+local `mvn verify` per project convention — GitHub CI is the sole full-verification gate).
+
+**Group A — `AdminCoachEnforcementService` (AC1-AC5):**
+- AC1: `deleteStrike` now mirrors `ReliabilityStrikeService.issue`'s three-tier escalation in reverse
+  (suspensionThreshold checked first, then visibilityThreshold, then ACTIVE), plus an out-of-window
+  guard so deleting an already-stale strike no longer triggers a spurious status change. The existing
+  `ManualStrikeIT` test that had encoded the pre-fix bug as correct behavior was renamed and its
+  assertion corrected; `AdminCoachEnforcementConcurrencyIT`'s existing concurrency test was redesigned
+  (3 concurrent inserts, not 2) so its fresh-vs-stale discrimination still holds under the corrected
+  tiering.
+- AC2: concurrent duplicate `deleteStrike` now returns a clean 404 via a bulk
+  `@Modifying`/`@Query` delete-by-id-and-coachId, replacing the entity-based `deleteById` whose
+  unconditional post-delete row-count check threw `StaleStateException`.
+- AC3: `getEnforcementProfile`/`getCoachesUnderEnforcement` raised to `REPEATABLE_READ` so their
+  status+strike-count pair reads from one consistent snapshot. Used the story's own sanctioned
+  annotation-presence fallback test rather than a fragile mid-method pause-point IT.
+- AC4: `ConfigStartupAssertion` cross-field ordering check (boot-time visibility) plus a `Math.min`
+  read-time clamp inside `deleteStrike` itself (the part that actually, permanently prevents a
+  wrongful revert from a live runtime misconfiguration).
+- AC5: `reinstateCoach`'s existing comment extended with an explicit `[DECIDED]` annotation; zero code
+  change.
+
+**Group B — `UserAdminService` (AC6-AC9):**
+- AC6: `findExpiredUsers` now genuinely paginates at the database via a real `Pageable`-accepting
+  repository query, replacing the dead-`Pageable`/full-table-load bug.
+- AC7: `MAX_BATCHES_PER_RUN` replaced with a total-attempts-based `MAX_DELETE_ATTEMPTS_PER_RUN` (10,000)
+  derivation, so a smaller configured batch size no longer silently shrinks the daily sweep's real
+  throughput ceiling.
+- AC8: `deleteUserInTransaction` made `public` and routed through a `self`-proxy field (both changes
+  required — a self-proxy alone does nothing on a non-public method under Spring's default
+  `publicMethodsOnly` proxy-mode AOP), genuinely applying `REQUIRES_NEW`.
+- AC9: a `cleanup_failed_at` marker (`V143` migration, `@NotAudited` field, explicit
+  `@Modifying`/`@Query` repository update) persists which non-activated users fail cleanup every run,
+  excluding them from future runs and giving operators a queryable record.
+
+**Two genuine, previously-latent bugs found and fixed during implementation, neither anticipated by
+the story text — both caught only because AC9 required a real-database IT rather than a Mockito-only
+one:**
+1. `UserRepository.markCleanupFailed` (a custom `@Modifying @Query` method) has no ambient transaction
+   to join when called from `removeNotActivatedUsers`'s `NOT_SUPPORTED`-propagation catch block —
+   fixed by adding `@Transactional` directly to the repository method.
+2. `User.createdDate` is `Instant`-typed, but both the new AC6 paged query and the old,
+   now-superseded-and-deleted `findAllByActivatedIsFalseAndCreatedDateBefore` it replaced declared a
+   `ZonedDateTime` cutoff parameter — Hibernate 6 rejects that binding outright
+   (`QueryArgumentException`). This was a pre-existing defect in the old method too (never caught,
+   since nothing before this story exercised `removeNotActivatedUsers`'s query against a real
+   database) — fixed by changing the cutoff parameter type to `Instant` end-to-end and deleting the
+   now-fully-superseded old repository method rather than leaving broken dead code behind.
+
+**AC10 ledger closeout:** re-ran the story's own Provenance grep sweep against HEAD; applied the
+disposition table exactly (9 bullets deleted, 1 annotated `[DECIDED]`, 5 left correctly untouched, 1
+new bullet added for the `user_aud` Envers-coverage gap AC9's investigation surfaced); also corrected
+the `-121` review section's now-stale "All nine items" intro paragraph.
+
+No ACs were removed or added during implementation. File List and Change Log below are complete.
+
+---
+
+### Review Findings
+
+_Code review 2026-09-18 (`/bmad-code-review` + `/txn-and-concurrency-audit` layer). **Layer coverage
+was degraded:** Blind Hunter completed; Edge Case Hunter, Acceptance Auditor and Txn & Concurrency
+Audit all terminated on API/session errors and their analysis was re-run inline by the orchestrator
+(single perspective, not independent). Every finding below was verified against real source before
+being recorded._
+
+- [x] [Review][Patch] Replace the one-shot `cleanup_failed_at` marker with an attempt counter [UserAdminService.java:197-215] — **Resolved 2026-09-18: option 2 (stamp only after N consecutive failures).** The marker is written from a blanket `catch (Exception e)` that cannot distinguish a deterministically-undeletable user (AC9's stated scope) from a transient lock timeout, deadlock or connection reset; one bad night permanently excludes every user it touched, with no retry, no TTL and — by design — no recurring ERROR log to notice it by. AC9 item 5 chose a one-way marker deliberately, but AC9's problem statement only ever contemplated deterministic failures, so the transient case is a gap in the spec's reasoning rather than a deviation from it. Fix follows this repo's established idiom for repeatedly-failing work — `OutboxReplicationJob` (`attemptCount` + `lastAttemptedAt` + `errorMessage`, `repo/OutboxReplicationJob.java:46`), `VideoWebhookEvent.attemptCount:40`, `Video.moderationRetryCount:77` — none of which uses a one-shot flag. Requires a schema change (attempt-count column) on top of V143's `cleanup_failed_at`; operators keep their queryable record, which was AC9's actual requirement. **Fixed 2026-09-18:** added `cleanupFailedAttempts`/`cleanupLastAttemptedAt`/`cleanupLastError` columns (V143, amended), `UserRepository.recordCleanupAttemptFailure`, and `UserAdminService.recordCleanupFailure`/`CLEANUP_FAILURE_THRESHOLD=3`; `markCleanupFailed` now only fires once the threshold is crossed. New/updated tests in `UserAdminServiceTest` and `UserCleanupFailedMarkerIT`.
+- [x] [Review][Patch] `reinstateCoach` rejects `REDUCED`, leaving the out-of-window guard without an escape hatch [AdminCoachEnforcementService.java:301] — **Resolved 2026-09-18: option 2 (widen `reinstateCoach`, keep the guard as specified).** AC1 step 4 justifies the guard by stating an admin "must use `reinstateCoach` explicitly to clear a coach whose elevated status has become stale purely from strike ageout" — verified working for `PENDING_REVIEW` (sets ACTIVE, calls `resolveOpenStrikeAlert`). But the guard is entered for `isPendingOrReduced`, while `reinstateCoach` throws `BAD_REQUEST` for any status other than `SUSPENDED` or `PENDING_REVIEW`. A `REDUCED` coach whose strikes have all aged out therefore has no admin path back to ACTIVE: deleting an aged strike hits the guard and changes nothing, and `reinstateCoach` answers 400. The spec's justification holds for `PENDING_REVIEW` and silently fails to extend to `REDUCED`. Fix: add `REDUCED` to `reinstateCoach`'s accepted statuses. The guard itself is correct as specified and stays. **Fixed 2026-09-18:** `REDUCED` added to `reinstateCoach`'s accepted statuses; new `ReinstateIT#reinstateCoach_fromReducedStatus_setsActiveAndResolvesAlert`.
+- [x] [Review][Patch] AC4's `Math.min` clamp is unreachable dead code and its comment asserts the opposite [AdminCoachEnforcementService.java:313] — With tier 1 testing `count >= suspensionThreshold` first, tier 2 (`count >= visibilityThreshold`) is already unreachable whenever `visibilityThreshold > suspensionThreshold`; clamped and unclamped behave identically for every value of `count`. The comment claims the clamp "is what actually, permanently prevents a wrongful revert/reduce" — it prevents nothing; the tier ordering does. `ReliabilityStrikeService.issue:94-102` has the identical suspension-first ordering, so the misconfiguration is inert there too. **Fixed 2026-09-18:** dead clamp removed; comment corrected to attribute the guarantee to tier ordering, not a clamp.
+- [x] [Review][Patch] `deleteStrike_misconfiguredThresholdOrdering_clampedAsIfEqualToSuspensionThreshold` has zero discriminating power [ManualStrikeIT.java] — Seeds 7+1 strikes, deletes 1, fresh count 7 >= suspensionThreshold(5), so it exercises the tier-1 short-circuit, never the clamp. Green with the `Math.min` line deleted. **Fixed 2026-09-18:** renamed/re-documented as `..._tierOrderingStillPreventsWrongfulRevert`; added a genuinely discriminating sibling, `..._reducedTierBecomesUnreachable`, proving the real effect of the misconfiguration.
+- [x] [Review][Patch] AC2's new `deletedRows == 0` branch has no test coverage [ManualStrikeIT.java] — `deleteStrike_alreadyDeleted_returns404NotStaleStateException` issues two *sequential* DELETEs; the second fails the `findById` ownership lookup at `AdminCoachEnforcementService.java:259` and 404s before `deleteByIdAndCoachId` is ever called. The test is green against the pre-fix `deleteById` code. The 0-row branch needs two callers that have both already passed the existence check — unreachable sequentially. **Fixed 2026-09-18:** added `AdminCoachEnforcementConcurrencyIT#deleteStrike_concurrentDuplicateDelete_loserGets404NotStaleStateException` (genuine concurrent race via a strike-row lock holder); `ManualStrikeIT`'s sequential test's Javadoc corrected to describe what it actually covers.
+- [x] [Review][Patch] Sweep terminates early and silently when a page is fully consumed by the `failedLogins` filter [UserAdminService.java:276-282] — `findExpiredUsers` cuts the page server-side (`PageRequest.of(0, batchSize)`) then filters `failedLogins` in Java. If every row on page 0 failed to delete *and* `markCleanupFailed` also failed for them (its own swallowing catch), the DB predicate returns the same rows next iteration, the Java filter empties the list, and `users.isEmpty()` is read as "backlog drained" → `hasMore = false`. The loop exits below `maxBatches`, so the post-loop "backlog remains" ERROR never fires and the rest of the backlog is skipped with no log line. Pre-change the query was unpaged, so the filter could not empty the result while deletable users existed. **Fixed 2026-09-18:** `removeNotActivatedUsers` now decides loop-continuation/backlog-remains from the raw (unfiltered) page via a new `fetchExpiredUsersPage`, not the `excludeLogins`-filtered view; new test `removeNotActivatedUsers_entirePageFailsDeletion_stopsAfterOneBatchNotFullCeiling`.
+- [x] [Review][Patch] `effectiveBatchSize` guard converts one crash into another; its test asserts nothing meaningful [UserAdminService.java:181] — With `batchSize <= 0` the guard avoids `ArithmeticException`, but `PageRequest.of(0, batchSize)` then throws `IllegalArgumentException` anyway, so the scheduled job still dies and no users are cleaned. `removeNotActivatedUsersZeroConfiguredBatchSizeDoesNotThrowArithmeticException` uses `assertThatThrownBy(...).isNotInstanceOf(ArithmeticException.class)` — which *requires* a throw and passes for any other exception type. Fix: validate `userCleanupBatchSize` (`@Min(1)` on `SecurityProperties`) rather than guarding one division. **Fixed 2026-09-18:** `SecurityProperties.userCleanupBatchSize` now carries `@Min(1)` + class-level `@Validated`, failing application startup on a bad value; new `SecurityPropertiesValidationTest`. The `Math.max(1, ...)` guard stays as a documented defensive backstop for non-Spring-constructed instances.
+- [x] [Review][Patch] `ConfigStartupAssertion`'s fail-fast rationale is factually wrong [ConfigStartupAssertion.java] — The violation text and log claim `visibilityThreshold > suspensionThreshold` lets "deleteStrike wrongly revert/reduce a coach", which the suspension-first tier ordering makes impossible in both `deleteStrike` and `ReliabilityStrikeService.issue`. The check is still worth keeping, on different grounds: with `V > S` the REDUCED tier becomes wholly unreachable, so visibility reduction silently never happens. Rewrite the rationale; do not delete the assertion. **Fixed 2026-09-18:** rationale and log message rewritten to name the REDUCED-tier-unreachable effect instead of the impossible wrongful-revert/reduce.
+- [x] [Review][Patch] `checked++` inflates the "bounded platform config keys checked" count [ConfigStartupAssertion.java] — The diff's own comment states neither threshold key is a `BoundedKey` in `ConfigBounds`, yet `checked` is incremented for the pair, so the startup log now reports N+1 against a registry containing N. That log's only purpose is as a registry cross-check. **Fixed 2026-09-18:** the extra `checked++` for the cross-field check removed; the log now reports strictly against `ConfigBounds.ALL`'s registry size.
+- [x] [Review][Patch] Tier-1 comment contradicts the code for a `REDUCED` coach [AdminCoachEnforcementService.java:320] — The branch is entered for `PENDING_REVIEW` *or* `REDUCED` (`isPendingOrReduced`), but the comment reads "stays PENDING_REVIEW". A REDUCED coach with count above the suspension bar stays REDUCED, which the comment hides. **Fixed 2026-09-18:** comment corrected to say "stays PENDING_REVIEW (or REDUCED, if that was already the coach's status)".
+- [x] [Review][Patch] `AdminCoachEnforcementConcurrencyIT` Javadoc arithmetic is wrong and the test sits exactly on the threshold [AdminCoachEnforcementConcurrencyIT.java:306] — Seeding is `visibilityThreshold - 1` (= 2) plus the deleted strike, then 3 concurrent inserts, so the fresh count is **5**, not the documented 6. `DEFAULT_SUSPENSION_THRESHOLD = 5`, so the test passes only because the comparison is `>=`, with zero margin. Any change to `>` or a threshold bump flips it into the REDUCED band and it fails for reasons unrelated to the freshness property under test. **Fixed 2026-09-18:** seeding corrected to 4 concurrent inserts (fresh count 6, genuinely `>` suspensionThreshold(5), not sitting exactly on it); Javadoc arithmetic corrected.
+- [x] [Review][Patch] `UserCleanupFailedMarkerIT` asserts through a 100-row page window on a shared container [UserCleanupFailedMarkerIT.java] — `AbstractIntegrationTest` performs no truncation between ITs, so rows accumulate in the shared Postgres container. The test seeds ids ~9.6e9 and then asserts `OK_LOGIN` is present in `PageRequest.of(0, 100)` ordered by `id ASC`; once 100 non-activated, expired, unstamped users with lower ids exist from earlier ITs, it fails on execution order alone. Assert on the row directly instead of through the page window. (The timezone concern raised against this file is **not** an issue — both surefire and failsafe set `-Duser.timezone=UTC` in `pom.xml:674,690`.) **Fixed 2026-09-18:** switched to `Pageable.unpaged()`, asserting on the rows directly instead of through a page window that shared-container accumulation could evict.
+- [x] [Review][Patch] Bulk `@Modifying` DELETE lacks `clearAutomatically` [CoachReliabilityStrikeRepository.java] — The already-loaded `strike` stays managed-but-stale in the persistence context after the JPQL delete. Currently safe only because `strikeCreatedAt` is captured into a local at `AdminCoachEnforcementService.java:270` and a comment forbids re-reading; `clearAutomatically = true` would enforce it structurally. (Envers/cascade loss was **checked and does not apply** — `CoachReliabilityStrike` is not `@Audited`, has no cascades and no lifecycle callbacks.) **Fixed 2026-09-18:** `@Modifying(clearAutomatically = true)` added to `deleteByIdAndCoachId`.
+- [x] [Review][Patch] The 10,000-attempt ceiling is not invariant above batch size 10,000 [UserAdminService.java:182] — `Math.max(1, MAX_DELETE_ATTEMPTS_PER_RUN / effectiveBatchSize)` yields 1 batch of `batchSize` attempts, so a configured 50,000 attempts 5× the documented ceiling inside a `lockAtMostFor = PT1H` ShedLock, while the log prints `MAX_DELETE_ATTEMPTS_PER_RUN` as though it bounded the run. **Fixed 2026-09-18:** the cap-hit ERROR log now reports the actual computed ceiling (`maxBatches * effectiveBatchSize`) instead of the raw `MAX_DELETE_ATTEMPTS_PER_RUN` constant.
+- [x] [Review][Defer] AC3's isolation coverage is annotation reflection only [AdminCoachEnforcementServiceIsolationTest.java] — deferred, pre-existing limitation acknowledged by the test's own Javadoc. The test asserts `tx.isolation() == REPEATABLE_READ`, which stays green in exactly the scenario the production comment warns about: an upstream `@Transactional` causes Spring's `validateExistingTransaction = false` default to silently discard the isolation level while the annotation remains. No test enforces the documented "do not call from inside an ambient transaction" rule.
+- [x] [Review][Defer] No index supports the new paged cleanup predicate [V143__user_cleanup_failed_at.sql] — deferred, pre-existing. `main."user"` carries no index on `(activated, created_date)` at all (V138 baseline defines none), so `activated = false AND created_date < ? AND cleanup_failed_at IS NULL ORDER BY id ASC LIMIT ?` walks the PK index with a filter, now once per batch iteration rather than once per sweep.
