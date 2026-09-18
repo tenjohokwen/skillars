@@ -22,12 +22,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * legitimately execute more than once for a single logical call. That is correct only if the supplier
  * is read-only/side-effect-free — a contract stated solely in {@code PessimisticLockRetryer}'s own
  * javadoc, with nothing mechanical enforcing it across a growing set of call sites (28 at story-
- * creation time — mirrors this codebase's own {@code EmailTransportArchitectureTest} /
+ * creation time, 30 as of {@code skillars-deferred-121}'s two new sites in {@code
+ * AdminCoachEnforcementService.reinstateCoach}/{@code .deleteStrike} — mirrors this codebase's own {@code EmailTransportArchitectureTest} /
  * {@code NoStraySmtpConfigTest} convention: a hand-rolled source-text scan rather than a general-
  * purpose static-analysis dependency).
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
- * building this scan against the real 28 call sites surfaced one genuine violation —
+ * building this scan against the real call sites (28 at story-creation time) surfaced one genuine violation —
  * {@code DrillUploadService}'s {@code initiateUpload}/{@code deleteVideo} both had writes
  * ({@code setVideoId}/{@code upsertVideoId}/{@code clearVideoId}) and an {@code eventPublisher.publishEvent(...)}
  * inside the retried lambda. Tracing it, no double-execution was actually reachable (every
@@ -58,10 +59,10 @@ class PessimisticLockRetryerCallSiteAuditTest {
 
     /**
      * Side-effecting patterns a retried {@code lockedOperation} supplier must never contain —
-     * refined against what this codebase's 28 real call sites actually use, per AC5's own
+     * refined against what this codebase's real call sites actually use, per AC5's own
      * instruction not to add a pattern speculatively. Deliberately no bare {@code "Client."} entry
      * (code review: over-matches any local variable or entity field named {@code client}/{@code Client}
-     * with no client call involved) — none of the 28 sites use a raw HTTP/external SDK client inside
+     * with no client call involved) — none of the sites use a raw HTTP/external SDK client inside
      * the lambda today, so no client-type denylist entry is needed either.
      */
     private static final List<Pattern> DENYLIST = List.of(
@@ -78,11 +79,12 @@ class PessimisticLockRetryerCallSiteAuditTest {
 
     /**
      * The exact known count of real {@code .withBoundedRetry(} call sites under {@code src/main/java}
-     * at implementation time (re-verified by grep — the ledger's own stale count was 16). Asserted
-     * explicitly so an added or removed call site is loud (this count changes) rather than silently
-     * changing how much code this test covers.
+     * (28 at {@code skillars-deferred-117} story-creation time — the ledger's own stale count was 16 —
+     * now 30 after {@code skillars-deferred-121} added {@code AdminCoachEnforcementService
+     * .reinstateCoach}/{@code .deleteStrike}). Asserted explicitly so an added or removed call site is
+     * loud (this count changes) rather than silently changing how much code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 28;
+    private static final int EXPECTED_CALL_SITE_COUNT = 30;
 
     private record CallSite(String file, int line, String argument) {
     }
