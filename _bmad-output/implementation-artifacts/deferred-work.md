@@ -2427,3 +2427,79 @@ closed by the story's own AC1/AC2/AC3 — bullets deleted outright per this file
   no operator-queryable list of what is stuck. A persisted `cleanup_failed_at` marker on the user row,
   filtered out by the batch query, would stop permanently-stuck rows consuming sweep capacity across
   runs and give operators something to query. Needs a Flyway migration and a query change.
+
+## Deferred from: code review of skillars-deferred-121-coach-enforcement-status-toctou-lock-gap (2026-09-18)
+
+All nine items are pre-existing behaviour in `AdminCoachEnforcementService` that the
+skillars-deferred-121 lock fix neither introduced nor was scoped to address. Items 1-8 surfaced by the
+Edge Case Hunter and Blind Hunter review layers; item 9 surfaced during the review-response pass itself
+(a false-positive check on the review's own Patch finding about `reinstateCoach`'s justification
+comment led to tracing the actual business-logic consequence, not just the doc inaccuracy).
+
+- **`deleteStrike` has no path back to `REDUCED`.** The revert decision is only
+  `count < visibilityThreshold` (`:239-241`). A coach at 5 strikes is `PENDING_REVIEW`; delete one and
+  the fresh count is 4, still `>= visibilityThreshold` (3), so `reverted == false` and no status is
+  written at all. `ReliabilityStrikeService.issue:102-109` would have placed that coach in `REDUCED`.
+  `deleteStrike` is ACTIVE-or-nothing, so the coach stays in `PENDING_REVIEW` with a strike count that
+  no longer justifies it. Mitigated in practice by `PENDING_REVIEW` coaches remaining bookable
+  (`BookingService:199,259`) and publicly visible (`CoachProfileService:359`), so this is a
+  reporting/administrative inconsistency rather than a lockout.
+
+- **`visibilityThreshold > suspensionThreshold` is an accepted configuration.**
+  `ConfigService.getBoundedLong` bounds both independently at `1..Long.MAX_VALUE` with no
+  cross-threshold ordering guard. With `visibilityThreshold=10`, `suspensionThreshold=5`, deleting one
+  strike from a coach at 8 gives `7 < 10` → flipped to `ACTIVE` with 7 in-window strikes, and
+  `resolveOpenStrikeAlert` closes the admin alert too. A validated ordering invariant on the two
+  config keys would close this.
+
+- **Deleting an out-of-window strike still fires a full revert.** `count` is recomputed only over
+  `now()-30d`, but `reverted` never requires the deleted strike to have been inside that window
+  (`:231-246`). A coach whose in-window count has already decayed to 2 gets a revert-to-`ACTIVE`,
+  alert resolution and a `COACH_REINSTATE` log entry from deleting a 60-day-old strike that was
+  already not counting.
+
+- **Concurrent duplicate `deleteStrike` surfaces `StaleStateException`, not 404.**
+  `findById(strikeId)` (`:216-223`) takes no lock, so both callers pass the existence and ownership
+  checks. The loser's DELETE affects 0 rows and Hibernate's row-count expectation throws
+  `StaleStateException`/`ObjectOptimisticLockingFailureException` out of `flush()` — not a
+  `PessimisticLockingFailureException`, so `PessimisticLockRetryer` records `outcome=error` and
+  rethrows. A post-lock `existsById` re-check would turn this into the intended 404.
+
+- **The strike DELETE's wait is outside the retry/savepoint guarantee.** `deleteById` is queued, then
+  `withBoundedRetry`'s `entityManager.flush()` issues the DELETE *before* the savepoint is taken
+  (`PessimisticLockRetryer:132-134`). That DELETE carries no `NO_WAIT` and blocks indefinitely if
+  another transaction holds the strike row, and the wait is neither retried, bounded, nor separately
+  attributable — it is folded into the `persistence.lock_retry` timer, which makes the metric
+  misleading. skillars-deferred-121 relocated this wait; it did not create it.
+
+- **`issueManualStrike` applies no coach-status guard.** Its unlocked `findById` (`:192-193`) only
+  proves existence. The coach can be `DEACTIVATED` or `SUSPENDED` between that check and
+  `ReliabilityStrikeService.issue`'s locked read, and nothing rejects the strike. Note that the
+  *absence* of a lock on that line is load-bearing — see the review-findings patch item about
+  `issue` being `REQUIRES_NEW`.
+
+- **`getEnforcementProfile` composes an inconsistent view.** Status (`:75-76`) and the rolling strike
+  count (`:78`) are two unlocked statements under READ COMMITTED, while every writer of the pair now
+  takes a lock. A `deleteStrike` committing between them yields `status=PENDING_REVIEW` with
+  `activeStrikes=2`, or `status=ACTIVE` with `activeStrikes=5` — the exact pairing the admin UI uses
+  to decide whether to reinstate. A `@Transactional(readOnly = true)` REPEATABLE READ or a single
+  joined query would fix it.
+
+- **The 30-day count window origin slides with contention.**
+  `OffsetDateTime.now().minusDays(30)` (`:231`) is evaluated after the lock wait, so a strike within
+  seconds of the boundary can be inside the window for an uncontended call and outside it for a
+  contended one. Same shape in `ReliabilityStrikeService.issue:90`. Capturing the timestamp once at
+  method entry would make the decision input independent of lock-wait duration.
+
+- **`reinstateCoach` cannot distinguish a stale suspension from one that just landed.**
+  `SUSPENDED` is (and after skillars-deferred-121's fix remains) an explicitly legal source status
+  (`:162-163`) — an admin's reinstate call proceeds to `ACTIVE` whether the coach was suspended before
+  the admin loaded the enforcement screen or by a *different* admin's concurrent `suspendCoach` call
+  that committed moments ago, fully applying that suspension's side effects (cancelled `REQUESTED`
+  bookings, `CoachSuspendedEvent`, an `AdminActionLog` row) in the process. skillars-deferred-121's lock
+  fix makes the read fresh, not the *decision* suspension-aware — it only prevents a stale-`ACTIVE`
+  double-reinstate, not a fresh-`SUSPENDED` override. Whether an explicit reinstate *should* reject or
+  warn when it discovers a just-landed concurrent suspension (vs. today's "explicit admin intent always
+  wins") is a genuine product question, not a locking bug — surfaced during skillars-deferred-121's own
+  code-review response after the review flagged the story's original failure-scenario narrative as
+  overstating what the fix closes.
