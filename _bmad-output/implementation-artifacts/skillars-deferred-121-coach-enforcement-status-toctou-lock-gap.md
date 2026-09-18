@@ -445,13 +445,32 @@ _From `/bmad-code-review` on 2026-09-18 — three parallel layers (Blind Hunter,
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified — `development_status` entry for
   this story key updated to `review`, then a follow-up note appended for the code review response)
 - `_bmad-output/implementation-artifacts/deferred-work.md` (modified — new "Deferred from: code review of
-  skillars-deferred-121..." section recording the 8 pre-existing, out-of-scope findings the review
+  skillars-deferred-121..." section recording the 9 pre-existing, out-of-scope findings the review
   surfaced in `AdminCoachEnforcementService`)
+- `src/test/java/com/softropic/skillars/infrastructure/persistence/PessimisticLockRetryerCallSiteAuditTest.java`
+  (modified — CI fix: `EXPECTED_CALL_SITE_COUNT` 28 -> 30 and surrounding javadoc, since AC1 added two
+  new `.withBoundedRetry(` call sites; re-verified both against the DENYLIST, no violation — see Change
+  Log)
+- `.github/workflows/pr-build.yml` (modified — CI fix: Spring context ceiling 41 -> 42, since
+  `AdminCoachEnforcementConcurrencyIT`'s `@Import(ReinstateEventCapture.class)` is a genuinely new
+  context signature; `mvn verify` itself was green (1164/1164) — see Change Log)
 
 ---
 
 ## Change Log
 
+- 2026-09-18: Post-PR CI fixes (PR #209, pushed after the code review response above). GitHub Actions'
+  `build` job failed twice, both mechanical consequences of this story's own changes rather than defects
+  in them: (1) `PessimisticLockRetryerCallSiteAuditTest` (`skillars-deferred-117` AC5) hard-codes the
+  exact count of `.withBoundedRetry(` call sites and fails loudly on drift by design — this story's two
+  new call sites (`reinstateCoach`/`deleteStrike`) took the count from 28 to 30; re-verified both against
+  the DENYLIST per the test's own instruction (bare `findByIdForUpdate(...).orElseThrow(...)`, no
+  side-effecting pattern), then updated the constant and javadoc. (2) The `assert-context-count.sh`
+  CI gate (`skillars-deferred-19` AC3) failed at 42 built Spring contexts against a ceiling of 41 —
+  `AdminCoachEnforcementConcurrencyIT`'s `@Import(ReinstateEventCapture.class)` is a distinct context
+  signature from every other test class, adding exactly one new context; `mvn verify` itself was fully
+  green (1164/1164 tests) — bumped the ceiling to 42, matching this project's established
+  one-at-a-time increment convention.
 - 2026-09-18: Code review response applied (`/bmad-code-review`, three parallel layers — Blind Hunter,
   Edge Case Hunter, Acceptance Auditor). Independently re-verified every Decision/Patch finding against
   the actual code before applying anything (per explicit instruction to watch for false positives) —
