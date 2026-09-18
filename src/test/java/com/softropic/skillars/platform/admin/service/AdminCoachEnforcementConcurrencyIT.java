@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.admin.service;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.admin.contract.CoachReinstatedEvent;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -291,10 +292,27 @@ class AdminCoachEnforcementConcurrencyIT extends AbstractIntegrationTest {
     /**
      * {@code deleteStrike}'s revert-to-{@code ACTIVE} path has the identical stale-vs-fresh shape
      * as {@code reinstateCoach}, gated by the rolling strike count instead of a direct status
-     * check. Concurrent strikes push the count back above {@code visibilityThreshold} while {@code
+     * check. Concurrent strikes push the count back above {@code suspensionThreshold} while {@code
      * deleteStrike} is in flight; pre-fix, a stale count read (taken before the lock) wrongly
      * reverts the coach to {@code ACTIVE} anyway. Post-fix, the locked read happens before the
      * count computation, so the fresh, post-lock count correctly leaves the coach un-reverted.
+     * <p>
+     * skillars-deferred-122 AC1: redesigned to seed the holder's concurrent inserts so the fresh
+     * post-delete count lands {@code >= suspensionThreshold}, not merely {@code >= visibilityThreshold}
+     * — under the AC1-corrected three-tier tiering, a fresh count that lands inside the
+     * {@code [visibilityThreshold, suspensionThreshold)} band is a <em>correct</em> {@code REDUCED}
+     * transition, not "no status change". The original seeding (holder inserts 2, landing fresh
+     * count at 4 — inside the new {@code REDUCED} band regardless of tiering correctness) no longer
+     * discriminates a fresh read from a stale one under the corrected tiering.
+     * <p>
+     * Code review 2026-09-18: the pre-delete seed is {@code visibilityThreshold - 1} (= 2) plus the
+     * strike being deleted (= 3 total, unaffected by the delete's own removal — the deleted strike
+     * isn't counted either way), so the fresh count after the holder's concurrent inserts is
+     * {@code 2 + N}, not {@code 3 + N} as an earlier version of this Javadoc claimed. 4 concurrent
+     * inserts (not 3) land the fresh count at 6 — genuinely {@code >} {@code suspensionThreshold(5)},
+     * not sitting exactly on it — so this test does not depend on {@code >=} specifically and survives
+     * a future threshold-comparison or default-value change without failing for reasons unrelated to
+     * the freshness property under test.
      */
     @Test
     @Timeout(45)
@@ -327,7 +345,12 @@ class AdminCoachEnforcementConcurrencyIT extends AbstractIntegrationTest {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
-                // Push the rolling count back above the threshold while the lock is still held.
+                // Push the rolling count back above suspensionThreshold while the lock is still
+                // held (4 inserts, not 2 — see this test's Javadoc for the corrected arithmetic and
+                // for why 2 no longer discriminates fresh-vs-stale under AC1's corrected three-tier
+                // tiering).
+                seedStrike(UUID.randomUUID());
+                seedStrike(UUID.randomUUID());
                 seedStrike(UUID.randomUUID());
                 seedStrike(UUID.randomUUID());
                 return null;
@@ -372,6 +395,96 @@ class AdminCoachEnforcementConcurrencyIT extends AbstractIntegrationTest {
         assertThat(deletedLogCount)
             .as("the no-revert branch must log COACH_STRIKE_DELETED, not COACH_REINSTATE")
             .isEqualTo(1L);
+    }
+
+    /**
+     * Code review 2026-09-18 (ManualStrikeIT gap): {@code ManualStrikeIT}'s AC2 coverage issues two
+     * <em>sequential</em> DELETEs, which only exercises the ownership-check {@code
+     * ResourceNotFoundException} — by the second call, the strike is simply gone, so it 404s before
+     * {@code deleteByIdAndCoachId} is ever reached. Exercising the actual {@code deletedRows == 0}
+     * branch needs two callers that have <em>both already passed</em> the ownership check before
+     * either commits — a genuine concurrent race, not a sequential replay.
+     * <p>
+     * A holder thread takes the strike row's {@code FOR UPDATE} lock and releases it (via commit,
+     * changing nothing) only after both contenders' {@code strikeRepository.findById} ownership
+     * checks — a plain {@code SELECT}, never blocked by another session's row lock under READ
+     * COMMITTED — have had time to run and see the strike as still present. Both contenders then
+     * block on the strike row's lock inside {@code deleteByIdAndCoachId}'s bulk {@code DELETE}.
+     * Postgres serialises the two blocked DELETEs against each other: the winner's DELETE affects 1
+     * row and its whole transaction (including the coach-profile lock/status logic downstream) commits
+     * before the loser's blocked DELETE is even granted the lock, so the loser's {@code DELETE}
+     * evaluates its {@code WHERE} clause against a row that is already gone — {@code deletedRows == 0}
+     * — and {@code deleteStrike} must translate that into {@link ResourceNotFoundException}, not let
+     * the now-defunct {@code StaleStateException} the old entity-based {@code deleteById} threw for a
+     * 0-row delete escape as an unhandled 500.
+     */
+    @Test
+    @Timeout(45)
+    void deleteStrike_concurrentDuplicateDelete_loserGets404NotStaleStateException() throws Exception {
+        UUID strikeToDelete = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            seedStrike(strikeToDelete);
+            return null;
+        });
+
+        long holdMillis = 1200;
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(3);
+        try {
+            Future<?> holder = pool.submit(() -> transactionTemplate.execute(status -> {
+                jdbcTemplate.query(
+                    "SELECT id FROM marketplace.coach_reliability_strikes WHERE id = ? FOR UPDATE",
+                    rs -> { }, strikeToDelete);
+                lockHeld.countDown();
+                try {
+                    Thread.sleep(holdMillis);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                // Deliberately no write here — this thread exists only to hold the row lock long
+                // enough for both contenders' ownership checks to land before either contender's
+                // DELETE is granted the lock, then releases it unchanged via commit.
+                return null;
+            }));
+
+            assertThat(lockHeld.await(5, TimeUnit.SECONDS)).as("holder must acquire the lock first").isTrue();
+            // Give both contenders' pre-lock ownership-check SELECTs (unblocked by the holder's FOR
+            // UPDATE) a moment to actually run before the holder releases the row.
+            Thread.sleep(200);
+
+            Future<?> contenderA = pool.submit(() -> {
+                enforcementService.deleteStrike(coachProfileId, strikeToDelete, "first", ADMIN_ID);
+                return null;
+            });
+            Future<?> contenderB = pool.submit(() -> {
+                enforcementService.deleteStrike(coachProfileId, strikeToDelete, "second", ADMIN_ID);
+                return null;
+            });
+
+            int successCount = 0;
+            ResourceNotFoundException loserCause = null;
+            for (Future<?> contender : List.of(contenderA, contenderB)) {
+                try {
+                    contender.get(20, TimeUnit.SECONDS);
+                    successCount++;
+                } catch (ExecutionException e) {
+                    assertThat(e.getCause()).isInstanceOf(ResourceNotFoundException.class);
+                    loserCause = (ResourceNotFoundException) e.getCause();
+                }
+            }
+            holder.get(15, TimeUnit.SECONDS);
+
+            assertThat(successCount).as("exactly one of the two concurrent deletes must succeed").isEqualTo(1);
+            assertThat(loserCause)
+                .as("the loser must see ResourceNotFoundException (404), not an unhandled StaleStateException")
+                .isNotNull();
+        } finally {
+            pool.shutdownNow();
+        }
+
+        Long strikeCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE id = ?", Long.class, strikeToDelete);
+        assertThat(strikeCount).as("the strike must have been deleted exactly once").isEqualTo(0L);
     }
 
     private void seedStrike(UUID strikeId) {

@@ -4,6 +4,8 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.payment.service.ReliabilityStrikeConfig;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,6 +49,7 @@ class ManualStrikeIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private ConfigService configService;
 
     @LocalServerPort private int randomServerPort;
 
@@ -165,9 +168,16 @@ class ManualStrikeIT extends AbstractIntegrationTest {
         jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE alert_id = ?", alertId);
     }
 
+    /**
+     * skillars-deferred-122 AC1: renamed from {@code deleteStrike_noStatusChange_doesNotResolveAlert},
+     * which asserted the pre-fix bug (staying {@code PENDING_REVIEW}) as if it were correct behavior.
+     * Seed 5 strikes → {@code PENDING_REVIEW}; deleting 1 → fresh count 4, which is
+     * {@code >= visibilityThreshold(3)} and {@code < suspensionThreshold(5)} — the coach must
+     * transition to {@code REDUCED} under the corrected tiering, and the alert must stay {@code OPEN}
+     * (only a full {@code ACTIVE} clear resolves it).
+     */
     @Test
-    void deleteStrike_noStatusChange_doesNotResolveAlert() {
-        // Seed 5 strikes → PENDING_REVIEW; deleting 1 → 4, still above threshold=3
+    void deleteStrike_countDropsIntoReducedBand_revertsToReducedAlertStaysOpen() {
         UUID strikeToDelete = UUID.randomUUID();
         UUID alertId = UUID.randomUUID();
         transactionTemplate.execute(status -> {
@@ -194,13 +204,246 @@ class ManualStrikeIT extends AbstractIntegrationTest {
 
         String coachStatus = jdbcTemplate.queryForObject(
             "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
-        assertThat(coachStatus).isEqualTo("PENDING_REVIEW");
+        assertThat(coachStatus).isEqualTo("REDUCED");
 
         String alertStatus = jdbcTemplate.queryForObject(
             "SELECT status FROM admin.admin_alerts WHERE alert_id = ?", String.class, alertId);
-        assertThat(alertStatus).isEqualTo("OPEN");
+        assertThat(alertStatus)
+            .as("only a full ACTIVE clear resolves the STRIKE_THRESHOLD alert, not a REDUCED transition")
+            .isEqualTo("OPEN");
 
         jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE alert_id = ?", alertId);
+    }
+
+    /**
+     * skillars-deferred-122 AC1: the corrected top tier. A coach whose fresh post-delete count is
+     * still {@code >= suspensionThreshold} must stay {@code PENDING_REVIEW}, not fall through to
+     * {@code REDUCED} — gating the {@code REDUCED} transition on {@code count >= visibilityThreshold}
+     * alone (without also requiring {@code count < suspensionThreshold}) would de-escalate a coach
+     * still above the suspension bar. Seeds 8 strikes (suspensionThreshold=5 default); deleting 1
+     * leaves a fresh count of 7, still {@code >= 5}.
+     */
+    @Test
+    void deleteStrike_countStillAtOrAboveSuspensionThreshold_staysPendingReview() {
+        UUID strikeToDelete = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            for (int i = 0; i < 7; i++) {
+                jdbcTemplate.update(
+                    "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
+                    UUID.randomUUID(), coachProfileId, bookingId, Timestamp.from(Instant.now()));
+            }
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
+                strikeToDelete, coachProfileId, bookingId, Timestamp.from(Instant.now()));
+            jdbcTemplate.update("UPDATE marketplace.coach_profiles SET status = 'PENDING_REVIEW' WHERE id = ?", coachProfileId);
+            return null;
+        });
+
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/coaches/" + coachProfileId + "/strikes/" + strikeToDelete + "?reason=Still+elevated",
+            HttpMethod.DELETE, null, authenticatedHeaders(adminCookies), Void.class);
+
+        String coachStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
+        assertThat(coachStatus)
+            .as("count(7) >= suspensionThreshold(5) after the delete — must not de-escalate to REDUCED")
+            .isEqualTo("PENDING_REVIEW");
+
+        Long deletedLogCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM admin.admin_action_log WHERE reference_id = ? AND action_type = 'COACH_STRIKE_DELETED'",
+            Long.class, coachProfileId.toString());
+        assertThat(deletedLogCount).isEqualTo(1L);
+    }
+
+    /**
+     * skillars-deferred-122 AC1: the out-of-window guard. A coach already below
+     * {@code visibilityThreshold} (2 in-window strikes) but manually set to {@code PENDING_REVIEW} has
+     * a 40-day-old (already not counted) strike deleted — this must produce no status/alert change,
+     * but must still write the existing {@code COACH_STRIKE_DELETED} action-log row (every
+     * {@code deleteStrike} call writes exactly one, on every branch — the out-of-window guard only
+     * suppresses the status/alert side effects, not the log write).
+     */
+    @Test
+    void deleteStrike_deletedStrikeOutOfThirtyDayWindow_noStatusChangeButLogsAction() {
+        UUID strikeToDelete = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            for (int i = 0; i < 2; i++) {
+                jdbcTemplate.update(
+                    "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
+                    UUID.randomUUID(), coachProfileId, bookingId, Timestamp.from(Instant.now()));
+            }
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
+                strikeToDelete, coachProfileId, bookingId,
+                Timestamp.from(Instant.now().minusSeconds(40L * 86400L)));
+            jdbcTemplate.update("UPDATE marketplace.coach_profiles SET status = 'PENDING_REVIEW' WHERE id = ?", coachProfileId);
+            return null;
+        });
+
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/coaches/" + coachProfileId + "/strikes/" + strikeToDelete + "?reason=Stale+strike+cleanup",
+            HttpMethod.DELETE, null, authenticatedHeaders(adminCookies), Void.class);
+
+        String coachStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
+        assertThat(coachStatus)
+            .as("the deleted strike was already out of the 30-day window — no status change")
+            .isEqualTo("PENDING_REVIEW");
+
+        Long deletedLogCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM admin.admin_action_log WHERE reference_id = ? AND action_type = 'COACH_STRIKE_DELETED'",
+            Long.class, coachProfileId.toString());
+        assertThat(deletedLogCount)
+            .as("the out-of-window guard suppresses the status change, not the action-log row")
+            .isEqualTo(1L);
+    }
+
+    /**
+     * skillars-deferred-122 AC2: a strike that no longer exists (already deleted by an earlier,
+     * fully-completed call) must see a clean 404, not the {@code StaleStateException} the old
+     * entity-based {@code deleteById} threw for a 0-affected-row delete.
+     * <p>
+     * Code review 2026-09-18: this <em>sequential</em> shape only exercises the ownership-check
+     * {@code ResourceNotFoundException} at {@code AdminCoachEnforcementService.java}'s
+     * {@code findById(strikeId).orElseThrow(...)} — the second call's strike no longer exists by the
+     * time its own ownership check runs, so it 404s before {@code deleteByIdAndCoachId} is ever
+     * called. It does not reach AC2's actual {@code deletedRows == 0} branch, which only a genuine
+     * concurrent duplicate delete (both callers passing the ownership check before either commits) can
+     * exercise — see
+     * {@code AdminCoachEnforcementConcurrencyIT#deleteStrike_concurrentDuplicateDelete_loserGets404NotStaleStateException}
+     * for that coverage.
+     */
+    @Test
+    void deleteStrike_alreadyDeleted_returns404NotStaleStateException() {
+        UUID strikeToDelete = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
+                strikeToDelete, coachProfileId, bookingId, Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        ResponseEntity<Void> firstDelete = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/coaches/" + coachProfileId + "/strikes/" + strikeToDelete + "?reason=First+delete",
+            HttpMethod.DELETE, null, authenticatedHeaders(adminCookies), Void.class);
+        assertThat(firstDelete.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/coaches/" + coachProfileId + "/strikes/" + strikeToDelete + "?reason=Duplicate+delete",
+            HttpMethod.DELETE, null, authenticatedHeaders(adminCookies), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    /**
+     * skillars-deferred-122 AC4 / code review 2026-09-18: a live runtime misconfiguration
+     * (visibilityThreshold > suspensionThreshold, set through the same {@code ConfigService.updateConfig}
+     * write path an operator's {@code PUT /api/config} call would use — bypassing the boot-time
+     * {@code ConfigStartupAssertion} check entirely, since neither key is registered in
+     * {@code ConfigBounds.ALL}) still must not let {@code deleteStrike} wrongly revert/reduce a coach
+     * whose fresh count is still above the suspension bar. Seeds 8 strikes (fresh post-delete count 7,
+     * {@code >= suspensionThreshold(5)}).
+     * <p>
+     * Renamed from {@code ..._clampedAsIfEqualToSuspensionThreshold}: code review 2026-09-18 found the
+     * {@code Math.min} read-time clamp this test's old name and docstring credited was unreachable dead
+     * code — this branch (tier 1, {@code count >= suspensionThreshold}) is evaluated and short-circuits
+     * before the visibility tier is ever reached, so the outcome here is identical with or without any
+     * clamp. What actually prevents the wrongful revert is the suspension-first tier <em>ordering</em>,
+     * which this test now documents accurately. See
+     * {@link #deleteStrike_misconfiguredThresholdOrdering_reducedTierBecomesUnreachable} for the real,
+     * documented effect of this misconfiguration (a silently-skipped REDUCED tier).
+     */
+    @Test
+    void deleteStrike_misconfiguredThresholdOrdering_tierOrderingStillPreventsWrongfulRevert() {
+        UUID strikeToDelete = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            for (int i = 0; i < 7; i++) {
+                jdbcTemplate.update(
+                    "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
+                    UUID.randomUUID(), coachProfileId, bookingId, Timestamp.from(Instant.now()));
+            }
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
+                strikeToDelete, coachProfileId, bookingId, Timestamp.from(Instant.now()));
+            jdbcTemplate.update("UPDATE marketplace.coach_profiles SET status = 'PENDING_REVIEW' WHERE id = ?", coachProfileId);
+            return null;
+        });
+
+        String originalVisibility = String.valueOf(ReliabilityStrikeConfig.DEFAULT_VISIBILITY_THRESHOLD);
+        try {
+            // Misconfigured pair: visibilityThreshold(10) > suspensionThreshold(5, seeded default).
+            configService.updateConfig(ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, "10");
+
+            String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+            httpTestClient.makeHttpRequest(
+                baseUrl() + "/api/admin/coaches/" + coachProfileId + "/strikes/" + strikeToDelete + "?reason=Misconfigured+pair",
+                HttpMethod.DELETE, null, authenticatedHeaders(adminCookies), Void.class);
+
+            String coachStatus = jdbcTemplate.queryForObject(
+                "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
+            assertThat(coachStatus)
+                .as("count(7) >= suspensionThreshold(5) — tier-1 ordering alone, not any clamp, must "
+                    + "keep the misconfigured, unclamped visibilityThreshold(10) from producing a "
+                    + "wrongful revert/reduce")
+                .isEqualTo("PENDING_REVIEW");
+        } finally {
+            configService.updateConfig(ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, originalVisibility);
+        }
+    }
+
+    /**
+     * Code review 2026-09-18: the real, accepted effect of {@code visibilityThreshold >
+     * suspensionThreshold} — {@code deleteStrike}'s REDUCED tier ({@code count >= visibilityThreshold},
+     * only reached once {@code count < suspensionThreshold}) becomes permanently unreachable, because
+     * {@code visibilityThreshold(10)} then exceeds every {@code count} that can still reach that
+     * branch. A coach whose fresh count would correctly land in the {@code REDUCED} band under the
+     * seeded default ({@code visibilityThreshold=3}) instead skips straight to {@code ACTIVE}. Seeds 5
+     * strikes (fresh post-delete count 4: {@code < suspensionThreshold(5)}, and, under the correct
+     * default, {@code >= visibilityThreshold(3)} — a REDUCED case per
+     * {@code deleteStrike_countDropsIntoReducedBand_revertsToReducedAlertStaysOpen}). This documents the
+     * gap {@code ConfigStartupAssertion}'s cross-field check now warns operators about, rather than
+     * silently passing either way.
+     */
+    @Test
+    void deleteStrike_misconfiguredThresholdOrdering_reducedTierBecomesUnreachable() {
+        UUID strikeToDelete = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            for (int i = 0; i < 4; i++) {
+                jdbcTemplate.update(
+                    "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
+                    UUID.randomUUID(), coachProfileId, bookingId, Timestamp.from(Instant.now()));
+            }
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_reliability_strikes (id, coach_id, booking_id, reason, created_at, acknowledged) VALUES (?, ?, ?, 'COACH_NO_SHOW', ?, false)",
+                strikeToDelete, coachProfileId, bookingId, Timestamp.from(Instant.now()));
+            jdbcTemplate.update("UPDATE marketplace.coach_profiles SET status = 'PENDING_REVIEW' WHERE id = ?", coachProfileId);
+            return null;
+        });
+
+        String originalVisibility = String.valueOf(ReliabilityStrikeConfig.DEFAULT_VISIBILITY_THRESHOLD);
+        try {
+            // Misconfigured pair: visibilityThreshold(10) > suspensionThreshold(5, seeded default).
+            configService.updateConfig(ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, "10");
+
+            String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+            httpTestClient.makeHttpRequest(
+                baseUrl() + "/api/admin/coaches/" + coachProfileId + "/strikes/" + strikeToDelete + "?reason=Misconfigured+pair+skips+reduced",
+                HttpMethod.DELETE, null, authenticatedHeaders(adminCookies), Void.class);
+
+            String coachStatus = jdbcTemplate.queryForObject(
+                "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
+            assertThat(coachStatus)
+                .as("count(4) < suspensionThreshold(5) and < the misconfigured visibilityThreshold(10) "
+                    + "— REDUCED is unreachable, so the coach skips straight to ACTIVE instead of the "
+                    + "REDUCED outcome the correctly-configured default(3) would have produced")
+                .isEqualTo("ACTIVE");
+        } finally {
+            configService.updateConfig(ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, originalVisibility);
+        }
     }
 
     @Test

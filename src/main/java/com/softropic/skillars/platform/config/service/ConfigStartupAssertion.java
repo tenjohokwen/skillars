@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.config.service;
 
 import com.softropic.skillars.infrastructure.exception.AppSetupException;
 import com.softropic.skillars.platform.config.service.ConfigBounds.BoundedKey;
+import com.softropic.skillars.platform.payment.service.ReliabilityStrikeConfig;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -113,6 +114,43 @@ public class ConfigStartupAssertion implements ApplicationListener<ApplicationRe
                         bk.key() + " = " + value + " (expected [" + bk.min() + ", " + bk.max() + "])");
                 }
             }
+        }
+
+        // skillars-deferred-122 AC4: cross-field ordering check. Neither threshold key is a
+        // BoundedKey in ConfigBounds (so it is deliberately NOT counted in `checked` below, which
+        // reports against ConfigBounds.ALL's registry size) — each is bounded independently against
+        // its own fixed [1, Long.MAX_VALUE] range at its two call sites (ReliabilityStrikeService,
+        // AdminCoachEnforcementService), so this relationship cannot be expressed as a single
+        // BoundedKey.
+        //
+        // Code review 2026-09-18 corrected this check's original rationale: AdminCoachEnforcementService
+        // .deleteStrike evaluates its suspension tier before its visibility tier (`count >=
+        // suspensionThreshold` short-circuits before `count >= visibilityThreshold` is ever reached),
+        // so a misconfigured visibilityThreshold > suspensionThreshold cannot actually cause a
+        // wrongful revert/reduce — that tier ordering alone already makes it structurally impossible,
+        // independent of this check or of any read-time clamp. What a misconfigured pair actually
+        // does: it makes deleteStrike's REDUCED tier permanently unreachable (`count >=
+        // visibilityThreshold` can never be true once `count < suspensionThreshold`, when
+        // visibilityThreshold > suspensionThreshold), so a coach's visibility silently never reduces
+        // to REDUCED. That is still a real data-integrity issue worth the existing failFast bar, just
+        // a different one than originally documented here.
+        long suspensionThreshold = configService.getBoundedLong(
+            ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY, ReliabilityStrikeConfig.DEFAULT_SUSPENSION_THRESHOLD, 1L, Long.MAX_VALUE);
+        long visibilityThreshold = configService.getBoundedLong(
+            ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, ReliabilityStrikeConfig.DEFAULT_VISIBILITY_THRESHOLD, 1L, Long.MAX_VALUE);
+        if (visibilityThreshold > suspensionThreshold) {
+            log.error("Platform config '{}' = {} exceeds '{}' = {} — deleteStrike's REDUCED tier "
+                    + "becomes permanently unreachable (a coach's visibility would silently never "
+                    + "reduce). Correct the stored values.",
+                ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, visibilityThreshold,
+                ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY, suspensionThreshold);
+            Counter.builder("config.value.misconfigured")
+                .tag("key", "reliability.strike.threshold_ordering")
+                .tag("reason", "cross_field_ordering")
+                .register(meterRegistry)
+                .increment();
+            failFastViolations.add(ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY + " = " + visibilityThreshold
+                + " must not exceed " + ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY + " = " + suspensionThreshold);
         }
 
         // Logged before the fail-fast throw so a blocked boot still records what was checked.

@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.config.service;
 
 import com.softropic.skillars.infrastructure.exception.AppSetupException;
 import com.softropic.skillars.platform.config.service.ConfigBounds.BoundedKey;
+import com.softropic.skillars.platform.payment.service.ReliabilityStrikeConfig;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,7 +18,9 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -193,6 +196,68 @@ class ConfigStartupAssertionTest {
                 .tag("key", key).tag("reason", "out_of_range").counter();
         assertThat(counter.count()).isEqualTo(1.0);
         assertThat(counter.getId().getTags()).hasSize(2);
+    }
+
+    // ── skillars-deferred-122 AC4: visibilityThreshold > suspensionThreshold cross-field check ──
+
+    @Test
+    void thresholdOrderingViolation_nonDev_throwsAppSetupExceptionNamingBothKeys() {
+        when(configService.getBoundedLong(eq(ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY), anyLong(), anyLong(), anyLong()))
+            .thenReturn(5L);
+        when(configService.getBoundedLong(eq(ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY), anyLong(), anyLong(), anyLong()))
+            .thenReturn(10L);
+
+        assertThatThrownBy(() -> assertion.onApplicationEvent(EVENT))
+            .isInstanceOf(AppSetupException.class)
+            .hasMessageContaining(ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY)
+            .hasMessageContaining(ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY);
+    }
+
+    @Test
+    void thresholdOrderingViolation_devProfile_noThrowButErrorMetricStillFires() {
+        when(env.getActiveProfiles()).thenReturn(new String[] {"dev"});
+        when(configService.getBoundedLong(eq(ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY), anyLong(), anyLong(), anyLong()))
+            .thenReturn(5L);
+        when(configService.getBoundedLong(eq(ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY), anyLong(), anyLong(), anyLong()))
+            .thenReturn(10L);
+
+        assertThatCode(() -> assertion.onApplicationEvent(EVENT)).doesNotThrowAnyException();
+
+        assertThat(meterRegistry.get("config.value.misconfigured")
+            .tag("key", "reliability.strike.threshold_ordering")
+            .tag("reason", "cross_field_ordering")
+            .counter().count())
+            .isEqualTo(1.0);
+    }
+
+    @Test
+    void thresholdOrderingEqualValues_doesNotFlag() {
+        when(configService.getBoundedLong(eq(ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY), anyLong(), anyLong(), anyLong()))
+            .thenReturn(5L);
+        when(configService.getBoundedLong(eq(ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY), anyLong(), anyLong(), anyLong()))
+            .thenReturn(5L);
+
+        assertThatCode(() -> assertion.onApplicationEvent(EVENT)).doesNotThrowAnyException();
+
+        assertThat(meterRegistry.find("config.value.misconfigured")
+            .tag("key", "reliability.strike.threshold_ordering")
+            .counter())
+            .isNull();
+    }
+
+    @Test
+    void thresholdOrderingVisibilityBelowSuspension_doesNotFlag() {
+        when(configService.getBoundedLong(eq(ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY), anyLong(), anyLong(), anyLong()))
+            .thenReturn(5L);
+        when(configService.getBoundedLong(eq(ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY), anyLong(), anyLong(), anyLong()))
+            .thenReturn(3L);
+
+        assertThatCode(() -> assertion.onApplicationEvent(EVENT)).doesNotThrowAnyException();
+
+        assertThat(meterRegistry.find("config.value.misconfigured")
+            .tag("key", "reliability.strike.threshold_ordering")
+            .counter())
+            .isNull();
     }
 
     @Test

@@ -134,6 +134,39 @@ class ReinstateIT extends AbstractIntegrationTest {
         assertThat(logCount).isEqualTo(1L);
     }
 
+    /**
+     * Code review 2026-09-18: {@code reinstateCoach} rejected {@code REDUCED} with {@code BAD_REQUEST}
+     * pre-fix, leaving a coach whose elevated status had become stale purely from strike ageout with no
+     * admin path back to {@code ACTIVE} — {@code deleteStrike}'s own out-of-window guard (AC1) changes
+     * nothing for an already-out-of-window strike, and this method threw for any status other than
+     * {@code SUSPENDED}/{@code PENDING_REVIEW}. {@code REDUCED} is now an accepted source status,
+     * mirroring {@code PENDING_REVIEW}'s existing behavior.
+     */
+    @Test
+    void reinstateCoach_fromReducedStatus_setsActiveAndResolvesAlert() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("UPDATE marketplace.coach_profiles SET status = 'REDUCED' WHERE id = ?", coachProfileId);
+            return null;
+        });
+
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        ResponseEntity<Void> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/coaches/" + coachProfileId + "/reinstate",
+            HttpMethod.POST,
+            Map.of("reason", "Strikes aged out"),
+            authenticatedHeaders(adminCookies), Void.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        String coachStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
+        assertThat(coachStatus).isEqualTo("ACTIVE");
+
+        String alertStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.admin_alerts WHERE alert_id = ?", String.class, strikeAlertId);
+        assertThat(alertStatus).isEqualTo("RESOLVED");
+    }
+
     @Test
     void reinstateIdempotent_doubleCallDoesNotFail() {
         String adminCookies = loginAndGetCookies(ADMIN_EMAIL);

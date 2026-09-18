@@ -38,6 +38,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -70,7 +71,19 @@ public class AdminCoachEnforcementService {
     private final ApplicationEventPublisher eventPublisher;
     private final PessimisticLockRetryer lockRetryer;
 
-    @Transactional(readOnly = true)
+    // skillars-deferred-122 AC3: REPEATABLE_READ so the status read and the strike-count read below
+    // share one consistent snapshot. Every writer of this pair (deleteStrike, reinstateCoach,
+    // suspendCoach, ReliabilityStrikeService.issue) now takes findByIdForUpdate before writing both
+    // fields together in the same transaction, but this method's two reads were still two separate
+    // READ COMMITTED statements — a second writer committing between them could produce a torn view
+    // (e.g. status=ACTIVE with activeStrikes=5), exactly the pairing this DTO exists to let an admin
+    // decide whether to reinstate. readOnly=true means no write-skew/serialization-failure risk.
+    // NOTE: Spring's validateExistingTransaction defaults to false, so this isolation request is
+    // silently ignored if this method ever runs inside an already-open ambient transaction —
+    // AdminCoachEnforcementResource's HTTP call site opens no enclosing transaction, so a fresh
+    // top-level REPEATABLE_READ transaction is genuinely created in production. Do not invoke this
+    // method from inside a test-level @Transactional/TransactionTemplate block.
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public CoachEnforcementProfileDto getEnforcementProfile(UUID coachId) {
         CoachProfile coach = coachProfileRepository.findById(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
@@ -166,6 +179,22 @@ public class AdminCoachEnforcementService {
         // ~3.2s budget. suspendCoach has carried this exact property since skillars-deferred-15
         // without incident; accepted here for consistency rather than introducing a narrower,
         // asymmetric lock strategy for these two methods alone.
+        //
+        // [DECIDED 2026-09-18, skillars-deferred-122]: explicit admin intent always wins over a
+        // concurrent suspension — this is intentional, not a residual bug. An admin's reinstate call
+        // proceeds to ACTIVE even when the fresh, lock-protected read above observes SUSPENDED
+        // because a *different* admin's suspendCoach call committed moments ago, fully applying that
+        // suspension's side effects in the process. skillars-deferred-121's lock fix makes this read
+        // fresh, not the decision suspension-aware — it only prevents a stale-ACTIVE double-reinstate,
+        // not a fresh-SUSPENDED override. No code change.
+        //
+        // Code review 2026-09-18 (/bmad-code-review): REDUCED accepted alongside SUSPENDED and
+        // PENDING_REVIEW. AC1's step 4 out-of-window guard in deleteStrike justifies itself by saying
+        // "an admin must use reinstateCoach explicitly to clear a coach whose elevated status has
+        // become stale purely from strike ageout" — true for PENDING_REVIEW (below), but pre-fix this
+        // method threw BAD_REQUEST for REDUCED, leaving a REDUCED coach whose strikes have all aged
+        // out with no admin path back to ACTIVE at all: deleteStrike's guard changes nothing for an
+        // out-of-window delete, and this method rejected the status outright.
         CoachProfile coach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
 
@@ -173,7 +202,8 @@ public class AdminCoachEnforcementService {
             return;
         }
         if (coach.getStatus() != CoachProfileStatus.SUSPENDED
-                && coach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
+                && coach.getStatus() != CoachProfileStatus.PENDING_REVIEW
+                && coach.getStatus() != CoachProfileStatus.REDUCED) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "Coach cannot be reinstated from status: " + coach.getStatus());
         }
@@ -242,7 +272,20 @@ public class AdminCoachEnforcementService {
             throw new ResourceNotFoundException("Strike not found", "coach_reliability_strike");
         }
 
-        strikeRepository.deleteById(strikeId);
+        // skillars-deferred-122 AC1 Fix step 3: captured into a local before the bulk delete below —
+        // the bulk @Modifying DELETE (AC2) bypasses the persistence context, leaving this already-
+        // loaded `strike` entity managed but stale. Never read strike.getCreatedAt() again past this
+        // point.
+        OffsetDateTime strikeCreatedAt = strike.getCreatedAt();
+
+        // skillars-deferred-122 AC2: bulk delete-by-id-and-coachId, replacing the entity-based
+        // deleteById whose unconditional post-delete row-count check threw StaleStateException for
+        // the loser of a concurrent duplicate deleteStrike call. A 0-row result here means this
+        // exact race — translate it into the same 404 the ownership check above already throws.
+        int deletedRows = strikeRepository.deleteByIdAndCoachId(strikeId, coachId);
+        if (deletedRows == 0) {
+            throw new ResourceNotFoundException("Strike not found", "coach_reliability_strike");
+        }
 
         // skillars-deferred-121 AC1: locked read moved before the count computation, mirroring
         // ReliabilityStrikeService.issue's ordering — the count and the revert decision must be
@@ -250,28 +293,69 @@ public class AdminCoachEnforcementService {
         CoachProfile coach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
 
-        long count = strikeRepository.countByCoachIdAndCreatedAtAfter(coachId, OffsetDateTime.now().minusDays(30));
-        long visibilityThreshold = configService.getBoundedLong(
-            ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, ReliabilityStrikeConfig.DEFAULT_VISIBILITY_THRESHOLD, 1L, Long.MAX_VALUE);
-
         AdminActionLog actionLog = new AdminActionLog();
         actionLog.setAdminId(adminId);
         actionLog.setReferenceId(coachId.toString());
 
-        boolean reverted = count < visibilityThreshold
-            && (coach.getStatus() == CoachProfileStatus.PENDING_REVIEW
-                || coach.getStatus() == CoachProfileStatus.REDUCED);
+        // skillars-deferred-122 AC1 Fix step 2: one cutoff local, reused below for both the
+        // out-of-window guard and the count query — matches countByCoachIdAndCreatedAtAfter's own
+        // strict `>` (a derived ...After query), so a boundary strike is judged identically by both.
+        OffsetDateTime cutoff = OffsetDateTime.now().minusDays(30);
+        boolean isPendingOrReduced = coach.getStatus() == CoachProfileStatus.PENDING_REVIEW
+            || coach.getStatus() == CoachProfileStatus.REDUCED;
 
-        if (reverted) {
-            coach.setStatus(CoachProfileStatus.ACTIVE);
-            coach.setStatusChangedAt(Instant.now());
-            coachProfileRepository.save(coach);
+        // skillars-deferred-122 AC1 Fix step 4: a strike already outside the 30-day count window was
+        // never counted toward the qualifying count, so deleting it must never trigger a status/alert
+        // side effect — only the log row below, which every deleteStrike call writes on every branch.
+        if (isPendingOrReduced && strikeCreatedAt.isAfter(cutoff)) {
+            long count = strikeRepository.countByCoachIdAndCreatedAtAfter(coachId, cutoff);
+            long suspensionThreshold = configService.getBoundedLong(
+                ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY, ReliabilityStrikeConfig.DEFAULT_SUSPENSION_THRESHOLD, 1L, Long.MAX_VALUE);
+            long visibilityThreshold = configService.getBoundedLong(
+                ReliabilityStrikeConfig.VISIBILITY_THRESHOLD_KEY, ReliabilityStrikeConfig.DEFAULT_VISIBILITY_THRESHOLD, 1L, Long.MAX_VALUE);
 
-            resolveOpenStrikeAlert(coachId, adminId);
+            // Three-tier logic, a true reverse mirror of ReliabilityStrikeService.issue's escalation,
+            // evaluated top-tier-first: checking `count >= visibilityThreshold` alone (without also
+            // requiring count < suspensionThreshold) would de-escalate a coach still above the
+            // suspension bar, since the two facts about `count` are independent. This top-tier-first
+            // ordering is what actually makes a wrongful revert/reduce structurally impossible — not
+            // a clamp on visibilityThreshold (code review 2026-09-18 found a since-removed
+            // `Math.min(visibilityThreshold, suspensionThreshold)` here was unreachable dead code:
+            // this branch is only reached when `count < suspensionThreshold` already, at which point
+            // `count >= visibilityThreshold` and `count >= min(visibilityThreshold, suspensionThreshold)`
+            // are the same comparison). A live misconfiguration (visibilityThreshold >
+            // suspensionThreshold) is still a real bug, just a different one: tier 2 below becomes
+            // permanently unreachable, so a coach's visibility silently never reduces to REDUCED — see
+            // ConfigStartupAssertion's cross-field check, which now names that failure mode correctly.
+            if (count >= suspensionThreshold) {
+                // Still too many in-window strikes to de-escalate at all — stays PENDING_REVIEW (or
+                // REDUCED, if that was already the coach's status — this branch does not change it).
+                actionLog.setActionType(AdminActionType.COACH_STRIKE_DELETED);
+                actionLog.setReason("Strike deleted (no status change): " + reason);
+                log.info("Strike deleted (no status change): coachId={} strikeId={}", coachId, strikeId);
+            } else if (count >= visibilityThreshold) {
+                if (coach.getStatus() != CoachProfileStatus.REDUCED) {
+                    coach.setStatus(CoachProfileStatus.REDUCED);
+                    coach.setStatusChangedAt(Instant.now());
+                    coachProfileRepository.save(coach);
+                }
+                // resolveOpenStrikeAlert intentionally NOT called: only a full ACTIVE clear resolves
+                // the STRIKE_THRESHOLD alert — a coach still REDUCED remains at an elevated strike
+                // count worth the admin's attention.
+                actionLog.setActionType(AdminActionType.COACH_STRIKE_DELETED);
+                actionLog.setReason("Strike deleted (coach reduced to REDUCED): " + reason);
+                log.info("Strike deleted, coach status reduced to REDUCED: coachId={} strikeId={}", coachId, strikeId);
+            } else {
+                coach.setStatus(CoachProfileStatus.ACTIVE);
+                coach.setStatusChangedAt(Instant.now());
+                coachProfileRepository.save(coach);
 
-            actionLog.setActionType(AdminActionType.COACH_REINSTATE);
-            actionLog.setReason("Strike deleted (coach reinstated to ACTIVE): " + reason);
-            log.info("Strike deleted, coach status reverted to ACTIVE: coachId={} strikeId={}", coachId, strikeId);
+                resolveOpenStrikeAlert(coachId, adminId);
+
+                actionLog.setActionType(AdminActionType.COACH_REINSTATE);
+                actionLog.setReason("Strike deleted (coach reinstated to ACTIVE): " + reason);
+                log.info("Strike deleted, coach status reverted to ACTIVE: coachId={} strikeId={}", coachId, strikeId);
+            }
         } else {
             actionLog.setActionType(AdminActionType.COACH_STRIKE_DELETED);
             actionLog.setReason("Strike deleted (no status change): " + reason);
@@ -281,7 +365,12 @@ public class AdminCoachEnforcementService {
         adminActionLogRepository.save(actionLog);
     }
 
-    @Transactional(readOnly = true)
+    // skillars-deferred-122 AC3: identical torn-read shape and fix as getEnforcementProfile above —
+    // status (via the paged query) and the rolling strike count are read consistently under one
+    // REPEATABLE_READ snapshot instead of two separate READ COMMITTED statements. Same
+    // validateExistingTransaction caveat applies: do not invoke from inside a test-level
+    // @Transactional/TransactionTemplate block.
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public Page<CoachEnforcementListItemDto> getCoachesUnderEnforcement(String statusParam, int page) {
         List<CoachProfileStatus> statuses;
         if (statusParam == null || statusParam.isBlank() || "ALL".equalsIgnoreCase(statusParam)) {
