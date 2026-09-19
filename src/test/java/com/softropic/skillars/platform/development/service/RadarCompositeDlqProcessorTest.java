@@ -162,6 +162,81 @@ class RadarCompositeDlqProcessorTest {
         verify(configService).getBoundedLong("platform.development.radar_composite_dlq.max_attempts", 5L, 1L, 100L);
     }
 
+    /**
+     * skillars-deferred-124 AC2 Task 5 (design revised by its own code review, 2026-09-19).
+     * {@code processRow} no longer catches anything itself — {@code process()}'s outer guard is the
+     * sole call site for {@code handleFailure}, exercised here via an ordinary {@code
+     * recalculateComposite} failure. See {@code handleFailure_itselfThrows_...} below for the case
+     * where {@code handleFailure} itself throws.
+     */
+    @Test
+    void process_middleRowThrows_isolatesBatchAndReachesFailureBookkeeping() {
+        RadarCompositeDlqEntry rowA = entry();
+        RadarCompositeDlqEntry rowMiddle = entry();
+        rowMiddle.setPlayerId(501L);
+        RadarCompositeDlqEntry rowC = entry();
+        rowC.setPlayerId(502L);
+        when(dlqRepository.findClaimedBatch(any(), anyInt())).thenReturn(List.of(rowA, rowMiddle, rowC));
+        when(dlqRepository.completeClaimed(eq(rowA.getId()), any())).thenReturn(1);
+        when(dlqRepository.completeClaimed(eq(rowC.getId()), any())).thenReturn(1);
+        when(configService.getBoundedLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong(), anyLong(), anyLong())).thenReturn(5L);
+        when(dlqRepository.failClaimed(eq(rowMiddle.getId()), any(), eq("PENDING"), eq(1), any(), any())).thenReturn(1);
+        lenient().doThrow(new RuntimeException("middle row recalculation failure"))
+            .when(compositeCalculationService).recalculateComposite(501L, 600L, Set.of("PAC"));
+
+        processor.process();
+
+        verify(dlqRepository).completeClaimed(eq(rowA.getId()), any());
+        verify(dlqRepository).completeClaimed(eq(rowC.getId()), any());
+        assertThat(rowMiddle.getAttempts())
+            .as("the failing row must genuinely reach failure bookkeeping, not just avoid crashing the loop")
+            .isEqualTo(1);
+        assertThat(rowMiddle.getStatus()).isEqualTo("PENDING");
+    }
+
+    /**
+     * skillars-deferred-124 AC2 Task 5 / Task 1 (design revised by its own code review, 2026-09-19):
+     * the case that exercises the {@code catch (Exception inner)} branch in {@code process()}'s outer
+     * guard — {@code handleFailure} itself throwing, which used to (pre-AC2) abort the loop for every
+     * remaining row. {@code handleFailure} is now the sole call site reachable from {@code processRow},
+     * so this also regression-guards the double-{@code handleFailure}-call bug the review found:
+     * {@code rowMiddle.getAttempts()} below must stay at exactly 1 (one {@code handleFailure} call
+     * mutates the detached POJO once before {@code getBoundedLong} throws and the transaction rolls
+     * back), never 2 — a prior design that called {@code handleFailure} a second time from here on the
+     * same row would double it.
+     */
+    @Test
+    void handleFailure_itselfThrows_stillIsolatesBatchAndDoesNotAbortTheLoop() {
+        RadarCompositeDlqEntry rowA = entry();
+        RadarCompositeDlqEntry rowMiddle = entry();
+        rowMiddle.setPlayerId(501L);
+        RadarCompositeDlqEntry rowC = entry();
+        rowC.setPlayerId(502L);
+        when(dlqRepository.findClaimedBatch(any(), anyInt())).thenReturn(List.of(rowA, rowMiddle, rowC));
+        when(dlqRepository.completeClaimed(eq(rowA.getId()), any())).thenReturn(1);
+        when(dlqRepository.completeClaimed(eq(rowC.getId()), any())).thenReturn(1);
+        lenient().doThrow(new RuntimeException("middle row recalculation failure"))
+            .when(compositeCalculationService).recalculateComposite(501L, 600L, Set.of("PAC"));
+        // configService.getBoundedLong is the first call inside handleFailure's own
+        // transactionTemplate.execute — throwing here means handleFailure itself never completes,
+        // exactly the gap the outer guard's inner catch exists for.
+        when(configService.getBoundedLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong(), anyLong(), anyLong()))
+            .thenThrow(new IllegalStateException("config lookup boom"));
+
+        assertThatCode(() -> processor.process())
+            .as("a failure inside handleFailure itself must not abort the batch")
+            .doesNotThrowAnyException();
+
+        verify(dlqRepository).completeClaimed(eq(rowA.getId()), any());
+        // row C, after the doubly-failing middle row, must still be reached and complete normally.
+        verify(dlqRepository).completeClaimed(eq(rowC.getId()), any());
+        verify(dlqRepository, never()).failClaimed(any(), any(), any(), anyInt(), any(), any());
+        assertThat(rowMiddle.getAttempts())
+            .as("handleFailure must be called at most once per row per tick — a design that let the "
+                + "outer guard call it a second time would double this")
+            .isEqualTo(1);
+    }
+
     @Test
     void process_carriesSchedulerLock() throws NoSuchMethodException {
         // skillars-deferred-118 AC3: findClaimedBatch() is not scoped to the calling invocation's

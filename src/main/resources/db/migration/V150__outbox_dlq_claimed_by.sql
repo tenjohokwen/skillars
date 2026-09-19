@@ -1,0 +1,43 @@
+-- skillars-deferred-124 AC4. Replaces the claimed_at-exact-equality "who owns this row right now"
+-- identity check on both main.video_deletion_outbox and development.radar_composite_dlq with a
+-- dedicated claimed_by UUID column, stamped once per tick with a fresh UUID.randomUUID() run id.
+--
+-- WHY. claimed_at was doing two structurally different jobs at once: a timestamp for
+-- resetStaleClaimed's staleness math, and a value-equality token for "which run owns this row."
+-- Correct today only because both processors generate exactly one Instant per tick and thread it
+-- through every call in that tick — but the two concerns having no independent enforcement that they
+-- stay coupled is brittle: any future change to how the run instant is threaded (a retry that
+-- re-derives it, a refactor that captures it twice) would silently break every claimed_at-equality
+-- call site at once, with a silent failure mode (rows claimed, batch fetched empty, stranded until
+-- the stale window recovers them), not an exception.
+--
+-- NO BACKFILL NEEDED. Any row currently CLAIMED gets a NULL claimed_by, which never matches
+-- `claimed_by = :runId` for any real run id (Postgres three-valued NULL logic) — but this is not the
+-- permanently-stranded case V144's own predecessor column would have been without a backfill (that
+-- migration's header: "would never match any run's claimed_at and would be stranded forever, hence
+-- the backfill"). It is genuinely different here: an old-shape row still carries a non-NULL
+-- claimed_at, so resetStaleClaimed (unchanged, still keyed on claimed_at) recovers it one stale
+-- window later exactly as it always has — this migration does not touch that recovery path at all.
+--
+-- NO NEW INDEX. Mirrors V144's own equivalent note for its own predicate change: both tables are
+-- near-empty of CLAIMED rows in steady-state operation (claimed status is a brief, few-seconds
+-- mid-tick transient, not a resting state), so no new index is warranted for the (status, claimed_by)
+-- access pattern findClaimedBatch moves to. Accepted as-is, same as V144, not silently unconsidered.
+--
+-- LOCK (migration-conventions.md item 9). Each ADD COLUMN below takes ACCESS EXCLUSIVE, briefly —
+-- a nullable column with no default is metadata-only in Postgres, no table rewrite. Both tables are
+-- also two of the actively-polled tables migration-conventions.md item 7's new sub-point (this
+-- story's own AC7) names by example: a poller's next tick can hold a conflicting lock at the exact
+-- moment this ALTER's ACCESS EXCLUSIVE request arrives. No online-safe alternative exists for adding
+-- a column beyond what SET lock_timeout already gives (turning an unbounded hang into a
+-- failed-and-retryable migration) — accepted per that same item, given skillars-deferred-117's
+-- owner decision that no production deploy of this application has ever happened.
+--
+-- ADD COLUMN IF NOT EXISTS matches on name only, not type — a pre-existing non-uuid column literally
+-- named claimed_by on either table would pass this migration silently and fail at the first bind
+-- (INT4 vs UUID). Accepted: this is the same pattern V144 already uses for claimed_at (both tables),
+-- and claimed_by is a name invented for this migration with no other writer in this codebase.
+SET lock_timeout = '5s';
+
+ALTER TABLE main.video_deletion_outbox ADD COLUMN IF NOT EXISTS claimed_by uuid;
+ALTER TABLE development.radar_composite_dlq ADD COLUMN IF NOT EXISTS claimed_by uuid;

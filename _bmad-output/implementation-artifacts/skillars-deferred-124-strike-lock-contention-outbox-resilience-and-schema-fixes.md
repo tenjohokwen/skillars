@@ -6,7 +6,7 @@
 that abandons whole outbox/DLQ batches on a single row's exception, one schema-width divergence
 between two live environments, one brittle claim-identity mechanism, and one audit-trail durability
 gap) — plus two documentation-only closures and the standard ledger closeout.
-**Status:** ready-for-dev
+**Status:** done
 **Created:** 2026-09-19
 
 ---
@@ -75,6 +75,17 @@ task list of its own beyond the one comment).
 ---
 
 ## AC1 — Fix `ReliabilityStrikeService.issue`'s INSERT-before-lock mutual lock-out
+
+> **[DROPPED — disproven, 2026-09-19, code review].** Everything below this AC's own heading through
+> its Tasks list states the original, story-creation-time premise as fact and is kept **only** as the
+> historical record of what was believed and why. The premise is false: `findByIdForUpdate` emits
+> `FOR NO KEY UPDATE NOWAIT`, not `FOR UPDATE NOWAIT` — the SQL-AST path a Spring Data `@Query` +
+> `@Lock` renders through (`PostgreSQLSqlAstTranslator.getForUpdate()`, not the legacy
+> `PostgreSQLDialect.getWriteLockString`). `FOR NO KEY UPDATE` does not conflict with the strike
+> INSERT's FK-check `FOR KEY SHARE`, so the described mutual lock-out cannot form under any
+> interleaving. No code was changed for this AC. See this story's own Debug Log / Dev Agent Record and
+> `deferred-work.md`'s "Last audit: 2026-09-19" block for the full empirical trail (a throwaway
+> Postgres 16 container, independent of the application, confirms the actual lock semantics).
 
 **Source:** `deferred-work.md`, "code review of skillars-deferred-123…", bullet 1.
 
@@ -732,9 +743,9 @@ this AC's own Task 2 table said).
 
    | Ledger bullet | Disposition |
    |---|---|
-   | "code review of skillars-deferred-123…": `ReliabilityStrikeService` mutual lock-out | Delete (AC1 — fully fixed, nothing left to track) |
+   | "code review of skillars-deferred-123…": `ReliabilityStrikeService` mutual lock-out | Delete (AC1 — **disproven, not fixed**: the premise is false, see the `[DROPPED]` marker at the top of AC1's own section and the Debug Log; deleting this ledger bullet is correct either way since there is nothing real left to track) |
    | "code review of skillars-deferred-123…": V144-shaped migrations race active pollers | Annotate `[DECIDED: accepted risk — skillars-deferred-124]`, citing `migration-conventions.md`'s new sub-point (AC7) — **do not delete**: this is a documented, unfixed systemic risk with its own stated revisit trigger ("no production deploy has ever happened"), not a closed bug, exactly the same shape as the Envers row below |
-   | "code review of skillars-deferred-123…": neither processor loop has a per-row try/catch | Delete (AC2 — routes through `handleFailure`, so the row now genuinely reaches `max_attempts`/`DEAD` instead of cycling forever; fully fixed, not merely isolated) |
+   | "code review of skillars-deferred-123…": neither processor loop has a per-row try/catch | Delete (AC2 — routes through `handleFailure`, the sole call site for it after AC2's own code-review response removed the redundant inner call that could double-invoke it; a chronically-*processing*-failing row genuinely reaches `max_attempts`/`DEAD`. One narrow residual case does not — a permanently-broken `configService.getBoundedLong` lookup, not the row's own processing — and is accepted as safe self-healing rather than a poison cycle; see `RadarCompositeDlqProcessor`'s class header comment) |
    | "code review of skillars-deferred-123…": Envers null `verificationStatus` reconstruction | Annotate `[DECIDED: accepted risk — skillars-deferred-124]` with the `User.java` citation from AC8 Task 1 — do not delete |
    | "code review of skillars-deferred-123…": `issueManualStrike` commits strike before audit log | Delete (AC5 — fully fixed, nothing left to track) |
    | "code review of skillars-deferred-123…": `findClaimedBatch` exact-timestamp-equality brittleness | Delete (AC4 — fully fixed, nothing left to track) |
@@ -772,29 +783,156 @@ this AC's own Task 2 table said).
 
 ## Tasks / Subtasks (top-level)
 
-- [ ] AC1 — fix `ReliabilityStrikeService.issue`'s INSERT-before-lock mutual lock-out; tighten the
-  existing `ReliabilityStrikeConcurrencyIT` (check its CI flake history first) rather than adding a
-  new test class; mutation-checked
-- [ ] AC2 — per-row exception isolation on both outbox/DLQ processor loops, routed through the
+- [x] AC1 — **DISPROVEN, not implemented.** `findByIdForUpdate`'s actual emitted SQL (confirmed via
+  `-Dspring.jpa.properties.hibernate.show_sql=true`) is `for no key update nowait`, not
+  `for update nowait` — Hibernate's `PESSIMISTIC_WRITE` on Postgres downgrades to `FOR NO KEY UPDATE`
+  when no version/key column forces the stronger mode. Verified empirically against a throwaway
+  Postgres 16 container: a fresh `SELECT ... FOR NO KEY UPDATE NOWAIT` from one session does **not**
+  conflict with another session's live, untouched `FOR KEY SHARE` on the same row (see Dev Agent
+  Record for the full empirical trail, including the control cases that confirm `FOR UPDATE NOWAIT`
+  *would* have conflicted — the mechanism AC1 assumed Hibernate emits, but does not). The strike
+  INSERT's FK-check lock can therefore never block `findByIdForUpdate` — there is no interleaving that
+  produces AC1's claimed mutual lock-out. Implemented the prescribed fix + tightened
+  `ReliabilityStrikeConcurrencyIT` (Task 5's interleave seam) anyway, as a mutation check: reran the
+  tightened test against the *unfixed* ordering (Task 6) and it still passed, with the identical
+  single benign lock-retry as the fixed version — proving the test cannot distinguish fixed from
+  unfixed, which is what actually surfaced the false premise. Both the production reorder and the
+  test tightening were reverted (working tree matches HEAD for both files); nothing shipped for AC1.
+  Owner decision (AskUserQuestion, 2026-09-19): drop AC1, document the disproof rather than fix a
+  non-existent bug. See AC8 for the corresponding ledger disposition change (was "Delete — fully
+  fixed", now "Delete — disproven, not a genuine bug").
+- [x] AC2 — per-row exception isolation on both outbox/DLQ processor loops, routed through the
   existing `handleFailure` so a poison row still reaches `max_attempts`/`DEAD` instead of cycling
-  forever; new tests per processor; mutation-checked
-- [ ] AC3 — decide widen-vs-narrow for `main."user"` `skillars_role`/`verification_status` on
+  forever; new tests per processor; mutation-checked. Premise independently re-verified against the
+  actual source (both `process()` loops confirmed genuinely unguarded around `processRow`, and
+  `RadarCompositeDlqProcessor.handleFailure`'s own `transactionTemplate.execute` confirmed reachable
+  and unguarded) before implementing — holds up, unlike AC1. `VideoDeletionOutboxProcessorIT` gained a
+  new `@MockitoSpyBean DrillVideoRefRepository` (context-ceiling bump 43→44, applied in both
+  `assert-context-count.sh` and `pr-build.yml`); `RadarCompositeDlqProcessorTest` needed no new mock
+  (plain Mockito unit test). Both mutation-checked by hand (`git stash` the fix, tightened test fails;
+  restore, passes). All four listed test classes re-run together — 26/26 green, zero regressions.
+- [x] AC3 — decide widen-vs-narrow for `main."user"` `skillars_role`/`verification_status` on
   enum-length evidence (widen to `varchar(255)`, mirroring `V145`, is the likely outcome but must be
-  an explicit decision); new migration; schema-shape test modeled on `EnvelopeEntitySchemaIT`
-- [ ] AC4 — `claimed_by` UUID column on both outbox/DLQ tables, replacing `claimed_at`-equality
+  an explicit decision); new migration; schema-shape test modeled on `EnvelopeEntitySchemaIT`.
+  Premise re-verified against actual source before implementing: `V138` confirmed declaring
+  `varchar(20)` for both columns, `User.java`'s `@Column` confirmed carrying no explicit `length`
+  (Hibernate default 255), enum lengths confirmed (`SkillarsRole` max 6, `SkillarsVerificationStatus`
+  max 14 — both well under 20), and `V138`'s own `CONSTRAINT user_*` list confirmed to have no
+  `skillars_role`/`verification_status` CHECK. Widened (`V149`), matching `V145`'s precedent. New
+  `UserSchemaWidthIT` (width + no-CHECK-constraint assertions) mutation-checked by hand (moved the
+  migration out, width test failed as expected — the first attempt at this check silently passed
+  against a stale `target/classes/db/migration` copy of the migration from an earlier build, caught by
+  also clearing that directory before re-checking). `MigrationConventionLintTest` re-run — 13/13 green,
+  no new violations (the `ALTER COLUMN ... TYPE` pattern is covered by `MISSING_LOCK_TIMEOUT` only, not
+  `VALIDATING_CONSTRAINT`/`INLINE_FK_ADD_COLUMN`, confirmed against `MigrationLint.java`'s own regex).
+- [x] AC4 — `claimed_by` UUID column on both outbox/DLQ tables, replacing `claimed_at`-equality
   identity, with `claimed_by` cleared on every transition out of `CLAIMED` (mirroring `claimed_at`'s
-  own invariant) (new migration, entity/repository/processor/test updates across 4+ test files)
-- [ ] AC5 — `AdminActionLog` `REQUIRES_NEW` self-proxy write for `issueManualStrike`; new durability
-  test built on a test-owned ambient `TransactionTemplate`, not a post-return throw; mutation-checked
-- [ ] AC6 — correct `deleteStrike`'s Java/SQL precision-mismatch comment to the boundary-equality
-  mechanism (doc-only); ledger disposition is `[DECIDED]`, not deletion
-- [ ] AC7 — document the migration-vs-active-poller collision risk in `migration-conventions.md` as a
+  own invariant) (new migration `V150`, entity/repository/processor/test updates across all 4
+  predicted test files). Premise confirmed directly from source before implementing (both repositories
+  read in full: every one of `findClaimedBatch`/`releaseClaimed`/`completeClaimed`/`failClaimed` on
+  both `VideoDeletionOutboxRepository` and `RadarCompositeDlqRepository` did key on
+  `claimed_at = :claimedAt`). `resetStaleClaimed` kept on `claimed_at` (a time predicate) but now also
+  clears `claimed_by`. New `claimed_by IS NULL` assertions added to every existing test that already
+  asserted `claimed_at IS NULL` post-transition. All 4 predicted test files
+  (`VideoDeletionOutboxProcessorIT`, `VideoDeletionOutboxProcessorSchedulerLockTest`,
+  `RadarCompositeDlqProcessorTest`, `RadarCompositeDlqRepositoryIT`) plus `MigrationConventionLintTest`
+  re-run together — 39/39 green, zero regressions.
+- [x] AC5 — `AdminActionLog` `REQUIRES_NEW` self-proxy write for `issueManualStrike`; new durability
+  test built on a test-owned ambient `TransactionTemplate`, not a post-return throw; mutation-checked.
+  Premise confirmed directly from source (`issue()`'s `REQUIRES_NEW`, `issueManualStrike`'s default
+  propagation, the inline same-transaction `AdminActionLog` save, and the missing `Propagation` import
+  all matched the story's description exactly). Mirrored `UserAdminService.self` exactly (`@Autowired
+  @Lazy` field, `public` `REQUIRES_NEW` method). Two new `ManualStrikeIT` tests: the happy-path control
+  (`issueManualStrike_normalCall_writesAuditLogWithCorrectAdminIdAndReason`, no prior test in this
+  class asserted the action-log row's own `admin_id`/`reason`) and the durability proof
+  (`issueManualStrike_outerTransactionRollsBack_strikeAndAuditBothSurviveViaRequiresNew`, a test-owned
+  `TransactionTemplate` the method's own `@Transactional` joins, calling the service directly rather
+  than through HTTP so it runs on the test's own thread). Mutation-checked by hand (reverted to the
+  inline non-`REQUIRES_NEW` write, durability test failed as expected; restored, full class re-run
+  green). `ManualStrikeIT` re-run in full — 15/15, zero regressions.
+- [x] AC6 — correct `deleteStrike`'s Java/SQL precision-mismatch comment to the boundary-equality
+  mechanism (doc-only); ledger disposition is `[DECIDED]`, not deletion. Found the actual comment at
+  `:373-382` (shifted from the story's `:342-343` citation, expected per this series' own convention)
+  and rewrote its tail to state the boundary-equality mechanism (strikeCreatedAt already
+  microsecond-quantised on read, so the real risk is independent rounding of the shared `cutoff` value
+  across the Java/pgjdbc boundary at the exact microsecond boundary) instead of the impossible
+  "sub-microsecond gap" framing, dropping the specific `~1e-9` figure for a qualitative
+  "astronomically unlikely" statement. Doc-only, no test change per Task 2.
+- [x] AC7 — document the migration-vs-active-poller collision risk in `migration-conventions.md` as a
   structural rule (not a two-table list), correctly describing transactional-migration rollback (no
   failed `flyway_schema_history` row for this case) (doc-only); ledger disposition is `[DECIDED]`, not
-  deletion
-- [ ] AC8 — Envers null-`verificationStatus` accepted-risk comment; ledger closeout per the corrected
-  disposition table (4 deletions, 3 `[DECIDED]` annotations, 1 in-place edit preserving the
-  deferred-122 bullet's still-relevant history)
+  deletion. Premise verified: confirmed the doc's existing `flyway repair`/failed-row recovery mechanism
+  is scoped explicitly to the non-transactional `CREATE INDEX CONCURRENTLY` sidecar case, not ordinary
+  transactional DDL — writing it for the transactional case (as the original ledger bullet did) would
+  have contradicted this same document a few paragraphs apart. Also independently re-counted the
+  `@Scheduled` claim: `grep -rc "@Scheduled" src/main/java` — 44 occurrences across 36 files, confirmed
+  exactly as stated. Added as a sub-point under item 7 (not a new numbered item). Doc-only, no test
+  change per Task 3.
+- [x] AC8 — Envers null-`verificationStatus` accepted-risk comment; ledger closeout per the disposition
+  table, corrected once more for AC1's disproof: 4 deletions (mutual lock-out — disproven, not "fully
+  fixed"; per-row try/catch, `issueManualStrike` audit, `findClaimedBatch` brittleness — all fully
+  fixed), 3 `[DECIDED: accepted risk]` annotations (migration-vs-poller race, Envers null
+  reconstruction, `deleteStrike` precision comment), 1 in-place edit (`main."user"` width — struck part
+  (4) only, `[CLOSED by skillars-deferred-124 AC3]`, parts (1)-(3)'s history preserved). Both section
+  headers and the deferred-123 preamble confirmed surviving unedited; both out-of-scope `[DECIDED]`
+  bullets (`ModerationSlaMonitorService`, `reinstateCoach`) confirmed still present, untouched. New
+  "Last audit: 2026-09-19" narrative block added, explicitly flagging AC1's disproof for future
+  readers of this ledger. Grep-sweep of all 7 touched files against the ledger found one unrelated
+  pre-existing closure marker (skillars-deferred-100 AC7, already `verified closed`) — no other stale
+  hits.
+
+
+### Review Findings
+
+_`/bmad-code-review`, 2026-09-19. Four layers: Blind Hunter (diff-only), Edge Case Hunter (diff +
+project), Acceptance Auditor (diff + spec), plus session-level verification of the AC1 disproof against
+the resolved Hibernate artifact. 2 decision-needed (both resolved into patches), 21 patch, 4 deferred, 6 dismissed as
+verified non-issues. AC1's disproof was independently re-verified and **upheld** — see the note below._
+
+_**Response pass, 2026-09-19.** Every finding below independently re-verified against the actual source
+before applying anything (explicit false-positive check — zero false positives found; all 23 actionable
+findings were genuine). Both `[Decision]` items resolved via `AskUserQuestion`: AC2's double-`handleFailure`
+bug via a structural single-call-site fix (better than the three options the review itself offered — see
+its own checkbox below); AC4's rolling-deploy window via accept-and-document. All 21 `[Patch]` findings
+applied. The 4 `[Defer]` findings were already correctly deferred by the review itself (checked, pre-existing,
+out of this story's scope) and needed no further action._
+
+> **AC1 re-verification (2026-09-19, reviewer).** The dev-story disproof is correct. Captured live from
+> `ManualStrikeIT` with `org.hibernate.SQL` at DEBUG: `select ... from marketplace.coach_profiles cp1_0
+> where cp1_0.id=? for no key update nowait` (13 occurrences, zero `for update`). Source is
+> `PostgreSQLSqlAstTranslator.getForUpdate()` -> `" for no key update"` — the SQL-AST path a Spring Data
+> `@Query` + `@Lock` renders through, not `PostgreSQLDialect.getWriteLockString`. `FOR NO KEY UPDATE`
+> does not conflict with the strike INSERT's FK-check `FOR KEY SHARE`, so AC1's deadlock cannot form and
+> the drop stands. An earlier reviewer claim that the jar contained no such string was a false negative
+> (ugrep skips binary files without `-a`) and is withdrawn._
+
+- [x] [Review][Decision] **AC2's new outer guard calls `handleFailure` a second time on the same detached row, double-counting `attempts` and destroying the original error.** Confirmed genuine by independent re-trace. **Resolved (2026-09-19, owner decision via AskUserQuestion): a fourth option, better than the three offered — single call site.** `processRow`'s own inner catch (the `deleteAsset` branch, the only branch that called `handleFailure` directly) was removed entirely; every exception `processRow` can throw now propagates to `process()`'s outer guard, which is the SOLE call site for `handleFailure` on both processors. This eliminates the double-invocation structurally (not via a workaround) and fixes the lost-original-error problem as a side effect, since the outer guard always receives the true original exception. Side effect requiring its own fix: promoting every ordinary recoverable failure (e.g. a Bunny.net hiccup) to the same "unexpected" log path meant the outer guard's log level had to drop from ERROR to WARN (see the separate ERROR-level finding below) — reaching `handleFailure` for backoff bookkeeping is the normal outcome, not a paging-worthy surprise; ERROR is reserved for `handleFailure` itself throwing. New regression-guard test added on the video side (`handleFailure_itselfThrows_stillIsolatesBatchAndLeavesRowClaimed`); radar's existing `handleFailure_itselfThrows_...` test now also asserts `attempts` stays at 1, not 2.
+- [x] [Review][Decision] **AC4 removed a self-healing property of the old `claimed_at` identity, opening a rolling-deploy lost-update window.** Confirmed genuine. **Resolved (2026-09-19, owner decision via AskUserQuestion): accept & document**, given skillars-deferred-117's "no production deploy has ever happened" — the window is not a live risk today. Documented in two places: `VideoDeletionOutbox.claimedBy`'s Javadoc (covers the radar-side mirror too, already pointed at by `RadarCompositeDlqEntry.claimedBy`), and a new sub-point under `migration-conventions.md` rule 7 prescribing the expand/contract fix (dual predicate for one release) a first production deploy of either table must follow before this premise changes.
+- [x] [Review][Patch] Production comment asserts the opposite of what the shipped test asserts — the poison-row cycle AC2 claims to eliminate is still reachable. **Fixed as a side effect of the Decision-1 refactor above** — rewrote `RadarCompositeDlqProcessor`'s class-header comment to state the accurate, narrower guarantee: a chronically-failing row's own processing reaches `max_attempts`/`DEAD`; only a permanently-broken `configService.getBoundedLong` (a config outage, not the row's own failure) does not, and that is accepted as safe self-healing, not a poison cycle. [src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeDlqProcessor.java:37-47]
+- [x] [Review][Patch] Story AC8 disposition table still records AC1 as "Delete (AC1 — fully fixed, nothing left to track)". **Fixed** — corrected to "disproven, not fixed" in the disposition table itself, and a `[DROPPED — disproven]` marker was added at the top of AC1's own section. [AC8 disposition table, this file]
+- [x] [Review][Patch] Story AC8 disposition table claims AC2 "fully fixed, not merely isolated" — contradicted by the shipped `verify(..., never()).failClaimed(...)` test. **Fixed** — reworded to state the accurate, narrower guarantee (matches the RadarCompositeDlqProcessor header-comment fix above): fully fixed for the row's-own-processing failure mode, with the config-outage residual case named explicitly as accepted-safe rather than claimed away. [AC8 disposition table, this file]
+- [x] [Review][Patch] Story AC1 section (lines 77-211) still states its `FOR UPDATE NOWAIT`-conflict premise as fact with no drop marker. **Fixed** — `[DROPPED — disproven, 2026-09-19, code review]` callout added immediately under the AC1 heading, explaining the false premise and pointing to the Debug Log/ledger for the empirical trail; the historical text below it is kept as record, not fact.
+- [x] [Review][Patch] Ledger's explanation of WHY `for no key update` is emitted is inaccurate. **Fixed** — corrected to the real mechanism (`PostgreSQLSqlAstTranslator.getForUpdate()`, the SQL-AST path a Spring Data `@Query` + `@Lock` renders through) with the false "PESSIMISTIC_WRITE downgrade" claim struck and attributed as an earlier draft's error. [_bmad-output/implementation-artifacts/deferred-work.md]
+- [x] [Review][Patch] Ledger headline count "Closed 6 of the 7" is wrong (actual: 4 deleted, 3 annotated). **Fixed** — headline reworded to state the accurate 4-deleted/3-annotated split. [_bmad-output/implementation-artifacts/deferred-work.md]
+- [x] [Review][Patch] In-place-edited deferred-122 bullet still opens "one frozen divergence remains to reconcile" after that divergence was closed. **Fixed** — reworded to "every divergence it caused is now reconciled". [_bmad-output/implementation-artifacts/deferred-work.md]
+- [x] [Review][Patch] AC6's replacement comment cites `:400`/`:401`; the actual statements are at `:415`/`:416`. **Fixed** — citations corrected in place. [src/main/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementService.java]
+- [x] [Review][Patch] AC2's new comments cite pre-change line numbers. **Fixed as a side effect of the Decision-1 refactor above** — the comments carrying stale citations were rewritten entirely (no line-number citations left in them to go stale); re-confirmed by grep that no `:205-210`/`:147`/`:169`-style citation remains anywhere in either processor. [src/main/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessor.java]
+- [x] [Review][Patch] Two class-level Javadocs still describe the removed `claimed_at = :claimedAt` identity predicate as current behaviour. **Fixed** — both updated: `VideoDeletionOutboxProcessor`'s `findClaimedBatch` sizing-basis Javadoc now notes AC4 replaced the predicate with `claimed_by`, and `VideoDeletionOutboxRepository`'s `completeClaimed`/`failClaimed` comment was generalized to name both predicates instead of asserting the old one as current. [src/main/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessor.java, src/main/java/com/softropic/skillars/platform/video/repo/VideoDeletionOutboxRepository.java]
+- [x] [Review][Patch] No test covers the video-side `catch (Exception inner)` branch or the double-`handleFailure` path. **Fixed** — new test `handleFailure_itselfThrows_stillIsolatesBatchAndLeavesRowClaimed` added, forcing the throw via a `@MockitoSpyBean`-stubbed `failClaimed` (no new `ConfigService` mock/context needed). [src/test/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessorIT.java]
+- [x] [Review][Patch] Radar `handleFailure_itselfThrows_...` test never asserts `attempts`, so the double increment is invisible to it. **Fixed** — added `assertThat(rowMiddle.getAttempts()).isEqualTo(1)` with an explanatory `.as(...)`. [src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeDlqProcessorTest.java]
+- [x] [Review][Patch] `V150`'s `ADD COLUMN IF NOT EXISTS` matches on name only — a pre-existing non-`uuid` column passes the migration and fails at first bind. **Addressed via documentation, not a functional change** — added a header note acknowledging the risk and stating why it's accepted as-is: this is the same pattern `V144` already uses for `claimed_at` on both tables, and `claimed_by` is a name invented for this migration with no other writer in the codebase. [src/main/resources/db/migration/V150__outbox_dlq_claimed_by.sql] (originally cited `:28-29`; the `ALTER TABLE` statements moved to `:42-43` once the item-9 lock header below was added — re-verify against HEAD, not this citation, before relying on it)
+- [x] [Review][Patch] `UserSchemaWidthIT`'s CHECK-constraint test cannot fail for any reason related to this change. **Addressed via documentation** — Javadoc now states honestly that this test is a forward-looking regression guard uncoupled from `V149`'s own diff, and points to the width-assertion test above it as the one that actually validates this story's change. [src/test/java/com/softropic/skillars/platform/security/repo/UserSchemaWidthIT.java]
+- [x] [Review][Patch] `V149`/`V150` omit `migration-conventions.md` item 9's required ACCESS EXCLUSIVE header statement — and `V150` alters the two actively-polled tables AC7's own new rule is about. **Fixed** — both migrations gained an explicit item-9 header block naming the lock (ACCESS EXCLUSIVE, brief/metadata-only in both cases), the online-safe alternative considered (none exists beyond `SET lock_timeout`'s bounded wait), and for `V150` an explicit cross-reference to AC7's own new actively-polled-table sub-point. [src/main/resources/db/migration/V149__widen_user_skillars_role_verification_status.sql, src/main/resources/db/migration/V150__outbox_dlq_claimed_by.sql]
+- [x] [Review][Patch] Context-count ceiling raised 43->44 on admitted speculation, with the same unverified number duplicated in two files. **Left as-is, deliberately** — the comment already states honestly that it is unverified pending CI, per this project's "GitHub CI is the sole full-verification gate" convention; nothing in this response pass adds a further context fork (the one new test added, `handleFailure_itselfThrows_stillIsolatesBatchAndLeavesRowClaimed`, adds a bean override to the SAME test class that already forks its own dedicated context, not a new fork). CI's own run is what actually confirms or corrects the number, exactly as the existing comment already says to do. [.github/scripts/assert-context-count.sh]
+- [x] [Review][Patch] `processed++` counts rows abandoned by both guards, overstating progress in the MAX_RUN_DURATION bail-out log. **Fixed** — renamed to `attempted` on both processors with an explanatory comment, and the bail-out log wording changed from "rows" to "rows attempted". [src/main/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessor.java, src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeDlqProcessor.java]
+- [x] [Review][Patch] `recordManualStrikeAudit` is public with a `reason` parameter that must already carry the "Manual strike: " prefix — a trap for any future caller. **Fixed** — the prefix is now built inside `recordManualStrikeAudit` itself; the caller passes the raw reason. Persisted value is unchanged (`ManualStrikeIT`'s existing `"Manual strike: COACH_NO_SHOW"` assertions still pass). [src/main/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementService.java]
+- [x] [Review][Patch] New ERROR-level logging fires for ordinary recoverable failures, up to two ERROR lines per failing row, inconsistent with the inner catch's silence for the same outcome. **Fixed as part of the Decision-1 refactor** — the outer guard's log level dropped from ERROR to WARN (reaching `handleFailure` for backoff bookkeeping is the normal outcome), with ERROR reserved for the genuinely exceptional case (`handleFailure` itself throwing). At most one WARN + one ERROR per failing row now, not two ERRORs. [src/main/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessor.java, src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeDlqProcessor.java]
+- [x] [Review][Patch] Unrequested wording change altered a sentence's meaning: "re-queued" -> "re-queried". **Fixed** — reverted to the original "re-queued". [src/main/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessor.java]
+- [x] [Review][Patch] AC2's new video IT asserts `getClaimedAt()` is null on the failure path but omits the matching `getClaimedBy()` assertion AC4 added everywhere else. **Fixed** — assertion added immediately after the existing `getClaimedAt()` one. [src/test/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessorIT.java]
+- [x] [Review][Defer] No `try`/`finally` around `claimPendingBatch`/`findClaimedBatch` — a throw there strands the whole claimed batch for a full stale window with `runId` lost [src/main/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessor.java:149-150] — deferred, pre-existing
+- [x] [Review][Defer] `MAX_RUN_DURATION` is sampled only between rows, and radar's `lockAtMostFor` (`PT10M`) equals its `STALE_CLAIM_WINDOW`, violating the invariant the video processor declares mandatory [src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeDlqProcessor.java:85] — deferred, pre-existing
+- [x] [Review][Defer] `runtimeBudget_staysStrictlyInsideLock` never asserts `lockAtMostFor < staleWindow` — the one inequality radar violates [src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeDlqProcessorTest.java:268-282] — deferred, pre-existing
+- [x] [Review][Defer] Migrations use session-scoped `SET lock_timeout` rather than transaction-scoped `SET LOCAL`, leaking the setting to later migrations on the same Flyway connection [src/main/resources/db/migration/V149__widen_user_skillars_role_verification_status.sql] — deferred, pre-existing repo-wide convention (V144, V145)
 
 ---
 
@@ -849,8 +987,12 @@ this if they capture and later re-compare a timestamp.
 
 ## File List
 
-**Production code (expected; confirm exact set during implementation):**
-- `src/main/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeService.java` (AC1)
+**Reconciled against the actual final diff (`git status --short`), not the story-creation-time
+expectation.** `ReliabilityStrikeService.java` and `ReliabilityStrikeConcurrencyIT.java` are
+deliberately **absent** — AC1 was disproven, not implemented, and both files were reverted to HEAD
+(see Change Log / Dev Agent Record). `ReliabilityStrikeServiceTest.java` needed no change either.
+
+**Production code:**
 - `src/main/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementService.java`
   (AC5, AC6)
 - `src/main/java/com/softropic/skillars/platform/security/repo/User.java` (AC3 Javadoc, AC8 comment)
@@ -863,29 +1005,27 @@ this if they capture and later re-compare a timestamp.
   (AC4)
 - `src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeDlqProcessor.java`
   (AC2, AC4)
-- new migration for AC3 (widen `main."user"` columns) — number TBD at implementation time
-- new migration for AC4 (`claimed_by` columns) — number TBD at implementation time
+- `src/main/resources/db/migration/V149__widen_user_skillars_role_verification_status.sql` (AC3, new)
+- `src/main/resources/db/migration/V150__outbox_dlq_claimed_by.sql` (AC4, new)
+- `.github/scripts/assert-context-count.sh` (AC2 — Spring-context ceiling bump 43→44)
+- `.github/workflows/pr-build.yml` (AC2 — same ceiling bump, `pr-build.yml`'s own call site)
 
-**Tests (expected):**
-- `src/test/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeConcurrencyIT.java`
-  (AC1 — tightened in place, not replaced; a new interleave seam if Task 5's deterministic mechanism is
-  used, which may itself add a bean-override set)
+**Tests:**
 - `src/test/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessorIT.java`
-  (AC2 new test if a new `@MockitoBean` seam is added — check the context-ceiling cost first per AC2
-  Task 5 — AC4 signature updates)
-- `src/test/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessorSchedulerLockTest.java`
-  (AC4 signature updates)
+  (AC2 new isolation test + `@MockitoSpyBean DrillVideoRefRepository`; AC4 signature updates)
 - `src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeDlqProcessorTest.java`
-  (AC2 new test — no context-ceiling cost, plain Mockito unit test; AC4 signature updates)
+  (AC2 two new tests — general isolation + the specific outer-guard case; AC4 needed no signature
+  change, `any()` matchers absorb the type change)
 - `src/test/java/com/softropic/skillars/platform/development/repo/RadarCompositeDlqRepositoryIT.java`
-  (AC4 signature updates)
-- new schema-shape test for AC3 (exact class TBD — model on
-  `EnvelopeEntitySchemaIT.java`'s `information_schema.columns` pattern, not
-  `MigrationConventionLintTest`/`RescheduleResourceIT`, neither of which has this pattern)
-- `src/test/java/com/softropic/skillars/platform/admin/api/ManualStrikeIT.java` (AC5 new tests, built
-  on a test-owned `TransactionTemplate` wrapping the call, per AC5 Task 5)
-- `src/test/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeServiceTest.java`
-  (AC1, only if some part of the reorder needs unit-level coverage beyond the tightened IT)
+  (AC4 signature updates + `claimed_by` assertions)
+- `src/test/java/com/softropic/skillars/platform/security/repo/UserSchemaWidthIT.java` (AC3, new —
+  modeled on `EnvelopeEntitySchemaIT`'s `information_schema.columns` pattern)
+- `src/test/java/com/softropic/skillars/platform/admin/api/ManualStrikeIT.java` (AC5 two new tests —
+  happy-path control + durability proof via a test-owned ambient `TransactionTemplate`)
+
+**Not changed, contra the story-creation-time expectation:**
+`VideoDeletionOutboxProcessorSchedulerLockTest.java` (plain reflection on `@SchedulerLock`, touches
+none of the changed method signatures).
 
 **Documentation / tracking:**
 - `docs/deployment/migration-conventions.md` (AC7)
@@ -893,11 +1033,6 @@ this if they capture and later re-compare a timestamp.
 - `_bmad-output/implementation-artifacts/skillars-deferred-124-strike-lock-contention-outbox-resilience-and-schema-fixes.md`
   (this file)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
-
-*This File List is a starting expectation from story-creation-time analysis, not a closed set — the
-dev agent must reconcile it against the actual final diff before marking the story done, per this
-series' own established practice (deferred-123's own File List needed exactly this kind of
-reconciliation after its code-review response added several files the original list had missed).*
 
 ## Change Log
 
@@ -951,7 +1086,179 @@ reconciliation after its code-review response added several files the original l
   corrected dispositions above). No scope change, no owner decision reopened — all corrections are to
   task/test executability and to the accuracy of two permanent artifacts
   (`migration-conventions.md`, `deferred-work.md`), not to what this story is for.
+- 2026-09-19: `/bmad-dev-story` implementation. Per user instruction, AC2–AC8's premises were
+  empirically re-verified against running code/actual source (not just re-read) before implementing
+  each, following AC1's disproof (see below) — every one held up as written. **AC1 was not
+  implemented: its core premise is false.** Implemented the prescribed fix and Task 5's deterministic
+  mutation-check seam, then Task 6's own mutation check (revert the fix, confirm the tightened test
+  fails) came back green either way — the test could not distinguish fixed from unfixed. Traced to
+  `findByIdForUpdate` actually emitting `FOR NO KEY UPDATE NOWAIT` (Hibernate's `PESSIMISTIC_WRITE`
+  downgrade), not `FOR UPDATE NOWAIT` as AC1 assumed; `FOR NO KEY UPDATE` does not conflict with the
+  strike INSERT's FK-check `FOR KEY SHARE` (confirmed against a throwaway Postgres 16 container,
+  independent of the app). No interleaving of the described code paths can produce the claimed
+  deadlock. Both changed files reverted to HEAD; user decision (AskUserQuestion) was to drop AC1 and
+  document the disproof rather than land a fix for a non-existent bug — recorded in this story's Dev
+  Agent Record, the ledger's own new "Last audit" block, and AC8's disposition table (the mutual
+  lock-out bullet deleted as disproven, not as fixed). AC2 (per-row exception isolation, both
+  processors) implemented as specified — premise held up exactly (both loops confirmed genuinely
+  unguarded around `processRow`, `RadarCompositeDlqProcessor.handleFailure`'s own transaction confirmed
+  reachable and unguarded); new isolation tests per processor, both mutation-checked; `assert-context-
+  count.sh` ceiling bumped 43→44 for the video side's new `@MockitoSpyBean`. AC3 (`main."user"` width
+  reconciliation) implemented with the widen direction the story called likely, confirmed by the
+  enum-length evidence and the "no CHECK exists" expectation, both re-verified directly against source;
+  `V149` plus a new `UserSchemaWidthIT`, mutation-checked (the first mutation-check attempt false-
+  passed against a stale `target/classes` copy of the migration — caught by clearing that directory and
+  re-checking, a reminder that a green mutation check against a compiled-artifact directory is not
+  automatically trustworthy). AC4 (`claimed_by` UUID identity column) implemented as specified across
+  both repositories/processors/entities and all four predicted test files; premise (every identity
+  predicate keyed on `claimed_at`) confirmed by reading both repositories in full before touching
+  either. AC5 (`REQUIRES_NEW` self-proxy audit write) implemented exactly per `UserAdminService.self`'s
+  established pattern; two new `ManualStrikeIT` tests (happy-path control, durability proof via a
+  test-owned ambient `TransactionTemplate`), mutation-checked. AC6 (comment correction) and AC7
+  (migration-conventions.md documentation) applied as specified, both doc-only, both premises
+  independently re-verified (AC6: the boundary-equality mechanism, not "sub-microsecond gap"; AC7: the
+  `flyway repair` recovery mechanism confirmed scoped to the non-transactional sidecar case only, and
+  the "44 `@Scheduled` methods across 36 classes" figure independently re-counted and confirmed exact).
+  AC8's ledger closeout applied per the disposition table, itself corrected once more for AC1's own
+  disproof (4 deletions net, not the originally-planned "delete AC1 as fixed" — disproven instead;
+  3 `[DECIDED: accepted risk]` annotations; 1 in-place edit for the `main."user"` width bullet). All
+  touched suites re-run together per AC (26, 39, 15, 37 tests across the four regression sweeps) plus
+  each fix's own targeted mutation check — zero regressions, zero failures. No `mvn verify` run locally
+  per project convention — GitHub CI is the sole full-verification gate.
+- 2026-09-19: `/bmad-code-review` response pass. Every finding independently re-verified against actual
+  source before applying anything — explicit false-positive check, zero false positives found (all 23
+  actionable findings — 2 `[Decision]`, 21 `[Patch]` — were genuine; the 4 `[Defer]` findings needed no
+  action, already correctly deferred by the review itself). Both `[Decision]` items resolved via
+  `AskUserQuestion`. **AC2's double-`handleFailure` bug**: traced the exact interleaving by hand and
+  found a structural fix better than the three options the review offered — `processRow`'s own inner
+  catch (the only place that called `handleFailure` directly, pre-existing since before this story) was
+  removed on both processors, making `process()`'s outer guard the sole call site. This eliminates the
+  double-invocation and the lost-original-error problem together, as one change, rather than via
+  snapshot/restore or a log-only backstop. Required a follow-on fix the review didn't anticipate: routing
+  every ordinary recoverable failure (not just genuinely unexpected ones) through the same guard meant
+  its log level had to drop from ERROR to WARN, reserving ERROR for `handleFailure` itself throwing —
+  this closed the separate "ERROR-level logging for ordinary recoverable failures" finding as a side
+  effect. **AC4's rolling-deploy lost-update window**: accept-and-document, per skillars-deferred-117's
+  "no production deploy has ever happened" — documented in `VideoDeletionOutbox.claimedBy`'s Javadoc
+  (already shared by the radar-side entity) and a new `migration-conventions.md` rule-7 sub-point
+  prescribing the expand/contract fix a first production deploy must apply. All 21 `[Patch]` findings
+  applied: the story's own AC1 section marked `[DROPPED — disproven]` in place (text kept as historical
+  record, not fact) and its AC8 disposition-table rows for AC1/AC2 corrected; `deferred-work.md`'s
+  "Closed 6 of the 7" headline, its stale `generate-ddl` bullet opening, and its inaccurate `for no key
+  update` mechanism explanation all corrected; stale line-number citations fixed or removed at the
+  source (rewritten comments no longer cite line numbers that can go stale); two stale
+  claimed-identity Javadocs updated; `recordManualStrikeAudit`'s prefix-parameter trap closed by moving
+  prefix construction inside the method (persisted value unchanged, existing tests still pass); `V149`/
+  `V150` gained explicit migration-conventions.md item-9 lock headers, with `V150` cross-referencing
+  AC7's own new actively-polled-table rule; a reverted unrequested wording change
+  ("re-queried" -> "re-queued"); `processed` renamed to `attempted` on both processors to stop
+  overstating progress in the bail-out log. Two test gaps closed: a new video-side test
+  (`handleFailure_itselfThrows_stillIsolatesBatchAndLeavesRowClaimed`, forcing the throw via a
+  `@MockitoSpyBean`-stubbed `failClaimed` rather than a new `ConfigService` mock/context) proves the
+  `catch (Exception inner)` branch and regression-guards the double-call fix; the radar side's existing
+  equivalent test gained an `attempts == 1` assertion for the same reason; the video isolation test
+  gained the `getClaimedBy()` assertion it was missing. Two documentation-only findings (`V150`'s
+  name-only `ADD COLUMN IF NOT EXISTS` match, `UserSchemaWidthIT`'s CHECK-constraint test being
+  uncoupled from `V149`'s own diff) addressed via clarifying comments rather than functional changes,
+  both consistent with existing repo precedent. One finding left as-is, deliberately:
+  `assert-context-count.sh`'s 43->44 ceiling bump is already honestly self-documented as pending CI
+  confirmation per this project's own "CI is the sole verification gate" convention, and this pass's one
+  new test does not add a further context fork (same test class, already-forked context). No `mvn
+  verify` run locally per project convention — GitHub CI is the sole full-verification gate.
 
 ## Dev Agent Record
 
-_To be completed during `/bmad-dev-story`._
+### Debug Log
+
+**AC1 — mutual-lock-out premise disproven (2026-09-19).**
+
+1. Implemented the prescribed fix (moved strike construction/`save()` to immediately after
+   `withBoundedRetry` succeeds, before `alreadyOffMarketplace`) and Task 5's deterministic interleave
+   seam in `ReliabilityStrikeConcurrencyIT` (a `@MockitoSpyBean CoachProfileRepository` blocking
+   `findByIdForUpdate` on a 2-count `CountDownLatch` until both racing threads arrive, guaranteeing
+   both have already flushed their own strike INSERT before either attempts the coach-row lock).
+   `mvn -o -DskipFrontend -Dtest=ReliabilityStrikeConcurrencyIT test` — green, one benign lock-retry
+   observed (`SQLState 55P03`, immediately resolved on the next attempt).
+2. Task 6 mutation check: `git stash push` the production reorder only (test unchanged), reran the
+   same command. **Still green, with the identical single lock-retry.** A test that cannot
+   distinguish the fixed ordering from the unfixed one has not validated the fix — this is what
+   surfaced the false premise, not a hunch.
+3. Reran with `-Dspring.jpa.properties.hibernate.show_sql=true`: `findByIdForUpdate` emits
+   `for no key update nowait`, not `for update nowait`. Hibernate 6's `PESSIMISTIC_WRITE` on the
+   Postgres dialect downgrades to `FOR NO KEY UPDATE` whenever no version/key column forces the
+   stronger `FOR UPDATE` — this entity has neither.
+4. Isolated the real Postgres semantics against a throwaway `postgres:16` container (`docker run`,
+   plain SQL via two coprocess `psql` sessions over named FIFOs — not through the app), independent of
+   any JPA/Hibernate behaviour:
+   - Baseline: session A holds `FOR KEY SHARE` (via a real FK-checked INSERT, untouched). Session B's
+     fresh `SELECT ... FOR UPDATE NOWAIT` **fails** (`could not obtain lock`) — confirms the
+     `FOR UPDATE`-conflicts-`FOR KEY SHARE` half of AC1's premise is correct in isolation.
+   - The actual mechanism: same setup, but B issues `SELECT ... FOR NO KEY UPDATE NOWAIT` instead —
+     **succeeds immediately**, despite A's `FOR KEY SHARE` being fully live and untouched. This is the
+     lock mode Hibernate actually emits, and it does not conflict with `FOR KEY SHARE`.
+   - Also checked (out of caution, since the app-level mutation-check run showed one thread failing
+     and the other succeeding within ~200µs — a real but unrelated same-row `FOR NO KEY UPDATE` vs.
+     `FOR NO KEY UPDATE` race, the ordinary contention `PessimisticLockRetryer` was already built for
+     since skillars-deferred-100): confirmed a savepoint-scoped failed lock attempt does **not**
+     release a lock acquired before the savepoint (session A's pre-savepoint `FOR KEY SHARE` survives
+     both the failed attempt and the following `ROLLBACK TO SAVEPOINT`) — ruling out "the retry
+     silently drops the earlier lock" as an alternative explanation for the observed pass.
+5. Conclusion: the strike INSERT's FK-check `FOR KEY SHARE` and `findByIdForUpdate`'s actual
+   `FOR NO KEY UPDATE NOWAIT` cannot conflict under any interleaving. AC1 as written describes a bug
+   that cannot occur in this codebase's actual lock configuration. Reverted both files
+   (`git checkout --`) to HEAD — no AC1 changes shipped. User decision (AskUserQuestion): drop AC1,
+   document the disproof (this entry) rather than land a fix + comments asserting a disproven
+   mechanism as fact. User also asked that remaining ACs (2–8) be empirically re-verified against
+   running code before implementing, not just re-read, given a prior senior-dev review pass
+   (`story-review.md`) already missed this.
+
+### Completion Notes
+
+**AC1 — not implemented, disproven.** See Debug Log above for the full empirical trail. No production
+or test change shipped; the ledger and story both record the disproof for future readers.
+
+**AC2 — done.** Loop-level per-row exception isolation added to both `VideoDeletionOutboxProcessor` and
+`RadarCompositeDlqProcessor`, routed through the existing `handleFailure` (itself further guarded) so a
+poison row still reaches `max_attempts`/`DEAD` rather than cycling forever. New tests per processor
+prove batch isolation and that the specific new outer-guard code path (not just the pre-existing inner
+try/catch) is exercised; both mutation-checked by hand.
+
+**AC3 — done.** `main."user".skillars_role`/`verification_status` widened to `varchar(255)` (`V149`),
+matching every already-booted environment and mirroring `V145`'s precedent. No CHECK constraint added
+— confirmed none exists in any environment for these two columns. New `UserSchemaWidthIT`, mutation-
+checked.
+
+**AC4 — done.** `claimed_by` UUID column added to both outbox/DLQ tables (`V150`), replacing
+`claimed_at`-exact-equality as the run-identity predicate across `findClaimedBatch`/`releaseClaimed`/
+`completeClaimed`/`failClaimed` on both repositories and processors; `claimed_at` unchanged for
+`resetStaleClaimed`'s staleness math. `claimed_by` cleared on every transition out of `CLAIMED`,
+mirroring `claimed_at`'s own invariant, with new assertions everywhere an existing test already
+asserted `claimed_at IS NULL` post-transition.
+
+**AC5 — done.** `AdminActionLog`'s write in `issueManualStrike` now goes through a `self`-proxied
+`REQUIRES_NEW` method (`recordManualStrikeAudit`), mirroring `UserAdminService.self` exactly, closing
+the durability gap where an outer-transaction rollback after `issue()`'s own `REQUIRES_NEW` commit
+could leave a real enforcement action with zero audit trail. Two new `ManualStrikeIT` tests, mutation-
+checked.
+
+**AC6 — done.** `deleteStrike`'s cutoff-precision comment corrected to the actual boundary-equality
+mechanism; doc-only.
+
+**AC7 — done.** Migration-vs-active-poller collision risk documented as a structural rule in
+`migration-conventions.md` item 7, with the corrected transactional-vs-non-transactional recovery
+mechanism; doc-only.
+
+**AC8 — done.** Envers null-`verificationStatus` accepted-risk comment added at `User.java`. Ledger
+closeout applied per the (AC1-corrected) disposition table; both section headers, the deferred-123
+preamble, and both untouched out-of-scope `[DECIDED]` bullets confirmed surviving. New "Last audit"
+narrative block added, explicitly flagging AC1's disproof.
+
+**Overall.** 7 of 8 ACs implemented and independently verified; AC1 investigated to completion and
+disproven rather than implemented, per explicit owner decision. Every AC's premise was empirically
+re-verified against running code or actual source before implementation (not just re-read from the
+story text) — the practice that surfaced AC1's false premise, applied consistently to the rest. No
+regressions across any touched suite, across four separate regression sweeps (26 tests for AC2's own
+processors; 39 once `MigrationConventionLintTest` joined for AC4; 15 for AC5's `ManualStrikeIT`; 37 for
+a final security/payment/admin cross-check sweep covering everything AC1's investigation and AC3/AC5/
+AC6 touched), plus each individual fix's own standalone mutation check. No `mvn verify` run locally —
+GitHub CI is the sole full-verification gate per this project's established convention.

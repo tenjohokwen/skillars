@@ -122,7 +122,17 @@ LOG="${1:?usage: assert-context-count.sh <build-log> [ceiling]}"
 # prove by reflection. Same one-new-config-forks-one-context shape as
 # AccountDeletionCascadeIT/SmtpTransportBootIT/SesCutoverPreflightResourceIT above, not
 # ordering-dependent thrashing. Measured in CI: missCount went 42 -> 43.
-CEILING="${2:-43}"
+# CEILING = 44, deliberate +1 (story skillars-deferred-124 AC2, VideoDeletionOutboxProcessorIT).
+# The new isolation test proving the outer-loop per-row exception guard (process()'s new try/catch
+# around processRow) needs a failure OUTSIDE the class's only existing seam (a @MockitoBean on
+# VideoProviderAdapter, which only covers the deleteAsset path) -- so the class gained a second
+# override, @MockitoSpyBean DrillVideoRefRepository, to force findByVideoId to throw for one row.
+# Same one-new-config-forks-one-context shape as AccountDeletionCascadeIT/SmtpTransportBootIT/
+# AdminCoachEnforcementIsolationRuntimeIT above, not ordering-dependent thrashing -- no other test
+# class in the suite combines these two overrides. Expected +1 from local reasoning (no full local
+# `mvn test` run per this project's own no-mvn-verify-locally convention); confirm the exact
+# pre->post missCount against this PR's actual CI run and correct this note if it differs.
+CEILING="${2:-44}"
 
 if [ ! -f "$LOG" ]; then
   echo "assert-context-count: build log not found: $LOG" >&2

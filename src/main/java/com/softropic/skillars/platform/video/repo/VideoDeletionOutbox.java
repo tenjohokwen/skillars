@@ -60,6 +60,32 @@ public class VideoDeletionOutbox {
     @Column(name = "claimed_at")
     private Instant claimedAt;
 
+    /**
+     * skillars-deferred-124 AC4: the run-identity token, replacing {@code claimed_at}-exact-equality
+     * for "which run owns this row right now." Stamped by {@code claimPendingBatch} with a fresh
+     * {@code UUID.randomUUID()} generated once per tick, alongside (not instead of) {@code claimedAt}
+     * — {@code claimedAt} keeps flowing to {@code resetStaleClaimed}'s time-based staleness check, a
+     * genuinely different concern from run identity. {@code findClaimedBatch}, {@code releaseClaimed},
+     * {@code completeClaimed} and {@code failClaimed} all key their identity predicate on this column
+     * instead. Cleared back to {@code null} on every transition out of {@code CLAIMED} — completion or
+     * either failure outcome, and {@code resetStaleClaimed} too — mirroring {@code claimedAt}'s own
+     * identical invariant above; a stale {@code claimed_by} on a non-{@code CLAIMED} row is never read
+     * as an identity match (every predicate is also gated on {@code status = 'CLAIMED'}), but leaving
+     * it uncleared would defeat the column's forensic purpose.
+     *
+     * <p><strong>skillars-deferred-124 code review 2026-09-19 Decision, accepted risk.</strong>
+     * Replacing {@code claimed_at}-equality outright (rather than adding {@code claimed_by} alongside
+     * it as a second, additional predicate) opens a rolling-deploy lost-update window: a pre-this-story
+     * instance running against the migrated schema does not know this column exists, so its own
+     * claim/release/reset writes leave it stale, which a post-this-story instance's predicate could
+     * then wrongly match. Accepted, not fixed, per {@code skillars-deferred-117}'s owner decision —
+     * no production deploy of this application has ever happened. See
+     * {@code docs/deployment/migration-conventions.md} rule 7's own sub-point for the expand/contract
+     * step this needs before a first production deploy of this table changes that premise.
+     */
+    @Column(name = "claimed_by")
+    private UUID claimedBy;
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();

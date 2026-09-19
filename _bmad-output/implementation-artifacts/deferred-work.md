@@ -2438,7 +2438,7 @@ about.)
 
 ## Deferred from: code review of skillars-deferred-122-coach-enforcement-round-2-and-user-cleanup-fixes (2026-09-18)
 
-- **Schema drift from `spring.jpa.generate-ddl: true` — CLOSED AT SOURCE by the skillars-deferred-123 code review (2026-09-18); one frozen divergence remains to reconcile.** Surfaced by skillars-deferred-123 AC5's investigation into a `main.user_aud`/`User.skillarsRole`+`verificationStatus` Envers-coverage gap. Empirically confirmed: raising `org.hibernate.SQL` to DEBUG showed Hibernate issuing `alter table if exists ... add column ... varchar(255) check (... in (...))` and `alter table if exists ... alter column ... set data type varchar(255)` at application boot — for both the audit table's missing enum columns and the *entity's own* `main."user".skillars_role`/`verification_status` columns (silently widening them from their declared `varchar(20)`) — while `main.flyway_schema_history` showed no migration responsible. **Cause, corrected:** the story originally attributed this to Hibernate acting "regardless of `hibernate.ddl-auto`" and proposed hunting for "a schema-generation property beyond simple `none`, if one exists". No such property is needed and no such Hibernate behaviour exists. The cause was `spring.jpa.generate-ddl: true` sitting one line above `ddl-auto: none` in `application.yaml`. Decompiled chain: `HibernateProperties.getAdditionalProperties` (spring-boot-autoconfigure 3.5.16) *removes* the `hibernate.hbm2ddl.auto` key when `ddl-auto` is `none` rather than setting it; `HibernateJpaVendorAdapter.getJpaPropertyMap` (spring-orm 6.2.19) then puts it as `"update"` because `isGenerateDdl()` is true; `AbstractEntityManagerFactoryBean` merges vendor properties only when the key is absent, so `"update"` won. Effective `hbm2ddl.auto=update` in every profile, production and test alike — which is also why no IT had ever caught Flyway/entity drift. The line has been removed. **Pre-removal audit (done before the change, not assumed):** every `@Table` entity has a `CREATE TABLE` in a Flyway migration, and `main.user_aud`'s only two missing columns are supplied by `V145`, so nothing depended on auto-DDL to boot. **`main.user_aud`'s own `CHECK`-constraint divergence CLOSED** (2026-09-18, code review Patch pass on skillars-deferred-123): `V145` now adds `user_aud_skillars_role_check`/`user_aud_verification_status_check` as `NOT VALID` constraints, named to match Postgres's own default naming for Hibernate's unnamed inline CHECK — a no-op on an already-Hibernate-patched database, a genuine fix on a Flyway-only one. **Still open — one divergence remains, deliberately not touched by this pass:** `main."user".skillars_role`/`verification_status` are `varchar(255)` on pre-fix databases (Hibernate silently widened them) and `varchar(20)` per `V138`'s baseline migration — narrowing a populated, live column carries real risk (a value beyond 20 chars would fail the ALTER) and needs its own migration and evidence pass, not a drive-by fix alongside an audit-table CHECK constraint. Note the ordinary closing condition does not apply here: per skillars-deferred-117's owner decision no production deploy has ever happened, so the only "pre-fix databases" in existence are development and CI ones.
+- **Schema drift from `spring.jpa.generate-ddl: true` — CLOSED AT SOURCE by the skillars-deferred-123 code review (2026-09-18); every divergence it caused is now reconciled.** Surfaced by skillars-deferred-123 AC5's investigation into a `main.user_aud`/`User.skillarsRole`+`verificationStatus` Envers-coverage gap. Empirically confirmed: raising `org.hibernate.SQL` to DEBUG showed Hibernate issuing `alter table if exists ... add column ... varchar(255) check (... in (...))` and `alter table if exists ... alter column ... set data type varchar(255)` at application boot — for both the audit table's missing enum columns and the *entity's own* `main."user".skillars_role`/`verification_status` columns (silently widening them from their declared `varchar(20)`) — while `main.flyway_schema_history` showed no migration responsible. **Cause, corrected:** the story originally attributed this to Hibernate acting "regardless of `hibernate.ddl-auto`" and proposed hunting for "a schema-generation property beyond simple `none`, if one exists". No such property is needed and no such Hibernate behaviour exists. The cause was `spring.jpa.generate-ddl: true` sitting one line above `ddl-auto: none` in `application.yaml`. Decompiled chain: `HibernateProperties.getAdditionalProperties` (spring-boot-autoconfigure 3.5.16) *removes* the `hibernate.hbm2ddl.auto` key when `ddl-auto` is `none` rather than setting it; `HibernateJpaVendorAdapter.getJpaPropertyMap` (spring-orm 6.2.19) then puts it as `"update"` because `isGenerateDdl()` is true; `AbstractEntityManagerFactoryBean` merges vendor properties only when the key is absent, so `"update"` won. Effective `hbm2ddl.auto=update` in every profile, production and test alike — which is also why no IT had ever caught Flyway/entity drift. The line has been removed. **Pre-removal audit (done before the change, not assumed):** every `@Table` entity has a `CREATE TABLE` in a Flyway migration, and `main.user_aud`'s only two missing columns are supplied by `V145`, so nothing depended on auto-DDL to boot. **`main.user_aud`'s own `CHECK`-constraint divergence CLOSED** (2026-09-18, code review Patch pass on skillars-deferred-123): `V145` now adds `user_aud_skillars_role_check`/`user_aud_verification_status_check` as `NOT VALID` constraints, named to match Postgres's own default naming for Hibernate's unnamed inline CHECK — a no-op on an already-Hibernate-patched database, a genuine fix on a Flyway-only one. **`main."user".skillars_role`/`verification_status` width divergence — `[CLOSED by skillars-deferred-124 AC3]`.** `V149__widen_user_skillars_role_verification_status.sql` widened both columns to `varchar(255)`, matching what every already-booted environment already carried (Hibernate's own auto-DDL width), reconciling the divergence against `V138`'s originally-declared `varchar(20)`. No CHECK constraint was added alongside it (confirmed via direct inspection of `V138`'s own `CONSTRAINT user_*` list — none exists on either column in any environment; `V145`'s add-column-with-CHECK precedent does not transfer to an existing column's type-only `ALTER`, which carries no CHECK clause of its own).
 
 ## Explicitly out of scope (skillars-deferred-123, 2026-09-18)
 
@@ -2452,57 +2452,71 @@ story's own disposition table so neither item is mistaken for silently dropped:
 
 _Four-layer review (Blind Hunter, Edge Case Hunter, Acceptance Auditor, `txn-and-concurrency-audit`). Each item below was independently re-verified against the working tree before being recorded._
 
-- **`ReliabilityStrikeService`'s pre-lock strike INSERT can mutually lock out two concurrent `issue()`
-  calls.** `strikeRepository.save(strike)` at `:62` runs before `withBoundedRetry` at `:98`.
-  `coach_reliability_strikes_coach_id_fkey` (`V138__baseline_schema.sql:4427`) makes PostgreSQL take
-  `FOR KEY SHARE` on the parent `coach_profiles` row for the child INSERT, held until commit, while
-  `CoachProfileRepository.findByIdForUpdate` is `PESSIMISTIC_WRITE` + `jakarta.persistence.lock.timeout = 0`
-  — i.e. `FOR UPDATE NOWAIT`, which conflicts with `FOR KEY SHARE`. `PessimisticLockRetryer:132-134`
-  flushes *before* taking its savepoint (deliberately, per its own Javadoc), so rollback-to-savepoint
-  does not release the FK lock the flush acquired. Two threads that both flush before either locks are
-  then permanently mutually blocked: every retry fails identically and the loser's strike is discarded
-  after the ~3.2s budget with a 409. Fix is to move the `save` after `withBoundedRetry`, or take the
-  savepoint before the flush. Pre-existing (the INSERT-before-lock ordering predates
-  `skillars-deferred-123`); surfaced by that story's review.
-- **V144-shaped `ALTER TABLE` migrations race the pollers that own the table.** `V144` adds columns to
-  `main.video_deletion_outbox` and `development.radar_composite_dlq` under `SET lock_timeout = '5s'`.
-  Both tables are polled every 60s by default, so an `ACCESS EXCLUSIVE` request can collide with an
-  in-flight processing transaction and abort the migration, failing the deploy and leaving a failed
-  `flyway_schema_history` row to repair by hand. No retry wrapper. Applies to any future migration
-  touching an actively-polled table, not just V144.
-- **Neither outbox/DLQ processor loop has a per-row `try`/`catch`.** In
-  `VideoDeletionOutboxProcessor.process` (`:119-121`) and `RadarCompositeDlqProcessor.process`
-  (`:68-70`), an exception raised outside the inner `try` (e.g. `drillVideoRefRepository.findByVideoId`,
-  `completeRowWithNullAsset`'s `transactionTemplate.execute`, or `configService.getBoundedLong` inside
-  `handleFailure`) abandons every remaining claimed row in the batch. `skillars-deferred-123` AC3 makes
-  this worse for the non-crash case: those rows were previously re-eligible on essentially the next
-  tick via the `next_retry_at` predicate, and are now invisible until a full stale window elapses
-  (20 min video / 10 min radar). A permanently-throwing row also buries the rest of its batch behind it
-  every window.
-- **Envers reconstruction of pre-V145 revisions returns `null` for `User.verificationStatus`.** V145 adds
-  `main.user_aud.verification_status` with no backfill, and the audit column is nullable while
-  `main."user".verification_status` is `NOT NULL DEFAULT 'UNVERIFIED'` — so the audit table can hold a
-  state the live table cannot, and a reconstructed entity silently defeats the field initialiser
-  (`User.java:355-357`). Latent only: no `AuditReader`/`AuditQuery` usage exists in `src/main` today.
-- **`AdminCoachEnforcementService.issueManualStrike` commits the strike before its audit log.** `issue()`
-  is `REQUIRES_NEW` (`ReliabilityStrikeService.java:49`), so the strike row, the `CoachProfile` status
-  change and the threshold/visibility events all commit at `:253`, while the `AdminActionLog` is written
-  at `:260` in the outer transaction. An outer rollback (constraint violation on `admin_action_log`,
-  connection reset, pod kill between the two commits) leaves a durable, publicly-visible enforcement
-  action with no record of which admin issued it. The `REQUIRES_NEW` choice is deliberate and well-argued
-  for the refund path; this consequence on the admin path is not covered by that reasoning.
-- **`findClaimedBatch` uses exact timestamp equality as a run-identity token.** Both repositories key the
-  claimed-batch fetch on `claimed_at = :claimedAt`, a value comparison standing in for run identity,
-  round-tripped through a microsecond-precision `timestamptz` column from a nanosecond-precision
-  `Instant`. Correct today — both statements bind the same `Instant` through the same path, so Postgres
-  rounds both identically — but brittle: any change to the binding makes the equality never match, and
-  the failure mode is silent (rows claimed, batch fetched empty, rows stranded until the stale window).
-  A per-invocation `claimed_by UUID` column is the robust shape.
+- **V144-shaped `ALTER TABLE` migrations race the pollers that own the table.**
+  `[DECIDED: accepted risk — skillars-deferred-124]`, documented structurally (not as a two-table
+  list, since this codebase has 44 `@Scheduled` methods across 36 classes) in
+  `docs/deployment/migration-conventions.md` item 7's new sub-point. The originally-recorded recovery
+  mechanism here ("leaves a failed `flyway_schema_history` row to repair by hand") was itself wrong for
+  the ordinary transactional-migration case this bullet is actually about — that doc's own
+  `flyway repair` guidance is scoped to the non-transactional `CREATE INDEX CONCURRENTLY` sidecar case
+  only; a transactional migration's `lock_timeout` abort rolls back cleanly with nothing to repair, and
+  the recovery step is simply retrying the deploy. Risk still theoretical: no production deploy of this
+  application has ever happened (skillars-deferred-117's owner decision, re-confirmed).
+- **Envers reconstruction of pre-V145 revisions returns `null` for `User.verificationStatus`.**
+  `[DECIDED: accepted risk — skillars-deferred-124]`, documented at `User.java`'s
+  `verificationStatus` field Javadoc. A backfill is not meaningfully possible (no historical value
+  exists for a revision predating the field's own existence), and building `AuditReader` usage solely
+  to test this would manufacture coverage for a feature `src/main` does not use today (re-confirmed:
+  `grep -rn "AuditReader\|AuditQuery" src/main` — no hits). Revisit if/when a real Envers-reconstruction
+  call site is ever added.
 - **`deleteStrike`'s 30-day cutoff is compared at different precisions in Java and SQL.**
-  `AdminCoachEnforcementService:317` evaluates `strikeCreatedAt.isAfter(cutoff)` at nanosecond precision
-  in the JVM, while `:318`'s `countByCoachIdAndCreatedAtAfter(coachId, cutoff)` binds the same object
-  through pgjdbc, which rounds to microseconds. A strike landing in the sub-microsecond gap is judged
-  in-window by the guard and out-of-window by the count, so the tiering can de-escalate one tier too far.
-  Probability ~1e-9 per call; recorded only because the comment added at `:296-297` explicitly asserts
-  "a boundary strike is judged identically wherever this local is used below", which does not hold across
-  the Java/SQL boundary.
+  `[DECIDED: accepted risk — skillars-deferred-124]`, comment corrected at
+  `AdminCoachEnforcementService.deleteStrike` (the cutoff-capture comment, near the strike-lookup and
+  lock-acquisition code). The original mechanism recorded here ("sub-microsecond gap") was itself
+  imprecise: `strikeCreatedAt` is read from a `timestamp with time zone` column and is therefore
+  already microsecond-quantised by the time the JVM sees it, so there is no sub-microsecond gap to fall
+  into. The real (still negligible) divergence is exact-equality *at* the microsecond boundary itself,
+  from the shared `cutoff` value being independently rounded on each side of the Java/pgjdbc boundary —
+  astronomically unlikely over a 30-day window, not the specific (and under-derived) `~1e-9` this bullet
+  originally cited. Accepted, not fixed — no `Clock`-seam test infrastructure exists to deterministically
+  exercise it.
+
+## Deferred from: code review of skillars-deferred-124-strike-lock-contention-outbox-resilience-and-schema-fixes (2026-09-19)
+
+_All four items below are pre-existing behaviour that skillars-deferred-124 neither introduced nor was
+scoped to address. Surfaced by that story's own `/bmad-code-review` (Edge Case Hunter + Blind Hunter
+layers)._
+
+- **Neither outbox/DLQ processor guards the claim/fetch phase, so a throw there strands the whole batch for a full stale window.** `VideoDeletionOutboxProcessor.process` (`:147-150`) and `RadarCompositeDlqProcessor.process` (`:121-123`) run `resetStaleClaimed` -> `claimPendingBatch` -> `findClaimedBatch` with no `try`/`finally`. If `findClaimedBatch` throws after `claimPendingBatch` has committed (connection reset, statement timeout, pool exhaustion), up to 50 rows are left `CLAIMED` and the method-local `runId` is lost, so `releaseClaimed` can never target them again. They wait the full `STALE_CLAIM_WINDOW` — 20 minutes for video, 10 for radar — even though the next tick 60s later could have taken them. skillars-deferred-124 AC2's new guard deliberately covers only the loop body. A `try`/`finally` calling `releaseClaimed(runId)` on abnormal exit would close it.
+- **`MAX_RUN_DURATION` is sampled only between rows, so the lock/stale invariant is not actually enforced.** Both processors test the deadline at the top of each iteration and never inside `processRow`, and skillars-deferred-124 AC2 added a further `handleFailure` DB transaction after that check. One row that blocks longer than `lockAtMostFor - MAX_RUN_DURATION` overruns the lock. For `RadarCompositeDlqProcessor` that margin is only 2 minutes (`PT10M` lock - 8 min budget) and `recalculateComposite` goes through `PessimisticLockRetryer` across three repositories.
+- **`RadarCompositeDlqProcessor`'s `STALE_CLAIM_WINDOW` (10 min) exactly equals its `lockAtMostFor` (`PT10M`), violating the invariant `VideoDeletionOutboxProcessor` declares mandatory.** That class's own Javadoc (`:57`) states `MAX_RUN_DURATION (12m) < LOCK_AT_MOST_FOR (15m) < STALE_CLAIM_WINDOW (20m)`; radar has no margin between the middle and outer terms. Once a run overruns, instance B's `resetStaleClaimed` frees rows A is still processing and re-claims them — `recalculateComposite` runs twice. `claimed_by` correctly blocks A's *writes*, but cannot undo an external side effect that already ran. The guard test `RadarCompositeDlqProcessorTest.runtimeBudget_staysStrictlyInsideLock` (`:268-282`) asserts `maxRun < lockAtMostFor` and `maxRun < staleWindow` but never `lockAtMostFor < staleWindow` — the one inequality radar violates. Pre-existing from skillars-deferred-123 Decision 3.
+- **Migrations use session-scoped `SET lock_timeout` rather than transaction-scoped `SET LOCAL`.** Plain `SET` survives the migration's commit and Flyway reuses one JDBC connection across migrations, so subsequent migrations silently inherit a `lock_timeout` they never declared. Repo-wide convention (`V144`, `V145`, `V149`, `V150` all do this) and `MigrationLint.Rule.MISSING_LOCK_TIMEOUT` accepts it, so changing it is a convention decision, not a one-migration fix.
+
+## Last audit: 2026-09-19 (skillars-deferred-124 dev-story completion)
+
+Of the 7 `code review of skillars-deferred-123…` bullets: 4 deleted (1 disproven — see below — plus 3
+genuinely fixed), 3 annotated `[DECIDED: accepted risk]` (documented, not fixed, each with its own
+revisit trigger). Also closed the still-open fourth-of-a-bullet in
+`code review of skillars-deferred-122…` (the `main."user"` width divergence). Full detail in
+`skillars-deferred-124-strike-lock-contention-outbox-resilience-and-schema-fixes.md`'s own Change Log
+and Dev Agent Record. Most significant: **the `ReliabilityStrikeService` mutual-lock-out bullet was
+disproven, not fixed** — the story's own mutation check (tighten a test to the described interleave,
+confirm it fails against the unfixed code, per this project's standard practice) instead revealed the
+test could not be made to fail at all. Investigation traced this to a premise error: `findByIdForUpdate`
+actually emits `FOR NO KEY UPDATE NOWAIT`, not `FOR UPDATE NOWAIT` as the bullet assumed. The mechanism:
+`PostgreSQLSqlAstTranslator.getForUpdate()` renders `" for no key update"` — the SQL-AST path a Spring
+Data `@Query` + `@Lock` takes, not the legacy `PostgreSQLDialect.getWriteLockString` (which would have
+emitted `" for update"`). (An earlier draft of this note attributed the downgrade to "Hibernate's
+`PESSIMISTIC_WRITE` downgrade when no version/key column forces the stronger mode" — no such rule
+exists; corrected during this story's own code review, 2026-09-19.) `FOR NO KEY UPDATE`
+does not conflict with the strike INSERT's FK-check `FOR KEY SHARE` (confirmed against a throwaway
+Postgres 16 container, independent of the application). No interleaving of the described code paths can
+produce the claimed deadlock. The bullet is deleted as disproven, not implemented, and no production code
+was changed for it — see the story's own Debug Log for the full empirical trail, including the control
+cases that confirm `FOR UPDATE NOWAIT` *would* have conflicted (the mechanism the bullet assumed
+Hibernate emits, but does not). This is the first claim in this ledger's history to be disproven by an
+actual mutation-check failure rather than by re-reading the source more carefully — worth flagging for
+future audits of this file: a plausible-sounding lock-mode/line-number citation is not a substitute for
+running the scenario. The three remaining bullets from that section (migration-vs-poller race, Envers
+null reconstruction, `deleteStrike` precision comment) are `[DECIDED: accepted risk]`, not closed —
+documented, not fixed, each with its own stated revisit trigger.

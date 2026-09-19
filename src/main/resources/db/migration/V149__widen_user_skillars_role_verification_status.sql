@@ -1,0 +1,56 @@
+-- skillars-deferred-124 AC3. Closes part (4) of the single bullet in deferred-work.md's "code review
+-- of skillars-deferred-122..." section (see that story's Provenance notes for why this is one bullet
+-- in four parts, not two — parts (1)-(3), the generate-ddl root-cause chain and the user_aud CHECK
+-- closure, were already closed by V145; this migration is the still-open fourth part).
+--
+-- THE DIVERGENCE. V138__baseline_schema.sql declares main."user".skillars_role/verification_status
+-- as character varying(20). User.java's @Column annotations for both carry no explicit `length`, so
+-- Hibernate's default for a String-backed column (both are @Enumerated(STRING)) is varchar(255). Per
+-- V145's own header (the skillars-deferred-123 investigation), the now-removed
+-- `spring.jpa.generate-ddl: true` had Hibernate silently issuing
+-- `alter table ... alter column ... set data type varchar(255)` against these two columns at every
+-- boot, in every environment — so every database that has ever booted this application carries
+-- varchar(255) here, while V138's own migration still declares varchar(20). A fresh, Flyway-only
+-- database (any CI run, any new environment) gets the varchar(20) the migration actually specifies —
+-- the two shapes disagree.
+--
+-- WIDEN, NOT NARROW — an explicit decision, not the only option considered. The alternative was
+-- @Column(length = 20) on User.skillarsRole/verificationStatus, preserving V138's originally-declared
+-- intent instead of chasing what auto-DDL left behind. Both enums' longest constants are well inside
+-- 20 characters (SkillarsRole: COACH/PARENT/PLAYER/ADMIN, longest PARENT/PLAYER at 6;
+-- SkillarsVerificationStatus: UNVERIFIED/EMAIL_VERIFIED/BASIC_VERIFIED/SUSPENDED, longest
+-- EMAIL_VERIFIED/BASIC_VERIFIED at 14 — re-confirmed against the actual enum source at
+-- implementation time), so a narrowing ALTER would not fail against today's data either way. Widening
+-- was chosen because it mirrors V145's own precedent for the identical situation on main.user_aud,
+-- is the lower-risk direction for a live, populated table (a widen never fails against existing data;
+-- a narrow, while safe here given the enum-length evidence, is the direction that COULD fail if that
+-- evidence ever changed), and an entity-side `length` annotation does nothing to a column that
+-- already exists at varchar(255) on every already-booted environment — it would only affect a fresh
+-- Hibernate-managed database, which this codebase does not have (Flyway is authoritative, ddl-auto is
+-- none). Per skillars-deferred-117's owner decision (re-confirmed still true at this story's creation
+-- time), no production deploy has ever happened, so "narrowing could fail against a populated table"
+-- was never the operative risk here — widening simply matches reality with the least motion.
+--
+-- CHECK CONSTRAINT — deliberately not added. Unlike V145's main.user_aud case (which added the
+-- columns for the first time, so Hibernate's `add column ... check (...)` DDL created a matching CHECK
+-- as a side effect of column creation), main."user" already had both columns since V138 — Hibernate's
+-- only possible action there was `alter column ... set data type`, which carries no CHECK clause of
+-- its own. Confirmed by direct inspection of V138__baseline_schema.sql: no
+-- user_skillars_role_check/user_verification_status_check (or any CHECK on these two columns) exists
+-- anywhere in that file's CONSTRAINT declarations for main."user". Adding one now would create a NEW
+-- divergence in the opposite direction (Flyway-built databases constrained, already-booted ones not) —
+-- the inverse of what this migration is for — so none is added.
+--
+-- LOCK (migration-conventions.md item 9). ALTER COLUMN ... TYPE below takes ACCESS EXCLUSIVE. Briefly:
+-- widening a character varying's declared length is metadata-only in Postgres (no table rewrite,
+-- unlike a narrowing ALTER, which would need to re-check every existing value). main."user" is not one
+-- of the actively-polled tables item 7's new sub-point names by example, but is swept periodically by
+-- UserAdminService.removeNotActivatedUsers, which that same sub-point also calls out. No online-safe
+-- alternative exists for a column type change beyond SET lock_timeout's bounded-wait guarantee;
+-- accepted per that item, given skillars-deferred-117's owner decision that no production deploy of
+-- this application has ever happened.
+SET lock_timeout = '5s';
+
+ALTER TABLE main."user"
+    ALTER COLUMN skillars_role TYPE character varying(255),
+    ALTER COLUMN verification_status TYPE character varying(255);

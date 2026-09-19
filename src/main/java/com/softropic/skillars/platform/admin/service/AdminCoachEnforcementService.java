@@ -33,13 +33,16 @@ import com.softropic.skillars.platform.payment.service.ReliabilityStrikeConfig;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -71,6 +74,17 @@ public class AdminCoachEnforcementService {
     private final ConfigService configService;
     private final ApplicationEventPublisher eventPublisher;
     private final PessimisticLockRetryer lockRetryer;
+
+    /**
+     * skillars-deferred-124 AC5: self-reference so {@link #recordManualStrikeAudit}'s
+     * {@code REQUIRES_NEW} is applied via the Spring AOP proxy, mirroring
+     * {@code UserAdminService.self} exactly. Field-injected (not constructor-injected): this class
+     * uses {@code @RequiredArgsConstructor}, and a constructor-injected self-reference would create an
+     * immediate circular dependency at bean-construction time — {@code @Autowired @Lazy} on a separate
+     * field defers resolution until first use, breaking the cycle.
+     */
+    @Autowired @Lazy
+    private AdminCoachEnforcementService self;
 
     // skillars-deferred-122 AC3: REPEATABLE_READ so the status read and the strike-count read below
     // share one consistent snapshot. Every writer of this pair (deleteStrike, reinstateCoach,
@@ -299,15 +313,43 @@ public class AdminCoachEnforcementService {
 
         CoachReliabilityStrike strike = reliabilityStrikeService.issue(coachId, bookingId, reason);
 
+        // skillars-deferred-124 AC5: audit-trail durability. issue() above is its own
+        // Propagation.REQUIRES_NEW transaction — it commits durably the moment it returns, independent
+        // of this method's own (default-propagation) transaction. The old inline save() here ran in
+        // THIS method's still-open transaction: if anything caused it to roll back after issue()
+        // returned (a deferred constraint firing at commit, a connection drop, a pod kill, or the audit
+        // save itself throwing for an unrelated reason), the strike was already durably committed but
+        // the record of which admin issued it was rolled back with it — a real enforcement action with
+        // zero audit trail. Routing through self.recordManualStrikeAudit's own REQUIRES_NEW closes that
+        // window to the narrowest possible: only the audit insert's own commit failing, not anything
+        // later in this method's transaction.
+        self.recordManualStrikeAudit(coachId, adminId, reason);
+
+        log.info("Manual strike issued: coachId={} bookingId={} reason={} adminId={}", coachId, bookingId, reason, adminId);
+        return strike.getId();
+    }
+
+    /**
+     * skillars-deferred-124 AC5: split out of {@link #issueManualStrike} so the audit write gets its
+     * own durable transaction, independent of the caller's. Must be {@code public} — Spring's default
+     * proxy-mode AOP silently ignores {@code @Transactional} on a non-public method regardless of how
+     * it is invoked, the exact trap {@code UserAdminService.deleteUserInTransaction} was already fixed
+     * for (skillars-deferred-122 AC8) and must not be repeated here.
+     *
+     * <p>skillars-deferred-124 code review 2026-09-19 (Patch): {@code reason} is the raw strike reason
+     * (e.g. {@code "COACH_NO_SHOW"}), not a pre-formatted message — this method builds the "Manual
+     * strike: " prefix itself now. It previously required every caller to prepend that exact prefix
+     * before calling, a trap for any future caller of this {@code public} method: {@link
+     * #issueManualStrike} was the only caller and always remembered to, but nothing enforced it.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordManualStrikeAudit(UUID coachId, Long adminId, String reason) {
         AdminActionLog actionLog = new AdminActionLog();
         actionLog.setAdminId(adminId);
         actionLog.setActionType(AdminActionType.COACH_STRIKE_ISSUED);
         actionLog.setReferenceId(coachId.toString());
         actionLog.setReason("Manual strike: " + reason);
         adminActionLogRepository.save(actionLog);
-
-        log.info("Manual strike issued: coachId={} bookingId={} reason={} adminId={}", coachId, bookingId, reason, adminId);
-        return strike.getId();
     }
 
     @Transactional
@@ -338,12 +380,27 @@ public class AdminCoachEnforcementService {
         // captured after it, alongside the out-of-window-guard use). Under lock contention
         // (PessimisticLockRetryer's ~3.2s worst-case budget) the window's start would otherwise
         // silently slide, so a strike created seconds before the 30-day boundary could be counted
-        // for an uncontended call and excluded for a contended one on the same coach. Matches
-        // countByCoachIdAndCreatedAtAfter's own strict `>` (a derived ...After query), so a boundary
-        // strike is judged identically wherever this local is used below. strikeCreatedAt (:279,
-        // captured before either) is unaffected by this move either way. Regression guard:
+        // for an uncontended call and excluded for a contended one on the same coach. strikeCreatedAt
+        // (:362, captured before either) is unaffected by this move either way. Regression guard:
         // AdminCoachEnforcementConcurrencyIT / AdminCoachEnforcementServiceIsolationTest — no
         // dedicated ordering test is added (no Clock seam exists today; see the story's AC2 Task 3).
+        //
+        // skillars-deferred-124 AC6, correcting an earlier overclaim here (was: "Matches
+        // countByCoachIdAndCreatedAtAfter's own strict `>` ..., so a boundary strike is judged
+        // identically wherever this local is used below" — worded as if the two comparisons below were
+        // exactly equivalent). They are not quite: strikeCreatedAt is read from a `timestamp with time
+        // zone` column, so it is already microsecond-quantised by the time the JVM sees it — there is
+        // no sub-microsecond gap for it to fall into. The real (and still negligible) divergence is
+        // exact-equality *at* the microsecond boundary itself: :415's strikeCreatedAt.isAfter(cutoff)
+        // compares two already-quantised instants in the JVM, while :416's
+        // countByCoachIdAndCreatedAtAfter(coachId, cutoff) binds the same `cutoff` object through
+        // pgjdbc, which independently rounds it — if that rounding moves `cutoff` by even one
+        // microsecond relative to how the JVM comparison saw it, a strike whose created_at sits at
+        // exactly that boundary microsecond could be judged in-window by one check and out-of-window
+        // by the other. Astronomically unlikely over a 30-day window and accepted, not fixed — no
+        // Clock-seam-based test infrastructure exists to even deterministically exercise it, and
+        // building one solely for this would be a larger investment than this negligible-probability
+        // finding warrants.
         OffsetDateTime cutoff = OffsetDateTime.now().minusDays(30);
 
         // skillars-deferred-121 AC1: locked read moved before the count computation, mirroring

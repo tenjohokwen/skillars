@@ -62,6 +62,13 @@ public class RadarCompositeDlqEntry {
     @Column(name = "claimed_at")
     private Instant claimedAt;
 
+    /**
+     * skillars-deferred-124 AC4: mirrors {@code VideoDeletionOutbox.claimedBy} — see that field's
+     * Javadoc for the full rationale.
+     */
+    @Column(name = "claimed_by")
+    private UUID claimedBy;
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();
