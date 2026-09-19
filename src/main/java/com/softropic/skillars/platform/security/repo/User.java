@@ -154,12 +154,39 @@ public class User extends Customer implements Serializable {
      * {@code hibernate.hbm2ddl.auto=update} in every profile. That line has been removed; see the
      * comment left in its place in {@code application.yaml} for the decompiled three-step mechanism.
      * With auto-DDL now off, {@code V145} is what creates these columns in a Flyway-only database.
+     *
+     * <p><strong>skillars-deferred-124 AC3.</strong> A second divergence closed: {@code
+     * main."user".skillars_role}/{@code verification_status} (this table, not {@code user_aud} above)
+     * were declared {@code varchar(20)} in {@code V138}, but the same auto-DDL mechanism this Javadoc
+     * already describes had silently widened them to {@code varchar(255)} on every already-booted
+     * environment (Hibernate's default width for an unannotated {@code @Enumerated(STRING)} column).
+     * {@code V149__widen_user_skillars_role_verification_status.sql} makes the width explicit and
+     * Flyway-tracked at {@code varchar(255)}, matching what every environment already carries, rather
+     * than narrowing to what {@code V138} originally (and now stale-ly) declared.
      */
     @Enumerated(EnumType.STRING)
     @Column(name = "skillars_role")
     private SkillarsRole skillarsRole;
 
-    /** skillars-deferred-123 AC5: see {@link #skillarsRole}'s Javadoc — identical finding and fix. */
+    /**
+     * skillars-deferred-123 AC5: see {@link #skillarsRole}'s Javadoc — identical finding and fix.
+     * skillars-deferred-124 AC3: see the same field's Javadoc for the width-reconciliation follow-up —
+     * applies identically here.
+     *
+     * <p><strong>skillars-deferred-124 AC8, accepted risk — `[DECIDED: accepted risk —
+     * skillars-deferred-124]`.</strong> {@code V145} added {@code main.user_aud.verification_status}
+     * with no backfill, and that audit column is nullable while this field's own column is
+     * {@code NOT NULL DEFAULT 'UNVERIFIED'} — so an Envers historical reconstruction of a revision that
+     * predates this column's own existence would return {@code null} for a field this declaration
+     * itself defaults to a non-null value below. Not fixed: a backfill is not meaningfully
+     * possible (there is no historical value to backfill for a revision that predates the field's own
+     * existence), and building {@code AuditReader} usage solely to test a code path nothing in
+     * {@code src/main} exercises today (re-confirmed: {@code grep -rn "AuditReader\|AuditQuery" src/main}
+     * returns nothing) would manufacture coverage for a feature that does not exist yet, not close a
+     * real gap. Revisit if/when this codebase ever adds a real Envers-reconstruction call site — at
+     * that point the null-vs-non-null-default mismatch becomes a genuine bug to fix, not a latent one
+     * to document.
+     */
     @Enumerated(EnumType.STRING)
     @Column(name = "verification_status")
     private SkillarsVerificationStatus verificationStatus = SkillarsVerificationStatus.UNVERIFIED;

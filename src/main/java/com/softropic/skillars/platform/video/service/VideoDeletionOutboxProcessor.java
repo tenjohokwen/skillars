@@ -96,7 +96,10 @@ public class VideoDeletionOutboxProcessor {
      * duplicate {@code videoProviderAdapter.deleteAsset} calls and duplicate {@code
      * video_deletion_log} rows, not merely a shared-field race. AC3 scoped the fetch to {@code
      * claimed_at = :claimedAt} (this run's own claim instant, stamped by {@code claimPendingBatch}),
-     * closing that path completely.
+     * closing that path completely. {@code skillars-deferred-124 AC4} later replaced that predicate
+     * with {@code claimed_by} (a dedicated run-identity {@code UUID}, see {@link
+     * VideoDeletionOutbox#getClaimedBy()}'s Javadoc) — {@code claimed_at} still flows to {@code
+     * resetStaleClaimed}'s staleness math below, but is no longer the identity check itself.
      *
      * <p><strong>{@code lockAtMostFor} vs {@link #STALE_CLAIM_WINDOW}.</strong> {@code
      * resetStaleClaimed} now keys staleness on <em>claim</em> time, not eligibility time — the other
@@ -115,6 +118,22 @@ public class VideoDeletionOutboxProcessor {
      * fast-fail-and-immediately-refire edge case. Crash-recovery latency (how long a stuck row from a
      * genuinely crashed instance waits before {@code resetStaleClaimed} frees it) is 20 minutes —
      * immaterial for a deletion outbox polled every 60 seconds under normal operation.
+     *
+     * <p><strong>skillars-deferred-124 AC2</strong> (revised by its own code review, 2026-09-19).
+     * {@link #processRow} does not catch anything itself — every exception it can throw (the
+     * {@code deleteAsset}+{@code completeRowWithNullAsset} pair, the drill-ref branch's {@code
+     * transactionTemplate.execute}, the plain {@code completeRow} path, {@code
+     * videoRepository.findById}) propagates to {@link #process}'s own loop, which wraps each {@link
+     * #processRow} call in a guard that routes the exception through {@link #handleFailure} — the SOLE
+     * call site for it. An earlier version of this design had {@code processRow} call {@code
+     * handleFailure} itself for the {@code deleteAsset} case and relied on this outer guard only as a
+     * backstop for everything else; that let {@code handleFailure}'s own failure trigger a SECOND
+     * {@code handleFailure} call from here, double-counting {@code attempts} and overwriting the real
+     * exception's message with the second failure's. Routing every path through one call site fixes
+     * both: {@code handleFailure} runs at most once per row per tick, and the exception it receives is
+     * always the true original cause. Routing to {@code handleFailure} — rather than a bare
+     * log-and-continue — lets a chronically-throwing row still reach {@code max_attempts}/{@code DEAD}
+     * instead of cycling {@code CLAIMED} -> {@code resetStaleClaimed} -> re-claimed -> throws forever.
      */
     @Scheduled(fixedDelayString   = "${platform.video.deletion.outbox_poll_delay_ms:60000}",
                initialDelayString = "${platform.video.deletion.outbox_initial_delay_ms:0}")
@@ -124,41 +143,79 @@ public class VideoDeletionOutboxProcessor {
                    lockAtMostFor = LOCK_AT_MOST_FOR,
                    lockAtLeastFor = "${platform.video.deletion.outbox_lock_at_least:PT30S}")
     public void process() {
-        // skillars-deferred-123 AC3: one Instant for the whole tick — the same value stamps
-        // claimPendingBatch's claimed_at and scopes findClaimedBatch's fetch, so this run's own claim
-        // is genuinely identifiable (closing the duplicate-processing path a second instance's
-        // globally-scoped fetch used to leave open even after resetStaleClaimed was itself fixed).
+        // skillars-deferred-123 AC3: one Instant for the whole tick — stamps claimPendingBatch's
+        // claimed_at and feeds resetStaleClaimed's staleness check (see STALE_CLAIM_WINDOW's Javadoc).
         Instant runClaimedAt = Instant.now();
+        // skillars-deferred-124 AC4: one UUID for the whole tick, alongside runClaimedAt — this run's
+        // own identity token. claimPendingBatch stamps it, and findClaimedBatch/releaseClaimed/
+        // completeClaimed/failClaimed (via processRow) now key their identity predicate on it instead
+        // of claimed_at-exact-equality. See VideoDeletionOutbox.claimedBy's Javadoc for why.
+        UUID runId = UUID.randomUUID();
         // Reset any rows stuck in CLAIMED state for longer than STALE_CLAIM_WINDOW (crashed run
         // recovery) — see STALE_CLAIM_WINDOW's own Javadoc for the invariant this must respect.
         outboxRepository.resetStaleClaimed(runClaimedAt.minus(STALE_CLAIM_WINDOW));
         // Atomically claim a batch of PENDING rows; row locks released after the UPDATE commits
-        outboxRepository.claimPendingBatch(runClaimedAt, BATCH_SIZE);
-        List<VideoDeletionOutbox> rows = outboxRepository.findClaimedBatch(runClaimedAt, BATCH_SIZE);
+        outboxRepository.claimPendingBatch(runClaimedAt, runId, BATCH_SIZE);
+        List<VideoDeletionOutbox> rows = outboxRepository.findClaimedBatch(runId, BATCH_SIZE);
 
         // skillars-deferred-123 code review 2026-09-18 (Decision 3): self-terminate before this run
         // could outlive its own lock. See MAX_RUN_DURATION's Javadoc for why the previous
         // per-item-cost sizing was not a real guarantee.
         Instant deadline = runClaimedAt.plus(MAX_RUN_DURATION);
-        int processed = 0;
+        // skillars-deferred-124 code review 2026-09-19 (Patch): named "attempted", not "processed" —
+        // it counts loop iterations entered, including a row that AC2's own outer guard routed to
+        // handleFailure (success or failure) and even the rare case where handleFailure itself threw
+        // and left the row CLAIMED. "Processed" implied every counted row reached a resolved terminal
+        // state, which overstated genuine forward progress in the bail-out log below.
+        int attempted = 0;
         for (VideoDeletionOutbox row : rows) {
             if (Instant.now().isAfter(deadline)) {
-                int released = outboxRepository.releaseClaimed(runClaimedAt);
-                log.warn("Stopped video deletion outbox processing after {}/{} rows — hit the {} safety "
-                    + "budget under lockAtMostFor={}; released {} unprocessed row(s) back to PENDING for "
-                    + "the next scheduled run", processed, rows.size(), MAX_RUN_DURATION,
+                int released = outboxRepository.releaseClaimed(runId);
+                log.warn("Stopped video deletion outbox processing after {}/{} rows attempted — hit the "
+                    + "{} safety budget under lockAtMostFor={}; released {} unprocessed row(s) back to "
+                    + "PENDING for the next scheduled run", attempted, rows.size(), MAX_RUN_DURATION,
                     LOCK_AT_MOST_FOR, released);
                 return;
             }
-            processRow(row, runClaimedAt);
-            processed++;
+            // skillars-deferred-124 AC2: loop-level guard, and (code review 2026-09-19 response) the
+            // SOLE call site for handleFailure — processRow itself no longer catches anything, it just
+            // lets whatever it throws (deleteAsset, the drill-ref branch's transactionTemplate.execute,
+            // the plain completeRow path, videoRepository.findById — any of it) propagate here. Before
+            // this, an exception from any of those used to propagate out of this loop and abandon every
+            // remaining row in the batch. Routing through handleFailure — the same attempt-increment/
+            // backoff/dead-letter path every other failure already gets — rather than a bare log means
+            // a chronically-throwing row still reaches max_attempts/DEAD instead of cycling CLAIMED ->
+            // resetStaleClaimed -> re-claimed -> throws forever (resetStaleClaimed only resets
+            // status/claimed_at, never attempts/next_retry_at). Logged at WARN, not ERROR: reaching
+            // here and going through handleFailure for backoff/retry bookkeeping IS the normal outcome
+            // for an ordinary recoverable failure (a Bunny.net hiccup, a transient DB blip) — this is
+            // the whole reason the retry/backoff/dead-letter mechanism exists, not a paging-worthy
+            // surprise. handleFailure itself gets its own inner guard, logged at ERROR: a failure
+            // inside its own transactionTemplate.execute (e.g. configService.getBoundedLong) is the
+            // genuinely exceptional case — this row cannot even be marked failed for this tick, and is
+            // simply left CLAIMED, recovered once STALE_CLAIM_WINDOW elapses on the next stale-claim
+            // sweep — still cannot abort the batch either way.
+            try {
+                processRow(row, runId);
+            } catch (Exception e) {
+                log.warn("[ROW_FAILURE videoId={} outboxId={}] processRow failed — routing to "
+                    + "handleFailure for attempt/backoff bookkeeping", row.getVideoId(), row.getId(), e);
+                try {
+                    handleFailure(row, e, runId);
+                } catch (Exception inner) {
+                    log.error("[HANDLE_FAILURE_ITSELF_THREW videoId={} outboxId={}] handleFailure threw "
+                        + "while recording the failure above — row left CLAIMED, recovered by the next "
+                        + "stale-claim sweep", row.getVideoId(), row.getId(), inner);
+                }
+            }
+            attempted++;
         }
     }
 
-    private void processRow(VideoDeletionOutbox row, Instant runClaimedAt) {
+    private void processRow(VideoDeletionOutbox row, UUID runId) {
         // Null Bunny ID short-circuit: video never reached encoding
         if (row.getBunnyVideoId() == null) {
-            completeRow(row, null, runClaimedAt);
+            completeRow(row, null, runId);
             return;
         }
 
@@ -174,7 +231,7 @@ public class VideoDeletionOutboxProcessor {
                 // skillars-deferred-123 code review 2026-09-18 (Decision 5): claim the terminal
                 // transition FIRST. decrementRefCount is a real, non-idempotent side effect, so it
                 // must not run at all if this invocation no longer owns the claim.
-                if (outboxRepository.completeClaimed(row.getId(), runClaimedAt) == 0) {
+                if (outboxRepository.completeClaimed(row.getId(), runId) == 0) {
                     return Boolean.FALSE;
                 }
                 int decremented = drillVideoRefRepository.decrementRefCount(drillId);
@@ -197,22 +254,26 @@ public class VideoDeletionOutboxProcessor {
         // Reload video: if providerAssetId already nulled, deletion already processed
         Optional<Video> videoOpt = videoRepository.findById(row.getVideoId());
         if (videoOpt.isPresent() && videoOpt.get().getProviderAssetId() == null) {
-            completeRow(row, row.getBunnyVideoId(), runClaimedAt);
+            completeRow(row, row.getBunnyVideoId(), runId);
             return;
         }
 
-        // Physical deletion via Bunny.net — outside @Transactional
-        try {
-            videoProviderAdapter.deleteAsset(row.getBunnyVideoId());
-            completeRowWithNullAsset(row, runClaimedAt);
-        } catch (Exception e) {
-            handleFailure(row, e, runClaimedAt);
-        }
+        // Physical deletion via Bunny.net — outside @Transactional. Exceptions here are deliberately
+        // NOT caught locally (code review 2026-09-19, response to AC2's own review): process()'s outer
+        // guard is now the sole call site for handleFailure on every processRow path, not just this
+        // one. Before this, a local catch-and-call-handleFailure here meant that if handleFailure
+        // itself threw (e.g. configService.getBoundedLong), that exception escaped this method
+        // uncaught and reached the outer guard, which called handleFailure a SECOND time on the same
+        // row — double-counting attempts and overwriting this exception's own message with
+        // handleFailure's. Letting it propagate makes handleFailure single-call, which fixes both the
+        // double-count and the lost-original-error problem as one structural change.
+        videoProviderAdapter.deleteAsset(row.getBunnyVideoId());
+        completeRowWithNullAsset(row, runId);
     }
 
-    private void completeRow(VideoDeletionOutbox row, String bunnyVideoId, Instant runClaimedAt) {
+    private void completeRow(VideoDeletionOutbox row, String bunnyVideoId, UUID runId) {
         Boolean applied = transactionTemplate.execute(status -> {
-            if (outboxRepository.completeClaimed(row.getId(), runClaimedAt) == 0) {
+            if (outboxRepository.completeClaimed(row.getId(), runId) == 0) {
                 return Boolean.FALSE;
             }
             appendDeletionLog(row, bunnyVideoId);
@@ -223,9 +284,9 @@ public class VideoDeletionOutboxProcessor {
         }
     }
 
-    private void completeRowWithNullAsset(VideoDeletionOutbox row, Instant runClaimedAt) {
+    private void completeRowWithNullAsset(VideoDeletionOutbox row, UUID runId) {
         Boolean applied = transactionTemplate.execute(status -> {
-            if (outboxRepository.completeClaimed(row.getId(), runClaimedAt) == 0) {
+            if (outboxRepository.completeClaimed(row.getId(), runId) == 0) {
                 return Boolean.FALSE;
             }
             videoRepository.findById(row.getVideoId()).ifPresent(v -> {
@@ -243,16 +304,18 @@ public class VideoDeletionOutboxProcessor {
         }
     }
 
-    private void handleFailure(VideoDeletionOutbox row, Exception e, Instant runClaimedAt) {
+    private void handleFailure(VideoDeletionOutbox row, Exception e, UUID runId) {
         Boolean applied = transactionTemplate.execute(status -> {
             row.setAttempts(row.getAttempts() + 1);
             row.setLastError(e.getMessage());
             // skillars-deferred-107 AC2: 0/neg would dead-letter on the first attempt (or never).
             int maxAttempts = (int) configService.getBoundedLong("platform.video.deletion.max_attempts", 5L, 1L, 100L);
-            // skillars-deferred-123 AC3: claimed_at cleared on BOTH outcomes below — DEAD as well as
-            // PENDING. A DEAD row keeping a stale non-null claimed_at would give a false claim-age
-            // reading if the row were ever re-queued by an unrelated path.
+            // skillars-deferred-123 AC3 / skillars-deferred-124 AC4: claimed_at/claimed_by cleared on
+            // BOTH outcomes below — DEAD as well as PENDING. A DEAD row keeping a stale non-null
+            // claimed_at/claimed_by would give a false claim-age/identity reading if the row were ever
+            // re-queued by an unrelated path.
             row.setClaimedAt(null);
+            row.setClaimedBy(null);
             if (row.getAttempts() >= maxAttempts) {
                 row.setStatus("DEAD");
                 log.error("[DEAD_LETTER videoId={} triggeredBy={}]", row.getVideoId(), row.getTriggeredBy());
@@ -265,7 +328,7 @@ public class VideoDeletionOutboxProcessor {
             // the claim. attempts/nextRetryAt above are derived from this invocation's own possibly-
             // stale snapshot, so if another instance has re-claimed and advanced the row, writing them
             // would reset its attempt counter — the path by which max_attempts could never be reached.
-            return outboxRepository.failClaimed(row.getId(), runClaimedAt, row.getStatus(),
+            return outboxRepository.failClaimed(row.getId(), runId, row.getStatus(),
                 row.getAttempts(), row.getLastError(), row.getNextRetryAt()) > 0;
         });
         if (!Boolean.TRUE.equals(applied)) {

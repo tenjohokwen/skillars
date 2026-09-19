@@ -104,22 +104,34 @@
 				  beanutils CVE-2025-48734. commons-validator 1.9.0 declares commons-beanutils
 				          1.9.4, which is the vulnerable version. Fix: 1.11.0.
 
-				  The bcprov pin that used to sit here was REMOVED, by exactly the rule above.
-				  It was added for CVE-2025-14813 (CRITICAL) when spring-cloud-commons 4.3.1
-				  brought the vulnerable 1.80. Under spring-cloud 2025.0.3, spring-cloud-commons
-				  4.3.3 brings 1.80.2 on its own, and Trivy lists 1.80.2 as a fixed version
-				  (fixes are 1.80.2 / 1.81.1 / 1.84). Upstream now satisfies it, so carrying our
-				  own version here only creates a second thing to maintain: Dependabot had
-				  already walked the pin to 1.85 (PR #26) purely because it existed.
-
-				  If a future bcprov CVE needs a version newer than whatever spring-cloud-commons
-				  ships, re-add the pin here rather than bumping spring-cloud for it. The
-				  pr-build Trivy scan is what tells you.
+				  The bcprov pin that used to sit here was REMOVED, by exactly the rule above,
+				  then RE-ADDED below (skillars-deferred-124) once that removal's own premise
+				  stopped holding; see the pin's own comment for the current story.
 				-->
 				<dependency>
 					<groupId>commons-beanutils</groupId>
 					<artifactId>commons-beanutils</artifactId>
 					<version>1.11.0</version>
+				</dependency>
+
+				<!--
+				  Transitive security pin, same rule as the commons-beanutils pin above.
+				  CVE-2026-8763 (CRITICAL, Name Constraints bypass via trailing dot) and
+				  CVE-2026-13506 (HIGH, DoS via lazy ASN.1 sequence parsing). Arrives via
+				  org.springframework.cloud:spring-cloud-starter-circuitbreaker-resilience4j
+				  -> spring-cloud-starter:4.3.3 -> bcprov-jdk18on:1.80.2 (confirmed via
+				  `mvn dependency:tree -Dincludes=org.bouncycastle`), spring-cloud-commons'
+				  own version. Fixed version per Trivy is 1.85. Drop this pin once
+				  spring-cloud-starter brings 1.85+ on its own, the same "the earlier pin
+				  was removed once upstream caught up" situation the commons-beanutils
+				  comment above describes, now recurring for the same artifact per that
+				  comment's own "if a future bcprov CVE needs a version newer than whatever
+				  spring-cloud-commons ships, re-add the pin here" rule.
+				-->
+				<dependency>
+					<groupId>org.bouncycastle</groupId>
+					<artifactId>bcprov-jdk18on</artifactId>
+					<version>1.85</version>
 				</dependency>
 
 				<!--

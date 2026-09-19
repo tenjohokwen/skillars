@@ -4,6 +4,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.admin.service.AdminCoachEnforcementService;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeConfig;
 import com.softropic.skillars.platform.security.SecurityIT;
@@ -51,6 +52,7 @@ class ManualStrikeIT extends AbstractIntegrationTest {
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private ConfigService configService;
+    @Autowired private AdminCoachEnforcementService adminCoachEnforcementService;
 
     @LocalServerPort private int randomServerPort;
 
@@ -127,6 +129,74 @@ class ManualStrikeIT extends AbstractIntegrationTest {
             "SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ?",
             Long.class, coachProfileId);
         assertThat(strikeCount).isEqualTo(1L);
+    }
+
+    /**
+     * skillars-deferred-124 AC5 Task 5, happy-path half. No existing test in this class asserted the
+     * {@code admin.admin_action_log} row's own content ({@code admin_id}/{@code reason}) for the
+     * {@code COACH_STRIKE_ISSUED} action-type — only the strike-row count above. Written to keep
+     * passing unchanged after the AC5 {@code REQUIRES_NEW} self-proxy split (this is the "no injected
+     * rollback" control case for {@link #issueManualStrike_outerTransactionRollsBack_strikeAndAuditBothSurviveViaRequiresNew}).
+     */
+    @Test
+    void issueManualStrike_normalCall_writesAuditLogWithCorrectAdminIdAndReason() {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/coaches/" + coachProfileId + "/strikes",
+            HttpMethod.POST,
+            Map.of("bookingId", bookingId.toString(), "reason", "COACH_NO_SHOW"),
+            authenticatedHeaders(adminCookies), Map.class);
+
+        Map<String, Object> actionLog = jdbcTemplate.queryForMap(
+            "SELECT admin_id, reason FROM admin.admin_action_log "
+                + "WHERE reference_id = ? AND action_type = 'COACH_STRIKE_ISSUED'",
+            coachProfileId.toString());
+        assertThat(actionLog.get("admin_id")).isEqualTo(ADMIN_ID);
+        assertThat(actionLog.get("reason")).isEqualTo("Manual strike: COACH_NO_SHOW");
+    }
+
+    /**
+     * skillars-deferred-124 AC5 Task 5, durability half. {@code issueManualStrike} itself has no point
+     * left to throw from after both {@code issue()} and {@code self.recordManualStrikeAudit} return
+     * (only {@code log.info}/{@code return} remain) — a test throwing from inside the HTTP-driven call
+     * would let the method's own {@code @Transactional} boundary commit before control ever returns to
+     * the test either way. Instead, this opens the test's OWN ambient {@code TransactionTemplate}
+     * (default {@code REQUIRED} propagation, calling the service directly rather than through HTTP so
+     * it runs on the test's own thread) so {@code issueManualStrike}'s {@code @Transactional} JOINS it;
+     * throwing after the call returns, still inside {@code execute()}, rolls back only the ambient
+     * transaction. {@code issue()}'s and {@code recordManualStrikeAudit}'s own
+     * {@code REQUIRES_NEW} writes are unaffected by definition — both must still be visible via a fresh
+     * {@code jdbcTemplate} read once {@code execute()} has returned, mirroring this class's own
+     * established jdbcTemplate-against-committed-state pattern used throughout.
+     */
+    @Test
+    void issueManualStrike_outerTransactionRollsBack_strikeAndAuditBothSurviveViaRequiresNew() {
+        UUID[] strikeId = new UUID[1];
+
+        assertThatThrownBy(() -> transactionTemplate.execute(status -> {
+            strikeId[0] = adminCoachEnforcementService.issueManualStrike(
+                coachProfileId, bookingId, "COACH_NO_SHOW", ADMIN_ID);
+            throw new RuntimeException(
+                "simulated failure in the outer transaction, after issue()+recordManualStrikeAudit both returned");
+        })).isInstanceOf(RuntimeException.class)
+            .hasMessageContaining("simulated failure");
+
+        Long strikeCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE id = ?",
+            Long.class, strikeId[0]);
+        assertThat(strikeCount)
+            .as("issue()'s own REQUIRES_NEW commit must survive the outer transaction's rollback")
+            .isEqualTo(1L);
+
+        Map<String, Object> actionLog = jdbcTemplate.queryForMap(
+            "SELECT admin_id, reason FROM admin.admin_action_log "
+                + "WHERE reference_id = ? AND action_type = 'COACH_STRIKE_ISSUED'",
+            coachProfileId.toString());
+        assertThat(actionLog.get("admin_id"))
+            .as("recordManualStrikeAudit's own REQUIRES_NEW commit must also survive the outer "
+                + "transaction's rollback — the exact gap AC5 closes")
+            .isEqualTo(ADMIN_ID);
+        assertThat(actionLog.get("reason")).isEqualTo("Manual strike: COACH_NO_SHOW");
     }
 
     /**

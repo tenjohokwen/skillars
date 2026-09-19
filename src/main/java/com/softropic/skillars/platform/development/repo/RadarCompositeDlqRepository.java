@@ -16,11 +16,14 @@ public interface RadarCompositeDlqRepository extends JpaRepository<RadarComposit
     // skillars-deferred-123 AC3: claimed_at stamped/scoped/keyed identically — see
     // VideoDeletionOutboxRepository's own comments on each of the three queries below for the
     // full rationale (RadarCompositeDlqEntry.claimedAt's Javadoc points back here too).
+    // skillars-deferred-124 AC4: claimed_by stamped/keyed identically too — see
+    // VideoDeletionOutboxRepository.claimPendingBatch's own comment and
+    // RadarCompositeDlqEntry.claimedBy's Javadoc.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE development.radar_composite_dlq
-        SET status = 'CLAIMED', claimed_at = :now
+        SET status = 'CLAIMED', claimed_at = :now, claimed_by = :runId
         WHERE id = ANY(
             SELECT id FROM development.radar_composite_dlq
             WHERE status = 'PENDING' AND next_retry_at <= :now
@@ -29,39 +32,45 @@ public interface RadarCompositeDlqRepository extends JpaRepository<RadarComposit
             FOR UPDATE SKIP LOCKED
         )
         """, nativeQuery = true)
-    int claimPendingBatch(@Param("now") Instant now, @Param("batchSize") int batchSize);
+    int claimPendingBatch(@Param("now") Instant now, @Param("runId") UUID runId, @Param("batchSize") int batchSize);
 
+    // skillars-deferred-124 AC4: identity predicate moved from claimed_at-exact-equality to
+    // claimed_by — see VideoDeletionOutboxRepository.findClaimedBatch's identical comment.
     @Query(value = """
         SELECT * FROM development.radar_composite_dlq
-        WHERE status = 'CLAIMED' AND claimed_at = :claimedAt
+        WHERE status = 'CLAIMED' AND claimed_by = :runId
         ORDER BY next_retry_at ASC
         LIMIT :batchSize
         """, nativeQuery = true)
-    List<RadarCompositeDlqEntry> findClaimedBatch(@Param("claimedAt") Instant claimedAt, @Param("batchSize") int batchSize);
+    List<RadarCompositeDlqEntry> findClaimedBatch(@Param("runId") UUID runId, @Param("batchSize") int batchSize);
 
     // skillars-deferred-123 code review 2026-09-18 (Patch): matches claimed_at IS NULL too, not just
     // claimed_at IS NOT NULL — see VideoDeletionOutboxRepository.resetStaleClaimed's comment for the
     // full rolling-deploy-stranding rationale. Also clears claimed_at back to NULL on this transition,
     // matching the field's documented invariant.
+    // skillars-deferred-124 AC4: WHERE predicate stays keyed on claimed_at (a time comparison, not an
+    // identity one), but claimed_by is cleared here too, same rationale as
+    // VideoDeletionOutboxRepository.resetStaleClaimed.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE development.radar_composite_dlq
-        SET status = 'PENDING', claimed_at = NULL
+        SET status = 'PENDING', claimed_at = NULL, claimed_by = NULL
         WHERE status = 'CLAIMED' AND (claimed_at IS NULL OR claimed_at < :deadline)
         """, nativeQuery = true)
     int resetStaleClaimed(@Param("deadline") Instant deadline);
 
     // skillars-deferred-123 code review 2026-09-18 (Decision 3): mirrors
     // VideoDeletionOutboxRepository.releaseClaimed — see that method's comment for the full rationale.
+    // skillars-deferred-124 AC4: identity predicate moved to claimed_by, same as that method.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE development.radar_composite_dlq
-        SET status = 'PENDING', claimed_at = NULL
-        WHERE status = 'CLAIMED' AND claimed_at = :claimedAt
+        SET status = 'PENDING', claimed_at = NULL, claimed_by = NULL
+        WHERE status = 'CLAIMED' AND claimed_by = :runId
         """, nativeQuery = true)
-    int releaseClaimed(@Param("claimedAt") Instant claimedAt);
+    int releaseClaimed(@Param("runId") UUID runId);
 
     // skillars-deferred-123 code review 2026-09-18 (Decision 5): mirrors
     // VideoDeletionOutboxRepository.completeClaimed/failClaimed — see those methods' comment for the
@@ -70,24 +79,25 @@ public interface RadarCompositeDlqRepository extends JpaRepository<RadarComposit
     // preventing the concurrent invocation in the first place"; that only holds while the lock is
     // held, and lockAtMostFor expiry is the documented end of that guarantee, so these predicates are
     // what actually close it.
+    // skillars-deferred-124 AC4: identity predicate moved to claimed_by, same as the video sibling.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE development.radar_composite_dlq
-        SET status = 'COMPLETED', claimed_at = NULL
-        WHERE id = :id AND status = 'CLAIMED' AND claimed_at = :claimedAt
+        SET status = 'COMPLETED', claimed_at = NULL, claimed_by = NULL
+        WHERE id = :id AND status = 'CLAIMED' AND claimed_by = :runId
         """, nativeQuery = true)
-    int completeClaimed(@Param("id") UUID id, @Param("claimedAt") Instant claimedAt);
+    int completeClaimed(@Param("id") UUID id, @Param("runId") UUID runId);
 
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE development.radar_composite_dlq
         SET status = :status, attempts = :attempts, last_error = :lastError,
-            next_retry_at = :nextRetryAt, claimed_at = NULL
-        WHERE id = :id AND status = 'CLAIMED' AND claimed_at = :claimedAt
+            next_retry_at = :nextRetryAt, claimed_at = NULL, claimed_by = NULL
+        WHERE id = :id AND status = 'CLAIMED' AND claimed_by = :runId
         """, nativeQuery = true)
-    int failClaimed(@Param("id") UUID id, @Param("claimedAt") Instant claimedAt,
+    int failClaimed(@Param("id") UUID id, @Param("runId") UUID runId,
                     @Param("status") String status, @Param("attempts") int attempts,
                     @Param("lastError") String lastError, @Param("nextRetryAt") Instant nextRetryAt);
 }

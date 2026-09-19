@@ -47,22 +47,22 @@ class RadarCompositeDlqRepositoryIT extends AbstractIntegrationTest {
      * round trip.
      */
     @Test
-    void claimPendingBatch_stampsClaimedAtSoFindClaimedBatchReturnsIt() {
+    void claimPendingBatch_stampsClaimedAtAndClaimedBySoFindClaimedBatchReturnsIt() {
         RadarCompositeDlqEntry row = seedEntry();
         row.setNextRetryAt(Instant.now().minusSeconds(5));
         dlqRepository.save(row);
 
         Instant runClaimedAt = Instant.now();
-        int claimed = dlqRepository.claimPendingBatch(runClaimedAt, 50);
+        UUID runId = UUID.randomUUID();
+        int claimed = dlqRepository.claimPendingBatch(runClaimedAt, runId, 50);
         assertThat(claimed).isEqualTo(1);
 
-        // findClaimedBatch matching at all (rather than returning zero rows) already proves
-        // claimPendingBatch's claimed_at stamp round-trips through the real query correctly — see the
-        // sibling findClaimedBatch_doesNotReturnRowsClaimedByADifferentRun test for why this equality
-        // is safe to rely on (both statements bind the same Instant through the same JDBC path).
-        List<RadarCompositeDlqEntry> batch = dlqRepository.findClaimedBatch(runClaimedAt, 50);
+        // skillars-deferred-124 AC4: findClaimedBatch now keys on claimed_by (runId), not
+        // claimed_at-exact-equality — see VideoDeletionOutboxProcessorIT's identical sibling test.
+        List<RadarCompositeDlqEntry> batch = dlqRepository.findClaimedBatch(runId, 50);
         assertThat(batch).extracting(RadarCompositeDlqEntry::getId).containsExactly(row.getId());
         assertThat(batch.get(0).getClaimedAt()).isNotNull();
+        assertThat(batch.get(0).getClaimedBy()).isEqualTo(runId);
     }
 
     /**
@@ -76,6 +76,7 @@ class RadarCompositeDlqRepositoryIT extends AbstractIntegrationTest {
         RadarCompositeDlqEntry row = seedEntry();
         row.setStatus("CLAIMED");
         row.setClaimedAt(Instant.now().minus(30, ChronoUnit.MINUTES));
+        row.setClaimedBy(UUID.randomUUID());
         dlqRepository.save(row);
 
         int reset = dlqRepository.resetStaleClaimed(Instant.now().minus(10, ChronoUnit.MINUTES));
@@ -84,6 +85,8 @@ class RadarCompositeDlqRepositoryIT extends AbstractIntegrationTest {
         RadarCompositeDlqEntry recovered = dlqRepository.findById(row.getId()).orElseThrow();
         assertThat(recovered.getStatus()).isEqualTo("PENDING");
         assertThat(recovered.getClaimedAt()).isNull();
+        // skillars-deferred-124 AC4 Task 7: claimed_by must also clear on this transition.
+        assertThat(recovered.getClaimedBy()).isNull();
     }
 
     /** Mirrors VideoDeletionOutboxProcessorIT#resetStaleClaimed_doesNotReclaimRecentlyClaimedButLongBacklogedRow(). */
@@ -107,18 +110,20 @@ class RadarCompositeDlqRepositoryIT extends AbstractIntegrationTest {
     void findClaimedBatch_doesNotReturnRowsClaimedByADifferentRun() {
         RadarCompositeDlqEntry rowA = seedEntry();
         RadarCompositeDlqEntry rowB = seedEntry();
-        Instant runAClaimedAt = Instant.now().minusSeconds(120);
-        Instant runBClaimedAt = Instant.now();
+        UUID runAId = UUID.randomUUID();
+        UUID runBId = UUID.randomUUID();
 
         rowA.setStatus("CLAIMED");
-        rowA.setClaimedAt(runAClaimedAt);
+        rowA.setClaimedAt(Instant.now().minusSeconds(120));
+        rowA.setClaimedBy(runAId);
         dlqRepository.save(rowA);
 
         rowB.setStatus("CLAIMED");
-        rowB.setClaimedAt(runBClaimedAt);
+        rowB.setClaimedAt(Instant.now());
+        rowB.setClaimedBy(runBId);
         dlqRepository.save(rowB);
 
-        List<RadarCompositeDlqEntry> runBBatch = dlqRepository.findClaimedBatch(runBClaimedAt, 50);
+        List<RadarCompositeDlqEntry> runBBatch = dlqRepository.findClaimedBatch(runBId, 50);
 
         assertThat(runBBatch).extracting(RadarCompositeDlqEntry::getId).containsExactly(rowB.getId());
     }

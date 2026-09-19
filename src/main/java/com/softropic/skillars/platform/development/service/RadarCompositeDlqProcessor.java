@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 // Deferred-77 AC10 Phase 2 — replays radar composite calculations that failed even after the
 // original @Async listener invocation. Mirrors VideoDeletionOutboxProcessor's claim/process/backoff
@@ -32,6 +33,18 @@ import java.util.Set;
 // (completeClaimed/failClaimed) on `status = 'CLAIMED' AND claimed_at = :claimedAt`, so even a run
 // that outlives lockAtMostFor and loses its claim to a stale-recovery sweep cannot corrupt another
 // instance's in-flight bookkeeping — a lost race writes 0 rows and is skipped, not silently applied.
+//
+// skillars-deferred-124 AC2 (revised by its own code review, 2026-09-19): processRow no longer
+// catches anything itself. process()'s own loop wraps each processRow call in a guard that is now the
+// SOLE call site for handleFailure, so a chronically-failing recalculateComposite/completeClaimed
+// reaches max_attempts/DEAD instead of cycling CLAIMED -> resetStaleClaimed -> re-claimed -> throws
+// forever. One residual case does NOT reach DEAD, and is not a regression of this AC: if
+// configService.getBoundedLong itself is permanently broken (not the row's own processing — a config
+// lookup failure), handleFailure can never complete its own transaction, so attempts is never
+// persisted and the row stays CLAIMED -> reset -> re-claimed -> retried indefinitely. This is accepted
+// as safe (not a poison row in the harmful sense — it self-heals the moment config lookups recover,
+// and never loses or corrupts the row) rather than fixed; see
+// handleFailure_itselfThrows_stillIsolatesBatchAndDoesNotAbortTheLoop for the exact scenario.
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -106,55 +119,81 @@ public class RadarCompositeDlqProcessor {
         // skillars-deferred-123 AC3: one Instant for the whole tick — see
         // VideoDeletionOutboxProcessor.process()'s identical comment for the full rationale.
         Instant runClaimedAt = Instant.now();
+        // skillars-deferred-124 AC4: one UUID for the whole tick — see
+        // VideoDeletionOutboxProcessor.process()'s identical comment for the full rationale.
+        UUID runId = UUID.randomUUID();
         dlqRepository.resetStaleClaimed(runClaimedAt.minus(STALE_CLAIM_WINDOW));
-        dlqRepository.claimPendingBatch(runClaimedAt, BATCH_SIZE);
-        List<RadarCompositeDlqEntry> rows = dlqRepository.findClaimedBatch(runClaimedAt, BATCH_SIZE);
+        dlqRepository.claimPendingBatch(runClaimedAt, runId, BATCH_SIZE);
+        List<RadarCompositeDlqEntry> rows = dlqRepository.findClaimedBatch(runId, BATCH_SIZE);
 
         // skillars-deferred-123 code review 2026-09-18 (Decision 3): self-terminate before this run
         // could outlive its own PT10M lock — see MAX_RUN_DURATION's Javadoc for why the previously
         // exact window/lock equality made that a live duplicate-processing path once AC3 landed.
         Instant deadline = runClaimedAt.plus(MAX_RUN_DURATION);
-        int processed = 0;
+        // skillars-deferred-124 code review 2026-09-19 (Patch): named "attempted", not "processed" —
+        // see VideoDeletionOutboxProcessor.process()'s identical comment for why.
+        int attempted = 0;
         for (RadarCompositeDlqEntry row : rows) {
             if (Instant.now().isAfter(deadline)) {
-                int released = dlqRepository.releaseClaimed(runClaimedAt);
-                log.warn("Stopped radar composite DLQ processing after {}/{} rows — hit the {} safety "
-                    + "budget under lockAtMostFor=PT10M; released {} unprocessed row(s) back to PENDING "
-                    + "for the next scheduled run", processed, rows.size(), MAX_RUN_DURATION, released);
+                int released = dlqRepository.releaseClaimed(runId);
+                log.warn("Stopped radar composite DLQ processing after {}/{} rows attempted — hit the "
+                    + "{} safety budget under lockAtMostFor=PT10M; released {} unprocessed row(s) back "
+                    + "to PENDING for the next scheduled run", attempted, rows.size(), MAX_RUN_DURATION, released);
                 return;
             }
-            processRow(row, runClaimedAt);
-            processed++;
-        }
-    }
-
-    private void processRow(RadarCompositeDlqEntry row, Instant runClaimedAt) {
-        try {
-            compositeCalculationService.recalculateComposite(
-                row.getPlayerId(), row.getParentId(), Set.copyOf(row.getSkillCodes()));
-            // skillars-deferred-123 code review 2026-09-18 (Decision 5): conditional on this run still
-            // owning the claim — see the repository methods' comment for the lost-update mechanism.
-            Boolean applied = transactionTemplate.execute(status ->
-                dlqRepository.completeClaimed(row.getId(), runClaimedAt) > 0);
-            if (!Boolean.TRUE.equals(applied)) {
-                logClaimLost(row, "completion");
+            // skillars-deferred-124 AC2 (revised by its own code review, 2026-09-19): loop-level guard
+            // and the SOLE call site for handleFailure — processRow no longer catches anything itself,
+            // see its own comment for why. Logged at WARN, not ERROR: reaching handleFailure for
+            // attempt/backoff bookkeeping is the normal outcome for an ordinary recoverable failure, not
+            // a paging-worthy surprise — see VideoDeletionOutboxProcessor.process()'s identical comment.
+            // handleFailure's own inner guard stays at ERROR: a failure inside its own
+            // transactionTemplate.execute (e.g. configService.getBoundedLong) is genuinely exceptional —
+            // the row cannot even be marked failed for this tick and is left CLAIMED, recovered by the
+            // next stale-claim sweep — but still cannot abort the batch either way.
+            try {
+                processRow(row, runId);
+            } catch (Exception e) {
+                log.warn("[ROW_FAILURE playerId={} dlqId={}] processRow failed — routing to "
+                    + "handleFailure for attempt/backoff bookkeeping", row.getPlayerId(), row.getId(), e);
+                try {
+                    handleFailure(row, e, runId);
+                } catch (Exception inner) {
+                    log.error("[HANDLE_FAILURE_ITSELF_THREW playerId={} dlqId={}] handleFailure threw "
+                        + "while recording the failure above — row left CLAIMED, recovered by the next "
+                        + "stale-claim sweep", row.getPlayerId(), row.getId(), inner);
+                }
             }
-        } catch (Exception e) {
-            handleFailure(row, e, runClaimedAt);
+            attempted++;
         }
     }
 
-    private void handleFailure(RadarCompositeDlqEntry row, Exception e, Instant runClaimedAt) {
+    private void processRow(RadarCompositeDlqEntry row, UUID runId) {
+        // skillars-deferred-124 code review 2026-09-19 response: deliberately no local try/catch here
+        // any more — see process()'s own comment for why letting everything propagate to the outer
+        // guard (the SOLE call site for handleFailure) is what fixes the double-handleFailure-call bug.
+        compositeCalculationService.recalculateComposite(
+            row.getPlayerId(), row.getParentId(), Set.copyOf(row.getSkillCodes()));
+        // skillars-deferred-123 code review 2026-09-18 (Decision 5): conditional on this run still
+        // owning the claim — see the repository methods' comment for the lost-update mechanism.
+        Boolean applied = transactionTemplate.execute(status ->
+            dlqRepository.completeClaimed(row.getId(), runId) > 0);
+        if (!Boolean.TRUE.equals(applied)) {
+            logClaimLost(row, "completion");
+        }
+    }
+
+    private void handleFailure(RadarCompositeDlqEntry row, Exception e, UUID runId) {
         Boolean applied = transactionTemplate.execute(status -> {
             row.setAttempts(row.getAttempts() + 1);
             row.setLastError(e.getMessage());
             // skillars-deferred-107 AC2: 0/neg would dead-letter on the first attempt (or never).
             int maxAttempts = (int) configService.getBoundedLong(
                 "platform.development.radar_composite_dlq.max_attempts", 5L, 1L, 100L);
-            // skillars-deferred-123 AC3: cleared on BOTH outcomes — see
+            // skillars-deferred-123 AC3 / skillars-deferred-124 AC4: cleared on BOTH outcomes — see
             // VideoDeletionOutboxProcessor.handleFailure's identical comment for why DEAD must clear
-            // it too, not just PENDING.
+            // both fields too, not just PENDING.
             row.setClaimedAt(null);
+            row.setClaimedBy(null);
             if (row.getAttempts() >= maxAttempts) {
                 row.setStatus("DEAD");
                 log.error("[DEAD_LETTER playerId={} skillCodes={}] radar composite recalculation exhausted retries",
@@ -167,7 +206,7 @@ public class RadarCompositeDlqProcessor {
             // skillars-deferred-123 code review 2026-09-18 (Decision 5): conditional on still owning
             // the claim — attempts/nextRetryAt are derived from this invocation's own possibly-stale
             // snapshot, so writing them over a re-claiming instance's would reset its attempt counter.
-            return dlqRepository.failClaimed(row.getId(), runClaimedAt, row.getStatus(),
+            return dlqRepository.failClaimed(row.getId(), runId, row.getStatus(),
                 row.getAttempts(), row.getLastError(), row.getNextRetryAt()) > 0;
         });
         if (!Boolean.TRUE.equals(applied)) {

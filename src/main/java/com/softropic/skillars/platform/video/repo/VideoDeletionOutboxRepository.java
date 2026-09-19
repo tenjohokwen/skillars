@@ -15,12 +15,16 @@ public interface VideoDeletionOutboxRepository extends JpaRepository<VideoDeleti
     // Phase 1: atomically claim a batch by updating status to CLAIMED within a single transaction.
     // FOR UPDATE SKIP LOCKED in the subquery prevents concurrent processors from double-claiming.
     // skillars-deferred-123 AC3: claimed_at stamped with this tick's own claim instant — see
-    // VideoDeletionOutbox.claimedAt's Javadoc for why (resetStaleClaimed/findClaimedBatch below).
+    // VideoDeletionOutbox.claimedAt's Javadoc for why (resetStaleClaimed below).
+    // skillars-deferred-124 AC4: claimed_by stamped with this tick's own run id (UUID.randomUUID(),
+    // generated once per tick) alongside claimed_at — see VideoDeletionOutbox.claimedBy's Javadoc.
+    // claimed_at keeps flowing to resetStaleClaimed's staleness check; claimed_by is now what
+    // findClaimedBatch/releaseClaimed/completeClaimed/failClaimed key their identity predicate on.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE main.video_deletion_outbox
-        SET status = 'CLAIMED', claimed_at = :now
+        SET status = 'CLAIMED', claimed_at = :now, claimed_by = :runId
         WHERE id = ANY(
             SELECT id FROM main.video_deletion_outbox
             WHERE status = 'PENDING' AND next_retry_at <= :now
@@ -29,18 +33,20 @@ public interface VideoDeletionOutboxRepository extends JpaRepository<VideoDeleti
             FOR UPDATE SKIP LOCKED
         )
         """, nativeQuery = true)
-    int claimPendingBatch(@Param("now") Instant now, @Param("batchSize") int batchSize);
+    int claimPendingBatch(@Param("now") Instant now, @Param("runId") UUID runId, @Param("batchSize") int batchSize);
 
     // Phase 2: fetch the rows this processor just claimed. skillars-deferred-123 AC3: scoped to this
-    // run's own claimed_at (previously globally scoped to status = 'CLAIMED' alone, with no per-run
+    // run's own claim (previously globally scoped to status = 'CLAIMED' alone, with no per-run
     // filter — a second instance's tick would return a still-in-flight first instance's rows too).
+    // skillars-deferred-124 AC4: identity predicate moved from claimed_at-exact-equality to
+    // claimed_by — see VideoDeletionOutbox.claimedBy's Javadoc for why.
     @Query(value = """
         SELECT * FROM main.video_deletion_outbox
-        WHERE status = 'CLAIMED' AND claimed_at = :claimedAt
+        WHERE status = 'CLAIMED' AND claimed_by = :runId
         ORDER BY next_retry_at ASC
         LIMIT :batchSize
         """, nativeQuery = true)
-    List<VideoDeletionOutbox> findClaimedBatch(@Param("claimedAt") Instant claimedAt, @Param("batchSize") int batchSize);
+    List<VideoDeletionOutbox> findClaimedBatch(@Param("runId") UUID runId, @Param("batchSize") int batchSize);
 
     // Recover rows stuck in CLAIMED state from a prior crashed run. skillars-deferred-123 AC3: keyed
     // on claimed_at (actual claim time), not next_retry_at (eligibility time) — a row backlogged well
@@ -54,32 +60,39 @@ public interface VideoDeletionOutboxRepository extends JpaRepository<VideoDeleti
     // only recovery path for CLAIMED rows — it would be permanently unrecoverable. Also clears
     // claimed_at back to NULL, matching the field's own documented invariant (cleared on every
     // transition out of CLAIMED) — this was the one transition that previously left it stale.
+    // skillars-deferred-124 AC4: the WHERE predicate stays keyed on claimed_at (a time comparison, not
+    // an identity one — this method's whole purpose is judging staleness by elapsed claim time, which
+    // claimed_by carries no information about), but claimed_by is cleared here too — this transitions
+    // a row out of CLAIMED exactly like every other terminal path, and the invariant applies
+    // regardless of which predicate triggered the transition.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE main.video_deletion_outbox
-        SET status = 'PENDING', claimed_at = NULL
+        SET status = 'PENDING', claimed_at = NULL, claimed_by = NULL
         WHERE status = 'CLAIMED' AND (claimed_at IS NULL OR claimed_at < :deadline)
         """, nativeQuery = true)
     int resetStaleClaimed(@Param("deadline") Instant deadline);
 
     // skillars-deferred-123 code review 2026-09-18 (Decision 3): hand this run's OWN unprocessed rows
     // straight back to PENDING when the processor self-terminates on its MAX_RUN_DURATION budget.
-    // Scoped to `claimed_at = :claimedAt`, so it can only ever touch rows this invocation claimed —
-    // never a concurrent instance's. Every row the loop actually finished has already had claimed_at
-    // cleared (COMPLETED and both handleFailure outcomes all null it), so "still CLAIMED with this
-    // run's stamp" is exactly the unprocessed remainder. Without this, a bailed-out batch would sit
-    // CLAIMED until STALE_CLAIM_WINDOW elapsed (20 minutes) even though the rows are known-good and
-    // the very next tick could take them. claimed_at is nulled here too, keeping the field's documented
-    // invariant — cleared on every transition out of CLAIMED — true for this path.
+    // Scoped to this run's own identity, so it can only ever touch rows this invocation claimed —
+    // never a concurrent instance's. Every row the loop actually finished has already had claimed_at/
+    // claimed_by cleared (COMPLETED and both handleFailure outcomes all null them), so "still CLAIMED
+    // with this run's stamp" is exactly the unprocessed remainder. Without this, a bailed-out batch
+    // would sit CLAIMED until STALE_CLAIM_WINDOW elapsed (20 minutes) even though the rows are
+    // known-good and the very next tick could take them.
+    // skillars-deferred-124 AC4: identity predicate moved from claimed_at-exact-equality to
+    // claimed_by; claimed_at is still nulled alongside it, keeping both fields' documented invariant
+    // (cleared on every transition out of CLAIMED) true for this path.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE main.video_deletion_outbox
-        SET status = 'PENDING', claimed_at = NULL
-        WHERE status = 'CLAIMED' AND claimed_at = :claimedAt
+        SET status = 'PENDING', claimed_at = NULL, claimed_by = NULL
+        WHERE status = 'CLAIMED' AND claimed_by = :runId
         """, nativeQuery = true)
-    int releaseClaimed(@Param("claimedAt") Instant claimedAt);
+    int releaseClaimed(@Param("runId") UUID runId);
 
     // skillars-deferred-123 code review 2026-09-18 (Decision 5): the terminal writes below replace an
     // unconditional `outboxRepository.save(row)`. That save was an em.merge() of a DETACHED entity —
@@ -90,30 +103,33 @@ public interface VideoDeletionOutboxRepository extends JpaRepository<VideoDeleti
     // the other order it resurrected a COMPLETED row to PENDING with attempts reset to 0, so
     // max_attempts could never be reached and the row would be dispatched forever.
     //
-    // The `status = 'CLAIMED' AND claimed_at = :claimedAt` predicate makes each write conditional on
-    // this invocation STILL OWNING the claim it started with. A losing race affects 0 rows, and the
-    // caller skips its side effects entirely rather than rolling them back — the same shape
+    // The conditional predicate (originally `claimed_at = :claimedAt`, now `claimed_by = :runId` per
+    // skillars-deferred-124 AC4 below) makes each write conditional on this invocation STILL OWNING
+    // the claim it started with. A losing race affects 0 rows, and the caller skips its side effects
+    // entirely rather than rolling them back — the same shape
     // DeletionSchedulerService.markPhysicallyDeleted already uses in this codebase.
     //
     // Only the columns this transition actually owns are written, so nothing else can be clobbered.
+    // skillars-deferred-124 AC4: identity predicate moved from claimed_at-exact-equality to
+    // claimed_by; claimed_at cleared alongside claimed_by, keeping both fields' invariant true.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE main.video_deletion_outbox
-        SET status = 'COMPLETED', claimed_at = NULL
-        WHERE id = :id AND status = 'CLAIMED' AND claimed_at = :claimedAt
+        SET status = 'COMPLETED', claimed_at = NULL, claimed_by = NULL
+        WHERE id = :id AND status = 'CLAIMED' AND claimed_by = :runId
         """, nativeQuery = true)
-    int completeClaimed(@Param("id") UUID id, @Param("claimedAt") Instant claimedAt);
+    int completeClaimed(@Param("id") UUID id, @Param("runId") UUID runId);
 
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE main.video_deletion_outbox
         SET status = :status, attempts = :attempts, last_error = :lastError,
-            next_retry_at = :nextRetryAt, claimed_at = NULL
-        WHERE id = :id AND status = 'CLAIMED' AND claimed_at = :claimedAt
+            next_retry_at = :nextRetryAt, claimed_at = NULL, claimed_by = NULL
+        WHERE id = :id AND status = 'CLAIMED' AND claimed_by = :runId
         """, nativeQuery = true)
-    int failClaimed(@Param("id") UUID id, @Param("claimedAt") Instant claimedAt,
+    int failClaimed(@Param("id") UUID id, @Param("runId") UUID runId,
                     @Param("status") String status, @Param("attempts") int attempts,
                     @Param("lastError") String lastError, @Param("nextRetryAt") Instant nextRetryAt);
 
