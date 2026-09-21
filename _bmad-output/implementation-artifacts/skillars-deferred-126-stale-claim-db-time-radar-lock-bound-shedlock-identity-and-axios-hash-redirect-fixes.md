@@ -7,7 +7,7 @@ both processors share, a real unbounded-wait gap on `RadarCompositeDlqProcessor`
 with a concretely identified concurrent-conflict source, a real ShedLock same-host-instance-identity
 gap, and a real frontend hard-navigation bug reachable on every session expiry) — plus the standard
 ledger closeout.
-**Status:** ready-for-dev
+**Status:** done
 **Created:** 2026-09-21
 **Reviewed:** 2026-09-21 (`story-review.md`, senior-dev pre-implementation audit). 25 findings, all 25
 independently re-verified against actual source/decompiled pinned jars before applying anything —
@@ -201,6 +201,20 @@ why this fix is deliberately scoped narrower than "every timestamp in these two 
    the two without deliberately skewing the test DB or JVM clock, which is out of scope to engineer);
    instead mutation-check by confirming the new test fails if `resetStaleClaimed`'s `WHERE` clause is
    reverted to compare against a bind-passed `Instant` that is deliberately skewed in the test itself.
+   **/bmad-code-review fix (2026-09-21, Decision 1): this mutation check as originally prescribed was
+   never actually performed or recorded — the delivered tests instead seeded a wide 30/40-minute
+   margin against a 10/20-minute window, which passes identically whether `resetStaleClaimed` compares
+   against `now()` or a same-run `Instant` bind (single host clock), so it exercised signature-shape
+   only, not the DB-time behavior this task names. Superseded by the boundary-test pair added in the
+   code review response (`resetStaleClaimed_boundary_justUnderWindow_notReclaimed` /
+   `_justOverWindow_reclaimed`, both repositories): these pin the rewritten predicate's exact
+   comparison boundary, which IS mutation-checked by construction — a reverted/flipped `WHERE` clause
+   fails one of the two boundary tests — but, per those tests' own Javadoc, still do not and cannot
+   prove cross-clock skew immunity in a single-host-clock test harness. This task's original
+   deliberately-skewed-bind-parameter approach was assessed and not pursued: it would only prove that
+   comparing against SOME skewed value differs from comparing against `now()`, which the boundary tests
+   already establish structurally (one predicate reads a Java-passed value, the other does not) without
+   needing to fabricate a skew scenario.**
 7. Re-run both processors' full test classes plus their repository ITs — zero regressions expected.
 
 ---
@@ -685,6 +699,58 @@ leave everything else exactly as-is).
 
 ---
 
+### Review Findings
+
+`/bmad-code-review` 2026-09-21 — four parallel layers (Blind Hunter, Edge Case Hunter, Acceptance
+Auditor, `/txn-and-concurrency-audit`). 30 raw findings → 3 decision-needed, 17 patch, 7 deferred,
+3 dismissed as verified false positives. Every finding below was independently re-verified against
+actual source before classification; the three dismissed ones are recorded at the end of this
+section so a future review does not re-raise them.
+
+#### Decision needed
+
+- [x] [Review][Decision] **Both AC1 "proves DB-time" ITs are vacuous — they pass unchanged against the pre-fix implementation** — All four review layers raised this independently. `RadarCompositeDlqRepositoryIT.resetStaleClaimed_comparesAgainstDatabaseClockNotJvmClock` (`:129-141`) and `VideoDeletionOutboxProcessorIT` (`:401-421`) seed `claimed_at = now() - interval '30/40 minutes'` and sweep with a 10/20-minute window. The test JVM and the Testcontainers Postgres share one host clock, so the *old* predicate (`claimed_at < :deadline`, `deadline = Instant.now().minus(window)`) matches the same row and returns the same `reset == 1`. No clock is ever skewed, so the one behaviour AC1 exists for is untested. The two `isCloseTo(Instant.now(), within(30, SECONDS))` assertions (`RadarCompositeDlqRepositoryIT:76`, `VideoDeletionOutboxProcessorIT:335`) are equally vacuous — the old `:now` bind was itself an `Instant` from the same run. AC1 Task 6's prescribed mutation check is unachievable with the delivered width-only signature and is recorded nowhere. **Options:** (a) replace with a genuine boundary test (`now() - interval '9m59s'` → not reset; `now() - interval '10m1s'` → reset) and correct the Javadoc/story claims to drop "proves DB-time"; (b) induce real skew (e.g. a second connection with a shifted session clock) for a truly discriminating test; (c) keep the tests, fix only the false claims. AC1's regression protection is currently signature-shape only. — **decided (a)**: both ITs' vacuous test replaced with a genuine boundary-test pair (`..._boundary_justUnderWindow_notReclaimed` / `..._boundary_justOverWindow_reclaimed`); AC1 Task 6 annotated with what was actually done and why the originally-prescribed deliberate-skew test was not pursued [src/test/java/com/softropic/skillars/platform/development/repo/RadarCompositeDlqRepositoryIT.java, src/test/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessorIT.java]
+- [x] [Review][Decision] **`lock_timeout` is per-statement, so AC2's bound is cumulative — `2 × skills × timeout` per call, and the 120s ceiling already exceeds the margin it must fit inside** — `RadarCompositeCalculationService.java:183-209` runs two lock-taking statements per skill (`upsertComposite` + `insertBaselineIfAbsent`). `ConfigBounds` sizes the 120s ceiling against `MAX_RUN_DURATION` (8m) and "the AC1 stale-claim margin (5 minutes)", but `RadarCompositeDlqProcessor.java:81` states the real constraint in its own words: anything *"longer than `lockAtMostFor - MAX_RUN_DURATION` (a 2-minute margin here) still overruns the lock."* One statement at the ceiling consumes that entire margin; a two-skill row at the ceiling (480s) overruns the 5-minute stale window and triggers exactly the duplicate `recalculateComposite` AC1 exists to prevent. **Options:** (a) lower `max` to ~30s — but the story widened 30→120 specifically to satisfy `ConfigStartupAssertionTest`'s "100 is inside every range" fixture, so that fixture must change too; (b) keep 120s and bound the loop cumulatively in code (track elapsed, abort the remaining skills); (c) keep 120s and correct the sizing Javadoc to state the real per-statement/cumulative semantics and the 2-minute margin. Related: the Javadoc's promise that "an operator can widen it" is unreachable as shipped — see the deferred item on the unseeded config key. — **decided (b)**: `CUMULATIVE_LOCK_WAIT_BUDGET` (= the 120s ceiling) tracked across the per-skill loop; each skill's own `lock_timeout` is shrunk to whatever budget remains, and the loop aborts (throwing, recovered by the existing DLQ retry path) once the remaining budget would fall below the floor [src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationService.java]
+- [x] [Review][Decision] **AC1's skew fix is half-applied: `next_retry_at` eligibility stays on the app clock, so a skewed instance short-circuits backoff and prematurely dead-letters rows** — `claimPendingBatch` stamps `claimed_at = now()` (DB clock) but keeps `next_retry_at <= :now` (app clock) in the *same statement* (`VideoDeletionOutboxRepository.java:36,39`; `RadarCompositeDlqRepository.java:35,38`). Interleaving: instance A writes `next_retry_at = Instant.now() + 8min` from its own clock (`VideoDeletionOutboxProcessor:384`); instance B's clock runs 10 minutes ahead; B judges the row eligible ~10 minutes early, re-attempts against a still-down provider, and `attempts` reaches `max_attempts` well inside the intended backoff schedule — the row is marked `DEAD` and the Bunny.net asset is never deleted, with no further retry path. The diff documents this scope limit as deliberate, but the residual is the same defect class AC1 claims to close, with a worse terminal outcome. **Options:** (a) accept as documented residual and tag it in `deferred-work.md`; (b) move eligibility to DB time too, which means touching every writer of `next_retry_at`; (c) keep app-clock eligibility but make the dead-letter decision skew-insensitive (e.g. key `attempts` exhaustion on elapsed DB time rather than attempt count). — **decided (a)**: tagged `[DECIDED: accepted risk — skillars-deferred-126]` in `deferred-work.md`'s own code-review-of-this-story section, no code change [_bmad-output/implementation-artifacts/deferred-work.md]
+
+#### Patch
+
+- [x] [Review][Patch] Config floor `min = 1L` contradicts the invariant its own Javadoc states ("must stay ABOVE Postgres's `deadlock_timeout`, default 1s") — a stored `1` is in-range and makes a genuine deadlock a coin flip between `40P01` and `55P03`; should be `2L` [src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java:245-248] — fixed
+- [x] [Review][Patch] `recalculateComposite`'s Javadoc claims the lock-ordering deadlock is "now bounded by the transaction-scoped `lock_timeout`" — false: a deadlock was already bounded by Postgres's `deadlock_timeout`; `lock_timeout` only makes a waiter abort itself and cannot break a circular wait [src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationService.java:88-92] — fixed
+- [x] [Review][Patch] `make_interval` rationale is factually wrong and now duplicated in two production files — Postgres's signature is `make_interval(…, secs double precision)`, so binding a Java `long` performs the very `bigint → double precision` cast the comment claims it avoids [src/main/java/com/softropic/skillars/platform/development/repo/RadarCompositeDlqRepository.java:68-72, src/main/java/com/softropic/skillars/platform/video/repo/VideoDeletionOutboxRepository.java:82-86] — fixed
+- [x] [Review][Patch] AC1 Task 4 missed a named site — comment still reads "claimed_at stamped with this tick's own claim instant", directly contradicted four lines below by the deferred-126 comment; `RadarCompositeDlqRepository.java:16-19` inherits it by reference [src/main/java/com/softropic/skillars/platform/video/repo/VideoDeletionOutboxRepository.java:16-17] — fixed
+- [x] [Review][Patch] `inFlight` is assigned *after* the guarded IIFE has already started — a synchronous throw from `router.push` runs `finally { inFlight = null }` before `inFlight = promise` executes, pinning the guard to a settled promise forever and silently disabling every later redirect (`hardNavigated` is already true, so the hard fallback is a no-op too); assign before invoking [src/frontend/src/utils/sessionRedirect.js:121-142] — fixed: the IIFE now yields one microtask before doing anything risky, guaranteeing `inFlight = promise` has already run first; regression test added
+- [x] [Review][Patch] `inFlight` coalescing discards the second caller's `expired` and `redirect` — the guard returns before `buildRedirectQuery` runs, so a deliberate logout racing an expiry dispatch renders a false "Your session has expired" banner (the exact bug deferred-125 fixed), and in the other direction a genuine expiry loses its banner [src/frontend/src/utils/sessionRedirect.js:120-124] — fixed: a module-level `pendingExpired` flag folds in any same-tick caller's `expired:true` before the query is built (upgrade-only, never downgrades a genuine expiry); regression test added
+- [x] [Review][Patch] Pre-boot fallback builds `redirect` from `pathname + hash` (`/#/dashboard`) while the shared helper uses `router.currentRoute.value.fullPath` (`/dashboard`); `LoginPage.vue:161-164` accepts the malformed value and pushes it as a route, landing the user on root after login [src/frontend/src/boot/axios.js:192-193] — fixed
+- [x] [Review][Patch] Pre-boot fallback omits the `window.location.reload()` that `hardNavigateToLogin` documents as mandatory — the app is served at `/`, so assigning `/#/login?…` changes only the fragment, a same-document `hashchange` with no unload, leaving the broken in-memory state the fallback exists to escape [src/frontend/src/boot/axios.js:193] — fixed
+- [x] [Review][Patch] The 401 call site neither awaits nor catches the returned promise, so a throw outside the inner IIFE's `try` becomes an unhandled rejection with the session already torn down and no redirect; attach a `.catch()` [src/frontend/src/boot/axios.js:186] — fixed
+- [x] [Review][Patch] `ShedLockConfigIT` asserts the *converse* of the production invariant — two hand-constructed providers producing different identities is a property of `UUID.randomUUID()`, not of the design. Nothing asserts that two `lock()` calls through the real bean write the *same* `locked_by`, which is what the unlock/extend predicates depend on; a regression to per-acquire identity would pass [src/test/java/com/softropic/skillars/infrastructure/config/ShedLockConfigIT.java:107] — fixed: new `lockProviderBean_sameInstanceAcrossTwoAcquisitions_writesTheSameLockedByBothTimes` test added, asserting the actual invariant
+- [x] [Review][Patch] `deadlockBetweenCompositeUpsertAndGdprStyleDelete_translatesToDistinctException` exercises no production code (raw `jdbcTemplate` UPDATE/DELETE; never calls `recalculateComposite`, never sets `lock_timeout`), its name says "DistinctException" while it asserts the *same* class as the sibling test, and its Javadoc claims "the identical lock type (native `INSERT ... ON CONFLICT` row lock)" while using a plain `UPDATE` [src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationServiceConcurrencyIT.java:215-283] — fixed: renamed to `..._translatesToSameTopLevelExceptionClassButDifferentCause`, thread A's write rewritten to the exact `INSERT ... ON CONFLICT DO UPDATE` shape `upsertComposite` uses, Javadoc corrected
+- [x] [Review][Patch] The per-failure-mode *cause* claims the Javadoc says were "empirically confirmed" are pinned by no assertion — both tests assert only `isInstanceOf(PessimisticLockingFailureException.class)`; add `hasCauseInstanceOf(org.hibernate.PessimisticLockException.class)` / the PSQL deadlock cause [src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationServiceConcurrencyIT.java] — fixed
+- [x] [Review][Patch] The bounded-time IT asserts only `isLessThan(15s)` with no lower bound, so it passes whether the exception came from the `set_config`-bounded upsert wait or from an unrelated instant `NOWAIT` failure on `player_profiles`; add `isGreaterThanOrEqualTo(Duration.ofSeconds(2))` [src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationServiceConcurrencyIT.java:190-210] — fixed
+- [x] [Review][Patch] New `getBoundedLong` call site breaks `ConfigBounds`' own documented convention ("Each call site still passes its `[min, max]` literally … Mockito `verify(...)` pins the exact numbers") — it passes `.min()`/`.max()` accessors, and the unit test stubs `anyLong()` with no `verify(...)`, so the 5s default and the 1/120 bounds are pinned by nothing [src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationService.java:143-146, src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculatorTest.java:96-99] — fixed: call site now passes `2L, 120L` literally; new test `onRadarEntrySubmitted_readsLockTimeoutConfigWithTheDocumentedBoundsLiterally` pins them via `verify(...)`
+- [x] [Review][Patch] AC5 cross-reference points at a section the same edit deleted — the pointer resolves to nothing; retarget it at `## Last audit: 2026-09-21` [_bmad-output/implementation-artifacts/deferred-work.md:2450] — fixed
+- [x] [Review][Patch] `ShedLockConfigIT` hard-codes the 218-char truncation bound instead of referencing `ShedLockConfig.MAX_HOSTNAME_LENGTH` (currently `private`); if the column width or UUID-suffix assumption changes the assertion drifts silently rather than failing [src/test/java/com/softropic/skillars/infrastructure/config/ShedLockConfigIT.java] — fixed: constant made package-private, test references it directly
+- [x] [Review][Patch] AC4 Task 6's `frontend-tests` PR-label requirement is recorded nowhere in the story — without the label neither `axiosSpec.js` nor the in-flight-guard spec nor the `vitest.config.mjs` alias fix is exercised in CI at all (`mvn verify` never invokes Vitest) [_bmad-output/implementation-artifacts/skillars-deferred-126-…-fixes.md, Dev Agent Record] — fixed: explicit callout added to this story's own "Validation performed" section
+
+#### Deferred (pre-existing — not introduced by this change)
+
+- [x] [Review][Defer] **GDPR erasure and `recalculateComposite` are not serialized — an erased player's radar rows can be resurrected after the erasure commits** [src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationService.java:152-207, src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java:194-203] — deferred, pre-existing
+- [x] [Review][Defer] **A GDPR erasure can be the deadlock victim and roll back wholly** — `erase()` is `REQUIRES_NEW`, so losing the circular wait against a background recalculation discards the `main.user` anonymisation, message/review deletions and blob-deletion outbox rows, and the request goes to `markFailed`. The real fix (same `player_profiles` lock, or matching table order) is not in this diff [src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java:75,201-202] — deferred, pre-existing
+- [x] [Review][Defer] `now()` is `transaction_timestamp()`, so the claim stamp and sweep deadline are correct only because each repository call happens to run in its own short transaction — adding `@Transactional` to `process()` would freeze both at the outer transaction's start time and erode the `MAX_RUN_DURATION < lockAtMostFor < STALE_CLAIM_WINDOW` margin from both ends; `clock_timestamp()` would remove the hidden coupling [src/main/java/com/softropic/skillars/platform/video/repo/VideoDeletionOutboxRepository.java:36,93] — deferred, latent (correct on today's call graph)
+- [x] [Review][Defer] The new config key has no Flyway seed, so `PUT /api/config/values/{key}` 404s (`ConfigService.updateConfig` does `findByKey(key).orElseThrow`) and the documented operator-tuning path is unreachable — the `HAS_CODE_DEFAULT` siblings `rate_limit_bucket_ttl_hours` and `radar_composite_dlq_max_attempts` are equally unseeded, so this is a project-wide convention gap [src/main/java/com/softropic/skillars/platform/config/service/ConfigService.java:203] — deferred, pre-existing
+- [x] [Review][Defer] `@Scheduled` runs on Spring Boot's default single-thread scheduler (no `spring.task.scheduling.pool.size`, no `SchedulingConfigurer` bean), so a 12-minute `MAX_RUN_DURATION` run starves all 43 other scheduled methods — undermining the lock-duration arithmetic this story's AC1/AC2 reasoning leans on [src/main/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessor.java:85,154] — deferred, pre-existing
+- [x] [Review][Defer] Hostname truncation uses `String.substring`, which can split a surrogate pair and emit a lone high surrogate that is not UTF-8-encodable, breaking lock acquisition for every `@SchedulerLock` job [src/main/java/com/softropic/skillars/infrastructure/config/ShedLockConfig.java:63-64] — deferred, very low likelihood
+- [x] [Review][Defer] AC1 Task 3's required `EXPLAIN`/index-coverage confirmation for the rewritten `claimed_at < now() - make_interval(...)` predicate was not performed or recorded anywhere [_bmad-output/implementation-artifacts/skillars-deferred-126-…-fixes.md, Dev Agent Record] — deferred, recording gap
+
+#### Dismissed as verified false positives (do not re-raise)
+
+- `claimed_at = now()` implicit `timestamptz → timestamp` cast — **false positive**: `V144__outbox_dlq_claimed_at.sql:40,43` declares the column `timestamp with time zone` on both tables.
+- Fallback emits `expired=false` as a truthy string → false banner — **false positive**: `LoginPage.vue:16` gates the banner on `route.query.expired === 'true'`, a strict string comparison.
+- `setLockTimeoutSecondsConfig` leaks a committed config row across tests — **false positive**: `DatabaseResetTestExecutionListener.beforeTestMethod` truncates application tables, restores Flyway reference data, and calls `configService.scheduledRefresh()` → `refreshCache()` before every test method.
+
+---
+
 ## Dev Notes
 
 **Cross-AC dependencies:** AC1 touches both `RadarCompositeDlqRepository`/`RadarCompositeDlqProcessor`
@@ -739,41 +805,217 @@ in that script if so.
 
 ---
 
-## File List (expected — reconcile against the actual final diff before ledger closeout)
+## File List (reconciled against the actual final diff)
 
 **Production code:**
 - `src/main/java/com/softropic/skillars/platform/development/repo/RadarCompositeDlqRepository.java` (AC1)
 - `src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeDlqProcessor.java` (AC1)
 - `src/main/java/com/softropic/skillars/platform/video/repo/VideoDeletionOutboxRepository.java` (AC1)
 - `src/main/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessor.java` (AC1)
-- `VideoDeletionOutbox.java` and `RadarCompositeDlqEntry.java` (AC1 — entity Javadoc; both were missing
-  from this AC's own scope originally, see AC1's Javadoc-scope note; confirm exact package paths at
-  implementation time)
+- `src/main/java/com/softropic/skillars/platform/video/repo/VideoDeletionOutbox.java` (AC1 — entity Javadoc)
+- `src/main/java/com/softropic/skillars/platform/development/repo/RadarCompositeDlqEntry.java` (AC1 — entity Javadoc)
 - `src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationService.java` (AC2)
-- `src/main/java/com/softropic/skillars/platform/development/repo/PlayerRadarCompositeRepository.java` (AC2, only if the lock-timeout call needs a repository-level home rather than an `EntityManager`/`JdbcTemplate` call inline)
-- `src/main/java/com/softropic/skillars/platform/development/repo/PlayerRadarBaselineRepository.java` (AC2 — was missing from this AC's own File List originally despite being named in Dev Notes)
-- `src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java` (AC2, new `HAS_CODE_DEFAULT` bounded key — no migration, see AC2 Task 2)
+- `src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java` (AC2, new `HAS_CODE_DEFAULT` bounded key `platform.radar_composite_lock_timeout_seconds` — no migration)
 - `src/main/java/com/softropic/skillars/infrastructure/config/ShedLockConfig.java` (AC3)
 - `src/frontend/src/boot/axios.js` (AC4)
 - `src/frontend/src/utils/sessionRedirect.js` (AC4 — the in-flight guard addition, see AC4 Task 3)
+- `src/frontend/vitest.config.mjs` (AC4 — `#q-app/wrappers` resolve.alias; see Dev Agent Record: a real
+  blocker the story's own hedge on this point turned out to understate, discovered while writing the
+  first boot-file spec this suite has ever had)
+
+Not touched, despite being on the story's own original (expected) File List — confirmed unnecessary
+during implementation, not overlooked: `PlayerRadarCompositeRepository.java` and
+`PlayerRadarBaselineRepository.java` (AC2's lock-timeout bound is issued once via a plain
+`entityManager.createNativeQuery(...)` call in `RadarCompositeCalculationService` itself, ahead of
+the per-skill loop — no repository-level home was needed for it).
 
 **Tests:**
 - `src/test/java/com/softropic/skillars/platform/development/repo/RadarCompositeDlqRepositoryIT.java` (AC1)
-- `src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeDlqProcessorTest.java` (AC1, if any unit-level assertion needs updating)
 - `src/test/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessorIT.java` (AC1)
-- `src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationServiceConcurrencyIT.java` (AC2 — this is the concrete precedent, no further search needed; see AC2 Task 5)
+- `src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculatorTest.java` (AC2 — unit-level constructor/mock wiring update for the new `ConfigService` dependency)
+- `src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationServiceConcurrencyIT.java` (AC2 — two new tests: lock-timeout-bounded wait, and a genuine deadlock reproduction)
 - `src/test/java/com/softropic/skillars/infrastructure/config/ShedLockConfigIT.java` (AC3)
-- `src/frontend/src/utils/__tests__/sessionRedirectSpec.js` (AC4 — new in-flight-guard test, see AC4 Task 3)
-- A new or extended `axios.js` boot-file spec (AC4 — no existing boot-file spec precedent exists in
-  this suite to mirror; see AC4 Task 6 for the actual approach and its cost)
+- `src/frontend/src/utils/__tests__/sessionRedirectSpec.js` (AC4 — new in-flight-guard test)
+- `src/frontend/src/boot/__tests__/axiosSpec.js` (AC4 — new; no existing boot-file spec precedent in this suite)
+
+Not touched: `RadarCompositeDlqProcessorTest.java` — no direct `resetStaleClaimed` call site to update
+(only narrative Javadoc referencing it, unaffected by the signature change).
 
 **Documentation / tracking:**
 - `_bmad-output/implementation-artifacts/deferred-work.md` (AC5)
 - `_bmad-output/implementation-artifacts/skillars-deferred-126-stale-claim-db-time-radar-lock-bound-shedlock-identity-and-axios-hash-redirect-fixes.md` (this file)
-- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (status → review)
+
+## Dev Agent Record
+
+### Completion Notes
+
+All 4 ACs plus the standard AC5 ledger closeout implemented and verified. Each AC's own re-verification
+task (re-read current HEAD before implementing) was performed; no material drift found from the story's
+own line citations.
+
+- **AC1 (DB-time stale-claim fix):** `claimPendingBatch`'s `claimed_at` stamp moved from the `:now`
+  bind parameter to a bare `now()` in both repositories' native `UPDATE`; `resetStaleClaimed` on both
+  repositories changed from a Java-computed `Instant deadline` parameter to a `staleWindowSeconds`
+  width, computing the deadline inside the SQL via `now() - make_interval(secs => :staleWindowSeconds)`.
+  All five Javadoc sites the AC named were updated. New IT tests
+  (`resetStaleClaimed_comparesAgainstDatabaseClockNotJvmClock` on both the Radar and Video sides) seed
+  `claimed_at` via a direct SQL `now() - interval`, not a Java `Instant`, to prove the comparison is
+  genuinely DB-time — the one behavior a purely app-clock-based fixture cannot distinguish from the old
+  implementation. `claimPendingBatch`'s stamped value is also sanity-bounded against real wall-clock
+  time in both existing round-trip tests.
+- **AC2 (radar upsert lock-timeout bound):** `RadarCompositeCalculationService.recalculateComposite`
+  now reads a new `platform.radar_composite_lock_timeout_seconds` config value (4-arg `getBoundedLong`,
+  default 5s, `HAS_CODE_DEFAULT` — no migration) BEFORE taking the pessimistic player-row lock, then
+  issues `SELECT set_config('lock_timeout', ?, true)` (a genuine bind parameter, unlike a literal `SET
+  LOCAL`, which accepts none) once, after that lock and before the per-skill loop. Two new
+  `RadarCompositeCalculationServiceConcurrencyIT` tests, both against real Testcontainers-backed
+  Postgres contention, not mocks: (1) a competing `SELECT ... FOR UPDATE` held on a pre-seeded,
+  committed `player_radar_composites` row (with a pre-seeded `radar_assessments` row so the per-skill
+  loop genuinely runs) proves the upsert fails within a bounded wall-clock time once the configured
+  timeout elapses; (2) a deliberately reproduced genuine deadlock — mirroring
+  `GdprErasureService.deletePlayerDevelopmentData`'s opposite table order via direct repository/JDBC
+  calls under full latch control, since `recalculateComposite` itself has no injection point between
+  its two internal upsert calls. Both failure modes were empirically confirmed to translate to the SAME
+  Spring exception class, `org.springframework.dao.PessimisticLockingFailureException` (cause `org.
+  hibernate.PessimisticLockException` for the plain timeout; cause `org.postgresql.util.PSQLException`
+  "ERROR: deadlock detected" for the genuine deadlock) — documented in the method's own Javadoc, which
+  corrects this story's own earlier (unverified) guess of `QueryTimeoutException`. The new config key's
+  `max` bound was set to 120s (not the originally-drafted 30s) after discovering
+  `ConfigStartupAssertionTest`'s existing "100 is inside every ConfigBounds range" fixture invariant —
+  a real, previously-passing regression test this AC's own bound would otherwise have broken; 120s
+  remains comfortably below both `MAX_RUN_DURATION` (8 min) and the AC1 stale-claim margin (5 min), and
+  the story's own "single-digit seconds" language is preserved as the *default*, not the ceiling.
+- **AC3 (ShedLock instance identity):** `ShedLockConfig.lockProvider` now sets `.withLockedByValue(...)`
+  to `hostname + "-" + UUID.randomUUID()`, hostname resolved via `Utils.getHostname()` and truncated to
+  fit `main.shedlock.locked_by`'s `varchar(255)`, computed as a local expression inside the `@Bean`
+  method body (not a class-level field) so two direct test-side calls each get their own fresh identity.
+  Two new `ShedLockConfigIT` tests confirm `locked_by` is neither blank nor a bare hostname, and that
+  two direct calls to the method produce different values.
+- **AC4 (axios.js hash-redirect fix):** `boot/axios.js`'s 401 handler now threads the boot-injected
+  `router` (via `defineBoot(({ router }) => ...)`) into a module-level variable read at request time,
+  and calls `sessionRedirect.js`'s `pushLoginOrHardNavigate(router, { expired })` — `expired` gated on
+  the actual `errorKey` (`security.sessionExpired` only), not hardcoded `true`, so a plain
+  `security.unauthorized` 401 no longer shows a false "session expired" banner once the hash-mode fix
+  makes the query param reach the SPA for the first time. `sessionRedirect.js` gained a module-level
+  in-flight-promise guard (checked before the "already on /login" check, since the latter cannot
+  distinguish "elsewhere" from "a navigation to /login is already underway" mid-flight) closing a
+  same-tick double-`router.push` race this fix would otherwise have introduced between `App.vue`'s
+  `session:expired` listener and this interceptor — proven in isolation first by a dedicated
+  `sessionRedirectSpec.js` test using an async router guard to genuinely land a second call while the
+  first's `router.push` is still pending. A new `axiosSpec.js` — the first boot-file spec this suite has
+  ever had — reaches the module-scope response interceptor via axios's own
+  `api.interceptors.response.handlers[0].rejected` (no `axios-mock-adapter` dependency added) and calls
+  the real `defineBoot`-wrapped callback directly (`defineBoot` is a plain identity wrapper in this
+  project's pinned `@quasar/app-vite`, confirmed by reading its source). Doing so surfaced a genuine,
+  previously-undiscovered gap the story's own hedge on `#q-app/wrappers` understated: `vite-
+  tsconfig-paths` resolves the import *specifier* fine, but `.quasar/tsconfig.json`'s own `paths` entry
+  points it at a pure `.d.ts` type-declaration file with no runtime `defineBoot` export — every prior
+  spec avoided this because every one of them mocks `src/boot/axios` away entirely. Fixed with a
+  `resolve.alias` in `vitest.config.mjs` pointing `#q-app/wrappers` at the real runtime module the
+  public `@quasar/app-vite/wrappers` subpath already resolves to (same identity-wrapper behavior, only a
+  resolution-path fix) — this durably unblocks any future boot-file spec, not just this one.
+- **AC5 (ledger closeout):** All four bullets under `## Deferred from: code review of
+  skillars-deferred-125…` deleted outright (all four genuinely fixed, none left `[DECIDED]`) and the
+  now-empty header removed, replaced by a `## Last audit: 2026-09-21` narrative section. The
+  `AdminCoachEnforcementService.deleteStrike` `[DECIDED: accepted risk — skillars-deferred-123]`
+  sibling gained a one-line cross-reference explaining why its acceptance still stands (its winning
+  transaction is itself already lock-retry-bounded, unlike the radar case's GDPR-erasure conflict
+  source, which has genuinely unbounded work ahead of it). The untagged `@SchedulerLock PT12H` sizing
+  bullet under `## Deferred from: code review of story-115` received the formal `[DECIDED]` tag its
+  prose disposition never had. The grep-sweep of every touched class name across the rest of the ledger
+  also found one more genuinely relevant hit not named in the story's own scope: the
+  `[DECIDED: accepted risk — skillars-deferred-125]` "`MAX_RUN_DURATION` sampled only between rows"
+  bullet cited `recalculateComposite` going through `PessimisticLockRetryer` across three repositories
+  as part of its accepted-risk mechanism — AC2 now bounds two of those three (previously unbounded),
+  narrowing (not closing) that residual; annotated in place rather than left to silently understate
+  the current state.
+
+### Validation performed
+
+Targeted tests only, per this project's `docs/validation-strategy.md` convention — no `mvn verify` run.
+Backend (re-run after applying the `### Review Findings` fixes above, `mvn -o test -Dtest=...`):
+`ShedLockConfigIT` (6), `RadarCompositeDlqRepositoryIT` (6), `RadarCompositeCalculationServiceConcurrencyIT`
+(3), `VideoDeletionOutboxProcessorIT` (15), `RadarCompositeCalculatorTest` (13, +1 new),
+`RadarCompositeDlqProcessorTest` (12), `ConfigBoundsEnumCoverageTest` (5), `ConfigStartupAssertionTest`
+(21) — all green, 81 tests, 0 failures. Frontend: `npm run test:unit` (full suite, 15 files / 126
+tests, +2 new) — all green, including the two new AC4 spec files.
+
+**Flakiness caught and fixed during this re-validation, not just assumed passing:** the first pass at
+the two new `resetStaleClaimed` boundary-test pairs (AC1 Decision 1) failed intermittently in this same
+Testcontainers environment — seeding `claimed_at` and calling `resetStaleClaimed` as two separate
+statements/transactions left a 1-second (and even a 30-second) margin exposed to real inter-statement
+clock movement (a fresh Postgres container's own clock visibly catching up to the host by several
+minutes shortly after startup, empirically observed here). Fixed by wrapping both statements in one
+explicit transaction so Postgres's `now()` (`transaction_timestamp()`) is identical for both, not by
+further widening the margin. Also caught: a `ShedLockConfigIT` lock-name literal that exceeded
+`main.shedlock.name`'s `varchar(64)` limit. All were fixed and the affected suites re-run green before
+this note was written.
+
+**⚠ PR must carry the `frontend-tests` label (/bmad-code-review fix, 2026-09-21).** AC4 Task 6 named
+this requirement inline but nothing outside that one task line recorded it — `mvn verify` never
+invokes Vitest, so without the label neither `axiosSpec.js`/the new `boot/__tests__/` spec, the
+in-flight-guard/coalescing specs added to `sessionRedirectSpec.js`, nor the `vitest.config.mjs`
+`#q-app/wrappers` alias fix this story needed are exercised in CI at all — every one of them has only
+ever been run locally (`npm run test:unit` above).
 
 ## Change Log
 
+- 2026-09-21: All 4 ACs + AC5 ledger closeout complete, all review findings applied, targeted backend
+  (81) and frontend (126) tests green. Status → done. Ready for commit/PR.
+- 2026-09-21: `/bmad-code-review` Review Findings applied (this file's own `### Review Findings`
+  section above). 30 raw findings across four parallel layers → 3 decision-needed, 17 patch, 7
+  deferred (pre-existing/latent, left open in `deferred-work.md`), 3 dismissed as verified false
+  positives. Every finding independently re-verified against actual source before acting; all 3
+  decision-needed items taken live with the user (`AskUserQuestion`) before implementing — no decision
+  assumed. Most significant: AC2's cumulative lock-wait gap (a two-skill row at the configured ceiling
+  could exceed both the DLQ processor's own margin and the stale-claim buffer AC1 relies on, reopening
+  the exact duplicate-`recalculateComposite` hazard AC1 exists to close) was closed in code, not just
+  documented — `RadarCompositeCalculationService` now tracks a `CUMULATIVE_LOCK_WAIT_BUDGET` across the
+  per-skill loop and shrinks/aborts rather than let the per-statement-only bound compound unboundedly.
+  AC1's two "proves DB-time" ITs, found vacuous (test JVM and Testcontainers Postgres share one host
+  clock, so old and new predicates matched identically), were replaced with genuine boundary-test pairs
+  in both repositories — real regression protection, though still not a skew-immunity proof, which
+  would need deliberately-induced clock skew this fix does not attempt (recorded, not pursued). Running
+  the new boundary tests (not just reasoning about them) surfaced a genuine flakiness bug of their own:
+  seeding `claimed_at` and calling `resetStaleClaimed` as two separate statements/transactions left the
+  test exposed to real inter-statement clock movement — empirically a multi-minute jump in this same
+  Testcontainers environment, plausibly a fresh container's own clock catching up to the host shortly
+  after startup — which a 1-second and even a 30-second margin both failed to survive. Fixed at the
+  root, not by further widening the margin: both statements now run inside one explicit transaction, so
+  Postgres's `now()` (`transaction_timestamp()`, frozen for a transaction's duration) is identical for
+  both, making the original tight 1-second margin safe. The
+  third decision — AC1's own half-applied residual (`next_retry_at` eligibility staying on the app
+  clock) — was accepted as documented risk and given its first formal `[DECIDED: accepted risk —
+  third decision — AC1's own half-applied residual (`next_retry_at` eligibility staying on the app
+  clock) — was accepted as documented risk and given its first formal `[DECIDED: accepted risk —
+  skillars-deferred-126]` tag in `deferred-work.md`, rather than expanding this story's scope to touch
+  every writer of that column. Also fixed: two factually-wrong Javadoc claims (a deadlock was already
+  bounded by Postgres's own `deadlock_timeout`, not newly bounded by `lock_timeout`; `make_interval`'s
+  own `secs` parameter is itself `double precision`, so it performs the identical cast the removed
+  rationale claimed it avoided); a config floor sitting AT rather than above the invariant it was
+  meant to enforce (`min` 1L → 2L); a stale AC1-superseded code comment; a synchronous-throw promise-
+  pinning bug and an expired-flag-discarding coalescing bug in `sessionRedirect.js`'s in-flight guard
+  (both traced to the same root cause and fixed by one microtask deferral, with regression tests for
+  each); three `boot/axios.js` pre-boot-fallback defects (wrong redirect shape, missing reload, no
+  `.catch()`); a `ShedLockConfigIT` test asserting the converse of the actual invariant (added the
+  missing same-instance/same-identity test); a mislabeled, production-code-bypassing deadlock IT
+  (renamed, rewritten to use the real upsert statement shape); two IT assertions strengthened to pin
+  the empirically-confirmed exception causes and a lower time bound; a `ConfigBounds` call-site
+  convention violation (literal bounds + `verify(...)`, not accessor calls + unpinned `anyLong()`); a
+  dangling ledger cross-reference retargeted; a hardcoded test literal replaced with a reference to the
+  constant it duplicates; and the `frontend-tests` PR-label requirement surfaced beyond its one
+  original task line. See the Review Findings section's own inline resolution notes for the
+  file-by-file detail.
+- 2026-09-21: Dev-story implementation complete (`/bmad-dev-story`), status → review. All 4 ACs + the
+  standard AC5 ledger closeout implemented and verified — see Dev Agent Record above for the
+  per-AC summary, the two exception-class findings (`PessimisticLockingFailureException` for both the
+  lock-timeout wait and the genuine deadlock, correcting this story's own earlier unverified guess of
+  `QueryTimeoutException`), the `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS` max-bound correction (30s → 120s,
+  to satisfy `ConfigStartupAssertionTest`'s existing "100 is inside every range" fixture invariant), and
+  the `#q-app/wrappers` Vitest resolution gap found and fixed while writing this story's first boot-file
+  spec. All targeted tests green (backend + full frontend `npm run test:unit`, 124 tests); no `mvn
+  verify` run, per this project's standard `/bmad-dev-story` validation policy.
 - 2026-09-21: `story-review.md` (senior-dev pre-implementation audit) applied. 25 findings (5 High,
   6 Medium, 14 lower-severity), every one independently re-verified against actual source (Postgres
   semantics, `ConfigBounds`/`ConfigService`/`ConfigStartupAssertion` source, `RadarCompositeCalculation

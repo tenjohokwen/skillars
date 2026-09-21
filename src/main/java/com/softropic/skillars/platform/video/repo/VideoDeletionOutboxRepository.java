@@ -14,17 +14,30 @@ public interface VideoDeletionOutboxRepository extends JpaRepository<VideoDeleti
 
     // Phase 1: atomically claim a batch by updating status to CLAIMED within a single transaction.
     // FOR UPDATE SKIP LOCKED in the subquery prevents concurrent processors from double-claiming.
-    // skillars-deferred-123 AC3: claimed_at stamped with this tick's own claim instant — see
-    // VideoDeletionOutbox.claimedAt's Javadoc for why (resetStaleClaimed below).
+    // skillars-deferred-123 AC3: claimed_at stamped at claim time — see VideoDeletionOutbox.claimedAt's
+    // Javadoc for why (resetStaleClaimed below).
+    // /bmad-code-review fix (2026-09-21): the stamp is no longer "this tick's own [app-clock] claim
+    // instant" — skillars-deferred-126 AC1 below moved it to the database's own now(), so this
+    // comment's own wording was directly contradicted by the very next paragraph. See AC1's comment
+    // further down for the DB-time rationale.
     // skillars-deferred-124 AC4: claimed_by stamped with this tick's own run id (UUID.randomUUID(),
     // generated once per tick) alongside claimed_at — see VideoDeletionOutbox.claimedBy's Javadoc.
     // claimed_at keeps flowing to resetStaleClaimed's staleness check; claimed_by is now what
     // findClaimedBatch/releaseClaimed/completeClaimed/failClaimed key their identity predicate on.
+    // skillars-deferred-126 AC1: claimed_at's stamp moved from the app-clock :now bind parameter to
+    // the database's own now() — matching ShedLockConfig's usingDbTime() choice for the identical
+    // cross-instance clock-skew reason. Scoped to this ONE clause only: next_retry_at <= :now (the
+    // eligibility predicate, sharing the same :now bind parameter) is deliberately left untouched —
+    // next_retry_at is itself app-clock-stamped elsewhere (row insertion, backoff computation), so
+    // making eligibility DB-time too would require touching every writer of that column, a much
+    // larger change than this fix's scope. Postgres allows a literal now() call and a bound
+    // parameter in the same UPDATE statement freely. See resetStaleClaimed's own Javadoc below for
+    // the comparison this stamp change was made for.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE main.video_deletion_outbox
-        SET status = 'CLAIMED', claimed_at = :now, claimed_by = :runId
+        SET status = 'CLAIMED', claimed_at = now(), claimed_by = :runId
         WHERE id = ANY(
             SELECT id FROM main.video_deletion_outbox
             WHERE status = 'PENDING' AND next_retry_at <= :now
@@ -65,14 +78,31 @@ public interface VideoDeletionOutboxRepository extends JpaRepository<VideoDeleti
     // claimed_by carries no information about), but claimed_by is cleared here too — this transitions
     // a row out of CLAIMED exactly like every other terminal path, and the invariant applies
     // regardless of which predicate triggered the transition.
+    // skillars-deferred-126 AC1: takes the stale-window WIDTH (seconds), not a Java-computed absolute
+    // deadline — the deadline is now computed inside the SQL itself via the database's own now(),
+    // matching claimPendingBatch's identical DB-time move above and ShedLockConfig's usingDbTime().
+    // If instance B's app clock ran ahead of instance A's by more than this window's margin above
+    // lockAtMostFor, the old app-clock deadline let B's sweep free and immediately re-claim rows A was
+    // still legitimately processing — a duplicate videoProviderAdapter.deleteAsset call, an
+    // externally-visible side effect claimed_by cannot undo after the fact. make_interval(secs => ...)
+    // is used rather than now() - (:staleWindowSeconds * interval '1 second') for clarity and
+    // unambiguous parameter typing, NOT to avoid a numeric cast (/bmad-code-review fix, 2026-09-21:
+    // the original rationale here was factually wrong — make_interval's own secs parameter is ITSELF
+    // declared double precision, so binding a bindable long performs the identical implicit bigint ->
+    // double precision cast either way). The real benefit is that a named function argument gives
+    // Postgres's parser an unambiguous target type to infer the bound parameter's type from, avoiding
+    // a "could not determine data type of parameter" error the bare multiplication form can trigger,
+    // and it reads unambiguously as "an interval of N seconds" rather than relying on
+    // interval-arithmetic operator precedence.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE main.video_deletion_outbox
         SET status = 'PENDING', claimed_at = NULL, claimed_by = NULL
-        WHERE status = 'CLAIMED' AND (claimed_at IS NULL OR claimed_at < :deadline)
+        WHERE status = 'CLAIMED'
+          AND (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => :staleWindowSeconds))
         """, nativeQuery = true)
-    int resetStaleClaimed(@Param("deadline") Instant deadline);
+    int resetStaleClaimed(@Param("staleWindowSeconds") long staleWindowSeconds);
 
     // skillars-deferred-123 code review 2026-09-18 (Decision 3): hand this run's OWN unprocessed rows
     // straight back to PENDING when the processor self-terminates on its MAX_RUN_DURATION budget.

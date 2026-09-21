@@ -214,6 +214,45 @@ public final class ConfigBounds {
                 + "eviction sweep provides less protection against the unbounded-map growth it exists "
                 + "to fix");
 
+    /**
+     * {@code RadarCompositeCalculationService.recalculateComposite} — skillars-deferred-126 AC2:
+     * bounds the previously-unbounded {@code upsertComposite}/{@code insertBaselineIfAbsent} native
+     * {@code INSERT ... ON CONFLICT} wait via a transaction-scoped ({@code SELECT set_config(
+     * 'lock_timeout', ..., true)}) bound, the narrowest-blast-radius mechanism that actually applies
+     * to a native DML statement's implicit row lock (unlike {@code @Lock}/{@code @QueryHints}, which
+     * only affects JPA-level pessimistic-lock acquisition on a {@code SELECT}-shaped query, the
+     * mechanism {@link #MODERATION_LOCK_TIMEOUT_MINUTES} mirrors).
+     *
+     * <p>Read via the 4-arg {@code getBoundedLong(key, default, min, max)} route and registered in
+     * {@link #HAS_CODE_DEFAULT} — deliberately NOT the {@code failFast}/no-code-default shape
+     * {@link #MODERATION_LOCK_TIMEOUT_MINUTES} uses, which would require a seeded Flyway value
+     * (this story's own Dev Notes rule out a new migration) and would also widen {@code
+     * RadarCompositeDlqProcessor}'s own documented {@code getBoundedLong}-failure residual onto the
+     * live {@code AFTER_COMMIT} path, not just the DLQ-retry path.
+     *
+     * <p>The DEFAULT (5s, see the call site) is kept in the single-digit seconds so a genuinely stuck
+     * upsert fails fast and becomes visible under normal operation, per this AC's own "fail fast, do
+     * not retry-in-place" decision (the existing DLQ/{@code AFTER_COMMIT}-catch recovery on both
+     * callers is the intended recovery path, not a second in-place retry mechanism here). The stored
+     * value's ceiling ({@code max}) is deliberately wider than the default — 120s, comfortably below
+     * both {@code MAX_RUN_DURATION} (8 minutes) and the AC1 stale-claim margin (5 minutes) — so an
+     * operator can widen it for an unusually contended deployment without the boot-time clamp fighting
+     * them; it is not itself the recommended operating value. The floor must stay ABOVE Postgres's own
+     * {@code deadlock_timeout} (default 1s) so the deadlock detector gets a chance to fire before this
+     * timeout would otherwise misreport a genuine deadlock ({@code 40P01}) as an ordinary lock timeout
+     * ({@code 55P03}) — see {@code recalculateComposite}'s own Javadoc for the write-order deadlock
+     * hazard this guards against ({@code GdprErasureService.deletePlayerDevelopmentData} takes the
+     * same two tables in the opposite order). {@code min = 2L}, not {@code 1L}: a stored {@code 1}
+     * would sit AT, not above, Postgres's own ~1s {@code deadlock_timeout} default — coin-flip-close
+     * enough that a genuine deadlock could still misreport as an ordinary lock timeout depending on
+     * which fires first, which is exactly the invariant this paragraph states the floor exists to
+     * preserve (/bmad-code-review fix, 2026-09-21).
+     */
+    public static final BoundedKey RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS =
+        new BoundedKey("platform.radar_composite_lock_timeout_seconds", 2L, 120L, false,
+            "too low (near Postgres's ~1s deadlock_timeout) → a genuine deadlock could misreport as "
+                + "an ordinary lock timeout; too high → the upsert wait this AC bounds stops failing fast");
+
     // ── Templated per-enum key segments — DELIBERATELY hand-listed ──────────────────────────────
     // skillars-deferred-108 AC9 (owner decision 2026-09-10, was deferred-107 code review): these
     // segments are hand-listed on purpose. Deriving them by iterating CoachSubscriptionTier
@@ -274,7 +313,8 @@ public final class ConfigBounds {
         REVIEWS_SUBMISSION_WINDOW_DAYS.key(),
         REVIEWS_AUTO_HOLD_FLAG_THRESHOLD.key(),
         TIMELINE_COACH_ACCESS_EXPIRY_DAYS.key(),
-        RATE_LIMIT_BUCKET_TTL_HOURS.key());
+        RATE_LIMIT_BUCKET_TTL_HOURS.key(),
+        RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -306,7 +346,8 @@ public final class ConfigBounds {
             VIDEO_LIFECYCLE_OUTBOX_MAX_ATTEMPTS,
             VIDEO_DELETION_MAX_ATTEMPTS,
             RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS,
-            RATE_LIMIT_BUCKET_TTL_HOURS));
+            RATE_LIMIT_BUCKET_TTL_HOURS,
+            RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

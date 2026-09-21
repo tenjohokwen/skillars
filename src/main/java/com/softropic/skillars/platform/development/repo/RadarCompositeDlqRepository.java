@@ -19,11 +19,20 @@ public interface RadarCompositeDlqRepository extends JpaRepository<RadarComposit
     // skillars-deferred-124 AC4: claimed_by stamped/keyed identically too — see
     // VideoDeletionOutboxRepository.claimPendingBatch's own comment and
     // RadarCompositeDlqEntry.claimedBy's Javadoc.
+    // skillars-deferred-126 AC1: claimed_at's stamp moved from the app-clock :now bind parameter to
+    // the database's own now() — matching ShedLockConfig's usingDbTime() choice for the identical
+    // cross-instance clock-skew reason. Scoped to this ONE clause only: next_retry_at <= :now (the
+    // eligibility predicate, sharing the same :now bind parameter) is deliberately left untouched —
+    // next_retry_at is itself app-clock-stamped elsewhere (row insertion, backoff computation), so
+    // making eligibility DB-time too would require touching every writer of that column, a much
+    // larger change than this fix's scope. Postgres allows a literal now() call and a bound
+    // parameter in the same UPDATE statement freely. See resetStaleClaimed's own Javadoc below for
+    // the comparison this stamp change was made for.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE development.radar_composite_dlq
-        SET status = 'CLAIMED', claimed_at = :now, claimed_by = :runId
+        SET status = 'CLAIMED', claimed_at = now(), claimed_by = :runId
         WHERE id = ANY(
             SELECT id FROM development.radar_composite_dlq
             WHERE status = 'PENDING' AND next_retry_at <= :now
@@ -51,14 +60,31 @@ public interface RadarCompositeDlqRepository extends JpaRepository<RadarComposit
     // skillars-deferred-124 AC4: WHERE predicate stays keyed on claimed_at (a time comparison, not an
     // identity one), but claimed_by is cleared here too, same rationale as
     // VideoDeletionOutboxRepository.resetStaleClaimed.
+    // skillars-deferred-126 AC1: takes the stale-window WIDTH (seconds), not a Java-computed absolute
+    // deadline — the deadline is now computed inside the SQL itself via the database's own now(),
+    // matching claimPendingBatch's identical DB-time move above and ShedLockConfig's usingDbTime().
+    // If instance B's app clock ran ahead of instance A's by more than this window's margin above
+    // lockAtMostFor, the old app-clock deadline let B's sweep free and immediately re-claim rows A was
+    // still legitimately processing — a duplicate recalculateComposite, an externally-visible side
+    // effect claimed_by cannot undo after the fact. make_interval(secs => ...) is used rather than
+    // now() - (:staleWindowSeconds * interval '1 second') for clarity and unambiguous parameter
+    // typing, NOT to avoid a numeric cast (/bmad-code-review fix, 2026-09-21: the original rationale
+    // here was factually wrong — make_interval's own secs parameter is ITSELF declared double
+    // precision, so binding a bindable long performs the identical implicit bigint -> double
+    // precision cast either way). The real benefit is that a named function argument gives Postgres's
+    // parser an unambiguous target type to infer the bound parameter's type from, avoiding a "could
+    // not determine data type of parameter" error the bare multiplication form can trigger, and it
+    // reads unambiguously as "an interval of N seconds" rather than relying on interval-arithmetic
+    // operator precedence.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE development.radar_composite_dlq
         SET status = 'PENDING', claimed_at = NULL, claimed_by = NULL
-        WHERE status = 'CLAIMED' AND (claimed_at IS NULL OR claimed_at < :deadline)
+        WHERE status = 'CLAIMED'
+          AND (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => :staleWindowSeconds))
         """, nativeQuery = true)
-    int resetStaleClaimed(@Param("deadline") Instant deadline);
+    int resetStaleClaimed(@Param("staleWindowSeconds") long staleWindowSeconds);
 
     // skillars-deferred-123 code review 2026-09-18 (Decision 3): mirrors
     // VideoDeletionOutboxRepository.releaseClaimed — see that method's comment for the full rationale.

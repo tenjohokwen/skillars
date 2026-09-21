@@ -36,7 +36,7 @@
 // branch from pushLoginOrHardNavigate → the "guard aborts" test below fails (window.location never
 // changes because the promise resolved rather than rejected, so only the catch path would have fired).
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import {
   pushLoginOrHardNavigate,
@@ -157,5 +157,108 @@ describe('sessionRedirect — pushLoginOrHardNavigate (deferred-125 AC3)', () =>
     await pushLoginOrHardNavigate(router, { expired: true })
 
     expect(window.location.href).toBe(hrefAfterFirstCall)
+  })
+
+  // skillars-deferred-126 AC4 Task 3 (story-review.md F-3): a call arriving while a previous call is
+  // still in flight — before that call's own router.push has resolved — must await and return THAT
+  // SAME in-flight promise rather than issuing a second router.push. Added BEFORE wiring axios.js's
+  // own new call site, per this AC's own task ordering, so the guard is proven in isolation first.
+  // The guard is async (awaits a controllable gate) specifically so a second call can genuinely land
+  // while the first's router.push is still pending — a synchronous guard would settle before a second
+  // call could ever be issued, since nothing here yields to the event loop.
+  it('a second call arrives before the first settles — awaits the same in-flight promise instead of issuing a second router.push', async () => {
+    let releaseGuard
+    const guardGate = new Promise((resolve) => {
+      releaseGuard = resolve
+    })
+    const router = buildRouter(async (to) => {
+      if (to.path === '/login') {
+        await guardGate
+        return false
+      }
+    })
+    await router.push('/blocked')
+    const pushSpy = vi.spyOn(router, 'push')
+
+    const firstCall = pushLoginOrHardNavigate(router, { expired: true })
+    const secondCall = pushLoginOrHardNavigate(router, { expired: true })
+
+    // /bmad-code-review fix (2026-09-21): pushLoginOrHardNavigate now yields one microtask (see its
+    // own comment) before calling router.push at all — both same-tick calls above are queued, but
+    // neither has actually invoked router.push yet until that microtask runs.
+    await Promise.resolve()
+
+    // Both calls must be racing the SAME underlying navigation — only one router.push issued so far,
+    // even though neither call has resolved yet.
+    expect(pushSpy).toHaveBeenCalledTimes(1)
+
+    releaseGuard()
+    await firstCall
+    await secondCall
+
+    expect(pushSpy).toHaveBeenCalledTimes(1)
+    expect(window.location.pathname).toBe('/login')
+    expect(window.location.search).toContain('expired=true')
+  })
+
+  // /bmad-code-review fix (2026-09-21): router.push throwing SYNCHRONOUSLY (as opposed to returning
+  // a rejected promise) used to run this whole function's try/catch/finally to completion — including
+  // `inFlight = null` — before `inFlight = promise` was even assigned, permanently pinning the guard
+  // to an already-settled promise and silently disabling every later call. Fixed by yielding one
+  // microtask before doing anything risky (see the IIFE's own comment in sessionRedirect.js).
+  it('router.push throwing synchronously does not permanently pin the in-flight guard against later calls', async () => {
+    const router = buildRouter() // no guard: /login is always reachable
+    await router.push('/blocked')
+    let callCount = 0
+    const realPush = router.push.bind(router)
+    router.push = vi.fn((...args) => {
+      callCount += 1
+      if (callCount === 1) {
+        throw new Error('synchronous boom')
+      }
+      return realPush(...args)
+    })
+
+    await pushLoginOrHardNavigate(router, { expired: true })
+    expect(router.push).toHaveBeenCalledTimes(1)
+    // The synchronous throw routed to the hard-nav fallback.
+    expect(window.location.pathname).toBe('/login')
+
+    // A later, unrelated call must still be able to issue its own router.push — under the bug this
+    // guards against, `inFlight` would already be a settled promise here, so this call would
+    // short-circuit on `if (inFlight) return inFlight` and router.push would never be called again.
+    await pushLoginOrHardNavigate(router, { expired: false })
+    expect(router.push).toHaveBeenCalledTimes(2)
+  })
+
+  // /bmad-code-review fix (2026-09-21): a call that coalesces onto an already-in-flight navigation
+  // (the guard above) used to silently discard its own `expired` intent — the coalescing branch
+  // returned before buildRedirectQuery ever ran, so whichever call arrived FIRST unilaterally decided
+  // the query for both callers. A deliberate logout (expired: false) racing a genuine expiry
+  // (expired: true) in the same tick must not lose the genuine expiry's banner.
+  it('a second call racing the first in the same tick folds its own expired:true into the still-pending navigation', async () => {
+    let releaseGuard
+    const guardGate = new Promise((resolve) => {
+      releaseGuard = resolve
+    })
+    const router = buildRouter(async (to) => {
+      if (to.path === '/login') {
+        await guardGate
+        return false
+      }
+    })
+    await router.push('/blocked')
+
+    // First call is the deliberate logout (no expiry); second, arriving in the same tick, is the
+    // genuine expiry — the exact race documented on sessionRedirect.js's `inFlight`/`pendingExpired`.
+    const firstCall = pushLoginOrHardNavigate(router, { expired: false })
+    const secondCall = pushLoginOrHardNavigate(router, { expired: true })
+
+    releaseGuard()
+    await firstCall
+    await secondCall
+
+    expect(window.location.pathname).toBe('/login')
+    expect(window.location.search).toContain('expired=true')
   })
 })

@@ -60,6 +60,16 @@ public class VideoDeletionOutboxProcessor {
      * now self-terminates at {@link #MAX_RUN_DURATION}, so the invariant is enforced at the source —
      * {@code MAX_RUN_DURATION (12m) < LOCK_AT_MOST_FOR (15m) < STALE_CLAIM_WINDOW (20m)} — instead of
      * being assumed from a per-item cost estimate that can drift whenever the adapter's timeouts change.
+     *
+     * <p><strong>skillars-deferred-126 AC1 (2026-09-21).</strong> The comparison this window feeds —
+     * {@code resetStaleClaimed}'s {@code claimed_at < deadline} check — is now computed against the
+     * database's own clock ({@code now()} inside the SQL itself), not each instance's own app clock,
+     * matching {@code ShedLockConfig}'s {@code usingDbTime()} choice. Before this fix, if instance B's
+     * clock ran ahead of instance A's by more than this window's margin above {@code LOCK_AT_MOST_FOR}
+     * (the 5 minutes described above), B's sweep could free and immediately re-claim rows A was still
+     * legitimately processing — a duplicate {@code deleteAsset} call, purely from clock skew, with no
+     * crash on either instance. That cross-instance clock-skew hazard is now closed; this window's own
+     * sizing rationale above (the buffer above {@code LOCK_AT_MOST_FOR}) is otherwise unchanged.
      */
     private static final Duration STALE_CLAIM_WINDOW = Duration.ofMinutes(20);
 
@@ -99,11 +109,13 @@ public class VideoDeletionOutboxProcessor {
      * return both batches, so each processed rows the other was concurrently processing — real
      * duplicate {@code videoProviderAdapter.deleteAsset} calls and duplicate {@code
      * video_deletion_log} rows, not merely a shared-field race. AC3 scoped the fetch to {@code
-     * claimed_at = :claimedAt} (this run's own claim instant, stamped by {@code claimPendingBatch}),
-     * closing that path completely. {@code skillars-deferred-124 AC4} later replaced that predicate
-     * with {@code claimed_by} (a dedicated run-identity {@code UUID}, see {@link
-     * VideoDeletionOutbox#getClaimedBy()}'s Javadoc) — {@code claimed_at} still flows to {@code
-     * resetStaleClaimed}'s staleness math below, but is no longer the identity check itself.
+     * claimed_at = :claimedAt} (this run's own claim instant, stamped by {@code claimPendingBatch} —
+     * skillars-deferred-126 AC1, 2026-09-21: the stamp is now the <em>database's</em> own claim
+     * instant, {@code now()}, not the claiming JVM's own wall clock; see {@link VideoDeletionOutbox
+     * #getClaimedAt()}'s Javadoc for why), closing that path completely. {@code skillars-deferred-124
+     * AC4} later replaced that predicate with {@code claimed_by} (a dedicated run-identity {@code UUID},
+     * see {@link VideoDeletionOutbox#getClaimedBy()}'s Javadoc) — {@code claimed_at} still flows to
+     * {@code resetStaleClaimed}'s staleness math below, but is no longer the identity check itself.
      *
      * <p><strong>{@code lockAtMostFor} vs {@link #STALE_CLAIM_WINDOW}.</strong> {@code
      * resetStaleClaimed} now keys staleness on <em>claim</em> time, not eligibility time — the other
@@ -157,7 +169,10 @@ public class VideoDeletionOutboxProcessor {
         UUID runId = UUID.randomUUID();
         // Reset any rows stuck in CLAIMED state for longer than STALE_CLAIM_WINDOW (crashed run
         // recovery) — see STALE_CLAIM_WINDOW's own Javadoc for the invariant this must respect.
-        outboxRepository.resetStaleClaimed(runClaimedAt.minus(STALE_CLAIM_WINDOW));
+        // skillars-deferred-126 AC1: passes the stale-window WIDTH, not a Java-computed absolute
+        // deadline — resetStaleClaimed now computes the deadline itself from the database's own
+        // now(), matching ShedLockConfig's usingDbTime() choice. See that method's own Javadoc.
+        outboxRepository.resetStaleClaimed(STALE_CLAIM_WINDOW.toSeconds());
         // Atomically claim a batch of PENDING rows; row locks released after the UPDATE commits.
         // skillars-deferred-125 AC1: claimPendingBatch's UPDATE is its own auto-committing statement —
         // by the time it returns, up to BATCH_SIZE rows are durably CLAIMED under runId, independent of

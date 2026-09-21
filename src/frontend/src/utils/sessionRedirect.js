@@ -50,6 +50,39 @@ import { isNavigationFailure, NavigationFailureType } from 'vue-router'
 // sessionManager.js's own vi.resetModules()-based test-reset convention for other module-level state).
 let hardNavigated = false
 
+// skillars-deferred-126 AC4 (2026-09-21, story-review.md F-3): a SEPARATE, same-tick guard from
+// `hardNavigated` above. `hardNavigated` only prevents a second HARD navigation once one has already
+// fired; it does nothing about two calls into this function racing to each start their OWN
+// `router.push` before either has resolved. That race is real: `refreshExpiryState()`'s
+// `tick()` dispatches `session:expired` via a SYNCHRONOUS `window.dispatchEvent` — every listener,
+// including App.vue's `handleSessionExpired` (fire-and-forget, not awaited), runs to the point of its
+// own first `await` before `dispatchEvent` returns control to the axios response interceptor, whose
+// own 401 handler then calls this function a SECOND time in the SAME tick. At that point neither
+// call's `router.push` has resolved, so `router.currentRoute.value.path` is still the pre-navigation
+// route for both — the "already on /login" check below cannot distinguish "genuinely elsewhere" from
+// "a navigation to /login is already underway". A call that arrives while `inFlight` is already set
+// (checked first, before the "already on /login" check — that check would otherwise be fooled by the
+// exact race this guard exists to close, since the in-progress navigation has not yet updated the
+// current route) awaits and returns THAT SAME promise instead of issuing a second `router.push`.
+// Deliberately generic — not a bespoke axios-side "skip if I just dispatched session:expired" special
+// case — so it fixes the race for any two of this helper's four call sites that might ever fire in
+// the same tick, not only the specific coupling that first surfaced it.
+let inFlight = null
+
+// /bmad-code-review fix (2026-09-21): the `expired` intent of a call that coalesces onto `inFlight`
+// (above) used to be silently discarded — the coalescing branch returned before buildRedirectQuery
+// ever ran, so whichever call happened to arrive FIRST unilaterally decided the query for both. A
+// deliberate logout (expired: false) racing a genuine expiry (expired: true) in the same tick — the
+// exact scenario `inFlight`'s own comment documents — could therefore either show a false "Your
+// session has expired" banner (the precise bug skillars-deferred-125 fixed, resurfacing through this
+// different mechanism) or, the other direction, silently swallow a real expiry's banner. `pendingExpired`
+// is read once per navigation, at the deferred point documented on the IIFE below — any call that
+// arrives before that read (same-tick coalescing) can still fold its own `expired: true` in. It only
+// ever upgrades false -> true, never downgrades: once ANY racing caller reports a genuine expiry, that
+// is not a fact a later "deliberate logout" call can retract, so the banner errs toward showing a real
+// expiry rather than toward hiding one.
+let pendingExpired = false
+
 const LOGIN_PATH = '/login'
 
 // A resolved navigation "failure" that means the push genuinely did not land on the target route.
@@ -88,7 +121,9 @@ function hardNavigateToLogin(router, query) {
  * form auto-encodes it) plus `expired=true` when `expired` is true. If the push does not actually
  * land — a resolved NavigationFailure (aborted/cancelled) or a rejection — falls back to a hard
  * navigation instead of leaving the caller's already-torn-down session state stranded on the current
- * route. A no-op if already on `/login`.
+ * route. A no-op if already on `/login`. A call that arrives while a previous call is still in
+ * flight (skillars-deferred-126 AC4) awaits and returns that same in-flight promise rather than
+ * issuing a second `router.push`.
  *
  * @param {import('vue-router').Router} router
  * @param {{ expired?: boolean }} [options] `expired` should be true only for a genuine session-expiry
@@ -97,21 +132,52 @@ function hardNavigateToLogin(router, query) {
  * @returns {Promise<void>}
  */
 export async function pushLoginOrHardNavigate(router, { expired = false } = {}) {
+  if (inFlight) {
+    if (expired) {
+      pendingExpired = true
+    }
+    return inFlight
+  }
   if (router.currentRoute.value.path === LOGIN_PATH) {
     return
   }
-  const query = buildRedirectQuery(router, expired)
-  try {
-    const failure = await router.push({ path: LOGIN_PATH, query })
-    if (isNavigationFailure(failure, DID_NOT_LAND)) {
+  pendingExpired = expired
+  const promise = (async () => {
+    // /bmad-code-review fix (2026-09-21): this await was added as the FIRST statement in this IIFE,
+    // before anything else runs. Two separate bugs both traced back to the same root cause — this
+    // body previously started doing real work (building the query, calling router.push) SYNCHRONOUSLY,
+    // in the same tick as `pushLoginOrHardNavigate` itself was called:
+    //   1. `inFlight = promise` (below) executes AFTER this IIFE is invoked. If router.push were to
+    //      throw synchronously (rather than returning a rejected promise — not vue-router's documented
+    //      behavior today, but not guaranteed by the type signature either), this body's own
+    //      try/catch/finally — including `inFlight = null` — would run to completion before `inFlight
+    //      = promise` even executes, permanently pinning the guard to an already-settled promise and
+    //      silently disabling every later call into this function.
+    //   2. `pendingExpired` (above) was being read to build the query before a same-tick second caller
+    //      (see that field's own comment) ever had a chance to fold its own `expired` in.
+    // Yielding one microtask here fixes both: `inFlight = promise` is now unconditionally guaranteed to
+    // run before this body does anything risky, and every same-tick caller (the exact race `inFlight`
+    // and `pendingExpired`'s own comments describe) gets to update `pendingExpired` before it is read.
+    await Promise.resolve()
+    const query = buildRedirectQuery(router, pendingExpired)
+    try {
+      const failure = await router.push({ path: LOGIN_PATH, query })
+      if (isNavigationFailure(failure, DID_NOT_LAND)) {
+        hardNavigateToLogin(router, query)
+      }
+    } catch {
       hardNavigateToLogin(router, query)
+    } finally {
+      inFlight = null
     }
-  } catch {
-    hardNavigateToLogin(router, query)
-  }
+  })()
+  inFlight = promise
+  return promise
 }
 
-/** Test-only reset for the module-level re-entrancy guard. Not for production use. */
+/** Test-only reset for the module-level re-entrancy guards. Not for production use. */
 export function __resetSessionRedirectGuardForTests() {
   hardNavigated = false
+  inFlight = null
+  pendingExpired = false
 }
