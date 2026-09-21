@@ -87,9 +87,7 @@ describe('boot/axios — 401 handler routes through sessionRedirect once boot ha
   })
 
   it('a non-401 error — pushLoginOrHardNavigate is not called', async () => {
-    await expect(
-      rejectedHandler({ response: { status: 500, data: {} } }),
-    ).rejects.toBeDefined()
+    await expect(rejectedHandler({ response: { status: 500, data: {} } })).rejects.toBeDefined()
 
     expect(pushLoginOrHardNavigate).not.toHaveBeenCalled()
   })
