@@ -1,627 +1,486 @@
-# Senior-Dev Audit — `skillars-deferred-125-outbox-claim-isolation-radar-window-margin-and-session-redirect-fixes.md`
+# Senior-dev audit — `skillars-deferred-126` story spec
 
-**Reviewed:** 2026-09-21
-**Story status at review:** `ready-for-dev`
-**Repo state:** branch `story/deferred-125-outbox-radar-session-fixes`, HEAD `1f11daca` (story-creation
-commit); story line citations were made against `77036728` (master, post-PR #212).
-**Method:** every file, line citation, constraint, precedent and test class named in the story was
-opened and checked against the actual source. Library behaviour claims were verified against the
-installed package, not from memory. Findings below are only those that survived that check; a
-"Verified correct" section at the end records what held up, so it is not re-litigated.
+**Target:** `_bmad-output/implementation-artifacts/skillars-deferred-126-stale-claim-db-time-radar-lock-bound-shedlock-identity-and-axios-hash-redirect-fixes.md`
+**Audited at:** `HEAD = 49b27359` (branch `story/deferred-126-clock-skew-lock-fixes`), 2026-09-21
+**Method:** every file, line citation, constraint, precedent and named test file in the story was opened
+and compared against actual source. ShedLock claims were verified against the decompiled
+`shedlock-*-7.10.1` jars in `~/.m2`, not from memory. Findings below are only those I could reproduce
+from the source; where a suspicion did not survive verification it is recorded under
+§4 *Checked and cleared* so it is not re-raised.
 
-**Headline:** the story's *structure* is sound — AC1's correction of the ledger's `try`/`finally` to
-`try`/`catch` is right, AC2's missing-assertion finding is real and its citations are cleaner than the
-ledger's, and AC5's bullet mapping is accurate. But three load-bearing premises are false against the
-actual source (AC3's Vue Router 4 semantics, AC3's "no existing router-mocking spec", AC4's "four
-migrations"), and AC4 as written would break two existing lint tests and mandate a form that is
-actively unsafe for this repo's own documented non-transactional migration pattern.
+**Verdict:** the story's four findings are all **real** and its four owner decisions are all
+**sound**. The core mechanism claims — including the two the story left as open questions — hold up.
+The defects are in the *implementation instructions*: two ACs have task lists that would produce a
+vacuous test or a boot-blocking config, one AC has an unflagged behavioural race with an existing
+call site, and one AC contains two tasks that contradict each other.
 
 ---
 
-## Severity summary
+## 1. Citation accuracy
 
-| # | AC | Severity | Finding |
-|---|---|---|---|
-| F1 | AC3 | **High** | Vue Router 4 **resolves** (does not reject) on all three failure modes the story names — a `.catch()`-only fix plus the prescribed test would ship green and fix nothing |
-| F2 | AC3 | **High** | "No existing spec mocks `useRouter()` … this will be the first" is false — three specs already do, one of them a near-exact template |
-| F3 | AC4 | **High** | "All **four** … migrations" — there are **ten** (V140–V150); the four-item list was copied from the ledger, not re-verified |
-| F4 | AC4 | **High** | `SET LOCAL` is a **no-op outside a transaction block**; this repo documents an `executeInTransaction=false` sidecar pattern, where the mandated form would silently remove all protection |
-| F5 | AC4 | **High** | A new rule bound at ~V150 flags **12 existing `valid/` lint fixtures**, breaking `validFixtures_areClean` |
-| F6 | AC4 | Medium | Adding a `Rule` enum member breaks `invalidFixtures_triggerEveryRule` until an `invalid/` fixture is added |
-| F7 | AC4 | Medium | A third baseline is an API change through 3 `lint()` overloads + `lintFile` + every fixture call site |
-| F8 | AC4 | Medium | Switching to `SET LOCAL` creates a new **false negative in the existing `MISSING_LOCK_TIMEOUT` rule** |
-| F9 | AC4 | Medium | AC4's own rationale ("immutable once applied") contradicts this story's out-of-scope note and `deferred-112`'s precedent |
-| F10 | AC4 | Medium | Doc update scoped to item 7 only; five other places in the same doc prescribe plain `SET` |
-| F11 | AC3 | Medium | Same bug, two other live call sites (`useSession.js:110`, `MainLayout.vue:374`) — AC3 fixes 1 of 3 |
-| F12 | AC3 | Medium | Existing hard-nav precedent missed (`boot/axios.js:163-167`); the fallback URL **must** `encodeURIComponent` the redirect path |
-| F13 | AC3 | Medium | `sessionManager.js:231` is pinned by an existing characterization spec **and** a recorded owner decision — neither is mentioned |
-| F14 | AC2 | Medium | The "rather than widen the window" reasoning lives in `MAX_RUN_DURATION`'s Javadoc, not the one task 3 targets |
-| F15 | AC2 | Medium | Three stale cross-references left out of scope (radar test Javadoc, video sibling Javadoc, `scheduler-lock-tuning.md:77`) |
-| F16 | AC1 | Medium | The fix's efficacy is overstated for the exact failure modes named |
-| F17 | AC1 | Medium | "no-throw-out-of-`process()` convention" does not exist for this phase; "log and return" would be a silent behaviour change |
-| F18 | AC5 | Medium | Bullet 4's own ledger text carries the four-migration error |
-| F19 | — | Medium | The Provenance "independently re-verified, not merely re-read" claim is falsified for two of the five items |
-| F20 | AC1 | Low | Dev Notes cite the wrong existing spy seam; the one AC1 needs already exists |
-| F21 | AC1 | Low | Test shape: `runId` is generated inside `process()` — needs an `ArgumentCaptor`, or the test is near-vacuous |
-| F22 | AC2 | Low | Unstated trade-off: crash-recovery latency goes 10m → 15m |
-| F23 | AC3 | Low | Re-entrancy: `session:expired` can fire again via the axios interceptor, repeating the hard nav |
-| F24 | AC5 | Low | The out-of-scope section has **two** bullets; the story names only one |
-| F25 | AC4 | Low | `MigrationLint.java` is filed under "Production code"; it lives in `src/test` |
+Every line citation was re-read. Accuracy is high — 27 of 30 are exact or within range.
 
----
-
-## AC1 — Outbox/DLQ claim-phase isolation
-
-### F16 (Medium) — the fix does not close the failure modes the story names
-
-> "If the very next call, `findClaimedBatch`, throws — a connection reset, a statement timeout, a
-> pool-exhaustion `CannotGetJdbcConnectionException` …"
-
-Two of those three (connection reset, pool exhaustion) will also break the `releaseClaimed(runId)` call
-the story puts in the catch block — it is another JDBC round trip on the same broken connection/pool.
-The fix genuinely helps only where `findClaimedBatch` fails for a reason that leaves the connection
-usable (a statement timeout on the `SELECT`, a row-mapping failure, a bad `LIMIT` bind). That is still
-worth doing, but the story presents it as closing the gap generally.
-
-**Required task addition:** the catch must guard its own `releaseClaimed` call, so a secondary failure
-does not mask the original. `e.addSuppressed(secondary)` before rethrowing, or a nested
-`try`/`catch` logging at ERROR — this class already has that exact shape for `handleFailure`'s inner
-guard (`VideoDeletionOutboxProcessor.java:203-209`, `RadarCompositeDlqProcessor.java:158-164`), so
-follow it rather than inventing a new one.
-
-### F17 (Medium) — the cited precedent for "log and return" does not exist
-
-> "then rethrows (or logs and returns, matching this method's existing no-throw-out-of-`process()`
-> convention — check `handleFailure`'s own return behaviour for the precedent)"
-
-There is no such convention for this phase. Verified: `process()`'s claim phase
-(`VideoDeletionOutboxProcessor.java:156-159`, `RadarCompositeDlqProcessor.java:125-127`) has no guard
-at all today, so a throw there *does* escape `process()`. And `handleFailure` does not swallow
-anything either — it is the *loop* (`:198-210` / `:153-165`) that catches, which is a different
-mechanism at a different level.
-
-This matters: choosing "log and return" would be a **behaviour change**, not a neutral style choice.
-Spring's scheduled-task error handler currently sees claim-phase DB failures; after "log and return"
-it would not, and the only signal left is a WARN line. Recommend the task simply prescribes **rethrow**
-and drops the alternative.
-
-### F20 (Low) — Dev Notes cite the wrong seam; the one AC1 needs already exists
-
-Dev Notes say the new tests "reuse the *same* test classes and mock shapes skillars-deferred-124 AC2
-already introduced (`VideoDeletionOutboxProcessorIT`'s existing `@MockitoSpyBean
-DrillVideoRefRepository` …)". The seam AC1 actually needs is the *other* one added by that story:
-
-```
-src/test/java/.../VideoDeletionOutboxProcessorIT.java:57
-    @MockitoSpyBean VideoDeletionOutboxRepository outboxRepository;
-```
-
-That is the exact bean whose `findClaimedBatch` must be made to throw and whose `releaseClaimed` must
-be verified. The Dev Notes' conclusion (no new Spring context fork needed) is still correct, and
-strengthened by this.
-
-### F21 (Low) — test shape: `runId` is generated inside `process()`
-
-Task 4 says "assert `releaseClaimed` was invoked with the run's `runId`". The `runId` is
-`UUID.randomUUID()` inside the method (`VideoDeletionOutboxProcessor.java:153`,
-`RadarCompositeDlqProcessor.java:124`), so the test has no handle on it. It must capture it — an
-`ArgumentCaptor<UUID>` on `claimPendingBatch`'s second argument, then assert the captured value is what
-reaches `releaseClaimed`. Writing `verify(repo).releaseClaimed(any())` instead would still pass the
-prescribed mutation check while proving almost nothing. Worth stating explicitly in the task.
-
-### Verified correct for AC1
-
-- `VideoDeletionOutboxProcessor.java:156-159` and `RadarCompositeDlqProcessor.java:125-127` — both
-  accurate. The ledger's own citations (`:147-150`, `:121-123`) had drifted; the story re-derived them.
-- The correction of the ledger's "`try`/`finally`" to `try`/`catch` is right, and the stated reason
-  (a `finally` would release a claim it just took, on the happy path, and race a concurrent
-  re-claim) is correct.
-- "Do **not** wrap `resetStaleClaimed`" is correct — no claim exists under this `runId` at that point.
-- `releaseClaimed` is scoped `WHERE status = 'CLAIMED' AND claimed_by = :runId` on both repositories
-  (`VideoDeletionOutboxRepository.java:90-95`, `RadarCompositeDlqRepository.java:68-73`), so a
-  claim-phase release provably cannot touch a concurrent run's rows.
-- `VideoDeletionOutboxRepository.java:90-104` does contain the "`process()` is not `@Transactional`"
-  statement (line 99) — citation holds.
-
----
-
-## AC2 — Radar stale-window margin
-
-### F14 (Medium) — task 3 rewrites the wrong Javadoc (and mislabels the one it cites)
-
-The story's finding text says:
-
-> "`RadarCompositeDlqProcessor`'s own **class Javadoc** (`:55-77`) already documents, at length, a
-> **prior, deliberate decision** … to leave the 10-minute/`PT10M` equality unchanged"
-
-`:55-77` is the **`MAX_RUN_DURATION` field Javadoc**, not the class Javadoc (which is the `//` block at
-`:20-47`). And it is where the load-bearing sentence lives — line 71: *"Fixed at the source rather than
-by widening the window."* Yet task 3 directs rewriting only `STALE_CLAIM_WINDOW`'s Javadoc (`:80-88`,
-story says `:80-89`).
-
-If only `:80-88` is rewritten, `:71` still asserts the opposite of what AC2 just did. **Both field
-Javadocs must be revised**, and the File List / task text should say so.
-
-### F15 (Medium) — three stale cross-references left out of scope
-
-Widening radar's window to 15 minutes invalidates text in three places AC2 does not list:
-
-1. `src/test/.../RadarCompositeDlqProcessorTest.java:261-275` — the Javadoc on the very test AC2
-   modifies states *"Rather than widen the window, `process()` now self-terminates …"* and *"That makes
-   `MAX_RUN_DURATION < lockAtMostFor` the load-bearing inequality here."* Directly contradicted.
-   AC2 task 4 only adds an assertion; it does not touch this Javadoc.
-2. `src/main/.../VideoDeletionOutboxProcessor.java:44-47` — describes *"`RadarCompositeDlqProcessor`'s
-   equality between its own 10-minute window and its `PT10M` lock."* Becomes false.
-   `VideoDeletionOutboxProcessor.java` appears in the File List for **AC1 only**.
-3. `docs/deployment/scheduler-lock-tuning.md:77` — the radar row reads *"load-bearing (see that class's
-   `MAX_RUN_DURATION`)"*. After AC2 it should mirror the video row directly above it at `:76`:
-   *"must stay strictly under `STALE_CLAIM_WINDOW`"*. This doc is not in the File List at all.
-
-### F22 (Low) — unstated trade-off
-
-Widening to 15 minutes raises radar's **crash-recovery latency** from 10 to 15 minutes — how long a
-genuinely dead instance's rows sit `CLAIMED` before the sweep frees them. The video sibling documents
-exactly this trade-off explicitly (`VideoDeletionOutboxProcessor.java:118-120`: *"Crash-recovery
-latency … is 20 minutes — immaterial for a deletion outbox polled every 60 seconds"*). AC2's new
-Javadoc should carry the equivalent sentence, or a future reader will read the widening as pure gain.
-
-### Verified correct for AC2
-
-- `STALE_CLAIM_WINDOW` at `:89` = `Duration.ofMinutes(10)` ✓; `lockAtMostFor = "PT10M"` at `:116` ✓;
-  `MAX_RUN_DURATION` at `:78` = 8 minutes ✓; the 2-minute margin arithmetic ✓.
-- `RadarCompositeDlqProcessorTest.runtimeBudget_staysStrictlyInsideLock` at `:277-290` ✓, and it
-  genuinely asserts only `maxRun < lockAtMostFor` and `maxRun < staleWindow` — the
-  `lockAtMostFor < staleWindow` assertion is genuinely absent.
-- The claim that the video sibling's coverage already treats that inequality as load-bearing is
-  **true**: `VideoDeletionOutboxProcessorSchedulerLockTest.runtimeBudget_staysStrictlyInsideLockAndStaleWindow`
-  (`:70-82`) asserts `assertThat(lockAtMostFor).isLessThan(staleWindow)`. The `.as(...)` wording
-  task 4 prescribes is accurate.
-- The duplicate-`recalculateComposite` mechanism is real: `resetStaleClaimed` is
-  `WHERE status='CLAIMED' AND (claimed_at IS NULL OR claimed_at < :deadline)` with
-  `deadline = now - STALE_CLAIM_WINDOW`, so at equality the very next tick after lock expiry frees a
-  still-running run's rows.
-- 15 minutes gives the same **5-minute gap** as the video sibling (15m → 20m) ✓.
-- The `QuotaReservationTimeoutService` precedent is real: `MAX_RUN_DURATION = Duration.ofMinutes(8)`
-  (`:23`) under `lockAtMostFor = "PT10M"` (`:32`).
-- Task 7's concern is satisfied: nothing else hardcodes the 10-minute constant.
-  `RadarCompositeDlqRepositoryIT:82,101` passes `Instant.now().minus(10, ChronoUnit.MINUTES)` as an
-  explicit *deadline argument* to the repository method — it never reads the processor constant, so it
-  is unaffected by the widening.
-
----
-
-## AC3 — Session-expiry redirect
-
-### F1 (High) — the Vue Router 4 premise is false; the prescribed fix and test would both pass while fixing nothing
-
-The story states:
-
-> "Vue Router 4's `router.push` returns a `Promise` that **rejects** on a failed navigation (a guard
-> cancels it, a duplicate-navigation, or a concurrently in-flight navigation superseding it — all real
-> Vue Router 4 outcomes, not hypothetical)."
-
-Installed version is **vue-router 4.6.4** (`src/frontend/node_modules/vue-router/package.json`).
-Verified against the shipped source:
-
-```js
-// node_modules/vue-router/dist/vue-router.mjs:1304  (pushWithRedirect)
-return (failure ? Promise.resolve(failure) : navigate(toLocation, from))
-  .catch((error) => isNavigationFailure(error)
-      ? (isNavigationFailure(error, ErrorTypes.NAVIGATION_GUARD_REDIRECT) ? error : markAsReady(error))
-      : triggerError(error, toLocation, from))
-  .then((failure) => { … return failure })   // :1318 — resolved value
-```
-
-Navigation failures are **caught and returned as a resolved value**. `markAsReady(err)` (`:1456-1464`)
-returns the error; the `.then` returns it. The only rejecting path is `triggerError` (`:1440-1448`),
-reached exclusively when a guard throws something that is **not** a `NavigationFailure`.
-
-So, concretely, in Vue Router 4:
-
-| Outcome | Story says | Actually |
+| Story claim | Actual | Status |
 |---|---|---|
-| Guard returns `false` (`NAVIGATION_ABORTED`) | rejects | **resolves** with a `NavigationFailure` |
-| Same-route push (`NAVIGATION_DUPLICATED`, `:1298`) | rejects | **resolves** (short-circuited before `navigate`) |
-| Superseded by concurrent navigation (`NAVIGATION_CANCELLED`) | rejects | **resolves** |
-| Guard *throws* an arbitrary error | not mentioned | **rejects** (`triggerError`) |
-
-All three failure modes the story names resolve. The one that rejects is the one it does not name.
-
-Worse, this compounds: **task 3 prescribes "a mocked router whose `push` rejects"**. A `.catch()`-only
-implementation passes that test and the mutation check, ships green, and still leaves every real-world
-failure mode unhandled. This is a false-confidence test, not a guard.
-
-**Required changes:**
-- The implementation must handle **both**: inspect the resolved value (`isNavigationFailure(result)`,
-  or simply a truthy return) *and* `.catch()` the rejection. Given the mixed contract, `async` +
-  `try`/`catch` around `const failure = await router.push(...)` is clearly the cleaner of the two
-  options the story offers.
-- The test suite needs a **third** case: `push` **resolves** with a `NavigationFailure`-shaped value →
-  fallback fires. Without it the dominant failure mode is untested.
-
-*Provenance note:* the same wrong claim is in the ledger at `deferred-work.md:1407`
-(*"Vue Router 4 rejects on an aborted/redirected navigation"*), in a bullet that also says *"the abort
-path is unverified."* The story carried it over verbatim rather than checking it. Worth correcting the
-ledger bullet in AC5 rather than just deleting it.
-
-### F2 (High) — "no existing spec mocks `useRouter()` … this will be the first" is false
-
-Stated twice — in AC3 task 3 (*"first component-mount test in this frontend suite to touch
-`useRouter()` — no existing spec mocks `vue-router`, so this establishes the pattern"*) and in Dev
-Notes (*"Frontend test infrastructure gotcha (AC3)"*, which further advises locating conventions
-"before writing new test scaffolding from scratch").
-
-Three existing specs already do exactly this, with a real memory-history router installed as a plugin
-alongside `createTestingPinia`:
-
-| Spec | Evidence |
-|---|---|
-| `src/layouts/__tests__/MainLayoutSpec.js` | `:20` imports `createRouter, createMemoryHistory`; `:46-52` builds the router with `/` + `/login` stubs; `:61` `global: { plugins: [pinia, router] }`; `:96` `vi.spyOn(router, 'push')` |
-| `src/composables/__tests__/useSessionSpec.js` | `:20, :38-53` — same shape, mounts a host component because `useSession()` calls `useRouter()` |
-| `src/pages/parent/__tests__/BookingRequestPageSpec.js` | `:28, :66` |
-
-`MainLayoutSpec.js` is a **near-exact template** for AC3: it asserts
-`authStore.logout → resetSelfPlayerId → destroySession → router.push('/login')` ordering on a component
-whose `handleLogout` is structurally the same function as `App.vue`'s `handleSessionExpired`.
-
-Other corrections to the same Dev Note:
-- **Naming/location:** the convention is `src/**/__tests__/<Name>Spec.js`, not `App.spec.js`. Both
-  patterns are in `vitest.config.mjs`'s `include`, but every existing spec uses the former.
-- **Environment is `happy-dom`**, not jsdom (`vitest.config.mjs`, `test.environment`). Relevant because
-  the hard-nav fallback needs `window.location` stubbed; plan for happy-dom's semantics.
-- **A shared setup helper does exist** and the question the Dev Note asks is already answered:
-  `test/vitest/setup-file.js` installs Quasar + vue-i18n globally and states explicitly that
-  *"Pinia is intentionally NOT installed globally here. Specs that need a store opt in with
-  `createTestingPinia()`."*
-
-Net: AC3 task 3's scaffolding work is ~30 minutes of copying `MainLayoutSpec.js`, not a new pattern.
-
-### F11 (Medium) — the same bug exists at two other live call sites, both out of scope
-
-`App.vue:36-39` is one of three places that tear down the session and then fire an unguarded
-`router.push`:
-
-| Call site | Teardown before the push | Push |
-|---|---|---|
-| `src/App.vue:31-39` | cookie cleared, `authStore.logout()`, `resetSelfPlayerId()`, `cleanup()` | `:36-39` (in scope) |
-| `src/composables/useSession.js:75-110` | `stopSessionMonitoring()`, `user` + `rint` cookies cleared (twice), `authStore.logout()` raced, `resetSelfPlayerId()`, `cleanup()` | `:110` **not in scope** |
-| `src/layouts/MainLayout.vue:354-374` | `logout → resetSelfPlayerId → destroySession → deleteUserCookie` | `:374` **not in scope** |
-
-All three leave the user on an authenticated-looking page with no session and no monitoring if the
-navigation does not land. `useSession.handleLogout` is arguably worse — it is `async` and its caller
-awaits it, so it *could* await the push today at zero cost.
-
-Either widen AC3 to all three (they are ~3 lines each and share a helper), or state explicitly in the
-story that the other two are knowingly deferred and add them to the ledger. Silently fixing 1 of 3
-identical instances is how this exact item stayed open since 2026-09-02.
-
-### F12 (Medium) — the hard-nav precedent already exists, and the URL must be encoded
-
-AC3 treats the hard navigation as new ground. It is not — `src/boot/axios.js:163-167` already does it,
-for the same event, to the same target:
-
-```js
-const currentPath = window.location.pathname + window.location.search
-const redirectUrl = `/login?redirect=${encodeURIComponent(currentPath)}&expired=true`
-window.location.href = redirectUrl
-```
-
-Follow that shape. The `encodeURIComponent` is **not optional**: `App.vue:35` builds the same
-`pathname + search` string but passes it through `router.push`'s `query` object, which encodes it for
-you. A hand-built fallback URL that skips the encoding breaks the moment the current path carries its
-own query string — `/coach/x?a=1&b=2` would arrive at `LoginPage.vue:161-164` as
-`route.query.redirect === '/coach/x'` with `a`/`b` as sibling params, and `expired` possibly lost.
-This is a concrete, easy-to-hit bug in the prescribed fix; call it out in the task.
-
-(The existing axios interceptor is also the reason the story's "stuck until their next API call
-happens to 401" framing is accurate — that interceptor is today's only backstop.)
-
-### F13 (Medium) — `sessionManager.js:231` is pinned by a spec *and* a recorded owner decision
-
-The story calls `startSessionMonitoring`'s early return *"the other half of this same gap"* and the
-File List leaves `sessionManager.js` as "only if implementation finds a change needed here." Two things
-the dev must know before touching it, neither of which the story mentions:
-
-1. **It is an explicit project-owner decision**, documented in-code at `sessionManager.js:223-230`
-   (*"skillars-deferred-90 (project-owner decision) … The rejected 'arm anyway' alternative costs one
-   dead interval cycle (~30s) plus a duplicate 'session:expired' dispatch — and therefore a duplicate
-   backend logout"*) and in the ledger at `deferred-work.md:1407` (*"Deliberately left as-is rather
-   than patched"*).
-2. **It is pinned by a characterization test.**
-   `src/frontend/src/plugins/__tests__/sessionManagerCoverageSpec.js:1-15` states the mutation check
-   outright: *"delete `if (tick()) return;` in `startSessionMonitoring()` → the early-return
-   characterization test sees a second 'session:expired' 30 s later and fails"*; the test itself is at
-   `:136-150`.
-
-Recommend the story say plainly: **AC3 does not change `sessionManager.js`** — fixing the router side
-removes the trigger, which is the correct root-cause fix. Also replace AC3 task 5's vague *"full
-`App.vue`/`sessionManager.js` spec suite"* with the two actual files: `sessionManagerSpec.js` and
-`sessionManagerCoverageSpec.js`.
-
-### F23 (Low) — re-entrancy
-
-`handleSessionExpired` is a `window` listener, and `refreshExpiryState()` → `tick()` runs from the
-axios response interceptor on **every** response (`boot/axios.js:130, :146`). `tick()` dispatches
-`session:expired` whenever `timeUntilExpiry <= 0` (`sessionManager.js:171-174`). So the handler can fire
-more than once, and with a hard-nav fallback that means repeated `window.location.href` assignments
-while the browser is already unloading. A one-shot module-level flag in `handleSessionExpired` is
-cheap insurance; worth one line in task 2.
-
-### Verified correct for AC3
-
-- `App.vue:27-40` is `handleSessionExpired` ✓; `router.push` at `:36-39` ✓; genuinely unawaited and
-  uncaught ✓.
-- `sessionManager.js:231` is `if (tick()) return` ✓, and `cleanup()` (`:316-323`) really does stop the
-  monitoring interval via `stopSessionMonitoring()` ✓.
-- "currently synchronous, no other `async` function in this component" ✓ — `App.vue` has none.
-- No existing spec mounts `App.vue` ✓ (that half of the Dev Note is true; the `useRouter()` half is
-  not — see F2).
-- `npm run test:unit` = `vitest run` ✓ (`package.json:13`); `frontend-tests` PR label gates
-  `.github/workflows/frontend-unit-tests.yml:53` ✓.
+| `ShedLockConfig.java:27` `.usingDbTime()` | line 27 | exact |
+| `ShedLockConfig.java:21-29` builder, `.withLockedByValue` absent | lines 21-29, absent | exact |
+| `RadarCompositeDlqProcessor.java:157` `Instant.now()` | line 157 | exact |
+| `RadarCompositeDlqProcessor.java:161` `resetStaleClaimed(...)` | line 161 | exact |
+| `RadarCompositeDlqProcessor.java:187` `deadline = ...plus(MAX_RUN_DURATION)` | line 187 | exact |
+| `VideoDeletionOutboxProcessor.java:152` / `:160` / `:194` | 152 / 160 / 194 | exact |
+| `RadarCompositeDlqRepository.java:24-35` `claimPendingBatch` | query 24-34, method 35 | in range |
+| `RadarCompositeDlqRepository.java:56-61` `resetStaleClaimed` | 56-61 | exact |
+| `VideoDeletionOutboxRepository.java:25-36` / `:70-75` | 25-36 / 70-75 | exact |
+| "5 minutes on both processors" | radar 15m vs `PT10M`; video 20m vs `PT15M` | exact |
+| `RadarCompositeCalculationService.java:79-133` | method 78-135 | in range |
+| `RadarCompositeCalculationService.java:130-131` upserts | 130, 131 | exact |
+| `PlayerProfileRepository.java:41-47` NOWAIT hint | hint 44-45, method 47 | off-by-3 start, in range |
+| `PlayerRadarCompositeRepository.java:16-24` | query 16-25 | in range |
+| `PlayerRadarBaselineRepository.java:19-24` | 19-24 | exact |
+| `ConfigBounds.java:92` `platform.moderation_lock_timeout_minutes` | line 92 | exact |
+| `boot/axios.js:165-167` hard navigation | 165-167 | exact |
+| `boot/axios.js:122` module-scope interceptor | 122 | exact |
+| `boot/axios.js:201` `defineBoot(async () => {` | 201 | exact |
+| `quasar.config.js:40` `vueRouterMode: 'hash'` | line 40 | exact |
+| `pushLoginOrHardNavigate(router, { expired })` | `sessionRedirect.js:99` | exact |
+| 3 existing helper call sites (`App.vue`, `useSession.js`, `MainLayout.vue`) | `App.vue:41`, `useSession.js:114`, `MainLayout.vue:378` | exact |
+| `i18n.js` destructures `{ app }`; no boot file takes `router` | `i18n.js:25`; confirmed across all 3 boot files | exact |
+| `ShedLockConfigIT` exists, "all three existing tests" | 3 tests (`:31`, `:40`, `:45`) | exact |
+| `assert-context-count.sh` ceiling 44 at `pr-build.yml` call site | `pr-build.yml:72`, script `:125`/`:135` | exact |
+| `MigrationLint.SESSION_SCOPED_LOCK_TIMEOUT` shipped by deferred-125 AC4 | `MigrationLint.Rule.SESSION_SCOPED_LOCK_TIMEOUT`, in `a40d1985` | exact (rule is nested in `Rule`, and the class lives in `src/test`) |
+| `AdminCoachEnforcementIsolationRuntimeIT` precedent exists | exists | exact |
+| `GdprErasureService.eraseRadarAndDevelopmentData` at `:196-203` | **no such method**; `erase` (`:75`) → private `deletePlayerDevelopmentData` (`:194`); the two deletes are at **`:201-202`** | **F-12** |
 
 ---
 
-## AC4 — `SET LOCAL lock_timeout` convention
+## 2. Defects — must fix before dev-story
 
-### F3 (High) — there are ten such migrations, not four
+### F-1 (High, AC2 + Dev Notes) "No new Flyway migration in this story" contradicts AC2's own named precedent
 
-> "All four of this codebase's `lock_timeout`-setting migrations — `V144`, `V145`, `V149`, `V150`"
+AC2 Task 2 says to add a `ConfigBounds` entry "mirroring the existing
+`platform.moderation_lock_timeout_minutes` shape". Following that precedent **requires a migration**:
 
-```
-$ grep -rln "^SET lock_timeout" src/main/resources/db/migration/ | sort -V
-V140, V142, V143, V144, V145, V146, V147, V148, V149, V150      → 10 files
-```
+- `V139__baseline_seed_data.sql:101` seeds `platform.moderation_lock_timeout_minutes` into
+  `main.platform_config`.
+- That key is **not** in `ConfigBounds.HAS_CODE_DEFAULT` (`ConfigBounds.java:261-277`).
+- `ConfigStartupAssertion` (`:80-120`) logs `ERROR` + `config.value.misconfigured` in **every** profile
+  for any `ConfigBounds.ALL` key that is absent/blank and not in `HAS_CODE_DEFAULT`, and **throws
+  `AppSetupException` (blocks boot) in non-`dev`** if the key is `failFast` — which the named
+  precedent is (`failFast = true`, `ConfigBounds.java:92`).
 
-The four-item list is reproduced **verbatim** from the ledger bullet at `deferred-work.md:2492`
-(*"`V144`, `V145`, `V149`, `V150` all do this"*), which is exactly what the story's Provenance section
-says did not happen (*"independently re-verified against HEAD … during this story's creation, not
-merely re-read"*).
+Three unstated required steps:
 
-**Impact:** the V150-boundary *conclusion* survives (all ten sit at or below V150, so all ten stay
-exempt), but every enumeration is wrong — AC4 task 1 ("all four migrations' current `SET lock_timeout`
-lines"), task 5 ("Confirm none of the four real shipped migrations … trip the new rule"), task 7, the
-design note, and AC5's bullet-4 disposition. Correct to **V140–V150 (ten files)** throughout.
+1. Register the key in `ConfigBounds.ALL`'s static block (`:283-309`). Task 2 says only "add a new
+   `ConfigBounds` entry"; a `BoundedKey` constant not added to `ALL` is invisible to
+   `ConfigStartupAssertion` **and** to `ConfigBoundsEnumCoverageTest` (`:104-114`, which iterates
+   `ALL`) — a silently inert tunable.
+2. Decide seed-vs-`HAS_CODE_DEFAULT` explicitly, and reconcile with the Dev Notes' "No new Flyway
+   migration".
+3. Pick the overload deliberately — see **F-4**.
 
-### F4 (High) — `SET LOCAL` is a no-op outside a transaction block, and this repo has a documented non-transactional pattern
+**Fix:** either state in AC2 that a Flyway migration *is* required (re-derive the next free version
+against `src/main/resources/db/migration/` at implementation time) and delete the "No new Flyway
+migration" Dev Note, or use the 4-arg `getBoundedLong` + `HAS_CODE_DEFAULT` route and say so —
+noting it deviates from the named precedent.
 
-PostgreSQL: `SET LOCAL` outside a transaction block emits
-`WARNING: SET LOCAL can only be used in transaction blocks` and **has no effect**. The statement
-succeeds, the warning is invisible in a Flyway log, and the lock wait is silently unbounded.
+### F-2 (High, AC2 Task 5) The prescribed concurrency test would be vacuous as written
 
-That is not hypothetical here. `docs/deployment/migration-conventions.md` endorses a **non-transactional
-`executeInTransaction=false` sidecar** in four places:
+Two mandatory fixture preconditions are missing, and the story points at the wrong precedent (F-17),
+whose `setUp()` would reproduce both gaps verbatim:
 
-- `:40` — *"committed independently via the `executeInTransaction=false` sidecar — see rule 6"*
-- `:99-103` — the callout, *"confirmed present in the resolved jar"*
-- `:159-162` — *"the `executeInTransaction=false` sidecar (confirmed working)"* for batched DML
-- `:241-249` — *"the **non-transactional** `executeInTransaction=false` sidecar case"*
+1. **The per-skill loop only runs for skills with assessment rows.**
+   `RadarCompositeCalculationService.java:107` iterates `bySkill`, built at `:97-105` **exclusively**
+   from `radarRepository.findAggregatesByPlayerAndSkills(...)` (`:88`). With no `radar_assessments`
+   rows for that player+skill, `bySkill` is empty and `upsertComposite`/`insertBaselineIfAbsent`
+   (`:130-131`) are **never reached**. The existing precedent IT
+   (`RadarCompositeCalculationServiceConcurrencyIT.setUp()`, `:41-52`) seeds only a `user` and a
+   `player_profiles` row — no assessments. A test copied from it never executes the code AC2 bounds.
+2. **`ON CONFLICT` only waits when there is something to conflict with.** `upsertComposite` is
+   `INSERT … ON CONFLICT (player_id, skill_code) DO UPDATE` (`PlayerRadarCompositeRepository.java:20`).
+   With no pre-existing `player_radar_composites` row for that `(player_id, skill_code)`, the insert
+   takes the no-conflict path and waits on nothing. The competing session must hold
+   `SELECT … FOR UPDATE` on a **pre-seeded** row.
 
-A blanket, lint-enforced "always `SET LOCAL`" would therefore mandate a form that provides **zero**
-protection in precisely the case rule 7 exists for — strictly worse than today's plain `SET`, which
-works in both modes. Today no migration uses the sidecar and none uses `CREATE INDEX CONCURRENTLY`,
-so this is latent rather than live — but the rule is being written for *future* migrations, which is
-exactly when it will bite, and `BLOCKING_INDEX` already pushes authors toward `CONCURRENTLY`.
+**Fix:** Task 5 must require (a) ≥1 `radar_assessments` row for the target player+skill, (b) a
+pre-seeded `development.player_radar_composites` row for that exact key, (c) the lock held on that
+seeded row. Without all three the assertion passes for the wrong reason, in both directions.
 
-**Required:** the new rule needs an opt-out marker (e.g. `-- migration-lint: allow-session-lock-timeout
-<reason>`) or detection of the non-transactional sidecar, and the doc change (task 6) must state the
-exception rather than presenting `SET LOCAL` as unconditional.
+### F-3 (High, AC4) Unflagged double-navigation race with `App.vue`'s existing handler
 
-### F5 (High) — the new rule breaks `validFixtures_areClean`
+`boot/axios.js:147` calls `refreshExpiryState()` **before** the 401 block. That path is synchronous:
+`sessionManager.refreshExpiryState()` (`:156`) → `tick()` (`:168`) →
+`window.dispatchEvent(new CustomEvent('session:expired'))` (`:172`) → `App.vue`'s window listener →
+`App.vue:41` `pushLoginOrHardNavigate(router, { expired: true })`. That call is `async`; its
+`router.push` has not resolved when control returns.
 
-`MigrationConventionLintTest.validFixtures_areClean` (`:84-86`) runs
-`lintFixtures("valid", 0)` — baseline **0**, i.e. every fixture is above it. Of the
-`src/test/resources/migration-lint/valid/` fixtures, **12 use plain `SET lock_timeout`**:
+Execution then falls straight into `axios.js:155-168`, which after AC4 calls
+`pushLoginOrHardNavigate` a **second time in the same tick**. The helper's "already on `/login`"
+guard (`sessionRedirect.js:100`) cannot fire — `router.currentRoute.value.path` is still the old
+route. Two concurrent `router.push({ path: '/login' })` calls: the second supersedes the first, the
+first resolves with `NAVIGATION_CANCELLED`, which **is** in `DID_NOT_LAND`
+(`sessionRedirect.js:59`) — so `hardNavigateToLogin` fires and does a full
+`window.location.href` + `window.location.reload()`.
 
-```
-V809, V810, V811, V812, V813, V814, V815, V816, V817, V819, V820, R__repeatable_drop_optout
-```
+`axios.js:141-146` already documents this co-firing ("both paths tear down… but can produce two
+navigations") as an *accepted, benign* residual. AC4 converts it into an unnecessary full page
+reload. The story never engages with that comment.
 
-All sit at V8xx, far above any ~V150 boundary, so a new rule bound at V150 flags all twelve and this
-test goes red. AC4 task 5 only says *"the four real shipped migrations must not newly fail"* and task 7
-only re-runs against the real migration directory — neither catches this.
+**Fix:** AC4 needs a decision here, not silence. Cheapest: have the 401 handler skip the redirect
+when it has just dispatched `session:expired` (the `refreshExpiryState()` return already knows), or
+add an in-flight guard to `pushLoginOrHardNavigate` alongside `hardNavigated`. Whatever is chosen,
+add a test for "401 while `App.vue`'s handler is mid-push" — otherwise the regression ships silently,
+since a hard reload is not observably wrong in a single-assertion test.
 
-**Resolution options (pick one, state it in the task):** thread a fixture-level boundary constant, as
-the class already does for the previous rule band (`FIXTURE_DEFERRED_92_BASELINE = 808`,
-`MigrationConventionLintTest.java:56`); or convert the 12 valid fixtures to `SET LOCAL` (they still
-satisfy `MISSING_LOCK_TIMEOUT`, whose regex accepts both spellings).
+### F-4 (High, AC2) The new config read widens a residual this codebase has already documented
 
-### F6 (Medium) — adding a `Rule` enum member breaks `invalidFixtures_triggerEveryRule`
+`RadarCompositeDlqProcessor`'s class Javadoc (`:41-47`) records a deliberate accepted residual:
+*"if `configService.getBoundedLong` itself is permanently broken … `handleFailure` can never complete
+its own transaction, so `attempts` is never persisted and the row stays CLAIMED -> reset ->
+re-claimed -> retried indefinitely."*
 
-`MigrationConventionLintTest.java:90-106` ends with:
+AC2 puts a **second** `getBoundedLong` call inside `recalculateComposite`, upstream of all the real
+work. Consequences:
 
-```java
-assertThat(triggered).containsExactlyInAnyOrder(MigrationLint.Rule.values());
-```
+- With the **3-arg** `getBoundedLong(key, min, max)` (`ConfigService.java:126-139`), a missing key
+  throws `IllegalStateException` (`:127` → `getLong(key)`). A broken config lookup would then break
+  `recalculateComposite` itself, on **both** the DLQ-retry path *and* the live `AFTER_COMMIT` path —
+  strictly wider than the residual above, which is confined to `handleFailure`.
+- With the **4-arg** `getBoundedLong(key, default, min, max)` (`:108-116`) it never throws.
 
-Every rule must have at least one failing fixture under `src/test/resources/migration-lint/invalid/`.
-Adding `SESSION_SCOPED_LOCK_TIMEOUT` without adding e.g.
-`invalid/V929__session_scoped_lock_timeout.sql` fails this test. Task 5 describes "synthetic
-migration" tests but never mentions the fixture directory, which is where this suite actually lives.
-A matching `valid/` fixture using `SET LOCAL` is also needed to prove the rule does not over-fire.
+**Fix:** AC2 must name the overload, and should prefer the 4-arg form so the residual is not widened.
+Task 2's "decide whether an out-of-range value should hard-fail boot or ERROR-and-fall-back" is
+asking the `failFast` question; this is the separate *call-site* question, and the story does not ask
+it.
 
-### F7 (Medium) — a third baseline is an API change, not a constant
+### F-5 (High, AC2) The live-path hang is worse than the story states
 
-`MigrationLint` has three `lint()` overloads (`:349`, `:353`, `:368`) and `lintFile` (`:533`) threads
-`baselineVersion` + `deferred92Baseline` explicitly. A third boundary must be plumbed through all of
-them, plus `MigrationConventionLintTest`'s two `lintFixtures` helpers (`:58`, `:62`) and all six call
-sites. Task 4's *"wire it into whatever aggregation/reporting mechanism the existing rules use"*
-understates this — it is a signature change with a fan-out, not a wiring detail.
+AC2 says a hang on the `AFTER_COMMIT` path "has no self-terminating backstop whatsoever." True, but
+incomplete. `onRadarEntrySubmitted` is `@Async("reportExecutor")`
+(`RadarCompositeCalculationService.java:58`), and `reportExecutor`
+(`DevelopmentConfig.java:105-118`) is `corePoolSize=2`, `maxPoolSize=4`, `queueCapacity=50`,
+`RejectedExecutionHandler = CallerRunsPolicy`, shared with `ReportGenerationService:201`.
 
-### F8 (Medium) — `SET LOCAL` creates a new false negative in the *existing* rule
-
-`lintLockTimeout` (`MigrationLint.java:959-976`) resolves "is a timeout in effect here?" by scanning
-**from the start of the file** to the statement:
-
-```java
-// A `SET lock_timeout` anywhere earlier in the file covers this statement: it is a session /
-// transaction setting, not a per-statement one, so scoping it per statement would be wrong.
-String before = stripComments(raw.substring(0, end));
-if (isLockTimeoutBoundedAt(before)) return;
-```
-
-That model is exactly right for a session-scoped `SET`. It is **wrong** for `SET LOCAL`, whose scope
-ends at the enclosing transaction — so a `SET LOCAL` followed by an explicit `COMMIT;` (or by a
-non-transactional boundary) would still be treated as "bounded" for every subsequent statement.
-Migrating the convention to `SET LOCAL` therefore weakens `MISSING_LOCK_TIMEOUT` unless
-`isLockTimeoutBoundedAt` learns to reset on `COMMIT`/`ROLLBACK`. AC4 does not mention this at all,
-and it is the kind of "guard believed stronger than it is" the class's own Javadoc (`:86-88`) warns
-about having shipped three times already.
-
-### F9 (Medium) — the stated rationale contradicts this story and this repo's own history
-
-> "the four already-shipped migrations are not rewritten (Flyway migrations are immutable once applied;
-> editing a shipped script's content changes its checksum and breaks every environment that already
-> ran it)."
-
-Two problems:
-
-1. This story's own "Not in scope" section rests on the fact that **no production deploy has happened**,
-   and the ledger re-confirms it: `deferred-work.md:2462` — *"no production deploy of this application
-   has ever happened (skillars-deferred-117's owner decision, re-confirmed)."*
-2. `skillars-deferred-112` **deleted V02–V137 outright** and replaced them with a generated baseline —
-   documented in `MigrationLint.java:43-49` (*"closed that gap by deletion, not by edit … recoverable
-   from git history at commit `4a3f218d`"*). The project has direct precedent for exactly the rewrite
-   AC4 says is impossible.
-
-The owner has decided; this is not a request to re-open it. But the *stated* justification is not
-accurate, and a dev who checks will reasonably re-raise it. Restate the rationale on its real grounds
-(non-production environments and CI databases have run these migrations; churning ten files for a
-convention change is not worth the coordination) rather than on immutability.
-
-### F10 (Medium) — the doc update is scoped to one of six places
-
-Task 6 targets item 7 (`:189-205`) only. `docs/deployment/migration-conventions.md` prescribes plain
-`SET lock_timeout` in five more:
-
-- `:45` — pre-flight checklist (*"Every lock-taking DDL has `SET lock_timeout` in effect"*)
-- `:156` and `:176` — rebaseline / defensive-use guidance
-- `:378-383` — the rule reference list for `MISSING_LOCK_TIMEOUT`
-- `:467` — the review checklist
-
-Leaving these on the old spelling reintroduces the exact doc/rule inconsistency AC4 exists to remove.
-
-### F25 (Low) — File List misclassification
-
-`src/test/java/com/softropic/skillars/db/MigrationLint.java` is listed under **"Production code."**
-It is a test-tree class (no Spring context, no DB, invoked from `MigrationConventionLintTest` in the
-`test` phase). Cosmetic, but it affects how a reviewer reads the diff's risk.
-
-### Verified correct for AC4
-
-- `LOCK_TIMEOUT_DIRECTIVE` at `MigrationLint.java:310-311` ✓, and it genuinely accepts both spellings
-  equally: `\bSET\s+(?:LOCAL\s+)?lock_timeout\s*(?:=|TO)\s*(…)`.
-- `GRANDFATHER_BASELINE` at `:112` = 139 ✓; `DEFERRED_92_BASELINE` at `:125` = 139 ✓.
-- `docs/deployment/migration-conventions.md` item 7 really does recommend the session-scoped form —
-  `:200-201`, *"it is a session/transaction setting, so one statement covers the whole script"* ✓.
-- The Flyway single-connection premise holds: Spring Boot config (`application.yaml:129-133`) sets
-  no `group` / `mixed`, so each migration runs in its own transaction over one reused JDBC
-  connection — a plain `SET` does survive into later migrations in the same run.
-- `isAboveBaseline` is strictly-greater (`:624`), so a boundary at 150 correctly exempts V150 itself ✓.
-- `MigrationConventionLintTest` is the right test class ✓ (task 5's hedge resolves correctly).
-
-### One correction to the design note's framing
-
-The story cites the class Javadoc as establishing that *"a new boundary constant is the established
-pattern."* The Javadoc argues closer to the opposite: it records that the two baselines now sit at the
-same value, are kept distinct only provisionally, and points at *"`migration-rebaseline.md`'s follow-up
-note for the case to **collapse them properly** in a future story"* (`MigrationLint.java:53-57`,
-`:114-124`). A third boundary is still the right call here — the rule genuinely must not bind
-V140–V150 — but the design note should acknowledge it is moving against the class's stated direction,
-not with it. (The story's cited range `:29-53` is also slightly off; the class Javadoc runs `:22-91`.)
+So a hung upsert permanently consumes 1 of at most **4** threads; four concurrent hangs exhaust the
+pool and stall all report generation; and once the 50-slot queue also fills, `CallerRunsPolicy` runs
+new submissions **on the publisher's own thread** — a request or scheduler thread then blocks
+synchronously on the same lock. This strengthens AC2's case and should be in its rationale so the
+priority is not later re-litigated.
 
 ---
 
-## AC5 — Ledger closeout
+## 3. Gaps and imprecisions — should fix
 
-### F18 (Medium) — bullet 4's ledger text carries the four-migration error
+### F-6 (Medium, AC4) `{ expired: true }` is hardcoded but the gate covers two different errorKeys
 
-`deferred-work.md:2492` reads *"Repo-wide convention (`V144`, `V145`, `V149`, `V150` all do this)."*
-Per F3 that is wrong (ten files, V140–V150). Deleting the bullet outright, as AC5 task 2 directs on the
-success path, erases the error silently. Add a task: whichever disposition bullet 4 gets, the
-`## Last audit` narrative must record the corrected count, so a future audit does not re-derive the
-wrong number from the story file.
+`axios.js:156` gates on `errorKey === 'security.sessionExpired' || errorKey === 'security.unauthorized'`.
+`security.unauthorized` is **not** an expiry: it is emitted for `AuthorizationException`
+(`ApiAdvice.java:241`) and for every non-expiry JWT failure
+(`JWTAuthorizationFilter.java:258`, `:279` — `expired ? "security.sessionExpired" : "security.unauthorized"`).
 
-### F24 (Low) — the out-of-scope section has two bullets, the story names one
+Today the `&expired=true` conflation is harmless *because of the very bug AC4 fixes* — in hash mode
+the param never reaches the SPA, so `LoginPage.vue:16`'s `route.query.expired === 'true'` never sees
+it. AC4 makes the param live for the first time, so a plain unauthorized 401 will now render
+"Your session is no longer valid. Please sign in again." This is the same false-banner class
+deferred-125's own code review fixed for logout (`sessionRedirect.js:17-20`).
 
-`## Explicitly out of scope (skillars-deferred-123, 2026-09-18)` (`deferred-work.md:2443-2448`)
-contains **two** bullets:
+**Fix:** pass `{ expired: errorKey === 'security.sessionExpired' }`.
 
-1. `main."user"` has no index supporting the cleanup-sweep predicate — covered by the story.
-2. `ModerationSlaMonitorService.detectSlaViolations`'s no-`@SchedulerLock` `[DECIDED]` note —
-   **not mentioned anywhere in the story.**
+(Verified *not* an issue: a bad-credentials login throws `AuthenticationException` →
+`security.authError` (`ApiAdvice.java:250`), so the interceptor's teardown does not fire on a failed
+login attempt.)
 
-AC5 task 4 says *"Do not touch … the `main."user"` index bullet"* and directs a `## Last audit` note
-re-confirming it. For a story that claims a full-file re-audit of ~92 section headers, the second
-bullet should get the same one-line re-confirmation, or a reader will assume it was missed.
+### F-7 (Medium, AC4 Task 5) Test feasibility is materially understated
 
-### Verified correct for AC5
+Task 5 says to mirror "`sessionRedirectSpec.js`'s/`AppSpec.js`'s existing real-router test style".
+That style does not transfer, because those specs work by **mocking `boot/axios` away**:
 
-- The `## Deferred from: code review of skillars-deferred-124-…` section exists at `deferred-work.md:2484`
-  with exactly four bullets, mapping to AC5 task 2's bullets 1–4 in order ✓.
-- The `## Last audit: 2026-09-19 (skillars-deferred-124 dev-story completion)` reference section is at
-  `:2495` — the story's "around line 2495" ✓.
-- Task 3's instruction that the section header survives is correct: bullet 2 is annotated, not deleted.
-- AC5's disposition of bullet 2 as accepted risk is well-founded — the residual is genuine and AC2
-  does not remove it.
+- `vi.mock('src/boot/axios', …)` appears in `AppSpec.js:20`, `useSessionSpec.js:22`,
+  `MainLayoutSpec.js:22`, `BookingRequestPageSpec.js:30`, `ParentBookingsPageSpec.js:18`, and
+  `paymentStoreSpec.js:25` — whose own comment states the reason: *"the real payment.api pulls in
+  src/boot/axios → src/boot/i18n"*. **No spec in the suite has ever loaded the real module.**
+- There is no boot-file spec for **any** boot file — no `src/boot/__tests__/` exists. Task 5's
+  "check whether one already exists for `i18n.js`/`theme.js` to mirror" resolves to: none.
+- Loading the real module pulls in `src/boot/i18n`, `@rajesh896/broprint.js` and the real
+  `src/plugins/sessionManager` (interval logic).
+- The response-error handler is an inline closure at `axios.js:136-197`, not exported. Reaching it
+  needs either axios internals (`api.interceptors.response.handlers[0].rejected`) or a mock adapter —
+  `axios-mock-adapter` is not a dependency.
+
+**Fix:** Task 5 should name the actual approach and its cost, rather than pointing at a precedent
+that does the opposite. (The alias is *not* a blocker: `#q-app/wrappers` is in
+`.quasar/tsconfig.json`'s `paths` at line 69, so `vite-tsconfig-paths` resolves it — see §4.)
+
+### F-8 (Medium, AC3) Tasks 3 and 5 contradict each other
+
+- Task 3: compute the identity "once (e.g. a field or a value computed at bean-construction time),
+  not per-lock-acquisition".
+- Task 5: assert it is "unique across two separately-constructed `LockProvider` instances in the same
+  test".
+
+A `@Configuration` instance field or `static` field is computed once per JVM, so **both**
+`lockProvider(dataSource, meterRegistry)` invocations return the *same* `locked_by` — Task 5's
+assertion is then unachievable, not merely awkward.
+
+**Fix:** compute the value inside the `@Bean` method body. The bean is a singleton, so production
+still gets exactly one identity per JVM (Task 3's actual requirement), *and* two direct factory calls
+in a test differ, making Task 5 achievable. Otherwise drop Task 5's uniqueness clause and assert only
+the shape (non-blank, contains a UUID-shaped suffix, longer than the bare hostname).
+
+### F-9 (Medium, AC1) Two entity Javadocs will be left stating the opposite of the new behaviour
+
+AC1 Task 4 scopes Javadoc updates to "both classes' `STALE_CLAIM_WINDOW`/`MAX_RUN_DURATION`/
+`resetStaleClaimed`-adjacent Javadoc", and the File List omits the entities entirely. These become
+false the moment `claimed_at = now()` lands:
+
+- `VideoDeletionOutbox.java:53-59` — *"stamped by `claimPendingBatch` with **the tick's own claim
+  instant**"*
+- `RadarCompositeDlqEntry.java:58-61` — mirrors the above by reference, so it inherits the error
+- `VideoDeletionOutboxRepository.java:17-18` and `:21`; `RadarCompositeDlqRepository.java:16-18`
+- `VideoDeletionOutboxProcessor.java:102` — *"this run's own claim instant, stamped by
+  `claimPendingBatch`"*
+
+**Fix:** add `VideoDeletionOutbox.java` and `RadarCompositeDlqEntry.java` to the File List and name
+all five sites in Task 4. Given how heavily this codebase leans on cross-referencing Javadoc, a
+stale "the tick's own claim instant" is actively misleading for the next reader of this subsystem.
+
+### F-10 (Medium, AC2) `SET LOCAL`'s blast radius depends on a caller property the story never states
+
+`recalculateComposite` is plain `@Transactional` (`:78`) — `Propagation.REQUIRED`. `SET LOCAL` binds
+to the **enclosing** transaction, so with a future transactional caller the lock timeout would
+outlive the method and apply to the rest of the caller's transaction, defeating the
+"narrowest-blast-radius" decision.
+
+Today this is safe — verified both callers: `onRadarEntrySubmitted` is `@Async` (no inherited
+transaction, `:58`) and `RadarCompositeDlqProcessor.processRow` (`:240-253`) is not transactional.
+
+**Fix:** state the constraint in the Javadoc Task 7 adds, or enforce it with
+`Propagation.REQUIRES_NEW`. Silence here is how the invariant gets broken by an unrelated change.
+
+### F-11 (Medium, AC5) The closeout will leave a ledger inconsistency it does not plan to reconcile
+
+The same bug class AC2 fixes — a native DML statement's implicit row-lock wait with no
+`NOWAIT`/`lock_timeout` — is already `[DECIDED: accepted risk — skillars-deferred-123]` for
+`AdminCoachEnforcementService.deleteStrike`'s bulk `@Modifying` delete
+(`deferred-work.md:2423-2438`). That bullet's own rationale says it *"would need revisiting if a
+future change to `deleteStrike` or its callees makes the winning transaction's own work unbounded."*
+
+After AC5, the ledger will fix one instance with `SET LOCAL lock_timeout` and keep the structurally
+identical sibling as accepted risk, with no note connecting them. AC5 Task 5's grep list
+(`RadarCompositeDlqProcessor`, `VideoDeletionOutboxProcessor`, `RadarCompositeDlqRepository`,
+`VideoDeletionOutboxRepository`, `RadarCompositeCalculationService`, `ShedLockConfig`,
+`boot/axios.js`, `ConfigBounds`) does not include `CoachReliabilityStrikeRepository` or
+`AdminCoachEnforcementService`, so the sweep will not surface it.
+
+**Fix:** add both to Task 5's grep list, and have Task 4's narrative state why the radar case warranted
+a bound while the strike delete's `[DECIDED]` still stands (the GDPR-erasure transaction is genuinely
+unbounded relative to row counts; the strike delete's winner is itself lock-retry-bounded).
 
 ---
 
-## Cross-cutting
+## 4. Lower-severity findings
 
-### F19 (Medium) — the Provenance re-verification claim is falsified for two items
+**F-12 (AC2) — `GdprErasureService` citation is wrong on the method name.** The story names
+`eraseRadarAndDevelopmentData` "(or its equivalent method — `GdprErasureService.java:196-203`)". No
+such method exists. Actual: `erase` carries the
+`@Transactional(propagation = Propagation.REQUIRES_NEW)` at `:75`; the private
+`deletePlayerDevelopmentData` at `:194` holds the two deletes at **`:201-202`**. The substance is
+confirmed: the class contains no `findByIdForUpdate` and no `lockRetryer`, so it genuinely does not
+take the `PlayerProfile` lock that `recalculateComposite` serialises on. Fix the name and line range.
 
-> "all freshly surfaced by that story's own `/bmad-code-review` … and **independently re-verified
-> against HEAD (`77036728`) during this story's creation, not merely re-read**."
+**F-13 (AC2) — the `insertBaselineIfAbsent` lock claim is overstated.** AC2 says *"An
+`INSERT ... ON CONFLICT` takes an implicit row lock on the conflicting row exactly like a plain
+`UPDATE`"*, applied to both upserts. True for `upsertComposite`'s `DO UPDATE`
+(`PlayerRadarCompositeRepository.java:20-24`). **Not** true for `insertBaselineIfAbsent`'s
+`ON CONFLICT … DO NOTHING` (`PlayerRadarBaselineRepository.java:23`): against an
+*already-committed* conflicting row it takes no row lock and skips; it waits only on a *concurrent
+uncommitted* insert or delete of the same key. The GDPR scenario is an uncommitted DELETE, so both
+statements do wait and the conclusion stands — but the stated mechanism is wrong for half the claim,
+and F-2's fixture design depends on getting this right.
 
-Two items were demonstrably re-read, not re-verified:
+**F-14 (AC1) — internally contradicted "only comparison" claim.** AC1 says `resetStaleClaimed`'s
+`claimed_at < :deadline` is *"the only absolute cross-instance time comparison either processor's
+claim/reset design makes."* The story's own Residual paragraph 40 lines later concedes otherwise:
+`next_retry_at <= :now` in the *same* `claimPendingBatch` statement is also absolute and
+cross-instance, since `next_retry_at` is written from `Instant.now()`
+(`RadarCompositeDlqProcessor.java:273` and the video sibling). Soften the claim to "the only one this
+fix addresses" so the two paragraphs agree.
 
-- **Bullet 4 → AC4:** the `V144`/`V145`/`V149`/`V150` list is verbatim from the ledger and is wrong by
-  a factor of 2.5 (F3).
-- **The 1-7b item → AC3:** *"Vue Router 4 rejects on an aborted/redirected navigation"* is verbatim
-  from `deferred-work.md:1407` and is wrong for the installed version (F1). That ledger bullet even
-  flags itself: *"the abort path is unverified."*
+**F-15 (AC3) — `locked_by` column width is not unbounded.** `main.shedlock.locked_by` is
+`character varying(255)` (`V138__baseline_schema.sql:1206`). `hostname + "-" + UUID` (37 chars of
+suffix) is safe for normal and Docker-derived hostnames, but a hostname longer than 218 chars would
+make the acquire `INSERT`/`UPDATE` fail with SQLState `22001`, breaking **every** `@SchedulerLock`ed
+job. A one-line truncation of the hostname portion removes the failure mode entirely; worth doing
+given the blast radius.
 
-Bullets 1–3 *were* genuinely re-verified — their line citations are corrected relative to the ledger's
-drifted ones (`:147-150` → `:156-159`, `:121-123` → `:125-127`, test `:268-282` → `:277-290`), which is
-evidence of real checking on those three.
+**F-16 (AC1) — three in-repo precedents for the core change go uncited.** AC1 and its Task 5 read as
+though DB-time stamping is novel here. It is not:
+`V144__outbox_dlq_claimed_at.sql:46` and `:50` already do `SET claimed_at = now()` on these exact two
+tables; `PlayerRadarCompositeRepository.java:19` and `PlayerRadarBaselineRepository.java:22` already
+use `NOW()` in native inserts; and `AbstractIntegrationTest.releaseSchedulerLock` (`:144`) already
+uses `now() - interval '1 minute'` in a **test** — which is precisely the fixture shape Task 5 asks
+the dev to invent. Citing these de-risks the AC and shortens the task.
 
-This is the same failure mode the ledger's own `## Last audit: 2026-09-19` note warns about in its
-closing line: *"a plausible-sounding lock-mode/line-number citation is not a substitute for running the
-scenario."* Recommend softening the Provenance claim to name which bullets were source-verified and how.
+**F-17 (AC2) — the ideal test precedent exists and was missed.** Task 5 and the File List say
+"locate the existing test class first; confirm exact name at implementation time", and the Dev Notes
+point at `AdminCoachEnforcementIsolationRuntimeIT` (a different module).
+`RadarCompositeCalculationServiceConcurrencyIT` already exists in the exact package
+(`…platform.development.service`) and is the precise shape AC2 needs: a second connection holding
+`SELECT id FROM main.player_profiles WHERE id = ? FOR UPDATE` (`:65-67`) across an `ExecutorService`
+(`:60`), `LOCK_HOLD_MILLIS = 1200` (`:38`), and a wall-clock ordering assertion (`:106-109`). It also
+makes AC2 Task 6 concretely answerable — its one test is the "existing deferred-77
+concurrent-recalculation test" Task 6 hedges about ("if any"). For a story that states every citation
+was "re-read directly", this is a verification gap.
 
-### Dev Notes — verified correct
+**F-18 (AC1 Task 3) — SQL detail worth pinning.** `now() - (:staleWindowSeconds * interval '1 second')`
+works, but relies on an implicit `bigint → double precision` cast to reach Postgres's
+`double precision * interval` operator. `now() - make_interval(secs => :staleWindowSeconds)` is
+unambiguous. Also worth asserting positively: the new predicate stays index-friendly (`now()` is
+`STABLE`, the parameter is stable), so there is **no plan regression** relative to
+`V144__outbox_dlq_claimed_at.sql:30-36`'s own index-coverage note — which the story does not address
+even though V144 flagged the predicate's index coverage as an accepted risk.
 
-- Context-count ceiling is 44 ✓ (`.github/workflows/pr-build.yml:65, :72`), and AC1's tests reuse
-  existing spy beans, so no fork is expected.
-- The cross-AC independence analysis is right: AC1 and AC2 touch disjoint regions of
-  `RadarCompositeDlqProcessor.java` (`:125-127` vs `:80-89` + the test) and are independently
-  revertable.
-- "No new Flyway migration in this story" ✓ — none of the four ACs requires one.
+**F-19 (AC2 Task 3) — the real implementation trap is not the one the task names.** Task 3 asks to
+"confirm Postgres's accepted syntax for the value, e.g. milliseconds as a bare integer vs. an
+interval-string literal". The actual trap is that **`SET` accepts no bind parameters in Postgres**, so
+`SET LOCAL lock_timeout = ?` is impossible — the value must be inlined into the SQL string (repo
+precedent: `V144:37` `SET lock_timeout = '5s'`;
+`docs/deployment/migration-conventions.md:213` prescribes the same form). The parameter-safe
+alternative, which Task 3 should name, is `SELECT set_config('lock_timeout', :value, true)` — the
+third argument makes it transaction-local, identical to `SET LOCAL`. Inlining a `ConfigService`-bounded
+`long` is safe, but the task should say so rather than leave a string-concatenated `SET` to be
+discovered.
+
+**F-20 (AC2 Task 4) — only one of two possible exceptions is covered.** Task 4 asks to confirm the
+exception for a `lock_timeout` expiry (`55P03`). The identified GDPR conflict can also produce a
+genuine **deadlock**, because the two paths take the same two tables in **opposite order**: `erase`
+deletes baselines (`:201`) then composites (`:202`); `recalculateComposite` writes composites
+(`:130`) then baselines (`:131`). That surfaces as SQLState `40P01` and a different Spring exception.
+Also worth stating: the configured timeout must stay **above** `deadlock_timeout` (default 1s) or the
+detector never runs and a real deadlock is misreported as a lock timeout — the story's
+"single-digit seconds" default satisfies this, but only by accident.
+
+**F-21 (Provenance) — the three-category scoping claim is not exhaustive.** The story asserts the
+remaining untagged ledger items are *"either genuinely too large for this bundle …, messaging-module-
+scoped edge cases unrelated to this story's subsystems, or `deploy-*` items already closed."*
+Counterexample: `## Deferred from: code review of story-115 (2026-09-16)`
+(`deferred-work.md:2324-2326`) holds an untagged `@SchedulerLock PT12H` sizing bullet for
+`VideoLifecycleScheduler` — scheduler locking, i.e. AC3's own subsystem, and none of the three
+categories. It reads as decided in prose ("no code change needed, documented in AC2") but carries no
+`[DECIDED]` tag, unlike the two genuinely-tagged items at `:2377` and `:2423`. Either widen the
+category list or tag that bullet.
+
+**F-22 (File List / AC5) — omissions.** Dev Notes says AC2 touches
+`PlayerRadarBaselineRepository`, but the File List lists only `PlayerRadarCompositeRepository`; AC5
+Task 5's grep list omits both `PlayerRadarBaselineRepository` and `sessionRedirect.js`. Add a
+migration entry if F-1 resolves that way.
+
+**F-23 (AC1) — unflagged divergence from the ledger's own number.** The ledger bullet says the hazard
+bites *"at a skew of 8 minutes or more"* (`deferred-work.md:2620`); the story says
+*"more than … 5 minutes"*. The story's 5 is the defensible figure (15m `STALE_CLAIM_WINDOW` − `PT10M`
+`lockAtMostFor` on radar; 20m − `PT15M` on video — both verified), but the divergence is silent, so a
+reader reconciling the two documents cannot tell which supersedes. Note the correction explicitly.
+
+**F-24 (AC2) — self-referential wording.** "bounded well below both `MAX_RUN_DURATION` and the AC2
+stale-window margin" — inside AC2. It means AC1's / the processors' stale-window margin.
+
+**F-25 (AC2) — config read placement.** `ConfigService` is TTL-cached (`:245-255`), but a cache
+expiry triggers `configRepository.findAll()` (`:255`). As specified, that round trip lands **inside**
+the transaction already holding the `player_profiles` pessimistic lock. Read the value before
+`findByIdForUpdate` and pass it down.
 
 ---
 
-## Recommended disposition
+## 5. Checked and cleared — do not re-raise
 
-**Blocking before dev-story starts** (a dev following the story as written would ship a non-fix or a
-red build):
+Recorded so these are not re-litigated at dev-story time.
 
-- **F1** — rewrite AC3's failure-mode analysis against Vue Router 4's actual resolve/reject contract;
-  the fix must handle the resolved-`NavigationFailure` case and the test must cover it.
-- **F3** — correct four → ten (V140–V150) everywhere in AC4 and AC5.
-- **F4** — add the non-transactional (`executeInTransaction=false`) exemption to AC4's rule design and
-  doc change.
-- **F5** / **F6** — add tasks for the 12 `valid/` fixtures and the new `invalid/` fixture, or the
-  lint suite goes red.
+- **`.withLockedByValue(String)` exists in the pinned version.** The story hedges ("confirm
+  accessibility"). Verified in `shedlock-sql-support-7.10.1`: it is on
+  `SqlConfiguration$SqlConfigurationBuilder`, inherited by
+  `JdbcTemplateLockProvider$Configuration$Builder`. **Available.**
+- **`net.javacrumbs.shedlock.support.Utils.getHostname()` is public API in 7.10.1**, not internal —
+  verified via `javap` on `shedlock-core-7.10.1`. The story's alternative
+  (`InetAddress.getLocalHost()` + `UnknownHostException` fallback) is unnecessary; `Utils` already
+  resolves the hostname into a static field.
+- **ShedLock's default `locked_by` is `Utils.getHostname()`** — confirmed in
+  `SqlConfigurationBuilder`'s constructor bytecode. Story's claim exact.
+- **ShedLock's unlock predicate really has no time component.**
+  `SqlStatementsSource.getUnlockStatement()` concatenates exactly `tableName`, `lockUntil`, `name`,
+  `lockedBy` — i.e. `UPDATE … SET lock_until = :unlockTime WHERE name = :name AND locked_by = :lockedBy`.
+  AC3's core mechanism claim is **confirmed from bytecode**, and the same-host unlock-collision it
+  describes is genuinely reachable.
+- **`claimed_at` is `timestamp with time zone`** (`V144:40`, `:43`), so `now()` (which returns
+  `timestamptz`) introduces no timezone coercion. Combined with
+  `application.yaml:109` `connection-init-sql: "SET TIME ZONE 'UTC'"`, AC1's stamp change is
+  type-safe. No hazard.
+- **AC1 breaks zero existing assertions.** Every `getClaimedAt()` assertion in the suite is
+  `isNull()` or `isNotNull()` — `VideoDeletionOutboxProcessorIT:86`, `:126`, `:151`, `:234`, `:324`,
+  `:352` and `RadarCompositeDlqRepositoryIT:64`, `:87`. Nothing asserts `claimed_at` equals a
+  Java-computed `Instant`. AC1 Task 6's own self-assessment is correct.
+- **The `resetStaleClaimed` signature change has exactly 6 call sites**, all inside the story's File
+  List: `RadarCompositeDlqProcessor:161`, `VideoDeletionOutboxProcessor:160`,
+  `RadarCompositeDlqRepositoryIT:82`, `:101`, `VideoDeletionOutboxProcessorIT:347`, `:376`. The four
+  test sites' semantics survive the rewrite (seeded `claimed_at` is `-30m` / `now`, decisive under
+  both the old 10/20-minute literals and the new `STALE_CLAIM_WINDOW.toSeconds()`), so no hidden
+  behavioural break. Worth enumerating them in Task 5 regardless.
+- **`claimPendingBatch` really is its own transaction**, so Postgres's transaction-scoped `now()`
+  behaves as a single claim-instant stamp. `process()` carries no `@Transactional`
+  (`RadarCompositeDlqProcessor:154`, `VideoDeletionOutboxProcessor:149`), `AbstractIntegrationTest`
+  is **not** `@Transactional`, and `application.yaml:108` sets `auto-commit: false`. AC1's paragraph
+  on this is accurate in every particular.
+- **`Duration.toSeconds()` is available** — `pom.xml:30` pins `java.version` 17; the method is Java 9+.
+- **`#q-app/wrappers` resolves under Vitest.** It is in `.quasar/tsconfig.json`'s `paths` (line 69),
+  which `vite-tsconfig-paths` reads (`vitest.config.js` plugin list). Not an obstacle to AC4's spec —
+  the real obstacles are in F-7.
+- **`npm run test:unit` exists** (`package.json:13` → `vitest run`), and the `frontend-tests` PR-label
+  convention is real (documented in `vitest.config.js`'s header). Story's claims exact.
+- **`AbstractIntegrationTest.releaseSchedulerLock` is unaffected by AC3** — it keys on `name` only
+  (`:144`), not `locked_by`, and no test anywhere asserts `locked_by`. AC3 is genuinely low-regression.
+- **`SET LOCAL` needs an active transaction and gets one.** `recalculateComposite` is `@Transactional`
+  (`:78`) and `auto-commit: false` means the connection is not autocommitting.
+  `docs/deployment/migration-conventions.md:169-174` independently documents the no-enclosing-transaction
+  no-op hazard; it does not apply here.
+- **The `SET LOCAL` placement does not disturb the NOWAIT path.** Placed after
+  `findByIdForUpdate` + `entityManager.refresh` (`:84-86`), it cannot interact with
+  `PessimisticLockRetryer`'s savepoint/retry loop (`:125-166`), and `lock_timeout` does not apply to
+  the plain MVCC `SELECT`s at `:88-90`. Effectively it bounds only the two upserts — as intended.
+- **The GDPR hang premise survives the deadlock-detector objection for the scenario the story
+  describes.** `erase` writes `main."user"` (`:99`) and `coach_profiles` (`:102-107`) but never
+  locks or updates `player_profiles`, so there is no circular wait with `recalculateComposite`'s
+  `player_profiles` lock, and Postgres's detector does not bail the waiter out. The
+  "erasure transaction is itself slow" framing is correct. (A separate genuine cycle does exist on
+  the composites/baselines ordering — see F-20.)
+- **`LoginPage.vue` consumes both params safely.** `:16` reads `route.query.expired === 'true'`; the
+  `redirect` consumer at `:161-165` carries an open-redirect guard
+  (`startsWith('/') && !startsWith('//')`). Making `redirect` live is safe, and AC4 silently *fixes*
+  it as a bonus: today `window.location.pathname` is always `/` in hash mode, so `redirect` is
+  useless, whereas `pushLoginOrHardNavigate` uses `router.currentRoute.value.fullPath`
+  (`sessionRedirect.js:62`). Worth stating in AC4 and asserting in the new spec.
+- **No circular-import risk for AC4.** `sessionRedirect.js` imports only `vue-router`; nothing under
+  `src/router/` imports `boot/axios`.
+- **The deferred-125 code-review section really is the freshest** — it is the final section of
+  `deferred-work.md` (line 2608 of 2652). The Provenance claim is accurate, and the four bullets
+  match AC1-AC4 one-to-one. The two nearby scheduler/lock items in AC1-AC3's subsystems
+  (`:2377` `ModerationSlaMonitorService` no-`@SchedulerLock`; `:2423` strike-DELETE wait) are both
+  correctly `[DECIDED]`-tagged already, so excluding them from scope is right — see F-11 for the one
+  reconciliation still owed, and F-21 for the one untagged item.
+- **CI context ceiling is 44** (`pr-build.yml:72`, `assert-context-count.sh:125`/`:135`). Both AC1
+  test homes (`RadarCompositeDlqRepositoryIT`, `VideoDeletionOutboxProcessorIT`) and AC3's
+  (`ShedLockConfigIT`) already exist and extend `AbstractIntegrationTest` with no extra annotations,
+  so they fork no new context. Only AC2's new test is a candidate, and reusing
+  `RadarCompositeCalculationServiceConcurrencyIT` (F-17) avoids that too.
 
-**Should be folded in before dev-story** (correctness or scope gaps, cheap to fix in the story):
+---
 
-F2, F7, F8, F11, F12, F13, F14, F15, F16, F17, F18.
+## 6. Recommendation
 
-**Worth a line each; safe to hand to the dev as notes:**
+`ready-for-dev` is not yet safe. **F-1** through **F-5** change what gets built or would ship a
+broken artefact (a boot-blocking config key, a vacuous test, a user-visible navigation regression);
+**F-8** blocks AC3's task list from being executable as written. Fold in F-6 through F-11 while
+editing, and fix the F-12 citation.
 
-F9, F10, F19, F20, F21, F22, F23, F24, F25.
-
-**Structurally sound as written, no change needed:** AC1's `try`/`catch`-not-`try`/`finally` correction
-and its scoping of `resetStaleClaimed` out of the guard; AC2's identification of the missing
-`lockAtMostFor < staleWindow` assertion and the 15-minute value; AC5's four-bullet disposition mapping;
-the cross-AC independence and commit-splitting guidance in Dev Notes.
+Ordering suggestion, unchanged from the story's own "separate commits" convention: **AC3** first (now
+fully de-risked — F-8 is the only edit needed, and every open question in it is answered in §5), then
+**AC1** (also de-risked; F-9/F-14/F-16/F-18 are edits, not investigations), then **AC4** (needs the
+F-3 decision before code), then **AC2** last (needs F-1's migration decision, F-2's fixture design
+and F-4's overload choice resolved first — it is the only AC with real unknowns remaining).
