@@ -5,6 +5,8 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.development.contract.AssessmentType;
 import com.softropic.skillars.platform.development.contract.RadarEntrySubmittedEvent;
 import com.softropic.skillars.platform.development.repo.PlayerRadarBaselineRepository;
@@ -13,6 +15,7 @@ import com.softropic.skillars.platform.development.repo.RadarAssessmentRepositor
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -33,6 +36,8 @@ import java.util.function.Supplier;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -64,6 +69,12 @@ class RadarCompositeCalculatorTest {
     @Mock
     private RadarCompositeDlqService dlqService;
 
+    @Mock
+    private ConfigService configService;
+
+    @Mock
+    private Query lockTimeoutQuery;
+
     private RadarCompositeCalculationService service;
 
     private static final Long PLAYER_ID = 9580000001L;
@@ -72,7 +83,7 @@ class RadarCompositeCalculatorTest {
     @BeforeEach
     void setUp() {
         service = new RadarCompositeCalculationService(radarRepository, compositeRepository, baselineRepository,
-            playerProfileRepository, lockRetryer, entityManager, dlqService);
+            playerProfileRepository, lockRetryer, entityManager, dlqService, configService);
         // onRadarEntrySubmitted delegates to `self.recalculateComposite(...)` — in production this is
         // an @Autowired @Lazy proxy reference; here it's wired directly to the same instance since
         // there is no Spring context, matching this codebase's other self-field unit tests.
@@ -82,6 +93,14 @@ class RadarCompositeCalculatorTest {
         lenient().when(playerProfileRepository.findByIdForUpdate(PLAYER_ID)).thenReturn(Optional.of(playerProfile));
         lenient().when(lockRetryer.withBoundedRetry(org.mockito.ArgumentMatchers.<Supplier<PlayerProfile>>any()))
             .thenAnswer(inv -> inv.getArgument(0, Supplier.class).get());
+
+        // skillars-deferred-126 AC2: recalculateComposite now reads the lock-timeout tunable and
+        // issues a SELECT set_config(...) native query before the per-skill loop — stub both so the
+        // pre-existing behavioral tests above are unaffected by this addition.
+        lenient().when(configService.getBoundedLong(anyString(), anyLong(), anyLong(), anyLong())).thenReturn(5L);
+        lenient().when(entityManager.createNativeQuery(anyString())).thenReturn(lockTimeoutQuery);
+        lenient().when(lockTimeoutQuery.setParameter(anyInt(), any())).thenReturn(lockTimeoutQuery);
+        lenient().when(lockTimeoutQuery.getSingleResult()).thenReturn("on");
     }
 
     @Test
@@ -312,5 +331,26 @@ class RadarCompositeCalculatorTest {
         service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
 
         verify(compositeRepository).upsertComposite(eq(PLAYER_ID), eq("PAC"), any(), eq(Integer.MAX_VALUE), eq(1));
+    }
+
+    /**
+     * /bmad-code-review fix (2026-09-21): {@code ConfigBounds}'s own class Javadoc documents "each
+     * call site still passes its [min, max] literally... Mockito verify(...) pins the exact numbers" —
+     * this call site was reading the bound back through {@code ConfigBounds.RADAR_COMPOSITE_LOCK_TIMEOUT_
+     * SECONDS.min()/.max()} accessors instead, and this test stubbed with bare {@code anyLong()} with no
+     * {@code verify(...)} at all, so neither the 5s default nor the 2/120 bounds were pinned by anything —
+     * a regression to the wrong literals at the call site would have passed silently.
+     */
+    @Test
+    void onRadarEntrySubmitted_readsLockTimeoutConfigWithTheDocumentedBoundsLiterally() {
+        when(radarRepository.findAggregatesByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.of());
+        when(radarRepository.findDistinctCoachCountsByPlayerAndSkills(PLAYER_ID, PARENT_ID, Set.of("PAC")))
+            .thenReturn(List.of());
+
+        service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
+
+        verify(configService).getBoundedLong(
+            eq(ConfigBounds.RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS.key()), eq(5L), eq(2L), eq(120L));
     }
 }

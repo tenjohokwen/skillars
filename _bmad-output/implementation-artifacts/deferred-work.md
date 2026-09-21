@@ -2323,7 +2323,16 @@ are the exceptions.
 
 ## Deferred from: code review of story-115 (2026-09-16)
 
-**@SchedulerLock PT12H sizing insufficient for realistic provider timeout scenarios** — `VideoLifecycleScheduler.runLifecycleJob()` sized for success-case ceiling-batch runtime (~5.5 hours), but realistic scenario with 10% provider timeout rate on 10000-row batch could take 20+ hours. If lock expires and second pod starts, double-archive/double-delete attempts. Story acknowledges as known risk, tunable by operator; no code change needed, documented in AC2.
+**@SchedulerLock PT12H sizing insufficient for realistic provider timeout scenarios**
+**[DECIDED: accepted risk — story-115, no code change needed, VideoLifecycleScheduler's own lock
+sizing is tunable by operator]** (tag added by skillars-deferred-126 AC5, 2026-09-21 — this bullet's
+prose already read as decided but had never carried the formal tag its two neighbors in nearby
+scheduler-lock sections do; substance unchanged, see skillars-deferred-126's own Provenance & Scoping
+section for how this was found). `VideoLifecycleScheduler.runLifecycleJob()` sized for success-case
+ceiling-batch runtime (~5.5 hours), but realistic scenario with 10% provider timeout rate on
+10000-row batch could take 20+ hours. If lock expires and second pod starts, double-archive/
+double-delete attempts. Story acknowledges as known risk, tunable by operator; no code change needed,
+documented in AC2.
 
 ## Deferred from: ad-hoc audit of payment module subscription schedulers (2026-09-16)
 
@@ -2435,6 +2444,20 @@ about.)
   make this wait open-ended. Would need revisiting if a future change to `deleteStrike` or its callees
   makes the winning transaction's own work unbounded. Documented at
   `CoachReliabilityStrikeRepository.deleteByIdAndCoachId` (`:45-47`).
+  **Cross-reference (skillars-deferred-126 AC5, 2026-09-21):** the structurally identical bug
+  class — a native DML statement's implicit row-lock wait with no `NOWAIT`/`lock_timeout` — was found
+  again and bounded in `RadarCompositeCalculationService.recalculateComposite`'s
+  `upsertComposite`/`insertBaselineIfAbsent` calls (see `## Last audit: 2026-09-21 (skillars-
+  deferred-126 dev-story completion)` below — /bmad-code-review fix, 2026-09-21: this pointer
+  originally targeted the "code review of skillars-deferred-125" section's bullet, which that same
+  edit deleted outright once all four of its bullets closed, per this file's own "delete outright,
+  don't leave an empty header" convention — so the pointer resolved to nothing). That case warranted
+  a bound while this one's acceptance still stands, for a
+  reason specific to each: the radar case's competing transaction
+  (`GdprErasureService.deletePlayerDevelopmentData`) has genuinely unbounded work ahead of it — no
+  lock-retry budget bounds it — whereas here the winning transaction is itself already
+  lock-retry-bounded (`PessimisticLockRetryer`'s ~3.2s worst-case budget, as this bullet's own text
+  above already states). This accepted-risk disposition is unaffected by that fix and remains open.
 
 ## Deferred from: code review of skillars-deferred-122-coach-enforcement-round-2-and-user-cleanup-fixes (2026-09-18)
 
@@ -2490,7 +2513,7 @@ AC2: the `STALE_CLAIM_WINDOW`/`lockAtMostFor` zero margin; AC4: the `SET`-vs-`SE
 see `## Last audit: 2026-09-19 (skillars-deferred-125 dev-story completion)` below. The remaining item
 is accepted risk, not fixed._
 
-- **`MAX_RUN_DURATION` is sampled only between rows, so the lock/stale invariant is not actually enforced.** Both processors test the deadline at the top of each iteration and never inside `processRow`, and skillars-deferred-124 AC2 added a further `handleFailure` DB transaction after that check. One row that blocks longer than `lockAtMostFor - MAX_RUN_DURATION` overruns the lock. For `RadarCompositeDlqProcessor` that margin is only 2 minutes (`PT10M` lock - 8 min budget) and `recalculateComposite` goes through `PessimisticLockRetryer` across three repositories. `[DECIDED: accepted risk — skillars-deferred-125]` skillars-deferred-125 AC2 restored a real 5-minute buffer between `RadarCompositeDlqProcessor`'s `lockAtMostFor` and `STALE_CLAIM_WINDOW` (10m→15m, matching `VideoDeletionOutboxProcessor`'s own buffer amount), which makes a single overrunning row materially less consequential — it no longer immediately triggers a duplicate reclaim on the very next tick — but does not eliminate the residual: a row that individually blocks longer than the lock/`MAX_RUN_DURATION` margin can still overrun the lock itself. Accepted as documented risk, not fixed (see `RadarCompositeDlqProcessor.MAX_RUN_DURATION`'s own Javadoc and `RadarCompositeDlqProcessorTest.runtimeBudget_staysStrictlyInsideLock`'s own comment for the mechanism).
+- **`MAX_RUN_DURATION` is sampled only between rows, so the lock/stale invariant is not actually enforced.** Both processors test the deadline at the top of each iteration and never inside `processRow`, and skillars-deferred-124 AC2 added a further `handleFailure` DB transaction after that check. One row that blocks longer than `lockAtMostFor - MAX_RUN_DURATION` overruns the lock. For `RadarCompositeDlqProcessor` that margin is only 2 minutes (`PT10M` lock - 8 min budget) and `recalculateComposite` goes through `PessimisticLockRetryer` across three repositories. `[DECIDED: accepted risk — skillars-deferred-125]` skillars-deferred-125 AC2 restored a real 5-minute buffer between `RadarCompositeDlqProcessor`'s `lockAtMostFor` and `STALE_CLAIM_WINDOW` (10m→15m, matching `VideoDeletionOutboxProcessor`'s own buffer amount), which makes a single overrunning row materially less consequential — it no longer immediately triggers a duplicate reclaim on the very next tick — but does not eliminate the residual: a row that individually blocks longer than the lock/`MAX_RUN_DURATION` margin can still overrun the lock itself. Accepted as documented risk, not fixed (see `RadarCompositeDlqProcessor.MAX_RUN_DURATION`'s own Javadoc and `RadarCompositeDlqProcessorTest.runtimeBudget_staysStrictlyInsideLock`'s own comment for the mechanism). **Narrowed by skillars-deferred-126 AC2 (2026-09-21), not closed:** the "goes through `PessimisticLockRetryer` across three repositories" mechanism this bullet cites is now only accurate for one of the three — `player_profiles` (`findByIdForUpdate`, NOWAIT + ~3.2s worst-case retry budget). The other two, `upsertComposite`/`insertBaselineIfAbsent`, previously had no bound at all and are now bounded by a transaction-scoped `lock_timeout` (single-digit seconds, see `ConfigBounds.RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`). A row can therefore no longer overrun the 2-minute margin via an unbounded upsert wait specifically — the residual this bullet accepts is now narrower (a non-lock-contention slow row — GC pause, slow disk, etc. — not an unbounded DB lock wait), but still real, so this stays `[DECIDED: accepted risk]`, not closed.
 
 ## Last audit: 2026-09-19 (skillars-deferred-124 dev-story completion)
 
@@ -2605,48 +2628,147 @@ the closures below differ from what this story's original creation draft would h
   production deploy has happened yet to generate the row-count/`EXPLAIN` evidence the first bullet's
   own blocker requires.
 
-## Deferred from: code review of skillars-deferred-125-outbox-claim-isolation-radar-window-margin-and-session-redirect-fixes (2026-09-21)
+## Last audit: 2026-09-21 (skillars-deferred-126 dev-story completion)
 
-Four pre-existing issues surfaced by the `/bmad-code-review` layers (Blind Hunter, Edge Case Hunter,
-Acceptance Auditor, `/txn-and-concurrency-audit`). All four are genuinely pre-existing — none was
-introduced by this story — but the first two are directly load-bearing for AC2's stale-window margin,
-so they are recorded rather than left implicit.
+Closed the entire `## Deferred from: code review of skillars-deferred-125…` section (all four bullets
+this story mined) — header removed per this file's own "delete outright what's genuinely fixed, don't
+leave an empty header" convention, since none of the four ended up `[DECIDED]`:
 
-- **The stale-claim window is denominated in per-instance application wall clocks while ShedLock is
-  configured `.usingDbTime()`** (`ShedLockConfig.java:27`). `resetStaleClaimed`'s
-  `claimed_at < :deadline` predicate is the only absolute cross-instance time comparison in either
-  processor's design, and it is computed from `Instant.now()` on the claiming JVM
-  (`RadarCompositeDlqProcessor.java:157`, `VideoDeletionOutboxProcessor.java:152`). If instance B's
-  clock runs ahead of A's by more than the margin, B's stale sweep frees and immediately re-claims
-  rows A is still processing — a duplicate `recalculateComposite`, an external side effect
-  `claimed_by` cannot undo. At a skew of 8 minutes or more this happens during entirely normal
-  operation, not only in the single-slow-row residual AC2's Javadoc accepts. AC2's whole 5-minute
-  buffer argument silently assumes clock agreement and never states it. Fix is cheap and local:
-  stamp `claimed_at = now()` and compute the deadline as `now() - interval` inside the native SQL,
-  matching the `usingDbTime()` choice already made for the sibling ShedLock ceiling.
-- **No `statement_timeout` or `lock_timeout` is set on application connections**
-  (`application.yaml:109` sets only `connection-init-sql: "SET TIME ZONE 'UTC'"`), so
-  `RadarCompositeDlqProcessor`'s per-row cost is genuinely unbounded. `MAX_RUN_DURATION` is sampled
-  only between loop iterations, and `RadarCompositeCalculationService.recalculateComposite`'s
-  `upsertComposite`/`insertBaselineIfAbsent` carry no `NOWAIT` or timeout hint (unlike
-  `PlayerProfileRepository.findByIdForUpdate`, which deliberately does). A single row blocking on a
-  conflicting lock waits forever, so AC2's widened window is a probabilistic mitigation rather than
-  a bound. `VideoDeletionOutboxProcessor` is genuinely safe here — its per-row cost is bounded by
-  `VideoProviderConfig`'s 30s read + 10s connect against a 3-minute margin — the radar twin has no
-  equivalent.
-- **ShedLock's unlock is guarded by `locked_by` = hostname only** — `ShedLockConfig` leaves
-  `.withLockedByValue(...)` unset, so ShedLock defaults to `Utils.getHostname()`. Two JVMs
-  co-located on one host write the same `locked_by`, and the unlock statement's
-  `WHERE name = :name AND locked_by = :lockedBy` predicate has no `locked_at` component — so an
-  overrunning run can release its successor's lock mid-run, leaving the stale-claim window as the
-  only remaining protection. Directly load-bearing for the "safe on multiple instances" claim both
-  processors' Javadocs make. One `.withLockedByValue(UUID.randomUUID().toString())` away from closed.
-- **`boot/axios.js`'s own 401 fallback carries the identical hash-mode defect** that this story's new
-  `sessionRedirect.js` helper copied from it (`axios.js:166`:
-  `window.location.href = \`/login?redirect=...&expired=true\``). `quasar.config.js` sets
-  `vueRouterMode: 'hash'`, so the SPA route lives in `location.hash`: `window.location.pathname` is
-  always `/`, and a hard navigation to the server path `/login` does not reach the SPA route
-  `/#/login` — `route.query.expired` and `route.query.redirect` are both undefined because
-  hash-history parses query only from the fragment. The helper's instance is patched by this review;
-  this original is left for a frontend-labelled story since it needs the same `frontend-tests` PR
-  label and touches the axios interceptor's own teardown path.
+- **Stale-claim clock-skew comparison** — fixed by AC1. `claimed_at`'s stamp and
+  `resetStaleClaimed`'s staleness comparison (both processors) now use the database's own `now()`,
+  matching `ShedLockConfig`'s `usingDbTime()` choice. Scoped to that one comparison only —
+  `next_retry_at` remains app-clock-stamped, a deliberate, documented residual (see
+  `VideoDeletionOutbox.nextRetryAt`'s own Javadoc).
+- **Unbounded `RadarCompositeDlqProcessor` per-row upsert wait** — fixed by AC2. A transaction-scoped
+  `SELECT set_config('lock_timeout', ..., true)` bound (the `SET LOCAL`-equivalent that actually
+  applies to a native `INSERT ... ON CONFLICT`'s implicit row lock, unlike `@Lock`/`@QueryHints`) now
+  bounds both `upsertComposite` and `insertBaselineIfAbsent`, tunable via the new
+  `platform.radar_composite_lock_timeout_seconds` `HAS_CODE_DEFAULT` config key (no Flyway migration
+  needed). The concrete conflict source this story's creation identified —
+  `GdprErasureService.deletePlayerDevelopmentData` deletes `player_radar_baselines` then
+  `player_radar_composites` for the same player, without taking `recalculateComposite`'s own
+  `player_profiles` pessimistic lock at all, and in the OPPOSITE table order — is a genuine
+  lock-ordering deadlock hazard (Postgres `40P01`), not merely an unbounded wait (`55P03`); both
+  failure modes were empirically confirmed (via `RadarCompositeCalculationServiceConcurrencyIT`'s two
+  new tests, real Testcontainers-backed contention, not mocked) to translate to the SAME Spring
+  exception class, `org.springframework.dao.PessimisticLockingFailureException`, distinguishable only
+  by inspecting the cause. See `RadarCompositeCalculationService.recalculateComposite`'s own Javadoc
+  for the full finding. The structurally identical `AdminCoachEnforcementService.deleteStrike`
+  `[DECIDED: accepted risk — skillars-deferred-123]` sibling (see that bullet's own cross-reference,
+  added by this story) remains correctly un-fixed — its winning transaction is itself already
+  lock-retry-bounded, unlike the radar case's GDPR-erasure conflict source.
+- **ShedLock `locked_by` = hostname only** — fixed by AC3. `ShedLockConfig.lockProvider` now sets
+  `.withLockedByValue(hostname + "-" + UUID.randomUUID())` (length-truncated to fit `character
+  varying(255)`), computed inside the `@Bean` method body so it is genuinely per-JVM while remaining
+  computed once per real application instance.
+- **`boot/axios.js`'s hash-mode 401 fallback defect** — fixed by AC4. The interceptor now reuses
+  `sessionRedirect.js`'s `pushLoginOrHardNavigate(router, { expired })`, with `router` threaded in via
+  Quasar's `defineBoot(({ router }) => ...)` callback. Two unflagged defects surfaced and fixed in the
+  same pass: `expired` is now gated on the actual `errorKey` (`security.unauthorized` is not an
+  expiry, and hardcoding `true` would have shown a false "session expired" banner once this fix made
+  the query param reach the SPA for the first time), and `sessionRedirect.js` gained a module-level
+  in-flight-promise guard (a call arriving while a previous call is still in flight awaits and returns
+  the SAME promise) closing a same-tick double-navigation race this fix would otherwise have
+  introduced between `App.vue`'s `session:expired` listener and this interceptor.
+
+No older ledger item was added to this story's scope. The formal `[DECIDED]` tag missing from the
+untagged `@SchedulerLock PT12H` sizing bullet under `## Deferred from: code review of story-115
+(2026-09-16)` was added (its substance unchanged — see that bullet's own note) — found by this story's
+own Provenance & Scoping audit, not part of its four-bullet scope proper.
+
+## Deferred from: code review of skillars-deferred-126-stale-claim-db-time-radar-lock-bound-shedlock-identity-and-axios-hash-redirect-fixes (2026-09-21)
+
+Surfaced by `/bmad-code-review` across four parallel layers (Blind Hunter, Edge Case Hunter,
+Acceptance Auditor, `/txn-and-concurrency-audit`). Each was independently re-verified against actual
+source before being recorded here. The first seven bullets below are genuinely pre-existing or latent
+— none introduced by skillars-deferred-126, all left open for a future story. The eighth is a residual
+OF skillars-deferred-126's own AC1 fix, surfaced by the same review pass and already taken to a formal
+owner decision (`AskUserQuestion`) in that same session — recorded `[DECIDED]`, not left open.
+
+- **GDPR erasure and `recalculateComposite` are not serialized against each other — an erased
+  player's radar composites/baselines can be resurrected after the erasure commits.**
+  `RadarCompositeCalculationService.recalculateComposite` (`:152-207`) serializes only on the
+  `player_profiles` row; `GdprErasureService.deletePlayerDevelopmentData` (`:194-203`) takes no such
+  lock. Interleaving: A locks `player_profiles(P)` and reads aggregates under READ COMMITTED → B
+  deletes baselines, composites and assessments for P and commits → A's per-skill loop re-inserts
+  composites and baselines from its pre-erasure snapshot. An Article-17-erased player has live radar
+  rows again and nothing will ever remove them (the erasure request is already `COMPLETED`).
+  `radar_composite_dlq` is not cleared by `deletePlayerDevelopmentData` either, so a queued DLQ row
+  for P survives the erasure. Real fix: have the erasure path take the same `player_profiles` lock.
+
+- **A GDPR erasure can be the deadlock victim and roll back wholly.** `GdprErasureService.erase` is
+  `@Transactional(propagation = REQUIRES_NEW)` (`:75`). Losing the circular wait against a background
+  `recalculateComposite` discards the `main.user` anonymisation, the message/review deletions and the
+  blob-deletion outbox rows, and routes the request to `markFailed` — a GDPR erasure fails because a
+  background radar recalculation happened to be running. skillars-deferred-126 AC2's `lock_timeout`
+  does not address this: `lock_timeout` only makes a waiter abort itself and cannot break a circular
+  wait, and the deadlock case (`40P01`) was already bounded by Postgres's `deadlock_timeout`. Real
+  fix: matching table order (composites-then-baselines) on both paths, or the shared lock above.
+
+- **`now()` is `transaction_timestamp()`, so the AC1 claim stamp and sweep deadline are correct only
+  because each repository call happens to run in its own short transaction — nothing enforces it.**
+  Today `process()` carries no `@Transactional` and ShedLock's accessor runs `REQUIRES_NEW`, so each
+  `@Modifying @Transactional` repository method gets a fresh transaction and `now()` ≈ statement
+  time. Adding `@Transactional` to `process()` (or calling it from any transactional caller) would
+  join both statements into one transaction: `claimed_at` would be stamped with the *outer*
+  transaction's start time and `resetStaleClaimed`'s deadline would freeze for the whole run,
+  eroding the `MAX_RUN_DURATION < lockAtMostFor < STALE_CLAIM_WINDOW` margin from both ends at once.
+  `clock_timestamp()` would make the stamp statement-accurate and remove the hidden coupling.
+
+- **Bounded config keys with `HAS_CODE_DEFAULT` have no Flyway seed, so the admin API cannot set
+  them at all.** `ConfigService.updateConfig` (`:203`) does `configRepository.findByKey(key)
+  .orElseThrow(ResourceNotFoundException)` and there is no create endpoint, so
+  `PUT /api/config/values/{key}` 404s for any unseeded key. This affects
+  `platform.radar_composite_lock_timeout_seconds` (new in skillars-deferred-126) and equally the
+  pre-existing `rate_limit_bucket_ttl_hours` and `radar_composite_dlq_max_attempts` — a project-wide
+  convention gap, not a defect of this story. Consequence: every documented "an operator can widen
+  this" rationale attached to a `HAS_CODE_DEFAULT` key's `max` bound is currently unreachable without
+  a hand-written database row.
+
+- **`@Scheduled` runs on Spring Boot's default single-thread scheduler.** No
+  `spring.task.scheduling.pool.size` in `application.yaml` and no `SchedulingConfigurer` /
+  `TaskSchedulerBuilder` bean anywhere in `src/main/java`. `VideoDeletionOutboxProcessor.process()`
+  can occupy that single thread for its full 12-minute `MAX_RUN_DURATION` (50 rows × 30s adapter read
+  timeout), during which none of the other 43 `@Scheduled` methods fire — including
+  `RadarCompositeDlqProcessor.process()`, whose `lockAtMostFor = PT10M` / `STALE_CLAIM_WINDOW = 15m`
+  arithmetic assumes a 60s cadence. Any job whose `lockAtMostFor` was sized as "runtime + margin"
+  rather than "runtime + margin + scheduler starvation" can have its ShedLock expire before it ever
+  gets a thread. This undermines the lock-duration reasoning skillars-deferred-126 AC1/AC2 lean on.
+
+- **`ShedLockConfig`'s hostname truncation uses `String.substring`, which can split a surrogate
+  pair.** `ShedLockConfig.java:63-64` cuts at 218 UTF-16 code units; a hostname longer than that
+  whose 218th/219th units form a surrogate pair (a container started with `docker run -h` accepts
+  arbitrary UTF-8) leaves a lone high surrogate that is not UTF-8-encodable. The JDBC driver then
+  either substitutes U+FFFD or the INSERT fails with `invalid byte sequence for encoding "UTF8"`,
+  breaking lock acquisition for every `@SchedulerLock` job — the exact failure mode the truncation
+  was added to prevent. Very low likelihood; recorded rather than fixed.
+
+- **skillars-deferred-126 AC1 Task 3's required `EXPLAIN`/index-coverage confirmation was never
+  performed or recorded.** The task said to confirm (e.g. via `EXPLAIN`) rather than assume that the
+  rewritten predicate `claimed_at < now() - make_interval(secs => ?)` still uses the intended index.
+  No plan output, note, or statement appears in the story's Completion Notes, Validation section, or
+  any touched file; the only plan-related text remains V144's own note, which still describes the
+  predicate in its old `claimed_at < :deadline` form
+  (`V144__outbox_dlq_claimed_at.sql:30-36`).
+
+- **`[DECIDED: accepted risk — skillars-deferred-126]` AC1's skew fix is half-applied: `next_retry_at`
+  eligibility stays on the app clock, so a sufficiently-skewed instance can prematurely dead-letter a
+  row.** `claimPendingBatch` stamps `claimed_at = now()` (DB clock, AC1's own fix) but keeps
+  `next_retry_at <= :now` (app clock) in the SAME statement (`VideoDeletionOutboxRepository.java:36,39`;
+  `RadarCompositeDlqRepository.java:35,38`) — a deliberate, documented scope limit (see
+  `VideoDeletionOutbox.nextRetryAt`'s own Javadoc), not an oversight. Interleaving: instance A writes
+  `next_retry_at = Instant.now() + 8min` from its own clock; instance B's clock runs sufficiently ahead
+  (more than the backoff window remaining) to judge the row eligible early, re-attempts against a
+  still-down provider, and `attempts` reaches `max_attempts` well inside the intended backoff schedule —
+  the row is marked `DEAD` and the Bunny.net asset is never deleted, with no further retry path (the
+  Radar sibling instead sits `PENDING` forever on a `getBoundedLong` failure, not the same terminal
+  shape, but the video case's `DEAD` outcome is a genuine silent-data-loss residual). **Accepted, not
+  fixed**, per an owner decision taken live (`AskUserQuestion`) during skillars-deferred-126's own code
+  review response, 2026-09-21: fully closing this would mean moving `next_retry_at` eligibility to DB
+  time too, touching every writer of that column across both processors (row insertion, every backoff
+  computation) — a materially larger change than AC1's own scoped fix, for a failure mode that needs a
+  specific large, sustained clock skew between two live instances to trigger, which this project has
+  never observed and has no production deploy history to weigh against. Would need revisiting if a
+  future story is asked to run this application across nodes with weaker clock-sync guarantees than are
+  assumed today (e.g. NTP disabled or unavailable), or if a `DEAD`-lettered video-deletion row with no
+  corresponding provider error is ever actually observed in the wild.

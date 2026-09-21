@@ -19,6 +19,22 @@ import tsconfigPaths from 'vite-tsconfig-paths'
 // `src/`, `components/`, `stores/`, `boot/` … aliases stay in lockstep with the app
 // automatically; they are never hand-maintained here.
 //
+// `#q-app/wrappers` is the one alias that does NOT stay in lockstep automatically and needs a
+// hand-maintained entry below (skillars-deferred-126 AC4, discovered empirically while writing the
+// first boot-file spec this suite has ever had — no prior spec loaded a real boot file, every one
+// mocked it away, so this gap was never exercised before). `.quasar/tsconfig.json`'s own `paths`
+// entry for `#q-app/wrappers` points at `@quasar/app-vite/types/app-wrappers.d.ts` — a pure TS type
+// declaration with no runtime output. `vite-tsconfig-paths` happily resolves the import SPECIFIER to
+// that file (no "cannot find module" error), but the compiled module then has no real `defineBoot`
+// export, so any boot file loaded for real under Vitest throws "defineBoot is not a function" at
+// import time. In the real app this only works because `@quasar/app-vite`'s own CLI injects a
+// runtime Vite alias for `#q-app/*` when it builds `quasar.config.js` — machinery this project's
+// vitest.config.mjs deliberately does not include (see the note above on why the Vitest AE itself is
+// unregistered). The explicit alias below points at the SAME real runtime module the public `
+// @quasar/app-vite/wrappers` subpath export already resolves to (`defineBoot = callback => callback`
+// — a plain identity wrapper, confirmed by reading its source), so this is not a stand-in for
+// different behavior, only a resolution-path fix.
+//
 // NOT wired into `mvn verify`: the Maven `frontend-maven-plugin` `npm test` execution
 // calls the `test` npm script, which is a permanent no-op stub. Vitest is reachable only
 // via `npm run test:unit` locally and the opt-in `.github/workflows/frontend-unit-tests.yml`
@@ -36,6 +52,14 @@ export default defineConfig({
       // … and the pre-existing `__tests__/…Spec.js` layout (SkillsRadarChartSpec.js,
       // sessionManagerSpec.js).
       'src/**/__tests__/**/*.{js,mjs}',
+    ],
+  },
+  resolve: {
+    alias: [
+      // See the "#q-app/wrappers" note above — must come before `tsconfigPaths()` runs (plugin order
+      // in the `plugins` array below is irrelevant to this; `resolve.alias` is checked ahead of any
+      // plugin's own `resolveId`), so this wins over the `.d.ts`-pointing tsconfig `paths` entry.
+      { find: '#q-app/wrappers', replacement: '@quasar/app-vite/wrappers' },
     ],
   },
   plugins: [

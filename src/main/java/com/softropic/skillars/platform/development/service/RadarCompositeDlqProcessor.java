@@ -121,6 +121,16 @@ public class RadarCompositeDlqProcessor {
      * own equivalent sentence for its 20-minute value: this is immaterial for a DLQ processor polled
      * every 60 seconds under normal operation — the extra 5 minutes only matters in the rare case of a
      * genuinely crashed instance, and even then only delays recovery, it does not lose work.
+     *
+     * <p><strong>skillars-deferred-126 AC1 (2026-09-21).</strong> The comparison this window feeds —
+     * {@code resetStaleClaimed}'s {@code claimed_at < deadline} check — is now computed against the
+     * database's own clock ({@code now()} inside the SQL itself), not each instance's own app clock,
+     * matching {@code ShedLockConfig}'s {@code usingDbTime()} choice. Before this fix, if instance B's
+     * clock ran ahead of instance A's by more than this window's margin above {@code lockAtMostFor}
+     * (the 5 minutes described above), B's sweep could free and immediately re-claim rows A was still
+     * legitimately processing — a duplicate {@code recalculateComposite}, purely from clock skew, with
+     * no crash on either instance. That cross-instance clock-skew hazard is now closed; this window's
+     * own sizing rationale above (the buffer above {@code lockAtMostFor}) is otherwise unchanged.
      */
     private static final Duration STALE_CLAIM_WINDOW = Duration.ofMinutes(15);
 
@@ -158,7 +168,10 @@ public class RadarCompositeDlqProcessor {
         // skillars-deferred-124 AC4: one UUID for the whole tick — see
         // VideoDeletionOutboxProcessor.process()'s identical comment for the full rationale.
         UUID runId = UUID.randomUUID();
-        dlqRepository.resetStaleClaimed(runClaimedAt.minus(STALE_CLAIM_WINDOW));
+        // skillars-deferred-126 AC1: passes the stale-window WIDTH, not a Java-computed absolute
+        // deadline — resetStaleClaimed now computes the deadline itself from the database's own
+        // now(), matching ShedLockConfig's usingDbTime() choice. See that method's own Javadoc.
+        dlqRepository.resetStaleClaimed(STALE_CLAIM_WINDOW.toSeconds());
         // skillars-deferred-125 AC1: release a stranded claim on abnormal exit from this phase — see
         // VideoDeletionOutboxProcessor.process()'s identical comment for the full rationale. Not a
         // try/finally: that would also fire on the successful path and undo the claim before a single

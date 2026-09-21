@@ -8,6 +8,14 @@ import {
   refreshExpiryState,
 } from 'src/plugins/sessionManager'
 import { getCurrentLocale } from 'src/boot/i18n'
+import { pushLoginOrHardNavigate } from 'src/utils/sessionRedirect'
+
+// skillars-deferred-126 AC4: the 401 response interceptor below (module-scope, runs once at module
+// import time) needs a `router` reference to call pushLoginOrHardNavigate — but Quasar only injects
+// `router` into the boot callback, which runs LATER, when Quasar invokes this file's default export.
+// Set once, at the top of that callback (before the existing setBrowserFingerprint() call), and read
+// by the interceptor at REQUEST time, by which point boot has already run on every real request path.
+let bootRouter = null
 
 // Loading state management
 let pendingRequests = 0
@@ -161,10 +169,57 @@ api.interceptors.response.use(
           // Delete user cookie
           deleteUserCookie()
 
-          // Redirect to login with current path for redirect after login
-          const currentPath = window.location.pathname + window.location.search
-          const redirectUrl = `/login?redirect=${encodeURIComponent(currentPath)}&expired=true`
-          window.location.href = redirectUrl
+          // skillars-deferred-126 AC4: was a hard `window.location.href = '/login?...'` — this app
+          // runs vueRouterMode: 'hash' (quasar.config.js), so a bare '/login' path targets the SERVER
+          // path, not the SPA route (which lives at '/#/login'), and never actually reached it;
+          // route.query.expired/redirect were always undefined on the next render as a result. Reuses
+          // the shared sessionRedirect.js helper skillars-deferred-125 AC3 already introduced for the
+          // three Vue-component call sites, rather than a standalone hash-aware patch that would leave
+          // two different redirect mechanisms in the codebase for the same event.
+          //
+          // `expired` is gated on the ACTUAL errorKey, not hardcoded true — the 401 condition above
+          // covers 'security.unauthorized' too, which is NOT an expiry (AuthorizationException /
+          // non-expiry JWT failures). Before this fix that conflation was harmless only because the
+          // hash-mode bug meant `expired` never reached the SPA at all; once it does, hardcoding true
+          // would render a false "Your session has expired" banner for a plain unauthorized 401.
+          if (bootRouter) {
+            // /bmad-code-review fix (2026-09-21): this call was neither awaited nor had a .catch() —
+            // a throw from inside pushLoginOrHardNavigate that escapes its own inner try (e.g. router
+            // itself being malformed) would become an unhandled promise rejection with the session
+            // already torn down above and no redirect ever issued. This handler is itself a plain
+            // (non-async) callback, so `await` is not available here; `.catch()` is the correct shape.
+            pushLoginOrHardNavigate(bootRouter, {
+              expired: errorKey === 'security.sessionExpired',
+            }).catch((redirectError) => {
+              console.error('[401] pushLoginOrHardNavigate failed unexpectedly', redirectError)
+            })
+          } else {
+            // Defensive fallback for the theoretical case this interceptor fires before boot has run
+            // (should not happen in Quasar's normal boot sequence — boot callbacks run before the app
+            // mounts and issues any request that could 401 — but confirmed not silently no-op-ing if
+            // it somehow does, e.g. setBrowserFingerprint() itself failing with a 401).
+            //
+            // /bmad-code-review fixes (2026-09-21):
+            //   - `redirect` must match the SAME shape sessionRedirect.js's own buildRedirectQuery
+            //     produces (router.currentRoute.value.fullPath, e.g. '/dashboard?foo=bar' — no leading
+            //     '#', no window.location.pathname prefix). This app runs hash-mode (quasar.config.js),
+            //     so the SPA's own path lives entirely after the '#'; window.location.pathname is
+            //     always just '/' (the server path) and prepending it produced a malformed value
+            //     ('/#/dashboard') that LoginPage.vue's own `redirect.startsWith('/') &&
+            //     !redirect.startsWith('//')` guard accepted anyway (it does start with '/'), then
+            //     pushed as a route — landing the user on a bogus nested route, not back where they
+            //     were.
+            //   - Added the window.location.reload() that hardNavigateToLogin (sessionRedirect.js's
+            //     own equivalent fallback) documents as mandatory: a hash-only URL change does not by
+            //     itself force a page reload/unload in a browser — it only fires 'hashchange' on the
+            //     current document — which would silently no-op the very escape hatch this branch
+            //     exists to provide (boot never having run implies whatever broke it is still broken
+            //     without a real reload).
+            const currentPath = window.location.hash ? window.location.hash.slice(1) : '/'
+            const expired = errorKey === 'security.sessionExpired'
+            window.location.href = `/#/login?redirect=${encodeURIComponent(currentPath)}&expired=${expired}`
+            window.location.reload()
+          }
         }
       }
 
@@ -198,7 +253,11 @@ api.interceptors.response.use(
 )
 
 // Quasar boot wrapper - initialize browser fingerprint cookie
-export default defineBoot(async () => {
+export default defineBoot(async ({ router }) => {
+  // skillars-deferred-126 AC4: capture the boot-injected router for the 401 interceptor above, which
+  // is registered at module scope (before this callback ever runs) and has no other way to reach it.
+  bootRouter = router
+
   // Set browser fingerprint cookie for fraud prevention
   await setBrowserFingerprint()
 })

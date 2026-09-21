@@ -28,6 +28,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -306,6 +307,12 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
      * zero rows (e.g. deleting {@code claimed_at = :now} from claimPendingBatch's SET clause) would
      * make that test fail on a COMPLETED assertion rather than showing the actual claim mechanism at
      * fault, so a direct repository-level check is still worth having.
+     *
+     * <p><strong>skillars-deferred-126 AC1.</strong> {@code claimed_at} is now stamped from the
+     * database's own {@code now()}, not the {@code Instant} passed for the {@code next_retry_at <=
+     * :now} eligibility predicate — the sanity bound below confirms the stamped value reads back
+     * close to real wall-clock time (not an exact-match assertion, since the test JVM and the test
+     * database may themselves be skewed in CI).
      */
     @Test
     void claimPendingBatch_stampsClaimedAtAndClaimedBySoFindClaimedBatchReturnsIt() {
@@ -323,6 +330,9 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         assertThat(batch).extracting(VideoDeletionOutbox::getId).containsExactly(row.getId());
         assertThat(batch.get(0).getClaimedAt()).isNotNull();
         assertThat(batch.get(0).getClaimedBy()).isEqualTo(runId);
+        // skillars-deferred-126 AC1: the stamp is the DATABASE's now(), read back — sanity-bound
+        // against real wall-clock time rather than asserted exactly equal to runClaimedAt.
+        assertThat(batch.get(0).getClaimedAt()).isCloseTo(Instant.now(), within(30, java.time.temporal.ChronoUnit.SECONDS));
     }
 
     /**
@@ -344,7 +354,7 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
             return null;
         });
 
-        int reset = outboxRepository.resetStaleClaimed(Instant.now().minus(20, java.time.temporal.ChronoUnit.MINUTES));
+        int reset = outboxRepository.resetStaleClaimed(java.time.Duration.ofMinutes(20).toSeconds());
 
         assertThat(reset).as("a genuinely stale claim must be reclaimed").isEqualTo(1);
         VideoDeletionOutbox recovered = outboxRepository.findById(row.getId()).orElseThrow();
@@ -373,11 +383,89 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
             return null;
         });
 
-        int reset = outboxRepository.resetStaleClaimed(Instant.now().minus(20, java.time.temporal.ChronoUnit.MINUTES));
+        int reset = outboxRepository.resetStaleClaimed(java.time.Duration.ofMinutes(20).toSeconds());
 
         assertThat(reset).as("a genuinely-just-claimed row must not be reclaimed").isZero();
         VideoDeletionOutbox stillClaimed = outboxRepository.findById(row.getId()).orElseThrow();
         assertThat(stillClaimed.getStatus()).isEqualTo("CLAIMED");
+    }
+
+    /**
+     * skillars-deferred-126 code review (Decision 1, 2026-09-21) — replaces the original
+     * {@code resetStaleClaimed_comparesAgainstDatabaseClockNotJvmClock}. That test claimed to prove
+     * the new predicate compares against the DATABASE's clock, not the JVM's, but seeded {@code
+     * claimed_at} 40 minutes stale against a 20-minute window — the test JVM and the Testcontainers
+     * Postgres instance share ONE host clock in this suite, so the OLD app-clock predicate
+     * ({@code claimed_at < Instant.now().minus(window)}) and the NEW database-clock predicate
+     * ({@code claimed_at < now() - make_interval(...)}) match the exact same row and return the exact
+     * same {@code reset == 1} — no clock is ever actually skewed, so the one behavior AC1 exists for
+     * was untested. Proving genuine cross-clock immunity would require inducing REAL skew (e.g. a
+     * second connection with a shifted session clock), which this fix does not attempt.
+     *
+     * <p>What these two tests instead pin is the rewritten predicate's exact comparison BOUNDARY —
+     * still a genuine regression test (a flipped comparison operator or an off-by-one in the
+     * {@code make_interval} arithmetic is caught here), just not a skew-immunity proof. See
+     * {@code RadarCompositeDlqRepositoryIT}'s identical sibling pair.
+     *
+     * <p><strong>Determinism (found while implementing this fix).</strong> An earlier version of these
+     * two tests seeded {@code claimed_at} via one statement and then called {@code resetStaleClaimed}
+     * as a SEPARATE statement/transaction, with only a 1-second (later widened to 30-second) margin
+     * between the two boundary values. That was empirically flaky in this same Testcontainers
+     * environment — a fresh Postgres container's clock can visibly jump by MINUTES shortly after
+     * startup as its own time-sync catches up to the host, and that jump can land between the two
+     * statements. Both statements are now wrapped in ONE explicit transaction
+     * ({@link #transactionTemplate}): {@code now()} is Postgres's {@code transaction_timestamp()}, not
+     * a per-statement clock read, so the seeding {@code UPDATE} and {@code resetStaleClaimed}'s own
+     * {@code @Transactional} (which joins this already-open transaction rather than starting a new
+     * one) see the IDENTICAL {@code now()} value — eliminating the race entirely rather than papering
+     * over it with a bigger margin. This restores the original 1-second margin safely.
+     */
+    @Test
+    void resetStaleClaimed_boundary_justUnderWindow_notReclaimed() {
+        Video video = seedPurgedVideo("asset-db-time-boundary-under");
+        VideoDeletionOutbox row = seedPendingOutboxRow(video.getId(), "asset-db-time-boundary-under");
+        transactionTemplate.execute(status -> {
+            VideoDeletionOutbox loaded = outboxRepository.findById(row.getId()).orElseThrow();
+            loaded.setStatus("CLAIMED");
+            loaded.setClaimedBy(UUID.randomUUID());
+            outboxRepository.save(loaded);
+            return null;
+        });
+
+        int reset = transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "UPDATE main.video_deletion_outbox SET claimed_at = now() - interval '19 minutes 59 seconds' WHERE id = ?",
+                row.getId());
+            return outboxRepository.resetStaleClaimed(java.time.Duration.ofMinutes(20).toSeconds());
+        });
+
+        assertThat(reset).as("a claim one second inside the stale window must NOT be reclaimed yet").isZero();
+    }
+
+    @Test
+    void resetStaleClaimed_boundary_justOverWindow_reclaimed() {
+        Video video = seedPurgedVideo("asset-db-time-boundary-over");
+        VideoDeletionOutbox row = seedPendingOutboxRow(video.getId(), "asset-db-time-boundary-over");
+        transactionTemplate.execute(status -> {
+            VideoDeletionOutbox loaded = outboxRepository.findById(row.getId()).orElseThrow();
+            loaded.setStatus("CLAIMED");
+            loaded.setClaimedBy(UUID.randomUUID());
+            outboxRepository.save(loaded);
+            return null;
+        });
+
+        int reset = transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "UPDATE main.video_deletion_outbox SET claimed_at = now() - interval '20 minutes 1 second' WHERE id = ?",
+                row.getId());
+            return outboxRepository.resetStaleClaimed(java.time.Duration.ofMinutes(20).toSeconds());
+        });
+
+        assertThat(reset).as("a claim one second past the stale window must be reclaimed").isEqualTo(1);
+        VideoDeletionOutbox recovered = outboxRepository.findById(row.getId()).orElseThrow();
+        assertThat(recovered.getStatus()).isEqualTo("PENDING");
+        assertThat(recovered.getClaimedAt()).isNull();
+        assertThat(recovered.getClaimedBy()).isNull();
     }
 
     /**

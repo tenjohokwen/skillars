@@ -5,11 +5,13 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import net.javacrumbs.shedlock.core.LockConfiguration;
+import net.javacrumbs.shedlock.core.LockProvider;
 import net.javacrumbs.shedlock.core.SimpleLock;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import javax.sql.DataSource;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -26,6 +28,7 @@ class ShedLockConfigIT extends AbstractIntegrationTest {
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private net.javacrumbs.shedlock.core.LockProvider lockProvider;
     @Autowired private MeterRegistry meterRegistry;
+    @Autowired private DataSource dataSource;
 
     @Test
     void shedlockTable_existsAfterStartup() {
@@ -61,5 +64,124 @@ class ShedLockConfigIT extends AbstractIntegrationTest {
         assertThat(counter.count()).isEqualTo(1.0);
 
         firstAttempt.get().unlock();
+    }
+
+    /**
+     * skillars-deferred-126 AC3 Task 6: after acquiring a lock via the real {@code lockProvider} bean,
+     * {@code main.shedlock.locked_by} must be neither null/empty nor a bare hostname with no
+     * distinguishing suffix — proving the same-host rolling-deploy collision this AC closes cannot
+     * recur.
+     */
+    @Test
+    void lockedBy_isNotBlankAndCarriesADistinguishingSuffixBeyondTheBareHostname() {
+        String lockName = "test-shed-lock-identity-" + UUID.randomUUID();
+        LockConfiguration lockConfiguration =
+            new LockConfiguration(Instant.now(), lockName, Duration.ofMinutes(1), Duration.ofSeconds(1));
+
+        Optional<SimpleLock> lock = lockProvider.lock(lockConfiguration);
+        assertThat(lock).isPresent();
+        try {
+            String lockedBy = jdbcTemplate.queryForObject(
+                "SELECT locked_by FROM main.shedlock WHERE name = ?", String.class, lockName);
+
+            assertThat(lockedBy).isNotBlank();
+            String hostname = net.javacrumbs.shedlock.support.Utils.getHostname();
+            assertThat(lockedBy)
+                .as("locked_by must carry a distinguishing suffix beyond the bare hostname, not just "
+                    + "the hostname ShedLock's own default identity would have used")
+                .isNotEqualTo(hostname)
+                .startsWith(hostname.length() <= ShedLockConfig.MAX_HOSTNAME_LENGTH
+                    ? hostname
+                    : hostname.substring(0, ShedLockConfig.MAX_HOSTNAME_LENGTH));
+        } finally {
+            lock.get().unlock();
+        }
+    }
+
+    /**
+     * skillars-deferred-126 AC3 Task 6: two direct calls to the {@code @Configuration} class's {@code
+     * lockProvider(...)} method — bypassing Spring's singleton scoping entirely, per Task 3's own
+     * design decision to compute the identity inside the method body rather than a class-level field —
+     * must return DIFFERENT {@code locked_by} values, proving per-JVM uniqueness rather than a single
+     * value shared across every caller.
+     */
+    @Test
+    void lockProviderMethod_twoDirectCallsBypassingSpring_produceDifferentLockedByValues() {
+        ShedLockConfig config = new ShedLockConfig();
+        LockProvider providerA = config.lockProvider(dataSource, meterRegistry);
+        LockProvider providerB = config.lockProvider(dataSource, meterRegistry);
+
+        String lockNameA = "test-shed-lock-identity-a-" + UUID.randomUUID();
+        String lockNameB = "test-shed-lock-identity-b-" + UUID.randomUUID();
+        LockConfiguration lockConfigA =
+            new LockConfiguration(Instant.now(), lockNameA, Duration.ofMinutes(1), Duration.ofSeconds(1));
+        LockConfiguration lockConfigB =
+            new LockConfiguration(Instant.now(), lockNameB, Duration.ofMinutes(1), Duration.ofSeconds(1));
+
+        Optional<SimpleLock> lockA = providerA.lock(lockConfigA);
+        Optional<SimpleLock> lockB = providerB.lock(lockConfigB);
+        assertThat(lockA).isPresent();
+        assertThat(lockB).isPresent();
+        try {
+            String lockedByA = jdbcTemplate.queryForObject(
+                "SELECT locked_by FROM main.shedlock WHERE name = ?", String.class, lockNameA);
+            String lockedByB = jdbcTemplate.queryForObject(
+                "SELECT locked_by FROM main.shedlock WHERE name = ?", String.class, lockNameB);
+
+            assertThat(lockedByA)
+                .as("two direct calls to lockProvider(...) must each compute their own fresh identity")
+                .isNotEqualTo(lockedByB);
+        } finally {
+            lockA.get().unlock();
+            lockB.get().unlock();
+        }
+    }
+
+    /**
+     * /bmad-code-review fix (2026-09-21): the "different instances get different identities" test
+     * above asserts the CONVERSE of the invariant that actually matters. Two hand-constructed
+     * providers producing different {@code locked_by} values is simply a property of
+     * {@code UUID.randomUUID()} being called twice — it says nothing about whether the design
+     * achieves "one identity per JVM." What the unlock/extend predicates (both keyed on
+     * {@code name = :name AND locked_by = :lockedBy}) actually depend on is the OTHER direction: the
+     * SAME bean instance (the single Spring-managed singleton this test autowires, standing in for
+     * "one JVM") must write the SAME {@code locked_by} across every lock it takes, not a fresh one
+     * per acquisition. A regression to per-acquire identity (e.g. accidentally moving the
+     * {@code UUID.randomUUID()} call from the {@code @Bean} method body into the returned lambda)
+     * would still pass every other test in this class but would silently defeat this AC's own
+     * unlock-safety guarantee, and only this test would catch it.
+     */
+    @Test
+    void lockProviderBean_sameInstanceAcrossTwoAcquisitions_writesTheSameLockedByBothTimes() {
+        // main.shedlock.name is character varying(64) — kept short enough (prefix + UUID) to fit,
+        // unlike the other lock-name prefixes in this class which have more headroom to spare.
+        String lockNameA = "shed-same-a-" + UUID.randomUUID();
+        String lockNameB = "shed-same-b-" + UUID.randomUUID();
+        LockConfiguration lockConfigA =
+            new LockConfiguration(Instant.now(), lockNameA, Duration.ofMinutes(1), Duration.ofSeconds(1));
+        LockConfiguration lockConfigB =
+            new LockConfiguration(Instant.now(), lockNameB, Duration.ofMinutes(1), Duration.ofSeconds(1));
+
+        // The autowired `lockProvider` is the single Spring-managed singleton bean — exactly the "one
+        // JVM, one identity" scenario this AC's own Javadoc describes, unlike the direct-construction
+        // test above which deliberately simulates two separate JVMs.
+        Optional<SimpleLock> lockA = lockProvider.lock(lockConfigA);
+        Optional<SimpleLock> lockB = lockProvider.lock(lockConfigB);
+        assertThat(lockA).isPresent();
+        assertThat(lockB).isPresent();
+        try {
+            String lockedByA = jdbcTemplate.queryForObject(
+                "SELECT locked_by FROM main.shedlock WHERE name = ?", String.class, lockNameA);
+            String lockedByB = jdbcTemplate.queryForObject(
+                "SELECT locked_by FROM main.shedlock WHERE name = ?", String.class, lockNameB);
+
+            assertThat(lockedByA)
+                .as("the same lockProvider bean instance must write the SAME locked_by across every "
+                    + "lock it takes — this is what the unlock/extend predicates actually depend on")
+                .isEqualTo(lockedByB);
+        } finally {
+            lockA.get().unlock();
+            lockB.get().unlock();
+        }
     }
 }

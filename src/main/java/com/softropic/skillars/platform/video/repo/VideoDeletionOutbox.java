@@ -38,6 +38,14 @@ public class VideoDeletionOutbox {
     @Column(name = "attempts", nullable = false)
     private int attempts = 0;
 
+    /**
+     * skillars-deferred-126 AC1: deliberately left app-clock-stamped (row insertion, backoff
+     * computation) — unlike {@code claimedAt}, this fix does not make this column DB-time. A
+     * skew-sensitive misfire here only shifts <em>when</em> a row becomes eligible for the next
+     * attempt by the skew amount; it is not a double-processing hazard the way {@code claimedAt}'s
+     * staleness comparison was, which is why that fix stayed scoped narrower than every timestamp on
+     * this entity.
+     */
     @Column(name = "next_retry_at", nullable = false)
     private Instant nextRetryAt;
 
@@ -51,11 +59,21 @@ public class VideoDeletionOutbox {
     private String triggeredBy;
 
     /**
-     * skillars-deferred-123 AC3: stamped by {@code claimPendingBatch} with the tick's own claim
-     * instant, and cleared back to {@code null} on every transition out of {@code CLAIMED}
-     * (completion or either failure outcome). Lets {@code resetStaleClaimed} key staleness on how
-     * long a row has actually been claimed rather than {@code nextRetryAt}'s eligibility time, and
-     * lets {@code findClaimedBatch} scope its fetch to this run's own claim.
+     * skillars-deferred-123 AC3: stamped by {@code claimPendingBatch}, and cleared back to
+     * {@code null} on every transition out of {@code CLAIMED} (completion or either failure
+     * outcome). Lets {@code resetStaleClaimed} key staleness on how long a row has actually been
+     * claimed rather than {@code nextRetryAt}'s eligibility time, and lets {@code findClaimedBatch}
+     * scope its fetch to this run's own claim.
+     *
+     * <p><strong>skillars-deferred-126 AC1.</strong> The stamp itself is now the <em>database's</em>
+     * own claim instant ({@code now()}), not the claiming JVM's own wall clock — matching
+     * {@code ShedLockConfig}'s {@code usingDbTime()} choice, and for the identical reason: two
+     * instances' app clocks can skew relative to each other, but every instance sees the same
+     * database clock. {@code resetStaleClaimed}'s staleness comparison against this column is now
+     * computed inside the SQL itself, so it is immune to that skew too. This does NOT extend to
+     * {@code nextRetryAt} (see that field), which remains app-clock-stamped at every site that
+     * writes it — only the {@code claimed_at} stamp and the staleness comparison against it were in
+     * scope for this fix.
      */
     @Column(name = "claimed_at")
     private Instant claimedAt;

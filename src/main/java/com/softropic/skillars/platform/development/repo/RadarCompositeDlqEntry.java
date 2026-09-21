@@ -57,7 +57,11 @@ public class RadarCompositeDlqEntry {
 
     /**
      * skillars-deferred-123 AC3: mirrors {@code VideoDeletionOutbox.claimedAt} — see that field's
-     * Javadoc for the full rationale.
+     * Javadoc for the full rationale, including the skillars-deferred-126 AC1 move of the stamp and
+     * {@code resetStaleClaimed}'s staleness comparison to the database's own clock ({@code now()}),
+     * matching {@code ShedLockConfig}'s {@code usingDbTime()} choice. {@code nextRetryAt} below
+     * remains app-clock-stamped — see {@code VideoDeletionOutbox.nextRetryAt}'s Javadoc for why that
+     * is a deliberate residual, not an oversight.
      */
     @Column(name = "claimed_at")
     private Instant claimedAt;
