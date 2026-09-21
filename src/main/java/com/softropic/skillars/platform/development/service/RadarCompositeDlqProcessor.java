@@ -68,12 +68,25 @@ public class RadarCompositeDlqProcessor {
      * this run's {@code claimed_at}, so it resets and immediately re-claims rows this instance is
      * still processing — duplicate {@code recalculateComposite} on the same row.
      *
-     * <p>Fixed at the source rather than by widening the window: {@link #process()} self-terminates at
-     * this budget, so the run cannot still be going when the lock expires. Mirrors
-     * {@code QuotaReservationTimeoutService.MAX_RUN_DURATION} (8 minutes under a {@code PT10M} lock) —
-     * the same lock duration, so the same 8 minutes. Unprocessed rows are handed straight back to
-     * {@code PENDING} via {@code releaseClaimed} for the next firing (default 60s), so nothing is lost
-     * and nothing waits on the stale sweep.
+     * <p>This budget bounds the run at the source — the run cannot still be going when the lock
+     * expires. Mirrors {@code QuotaReservationTimeoutService.MAX_RUN_DURATION} (8 minutes under a
+     * {@code PT10M} lock) — the same lock duration, so the same 8 minutes. Unprocessed rows are handed
+     * straight back to {@code PENDING} via {@code releaseClaimed} for the next firing (default 60s), so
+     * nothing is lost and nothing waits on the stale sweep.
+     *
+     * <p><strong>skillars-deferred-125 AC2 (2026-09-21): "fixed at the source rather than by widening
+     * the window" is no longer this class's whole story.</strong> {@code skillars-deferred-124}'s own
+     * code review found this bound is sampled only at the top of {@link #process()}'s loop — never
+     * inside {@code processRow}/{@code handleFailure} itself — so one row that individually blocks
+     * longer than {@code lockAtMostFor - MAX_RUN_DURATION} (a 2-minute margin here) still overruns the
+     * lock despite this budget existing. With the zero-margin equality this Javadoc used to defend,
+     * that single-row overrun immediately triggered a duplicate reclaim on the very next tick. A real
+     * buffer between {@code lockAtMostFor} and {@link #STALE_CLAIM_WINDOW} (see that field's own
+     * Javadoc) is restored as defense-in-depth on top of this bound, not instead of it — this bound
+     * still does the majority of the work by keeping the run itself inside the lock under normal
+     * operation; the window buffer only matters for the single-slow-row residual this bound does not
+     * reach. That narrower residual is accepted, not fixed, by this AC — see
+     * {@code deferred-work.md}'s corresponding ledger entry.
      */
     private static final Duration MAX_RUN_DURATION = Duration.ofMinutes(8);
 
@@ -82,11 +95,34 @@ public class RadarCompositeDlqProcessor {
      * {@code minus(10, ChronoUnit.MINUTES)} literal it used to be, so the relationship between it,
      * {@link #MAX_RUN_DURATION} and this scheduler's {@code lockAtMostFor} is stated in one place and
      * can be asserted — matching {@code VideoDeletionOutboxProcessor.STALE_CLAIM_WINDOW}, whose Javadoc
-     * this class's inline literal previously had no counterpart to. Value deliberately unchanged at 10
-     * minutes: with the run now bounded at {@link #MAX_RUN_DURATION}, widening the window is no longer
-     * what makes the equality with {@code PT10M} safe — the bound is.
+     * this class's inline literal previously had no counterpart to.
+     *
+     * <p><strong>skillars-deferred-125 AC2 (2026-09-21): widened from 10 to 15 minutes, restoring a
+     * real 5-minute buffer above {@code lockAtMostFor}'s {@code PT10M}.</strong> The value was
+     * previously "deliberately unchanged at 10 minutes" on the reasoning that, once the run is bounded
+     * at {@link #MAX_RUN_DURATION}, the equality with {@code lockAtMostFor} is safe — but that reasoning
+     * assumed {@code MAX_RUN_DURATION} is a hard, continuously-enforced ceiling. It is not: {@code
+     * skillars-deferred-124}'s own code review found the deadline is sampled only between loop
+     * iterations, so a single row that individually blocks longer than the lock/{@code
+     * MAX_RUN_DURATION} margin (2 minutes) can still overrun the lock. Once that happens, the previous
+     * zero-margin equality meant the very next tick's {@code resetStaleClaimed} immediately freed and
+     * re-claimed the still-processing run's rows — a real duplicate {@code recalculateComposite}, an
+     * external side effect {@code claimed_by} cannot undo after the fact, only prevent from being
+     * written twice. This class's structural twin, {@code VideoDeletionOutboxProcessor}, keeps the
+     * equivalent 5-minute buffer amount between its own {@code LOCK_AT_MOST_FOR (15m)} and
+     * {@code STALE_CLAIM_WINDOW (20m)} — this restores the same buffer amount here, not merely the same
+     * ratio. {@link #MAX_RUN_DURATION}'s single-row-overrun residual is accepted, not eliminated, by
+     * this widening — see that field's own Javadoc — but is now materially less consequential, since a
+     * single overrunning row no longer immediately triggers a duplicate reclaim.
+     *
+     * <p><strong>Trade-off.</strong> Widening this window also raises this class's crash-recovery
+     * latency (how long a genuinely dead instance's rows sit {@code CLAIMED} before the stale sweep
+     * frees them) from 10 to 15 minutes. Mirroring {@code VideoDeletionOutboxProcessor.STALE_CLAIM_WINDOW}'s
+     * own equivalent sentence for its 20-minute value: this is immaterial for a DLQ processor polled
+     * every 60 seconds under normal operation — the extra 5 minutes only matters in the rare case of a
+     * genuinely crashed instance, and even then only delays recovery, it does not lose work.
      */
-    private static final Duration STALE_CLAIM_WINDOW = Duration.ofMinutes(10);
+    private static final Duration STALE_CLAIM_WINDOW = Duration.ofMinutes(15);
 
     private final RadarCompositeDlqRepository dlqRepository;
     private final RadarCompositeCalculationService compositeCalculationService;
@@ -123,8 +159,27 @@ public class RadarCompositeDlqProcessor {
         // VideoDeletionOutboxProcessor.process()'s identical comment for the full rationale.
         UUID runId = UUID.randomUUID();
         dlqRepository.resetStaleClaimed(runClaimedAt.minus(STALE_CLAIM_WINDOW));
-        dlqRepository.claimPendingBatch(runClaimedAt, runId, BATCH_SIZE);
-        List<RadarCompositeDlqEntry> rows = dlqRepository.findClaimedBatch(runId, BATCH_SIZE);
+        // skillars-deferred-125 AC1: release a stranded claim on abnormal exit from this phase — see
+        // VideoDeletionOutboxProcessor.process()'s identical comment for the full rationale. Not a
+        // try/finally: that would also fire on the successful path and undo the claim before a single
+        // row is processed.
+        List<RadarCompositeDlqEntry> rows;
+        try {
+            dlqRepository.claimPendingBatch(runClaimedAt, runId, BATCH_SIZE);
+            rows = dlqRepository.findClaimedBatch(runId, BATCH_SIZE);
+        } catch (Exception e) {
+            try {
+                dlqRepository.releaseClaimed(runId);
+            } catch (Exception inner) {
+                // /bmad-code-review fix (2026-09-21): addSuppressed alongside the ERROR log — see
+                // VideoDeletionOutboxProcessor.process()'s identical comment for the full rationale.
+                e.addSuppressed(inner);
+                log.error("[RELEASE_CLAIMED_ITSELF_THREW runId={}] releaseClaimed threw while recovering "
+                    + "from a claim-phase failure below — any rows this run claimed are left CLAIMED, "
+                    + "recovered by the next stale-claim sweep", runId, inner);
+            }
+            throw e;
+        }
 
         // skillars-deferred-123 code review 2026-09-18 (Decision 3): self-terminate before this run
         // could outlive its own PT10M lock — see MAX_RUN_DURATION's Javadoc for why the previously
@@ -135,7 +190,22 @@ public class RadarCompositeDlqProcessor {
         int attempted = 0;
         for (RadarCompositeDlqEntry row : rows) {
             if (Instant.now().isAfter(deadline)) {
-                int released = dlqRepository.releaseClaimed(runId);
+                // /bmad-code-review fix (2026-09-21): this releaseClaimed call was unguarded — the
+                // same stranded-claim class AC1 hardened the claim phase against, on the path most
+                // likely to fail (a run that has already been executing long enough to hit its own
+                // time budget). Logged and swallowed instead, mirroring AC1's own claim-phase guard
+                // shape (and this method's own inner guard above) — the rows are left CLAIMED either
+                // way, recovered by the next stale-claim sweep.
+                int released;
+                try {
+                    released = dlqRepository.releaseClaimed(runId);
+                } catch (Exception e) {
+                    log.error("[RELEASE_CLAIMED_ITSELF_THREW runId={}] releaseClaimed threw while "
+                        + "releasing rows after hitting the {} safety budget — any rows this run "
+                        + "claimed are left CLAIMED, recovered by the next stale-claim sweep", runId,
+                        MAX_RUN_DURATION, e);
+                    released = 0;
+                }
                 log.warn("Stopped radar composite DLQ processing after {}/{} rows attempted — hit the "
                     + "{} safety budget under lockAtMostFor=PT10M; released {} unprocessed row(s) back "
                     + "to PENDING for the next scheduled run", attempted, rows.size(), MAX_RUN_DURATION, released);

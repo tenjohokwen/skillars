@@ -55,6 +55,16 @@ class MigrationConventionLintTest {
     /** Fixtures at or below this predate the skillars-deferred-92 rules, as V122–V127 do for real. */
     private static final int FIXTURE_DEFERRED_92_BASELINE = 808;
 
+    /**
+     * skillars-deferred-125 AC4: a separate, fixture-level boundary for
+     * {@link MigrationLint.Rule#SESSION_SCOPED_LOCK_TIMEOUT} — mirrors {@link
+     * #FIXTURE_DEFERRED_92_BASELINE}'s own reasoning (a distinct numbering space from the real
+     * migration directory's {@link MigrationLint#SESSION_SCOPED_LOCK_TIMEOUT_BASELINE} = 150), set
+     * high enough that every existing {@code valid/} fixture using a plain {@code SET lock_timeout}
+     * (V809–V820, {@code R__repeatable_drop_optout}) stays exempt rather than newly flagged.
+     */
+    private static final int FIXTURE_SESSION_SCOPED_LOCK_TIMEOUT_BASELINE = 840;
+
     private static List<MigrationLint.Violation> lintFixtures(String dir, int baseline) throws IOException {
         return lintFixtures(dir, baseline, FIXTURE_DEFERRED_92_BASELINE, MigrationLint.ALL_KNOWN_AT_HEAD);
     }
@@ -62,8 +72,15 @@ class MigrationConventionLintTest {
     private static List<MigrationLint.Violation> lintFixtures(
             String dir, int baseline, int deferred92Baseline,
             java.util.function.Predicate<Path> knownAtHead) throws IOException {
-        return MigrationLint.lint(
-            FIXTURES.resolve(dir), baseline, deferred92Baseline, knownAtHead, FIXTURE_SOURCES);
+        return lintFixtures(dir, baseline, deferred92Baseline,
+            FIXTURE_SESSION_SCOPED_LOCK_TIMEOUT_BASELINE, knownAtHead);
+    }
+
+    private static List<MigrationLint.Violation> lintFixtures(
+            String dir, int baseline, int deferred92Baseline, int sessionScopedLockTimeoutBaseline,
+            java.util.function.Predicate<Path> knownAtHead) throws IOException {
+        return MigrationLint.lint(FIXTURES.resolve(dir), baseline, deferred92Baseline,
+            sessionScopedLockTimeoutBaseline, knownAtHead, FIXTURE_SOURCES);
     }
 
     @Test
@@ -440,8 +457,12 @@ class MigrationConventionLintTest {
             Files.writeString(tmp.resolve("V911__drop_column_marker_but_live_reference.sql"),
                 withLiveReader.replace("obsolete_reading", "column_nothing_reads"));
 
+            // skillars-deferred-125 AC4: V911's own plain SET lock_timeout is incidental to what this
+            // test actually exercises (the drop-reference scan) — pass a baseline above V911 itself so
+            // SESSION_SCOPED_LOCK_TIMEOUT stays out of this assertion's way, mirroring how this test
+            // already passes deferred92Baseline=FIXTURE_DEFERRED_92_BASELINE rather than the real one.
             assertThat(MigrationLint.lint(tmp, 100, FIXTURE_DEFERRED_92_BASELINE,
-                    MigrationLint.ALL_KNOWN_AT_HEAD, FIXTURE_SOURCES))
+                    911, MigrationLint.ALL_KNOWN_AT_HEAD, FIXTURE_SOURCES))
                 .as("with no live reader the identical file must pass — so V911's failure is the scan "
                     + "finding a real reference, not the rule firing on every DROP that carries a marker")
                 .isEmpty();
@@ -474,6 +495,504 @@ class MigrationConventionLintTest {
                 .as("without the opt-out the very same file must fail — otherwise the fixture proves nothing")
                 .anyMatch(v -> v.rule() == MigrationLint.Rule.REPEATABLE_HAZARD
                             && v.detail().contains("allow-unconditional-drop"));
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // skillars-deferred-125 AC4 — SESSION_SCOPED_LOCK_TIMEOUT
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * A synthetic migration above {@link MigrationLint#SESSION_SCOPED_LOCK_TIMEOUT_BASELINE} using a
+     * plain {@code SET lock_timeout} must trigger the new rule.
+     */
+    @Test
+    @DisplayName("a plain SET lock_timeout above the boundary triggers SESSION_SCOPED_LOCK_TIMEOUT")
+    void sessionScopedLockTimeout_aboveBoundary_triggersViolation() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-session-scoped-above");
+        try {
+            Files.writeString(
+                tmp.resolve("V" + (MigrationLint.SESSION_SCOPED_LOCK_TIMEOUT_BASELINE + 1) + "__probe.sql"),
+                "-- header\nSET lock_timeout = '5s';\n\nALTER TABLE main.widget ADD COLUMN probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0, 0,
+                MigrationLint.SESSION_SCOPED_LOCK_TIMEOUT_BASELINE, MigrationLint.ALL_KNOWN_AT_HEAD,
+                FIXTURE_SOURCES);
+
+            assertThat(violations)
+                .as("a plain SET above the boundary must trigger SESSION_SCOPED_LOCK_TIMEOUT: %s", violations)
+                .anyMatch(v -> v.rule() == MigrationLint.Rule.SESSION_SCOPED_LOCK_TIMEOUT);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /** The same content, at or below the boundary, must be grandfathered — no violation. */
+    @Test
+    @DisplayName("the same plain SET lock_timeout at the boundary is grandfathered")
+    void sessionScopedLockTimeout_atBoundary_isGrandfathered() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-session-scoped-at");
+        try {
+            Files.writeString(
+                tmp.resolve("V" + MigrationLint.SESSION_SCOPED_LOCK_TIMEOUT_BASELINE + "__probe.sql"),
+                "-- header\nSET lock_timeout = '5s';\n\nALTER TABLE main.widget ADD COLUMN probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0, 0,
+                MigrationLint.SESSION_SCOPED_LOCK_TIMEOUT_BASELINE, MigrationLint.ALL_KNOWN_AT_HEAD,
+                FIXTURE_SOURCES);
+
+            assertThat(violations)
+                .as("a migration AT the boundary must be grandfathered — mirrors every already-shipped "
+                    + "V140-V150 migration this rule must not retroactively flag: %s", violations)
+                .noneMatch(v -> v.rule() == MigrationLint.Rule.SESSION_SCOPED_LOCK_TIMEOUT);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /** {@code SET LOCAL} above the boundary must not trigger the rule — it is the compliant form. */
+    @Test
+    @DisplayName("SET LOCAL lock_timeout above the boundary does not trigger SESSION_SCOPED_LOCK_TIMEOUT")
+    void sessionScopedLockTimeout_setLocalAboveBoundary_doesNotTrigger() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-session-scoped-local");
+        try {
+            Files.writeString(
+                tmp.resolve("V" + (MigrationLint.SESSION_SCOPED_LOCK_TIMEOUT_BASELINE + 1) + "__probe.sql"),
+                "-- header\nSET LOCAL lock_timeout = '5s';\n\nALTER TABLE main.widget ADD COLUMN probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0, 0,
+                MigrationLint.SESSION_SCOPED_LOCK_TIMEOUT_BASELINE, MigrationLint.ALL_KNOWN_AT_HEAD,
+                FIXTURE_SOURCES);
+
+            assertThat(violations)
+                .as("SET LOCAL must never trigger SESSION_SCOPED_LOCK_TIMEOUT: %s", violations)
+                .noneMatch(v -> v.rule() == MigrationLint.Rule.SESSION_SCOPED_LOCK_TIMEOUT);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * A migration carrying the {@code executeInTransaction=false} sidecar has no enclosing
+     * transaction for {@code SET LOCAL} to bind to, so a plain {@code SET} is the ONLY legal form for
+     * it — the rule must exempt it entirely rather than flag a shape the sidecar pattern structurally
+     * requires (story-review.md finding: an unconditional rule would silently defeat this repo's own
+     * "confirmed working" non-transactional backfill pattern).
+     */
+    @Test
+    @DisplayName("a sidecar-exempt (executeInTransaction=false) migration's plain SET does not trigger the rule")
+    void sessionScopedLockTimeout_sidecarExemptMigration_doesNotTrigger() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-session-scoped-sidecar");
+        try {
+            String version = "V" + (MigrationLint.SESSION_SCOPED_LOCK_TIMEOUT_BASELINE + 1);
+            Files.writeString(tmp.resolve(version + "__probe.sql"),
+                "-- header\nSET lock_timeout = '5s';\n\nUPDATE main.widget SET probe = 1 WHERE id = 1;\n");
+            Files.writeString(tmp.resolve(version + "__probe.sql.conf"), "executeInTransaction=false\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0, 0,
+                MigrationLint.SESSION_SCOPED_LOCK_TIMEOUT_BASELINE, MigrationLint.ALL_KNOWN_AT_HEAD,
+                FIXTURE_SOURCES);
+
+            assertThat(violations)
+                .as("a sidecar-exempt migration's plain SET is the only legal form and must not be "
+                    + "flagged: %s", violations)
+                .noneMatch(v -> v.rule() == MigrationLint.Rule.SESSION_SCOPED_LOCK_TIMEOUT);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * story-review.md Task 4: {@code isLockTimeoutBoundedAt} must stop treating a {@code SET LOCAL} as
+     * bounding statements after an explicit mid-file {@code COMMIT} — its real scope ends there, unlike
+     * a plain session-scoped {@code SET}, which survives a {@code COMMIT}. Without this fix,
+     * {@code MISSING_LOCK_TIMEOUT} would have a false negative on the second {@code ALTER TABLE} below
+     * once {@code SET LOCAL} becomes the norm this AC's own rule pushes new migrations toward.
+     */
+    @Test
+    @DisplayName("SET LOCAL does not bound a lock-taking statement after an explicit mid-file COMMIT")
+    void missingLockTimeout_setLocalDoesNotSurviveAnExplicitCommit() throws IOException {
+        // /bmad-code-review fix (2026-09-21): NOT a sidecar (no .conf) — this is testing the plain
+        // COMMIT/ROLLBACK-boundary behavior of an ordinary transactional migration, where SET LOCAL
+        // genuinely does take effect. Mixing this with a non-transactional sidecar (as the original
+        // version of this test did) conflated two different scopes: in a real sidecar, SET LOCAL never
+        // takes effect at all, from the very first statement — see
+        // missingLockTimeout_setLocalIsIgnoredInsideANonTransactionalSidecar below for that case.
+        Path tmp = Files.createTempDirectory("migration-lint-set-local-commit-boundary");
+        try {
+            Files.writeString(tmp.resolve("V1000__set_local_commit_boundary.sql"),
+                "-- header\n"
+                    + "SET LOCAL lock_timeout = '5s';\n"
+                    + "ALTER TABLE main.widget ADD COLUMN first_probe VARCHAR(10);\n"
+                    + "COMMIT;\n"
+                    + "ALTER TABLE main.widget ADD COLUMN second_probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("the first ALTER TABLE, before the COMMIT, is genuinely bounded by the SET LOCAL "
+                    + "above it: %s", violations)
+                .noneMatch(v -> v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT
+                    && v.detail().contains("first_probe"));
+            assertThat(violations)
+                .as("the second ALTER TABLE, after the explicit COMMIT, must no longer be considered "
+                    + "bounded by the SET LOCAL above it — its real scope ended at that COMMIT: %s",
+                    violations)
+                .anyMatch(v -> v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT
+                    && v.detail().contains("second_probe"));
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * The counterpart to the test above: a plain, session-scoped {@code SET} DOES survive an explicit
+     * {@code COMMIT} (matching real PostgreSQL session semantics) — the fix must not over-correct into
+     * treating every {@code SET}/{@code SET LOCAL} identically around a transaction boundary.
+     */
+    @Test
+    @DisplayName("a plain session-scoped SET still bounds a statement after an explicit mid-file COMMIT")
+    void missingLockTimeout_plainSetSurvivesAnExplicitCommit() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-plain-set-commit-boundary");
+        try {
+            Files.writeString(tmp.resolve("V1000__plain_set_commit_boundary.sql"),
+                "-- header\n"
+                    + "SET lock_timeout = '5s';\n"
+                    + "ALTER TABLE main.widget ADD COLUMN first_probe VARCHAR(10);\n"
+                    + "COMMIT;\n"
+                    + "ALTER TABLE main.widget ADD COLUMN second_probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("a plain SET is session-scoped and genuinely does survive a COMMIT — the second "
+                    + "ALTER TABLE must still be considered bounded: %s", violations)
+                .noneMatch(v -> v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT
+                    && v.detail().contains("second_probe"));
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * /bmad-code-review fix (2026-09-21): the original version of the two tests above ran inside a
+     * non-transactional sidecar, which silently mixed two different bugs together — this isolates the
+     * sidecar case on its own. A plain SET BEFORE a SET LOCAL, then a COMMIT, must still leave the
+     * plain SET's bound in effect afterward — the original isLockTimeoutBoundedAt collapsed session and
+     * local scope into one flag pair and would have incorrectly cleared it at the COMMIT.
+     */
+    @Test
+    @DisplayName("a plain SET before a SET LOCAL still bounds a statement after the SET LOCAL's COMMIT ends")
+    void missingLockTimeout_plainSetUnderASetLocalSurvivesTheLocalsCommit() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-plain-under-local-commit-boundary");
+        try {
+            Files.writeString(tmp.resolve("V1000__plain_under_local_commit_boundary.sql"),
+                "-- header\n"
+                    + "SET lock_timeout = '5s';\n"
+                    + "SET LOCAL lock_timeout = '1s';\n"
+                    + "ALTER TABLE main.widget ADD COLUMN first_probe VARCHAR(10);\n"
+                    + "COMMIT;\n"
+                    + "ALTER TABLE main.widget ADD COLUMN second_probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("the earlier plain SET's session-scoped bound must survive the SET LOCAL's own "
+                    + "COMMIT-bounded scope ending — the second ALTER TABLE is still bounded: %s",
+                    violations)
+                .noneMatch(v -> v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT
+                    && v.detail().contains("second_probe"));
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * /bmad-code-review fix (2026-09-21): SET LOCAL is a documented Postgres no-op with no enclosing
+     * transaction — in a genuine {@code executeInTransaction=false} sidecar migration it never takes
+     * effect at all, from the very first statement. The original fix for the COMMIT/ROLLBACK boundary
+     * did not know about the sidecar case, so a SET LOCAL there would have silently satisfied
+     * MISSING_LOCK_TIMEOUT for a statement that is, in real Postgres, genuinely unbounded.
+     */
+    @Test
+    @DisplayName("SET LOCAL is ignored entirely inside a non-transactional (executeInTransaction=false) sidecar")
+    void missingLockTimeout_setLocalIsIgnoredInsideANonTransactionalSidecar() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-set-local-sidecar-noop");
+        try {
+            Files.writeString(tmp.resolve("V1000__set_local_sidecar_noop.sql.conf"),
+                "executeInTransaction=false\n");
+            Files.writeString(tmp.resolve("V1000__set_local_sidecar_noop.sql"),
+                "-- header\n"
+                    + "SET LOCAL lock_timeout = '5s';\n"
+                    + "ALTER TABLE main.widget ADD COLUMN sidecar_probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("SET LOCAL never took effect in this non-transactional sidecar — the statement is "
+                    + "genuinely unbounded and must be flagged, even though it is the very first "
+                    + "statement in the file (no COMMIT/ROLLBACK boundary needed to disprove it): %s",
+                    violations)
+                .anyMatch(v -> v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT
+                    && v.detail().contains("sidecar_probe"));
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * /bmad-code-review fix (2026-09-21): {@code SET SESSION lock_timeout} is valid PostgreSQL (SESSION
+     * is the explicit spelling of the scope a bare SET already defaults to) but evaded the original
+     * LOCK_TIMEOUT_DIRECTIVE/SESSION_SCOPED_SET_LOCK_TIMEOUT patterns entirely, which only recognised a
+     * bare SET or SET LOCAL.
+     */
+    @Test
+    @DisplayName("SET SESSION lock_timeout bounds a statement and still triggers SESSION_SCOPED_LOCK_TIMEOUT")
+    void setSessionLockTimeout_boundsAndIsSessionScoped() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-set-session-lock-timeout");
+        try {
+            Files.writeString(tmp.resolve("V1000__set_session_lock_timeout.sql"),
+                "-- header\n"
+                    + "SET SESSION lock_timeout = '5s';\n"
+                    + "ALTER TABLE main.widget ADD COLUMN session_probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("SET SESSION lock_timeout genuinely bounds the statement — must not trip "
+                    + "MISSING_LOCK_TIMEOUT: %s", violations)
+                .noneMatch(v -> v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT);
+            assertThat(violations)
+                .as("SET SESSION is session-scoped exactly like a bare SET — must still trip "
+                    + "SESSION_SCOPED_LOCK_TIMEOUT: %s", violations)
+                .anyMatch(v -> v.rule() == MigrationLint.Rule.SESSION_SCOPED_LOCK_TIMEOUT);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * /bmad-code-review fix (2026-09-21): Postgres's own {@code lock_timeout} default is {@code 0}
+     * (wait forever) — {@code SET LOCAL lock_timeout = DEFAULT} is therefore exactly as unbounded as an
+     * explicit {@code 0}, but the original digit-only isZeroTimeout check found no leading digit in
+     * "DEFAULT" and treated it as bounded.
+     */
+    @Test
+    @DisplayName("SET LOCAL lock_timeout = DEFAULT is unbounded, not a genuine bound")
+    void lockTimeoutDefault_isTreatedAsUnbounded() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-lock-timeout-default");
+        try {
+            Files.writeString(tmp.resolve("V1000__lock_timeout_default.sql"),
+                "-- header\n"
+                    + "SET LOCAL lock_timeout = DEFAULT;\n"
+                    + "ALTER TABLE main.widget ADD COLUMN default_probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("DEFAULT resolves to 0 (unbounded) in real Postgres — must trip "
+                    + "MISSING_LOCK_TIMEOUT: %s", violations)
+                .anyMatch(v -> v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT
+                    && v.detail().contains("default_probe"));
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * /bmad-code-review fix (2026-09-21): {@code ON COMMIT DROP} (a {@code CREATE TEMP TABLE} clause)
+     * contains the bare word "COMMIT" but is not a real transaction boundary — the original
+     * TRANSACTION_BOUNDARY pattern had no way to tell the two apart. A SET LOCAL before it must still
+     * bound a later statement in the same (never actually ended) transaction.
+     */
+    @Test
+    @DisplayName("ON COMMIT DROP is not mistaken for a real transaction-ending COMMIT")
+    void transactionBoundary_onCommitDropIsNotARealBoundary() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-on-commit-drop");
+        try {
+            Files.writeString(tmp.resolve("V1000__on_commit_drop.sql"),
+                "-- header\n"
+                    + "SET LOCAL lock_timeout = '5s';\n"
+                    + "CREATE TEMP TABLE staging (id int) ON COMMIT DROP;\n"
+                    + "ALTER TABLE main.widget ADD COLUMN after_temp_probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("'ON COMMIT DROP' must not be read as a real transaction boundary — the later ALTER "
+                    + "TABLE is still bounded by the SET LOCAL above it, since no real COMMIT occurred: %s",
+                    violations)
+                .noneMatch(v -> v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT
+                    && v.detail().contains("after_temp_probe"));
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * /bmad-code-review fix (2026-09-21): {@code END} is Postgres's own synonym for {@code COMMIT} —
+     * the original TRANSACTION_BOUNDARY pattern recognised only the literal {@code COMMIT}/
+     * {@code ROLLBACK} keywords.
+     */
+    @Test
+    @DisplayName("END ends a SET LOCAL's scope exactly like COMMIT")
+    void transactionBoundary_endIsRecognisedAsACommitSynonym() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-end-boundary");
+        try {
+            Files.writeString(tmp.resolve("V1000__end_boundary.sql"),
+                "-- header\n"
+                    + "SET LOCAL lock_timeout = '5s';\n"
+                    + "ALTER TABLE main.widget ADD COLUMN first_probe VARCHAR(10);\n"
+                    + "END;\n"
+                    + "ALTER TABLE main.widget ADD COLUMN second_probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("END is Postgres's own COMMIT synonym — the second ALTER TABLE, after it, must no "
+                    + "longer be considered bounded by the SET LOCAL above it: %s", violations)
+                .anyMatch(v -> v.rule() == MigrationLint.Rule.MISSING_LOCK_TIMEOUT
+                    && v.detail().contains("second_probe"));
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * /bmad-code-review fix (2026-09-21): {@link MigrationLint}'s {@code hasNonTransactionalSidecar}
+     * used to be a raw {@code .contains("executeInTransaction=false")} substring search — it missed
+     * whitespace/case variants and, worse, matched a commented-out directive. This drives the check via
+     * SESSION_SCOPED_LOCK_TIMEOUT (which exempts a genuine sidecar entirely), since it is directly
+     * observable from lint output whether the sidecar was detected.
+     */
+    @Test
+    @DisplayName("hasNonTransactionalSidecar tolerates whitespace/case and ignores a commented-out directive")
+    void nonTransactionalSidecar_isWhitespaceCaseToleranteAndIgnoresComments() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-sidecar-parsing");
+        try {
+            Files.writeString(tmp.resolve("V1000__sidecar_spaced.sql.conf"),
+                "executeInTransaction = FALSE\n");
+            Files.writeString(tmp.resolve("V1000__sidecar_spaced.sql"),
+                "-- header\nSET lock_timeout = '5s';\nRESET lock_timeout;\n");
+
+            Files.writeString(tmp.resolve("V1001__sidecar_commented_out.sql.conf"),
+                "# executeInTransaction=false\n");
+            Files.writeString(tmp.resolve("V1001__sidecar_commented_out.sql"),
+                "-- header\nSET lock_timeout = '5s';\nRESET lock_timeout;\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("'executeInTransaction = FALSE' (spaces, different case) must still be recognised as "
+                    + "the sidecar — the plain SET in V1000 must be exempt from SESSION_SCOPED_LOCK_TIMEOUT: %s",
+                    violations)
+                .noneMatch(v -> v.rule() == MigrationLint.Rule.SESSION_SCOPED_LOCK_TIMEOUT
+                    && v.file().equals("V1000__sidecar_spaced.sql"));
+            assertThat(violations)
+                .as("a COMMENTED-OUT '# executeInTransaction=false' must NOT be read as a live sidecar "
+                    + "directive — V1001's plain SET must still trip SESSION_SCOPED_LOCK_TIMEOUT: %s",
+                    violations)
+                .anyMatch(v -> v.rule() == MigrationLint.Rule.SESSION_SCOPED_LOCK_TIMEOUT
+                    && v.file().equals("V1001__sidecar_commented_out.sql"));
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * /bmad-code-review fix (2026-09-21, owner decision — option 1 of 3, see
+     * optionsAndRecommendations.md): the new counterpart rule to SESSION_SCOPED_LOCK_TIMEOUT's sidecar
+     * exemption — closes the leak that exemption would otherwise leave open (a sidecar migration's
+     * plain SET has no COMMIT to bound it, so it is GUARANTEED, not merely possible, to carry into
+     * every later migration in the deploy unless reset by hand).
+     */
+    @Test
+    @DisplayName("a sidecar migration's plain SET lock_timeout with no later RESET trips SIDECAR_LOCK_TIMEOUT_NOT_RESET")
+    void sidecarLockTimeoutNotReset_firesWithNoTrailingReset() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-sidecar-no-reset");
+        try {
+            Files.writeString(tmp.resolve("V1000__sidecar_no_reset.sql.conf"),
+                "executeInTransaction=false\n");
+            Files.writeString(tmp.resolve("V1000__sidecar_no_reset.sql"),
+                "-- header\nSET lock_timeout = '5s';\nALTER TABLE main.widget ADD COLUMN probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("a sidecar's plain SET with no later RESET must trip SIDECAR_LOCK_TIMEOUT_NOT_RESET: %s",
+                    violations)
+                .anyMatch(v -> v.rule() == MigrationLint.Rule.SIDECAR_LOCK_TIMEOUT_NOT_RESET);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    @Test
+    @DisplayName("a sidecar migration's plain SET lock_timeout followed by a RESET does not trip the rule")
+    void sidecarLockTimeoutNotReset_doesNotFireWithATrailingReset() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-sidecar-with-reset");
+        try {
+            Files.writeString(tmp.resolve("V1000__sidecar_with_reset.sql.conf"),
+                "executeInTransaction=false\n");
+            Files.writeString(tmp.resolve("V1000__sidecar_with_reset.sql"),
+                "-- header\nSET lock_timeout = '5s';\n"
+                    + "ALTER TABLE main.widget ADD COLUMN probe VARCHAR(10);\nRESET lock_timeout;\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("a trailing RESET satisfies the rule: %s", violations)
+                .noneMatch(v -> v.rule() == MigrationLint.Rule.SIDECAR_LOCK_TIMEOUT_NOT_RESET);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    @Test
+    @DisplayName("a sidecar migration's plain SET lock_timeout opted out via allow-session-lock-timeout does not trip the rule")
+    void sidecarLockTimeoutNotReset_optOutMarkerSuppresses() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-sidecar-optout");
+        try {
+            Files.writeString(tmp.resolve("V1000__sidecar_optout.sql.conf"),
+                "executeInTransaction=false\n");
+            Files.writeString(tmp.resolve("V1000__sidecar_optout.sql"),
+                "-- header\n"
+                    + "-- migration-lint: allow-session-lock-timeout cannot reset, deploy aborts after this step\n"
+                    + "SET lock_timeout = '5s';\n"
+                    + "ALTER TABLE main.widget ADD COLUMN probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("the opt-out marker suppresses SIDECAR_LOCK_TIMEOUT_NOT_RESET exactly as it "
+                    + "suppresses SESSION_SCOPED_LOCK_TIMEOUT: %s", violations)
+                .noneMatch(v -> v.rule() == MigrationLint.Rule.SIDECAR_LOCK_TIMEOUT_NOT_RESET);
+        } finally {
+            deleteRecursively(tmp);
+        }
+    }
+
+    /**
+     * /bmad-code-review fix (2026-09-21): SESSION_SCOPED_LOCK_TIMEOUT (and its sidecar-RESET
+     * counterpart) were never invoked for R__ repeatables at all — lintFile returns into lintRepeatable
+     * before the versioned per-statement loop that carries those checks ever runs.
+     */
+    @Test
+    @DisplayName("an R__ repeatable's plain SET lock_timeout trips SESSION_SCOPED_LOCK_TIMEOUT")
+    void repeatable_plainSetLockTimeout_trips_sessionScopedLockTimeout() throws IOException {
+        Path tmp = Files.createTempDirectory("migration-lint-repeatable-session-scoped");
+        try {
+            Files.writeString(tmp.resolve("R__probe.sql"),
+                "-- header\nSET lock_timeout = '5s';\nALTER TABLE main.widget ADD COLUMN probe VARCHAR(10);\n");
+
+            List<MigrationLint.Violation> violations = MigrationLint.lint(tmp, 0);
+
+            assertThat(violations)
+                .as("an R__ repeatable's plain SET is exactly as much a cross-migration leak hazard as a "
+                    + "versioned migration's — must trip SESSION_SCOPED_LOCK_TIMEOUT: %s", violations)
+                .anyMatch(v -> v.rule() == MigrationLint.Rule.SESSION_SCOPED_LOCK_TIMEOUT);
         } finally {
             deleteRecursively(tmp);
         }

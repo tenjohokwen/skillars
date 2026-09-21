@@ -125,6 +125,30 @@ public final class MigrationLint {
     public static final int DEFERRED_92_BASELINE = 139;
 
     /**
+     * skillars-deferred-125 AC4: a third, later boundary for {@link Rule#SESSION_SCOPED_LOCK_TIMEOUT}
+     * — the rule genuinely must not bind the ten already-shipped migrations that use a plain,
+     * session-scoped {@code SET lock_timeout} ({@code V140}–{@code V150}, excluding the marker-only
+     * {@code V141}; re-verify the actual real-migration tip at implementation/maintenance time — a
+     * concurrent story could have added a newer one since), matching the same "cannot rewrite an
+     * applied migration" reasoning that produced {@link #GRANDFATHER_BASELINE} and
+     * {@link #DEFERRED_92_BASELINE} — restated here on its real grounds (churn/coordination cost
+     * across every environment that already ran them, not Flyway checksum immutability alone;
+     * {@code skillars-deferred-112}'s own squash-and-delete precedent already rewrote migration
+     * history once, so "impossible to edit" is not the honest reason not to touch these ten).
+     *
+     * <p>Kept as a third, distinct constant rather than folded into {@link #DEFERRED_92_BASELINE}
+     * (currently the same value, {@code 139}): this class's own Javadoc records that the first two
+     * baselines are kept apart only <em>provisionally</em>, with a follow-up note in
+     * {@code migration-rebaseline.md} for the case to collapse them properly in a future story — it
+     * does not present "add a new boundary constant" as the established forward direction. A third
+     * boundary is still the right call here (this rule's grandfathered band, {@code V140}–{@code
+     * V150}, is strictly newer than — and disjoint from — the {@code V139} band the other two
+     * baselines share), but is added with that context in mind rather than as if it were this class's
+     * stated intent.
+     */
+    public static final int SESSION_SCOPED_LOCK_TIMEOUT_BASELINE = 150;
+
+    /**
      * Sentinel passed to {@link #lintDropOrdering} for an {@code R__} repeatable, which has no
      * version number to compare a {@code drop-prepared-in} marker's release against (code review:
      * repeatables were previously exempt from all four skillars-deferred-92 rules outright).
@@ -185,7 +209,32 @@ public final class MigrationLint {
          * entirely. {@code V128} gave the column an identity; a hand-picked id collides on the
          * primary key, which the {@code ON CONFLICT (key)} clause never sees.
          */
-        PLATFORM_CONFIG_EXPLICIT_ID
+        PLATFORM_CONFIG_EXPLICIT_ID,
+        /**
+         * skillars-deferred-125 AC4: a plain, session-scoped {@code SET lock_timeout} (not
+         * {@code SET LOCAL}) in a migration above {@link #SESSION_SCOPED_LOCK_TIMEOUT_BASELINE}.
+         * Flyway runs every pending migration in a deploy over one reused JDBC session (no
+         * {@code group}/{@code mixed} option configured), so a session-scoped {@code SET} in one
+         * migration silently carries forward into a later migration in the same deploy that never
+         * declared its own timeout — {@code SET LOCAL} resets automatically at
+         * {@code COMMIT}/{@code ROLLBACK} and closes that leak. Exempt: a migration with the
+         * {@code executeInTransaction=false} sidecar present (no enclosing transaction for
+         * {@code SET LOCAL} to bind to — see {@code docs/deployment/migration-conventions.md} rule 6)
+         * and a statement carrying {@code -- migration-lint: allow-session-lock-timeout <reason>}.
+         */
+        SESSION_SCOPED_LOCK_TIMEOUT,
+        /**
+         * skillars-deferred-125 AC4 code-review fix (2026-09-21, owner decision — option 1 of 3, see
+         * {@code optionsAndRecommendations.md}): the {@link Rule#SESSION_SCOPED_LOCK_TIMEOUT} sidecar
+         * exemption above is correct — {@code SET LOCAL} genuinely cannot work with no enclosing
+         * transaction — but leaves the rule's own stated leak not merely possible but <em>guaranteed</em>
+         * in exactly this case: a non-transactional migration has no {@code COMMIT} to bound a plain
+         * {@code SET} the way {@code SET LOCAL} would. A sidecar migration that sets
+         * {@code lock_timeout} must therefore carry a later, hand-rolled {@code RESET lock_timeout} —
+         * the manual equivalent of what {@code SET LOCAL} does automatically at {@code COMMIT} — or
+         * silence this with {@code -- migration-lint: allow-session-lock-timeout <reason>}.
+         */
+        SIDECAR_LOCK_TIMEOUT_NOT_RESET
     }
 
     public record Violation(String file, Rule rule, String detail) {
@@ -307,8 +356,58 @@ public final class MigrationLint {
      * own spelling for "wait forever" — satisfied the rule it exists to prevent, and a
      * {@code RESET lock_timeout} after a valid {@code SET} was invisible too.
      */
+    // skillars-deferred-125 AC4: group 1 now captures "LOCAL" when present (null for a plain SET,
+    // including "SET SESSION ...", which is session-scoped like a bare SET — SESSION is just the
+    // explicit spelling of the default scope) — isLockTimeoutBoundedAt needs to know which spelling
+    // bounded the statement, since only a plain SET's bound survives a mid-file COMMIT/ROLLBACK; SET
+    // LOCAL's does not. Group 2 (was group 1) is still the raw value text.
+    //
+    // /bmad-code-review fix (2026-09-21): "SET SESSION lock_timeout" (valid Postgres — SESSION is the
+    // explicit, rarely-written spelling of the scope SET already defaults to) evaded this pattern
+    // entirely, so a genuinely-bounded statement using that spelling was flagged MISSING_LOCK_TIMEOUT.
     private static final Pattern LOCK_TIMEOUT_DIRECTIVE = Pattern.compile(
-        "(?i)\\bRESET\\s+lock_timeout\\b|\\bSET\\s+(?:LOCAL\\s+)?lock_timeout\\s*(?:=|TO)\\s*('[^']*'|[\\w]+)");
+        "(?i)\\bRESET\\s+lock_timeout\\b|\\bSET\\s+(?:(LOCAL)\\s+|SESSION\\s+)?lock_timeout\\s*(?:=|TO)\\s*('[^']*'|[\\w]+)");
+    /**
+     * skillars-deferred-125 AC4 — {@link Rule#SESSION_SCOPED_LOCK_TIMEOUT}. A plain {@code SET
+     * lock_timeout}, including the explicit {@code SET SESSION lock_timeout} spelling (the negative
+     * lookahead excludes only {@code SET LOCAL}) — distinct from {@link #LOCK_TIMEOUT_DIRECTIVE},
+     * which matches both spellings plus {@code RESET} for the pre-existing {@code
+     * MISSING_LOCK_TIMEOUT} "is a bound genuinely in effect" check.
+     */
+    private static final Pattern SESSION_SCOPED_SET_LOCK_TIMEOUT = Pattern.compile(
+        "(?i)\\bSET\\s+(?!LOCAL\\b)(?:SESSION\\s+)?lock_timeout\\s*(?:=|TO)\\s*('[^']*'|[\\w]+)");
+    /**
+     * skillars-deferred-125 AC4 code-review fix (2026-09-21) — {@link Rule#SIDECAR_LOCK_TIMEOUT_NOT_RESET}:
+     * a bare {@code RESET lock_timeout}, searched for anywhere after a sidecar migration's plain
+     * {@code SET lock_timeout}.
+     */
+    private static final Pattern RESET_LOCK_TIMEOUT = Pattern.compile("(?i)\\bRESET\\s+lock_timeout\\b");
+    /**
+     * skillars-deferred-125 AC4 code-review fix (2026-09-21) — a Flyway {@code .conf} sidecar's
+     * {@code executeInTransaction=false} directive, tolerant of whitespace around {@code =} and case
+     * in the boolean literal. Matched against one already-comment-stripped line at a time — see
+     * {@link #hasNonTransactionalSidecar}.
+     */
+    private static final Pattern EXECUTE_IN_TRANSACTION_FALSE =
+        Pattern.compile("(?i)executeInTransaction\\s*=\\s*false");
+    /**
+     * skillars-deferred-125 AC4 Task 4: a top-level transaction-boundary statement. {@code SET LOCAL}'s
+     * effect ends here — {@link #isLockTimeoutBoundedAt} must stop treating it as bounding statements
+     * after this point in the same file, which the previous version (a pure forward replay with no
+     * transaction-boundary concept) did not.
+     *
+     * <p>/bmad-code-review fix (2026-09-21): also recognises {@code END} and {@code ABORT} — Postgres's
+     * own synonyms for {@code COMMIT}/{@code ROLLBACK} — and excludes {@code ON COMMIT} (the {@code
+     * CREATE TEMP TABLE ... ON COMMIT DROP/DELETE ROWS/PRESERVE ROWS} clause, not a real transaction
+     * boundary). This operates on {@link #stripComments}'d text, which already blanks dollar-quoted
+     * bodies entirely — a PL/pgSQL {@code END IF}/{@code END LOOP}/block {@code END} inside a
+     * {@code $$...$$} function body never reaches this pattern. The residual risk is a bare, top-level
+     * {@code CASE ... END} expression outside any dollar-quoted body, which would be misread as a
+     * boundary; no real migration in this repository does that today (verified by grep), and it is
+     * accepted rather than built out into a real SQL parser.
+     */
+    private static final Pattern TRANSACTION_BOUNDARY =
+        Pattern.compile("(?i)(?<!\\bON\\s{1,4})\\b(?:COMMIT|ROLLBACK|END|ABORT)\\b");
     /** {@code TRUNCATE [TABLE] ...} at the start of a statement. */
     private static final Pattern TRUNCATE_STATEMENT = Pattern.compile("(?is)^\\s*TRUNCATE\\b");
     /**
@@ -368,6 +467,20 @@ public final class MigrationLint {
     public static List<Violation> lint(Path dir, int baselineVersion, int deferred92Baseline,
                                        Predicate<Path> knownAtHead, List<Path> sourceRoots)
             throws IOException {
+        return lint(dir, baselineVersion, deferred92Baseline, SESSION_SCOPED_LOCK_TIMEOUT_BASELINE,
+            knownAtHead, sourceRoots);
+    }
+
+    /**
+     * @param sessionScopedLockTimeoutBaseline versions at or below this are additionally
+     *     grandfathered from {@link Rule#SESSION_SCOPED_LOCK_TIMEOUT} (skillars-deferred-125 AC4) —
+     *     see {@link #SESSION_SCOPED_LOCK_TIMEOUT_BASELINE}'s own Javadoc for why this is a third,
+     *     distinct constant rather than reusing {@code deferred92Baseline}
+     */
+    public static List<Violation> lint(Path dir, int baselineVersion, int deferred92Baseline,
+                                       int sessionScopedLockTimeoutBaseline, Predicate<Path> knownAtHead,
+                                       List<Path> sourceRoots)
+            throws IOException {
         final List<Violation> violations = new ArrayList<>();
         // skillars-deferred-92 code review: Files.list is non-recursive, so a migration in a
         // subdirectory of the Flyway location (Flyway's own classpath scan IS recursive) was never
@@ -376,8 +489,8 @@ public final class MigrationLint {
             files.filter(Files::isRegularFile)
                  .filter(p -> p.getFileName().toString().endsWith(".sql"))
                  .sorted()
-                 .forEach(p -> lintFile(p, baselineVersion, deferred92Baseline, knownAtHead,
-                     sourceRoots, violations));
+                 .forEach(p -> lintFile(p, baselineVersion, deferred92Baseline,
+                     sessionScopedLockTimeoutBaseline, knownAtHead, sourceRoots, violations));
         }
         return violations;
     }
@@ -531,8 +644,8 @@ public final class MigrationLint {
     // --- file linting -------------------------------------------------------------------------
 
     private static void lintFile(Path file, int baselineVersion, int deferred92Baseline,
-                                 Predicate<Path> knownAtHead, List<Path> sourceRoots,
-                                 List<Violation> out) {
+                                 int sessionScopedLockTimeoutBaseline, Predicate<Path> knownAtHead,
+                                 List<Path> sourceRoots, List<Violation> out) {
         final String name = file.getFileName().toString();
         final Matcher vm = VERSIONED.matcher(name);
         if (!vm.matches()) {
@@ -583,6 +696,19 @@ public final class MigrationLint {
         }
         final List<Statement> statements = statements(raw);
         final boolean deferred92Applies = isAboveBaseline(versionParts, deferred92Baseline);
+        // skillars-deferred-125 AC4: the sidecar check is file-level (a non-transactional migration
+        // has no enclosing transaction for SET LOCAL to bind to anywhere in the file), so it is
+        // resolved once here rather than per statement. Also feeds lintLockTimeout/
+        // isLockTimeoutBoundedAt (code review fix 2026-09-21) — a SET LOCAL is a no-op there too, and
+        // must not silently satisfy MISSING_LOCK_TIMEOUT either.
+        final boolean nonTransactionalSidecar = hasNonTransactionalSidecar(file);
+        final boolean aboveSessionScopedBaseline = isAboveBaseline(versionParts, sessionScopedLockTimeoutBaseline);
+        final boolean sessionScopedLockTimeoutApplies = aboveSessionScopedBaseline && !nonTransactionalSidecar;
+        // skillars-deferred-125 AC4 code-review fix (2026-09-21, owner decision — option 1): the
+        // mirror-image check to sessionScopedLockTimeoutApplies above — runs exactly when a sidecar
+        // migration IS exempt from SESSION_SCOPED_LOCK_TIMEOUT, closing the leak that exemption would
+        // otherwise leave open. Same baseline, opposite sidecar condition.
+        final boolean sidecarLockTimeoutResetApplies = aboveSessionScopedBaseline && nonTransactionalSidecar;
 
         int dropScopeStart = 0;
         for (Statement st : statements) {
@@ -590,10 +716,17 @@ public final class MigrationLint {
             if (deferred92Applies) {
                 int stEnd = Math.min(raw.length(), st.offset() + st.scope().length());
                 String dropScope = raw.substring(dropScopeStart, stEnd);
-                lintStatementDeferred92(name, st, raw, dropScope, sourceRoots, out, majorVersion);
+                lintStatementDeferred92(name, st, raw, dropScope, sourceRoots, out, majorVersion,
+                    nonTransactionalSidecar);
                 if (dropsTableOrColumn(st.sql())) {
                     dropScopeStart = stEnd;
                 }
+            }
+            if (sessionScopedLockTimeoutApplies) {
+                lintSessionScopedLockTimeout(name, st, out);
+            }
+            if (sidecarLockTimeoutResetApplies) {
+                lintSidecarLockTimeoutReset(name, st, raw, out);
             }
         }
 
@@ -687,9 +820,10 @@ public final class MigrationLint {
      *     marker for THIS statement may appear in — see {@link #lintDropOrdering}
      */
     private static void lintStatementDeferred92(String name, Statement st, String raw, String dropScope,
-                                                List<Path> sourceRoots, List<Violation> out, int version) {
+                                                List<Path> sourceRoots, List<Violation> out, int version,
+                                                boolean nonTransactionalSidecar) {
         lintDropOrdering(name, st, dropScope, sourceRoots, out, version);
-        lintLockTimeout(name, st, raw, out);
+        lintLockTimeout(name, st, raw, nonTransactionalSidecar, out);
         lintUnbatchedDml(name, st, out);
         lintPlatformConfigId(name, st, out);
     }
@@ -951,7 +1085,8 @@ public final class MigrationLint {
      * rule deliberately does not claim they are equally disruptive, and the message it emits does not
      * either. Overstating what a guard covers is the failure this project has recorded three times.
      */
-    private static void lintLockTimeout(String name, Statement st, String raw, List<Violation> out) {
+    private static void lintLockTimeout(String name, Statement st, String raw, boolean nonTransactionalSidecar,
+                                        List<Violation> out) {
         if (!ACCESS_EXCLUSIVE_ALTER.matcher(st.sql()).find()
             && !TOP_LEVEL_ACCESS_EXCLUSIVE.matcher(st.sql()).find()
             && !ANY_CREATE_INDEX.matcher(st.sql()).find()) {
@@ -966,7 +1101,7 @@ public final class MigrationLint {
         // merely *discusses* lock_timeout silences the rule for its own DDL.
         int end = Math.min(raw.length(), st.offset() + st.scope().length());
         String before = stripComments(raw.substring(0, end));
-        if (isLockTimeoutBoundedAt(before)) {
+        if (isLockTimeoutBoundedAt(before, nonTransactionalSidecar)) {
             return;
         }
         out.add(new Violation(name, Rule.MISSING_LOCK_TIMEOUT,
@@ -977,25 +1112,94 @@ public final class MigrationLint {
                 + oneLine(st.sql())));
     }
 
-    /** Replays every {@code SET}/{@code RESET lock_timeout} in {@code text} to the running state. */
-    private static boolean isLockTimeoutBoundedAt(String text) {
-        Matcher m = LOCK_TIMEOUT_DIRECTIVE.matcher(text);
-        boolean bounded = false;
-        while (m.find()) {
-            if (m.group().toUpperCase(Locale.ROOT).startsWith("RESET")) {
-                bounded = false;
+    /**
+     * Replays every {@code SET}/{@code RESET lock_timeout} in {@code text} to the running state.
+     *
+     * <p>skillars-deferred-125 AC4 Task 4 (story-review.md): also replays {@code COMMIT}/{@code
+     * ROLLBACK} (and, since the {@code /bmad-code-review} fix below, {@code END}/{@code ABORT})
+     * transaction boundaries.
+     *
+     * <p><strong>Session vs. local scope, tracked separately (code review fix 2026-09-21).</strong> A
+     * plain, session-scoped {@code SET}'s bound genuinely lasts for the rest of the session regardless
+     * of any {@code COMMIT} in between. A {@code SET LOCAL}'s real scope ends at the enclosing
+     * {@code COMMIT}/{@code ROLLBACK}, reverting to whatever the session-scoped state was underneath
+     * it — NOT to "unbounded" unconditionally. The original version of this method collapsed both into
+     * one flag pair, so a plain {@code SET} followed by a {@code SET LOCAL} then a {@code COMMIT}
+     * incorrectly lost the still-live plain {@code SET}'s bound. {@code sessionBounded} and
+     * {@code localActive}/{@code localBounded} are now tracked independently: a transaction boundary
+     * clears only the local override, never the session-scoped value.
+     *
+     * @param nonTransactionalSidecar true if this file carries the Flyway {@code
+     *     executeInTransaction=false} sidecar (see {@link #hasNonTransactionalSidecar}). {@code SET
+     *     LOCAL} is a documented Postgres no-op with no enclosing transaction, so in a genuinely
+     *     non-transactional migration it is ignored entirely rather than treated as a bound —
+     *     otherwise a {@code SET LOCAL lock_timeout} that never actually took effect would silently
+     *     satisfy {@link Rule#MISSING_LOCK_TIMEOUT} (code review fix 2026-09-21; this is exactly the
+     *     form {@link Rule#SESSION_SCOPED_LOCK_TIMEOUT}'s own sidecar exemption pushes an author
+     *     toward avoiding — the plain, session-scoped {@code SET} remains the only form that actually
+     *     works in a sidecar migration, and continues to bound normally here).
+     */
+    private static boolean isLockTimeoutBoundedAt(String text, boolean nonTransactionalSidecar) {
+        Matcher lockTimeout = LOCK_TIMEOUT_DIRECTIVE.matcher(text);
+        Matcher boundary = TRANSACTION_BOUNDARY.matcher(text);
+        boolean sessionBounded = false;
+        boolean localActive = false;
+        boolean localBounded = false;
+        boolean hasNextLockTimeout = lockTimeout.find();
+        boolean hasNextBoundary = boundary.find();
+        while (hasNextLockTimeout || hasNextBoundary) {
+            boolean lockTimeoutIsNext = hasNextLockTimeout
+                && (!hasNextBoundary || lockTimeout.start() <= boundary.start());
+            if (lockTimeoutIsNext) {
+                if (lockTimeout.group().toUpperCase(Locale.ROOT).startsWith("RESET")) {
+                    // RESET clears whichever scope currently governs: the LOCAL override if one is
+                    // active, else the session-scoped value — mirroring real Postgres RESET semantics.
+                    if (localActive) {
+                        localActive = false;
+                        localBounded = false;
+                    } else {
+                        sessionBounded = false;
+                    }
+                } else {
+                    boolean isLocal = lockTimeout.group(1) != null;
+                    boolean bound = !isZeroTimeout(lockTimeout.group(2));
+                    if (isLocal) {
+                        if (!nonTransactionalSidecar) {
+                            localActive = true;
+                            localBounded = bound;
+                        }
+                        // else: a Postgres no-op with no enclosing transaction — ignored rather than
+                        // treated as a bound (see this method's own Javadoc).
+                    } else {
+                        sessionBounded = bound;
+                    }
+                }
+                hasNextLockTimeout = lockTimeout.find();
             } else {
-                bounded = !isZeroTimeout(m.group(1));
+                // A COMMIT/ROLLBACK/END/ABORT ends any active SET LOCAL's scope — the session-scoped
+                // SET's bound (if any) survives it untouched, which is the whole distinction this fix
+                // exists to make.
+                localActive = false;
+                localBounded = false;
+                hasNextBoundary = boundary.find();
             }
         }
-        return bounded;
+        return localActive ? localBounded : sessionBounded;
     }
 
+    // /bmad-code-review fix (2026-09-21): "SET LOCAL lock_timeout = DEFAULT" (or a plain SET) was
+    // treated as bounded, because the old digit-only check found no leading digit in "DEFAULT" and
+    // fell through to "not zero". Postgres's own lock_timeout default is 0 (wait forever) — DEFAULT is
+    // therefore exactly as unbounded as an explicit 0.
     private static boolean isZeroTimeout(String rawValue) {
         if (rawValue == null) {
             return false;
         }
-        Matcher digits = Pattern.compile("^(\\d+)").matcher(rawValue.replace("'", "").strip());
+        String stripped = rawValue.replace("'", "").strip();
+        if (stripped.equalsIgnoreCase("DEFAULT")) {
+            return true;
+        }
+        Matcher digits = Pattern.compile("^(\\d+)").matcher(stripped);
         return digits.find() && Integer.parseInt(digits.group(1)) == 0;
     }
 
@@ -1094,6 +1298,104 @@ public final class MigrationLint {
         }
     }
 
+    /**
+     * skillars-deferred-125 AC4: true when {@code file} carries a Flyway {@code
+     * executeInTransaction=false} sidecar ({@code <file's own name>.conf} containing that directive) —
+     * the "confirmed working" non-transactional pattern {@code docs/deployment/migration-conventions.md}
+     * documents for multi-batch, multi-commit backfills. {@code SET LOCAL} is a Postgres no-op outside
+     * a transaction block, so a migration using this sidecar has no enclosing transaction for
+     * {@code SET LOCAL} to bind to and must be allowed to keep a plain, session-scoped {@code SET} —
+     * {@link Rule#SESSION_SCOPED_LOCK_TIMEOUT} exempts it entirely rather than flagging a form the
+     * sidecar pattern structurally requires.
+     *
+     * <p>/bmad-code-review fix (2026-09-21): the previous version was a raw
+     * {@code .contains("executeInTransaction=false")} substring search — it missed
+     * {@code executeInTransaction = false} (spaces around {@code =}) and {@code executeInTransaction=FALSE},
+     * and it *matched* a commented-out {@code #executeInTransaction=false} line, wrongly exempting a
+     * migration whose sidecar had the directive turned off. Flyway {@code .conf} sidecars are
+     * Java-properties files, where {@code #}/{@code !} start a comment line — parsed line by line here,
+     * skipping comment lines, with a whitespace/case-tolerant match on the directive itself.
+     */
+    private static boolean hasNonTransactionalSidecar(Path file) {
+        Path sidecar = file.resolveSibling(file.getFileName().toString() + ".conf");
+        if (!Files.isRegularFile(sidecar)) {
+            return false;
+        }
+        try {
+            String content = Files.readString(sidecar, StandardCharsets.UTF_8);
+            for (String line : content.split("\n", -1)) {
+                String trimmed = line.strip();
+                if (trimmed.startsWith("#") || trimmed.startsWith("!")) {
+                    continue; // Java .properties-style comment line — not a live directive
+                }
+                if (EXECUTE_IN_TRANSACTION_FALSE.matcher(trimmed).find()) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * skillars-deferred-125 AC4 — see {@link Rule#SESSION_SCOPED_LOCK_TIMEOUT}'s own Javadoc for the
+     * cross-migration leak this closes. Statement-scoped like every other {@code migration-lint}
+     * marker (AC11.2's convention): {@code -- migration-lint: allow-session-lock-timeout <reason>}
+     * immediately above the statement opts it out. Callers are responsible for the file-level
+     * {@link #hasNonTransactionalSidecar} exemption and the {@link #SESSION_SCOPED_LOCK_TIMEOUT_BASELINE}
+     * check — this method assumes both already passed.
+     */
+    private static void lintSessionScopedLockTimeout(String name, Statement st, List<Violation> out) {
+        if (!SESSION_SCOPED_SET_LOCK_TIMEOUT.matcher(st.sql()).find()) {
+            return;
+        }
+        if (hasMarker(st.scope(), "allow-session-lock-timeout")) {
+            return;
+        }
+        out.add(new Violation(name, Rule.SESSION_SCOPED_LOCK_TIMEOUT,
+            "a plain 'SET lock_timeout' is session-scoped and persists past this migration's own "
+                + "COMMIT — Flyway runs every pending migration in a deploy over one reused JDBC "
+                + "session, so this silently carries forward into a later migration that never "
+                + "declared its own timeout. Use 'SET LOCAL lock_timeout' instead (resets "
+                + "automatically at COMMIT/ROLLBACK), or add '-- migration-lint: "
+                + "allow-session-lock-timeout <reason>' immediately above this statement: "
+                + oneLine(st.sql())));
+    }
+
+    /**
+     * skillars-deferred-125 AC4 code-review fix (2026-09-21, owner decision — option 1, see
+     * {@code optionsAndRecommendations.md}): the counterpart check for a sidecar migration exempted
+     * from {@link Rule#SESSION_SCOPED_LOCK_TIMEOUT} above. A plain {@code SET lock_timeout} there is
+     * genuinely the only form that works (no enclosing transaction for {@code SET LOCAL} to bind to),
+     * but with no {@code COMMIT} to bound it automatically, it is GUARANTEED — not merely possible —
+     * to carry into every later migration in the deploy unless the migration also issues a later
+     * {@code RESET lock_timeout} by hand. Callers are responsible for the file-level {@link
+     * #hasNonTransactionalSidecar} check and the {@link #SESSION_SCOPED_LOCK_TIMEOUT_BASELINE} check
+     * — this method assumes both already passed (mirrors {@link #lintSessionScopedLockTimeout}).
+     */
+    private static void lintSidecarLockTimeoutReset(String name, Statement st, String raw, List<Violation> out) {
+        if (!SESSION_SCOPED_SET_LOCK_TIMEOUT.matcher(st.sql()).find()) {
+            return;
+        }
+        if (hasMarker(st.scope(), "allow-session-lock-timeout")) {
+            return;
+        }
+        int end = Math.min(raw.length(), st.offset() + st.scope().length());
+        String after = stripComments(raw.substring(end));
+        if (RESET_LOCK_TIMEOUT.matcher(after).find()) {
+            return;
+        }
+        out.add(new Violation(name, Rule.SIDECAR_LOCK_TIMEOUT_NOT_RESET,
+            "a sidecar (executeInTransaction=false) migration's plain 'SET lock_timeout' has no later "
+                + "'RESET lock_timeout' anywhere after it in the file — with no COMMIT to bound it the "
+                + "way SET LOCAL would in a transactional migration, this setting is guaranteed to carry "
+                + "forward into every later migration in the same deploy. Add 'RESET lock_timeout;' "
+                + "after this migration's lock-taking statements, or add '-- migration-lint: "
+                + "allow-session-lock-timeout <reason>' immediately above this statement: "
+                + oneLine(st.sql())));
+    }
+
     private static String oneLine(String sql) {
         String s = sql.replaceAll("\\s+", " ").strip();
         return s.length() <= 120 ? s : s.substring(0, 117) + "...";
@@ -1121,6 +1423,14 @@ public final class MigrationLint {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+        // /bmad-code-review fix (2026-09-21): SESSION_SCOPED_LOCK_TIMEOUT (and its sidecar-RESET
+        // counterpart) were never invoked for repeatables at all — this method has its own separate
+        // per-statement loop and did not call either. A repeatable's plain SET lock_timeout is exactly
+        // as much a cross-migration leak hazard as a versioned migration's, and a repeatable shares the
+        // same reused Flyway JDBC session for the rest of the deploy. No baseline gate, matching this
+        // method's existing NO_ORDERING_CHECK convention below: a repeatable always re-runs at HEAD, so
+        // there is no grandfathered band for it the way a versioned migration has.
+        final boolean nonTransactionalSidecar = hasNonTransactionalSidecar(file);
 
         int dropScopeStart = 0;
         for (Statement st : statements(raw)) {
@@ -1164,7 +1474,13 @@ public final class MigrationLint {
                 }
             }
 
-            lintStatementDeferred92(name, st, raw, dropScope, sourceRoots, out, NO_ORDERING_CHECK);
+            lintStatementDeferred92(name, st, raw, dropScope, sourceRoots, out, NO_ORDERING_CHECK,
+                nonTransactionalSidecar);
+            if (nonTransactionalSidecar) {
+                lintSidecarLockTimeoutReset(name, st, raw, out);
+            } else {
+                lintSessionScopedLockTimeout(name, st, out);
+            }
         }
     }
 

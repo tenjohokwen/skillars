@@ -42,8 +42,10 @@ after it is the authority; this is the quick pass.
 - [ ] **Every `DROP` is last and guarded**: `IF EXISTS`, a header explaining which release removed
       the last reader, and `-- migration-lint: drop-prepared-in: V<n>` immediately above the
       statement (one per `DROP`).
-- [ ] **Every lock-taking DDL has `SET lock_timeout` in effect** at that point in the file
+- [ ] **Every lock-taking DDL has `SET LOCAL lock_timeout` in effect** at that point in the file
       (`0` = unbounded, does not count), or `-- migration-lint: allow-unbounded-lock-wait <reason>`.
+      **`LOCAL`, not a plain `SET`, for any new migration** (skillars-deferred-125 AC4) — see item 7
+      for why a plain `SET` leaks into later migrations in the same deploy.
 - [ ] **`INSERT INTO main.platform_config` omits `id`** (identity since `V128`).
 - [ ] **`MigrationConventionLintTest` passes.** It enforces the mechanical subset; the rest is review's.
 
@@ -153,15 +155,25 @@ after it is the authority; this is the quick pass.
 
 6. **Long `UPDATE` backfills are batched / chunked** (the `Def10` precedent in
    `skillars-6-1`; a pre-baseline example that used to live at `V98` is now folded into the
-   `V138` baseline — see `migration-rebaseline.md`), with `SET lock_timeout` /
-   `SET statement_timeout` set where a full scan is unavoidable, so a slow backfill cannot
-   hold a lock indefinitely or wedge the deploy. **Multi-batch, multi-commit backfills need
-   the `executeInTransaction=false` sidecar** (confirmed working — see the callout under
-   rule 4): name the migration's `.conf` file after it
-   (`V140__some_backfill.sql` + `V140__some_backfill.sql.conf` containing
-   `executeInTransaction=false`) so each batch's `UPDATE` commits independently instead of
-   accumulating in one long-held transaction. A non-transactional migration cannot be rolled
-   back, so this is for genuine multi-commit backfills only, never for convenience.
+   `V138` baseline — see `migration-rebaseline.md`), with `SET LOCAL lock_timeout` /
+   `SET LOCAL statement_timeout` set where a full scan is unavoidable, so a slow backfill
+   cannot hold a lock indefinitely or wedge the deploy. **This `SET LOCAL` prescription is for
+   the default, single-transaction case** — a backfill that fits in one migration's own
+   transaction. **Multi-batch, multi-commit backfills need the `executeInTransaction=false`
+   sidecar instead** (confirmed working — see the callout under rule 4): name the migration's
+   `.conf` file after it (`V140__some_backfill.sql` + `V140__some_backfill.sql.conf`
+   containing `executeInTransaction=false`) so each batch's `UPDATE` commits independently
+   instead of accumulating in one long-held transaction. A non-transactional migration cannot
+   be rolled back, so this is for genuine multi-commit backfills only, never for convenience.
+   **A sidecar-driven backfill is the one case that still uses a plain `SET`, not
+   `SET LOCAL`** — with no enclosing transaction for `LOCAL` to bind to (it is a Postgres
+   no-op outside a transaction block), the plain, session-scoped form is the only one that
+   works here; `MigrationLint.Rule.SESSION_SCOPED_LOCK_TIMEOUT` (item 7) detects the sidecar
+   and exempts it automatically — but that exemption is not a free pass: with no `COMMIT` to
+   bound it the way `SET LOCAL` would, the setting is guaranteed to carry into every later
+   migration in the deploy unless it is followed by an explicit `RESET lock_timeout`
+   (`MigrationLint.Rule.SIDECAR_LOCK_TIMEOUT_NOT_RESET`, added by the same code review that
+   found this contradiction).
    - `MigrationLint.Rule.UNBATCHED_DML` (skillars-deferred-92 AC9) fails an `UPDATE`,
      `DELETE` or `TRUNCATE` with **no** `WHERE` (or none possible, for `TRUNCATE`), or
      with a tautological one that is the *entire* predicate (`WHERE TRUE`, `WHERE 1=1` —
@@ -173,7 +185,7 @@ after it is the authority; this is the quick pass.
    - A row-level `UPDATE`/`DELETE` that is bounded (a small, named set of rows) does not
      take `ACCESS EXCLUSIVE` and is not what rule 7 below binds — but it still takes
      ordinary row locks, which a concurrent writer on the same rows can hold indefinitely.
-     `SET lock_timeout` is worth adding defensively even here, despite touching only a
+     `SET LOCAL lock_timeout` is worth adding defensively even here, despite touching only a
      handful of rows.
    - The same applies to application code, not just migrations.
      `BandwidthResetService.resetMonthlyBandwidth` was a single unpartitioned `UPDATE` over
@@ -186,8 +198,9 @@ after it is the authority; this is the quick pass.
      replaced), and the chunk predicate must be **self-excluding** so the loop terminates
      and a crashed run resumes rather than double-applying.
 
-7. **`SET lock_timeout` on every lock-taking DDL statement** (skillars-deferred-92 AC8).
-   Verified during that story: only **2** of 121 migrations set one.
+7. **`SET LOCAL lock_timeout` on every lock-taking DDL statement** (skillars-deferred-92 AC8;
+   `LOCAL` required for new migrations since skillars-deferred-125 AC4). Verified during
+   skillars-deferred-92: only **2** of 121 migrations set one at all.
 
    **Why this matters more than it looks.** The danger is not that the `ALTER` itself is
    slow — it is usually instant. It is that a *blocked* `ALTER` sits in the lock queue, and
@@ -197,12 +210,42 @@ after it is the authority; this is the quick pass.
    into a failed migration, which is the far better outcome. The doc previously gave the
    rule without this reason, which is most of why it was ignored.
 
-   Put `SET lock_timeout = '5s';` near the top of the migration (it is a session/transaction
-   setting, so one statement covers the whole script), or opt out with
-   `-- migration-lint: allow-unbounded-lock-wait <reason>`. A `SET lock_timeout = 0`
+   Put `SET LOCAL lock_timeout = '5s';` near the top of the migration, or opt out with
+   `-- migration-lint: allow-unbounded-lock-wait <reason>`. A `SET LOCAL lock_timeout = 0`
    (Postgres's own spelling for "wait forever") does **not** satisfy the rule — the guard
    reads the value, not just the keyword's presence — and a later `RESET lock_timeout`
    correctly un-bounds every statement after it.
+
+   **`LOCAL`, not a plain `SET` — skillars-deferred-125 AC4.** Flyway runs every pending
+   migration in one deploy over a **single reused JDBC session** (this project sets no
+   Flyway `group`/`mixed` option). A plain `SET lock_timeout` is session-scoped: it persists
+   for the rest of that session, so it silently carries forward from one migration into a
+   *later* migration in the same deploy that never declared its own timeout, or that assumed
+   the platform default. `SET LOCAL lock_timeout` is transaction-scoped instead — it resets
+   automatically at `COMMIT`/`ROLLBACK`, so it cannot leak past the migration that set it.
+   `MigrationLint.Rule.SESSION_SCOPED_LOCK_TIMEOUT` fails the build on a plain `SET
+   lock_timeout` in any migration newer than `MigrationLint.SESSION_SCOPED_LOCK_TIMEOUT_BASELINE`
+   (`V150` at the time this rule was added) — the ten already-shipped migrations at or below
+   that boundary (`V140`–`V150`, all plain `SET`) are grandfathered rather than rewritten:
+   non-production environments and CI have already run them, and churning ten files for a
+   pure convention change is not worth the coordination/review overhead relative to just
+   applying the stronger rule going forward (not because a shipped migration is literally
+   impossible to edit — `skillars-deferred-112`'s own squash-and-delete precedent already
+   rewrote this project's entire migration history once).
+
+   **One case still legitimately uses a plain `SET`: the `executeInTransaction=false`
+   sidecar** (rule 6). `SET LOCAL` is a Postgres no-op — a silent `WARNING`, not an error —
+   outside a transaction block, and a non-transactional sidecar migration has no single
+   enclosing transaction for it to bind to. `SESSION_SCOPED_LOCK_TIMEOUT` detects the
+   sidecar `.conf` file and exempts the whole migration automatically; a statement can also
+   opt out directly with `-- migration-lint: allow-session-lock-timeout <reason>`.
+
+   **That exemption is not a free pass, though.** A sidecar migration has no `COMMIT` to bound
+   a plain `SET` the way `SET LOCAL` does automatically in a transactional migration — so the
+   leak this whole rule exists to prevent is *guaranteed*, not merely possible, for a sidecar
+   that sets `lock_timeout` and never resets it. `MigrationLint.Rule.SIDECAR_LOCK_TIMEOUT_NOT_RESET`
+   requires a later `RESET lock_timeout;` in the same file — the hand-rolled equivalent of what
+   `SET LOCAL` does for free — or the same `allow-session-lock-timeout` opt-out.
 
    **The lock levels are not all the same, and the rule does not pretend they are:**
 
@@ -375,12 +418,21 @@ The three blind spots this section used to name are now checked by `MigrationLin
   the dropped identifier may remain in `src/main`. Rule 2 above states exactly what the
   reference search can and cannot see. `COLUMN` is optional in PostgreSQL's grammar for a
   `DROP` sub-clause, and the rule accounts for both spellings.
-- **`SET lock_timeout` genuinely in effect** on lock-taking DDL — `MISSING_LOCK_TIMEOUT`. See
-  rule 7 for the queue-behind-the-blocked-`ALTER` mechanism, the per-statement lock levels, and
-  the `SET … = 0` / `RESET` handling. *Implementation note:* the check strips comments — literal-
+- **`SET`/`SET LOCAL lock_timeout` genuinely in effect** on lock-taking DDL —
+  `MISSING_LOCK_TIMEOUT` (either spelling satisfies it). See rule 7 for the
+  queue-behind-the-blocked-`ALTER` mechanism, the per-statement lock levels, and the
+  `SET … = 0` / `RESET` handling. *Implementation note:* the check strips comments — literal-
   aware, so a string value that happens to contain `--` does not corrupt the statements after it
   — before looking for `SET lock_timeout`. Without that, a migration whose header merely
-  **discusses** `lock_timeout` silences the rule for its own DDL.
+  **discusses** `lock_timeout` silences the rule for its own DDL. *Also:* a `SET LOCAL`'s bound
+  is replayed as ending at an explicit mid-file `COMMIT`/`ROLLBACK` (skillars-deferred-125 AC4) —
+  a plain `SET`'s does not, matching real PostgreSQL session semantics.
+- **A plain, session-scoped `SET lock_timeout` on a new migration** —
+  `SESSION_SCOPED_LOCK_TIMEOUT` (skillars-deferred-125 AC4). Distinct from
+  `MISSING_LOCK_TIMEOUT` above: this rule fires even when a bound genuinely is in effect, because
+  a plain `SET` leaks into a later migration in the same Flyway deploy session — see rule 7.
+  Grandfathers every migration at or below `MigrationLint.SESSION_SCOPED_LOCK_TIMEOUT_BASELINE`
+  and any migration carrying the `executeInTransaction=false` sidecar.
 - **Unbatched full-table DML** — `UNBATCHED_DML`, for an `UPDATE`, `DELETE` or `TRUNCATE` with no
   `WHERE` (or none possible) or a tautological one. `WHERE` and the write keyword itself are
   matched at the statement's top level, not inside a subquery's own parentheses, and a leading
@@ -464,9 +516,12 @@ Before merging a PR that adds or changes a file under
       drop-prepared-in: V<n>` immediately above the statement, naming a release that is
       strictly before this one and that really did remove the last reader — one marker
       per `DROP`, not one for the file.
-- [ ] Any lock-taking DDL has a `SET lock_timeout` genuinely in effect at that point in the
-      file (see rule 7 for why — and note `0` does not count, and a `RESET` un-bounds
+- [ ] Any lock-taking DDL has a `SET LOCAL lock_timeout` genuinely in effect at that point in
+      the file (see rule 7 for why — and note `0` does not count, and a `RESET` un-bounds
       everything after it), or carries `-- migration-lint: allow-unbounded-lock-wait <reason>`.
+- [ ] **`LOCAL`, not a plain `SET`** (see rule 7) — unless this migration carries the
+      `executeInTransaction=false` sidecar, or the statement carries
+      `-- migration-lint: allow-session-lock-timeout <reason>`.
 - [ ] Any `UPDATE` / `DELETE` / `TRUNCATE` bounds its row count, or carries
       `-- migration-lint: allow-full-table-dml <reason>`.
 - [ ] Any `INSERT INTO main.platform_config` **omits `id`** — the column has an identity as of

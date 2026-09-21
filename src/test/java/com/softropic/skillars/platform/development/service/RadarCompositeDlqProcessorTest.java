@@ -7,6 +7,7 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -20,6 +21,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -237,6 +239,45 @@ class RadarCompositeDlqProcessorTest {
             .isEqualTo(1);
     }
 
+    /**
+     * skillars-deferred-125 AC1 Task 4. Mirrors
+     * {@code VideoDeletionOutboxProcessorIT.process_findClaimedBatchThrows_releasesTheStrandedClaim} —
+     * proves the new claim-phase try/catch releases a stranded claim on an exception from
+     * {@code findClaimedBatch} (after {@code claimPendingBatch} already committed it) and rethrows
+     * rather than swallowing it. {@code runId} is generated inside {@code process()}, so it is
+     * captured off {@code claimPendingBatch}'s own second argument rather than asserted with a bare
+     * {@code any()} matcher.
+     */
+    @Test
+    void process_findClaimedBatchThrows_releasesTheStrandedClaim() {
+        when(dlqRepository.findClaimedBatch(any(), anyInt()))
+            .thenThrow(new RuntimeException("row-mapping failure"));
+
+        assertThatThrownBy(() -> processor.process())
+            .as("a claim-phase failure must propagate — this phase has no log-and-return convention")
+            .isInstanceOf(RuntimeException.class)
+            .hasMessageContaining("row-mapping failure");
+
+        ArgumentCaptor<UUID> runIdCaptor = ArgumentCaptor.forClass(UUID.class);
+        verify(dlqRepository).claimPendingBatch(any(), runIdCaptor.capture(), anyInt());
+        verify(dlqRepository).releaseClaimed(runIdCaptor.getValue());
+    }
+
+    /**
+     * skillars-deferred-125 AC1 Task 4. The happy-path counterpart — {@code releaseClaimed} must NOT
+     * be invoked when the claim/fetch phase succeeds.
+     */
+    @Test
+    void process_claimPhaseSucceeds_neverReleasesTheClaim() {
+        RadarCompositeDlqEntry row = entry();
+        when(dlqRepository.findClaimedBatch(any(), anyInt())).thenReturn(List.of(row));
+        when(dlqRepository.completeClaimed(eq(row.getId()), any())).thenReturn(1);
+
+        processor.process();
+
+        verify(dlqRepository, never()).releaseClaimed(any());
+    }
+
     @Test
     void process_carriesSchedulerLock() throws NoSuchMethodException {
         // skillars-deferred-118 AC3: findClaimedBatch() is not scoped to the calling invocation's
@@ -260,18 +301,22 @@ class RadarCompositeDlqProcessorTest {
 
     /**
      * skillars-deferred-123 code review 2026-09-18 (Decision 3). This class's stale-claim window and
-     * its {@code lockAtMostFor} are both 10 minutes — exactly equal, where its structural twin
+     * its {@code lockAtMostFor} used to both be 10 minutes — exactly equal, where its structural twin
      * {@code VideoDeletionOutboxProcessor} documents strict inequality as mandatory
      * (skillars-deferred-120 Decision 1). That equality only became dangerous when AC3 re-keyed
      * {@code resetStaleClaimed} from {@code next_retry_at} (eligibility time) to {@code claimed_at}
      * (actual claim time): at lock expiry the next instance's deadline is already past this run's
      * claim stamp, so it resets and re-claims rows this instance is still processing.
      *
-     * <p>Rather than widen the window, {@code process()} now self-terminates at
-     * {@code MAX_RUN_DURATION}, so the run cannot still be in flight when the lock expires. That makes
-     * {@code MAX_RUN_DURATION < lockAtMostFor} the load-bearing inequality here, and this test is what
-     * stops a future edit from raising the budget to or past the lock and silently restoring the
-     * duplicate-processing path.
+     * <p>{@code process()} self-terminates at {@code MAX_RUN_DURATION}, so the run cannot still be in
+     * flight when the lock expires under normal operation — {@code MAX_RUN_DURATION < lockAtMostFor}
+     * stops a future edit from raising the budget to or past the lock. <strong>skillars-deferred-125
+     * AC2 (2026-09-21):</strong> that bound alone is not airtight — it is sampled only between loop
+     * iterations, so a single slow row can still overrun the lock — so {@code lockAtMostFor <
+     * staleWindow} is now also asserted below, restoring the real buffer this class's own zero-margin
+     * equality previously lacked and its structural twin's equivalent test coverage
+     * ({@code VideoDeletionOutboxProcessorSchedulerLockTest.runtimeBudget_staysStrictlyInsideLockAndStaleWindow})
+     * already treats as load-bearing.
      */
     @Test
     void runtimeBudget_staysStrictlyInsideLock() throws Exception {
@@ -286,6 +331,14 @@ class RadarCompositeDlqProcessorTest {
             .isLessThan(lockAtMostFor);
         assertThat(maxRun)
             .as("a run must also not outlast the stale-claim window, or it could have its own rows reclaimed")
+            .isLessThan(staleWindow);
+        // skillars-deferred-125 AC2: the inequality this class previously violated (zero margin
+        // between lockAtMostFor and staleWindow) — VideoDeletionOutboxProcessor's equivalent test
+        // already treats this as load-bearing; this class's coverage previously did not.
+        assertThat(lockAtMostFor)
+            .as("lockAtMostFor must stay strictly below staleWindow — a single row that overruns "
+                + "MAX_RUN_DURATION's between-iteration sampling must not have its still-processing "
+                + "claim reclaimed the instant the lock itself expires")
             .isLessThan(staleWindow);
     }
 

@@ -13,6 +13,7 @@ import { startSessionMonitoring, stopSessionMonitoring, cleanup } from 'src/plug
 import { useAuthStore } from 'src/stores/auth.store'
 import { usePlayerStore } from 'src/stores/playerStore'
 import { hasUserSession } from 'src/utils/sessionCookies'
+import { pushLoginOrHardNavigate } from 'src/utils/sessionRedirect'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -32,11 +33,12 @@ function handleSessionExpired() {
   authStore.logout() // best-effort backend call fires in background; cookie/state already cleared
   playerStore.resetSelfPlayerId()
   cleanup()
-  const currentPath = window.location.pathname + window.location.search
-  router.push({
-    path: '/login',
-    query: { redirect: currentPath, expired: 'true' },
-  })
+  // skillars-deferred-125 AC3: router.push does not reject for the failure modes this teardown can
+  // actually hit (see sessionRedirect.js's own comment) — it falls back to a hard navigation instead
+  // of leaving every piece of state above torn down with the user stranded on the current route.
+  // expired: true — this IS a genuine session expiry, unlike the two deliberate-logout call sites
+  // (useSession.js, MainLayout.vue), which must not show the "Your session has expired" banner.
+  pushLoginOrHardNavigate(router, { expired: true })
 }
 
 onMounted(() => {

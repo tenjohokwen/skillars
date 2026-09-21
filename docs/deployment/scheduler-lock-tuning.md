@@ -74,7 +74,7 @@ stay under:
 | `OutboxService.sweep` | `PT10M` | no — code literal |
 | `QuotaReservationTimeoutService.expireStaleReservations` | `PT10M` | no — code literal |
 | `VideoDeletionOutboxProcessor.process` | `PT15M` | no — code literal, and load-bearing (must stay strictly under `STALE_CLAIM_WINDOW`) |
-| `RadarCompositeDlqProcessor.process` | `PT10M` | no — code literal, and load-bearing (see that class's `MAX_RUN_DURATION`) |
+| `RadarCompositeDlqProcessor.process` | `PT10M` | no — code literal, and load-bearing (must stay strictly under `STALE_CLAIM_WINDOW`, restored to a real margin by `skillars-deferred-125` AC2 — `STALE_CLAIM_WINDOW` widened 10m → 15m, a 5-minute buffer over this 10-minute lock) |
 | `EmailRetryScheduler.retryFailedEmails` | `PT10M` | no — code literal |
 | `OutboxPollerScheduler.pollAndProcess` | `PT10M` | no — code literal |
 | `DeletionSchedulerService.processDeletions` | `PT5M` | no — code literal |

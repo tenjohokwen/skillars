@@ -15,6 +15,7 @@ import com.softropic.skillars.platform.video.repo.VideoDeletionOutboxRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -26,11 +27,13 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
@@ -409,6 +412,68 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         List<VideoDeletionOutbox> runBBatch = outboxRepository.findClaimedBatch(runBId, 50);
 
         assertThat(runBBatch).extracting(VideoDeletionOutbox::getId).containsExactly(rowB.getId());
+    }
+
+    /**
+     * skillars-deferred-125 AC1 Task 4. Forces {@code findClaimedBatch} to throw AFTER
+     * {@code claimPendingBatch} has already committed the claim — proves the new claim-phase
+     * try/catch releases the stranded claim rather than leaving it {@code CLAIMED} until the next
+     * stale-claim sweep, and that the original exception still propagates out of {@code process()}
+     * (this phase has no "log and return" convention — see AC1's own text). {@code runId} is
+     * generated inside {@code process()} ({@code UUID.randomUUID()}), so this test has no a-priori
+     * handle on it — captured via {@code ArgumentCaptor} on {@code claimPendingBatch}'s own second
+     * argument, then asserted as the same value passed to {@code releaseClaimed}. A bare
+     * {@code verify(outboxRepository).releaseClaimed(any())} would pass without proving the released
+     * run is actually this run's own.
+     *
+     * <p>/bmad-code-review fix (2026-09-21): the {@code verify(...)} calls above only prove
+     * {@code releaseClaimed} was INVOKED on the spy — every other test in this class asserts real DB
+     * state via {@code outboxRepository.findById(...)}. {@code outboxRepository} is a
+     * {@code @MockitoSpyBean} wrapping the real bean (only {@code findClaimedBatch} is stubbed), so
+     * {@code releaseClaimed}'s real UPDATE genuinely runs — asserted directly below rather than only
+     * inferred from the mock having been called.
+     */
+    @Test
+    void process_findClaimedBatchThrows_releasesTheStrandedClaim() {
+        Video video = seedPurgedVideo("asset-claim-throw");
+        VideoDeletionOutbox row = seedPendingOutboxRow(video.getId(), "asset-claim-throw");
+        doThrow(new RuntimeException("row-mapping failure"))
+            .when(outboxRepository).findClaimedBatch(any(), anyInt());
+
+        assertThatThrownBy(() -> processor.process())
+            .as("a claim-phase failure must propagate — this phase has no log-and-return convention")
+            .isInstanceOf(RuntimeException.class)
+            .hasMessageContaining("row-mapping failure");
+
+        ArgumentCaptor<UUID> runIdCaptor = ArgumentCaptor.forClass(UUID.class);
+        verify(outboxRepository).claimPendingBatch(any(), runIdCaptor.capture(), anyInt());
+        verify(outboxRepository).releaseClaimed(runIdCaptor.getValue());
+
+        VideoDeletionOutbox released = outboxRepository.findById(row.getId()).orElseThrow();
+        assertThat(released.getStatus())
+            .as("the row must genuinely be back in PENDING in the database, not merely have had "
+                + "releaseClaimed invoked on the mock")
+            .isEqualTo("PENDING");
+        assertThat(released.getClaimedBy())
+            .as("claimed_by must be cleared alongside the status, so a future claimPendingBatch does "
+                + "not skip this row as already claimed")
+            .isNull();
+    }
+
+    /**
+     * skillars-deferred-125 AC1 Task 4. The happy-path counterpart to the test above — proves
+     * {@code releaseClaimed} is NOT invoked when the claim/fetch phase succeeds, so the new
+     * try/catch cannot regress the normal path into undoing a successful claim.
+     */
+    @Test
+    void process_claimPhaseSucceeds_neverReleasesTheClaim() {
+        Video video = seedPurgedVideo("asset-claim-happy");
+        seedPendingOutboxRow(video.getId(), "asset-claim-happy");
+        doNothing().when(videoProviderAdapter).deleteAsset(eq("asset-claim-happy"));
+
+        processor.process();
+
+        verify(outboxRepository, never()).releaseClaimed(any());
     }
 
     private Video seedPurgedVideo(String providerAssetId) {
