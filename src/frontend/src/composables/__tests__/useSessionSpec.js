@@ -26,6 +26,7 @@ vi.mock('src/plugins/sessionManager', { spy: true })
 
 import * as sm from 'src/plugins/sessionManager'
 import { useSession } from 'src/composables/useSession'
+import { __resetSessionRedirectGuardForTests } from 'src/utils/sessionRedirect'
 
 const STUB = { template: '<div />' }
 
@@ -33,7 +34,7 @@ function clearRint() {
   document.cookie = 'rint=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
 }
 
-function mountUseSession() {
+function mountUseSession(beforeEachGuard) {
   const pinia = createTestingPinia({ createSpy: vi.fn })
   const router = createRouter({
     history: createMemoryHistory(),
@@ -42,6 +43,9 @@ function mountUseSession() {
       { path: '/login', component: STUB },
     ],
   })
+  if (beforeEachGuard) {
+    router.beforeEach(beforeEachGuard)
+  }
   router.push('/')
 
   const Host = defineComponent({
@@ -59,6 +63,7 @@ describe('useSession — handleLogout (deferred-108 AC6)', () => {
     vi.useFakeTimers()
     vi.clearAllMocks()
     clearRint()
+    window.history.pushState({}, '', '/')
   })
 
   afterEach(() => {
@@ -66,6 +71,7 @@ describe('useSession — handleLogout (deferred-108 AC6)', () => {
     // Not vi.restoreAllMocks(): it unwraps the { spy: true } sessionManager module spies for
     // subsequent tests. Fresh Pinia + fresh router per test keeps the per-test spies isolated.
     clearRint()
+    __resetSessionRedirectGuardForTests()
   })
 
   it('happy path: stopSessionMonitoring → authStore.logout → resetSelfPlayerId → cleanup → router.push(/login)', async () => {
@@ -82,7 +88,18 @@ describe('useSession — handleLogout (deferred-108 AC6)', () => {
     expect(authStore.logout).toHaveBeenCalledTimes(1)
     expect(playerStore.resetSelfPlayerId).toHaveBeenCalledTimes(1)
     expect(sm.cleanup).toHaveBeenCalled()
-    expect(pushSpy).toHaveBeenCalledWith('/login')
+    // skillars-deferred-125 AC3: handleLogout's final push now goes through the shared
+    // pushLoginOrHardNavigate helper, which pushes an object (path + redirect query) rather than the
+    // bare '/login' string this call site used before. /bmad-code-review fix (2026-09-21): a
+    // DELIBERATE logout must not carry expired:'true' (that banner is for App.vue's genuine
+    // session-expiry teardown only) — handleLogout calls pushLoginOrHardNavigate with no options, so
+    // the query must NOT contain 'expired' at all.
+    expect(pushSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/login',
+        query: { redirect: '/' },
+      }),
+    )
 
     const order = (spy) => spy.mock.invocationCallOrder[0]
     expect(order(sm.stopSessionMonitoring)).toBeLessThan(order(authStore.logout))
@@ -118,6 +135,34 @@ describe('useSession — handleLogout (deferred-108 AC6)', () => {
     await done
 
     expect(sm.cleanup).toHaveBeenCalled()
-    expect(pushSpy).toHaveBeenCalledWith('/login')
+    // skillars-deferred-125 AC3: handleLogout's final push now goes through the shared
+    // pushLoginOrHardNavigate helper, which pushes an object (path + redirect query) rather than the
+    // bare '/login' string this call site used before. /bmad-code-review fix (2026-09-21): a
+    // DELIBERATE logout must not carry expired:'true' (that banner is for App.vue's genuine
+    // session-expiry teardown only) — handleLogout calls pushLoginOrHardNavigate with no options, so
+    // the query must NOT contain 'expired' at all.
+    expect(pushSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/login',
+        query: { redirect: '/' },
+      }),
+    )
+  })
+
+  // /bmad-code-review fix (2026-09-21): AC3 task 4 called for "one integration-style case per call
+  // site" proving the fallback actually fires from THIS call site's own teardown — the assertion
+  // above only proved the push's shape, never that a failed push falls back. sessionRedirectSpec.js
+  // covers the mechanism in isolation; this proves useSession.js's own call site is wired to it.
+  it('router.push does not land (guard aborts) — falls back to a hard navigation', async () => {
+    const { wrapper } = mountUseSession((to) => {
+      if (to.path === '/login') {
+        return false
+      }
+    })
+
+    await wrapper.vm.handleLogout()
+
+    expect(window.location.pathname).toBe('/login')
+    expect(window.location.search).not.toContain('expired')
   })
 })

@@ -10,7 +10,12 @@
 --
 -- skillars-deferred-92 code review: repeatables are now ALSO linted by MISSING_LOCK_TIMEOUT, since
 -- a rebuilt index is exactly as much a lock-taking-DDL hazard here as in a versioned migration.
-SET lock_timeout = '5s';
+--
+-- /bmad-code-review fix (2026-09-21, skillars-deferred-125 AC4): repeatables are now ALSO linted by
+-- SESSION_SCOPED_LOCK_TIMEOUT (a plain SET here would be exactly as much a cross-migration leak
+-- hazard as in a versioned migration) — SET LOCAL still satisfies MISSING_LOCK_TIMEOUT's regex, which
+-- accepts either spelling, and is the preferred form going forward regardless.
+SET LOCAL lock_timeout = '5s';
 
 -- migration-lint: allow-unconditional-drop the index is recreated immediately below; a guarded drop
 -- would leave a stale definition if the index expression changed.

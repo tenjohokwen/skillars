@@ -15,6 +15,7 @@ import {
 } from 'src/plugins/sessionManager'
 import { useAuthStore } from 'src/stores/auth.store'
 import { usePlayerStore } from 'src/stores/playerStore'
+import { pushLoginOrHardNavigate } from 'src/utils/sessionRedirect'
 
 /**
  * Composable for session management.
@@ -107,7 +108,10 @@ export function useSession() {
     playerStore.resetSelfPlayerId()
     cleanup()
 
-    router.push('/login')
+    // skillars-deferred-125 AC3: shared helper falls back to a hard navigation if router.push does
+    // not land — see sessionRedirect.js's own comment for why router.push cannot be trusted to
+    // reject/resolve the way this call site used to assume.
+    await pushLoginOrHardNavigate(router)
   }
 
   /**

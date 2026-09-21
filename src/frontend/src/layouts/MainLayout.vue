@@ -272,6 +272,7 @@ import { toggleTheme as bootToggleTheme, isDarkMode } from 'src/boot/theme'
 import ParentChildSwitcher from 'src/components/ParentChildSwitcher.vue'
 import { useAuthStore } from 'src/stores/auth.store'
 import { usePlayerStore } from 'src/stores/playerStore'
+import { pushLoginOrHardNavigate } from 'src/utils/sessionRedirect'
 
 const router = useRouter()
 const { t, locale } = useI18n()
@@ -351,7 +352,7 @@ async function handleLogout() {
   // two logout sequences stop diverging on what matters for sibling-tab teardown — a BOUNDED wait
   // on the backend call, and BOTH 'rint' clears (pre- and post-race). Deliberately NOT unified:
   // useSession stops monitoring first; MainLayout keeps its
-  // logout → resetSelfPlayerId → destroySession → deleteUserCookie → router.push('/login') order
+  // logout → resetSelfPlayerId → destroySession → deleteUserCookie → pushLoginOrHardNavigate order
   // (destroySession() below owns the monitoring teardown here).
   //
   // Pre-race clear: sibling tabs enter computeTimeUntilExpiry's fast-teardown branch immediately
@@ -371,7 +372,10 @@ async function handleLogout() {
   playerStore.resetSelfPlayerId()
   destroySession()
   deleteUserCookie()
-  router.push('/login')
+  // skillars-deferred-125 AC3: shared helper falls back to a hard navigation if router.push does
+  // not land — see sessionRedirect.js's own comment for why router.push cannot be trusted to
+  // reject/resolve the way this call site used to assume.
+  await pushLoginOrHardNavigate(router)
 }
 
 function toggleLeftDrawer() {

@@ -45,6 +45,10 @@ public class VideoDeletionOutboxProcessor {
      * own 10-minute window and its {@code PT10M} lock as "an accepted, unfixed weakness recorded in
      * {@code deferred-work.md}". It was not recorded anywhere — the whole ledger was checked. It is now
      * fixed rather than accepted: that class bounds its loop the same way this one does (below).
+     * (skillars-deferred-125 AC2, 2026-09-21: that equality no longer exists at all — its
+     * {@code STALE_CLAIM_WINDOW} was widened to 15 minutes, restoring a real 5-minute buffer above its
+     * {@code PT10M} lock, since the loop bound alone turned out not to be airtight against a single
+     * slow row; see that class's own Javadoc.)
      *
      * <p>Second, and more importantly, the buffer above was never the real guarantee. The margin was
      * derived from a self-described optimistic "~10s/item realistic worst case, not the full
@@ -154,9 +158,35 @@ public class VideoDeletionOutboxProcessor {
         // Reset any rows stuck in CLAIMED state for longer than STALE_CLAIM_WINDOW (crashed run
         // recovery) — see STALE_CLAIM_WINDOW's own Javadoc for the invariant this must respect.
         outboxRepository.resetStaleClaimed(runClaimedAt.minus(STALE_CLAIM_WINDOW));
-        // Atomically claim a batch of PENDING rows; row locks released after the UPDATE commits
-        outboxRepository.claimPendingBatch(runClaimedAt, runId, BATCH_SIZE);
-        List<VideoDeletionOutbox> rows = outboxRepository.findClaimedBatch(runId, BATCH_SIZE);
+        // Atomically claim a batch of PENDING rows; row locks released after the UPDATE commits.
+        // skillars-deferred-125 AC1: claimPendingBatch's UPDATE is its own auto-committing statement —
+        // by the time it returns, up to BATCH_SIZE rows are durably CLAIMED under runId, independent of
+        // anything that happens next in this method. If findClaimedBatch throws for a reason that
+        // leaves the connection usable (a statement timeout, a row-mapping failure), those rows would
+        // otherwise be stranded CLAIMED until the next resetStaleClaimed tick (up to STALE_CLAIM_WINDOW
+        // later) even though this run's own runId is about to go out of scope and could never itself
+        // recover them. The catch here releases the claim on any exception from this phase and
+        // rethrows — never a bare try/finally, which would also fire on the successful path and race a
+        // concurrent invocation into re-claiming rows before a single one has been processed.
+        List<VideoDeletionOutbox> rows;
+        try {
+            outboxRepository.claimPendingBatch(runClaimedAt, runId, BATCH_SIZE);
+            rows = outboxRepository.findClaimedBatch(runId, BATCH_SIZE);
+        } catch (Exception e) {
+            try {
+                outboxRepository.releaseClaimed(runId);
+            } catch (Exception inner) {
+                // /bmad-code-review fix (2026-09-21): addSuppressed alongside the ERROR log — logging
+                // alone means the two failures are only correlated via runId across separate log
+                // lines; attaching inner to e means any exception-tracking tool that captures e
+                // directly (this method still rethrows it) sees both in one stack trace.
+                e.addSuppressed(inner);
+                log.error("[RELEASE_CLAIMED_ITSELF_THREW runId={}] releaseClaimed threw while recovering "
+                    + "from a claim-phase failure below — any rows this run claimed are left CLAIMED, "
+                    + "recovered by the next stale-claim sweep", runId, inner);
+            }
+            throw e;
+        }
 
         // skillars-deferred-123 code review 2026-09-18 (Decision 3): self-terminate before this run
         // could outlive its own lock. See MAX_RUN_DURATION's Javadoc for why the previous
@@ -170,7 +200,22 @@ public class VideoDeletionOutboxProcessor {
         int attempted = 0;
         for (VideoDeletionOutbox row : rows) {
             if (Instant.now().isAfter(deadline)) {
-                int released = outboxRepository.releaseClaimed(runId);
+                // /bmad-code-review fix (2026-09-21): this releaseClaimed call was unguarded — the
+                // same stranded-claim class AC1 hardened the claim phase against, on the path most
+                // likely to fail (a run that has already been executing long enough to hit its own
+                // time budget). A throw here used to propagate out of process() uninformatively;
+                // logged and swallowed instead, mirroring AC1's own claim-phase guard shape — the
+                // rows are left CLAIMED either way, recovered by the next stale-claim sweep.
+                int released;
+                try {
+                    released = outboxRepository.releaseClaimed(runId);
+                } catch (Exception e) {
+                    log.error("[RELEASE_CLAIMED_ITSELF_THREW runId={}] releaseClaimed threw while "
+                        + "releasing rows after hitting the {} safety budget — any rows this run "
+                        + "claimed are left CLAIMED, recovered by the next stale-claim sweep", runId,
+                        MAX_RUN_DURATION, e);
+                    released = 0;
+                }
                 log.warn("Stopped video deletion outbox processing after {}/{} rows attempted — hit the "
                     + "{} safety budget under lockAtMostFor={}; released {} unprocessed row(s) back to "
                     + "PENDING for the next scheduled run", attempted, rows.size(), MAX_RUN_DURATION,

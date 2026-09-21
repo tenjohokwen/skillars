@@ -36,11 +36,12 @@ vi.mock('src/composables/useSession', async (importOriginal) => {
 })
 
 import MainLayout from 'src/layouts/MainLayout.vue'
+import { __resetSessionRedirectGuardForTests } from 'src/utils/sessionRedirect'
 
 const STUB = { template: '<div />' }
 let wrapper
 
-async function mountLayout(authState = { role: 'PARENT' }, preMount) {
+async function mountLayout(authState = { role: 'PARENT' }, preMount, beforeEachGuard) {
   const pinia = createTestingPinia({ createSpy: vi.fn, initialState: { auth: authState } })
   const router = createRouter({
     history: createMemoryHistory(),
@@ -49,6 +50,9 @@ async function mountLayout(authState = { role: 'PARENT' }, preMount) {
       { path: '/login', component: STUB },
     ],
   })
+  if (beforeEachGuard) {
+    router.beforeEach(beforeEachGuard)
+  }
   router.push('/')
   await router.isReady()
 
@@ -73,6 +77,7 @@ afterEach(() => {
   for (const name of ['rint', 'lang', 'user']) {
     document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`
   }
+  __resetSessionRedirectGuardForTests()
   if (wrapper) {
     // Restore the shared vue-i18n global locale the AC6 tests mutate.
     try {
@@ -102,7 +107,17 @@ describe('MainLayout.vue — handleLogout order (deferred-108 AC4)', () => {
     expect(authStore.logout).toHaveBeenCalledTimes(1)
     expect(playerStore.resetSelfPlayerId).toHaveBeenCalledTimes(1)
     expect(destroySessionSpy).toHaveBeenCalledTimes(1)
-    expect(pushSpy).toHaveBeenCalledWith('/login')
+    // skillars-deferred-125 AC3: handleLogout's final push now goes through the shared
+    // pushLoginOrHardNavigate helper, which pushes an object (path + redirect query) rather than the
+    // bare '/login' string this call site used before. /bmad-code-review fix (2026-09-21): a
+    // DELIBERATE logout must not carry expired:'true' — handleLogout calls pushLoginOrHardNavigate
+    // with no options, so the query must NOT contain 'expired' at all.
+    expect(pushSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/login',
+        query: { redirect: '/' },
+      }),
+    )
 
     const logoutOrder = authStore.logout.mock.invocationCallOrder[0]
     const resetOrder = playerStore.resetSelfPlayerId.mock.invocationCallOrder[0]
@@ -112,6 +127,24 @@ describe('MainLayout.vue — handleLogout order (deferred-108 AC4)', () => {
     expect(logoutOrder).toBeLessThan(resetOrder)
     expect(resetOrder).toBeLessThan(teardownOrder)
     expect(teardownOrder).toBeLessThan(pushOrder)
+  })
+
+  // /bmad-code-review fix (2026-09-21): AC3 task 4 called for "one integration-style case per call
+  // site" proving the fallback actually fires from THIS call site's own teardown — the assertion
+  // above only proved the push's shape, never that a failed push falls back. sessionRedirectSpec.js
+  // covers the mechanism in isolation; this proves MainLayout.vue's own call site is wired to it.
+  it('router.push does not land (guard aborts) — falls back to a hard navigation', async () => {
+    window.history.pushState({}, '', '/')
+    const { wrapper } = await mountLayout({ role: 'PARENT' }, undefined, (to) => {
+      if (to.path === '/login') {
+        return false
+      }
+    })
+
+    await wrapper.vm.handleLogout()
+
+    expect(window.location.pathname).toBe('/login')
+    expect(window.location.search).not.toContain('expired')
   })
 })
 
@@ -168,7 +201,17 @@ describe('MainLayout.vue — handleLogout parity (deferred-109 AC3.1)', () => {
     } finally {
       vi.useRealTimers()
     }
-    expect(pushSpy).toHaveBeenCalledWith('/login')
+    // skillars-deferred-125 AC3: handleLogout's final push now goes through the shared
+    // pushLoginOrHardNavigate helper, which pushes an object (path + redirect query) rather than the
+    // bare '/login' string this call site used before. /bmad-code-review fix (2026-09-21): a
+    // DELIBERATE logout must not carry expired:'true' — handleLogout calls pushLoginOrHardNavigate
+    // with no options, so the query must NOT contain 'expired' at all.
+    expect(pushSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/login',
+        query: { redirect: '/' },
+      }),
+    )
     // Mutation: revert the Promise.race bound to a bare `await authStore.logout()` → handleLogout
     // never resolves and this test times out → RED.
   })

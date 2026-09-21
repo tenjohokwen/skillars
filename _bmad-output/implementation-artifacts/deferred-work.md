@@ -1404,7 +1404,7 @@ Four pre-existing issues identified during code review:
 
 ## Deferred from: code review (round 2) of 1-7b-session-refresh-rint-contract-fix (2026-09-02)
 
-- **`startSessionMonitoring()`'s early return leaves no timer armed if the expiry navigation is swallowed.** When the first `tick()` reports an expired session, monitoring returns without arming the 30 s interval and relies entirely on `App.vue`'s `handleSessionExpired` → `router.push()`. That push is not awaited or `.catch()`ed, and Vue Router 4 rejects on an aborted/redirected navigation. If it is aborted, `cleanup()` has already reset the state to look healthy (`showWarning = false`, `timeUntilExpiry = LEGACY_SESSION_TTL`, `checkIntervalId = null`) and nothing re-arms monitoring — `startSessionMonitoring()` is only called from `App.vue` mount and `initSession()`. Deliberately left as-is rather than patched: the alternative (arm the interval anyway) makes the failure noisy instead of silent but re-dispatches `session:expired` — and therefore a backend logout call — every 30 s until navigation completes. Both options have real costs and the abort path is unverified. [`src/frontend/src/plugins/sessionManager.js:startSessionMonitoring`] `[behaviour pinned by skillars-deferred-108 AC5's characterization spec (2026-09-10); the App.vue router-abort / no-re-arm concern is unchanged and this item stays open]`
+- **`startSessionMonitoring()`'s early return leaves no timer armed if the expiry navigation is swallowed.** When the first `tick()` reports an expired session, monitoring returns without arming the 30 s interval and relies entirely on `App.vue`'s `handleSessionExpired` → `router.push()`. `cleanup()` has already reset the state to look healthy (`showWarning = false`, `timeUntilExpiry = LEGACY_SESSION_TTL`, `checkIntervalId = null`) by the time that push settles, and nothing re-arms monitoring — `startSessionMonitoring()` is only called from `App.vue` mount and `initSession()`. Deliberately left as-is rather than patched: the alternative (arm the interval anyway) makes the failure noisy instead of silent but re-dispatches `session:expired` — and therefore a backend logout call — every 30 s until navigation completes. Both options have real costs. `[behaviour pinned by skillars-deferred-108 AC5's characterization spec (2026-09-10); the `startSessionMonitoring` early-return/no-re-arm DECISION is unchanged and stays deliberate]` `[CORRECTED and CLOSED at the router layer by skillars-deferred-125 AC3, 2026-09-21: this bullet's own "the abort path is unverified" flag and its "Vue Router 4 rejects on an aborted/redirected navigation" claim were both carried forward as fact by that story's original draft and found FALSE by its story-review.md audit — verified directly against the installed vue-router package (4.6.4): a guard-aborted, duplicate, or superseded navigation all RESOLVE router.push()'s promise with a NavigationFailure object; only a guard that itself throws rejects. AC3 closed the actual silent-stall gap this describes — `App.vue`'s `handleSessionExpired`, and the two structurally identical `handleLogout` call sites in `useSession.js`/`MainLayout.vue`, now inspect the settled push for both outcomes via a shared `sessionRedirect.js` helper and fall back to a hard `window.location` navigation when it does not land, rather than leaving the already-torn-down session stranded. The `startSessionMonitoring` early-return decision documented above is untouched and remains deliberate — AC3 is a root-cause fix at the router layer, not a reason to revisit that decision.]`
 ## Deferred from: skillars-deferred-90 story creation and implementation (2026-09-02)
 
 - **`sessionManager.js` `startSessionMonitoring()`'s early-return-with-no-timer path** — left as documented (project-owner decision). See the round-2 1-7b bullet above; not re-fixed here. `[behaviour pinned by skillars-deferred-108 AC5's characterization spec (2026-09-10); decision unchanged, item stays open]`
@@ -2445,8 +2445,8 @@ about.)
 Confirmed still correctly out of scope for this story, left untouched — recorded explicitly per this
 story's own disposition table so neither item is mistaken for silently dropped:
 
-- **`main."user"` has no index supporting the cleanup sweep predicate.** `V138__baseline_schema.sql` defines no index on `(activated, created_date)`, so `UserRepository.findByActivatedFalseAndCreatedDateBeforeAndCleanupFailedAtIsNullOrderByIdAsc` resolves as a PK-index walk with a filter. AC6's paging change did not introduce the gap, but it changes the access pattern from one unpaged query per batch to a `LIMIT`-ed ordered query per batch iteration (up to `maxBatches + 1` per run), so a large backlog night holds the `PT1H` ShedLock longer than necessary. A partial index (`CREATE INDEX CONCURRENTLY ... ON main."user" (id) WHERE activated = false AND cleanup_failed_at IS NULL`) would suit the query shape. Deferred: needs production row-count and `EXPLAIN` evidence before choosing an index shape, and per `docs/deployment/migration-conventions.md` an index on a hot table must go in as `CREATE INDEX CONCURRENTLY` in its own migration. This story's scope was strike-timing/scheduler-lock/Envers-audit findings, not this one.
-- **`ModerationSlaMonitorService.detectSlaViolations`'s no-`@SchedulerLock` `[DECIDED]` note** (see the restored bullet under "code review of skillars-deferred-120" above) — confirmed still correctly out of scope, untouched by this story.
+- **`main."user"` has no index supporting the cleanup sweep predicate.** `V138__baseline_schema.sql` defines no index on `(activated, created_date)`, so `UserRepository.findByActivatedFalseAndCreatedDateBeforeAndCleanupFailedAtIsNullOrderByIdAsc` resolves as a PK-index walk with a filter. AC6's paging change did not introduce the gap, but it changes the access pattern from one unpaged query per batch to a `LIMIT`-ed ordered query per batch iteration (up to `maxBatches + 1` per run), so a large backlog night holds the `PT1H` ShedLock longer than necessary. A partial index (`CREATE INDEX CONCURRENTLY ... ON main."user" (id) WHERE activated = false AND cleanup_failed_at IS NULL`) would suit the query shape. Deferred: needs production row-count and `EXPLAIN` evidence before choosing an index shape, and per `docs/deployment/migration-conventions.md` an index on a hot table must go in as `CREATE INDEX CONCURRENTLY` in its own migration. This story's scope was strike-timing/scheduler-lock/Envers-audit findings, not this one. `[re-confirmed by skillars-deferred-125, 2026-09-19: still no production deploy to generate the row-count/EXPLAIN evidence this bullet's own blocker requires; owner decision (AskUserQuestion) was to keep deferring rather than guess an index shape — still correctly out of scope]`
+- **`ModerationSlaMonitorService.detectSlaViolations`'s no-`@SchedulerLock` `[DECIDED]` note** (see the restored bullet under "code review of skillars-deferred-120" above) — confirmed still correctly out of scope, untouched by this story. `[re-confirmed by skillars-deferred-125, 2026-09-19: already-decided elsewhere in this ledger, still correctly out of scope, untouched]`
 
 ## Deferred from: code review of skillars-deferred-123-strike-timing-scheduler-lock-config-and-envers-audit-gap-fixes (2026-09-18)
 
@@ -2483,14 +2483,14 @@ _Four-layer review (Blind Hunter, Edge Case Hunter, Acceptance Auditor, `txn-and
 
 ## Deferred from: code review of skillars-deferred-124-strike-lock-contention-outbox-resilience-and-schema-fixes (2026-09-19)
 
-_All four items below are pre-existing behaviour that skillars-deferred-124 neither introduced nor was
-scoped to address. Surfaced by that story's own `/bmad-code-review` (Edge Case Hunter + Blind Hunter
-layers)._
+_Originally four items, pre-existing behaviour that skillars-deferred-124 neither introduced nor was
+scoped to address, surfaced by that story's own `/bmad-code-review` (Edge Case Hunter + Blind Hunter
+layers). Three of the four were closed by skillars-deferred-125 (AC1: the claim/fetch-phase guard;
+AC2: the `STALE_CLAIM_WINDOW`/`lockAtMostFor` zero margin; AC4: the `SET`-vs-`SET LOCAL` convention) —
+see `## Last audit: 2026-09-19 (skillars-deferred-125 dev-story completion)` below. The remaining item
+is accepted risk, not fixed._
 
-- **Neither outbox/DLQ processor guards the claim/fetch phase, so a throw there strands the whole batch for a full stale window.** `VideoDeletionOutboxProcessor.process` (`:147-150`) and `RadarCompositeDlqProcessor.process` (`:121-123`) run `resetStaleClaimed` -> `claimPendingBatch` -> `findClaimedBatch` with no `try`/`finally`. If `findClaimedBatch` throws after `claimPendingBatch` has committed (connection reset, statement timeout, pool exhaustion), up to 50 rows are left `CLAIMED` and the method-local `runId` is lost, so `releaseClaimed` can never target them again. They wait the full `STALE_CLAIM_WINDOW` — 20 minutes for video, 10 for radar — even though the next tick 60s later could have taken them. skillars-deferred-124 AC2's new guard deliberately covers only the loop body. A `try`/`finally` calling `releaseClaimed(runId)` on abnormal exit would close it.
-- **`MAX_RUN_DURATION` is sampled only between rows, so the lock/stale invariant is not actually enforced.** Both processors test the deadline at the top of each iteration and never inside `processRow`, and skillars-deferred-124 AC2 added a further `handleFailure` DB transaction after that check. One row that blocks longer than `lockAtMostFor - MAX_RUN_DURATION` overruns the lock. For `RadarCompositeDlqProcessor` that margin is only 2 minutes (`PT10M` lock - 8 min budget) and `recalculateComposite` goes through `PessimisticLockRetryer` across three repositories.
-- **`RadarCompositeDlqProcessor`'s `STALE_CLAIM_WINDOW` (10 min) exactly equals its `lockAtMostFor` (`PT10M`), violating the invariant `VideoDeletionOutboxProcessor` declares mandatory.** That class's own Javadoc (`:57`) states `MAX_RUN_DURATION (12m) < LOCK_AT_MOST_FOR (15m) < STALE_CLAIM_WINDOW (20m)`; radar has no margin between the middle and outer terms. Once a run overruns, instance B's `resetStaleClaimed` frees rows A is still processing and re-claims them — `recalculateComposite` runs twice. `claimed_by` correctly blocks A's *writes*, but cannot undo an external side effect that already ran. The guard test `RadarCompositeDlqProcessorTest.runtimeBudget_staysStrictlyInsideLock` (`:268-282`) asserts `maxRun < lockAtMostFor` and `maxRun < staleWindow` but never `lockAtMostFor < staleWindow` — the one inequality radar violates. Pre-existing from skillars-deferred-123 Decision 3.
-- **Migrations use session-scoped `SET lock_timeout` rather than transaction-scoped `SET LOCAL`.** Plain `SET` survives the migration's commit and Flyway reuses one JDBC connection across migrations, so subsequent migrations silently inherit a `lock_timeout` they never declared. Repo-wide convention (`V144`, `V145`, `V149`, `V150` all do this) and `MigrationLint.Rule.MISSING_LOCK_TIMEOUT` accepts it, so changing it is a convention decision, not a one-migration fix.
+- **`MAX_RUN_DURATION` is sampled only between rows, so the lock/stale invariant is not actually enforced.** Both processors test the deadline at the top of each iteration and never inside `processRow`, and skillars-deferred-124 AC2 added a further `handleFailure` DB transaction after that check. One row that blocks longer than `lockAtMostFor - MAX_RUN_DURATION` overruns the lock. For `RadarCompositeDlqProcessor` that margin is only 2 minutes (`PT10M` lock - 8 min budget) and `recalculateComposite` goes through `PessimisticLockRetryer` across three repositories. `[DECIDED: accepted risk — skillars-deferred-125]` skillars-deferred-125 AC2 restored a real 5-minute buffer between `RadarCompositeDlqProcessor`'s `lockAtMostFor` and `STALE_CLAIM_WINDOW` (10m→15m, matching `VideoDeletionOutboxProcessor`'s own buffer amount), which makes a single overrunning row materially less consequential — it no longer immediately triggers a duplicate reclaim on the very next tick — but does not eliminate the residual: a row that individually blocks longer than the lock/`MAX_RUN_DURATION` margin can still overrun the lock itself. Accepted as documented risk, not fixed (see `RadarCompositeDlqProcessor.MAX_RUN_DURATION`'s own Javadoc and `RadarCompositeDlqProcessorTest.runtimeBudget_staysStrictlyInsideLock`'s own comment for the mechanism).
 
 ## Last audit: 2026-09-19 (skillars-deferred-124 dev-story completion)
 
@@ -2520,3 +2520,133 @@ future audits of this file: a plausible-sounding lock-mode/line-number citation 
 running the scenario. The three remaining bullets from that section (migration-vs-poller race, Envers
 null reconstruction, `deleteStrike` precision comment) are `[DECIDED: accepted risk]`, not closed —
 documented, not fixed, each with its own stated revisit trigger.
+
+## Last audit: 2026-09-19 (skillars-deferred-125 dev-story completion)
+
+Of the 4 `code review of skillars-deferred-124…` bullets: 3 deleted (genuinely fixed), 1 annotated
+`[DECIDED: accepted risk — skillars-deferred-125]` (documented, not fixed, with its own revisit
+trigger — see that bullet's own text). Also corrected the round-2 1-7b router-abort bullet's own
+Vue Router premise and closed the gap it describes at the router layer. Full detail in
+`skillars-deferred-125-outbox-claim-isolation-radar-window-margin-and-session-redirect-fixes.md`'s
+own Change Log and Dev Agent Record; this story's own `story-review.md` (senior-dev pre-implementation
+audit, 25 findings, zero false positives after independent re-verification) is the reason several of
+the closures below differ from what this story's original creation draft would have claimed.
+
+- **Outbox/DLQ claim-phase isolation (AC1) — CLOSED.** Both `VideoDeletionOutboxProcessor.process()`
+  and `RadarCompositeDlqProcessor.process()` now wrap `claimPendingBatch` + `findClaimedBatch` in a
+  `try`/`catch` that releases the claim via `releaseClaimed(runId)` — itself guarded by a nested
+  `try`/`catch` mirroring each class's own `handleFailure`-itself-throws precedent, so a secondary
+  failure cannot mask the original exception — and rethrows. Deliberately not a `try`/`finally`,
+  which would also release a successfully-claimed batch before a single row is processed. New tests
+  in both `VideoDeletionOutboxProcessorIT` and `RadarCompositeDlqProcessorTest` capture the
+  process()-internal `runId` via `ArgumentCaptor` (it has no a-priori handle otherwise) and assert
+  the same value reaches `releaseClaimed`, plus a happy-path counterpart proving `releaseClaimed` is
+  never invoked when the claim phase succeeds. Mutation-checked by hand both ways.
+- **`RadarCompositeDlqProcessor`'s zero-margin `STALE_CLAIM_WINDOW`/`lockAtMostFor` equality (AC2) —
+  CLOSED.** `STALE_CLAIM_WINDOW` widened 10m→15m, restoring a real 5-minute buffer above the
+  `PT10M` lock — the same buffer *amount* (not just ratio) `VideoDeletionOutboxProcessor` keeps
+  between its own `LOCK_AT_MOST_FOR (15m)` and `STALE_CLAIM_WINDOW (20m)`. Both `MAX_RUN_DURATION`'s
+  and `STALE_CLAIM_WINDOW`'s own field Javadocs rewritten (the load-bearing "fixed at the source
+  rather than by widening the window" sentence actually lived in `MAX_RUN_DURATION`'s Javadoc, not
+  `STALE_CLAIM_WINDOW`'s alone — a citation `story-review.md` corrected). Three previously-missed
+  stale cross-references fixed too: `RadarCompositeDlqProcessorTest`'s own test-method Javadoc,
+  `VideoDeletionOutboxProcessor.java`'s sibling-class Javadoc, and
+  `docs/deployment/scheduler-lock-tuning.md`'s radar row. `RadarCompositeDlqProcessorTest.runtimeBudget_staysStrictlyInsideLock`
+  gained the previously-missing `lockAtMostFor < staleWindow` assertion, mutation-checked against the
+  unwidened value first. The narrower single-row-overrun residual `MAX_RUN_DURATION`'s own sampling
+  gap leaves is accepted, not eliminated — see the remaining bullet above, now annotated rather than
+  open.
+- **Migration convention: `SET LOCAL` required for new migrations (AC4) — CLOSED, with the ledger's
+  own migration count corrected.** This bullet's text previously read "Repo-wide convention (`V144`,
+  `V145`, `V149`, `V150` all do this)" — `story-review.md` found that wrong by a factor of 2.5: the
+  actual count, re-verified directly (`grep -rln "^SET lock_timeout" src/main/resources/db/migration/`),
+  is **ten** migrations, `V140`–`V150` excluding the marker-only `V141`. All ten are grandfathered
+  (not rewritten — non-production environments and CI have already run them, and churning ten files
+  for a pure convention change is not worth the coordination/review overhead) below a new
+  `MigrationLint.SESSION_SCOPED_LOCK_TIMEOUT_BASELINE` (`V150`, the tip at story-creation time — a
+  third boundary constant, distinct from `GRANDFATHER_BASELINE`/`DEFERRED_92_BASELINE`, per this
+  class's own documented "kept apart provisionally" framing rather than as if a third boundary were
+  its stated forward direction). A new `MigrationLint.Rule.SESSION_SCOPED_LOCK_TIMEOUT` fails the
+  build on a plain `SET lock_timeout` above that boundary, with two required corrections
+  `story-review.md` found the original design missing: (1) an exemption for the
+  `executeInTransaction=false` sidecar pattern (a non-transactional migration has no enclosing
+  transaction for `SET LOCAL` to bind to, so a plain `SET` is the only legal form there — the rule
+  detects the sidecar `.conf` file and exempts the whole migration, with a
+  `-- migration-lint: allow-session-lock-timeout <reason>` statement-level opt-out available too);
+  (2) `isLockTimeoutBoundedAt` (the pre-existing `MISSING_LOCK_TIMEOUT` check) now resets a `SET
+  LOCAL`-derived bound at an explicit mid-file `COMMIT`/`ROLLBACK` — a plain `SET`'s bound correctly
+  survives one, matching real PostgreSQL session semantics; this codebase has no mid-file `COMMIT`
+  today, so this was a latent gap, not a live one, closed alongside the rest of this AC. A new,
+  fixture-level `MigrationConventionLintTest.FIXTURE_SESSION_SCOPED_LOCK_TIMEOUT_BASELINE` (mirroring
+  `FIXTURE_DEFERRED_92_BASELINE`'s own separate-numbering-space precedent) keeps the 12 pre-existing
+  `valid/` fixtures using plain `SET lock_timeout` from being newly flagged; new dedicated `valid/`
+  and `invalid/` fixtures prove the rule fires correctly and does not over-fire.
+  `docs/deployment/migration-conventions.md` updated in all six places it prescribed plain `SET`, not
+  just item 7 — the pre-flight checklist, the rebaseline/defensive-use guidance (twice), item 7's own
+  rationale (now stating the real reason the ten are grandfathered — churn/coordination cost, not
+  Flyway-checksum immutability, which `skillars-deferred-112`'s own squash-and-delete precedent
+  already contradicts), the `MISSING_LOCK_TIMEOUT` rule-reference list, and the review checklist.
+- **round-2 1-7b router-abort bullet — Vue Router premise corrected, underlying gap CLOSED.** See
+  that bullet's own text above (now carrying a `[CORRECTED and CLOSED …]` annotation) — the bullet's
+  self-flagged "the abort path is unverified" claim was carried forward as fact by this story's
+  original draft and found false: Vue Router 4 (installed 4.6.4) resolves, not rejects, on a
+  guard-aborted/duplicate/superseded navigation. AC3 fixes the actual gap at three call sites
+  (`App.vue`, `useSession.js`, `MainLayout.vue` — all three share the identical unguarded
+  `router.push` shape; the original draft named only `App.vue`) via a shared
+  `src/frontend/src/utils/sessionRedirect.js` helper that inspects the settled push for both a
+  resolved `NavigationFailure` (via `vue-router`'s own `isNavigationFailure`) and a rejection, falling
+  back to a hard `window.location` navigation — mirroring `boot/axios.js`'s own independent 401
+  handler for the identical event, `encodeURIComponent` included. The `startSessionMonitoring`
+  early-return decision the bullet also describes is untouched and remains deliberate; `sessionManager.js`
+  was explicitly out of scope for this AC.
+- **`main."user"` cleanup-sweep index and `ModerationSlaMonitorService`'s no-`@SchedulerLock`
+  `[DECIDED]` note — both re-confirmed still correctly out of scope**, per the annotations added to
+  their own bullets above (`## Explicitly out of scope (skillars-deferred-123, 2026-09-18)`). No
+  production deploy has happened yet to generate the row-count/`EXPLAIN` evidence the first bullet's
+  own blocker requires.
+
+## Deferred from: code review of skillars-deferred-125-outbox-claim-isolation-radar-window-margin-and-session-redirect-fixes (2026-09-21)
+
+Four pre-existing issues surfaced by the `/bmad-code-review` layers (Blind Hunter, Edge Case Hunter,
+Acceptance Auditor, `/txn-and-concurrency-audit`). All four are genuinely pre-existing — none was
+introduced by this story — but the first two are directly load-bearing for AC2's stale-window margin,
+so they are recorded rather than left implicit.
+
+- **The stale-claim window is denominated in per-instance application wall clocks while ShedLock is
+  configured `.usingDbTime()`** (`ShedLockConfig.java:27`). `resetStaleClaimed`'s
+  `claimed_at < :deadline` predicate is the only absolute cross-instance time comparison in either
+  processor's design, and it is computed from `Instant.now()` on the claiming JVM
+  (`RadarCompositeDlqProcessor.java:157`, `VideoDeletionOutboxProcessor.java:152`). If instance B's
+  clock runs ahead of A's by more than the margin, B's stale sweep frees and immediately re-claims
+  rows A is still processing — a duplicate `recalculateComposite`, an external side effect
+  `claimed_by` cannot undo. At a skew of 8 minutes or more this happens during entirely normal
+  operation, not only in the single-slow-row residual AC2's Javadoc accepts. AC2's whole 5-minute
+  buffer argument silently assumes clock agreement and never states it. Fix is cheap and local:
+  stamp `claimed_at = now()` and compute the deadline as `now() - interval` inside the native SQL,
+  matching the `usingDbTime()` choice already made for the sibling ShedLock ceiling.
+- **No `statement_timeout` or `lock_timeout` is set on application connections**
+  (`application.yaml:109` sets only `connection-init-sql: "SET TIME ZONE 'UTC'"`), so
+  `RadarCompositeDlqProcessor`'s per-row cost is genuinely unbounded. `MAX_RUN_DURATION` is sampled
+  only between loop iterations, and `RadarCompositeCalculationService.recalculateComposite`'s
+  `upsertComposite`/`insertBaselineIfAbsent` carry no `NOWAIT` or timeout hint (unlike
+  `PlayerProfileRepository.findByIdForUpdate`, which deliberately does). A single row blocking on a
+  conflicting lock waits forever, so AC2's widened window is a probabilistic mitigation rather than
+  a bound. `VideoDeletionOutboxProcessor` is genuinely safe here — its per-row cost is bounded by
+  `VideoProviderConfig`'s 30s read + 10s connect against a 3-minute margin — the radar twin has no
+  equivalent.
+- **ShedLock's unlock is guarded by `locked_by` = hostname only** — `ShedLockConfig` leaves
+  `.withLockedByValue(...)` unset, so ShedLock defaults to `Utils.getHostname()`. Two JVMs
+  co-located on one host write the same `locked_by`, and the unlock statement's
+  `WHERE name = :name AND locked_by = :lockedBy` predicate has no `locked_at` component — so an
+  overrunning run can release its successor's lock mid-run, leaving the stale-claim window as the
+  only remaining protection. Directly load-bearing for the "safe on multiple instances" claim both
+  processors' Javadocs make. One `.withLockedByValue(UUID.randomUUID().toString())` away from closed.
+- **`boot/axios.js`'s own 401 fallback carries the identical hash-mode defect** that this story's new
+  `sessionRedirect.js` helper copied from it (`axios.js:166`:
+  `window.location.href = \`/login?redirect=...&expired=true\``). `quasar.config.js` sets
+  `vueRouterMode: 'hash'`, so the SPA route lives in `location.hash`: `window.location.pathname` is
+  always `/`, and a hard navigation to the server path `/login` does not reach the SPA route
+  `/#/login` — `route.query.expired` and `route.query.redirect` are both undefined because
+  hash-history parses query only from the fragment. The helper's instance is patched by this review;
+  this original is left for a frontend-labelled story since it needs the same `frontend-tests` PR
+  label and touches the axios interceptor's own teardown path.
