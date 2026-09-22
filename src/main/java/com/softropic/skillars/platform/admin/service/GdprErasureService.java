@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.admin.repo.GdprRequest;
 import com.softropic.skillars.platform.admin.repo.GdprRequestRepository;
@@ -29,6 +31,8 @@ import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -71,6 +75,8 @@ public class GdprErasureService {
     private final BlobDeletionOutboxSupport blobDeletionOutboxSupport;
     private final RefreshTokenRepository refreshTokenRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final PessimisticLockRetryer lockRetryer;
+    private final EntityManager entityManager;
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void erase(UUID requestId, Long userId) {
@@ -123,10 +129,24 @@ public class GdprErasureService {
         List<String> blobKeysToDelete = new ArrayList<>();
 
         // Delete player development data
+        // skillars-deferred-127 AC1: a player_profiles.id (TSID) is NOT the same as main.user.id, so
+        // the PLAYER branch must resolve its own profile via findByUserId first — passing userId
+        // straight to deletePlayerDevelopmentData (which now locks its argument as a player_profiles.id)
+        // would either find no row (a genuine ResourceNotFoundException, since a TSID essentially never
+        // equals a user id) or, worse, coincidentally lock and touch an unrelated profile. A PLAYER-role
+        // account with no profile row yet has nothing to erase here — orElse-skip, not orElseThrow; a
+        // missing profile is a legitimate "nothing to erase" case on a GDPR path, not an error.
         if (role == SkillarsRole.PLAYER) {
-            deletePlayerDevelopmentData(userId, blobKeysToDelete);
+            playerProfileRepository.findByUserId(userId)
+                .ifPresentOrElse(
+                    pp -> deletePlayerDevelopmentData(pp.getId(), blobKeysToDelete),
+                    // code review 2026-09-21: distinguishable from the intended "never built a
+                    // profile" case in the logs — a silent no-op here would look identical to a
+                    // successfully-completed erasure even if the absence ever had some other cause.
+                    () -> log.warn("[GDPR_ERASURE] No player_profiles row found for PLAYER-role "
+                        + "userId={} — skipping development-data deletion", userId));
         } else if (role == SkillarsRole.PARENT) {
-            playerProfileRepository.findByParentId(userId)
+            playerProfileRepository.findByParentIdOrderByIdAsc(userId)
                 .forEach(pp -> deletePlayerDevelopmentData(pp.getId(), blobKeysToDelete));
         }
 
@@ -168,7 +188,7 @@ public class GdprErasureService {
             } else if (role == SkillarsRole.PARENT) {
                 eventUserId = String.valueOf(userId);
                 accountRole = AccountRole.PARENT;
-                linkedPlayerIds = playerProfileRepository.findByParentId(userId).stream()
+                linkedPlayerIds = playerProfileRepository.findByParentIdOrderByIdAsc(userId).stream()
                     .map(PlayerProfile::getId)
                     .collect(Collectors.toList());
             } else {
@@ -191,7 +211,50 @@ public class GdprErasureService {
         });
     }
 
+    /**
+     * skillars-deferred-127 AC1: takes the SAME {@code player_profiles} pessimistic lock
+     * {@link com.softropic.skillars.platform.development.service.RadarCompositeCalculationService#recalculateComposite}
+     * already uses (same {@code findByIdForUpdate} + {@link PessimisticLockRetryer#withBoundedRetry}
+     * pattern), before deleting anything below. This fully serializes GDPR erasure against a
+     * concurrent radar-composite recalculation for the same player — once one path holds this lock,
+     * the other cannot even begin touching {@code player_radar_composites}/{@code player_radar_baselines},
+     * closing both the resurrection race (a recalculation re-inserting composites/baselines from a
+     * pre-erasure snapshot after this method already deleted them) and the lock-ordering deadlock
+     * hazard (the two paths write/delete those same two tables in opposite order) as a structural
+     * consequence of the shared lock, not a separate mechanism.
+     *
+     * <p>{@code playerId} here is always an already-resolved {@code player_profiles.id} (a TSID) —
+     * never a {@code main.user.id} — resolved differently by each caller in {@link #erase}: the
+     * PARENT branch already has it from {@code findByParentIdOrderByIdAsc}; the PLAYER branch resolves it via
+     * {@code playerProfileRepository.findByUserId} first and only calls this method when a profile
+     * row exists. A not-found here therefore means the row vanished between that resolution and lock
+     * acquisition — a real error, not the normal "no profile" case the PLAYER branch already handles
+     * one level up — so {@code orElseThrow} is correct at this point.
+     *
+     * <p>Each player's lock is acquired once, here, and — because {@code SELECT ... FOR UPDATE} row
+     * locks release only at transaction end and {@link #erase} is a single
+     * {@code Propagation.REQUIRES_NEW} transaction — accumulates with every other player's lock
+     * already acquired earlier in the same {@link #erase} call until that whole transaction commits.
+     * A PARENT with N children therefore holds N {@code player_profiles} locks simultaneously; this is
+     * NOT "locked/unlocked independently" per player.
+     *
+     * <p><strong>The shared lock alone does not fully close the resurrection race</strong> (code
+     * review, 2026-09-21): {@code RadarAssessmentService.submitAssessment} writes
+     * {@code radar_assessment_entries} without taking this lock at all, so a coach submission that
+     * commits while this method's delete is already running can leave rows this method's own
+     * {@code radarAssessmentRepository.deleteAllByPlayerId} never saw (not yet committed under READ
+     * COMMITTED at the moment it ran) — a later {@code recalculateComposite} run (live or
+     * DLQ-retried) would then read those surviving rows and re-create composites/baselines for an
+     * already-erased player. Stamping {@link PlayerProfile#getDevelopmentDataErasedAt()} here, under
+     * this same lock, closes it: {@code recalculateComposite} checks this field immediately after
+     * re-acquiring/refreshing the identical lock, before reading any aggregates, and skips entirely
+     * once it is set — see that method's own Javadoc.
+     */
     private void deletePlayerDevelopmentData(Long playerId, List<String> blobKeysToDelete) {
+        var playerProfile = lockRetryer.withBoundedRetry(() -> playerProfileRepository.findByIdForUpdate(playerId)
+            .orElseThrow(() -> new ResourceNotFoundException("Player not found: " + playerId, "player_profile")));
+        entityManager.refresh(playerProfile, LockModeType.PESSIMISTIC_WRITE);
+
         playerTimelineRepository.deleteByPlayerId(playerId);
         sluRepository.deleteAllByPlayerId(playerId);
         sluWeeklySnapshotRepository.deleteAllByPlayerId(playerId);
@@ -210,5 +273,10 @@ public class GdprErasureService {
         });
         performanceReportRepository.deleteAllByPlayerId(playerId);
         homeworkCompletionRepository.deleteAllByPlayerId(playerId);
+
+        // Sticky tombstone — see this method's own Javadoc. Never reset back to null: a
+        // player_profiles row is never "un-erased".
+        playerProfile.setDevelopmentDataErasedAt(Instant.now());
+        playerProfileRepository.save(playerProfile);
     }
 }

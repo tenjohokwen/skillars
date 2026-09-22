@@ -2451,13 +2451,26 @@ about.)
   deferred-126 dev-story completion)` below — /bmad-code-review fix, 2026-09-21: this pointer
   originally targeted the "code review of skillars-deferred-125" section's bullet, which that same
   edit deleted outright once all four of its bullets closed, per this file's own "delete outright,
-  don't leave an empty header" convention — so the pointer resolved to nothing). That case warranted
-  a bound while this one's acceptance still stands, for a
-  reason specific to each: the radar case's competing transaction
-  (`GdprErasureService.deletePlayerDevelopmentData`) has genuinely unbounded work ahead of it — no
-  lock-retry budget bounds it — whereas here the winning transaction is itself already
+  don't leave an empty header" convention — so the pointer resolved to nothing). At the time this
+  cross-reference was written, that case warranted a bound while this one's acceptance already stood,
+  for a reason specific to each: the radar case's competing transaction
+  (`GdprErasureService.deletePlayerDevelopmentData`) had genuinely unbounded work ahead of it — no
+  lock-retry budget bounded it — whereas here the winning transaction was itself already
   lock-retry-bounded (`PessimisticLockRetryer`'s ~3.2s worst-case budget, as this bullet's own text
-  above already states). This accepted-risk disposition is unaffected by that fix and remains open.
+  above already states).
+  **Re-decided (skillars-deferred-127 AC1/AC5, 2026-09-21, story-review.md H4): that asymmetry no
+  longer exists, so the contrast above is now stale, not just superseded.**
+  `deletePlayerDevelopmentData` now takes the SAME `player_profiles` pessimistic lock via the SAME
+  `findByIdForUpdate` + `PessimisticLockRetryer.withBoundedRetry` pattern this bullet's own winning
+  transaction already used — the radar/GDPR-erasure competing transaction is therefore now ALSO
+  lock-retry-bounded (~3.2s worst case per player), not unbounded. Both cases are now symmetric: each
+  side's wait is bounded by a lock-retry budget belonging to the OTHER transaction currently holding
+  the row, not by that transaction's full unbounded work. This does not change `deleteStrike`'s own
+  accepted-risk disposition here — its own reasoning (a bulk DELETE's implicit wait, naturally bounded
+  by the winning transaction's own lock-retry-bounded work) never depended on the radar case's
+  now-superseded asymmetry — it only means the contrast sentence itself no longer describes a real
+  difference between the two and should not be read as still distinguishing them. Remains
+  `[DECIDED: accepted risk — skillars-deferred-123]`, open.
 
 ## Deferred from: code review of skillars-deferred-122-coach-enforcement-round-2-and-user-cleanup-fixes (2026-09-18)
 
@@ -2653,10 +2666,15 @@ leave an empty header" convention, since none of the four ended up `[DECIDED]`:
   new tests, real Testcontainers-backed contention, not mocked) to translate to the SAME Spring
   exception class, `org.springframework.dao.PessimisticLockingFailureException`, distinguishable only
   by inspecting the cause. See `RadarCompositeCalculationService.recalculateComposite`'s own Javadoc
-  for the full finding. The structurally identical `AdminCoachEnforcementService.deleteStrike`
-  `[DECIDED: accepted risk — skillars-deferred-123]` sibling (see that bullet's own cross-reference,
-  added by this story) remains correctly un-fixed — its winning transaction is itself already
-  lock-retry-bounded, unlike the radar case's GDPR-erasure conflict source.
+  for the full finding. **Historical note (skillars-deferred-127 code review, 2026-09-21):**
+  `deletePlayerDevelopmentData` no longer describes this project's present state — skillars-deferred-127
+  AC1 gave it the identical `player_profiles` lock, closing this exact conflict; the paragraph above is
+  preserved as an accurate record of what skillars-deferred-126 itself found and left open, not of
+  today's code. The `AdminCoachEnforcementService.deleteStrike`
+  `[DECIDED: accepted risk — skillars-deferred-123]` cross-reference this sentence originally drew —
+  "its winning transaction is itself already lock-retry-bounded, unlike the radar case's GDPR-erasure
+  conflict source" — no longer holds either, for the same reason; see that bullet's own re-decided text
+  under `## Deferred from: code review of skillars-deferred-122…` for the current state.
 - **ShedLock `locked_by` = hostname only** — fixed by AC3. `ShedLockConfig.lockProvider` now sets
   `.withLockedByValue(hostname + "-" + UUID.randomUUID())` (length-truncated to fit `character
   varying(255)`), computed inside the `@Bean` method body so it is genuinely per-JVM while remaining
@@ -2676,34 +2694,76 @@ untagged `@SchedulerLock PT12H` sizing bullet under `## Deferred from: code revi
 (2026-09-16)` was added (its substance unchanged — see that bullet's own note) — found by this story's
 own Provenance & Scoping audit, not part of its four-bullet scope proper.
 
+## Last audit: 2026-09-21 (skillars-deferred-127 dev-story completion)
+
+Closed five of the seven genuinely-open bullets under the `## Deferred from: code review of
+skillars-deferred-126…` section immediately below (deleted outright, not `[DECIDED]`) — deliberately
+kept as `2026-09-21 (skillars-deferred-127 …)` rather than a bare `2026-09-21`, per story-review.md
+L3, so this heading stays distinguishable from the same-date `2026-09-21 (skillars-deferred-126 dev-
+story completion)` heading directly above:
+
+- **GDPR erasure / `recalculateComposite` resurrection race** — fixed by AC1.
+  `GdprErasureService.deletePlayerDevelopmentData` now takes the SAME `player_profiles` pessimistic
+  lock `recalculateComposite` already takes (same `findByIdForUpdate` + `PessimisticLockRetryer`
+  pattern), fully serializing the two paths so they can never race on `player_radar_composites`/
+  `player_radar_baselines` locks at all.
+- **GDPR erasure as deadlock victim** — fixed by AC1 as a structural consequence of the same shared
+  lock, not a separate mechanism: once serialized upstream, the two paths' opposite table order can
+  no longer collide.
+- **PLAYER-role id-resolution bug, surfaced during this story's own pre-implementation review
+  (story-review.md B1)** — fixed as part of AC1 (not a separate AC, since the fix touches the
+  identical lines): the PLAYER branch now resolves its `player_profiles` row via
+  `playerProfileRepository.findByUserId(userId)` instead of treating `userId` as a `player_profiles.id`
+  (a TSID, essentially never equal to `main.user.id`) — closing both AC1's own motivating race AND a
+  pre-existing, independent bug this surfaced: the PLAYER path had never actually deleted a
+  self-registered player's development data at all. `orElse`-skips (does not fail the erasure) when no
+  profile row exists for the account.
+- **Unseeded `HAS_CODE_DEFAULT` config keys** — fixed by AC2. `ConfigService.updateConfig` now
+  upserts (creates a new `platform_config` row) when a key is absent AND in
+  `ConfigBounds.HAS_CODE_DEFAULT`, closing the write-path gap for the 4 keys `V139__baseline_seed_
+  data.sql` never seeded: `platform.moderation_sla_batch_size`,
+  `platform.development.radar_composite_dlq.max_attempts`, `security.rate_limiting.bucket_ttl_hours`,
+  `platform.radar_composite_lock_timeout_seconds`. A key absent and NOT in `HAS_CODE_DEFAULT` still
+  404s exactly as before.
+- **Single-thread `@Scheduled` starvation** — fixed by AC3. `spring.task.scheduling.pool.size: 8`
+  added to `application.yaml`, a plain static property (not a new runtime-tunable config key — a
+  thread pool's size cannot be resized at runtime without recreating the scheduler bean, so a
+  runtime-tunable value would not be actionable without a restart anyway).
+- **`ShedLockConfig` hostname-truncation surrogate-pair split** — fixed by AC4. The truncation logic
+  is now an extracted, testable `ShedLockConfig.truncateHostname(...)` that backs the cut index off by
+  one when a plain `substring` would split a UTF-16 surrogate pair.
+
+Two new `[DECIDED: accepted risk — skillars-deferred-127]` bullets added to the section below for
+consequences of AC1's fix that this story deliberately did not build further machinery for: the
+`radar_composite_dlq` post-erasure residual (harmless, since `radar_assessment_entries` is also
+deleted) and the new-but-not-introduced-from-scratch path AC1 opens into
+`GdprErasureService.markFailed`'s pre-existing lack of `AdminAlert`/auto-retry.
+
+The `EXPLAIN`/index-coverage bullet (skillars-deferred-126 AC1 Task 3's never-performed confirmation)
+is reframed, not deleted — the answer already existed in `V144__outbox_dlq_claimed_at.sql`'s own
+comment; this story only confirmed it empirically and cited it. The `now()`/`clock_timestamp()`
+fragility bullet remains genuinely open (latent, not a live bug — see this story's own Provenance
+section for why it was left out of scope), and the already-`[DECIDED]` `next_retry_at` bullet is
+untouched.
+
+Also updated, not part of the section below: the `AdminCoachEnforcementService.deleteStrike`
+`[DECIDED: accepted risk — skillars-deferred-123]` bullet's own cross-reference (added by
+skillars-deferred-126) — its contrast against "the radar case has no lock-retry budget, this one
+does" no longer holds now that AC1 makes `deletePlayerDevelopmentData` lock-retry-bounded by the same
+mechanism; re-decided as still accepted, for reasons that no longer depend on that now-collapsed
+asymmetry (see that bullet's own updated text, under `## Deferred from: code review of
+skillars-deferred-122…`).
+
 ## Deferred from: code review of skillars-deferred-126-stale-claim-db-time-radar-lock-bound-shedlock-identity-and-axios-hash-redirect-fixes (2026-09-21)
 
 Surfaced by `/bmad-code-review` across four parallel layers (Blind Hunter, Edge Case Hunter,
 Acceptance Auditor, `/txn-and-concurrency-audit`). Each was independently re-verified against actual
-source before being recorded here. The first seven bullets below are genuinely pre-existing or latent
-— none introduced by skillars-deferred-126, all left open for a future story. The eighth is a residual
-OF skillars-deferred-126's own AC1 fix, surfaced by the same review pass and already taken to a formal
-owner decision (`AskUserQuestion`) in that same session — recorded `[DECIDED]`, not left open.
-
-- **GDPR erasure and `recalculateComposite` are not serialized against each other — an erased
-  player's radar composites/baselines can be resurrected after the erasure commits.**
-  `RadarCompositeCalculationService.recalculateComposite` (`:152-207`) serializes only on the
-  `player_profiles` row; `GdprErasureService.deletePlayerDevelopmentData` (`:194-203`) takes no such
-  lock. Interleaving: A locks `player_profiles(P)` and reads aggregates under READ COMMITTED → B
-  deletes baselines, composites and assessments for P and commits → A's per-skill loop re-inserts
-  composites and baselines from its pre-erasure snapshot. An Article-17-erased player has live radar
-  rows again and nothing will ever remove them (the erasure request is already `COMPLETED`).
-  `radar_composite_dlq` is not cleared by `deletePlayerDevelopmentData` either, so a queued DLQ row
-  for P survives the erasure. Real fix: have the erasure path take the same `player_profiles` lock.
-
-- **A GDPR erasure can be the deadlock victim and roll back wholly.** `GdprErasureService.erase` is
-  `@Transactional(propagation = REQUIRES_NEW)` (`:75`). Losing the circular wait against a background
-  `recalculateComposite` discards the `main.user` anonymisation, the message/review deletions and the
-  blob-deletion outbox rows, and routes the request to `markFailed` — a GDPR erasure fails because a
-  background radar recalculation happened to be running. skillars-deferred-126 AC2's `lock_timeout`
-  does not address this: `lock_timeout` only makes a waiter abort itself and cannot break a circular
-  wait, and the deadlock case (`40P01`) was already bounded by Postgres's `deadlock_timeout`. Real
-  fix: matching table order (composites-then-baselines) on both paths, or the shared lock above.
+source before being recorded here. Originally seven genuinely pre-existing/latent bullets plus one
+residual `[DECIDED]` bullet OF skillars-deferred-126's own AC1 fix. **Update (skillars-deferred-127
+AC5, 2026-09-21, story-review.md L3):** the first, second, fourth, fifth and sixth of those original
+seven are now closed and deleted outright (see `## Last audit: 2026-09-21 (skillars-deferred-127
+dev-story completion)` below) — only the `now()`/`clock_timestamp()` bullet remains genuinely open,
+alongside the already-`[DECIDED]` eighth.
 
 - **`now()` is `transaction_timestamp()`, so the AC1 claim stamp and sweep deadline are correct only
   because each repository call happens to run in its own short transaction — nothing enforces it.**
@@ -2715,41 +2775,58 @@ owner decision (`AskUserQuestion`) in that same session — recorded `[DECIDED]`
   eroding the `MAX_RUN_DURATION < lockAtMostFor < STALE_CLAIM_WINDOW` margin from both ends at once.
   `clock_timestamp()` would make the stamp statement-accurate and remove the hidden coupling.
 
-- **Bounded config keys with `HAS_CODE_DEFAULT` have no Flyway seed, so the admin API cannot set
-  them at all.** `ConfigService.updateConfig` (`:203`) does `configRepository.findByKey(key)
-  .orElseThrow(ResourceNotFoundException)` and there is no create endpoint, so
-  `PUT /api/config/values/{key}` 404s for any unseeded key. This affects
-  `platform.radar_composite_lock_timeout_seconds` (new in skillars-deferred-126) and equally the
-  pre-existing `rate_limit_bucket_ttl_hours` and `radar_composite_dlq_max_attempts` — a project-wide
-  convention gap, not a defect of this story. Consequence: every documented "an operator can widen
-  this" rationale attached to a `HAS_CODE_DEFAULT` key's `max` bound is currently unreachable without
-  a hand-written database row.
-
-- **`@Scheduled` runs on Spring Boot's default single-thread scheduler.** No
-  `spring.task.scheduling.pool.size` in `application.yaml` and no `SchedulingConfigurer` /
-  `TaskSchedulerBuilder` bean anywhere in `src/main/java`. `VideoDeletionOutboxProcessor.process()`
-  can occupy that single thread for its full 12-minute `MAX_RUN_DURATION` (50 rows × 30s adapter read
-  timeout), during which none of the other 43 `@Scheduled` methods fire — including
-  `RadarCompositeDlqProcessor.process()`, whose `lockAtMostFor = PT10M` / `STALE_CLAIM_WINDOW = 15m`
-  arithmetic assumes a 60s cadence. Any job whose `lockAtMostFor` was sized as "runtime + margin"
-  rather than "runtime + margin + scheduler starvation" can have its ShedLock expire before it ever
-  gets a thread. This undermines the lock-duration reasoning skillars-deferred-126 AC1/AC2 lean on.
-
-- **`ShedLockConfig`'s hostname truncation uses `String.substring`, which can split a surrogate
-  pair.** `ShedLockConfig.java:63-64` cuts at 218 UTF-16 code units; a hostname longer than that
-  whose 218th/219th units form a surrogate pair (a container started with `docker run -h` accepts
-  arbitrary UTF-8) leaves a lone high surrogate that is not UTF-8-encodable. The JDBC driver then
-  either substitutes U+FFFD or the INSERT fails with `invalid byte sequence for encoding "UTF8"`,
-  breaking lock acquisition for every `@SchedulerLock` job — the exact failure mode the truncation
-  was added to prevent. Very low likelihood; recorded rather than fixed.
-
-- **skillars-deferred-126 AC1 Task 3's required `EXPLAIN`/index-coverage confirmation was never
-  performed or recorded.** The task said to confirm (e.g. via `EXPLAIN`) rather than assume that the
-  rewritten predicate `claimed_at < now() - make_interval(secs => ?)` still uses the intended index.
-  No plan output, note, or statement appears in the story's Completion Notes, Validation section, or
-  any touched file; the only plan-related text remains V144's own note, which still describes the
-  predicate in its old `claimed_at < :deadline` form
-  (`V144__outbox_dlq_claimed_at.sql:30-36`).
+- **[CLOSED by skillars-deferred-127 AC5, 2026-09-21] `EXPLAIN`/index-coverage confirmation for
+  skillars-deferred-126 AC1 Task 3, performed and recorded.** The task said to confirm (e.g. via
+  `EXPLAIN`) rather than assume that the rewritten predicate
+  `claimed_at IS NULL OR claimed_at < now() - make_interval(secs => ?)` still uses the intended
+  index. `V144__outbox_dlq_claimed_at.sql:30-36`'s own "Index coverage" comment already answers this
+  and already accepted the answer as-is — and draws a real distinction between the two tables that a
+  quick re-read can miss: `radar_composite_dlq` has no dedicated `CLAIMED`-only index, so its
+  predicate is served only by `idx_radar_composite_dlq_status_retry`'s `status` prefix; `main.
+  video_deletion_outbox` additionally has `idx_vdoutbox_status_claimed ON (status) WHERE status =
+  'CLAIMED'`, which the comment says "still covers the video side's status predicate" even after the
+  predicate moved off `next_retry_at`. Both tables are expected to stay small enough (near-zero
+  `CLAIMED` rows at any moment) that this is accepted as-is regardless.
+  **Correction to V144's own comment (skillars-deferred-127 code review, 2026-09-21):** that
+  comment's framing that the PRE-V144 predicate (`next_retry_at < :deadline`) was "served by …
+  `idx_vdoutbox_status_retry`" does not hold for the video table — `idx_vdoutbox_status_retry`
+  (`V138__baseline_schema.sql:3670`) is itself `WHERE status = 'PENDING'`, a partial index that could
+  never have served a `status = 'CLAIMED'` query, before or after V144's predicate change. This
+  appears to be inherited from the radar table's citation, where `idx_radar_composite_dlq_status_retry`
+  is a full, non-partial `(status, next_retry_at)` index that genuinely did serve the old CLAIMED-scoped
+  query — the two tables are not actually symmetric here, and V144's own file is left unedited
+  (changing an already-applied migration's checksum is unsafe) with this correction recorded here
+  instead. The video table's `resetStaleClaimed` `status = 'CLAIMED'` prefix has always been served
+  by `idx_vdoutbox_status_claimed`, both before and after V144.
+  **Empirically confirmed** (skillars-deferred-127, 2026-09-21) — `EXPLAIN` run against a real
+  Testcontainers-backed Postgres session via a throwaway integration test (same container
+  image/schema this project's IT suite uses; deleted after use — not run against the production
+  database, consistent with this project's "no local `mvn verify`"/no-ad-hoc-prod-access convention).
+  Literal plan output, quoted verbatim for reproducibility (code review, 2026-09-21: an earlier draft
+  of this bullet paraphrased the result without quoting it, and the test that produced it had already
+  been deleted, leaving nothing to reproduce it against):
+  ```
+  === radar_composite_dlq.resetStaleClaimed ===
+  Update on radar_composite_dlq  (cost=4.16..9.52 rows=0 width=0)
+    ->  Bitmap Heap Scan on radar_composite_dlq  (cost=4.16..9.52 rows=1 width=80)
+          Recheck Cond: ((status)::text = 'CLAIMED'::text)
+          Filter: ((claimed_at IS NULL) OR (claimed_at < (now() - '00:15:00'::interval)))
+          ->  Bitmap Index Scan on idx_radar_composite_dlq_status_retry  (cost=0.00..4.16 rows=2 width=0)
+                Index Cond: ((status)::text = 'CLAIMED'::text)
+  === main.video_deletion_outbox.resetStaleClaimed ===
+  Update on video_deletion_outbox  (cost=0.12..8.15 rows=0 width=0)
+    ->  Index Scan using idx_vdoutbox_status_claimed on video_deletion_outbox  (cost=0.12..8.15 rows=1 width=80)
+          Index Cond: ((status)::text = 'CLAIMED'::text)
+          Filter: ((claimed_at IS NULL) OR (claimed_at < (now() - '00:15:00'::interval)))
+  ```
+  Confirms both predictions above: `radar_composite_dlq` plans a Bitmap Index Scan on
+  `idx_radar_composite_dlq_status_retry` filtered to `status` only, with the `claimed_at` disjunct
+  applied as a row-level filter afterward; `video_deletion_outbox` plans an Index Scan on
+  `idx_vdoutbox_status_claimed` (never `idx_vdoutbox_status_retry`), also filtering `claimed_at` at
+  the row level. To reproduce: seed either table with a `CLAIMED` row and run `EXPLAIN UPDATE …`
+  with the exact predicate above against a Testcontainers-backed (or any real) Postgres instance
+  running this schema — no throwaway test file is needed, a plain `psql`/JDBC session suffices. No
+  index or query change made; this bullet only confirms and records what was already decided.
 
 - **`[DECIDED: accepted risk — skillars-deferred-126]` AC1's skew fix is half-applied: `next_retry_at`
   eligibility stays on the app clock, so a sufficiently-skewed instance can prematurely dead-letter a
@@ -2772,3 +2849,99 @@ owner decision (`AskUserQuestion`) in that same session — recorded `[DECIDED]`
   future story is asked to run this application across nodes with weaker clock-sync guarantees than are
   assumed today (e.g. NTP disabled or unavailable), or if a `DEAD`-lettered video-deletion row with no
   corresponding provider error is ever actually observed in the wild.
+
+- **`[DECIDED: accepted risk — skillars-deferred-127]` `radar_composite_dlq` rows for an erased
+  player are not cleared by `GdprErasureService.deletePlayerDevelopmentData`, and will still process
+  after skillars-deferred-127 AC1's fix ships.** Not a data-integrity issue post-fix — but the
+  original safety argument recorded here was itself wrong in one window, corrected below (code
+  review, 2026-09-21).
+  **Original argument (incomplete):** `deletePlayerDevelopmentData` also deletes the player's
+  `radar_assessment_entries`, so a stale DLQ row's later `recalculateComposite` re-run finds no
+  aggregates to derive a composite from (`bySkill` is empty, the per-skill loop is a no-op) —
+  wasted work, not a resurrection. **This does not hold in one genuine window:** a coach's
+  `submitAssessment` transaction can commit new assessment rows for the player *after*
+  `deletePlayerDevelopmentData`'s own delete already ran and (under READ COMMITTED) could not see
+  them — that specific race is what the `development_data_erased_at` tombstone (see AC1's own
+  Javadoc on `RadarCompositeCalculationService.recalculateComposite` and `PlayerProfile`) now closes
+  independently, by construction: `recalculateComposite` checks the tombstone immediately after
+  re-acquiring/refreshing the `player_profiles` lock, before reading any aggregates at all — so it
+  skips regardless of whether `radar_assessment_entries` happens to be empty, survive, or be
+  freshly re-populated by a racing submission. The DLQ row itself is still not cleared (this remains
+  accepted, low-value cleanup), but the composite/baseline resurrection outcome the original argument
+  was really about is now doubly independent of whether `radar_assessment_entries` was fully deleted.
+  The `main.player_profiles` row itself surviving erasure remains a real dependency of both
+  arguments: nothing in `erase()` deletes it, and `AccountDeletionCascadeListener`'s cascade only
+  purges videos. (If that ever changed, `recalculateComposite`'s own
+  `findByIdForUpdate(...).orElseThrow(...)` would throw on every DLQ retry until `max_attempts`,
+  rather than silently no-opping — a visible failure, not a silent one, so this dependency is
+  self-alarming if it ever breaks.) Accepted as a low-value cleanup gap, not fixed, since AC1's own
+  scope was the lock-serialization fix alone.
+
+- **`[DECIDED: accepted risk — skillars-deferred-127]` skillars-deferred-127 AC1's shared
+  `player_profiles` lock introduces a new path into `GdprErasureService.markFailed`'s pre-existing
+  lack of `AdminAlert`/auto-retry on failure.** Before AC1, a GDPR erasure had no `player_profiles`
+  lock check at all, so it could not fail on lock contention. After AC1, `deletePlayerDevelopmentData`
+  can now hit `PessimisticLockingFailureException` under genuine contention with a concurrent
+  `recalculateComposite` — most severely, `recalculateComposite` can hold the same lock for up to
+  `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s configured ceiling (120s), while the erasure's own
+  `PessimisticLockRetryer` budget is only ~3.2s, so a genuinely contended erasure that previously
+  always succeeded can now fail fast. `GdprEventListener.onErasureRequested`'s catch routes this to
+  `markFailed`, which only `log.error`s — no `AdminAlert`, nothing auto-re-drives a `FAILED` request.
+  The user can manually re-submit (the transaction rolled back; they were never anonymised or locked
+  out, and `GdprRequestService.requestErasure` only blocks on `PENDING`/`PROCESSING`), but the failure
+  is silent to admins. **Not a gap AC1 introduces from scratch** — `markFailed`'s lack of alerting is
+  pre-existing and applies to every erasure-failure cause today, not just this new one — but this is
+  the first ledger record of it, and AC1 gives it a new, previously-nonexistent trigger path. Accepted
+  as documented, not fixed: building `AdminAlert` machinery across every `markFailed` cause is a
+  separate, larger concern for a future story, out of AC1's own scoped fix.
+
+## Deferred from: code review of skillars-deferred-127-gdpr-radar-lock-serialization-config-upsert-and-scheduler-pool-fixes (2026-09-21)
+
+Surfaced by `/bmad-code-review` across four parallel layers (Blind Hunter, Edge Case Hunter,
+Acceptance Auditor, `/txn-and-concurrency-audit`). Each bullet was independently re-verified against
+real source before being recorded here. The review's `decision-needed` and `patch` findings are
+tracked in the story file's own `## Review Findings` section, not here.
+
+- **Erase holds `player_profiles FOR UPDATE` for its full remaining transaction, blocking FK
+  `FOR KEY SHARE` RI checks on child tables.** After AC1, `GdprErasureService.erase`'s single
+  `REQUIRES_NEW` transaction holds each locked profile row to commit, then continues through
+  `refreshTokenRepository.markAllUsedByUserId`, `gdprRequestRepository.deleteExpiredByUserId` and
+  `blobDeletionOutboxSupport.enqueue`. Any concurrent INSERT referencing a locked `player_profiles`
+  row runs an RI check (`SELECT 1 ... FOR KEY SHARE`) that conflicts with `FOR UPDATE` and blocks for
+  the rest of that transaction; those inserters set no `lock_timeout`, so the wait is bounded only by
+  Postgres defaults. Seven FK'd tables are exposed (`V138__baseline_schema.sql:4084,4091,4098,4105,4231,4497,4504`).
+  A PARENT erasure widens this to N profiles simultaneously. Already analysed as story-review H2 and
+  noted in the story's risk section; recorded here so it is not lost.
+- **`PessimisticLockRetryer` is now used from exactly the long-running call site its own Javadoc
+  forbids.** `PessimisticLockRetryer.java:44-52` states "all current call sites are short
+  read-then-maybe-refresh operations (`findByIdForUpdate` + optional `refresh`). If a future call site
+  is long-running, or the pool is small relative to the contended row's traffic, revisit this."
+  AC1 made `deletePlayerDevelopmentData` — 14 bulk deletes across 13 tables plus a
+  `performance_reports` scan, invoked once per child — such a call site. A PARENT erasure with N
+  contended children can occupy one HikariCP connection for N × ~3.2s of pure backoff sleep while
+  holding N accumulated row locks. Nothing bounds the total: no per-`erase` deadline, no cap on N.
+  The documented "revisit this" precondition was triggered and not revisited.
+- **Hikari pool pressure from AC3's 8 concurrent schedulers is undocumented and `8` is underived.**
+  `maximum-pool-size: 25` (`application.yaml:120`) is shared with Tomcat request threads, clustered
+  Quartz, and six `@Async` executors (`outboxDrainPool`, `sluRetryExecutor`, `reportExecutor`, two
+  notification executors, the general `taskExecutor`). Ten high-cadence jobs (5s–60s) can now put 8
+  DB-touching jobs in flight where exactly 1 was possible before, and `PessimisticLockRetryer` sleeps
+  while still holding its pooled connection — 8 scheduler threads in backoff park 8/25 connections
+  doing nothing, while `connection-timeout: 30000` makes request threads queue 30s before failing.
+  The yaml comment documents the starvation being fixed but not the pressure it creates, and gives no
+  derivation for `8` over `3` or `4`.
+- **Five DB-touching `@Scheduled` methods still carry no `@SchedulerLock`.**
+  `UploadSessionExpiryScheduler`, `ReconciliationWorkerScheduler.reconcile`,
+  `WebhookEventProcessorScheduler`, `ModerationSlaMonitorService`, `AlertEvaluationService`. Strictly
+  pre-existing and multi-instance-only — Spring's `ReschedulingRunnable` schedules the next execution
+  only after the current one returns, so AC3's pool size cannot make any job overlap *itself* inside
+  one JVM, and this diff does not worsen the gap. (The other four unlocked `@Scheduled` methods —
+  `ConfigService.scheduledRefresh`, `AlertRuleCache.refresh`, `MessagingEmitterRegistry.sendHeartbeats`,
+  `RateLimitingService.evictIdleBuckets` — are node-local caches and correctly need no lock.)
+- **`orElseThrow` inside the multi-child PARENT loop aborts an entire erasure if one child's profile
+  row vanishes.** `GdprErasureService.java:236-238` runs inside `erase`'s single `REQUIRES_NEW`
+  transaction, so for a PARENT with children `[A, B, C]`, B's row disappearing between
+  `findByParentId` and its lock acquisition rolls back A's already-completed deletions and fails the
+  whole GDPR request. The benign case (B was erased concurrently — the data is already gone) becomes
+  a `FAILED` request needing manual intervention. Arguably correct-as-designed per the method's
+  explicit Javadoc reasoning, and rare; deferred rather than changed. No test covers it.

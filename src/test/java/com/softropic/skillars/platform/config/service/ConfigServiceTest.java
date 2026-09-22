@@ -5,13 +5,17 @@ import com.softropic.skillars.platform.config.contract.ConfigValueType;
 import com.softropic.skillars.platform.config.repo.PlatformConfig;
 import com.softropic.skillars.platform.config.repo.PlatformConfigRepository;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.instancio.Instancio;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.List;
 import java.util.Optional;
@@ -20,6 +24,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.instancio.Select.field;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -335,6 +341,62 @@ class ConfigServiceTest {
 
         verify(configRepository).save(existing);
         assertThat(existing.getValue()).isEqualTo("anything-goes");
+    }
+
+    // ── skillars-deferred-127 AC2: upsert for unseeded HAS_CODE_DEFAULT keys ──────────────────────
+
+    @Test
+    void updateConfig_unseededHasCodeDefaultKey_createsRow() {
+        // platform.radar_composite_lock_timeout_seconds is one of the 4 HAS_CODE_DEFAULT keys
+        // V139__baseline_seed_data.sql never seeded (story-review.md B2's corrected count/list).
+        when(configRepository.findByKey("platform.radar_composite_lock_timeout_seconds"))
+                .thenReturn(Optional.empty());
+
+        configService.updateConfig("platform.radar_composite_lock_timeout_seconds", "10");
+
+        ArgumentCaptor<PlatformConfig> captor = ArgumentCaptor.forClass(PlatformConfig.class);
+        verify(configRepository).save(captor.capture());
+        PlatformConfig saved = captor.getValue();
+        assertThat(saved.getKey()).isEqualTo("platform.radar_composite_lock_timeout_seconds");
+        assertThat(saved.getValue()).isEqualTo("10");
+        assertThat(saved.getValueType()).isEqualTo(ConfigValueType.LONG);
+        assertThat(saved.getUpdatedAt()).isNotNull();
+    }
+
+    @Test
+    void updateConfig_unseededNonHasCodeDefaultKey_stays404() {
+        // A key that is neither present nor in HAS_CODE_DEFAULT must keep 404ing — this AC does not
+        // widen the write surface to arbitrary unknown keys.
+        when(configRepository.findByKey("some.never.seeded.key")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> configService.updateConfig("some.never.seeded.key", "1"))
+                .isInstanceOf(ResourceNotFoundException.class);
+        verify(configRepository, never()).save(any());
+    }
+
+    /**
+     * skillars-deferred-127 code review (2026-09-21): the concurrent first-write race
+     * ({@code updateConfig} is a read-then-insert TOCTOU with no {@code @Transactional}) — two
+     * callers can both observe {@code findByKey} as empty and both attempt to create the row; only
+     * one {@code INSERT} can win against {@code uq_platform_config_key}. Simulates the losing
+     * caller's {@code save()} throwing {@link DataIntegrityViolationException} and asserts it is
+     * caught, the winner's now-committed row is re-read, and this call's own value is applied to it
+     * instead of the exception propagating.
+     */
+    @Test
+    void updateConfig_unseededHasCodeDefaultKey_concurrentFirstWriteLoses_readsBackAndUpdatesWinner() {
+        String key = "platform.radar_composite_lock_timeout_seconds";
+        PlatformConfig winnerRow = entry(key, "5", ConfigValueType.LONG);
+        when(configRepository.findByKey(key))
+                .thenReturn(Optional.empty())   // updateConfig's own initial lookup
+                .thenReturn(Optional.of(winnerRow)); // re-read after the losing INSERT
+        doThrow(new DataIntegrityViolationException("uq_platform_config_key"))
+                .when(configRepository).save(argThat(c -> c != winnerRow));
+
+        configService.updateConfig(key, "10");
+
+        verify(configRepository).save(winnerRow);
+        assertThat(winnerRow.getValue()).isEqualTo("10");
     }
 
     @Test

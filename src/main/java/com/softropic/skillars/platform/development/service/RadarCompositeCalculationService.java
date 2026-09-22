@@ -106,10 +106,37 @@ public class RadarCompositeCalculationService {
      * {@link PessimisticLockRetryer}). A concrete conflict source: {@code GdprErasureService.erase}
      * (its own {@code Propagation.REQUIRES_NEW} transaction) calls {@code
      * deletePlayerDevelopmentData}, which deletes {@code player_radar_baselines} then {@code
-     * player_radar_composites} for the same player — <strong>without</strong> taking this method's
-     * own {@code player_profiles} pessimistic lock at all, and in the <strong>opposite</strong> table
-     * order this method writes them in (composites then baselines). That is a genuine lock-ordering
-     * deadlock shape (Postgres {@code 40P01}), not merely an unbounded wait ({@code 55P03}).
+     * player_radar_composites} for the same player, in the <strong>opposite</strong> table order this
+     * method writes them in (composites then baselines). That is a genuine lock-ordering deadlock
+     * shape (Postgres {@code 40P01}), not merely an unbounded wait ({@code 55P03}).
+     *
+     * <p><strong>The direct table-order collision is CLOSED (skillars-deferred-127 AC1, 2026-09-21):
+     * </strong> {@code deletePlayerDevelopmentData} now takes the SAME {@code player_profiles}
+     * pessimistic lock this method takes below (same {@code findByIdForUpdate} + {@link
+     * PessimisticLockRetryer} pattern) before touching either table, fully serializing the two paths
+     * — once one holds the {@code player_profiles} lock, the other cannot even begin touching {@code
+     * player_radar_composites}/{@code player_radar_baselines}, so they can no longer race on those two
+     * tables' row locks at all. This closes the direct resurrection risk (a recalculation
+     * re-inserting composites/baselines from a pre-erasure snapshot after erasure already deleted
+     * them) and the lock-ordering deadlock shape above, as a structural consequence of the shared
+     * lock, not a separate mechanism. The lock-ordering discussion, the {@code lock_timeout} vs
+     * {@code deadlock_timeout} distinction and the exception-class findings immediately below remain
+     * accurate — they describe how a wait/deadlock on these tables is bounded/detected in general, not
+     * only for the now-closed erasure conflict specifically.
+     *
+     * <p><strong>A residual race through the SOURCE table is separately closed by a tombstone
+     * (code review, 2026-09-21):</strong> the shared lock above only serializes {@code erase} against
+     * THIS method — it does nothing for {@code RadarAssessmentService.submitAssessment}, which writes
+     * {@code radar_assessment_entries} (the data this method reads) without taking this lock at all.
+     * A coach's {@code submitAssessment} transaction can commit new assessment rows for player P
+     * <em>after</em> {@code deletePlayerDevelopmentData}'s own delete of {@code
+     * radar_assessment_entries} already ran and (under READ COMMITTED) could not see them, then this
+     * method's {@code AFTER_COMMIT}-triggered or DLQ-retried run would read those surviving rows and
+     * re-create composites/baselines for an already-erased player. See the {@code
+     * developmentDataErasedAt} check immediately after this method's own lock acquisition below —
+     * checked under the identical lock, so whichever of {@code erase}/this method runs second always
+     * sees the other's fully-committed state.
+     *
      * <strong>/bmad-code-review fix (2026-09-21): these are NOT both bounded by the same mechanism.</strong>
      * A genuine deadlock was ALREADY bounded — by Postgres's own {@code deadlock_timeout} (default
      * 1s), independent of anything this AC adds; {@code lock_timeout} only makes an ordinary WAITER
@@ -191,6 +218,24 @@ public class RadarCompositeCalculationService {
         var playerProfile = lockRetryer.withBoundedRetry(() -> playerProfileRepository.findByIdForUpdate(playerId)
             .orElseThrow(() -> new ResourceNotFoundException("Player not found: " + playerId, "player_profile")));
         entityManager.refresh(playerProfile, LockModeType.PESSIMISTIC_WRITE);
+
+        // skillars-deferred-127 code review (2026-09-21): the shared player_profiles lock alone does
+        // not close the resurrection race against GdprErasureService.erase — RadarAssessmentService.
+        // submitAssessment writes radar_assessment_entries without taking this lock at all, so a
+        // coach submission that commits during an in-flight erasure can leave rows the erasure's own
+        // delete never saw. GdprErasureService.deletePlayerDevelopmentData stamps this tombstone
+        // under the identical lock this method just re-acquired/refreshed above — checking it here,
+        // immediately after that refresh and before reading any aggregates, means: if the erasure ran
+        // first and committed, this refresh sees the now-committed tombstone and this method skips
+        // entirely; if this method ran first, the erasure blocks behind this call's own lock hold and
+        // cannot set the tombstone until this call's transaction has already committed. Covers both
+        // the live AFTER_COMMIT path (via onRadarEntrySubmitted) and the RadarCompositeDlqProcessor
+        // retry path, since every route to an upsert passes through this one method.
+        if (playerProfile.getDevelopmentDataErasedAt() != null) {
+            log.info("Skipping composite recalculation for player={} — development data was erased at {}",
+                playerId, playerProfile.getDevelopmentDataErasedAt());
+            return;
+        }
 
         List<Object[]> aggregates = radarRepository.findAggregatesByPlayerAndSkills(playerId, parentId, skills);
         List<Object[]> distinctCoachCounts =

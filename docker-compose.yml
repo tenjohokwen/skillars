@@ -165,16 +165,21 @@ services:
         condition: service_started
       tempo:
         condition: service_started
-    # skillars-deferred-92 AC3.2, raised again by that story's code review (D2). Raised from 30s:
-    # SIGTERM now has real work to wait for, and the sum of the shutdown budget does not fit in 30.
-    # Worst case is ~48s -- 8s HTTP drain (spring.lifecycle.timeout-per-shutdown-phase) + 36s of
-    # sequential executor awaits across the SEVEN pools (infrastructure.threadpool.ExecutorShutdown
-    # documents the per-pool split and the arithmetic) + ~4s of remaining context teardown. The
-    # seventh pool is reportExecutor, at 8s: report/radar generation was on the shared 2s pool while
-    # doing an S3 upload with no retry behind it. Docker SIGKILLs at this deadline regardless, so if
-    # you add a pool or lengthen an await, redo that sum and move this with it. Only the app service
-    # needs it; the other eight services here shut down in well under 30s.
-    stop_grace_period: 55s
+    # skillars-deferred-92 AC3.2, raised again by that story's code review (D2), and again by
+    # skillars-deferred-127's code review (2026-09-21). Raised from 30s: SIGTERM now has real work to
+    # wait for, and the sum of the shutdown budget does not fit in 30. Worst case is ~53s -- 8s HTTP
+    # drain (spring.lifecycle.timeout-per-shutdown-phase) + 36s of sequential executor awaits across
+    # the SEVEN pools (infrastructure.threadpool.ExecutorShutdown documents the per-pool split and the
+    # arithmetic) + 5s for the auto-configured @Scheduled taskScheduler's own
+    # spring.task.scheduling.shutdown.await-termination-period (added when skillars-deferred-127 AC3
+    # gave that scheduler 8 threads instead of Spring's single-thread default -- it is NOT one of the
+    # seven ExecutorShutdown pools and so is not caught by ExecutorShutdownConfigurationTest, but it
+    # takes the identical sequential destroy() slice) + ~4s of remaining context teardown. The seventh
+    # ExecutorShutdown pool is reportExecutor, at 8s: report/radar generation was on the shared 2s pool
+    # while doing an S3 upload with no retry behind it. Docker SIGKILLs at this deadline regardless, so
+    # if you add a pool, a scheduler await, or lengthen an existing one, redo that sum and move this
+    # with it. Only the app service needs it; the other eight services here shut down in well under 30s.
+    stop_grace_period: 60s
     restart: unless-stopped
     logging: *default-logging
 

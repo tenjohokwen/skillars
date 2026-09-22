@@ -50,6 +50,37 @@ spring:
   # before bean destruction -- where the executor awaits actually live -- had begun.
   lifecycle:
     timeout-per-shutdown-phase: 8s
+  # skillars-deferred-127 AC3: without this, Spring Boot's TaskSchedulingAutoConfiguration backs
+  # @EnableScheduling with a single-thread ThreadPoolTaskScheduler by default, shared by all 44
+  # @Scheduled methods across this project's platform modules. One long-running job (e.g.
+  # VideoDeletionOutboxProcessor.process()'s documented 12-minute MAX_RUN_DURATION) occupies that
+  # one thread entirely, starving every other scheduled job -- including the two ShedLock-timing-
+  # sensitive processors whose lockAtMostFor/STALE_CLAIM_WINDOW arithmetic (skillars-deferred-126
+  # AC1) implicitly assumes their own cadence is not starved by an unrelated job. Kept as a plain
+  # static property, not a runtime-tunable platform_config key: a thread pool's size cannot be
+  # resized at runtime without recreating the scheduler bean, so a runtime-tunable value would not
+  # actually be actionable without a restart anyway.
+  task:
+    scheduling:
+      pool:
+        size: 8
+      # skillars-deferred-127 code review (2026-09-21, owner decision taken live via
+      # AskUserQuestion): the auto-configured taskScheduler is a plain TaskSchedulingAutoConfiguration
+      # bean, not one of this project's own infrastructure.threadpool.ExecutorShutdown-covered pools
+      # -- ExecutorShutdownConfigurationTest#everyExecutorBeanIsCovered only scans
+      # classpath*:com/softropic/skillars/**/*Config.class, which structurally cannot see a bean
+      # defined in org.springframework.boot.*. Without await-termination, ExecutorConfigurationSupport
+      # .destroy() takes the shutdownNow() path on every SIGTERM: where one in-flight scheduled job
+      # was previously interrupted mid-transaction, now up to eight can be. 5s mirrors this project's
+      # own convention for a pool that can carry a long individual task (SLU_RETRY_SECONDS,
+      # STORAGE_UPLOAD_SECONDS) -- enough for an in-flight short job's current statement to land, not
+      # an attempt to wait out VideoDeletionOutboxProcessor's 12-minute MAX_RUN_DURATION, which is
+      # already designed to be interrupted and resumed via its own outbox claim/release semantics.
+      # Added to docker-compose.yml's stop_grace_period arithmetic alongside
+      # infrastructure.threadpool.ExecutorShutdown's own seven pools -- see that file's class Javadoc.
+      shutdown:
+        await-termination: true
+        await-termination-period: 5s
   mvc:
     async:
       request-timeout: -1

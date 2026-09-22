@@ -43,8 +43,20 @@ public class ShedLockConfig {
      * {@code hostname + "-" + UUID} adds 37 fixed characters for the separator and UUID; an
      * abnormally long hostname (over ~218 chars — rare, but Docker-derived or misconfigured
      * hostnames are not bounded by convention) would otherwise make the lock acquire INSERT/UPDATE
-     * fail with SQLState {@code 22001}, breaking EVERY {@code @SchedulerLock}ed job in the app, not
-     * just this identity fix.
+     * fail with SQLState {@code 22001}.
+     *
+     * <p>skillars-deferred-127 AC4 (story-review.md M2): {@link #truncateHostname} additionally
+     * guards against splitting a UTF-16 surrogate pair at the truncation boundary. A plain {@code
+     * String.substring(0, MAX_HOSTNAME_LENGTH)} truncates at a raw UTF-16 code-unit boundary, so a
+     * hostname whose 218th/219th code units happen to form one supplementary-plane code point (e.g.
+     * an emoji — a container started with {@code docker run -h} accepts arbitrary UTF-8, so this is
+     * reachable, if very unlikely) would leave a lone high surrogate, which is not valid UTF-16.
+     * This does NOT break every {@code @SchedulerLock} job the way the raw length bound above does
+     * if exceeded: Java's default UTF-8 encoder substitutes {@code ?} for an unpaired surrogate
+     * rather than throwing, so the realistic consequence is a cosmetically-mangled hostname prefix
+     * in an operational column, not a broken lock mechanism — the {@code "-" + UUID} suffix keeps
+     * {@code locked_by} unique regardless. Still worth the two-line fix since it lives in the exact
+     * method this AC-adjacent work already touches.
      */
     private static final int MAX_LOCKED_BY_LENGTH = 255;
     private static final int UUID_SUFFIX_LENGTH = 37; // "-" + UUID.toString() (36 chars)
@@ -52,6 +64,31 @@ public class ShedLockConfig {
     // package) asserted against this bound with a hardcoded `218` literal, which would silently drift
     // out of sync with this computed value if MAX_LOCKED_BY_LENGTH/UUID_SUFFIX_LENGTH ever changed.
     static final int MAX_HOSTNAME_LENGTH = MAX_LOCKED_BY_LENGTH - UUID_SUFFIX_LENGTH;
+
+    /**
+     * Truncates {@code hostname} to at most {@link #MAX_HOSTNAME_LENGTH} UTF-16 code units,
+     * backing the cut index off by one when a plain {@code substring} at that length would split a
+     * surrogate pair — see {@link #MAX_LOCKED_BY_LENGTH}'s own Javadoc. Package-private static so
+     * {@code ShedLockConfigIT} (same package) can call it directly: there is no other seam to test
+     * this through, since {@link Utils#getHostname()} is a third-party static method with no
+     * mockable return value here.
+     */
+    static String truncateHostname(String hostname) {
+        if (hostname.length() <= MAX_HOSTNAME_LENGTH) {
+            return hostname;
+        }
+        int truncateAt = MAX_HOSTNAME_LENGTH;
+        // A high surrogate can never legally stand alone as the last character of a string — back
+        // off whether it was originally paired with a low surrogate just past the cut (a well-formed
+        // pair this truncation would otherwise split) or already an unpaired/malformed high
+        // surrogate in the input itself. (Code review, 2026-09-21: an earlier version of this guard
+        // also required a matching low surrogate at the cut index, which missed the latter case —
+        // a pre-existing lone high surrogate exactly at the boundary passed through unguarded.)
+        if (Character.isHighSurrogate(hostname.charAt(truncateAt - 1))) {
+            truncateAt--;
+        }
+        return hostname.substring(0, truncateAt);
+    }
 
     @Bean
     public LockProvider lockProvider(DataSource dataSource, MeterRegistry meterRegistry) {
@@ -63,9 +100,7 @@ public class ShedLockConfig {
         // in a plain unit test) return the SAME value, making ShedLockConfigIT's uniqueness assertion
         // unachievable — computing it here instead makes each direct call produce its own fresh value.
         String hostname = Utils.getHostname();
-        String truncatedHostname = hostname.length() > MAX_HOSTNAME_LENGTH
-            ? hostname.substring(0, MAX_HOSTNAME_LENGTH)
-            : hostname;
+        String truncatedHostname = truncateHostname(hostname);
         String lockedByValue = truncatedHostname + "-" + UUID.randomUUID();
 
         LockProvider delegate = new JdbcTemplateLockProvider(

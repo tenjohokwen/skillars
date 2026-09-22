@@ -13,7 +13,13 @@ import java.util.Optional;
 
 public interface PlayerProfileRepository extends JpaRepository<PlayerProfile, Long> {
 
-    List<PlayerProfile> findByParentId(Long parentId);
+    // skillars-deferred-127 code review (2026-09-21): ORDER BY id — deterministic acquisition order
+    // for GdprErasureService.erase's PARENT-branch loop, each iteration of which now takes a
+    // player_profiles pessimistic lock (see deletePlayerDevelopmentData). NOWAIT means a lock
+    // conflict fails fast rather than waits, so unordered acquisition cannot itself produce a
+    // circular-wait deadlock (40P01) — but it does make which acquisition attempt (if any) exhausts
+    // its retry budget nondeterministic, heap-order-dependent, and undocumented. Zero-cost fix.
+    List<PlayerProfile> findByParentIdOrderByIdAsc(Long parentId);
 
     /** Always use this instead of findById — parentId enforces family isolation. */
     Optional<PlayerProfile> findByIdAndParentId(Long id, Long parentId);

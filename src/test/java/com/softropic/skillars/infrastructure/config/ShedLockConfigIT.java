@@ -86,13 +86,15 @@ class ShedLockConfigIT extends AbstractIntegrationTest {
 
             assertThat(lockedBy).isNotBlank();
             String hostname = net.javacrumbs.shedlock.support.Utils.getHostname();
+            // skillars-deferred-127 AC4 Task 5: call the extracted truncateHostname(...) directly
+            // rather than re-implementing the truncation rule inline — once truncateHostname gained
+            // the surrogate-pair-safety branch, a plain substring() re-implementation here would
+            // silently diverge from the real rule for any hostname that happens to trigger it.
             assertThat(lockedBy)
                 .as("locked_by must carry a distinguishing suffix beyond the bare hostname, not just "
                     + "the hostname ShedLock's own default identity would have used")
                 .isNotEqualTo(hostname)
-                .startsWith(hostname.length() <= ShedLockConfig.MAX_HOSTNAME_LENGTH
-                    ? hostname
-                    : hostname.substring(0, ShedLockConfig.MAX_HOSTNAME_LENGTH));
+                .startsWith(ShedLockConfig.truncateHostname(hostname));
         } finally {
             lock.get().unlock();
         }
@@ -134,6 +136,77 @@ class ShedLockConfigIT extends AbstractIntegrationTest {
         } finally {
             lockA.get().unlock();
             lockB.get().unlock();
+        }
+    }
+
+    /**
+     * skillars-deferred-127 AC4 (story-review.md M1): {@code truncateHostname} must not split a
+     * UTF-16 surrogate pair at the truncation boundary. Constructs a hostname whose 218th/219th
+     * code units are exactly the surrogate pair a plain {@code substring(0, 218)} would split (a
+     * supplementary-plane character, e.g. an emoji) and asserts the result contains no lone
+     * surrogate and is a valid UTF-8-encodable string. There is no seam to control
+     * {@code Utils.getHostname()}'s return value directly (no mocking precedent needed here —
+     * {@code ShedLockConfig.truncateHostname} is package-private and callable directly), so this
+     * calls the extracted method with a constructed input rather than trying to control the real
+     * hostname.
+     */
+    @Test
+    void truncateHostname_doesNotSplitASurrogatePairAtTheBoundary() {
+        // 217 filler chars, then a supplementary-plane code point (U+1F600, 2 UTF-16 code units)
+        // straddling indices 217/218 — exactly the boundary MAX_HOSTNAME_LENGTH (218) would split.
+        String filler = "h".repeat(ShedLockConfig.MAX_HOSTNAME_LENGTH - 1);
+        String emoji = new String(Character.toChars(0x1F600));
+        String hostname = filler + emoji + "-extra-tail-beyond-the-cut";
+        assertThat(hostname.length()).isGreaterThan(ShedLockConfig.MAX_HOSTNAME_LENGTH);
+        // Sanity-check the fixture actually straddles the boundary the way this test claims.
+        assertThat(Character.isHighSurrogate(hostname.charAt(ShedLockConfig.MAX_HOSTNAME_LENGTH - 1))).isTrue();
+        assertThat(Character.isLowSurrogate(hostname.charAt(ShedLockConfig.MAX_HOSTNAME_LENGTH))).isTrue();
+
+        String truncated = ShedLockConfig.truncateHostname(hostname);
+
+        assertThat(truncated).isEqualTo(filler); // backed off by one, dropping the whole surrogate pair
+        assertThat(truncated.length()).isLessThanOrEqualTo(ShedLockConfig.MAX_HOSTNAME_LENGTH);
+        for (int i = 0; i < truncated.length(); i++) {
+            char c = truncated.charAt(i);
+            assertThat(Character.isSurrogate(c))
+                .as("truncated hostname must contain no lone surrogate at index %d", i)
+                .isFalse();
+        }
+        // A lone surrogate would still "encode" via Java's default UTF-8 substitution (story-review.md
+        // M2 — it does not throw), so the real proof is the absence-of-lone-surrogate check above, not
+        // this round-trip; asserted anyway as a cheap extra confirmation of the same fact.
+        byte[] utf8 = truncated.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(new String(utf8, java.nio.charset.StandardCharsets.UTF_8)).isEqualTo(truncated);
+    }
+
+    /**
+     * skillars-deferred-127 code review (2026-09-21, Patch): {@code truncateHostname}'s guard
+     * requires a WELL-FORMED pair straddling the boundary (high surrogate at {@code
+     * MAX_HOSTNAME_LENGTH - 1} AND a matching low surrogate at {@code MAX_HOSTNAME_LENGTH}). A
+     * hostname that already carries a lone, unpaired high surrogate exactly at the cut index —
+     * pre-existing malformed input, not a pair the truncation itself would split — does not satisfy
+     * that second condition, so the guard does not fire and {@code substring(0, 218)} still ends in
+     * that lone high surrogate. Fixed by backing off whenever the last character before the cut is
+     * ANY high surrogate, regardless of what (if anything) follows it — see
+     * {@link ShedLockConfig#truncateHostname}'s own updated implementation.
+     */
+    @Test
+    void truncateHostname_backsOffOnAPreExistingUnpairedHighSurrogateAtTheCutIndex() {
+        String filler = "h".repeat(ShedLockConfig.MAX_HOSTNAME_LENGTH - 1);
+        // Index MAX_HOSTNAME_LENGTH - 1 is a lone high surrogate; the NEXT character is an ordinary
+        // 'x', not its low-surrogate partner — this hostname is already malformed independent of
+        // where any truncation would cut it.
+        String hostname = filler + '\uD83D' + "x-extra-tail-beyond-the-cut";
+        assertThat(Character.isHighSurrogate(hostname.charAt(ShedLockConfig.MAX_HOSTNAME_LENGTH - 1))).isTrue();
+        assertThat(Character.isLowSurrogate(hostname.charAt(ShedLockConfig.MAX_HOSTNAME_LENGTH))).isFalse();
+
+        String truncated = ShedLockConfig.truncateHostname(hostname);
+
+        assertThat(truncated).isEqualTo(filler);
+        for (int i = 0; i < truncated.length(); i++) {
+            assertThat(Character.isSurrogate(truncated.charAt(i)))
+                .as("truncated hostname must contain no lone surrogate at index %d", i)
+                .isFalse();
         }
     }
 

@@ -105,7 +105,7 @@ public class ShadowAccountService {
 
     @Transactional(readOnly = true)
     public List<PlayerProfileResponse> listPlayerProfiles(Long parentId) {
-        return playerProfileRepository.findByParentId(parentId)
+        return playerProfileRepository.findByParentIdOrderByIdAsc(parentId)
             .stream()
             .map(playerProfileMapper::toResponse)
             .toList();
