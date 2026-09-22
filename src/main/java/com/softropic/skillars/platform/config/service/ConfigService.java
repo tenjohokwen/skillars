@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.config.service;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.config.config.ConfigProperties;
 import com.softropic.skillars.platform.config.contract.ConfigValueResponse;
+import com.softropic.skillars.platform.config.contract.ConfigValueType;
 import com.softropic.skillars.platform.config.repo.PlatformConfig;
 import com.softropic.skillars.platform.config.repo.PlatformConfigRepository;
 
@@ -10,6 +11,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -199,15 +201,69 @@ public class ConfigService {
         return configMapper.toResponse(entry);
     }
 
+    /**
+     * skillars-deferred-127 AC2: a {@link ConfigBounds#HAS_CODE_DEFAULT} key with no existing
+     * {@code platform_config} row is upserted (a new row is created) rather than 404ing — every
+     * {@code HAS_CODE_DEFAULT} key's own Javadoc documents "an operator can widen this at runtime" as
+     * its {@code max}-bound rationale, which this write path previously contradicted for the 4 of
+     * those 17 keys that {@code V139__baseline_seed_data.sql} never seeded. A key that is absent AND
+     * not in {@code HAS_CODE_DEFAULT} (a {@code failFast} key, or simply unrecognized) keeps the
+     * existing 404 behavior exactly — this does not widen the write surface to arbitrary unknown keys.
+     */
     public ConfigValueResponse updateConfig(String key, String newValue) {
-        PlatformConfig entity = configRepository.findByKey(key)
-                .orElseThrow(() -> new ResourceNotFoundException("ConfigEntry", key));
+        Optional<PlatformConfig> existing = configRepository.findByKey(key);
+        if (existing.isEmpty() && !ConfigBounds.HAS_CODE_DEFAULT.contains(key)) {
+            // Preserves the original 404-before-range-check ordering for a key that is neither
+            // present nor upsertable — matching this method's pre-AC2 behavior exactly.
+            throw new ResourceNotFoundException("ConfigEntry", key);
+        }
         rejectOutOfRange(key, newValue);
-        entity.setValue(newValue);
-        entity.setUpdatedAt(Instant.now());
-        configRepository.save(entity);
+
+        if (existing.isPresent()) {
+            PlatformConfig entity = existing.get();
+            entity.setValue(newValue);
+            entity.setUpdatedAt(Instant.now());
+            configRepository.save(entity);
+            invalidate();
+            return configMapper.toResponse(entity);
+        }
+
+        PlatformConfig entity = createOrReadBack(key, newValue);
         invalidate();
         return configMapper.toResponse(entity);
+    }
+
+    /**
+     * skillars-deferred-127 code review (2026-09-21, owner decision taken live via
+     * {@code AskUserQuestion}): this method is a read-then-insert TOCTOU with no
+     * {@code @Transactional} — two concurrent first-ever writes for the same unseeded {@code
+     * HAS_CODE_DEFAULT} key can both observe {@link #updateConfig}'s own {@code
+     * configRepository.findByKey(key)} as empty and both attempt to create the row here; only one
+     * {@code INSERT} can win against {@code uq_platform_config_key} (
+     * {@code V138__baseline_schema.sql}). Rather than let the loser's constraint violation surface as
+     * a raw {@code DataIntegrityViolationException} → HTTP 500, catch it and re-read the winner's
+     * now-committed row, applying this call's own requested value to it instead — turning the race
+     * into correct last-writer-wins semantics matching every other concurrent-write path in this
+     * codebase, rather than a 500 with the request's value silently dropped.
+     */
+    private PlatformConfig createOrReadBack(String key, String newValue) {
+        PlatformConfig created = PlatformConfig.builder()
+            .key(key)
+            .value(newValue)
+            .valueType(ConfigValueType.LONG)
+            .updatedAt(Instant.now())
+            .build();
+        try {
+            configRepository.save(created);
+            return created;
+        } catch (DataIntegrityViolationException e) {
+            PlatformConfig winner = configRepository.findByKey(key)
+                .orElseThrow(() -> e);
+            winner.setValue(newValue);
+            winner.setUpdatedAt(Instant.now());
+            configRepository.save(winner);
+            return winner;
+        }
     }
 
     /**

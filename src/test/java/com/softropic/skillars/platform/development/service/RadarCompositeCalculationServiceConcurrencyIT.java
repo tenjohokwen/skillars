@@ -117,6 +117,40 @@ class RadarCompositeCalculationServiceConcurrencyIT extends AbstractIntegrationT
     }
 
     /**
+     * skillars-deferred-127 code review (2026-09-21): the shared {@code player_profiles} lock alone
+     * does not close the resurrection race through {@code radar_assessment_entries} — {@code
+     * RadarAssessmentService.submitAssessment} writes that table without taking this lock at all. The
+     * fix is a sticky {@code development_data_erased_at} tombstone, set by {@code
+     * GdprErasureService.deletePlayerDevelopmentData} and checked by {@code recalculateComposite}
+     * immediately after it re-acquires/refreshes the lock. This test proves the checking half of that
+     * mechanism directly: with the tombstone already set (simulating "erasure already committed
+     * before this call ever started" — the exact state a real interleaving would leave), a
+     * {@code recalculateComposite} call for that player must skip entirely and create nothing, even
+     * though a genuine assessment row exists that would otherwise make the per-skill loop non-empty.
+     */
+    @Test
+    void recalculateComposite_playerAlreadyTombstoned_skipsWithoutUpsertingAnything() {
+        seedRadarAssessment();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "UPDATE main.player_profiles SET development_data_erased_at = now() WHERE id = ?",
+                PLAYER_ID);
+            return null;
+        });
+
+        compositeCalculationService.recalculateComposite(PLAYER_ID, PARENT_USER_ID, Set.of(SKILL));
+
+        int compositeCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_radar_composites WHERE player_id = ?",
+            Integer.class, PLAYER_ID);
+        int baselineCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_radar_baselines WHERE player_id = ?",
+            Integer.class, PLAYER_ID);
+        assertThat(compositeCount).as("tombstoned player must get no composite row").isZero();
+        assertThat(baselineCount).as("tombstoned player must get no baseline row").isZero();
+    }
+
+    /**
      * skillars-deferred-126 AC2 Task 5. Reuses this exact class (per this AC's own Dev Notes — not a
      * from-scratch design, not {@code AdminCoachEnforcementIsolationRuntimeIT}), extended with the
      * three preconditions the existing fixture above does NOT satisfy: (a) a seeded {@code
@@ -217,7 +251,15 @@ class RadarCompositeCalculationServiceConcurrencyIT extends AbstractIntegrationT
      * GdprErasureService.deletePlayerDevelopmentData} (baselines then composites) via direct
      * repository/JDBC calls under full latch control — {@code recalculateComposite} itself has no
      * injection point between its two internal upsert calls to synchronize on from outside, so this
-     * drives both sides of the collision directly rather than through the production method. Thread A's
+     * drives both sides of the collision directly rather than through the production method.
+     * <strong>Historical note (skillars-deferred-127 AC1, 2026-09-21):</strong> production
+     * {@code deletePlayerDevelopmentData} now takes a shared {@code player_profiles} pessimistic lock
+     * upstream of either table, which fully serializes it against {@code recalculateComposite} and so
+     * this exact collision can no longer occur end-to-end in production. This test still drives both
+     * table orders directly with raw SQL/JDBC, independent of that production-code change, and remains
+     * a valid, useful proof that the opposite-order collision — if it were ever reachable again —
+     * still translates to the documented exception/cause pair; it is not itself testing the (now
+     * closed) production reachability of that collision. Thread A's
      * own write below mirrors {@code PlayerRadarCompositeRepository.upsertComposite}'s exact {@code
      * INSERT ... ON CONFLICT DO UPDATE} statement shape (not a plain {@code UPDATE}
      * — /bmad-code-review fix, 2026-09-21: the previous version used a plain {@code UPDATE} while
@@ -265,7 +307,9 @@ class RadarCompositeCalculationServiceConcurrencyIT extends AbstractIntegrationT
         });
 
         // Thread B: mirrors GdprErasureService.deletePlayerDevelopmentData's own order — baselines,
-        // then composites.
+        // then composites. (Historical framing, skillars-deferred-127 AC1: this order collision is
+        // no longer reachable end-to-end in production now that deletePlayerDevelopmentData takes a
+        // shared player_profiles lock upstream — see this test's class-level Javadoc above.)
         Future<?> threadB = executor.submit(() -> {
             try {
                 await(compositesLockedByA);

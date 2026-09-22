@@ -51,4 +51,21 @@ public class PlayerProfile extends BaseEntity {
 
     @Column(name = "consent_policy_version", length = 10)
     private String consentPolicyVersion;
+
+    /**
+     * skillars-deferred-127 code review (2026-09-21): a sticky tombstone set by
+     * {@code GdprErasureService.deletePlayerDevelopmentData} (under this row's own pessimistic lock)
+     * and checked by {@code RadarCompositeCalculationService.recalculateComposite} (immediately after
+     * it re-acquires/refreshes that same lock, before reading any aggregates) — closing the residual
+     * resurrection race the shared lock alone does not: {@code RadarAssessmentService.submitAssessment}
+     * writes {@code radar_assessment_entries} without taking this lock at all, so a coach submission
+     * that commits during an in-flight erasure can leave rows the erasure's own {@code DELETE} never
+     * saw (not yet committed at the time it ran). A single check inside {@code recalculateComposite}
+     * covers both the live {@code AFTER_COMMIT} path and the {@code RadarCompositeDlqProcessor} retry
+     * path, since every route to an upsert goes through that one method. {@code null} means "not
+     * erased" — never reset back to {@code null} once set, since a {@code player_profiles} row is
+     * never "un-erased".
+     */
+    @Column(name = "development_data_erased_at")
+    private Instant developmentDataErasedAt;
 }

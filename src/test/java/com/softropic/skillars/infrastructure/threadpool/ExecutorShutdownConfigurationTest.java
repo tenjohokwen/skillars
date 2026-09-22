@@ -13,9 +13,13 @@ import org.springframework.core.type.classreading.CachingMetadataReaderFactory;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.ReflectionUtils;
+import org.yaml.snakeyaml.Yaml;
 
+import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -256,6 +260,52 @@ class ExecutorShutdownConfigurationTest {
                 // inventory was built from. Covered by storageUploadExecutorAwaitsOnShutdown below,
                 // not by pools() — it is not a ThreadPoolTaskExecutor and has no such fields.
                 "BlobstoreConfig#storageUploadExecutor");
+    }
+
+    /**
+     * skillars-deferred-127 code review (2026-09-21, owner decision taken live via
+     * {@code AskUserQuestion}): widens this class's guard to the one executor
+     * {@code everyExecutorBeanIsCovered} structurally cannot see. The {@code taskScheduler} backing
+     * every {@code @Scheduled} method is auto-configured by Spring Boot's own
+     * {@code TaskSchedulingAutoConfiguration} (not a {@code @Bean} on a {@code com.softropic.skillars.
+     * **.*Config} class), so it never appears in that scan — a future change that flips
+     * {@code spring.task.scheduling.shutdown.await-termination} back off would pass every other test
+     * in this class silently. Reading {@code application.yaml} directly with SnakeYAML (the same
+     * technique {@code NoStraySmtpConfigTest} uses, already on the classpath via Spring Boot's own
+     * YAML property source support) keeps this test in the same no-Spring-context, no-container class
+     * as its siblings, rather than adding an eighth context to this project's gated CI count just to
+     * assert one property pair.
+     */
+    @Test
+    @DisplayName("the auto-configured @Scheduled taskScheduler awaits termination on shutdown")
+    void schedulerTaskExecutor_awaitsTerminationOnShutdown() throws Exception {
+        Map<String, Object> yaml;
+        try (InputStream in = Files.newInputStream(Path.of("src/main/resources/application.yaml"))) {
+            yaml = new Yaml().load(in);
+        }
+
+        Object spring = yaml.get("spring");
+        assertThat(spring).as("application.yaml must have a top-level spring: block").isInstanceOf(Map.class);
+        Object task = ((Map<?, ?>) spring).get("task");
+        assertThat(task).as("spring.task: block must exist (see AC3's pool.size)").isInstanceOf(Map.class);
+        Object scheduling = ((Map<?, ?>) task).get("scheduling");
+        assertThat(scheduling).as("spring.task.scheduling: block must exist").isInstanceOf(Map.class);
+        Object shutdown = ((Map<?, ?>) scheduling).get("shutdown");
+        assertThat(shutdown)
+            .as("spring.task.scheduling.shutdown: block must exist — without it, "
+                + "ExecutorConfigurationSupport.destroy() takes the shutdownNow() path for the "
+                + "auto-configured taskScheduler, interrupting up to 8 in-flight scheduled jobs "
+                + "(AC3's pool size) on every SIGTERM instead of just one")
+            .isInstanceOf(Map.class);
+
+        assertThat(((Map<?, ?>) shutdown).get("await-termination"))
+            .as("spring.task.scheduling.shutdown.await-termination must be true")
+            .isEqualTo(true);
+        assertThat(((Map<?, ?>) shutdown).get("await-termination-period"))
+            .as("spring.task.scheduling.shutdown.await-termination-period must be set — see "
+                + "ExecutorShutdown's own class Javadoc for the shutdown-budget arithmetic this "
+                + "period must fit inside")
+            .isNotNull();
     }
 
     /**

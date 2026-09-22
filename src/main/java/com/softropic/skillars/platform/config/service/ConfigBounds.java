@@ -241,8 +241,12 @@ public final class ConfigBounds {
      * {@code deadlock_timeout} (default 1s) so the deadlock detector gets a chance to fire before this
      * timeout would otherwise misreport a genuine deadlock ({@code 40P01}) as an ordinary lock timeout
      * ({@code 55P03}) — see {@code recalculateComposite}'s own Javadoc for the write-order deadlock
-     * hazard this guards against ({@code GdprErasureService.deletePlayerDevelopmentData} takes the
-     * same two tables in the opposite order). {@code min = 2L}, not {@code 1L}: a stored {@code 1}
+     * hazard this guards against ({@code GdprErasureService.deletePlayerDevelopmentData} still takes
+     * the same two tables in the opposite order; skillars-deferred-127 AC1 closed the concrete
+     * GDPR-erasure conflict by serializing the two paths upstream on a shared {@code player_profiles}
+     * lock, but this bound's own purpose — keeping a per-statement lock wait above Postgres's
+     * deadlock detector's own timeout for ANY conflicting writer on these two tables, not only that
+     * now-closed one — is unchanged). {@code min = 2L}, not {@code 1L}: a stored {@code 1}
      * would sit AT, not above, Postgres's own ~1s {@code deadlock_timeout} default — coin-flip-close
      * enough that a genuine deadlock could still misreport as an ordinary lock timeout depending on
      * which fires first, which is exactly the invariant this paragraph states the floor exists to

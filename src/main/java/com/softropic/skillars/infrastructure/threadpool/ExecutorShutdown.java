@@ -81,15 +81,24 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   moderationTaskExecutor  {@value #MODERATION_SECONDS} s
  *   taskExecutor            {@value #SHARED_ASYNC_SECONDS} s
  *   reportExecutor          {@value #REPORT_SECONDS} s
+ *   spring.task.scheduling.shutdown.await-termination-period            5 s
  *   remaining context teardown (datasource, Flyway, Redis)             ~4 s
  *   -------------------------------------------------------------------------
- *   worst case                                                        ~48 s
- *   docker-compose stop_grace_period (app service)                     55 s
+ *   worst case                                                        ~53 s
+ *   docker-compose stop_grace_period (app service)                     60 s
  * </pre>
  *
  * {@code stop_grace_period} was raised from 30 s to 45 s for this budget, then to 55 s when
- * {@link #REPORT_SECONDS} added a seventh pool; at 30 s the sum above could not fit and the pools
- * would have been SIGKILLed mid-drain anyway, which is the state this class exists to leave behind.
+ * {@link #REPORT_SECONDS} added a seventh pool, then to 60 s (skillars-deferred-127 code review,
+ * 2026-09-21) when {@code spring.task.scheduling.shutdown.await-termination} was turned on for the
+ * separately auto-configured {@code taskScheduler} bean backing every {@code @Scheduled} method —
+ * that bean is NOT one of the pools this class covers (it is defined by Spring Boot's own
+ * {@code TaskSchedulingAutoConfiguration}, invisible to {@code ExecutorShutdownConfigurationTest}'s
+ * {@code everyExecutorBeanIsCovered} scan, which is scoped to {@code com.softropic.skillars.**}), but
+ * it takes the identical sequential-{@code destroy()} slice in the same shutdown arithmetic, so its
+ * award belongs in this sum regardless of which test (if any) can mechanically enforce it; at 30 s the
+ * sum above could not fit and the pools would have been SIGKILLed mid-drain anyway, which is the state
+ * this class exists to leave behind.
  *
  * <p><strong>There are seven pools, not the five the story enumerated.</strong>
  * {@code BlobstoreConfig#storageUploadExecutor} is a raw {@link java.util.concurrent.ThreadPoolExecutor}
