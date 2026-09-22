@@ -25,7 +25,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * creation time, 30 as of {@code skillars-deferred-121}'s two new sites in {@code
  * AdminCoachEnforcementService.reinstateCoach}/{@code .deleteStrike} — mirrors this codebase's own {@code EmailTransportArchitectureTest} /
  * {@code NoStraySmtpConfigTest} convention: a hand-rolled source-text scan rather than a general-
- * purpose static-analysis dependency).
+ * purpose static-analysis dependency). Now 31 as of {@code skillars-deferred-127}'s new
+ * {@code GdprErasureService.deletePlayerDevelopmentData} lock-acquisition site (the retried lambda
+ * is the {@code findByIdForUpdate}+{@code orElseThrow} read only — the method's bulk deletes run
+ * after {@code withBoundedRetry} returns, so it passes the same read-only contract as every other
+ * site here).
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
  * building this scan against the real call sites (28 at story-creation time) surfaced one genuine violation —
@@ -80,11 +84,13 @@ class PessimisticLockRetryerCallSiteAuditTest {
     /**
      * The exact known count of real {@code .withBoundedRetry(} call sites under {@code src/main/java}
      * (28 at {@code skillars-deferred-117} story-creation time — the ledger's own stale count was 16 —
-     * now 30 after {@code skillars-deferred-121} added {@code AdminCoachEnforcementService
-     * .reinstateCoach}/{@code .deleteStrike}). Asserted explicitly so an added or removed call site is
-     * loud (this count changes) rather than silently changing how much code this test covers.
+     * 30 after {@code skillars-deferred-121} added {@code AdminCoachEnforcementService
+     * .reinstateCoach}/{@code .deleteStrike} — now 31 after {@code skillars-deferred-127} added
+     * {@code GdprErasureService.deletePlayerDevelopmentData}). Asserted explicitly so an added or
+     * removed call site is loud (this count changes) rather than silently changing how much code this
+     * test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 30;
+    private static final int EXPECTED_CALL_SITE_COUNT = 31;
 
     private record CallSite(String file, int line, String argument) {
     }
