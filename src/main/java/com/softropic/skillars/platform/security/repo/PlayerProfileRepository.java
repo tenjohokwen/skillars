@@ -13,12 +13,22 @@ import java.util.Optional;
 
 public interface PlayerProfileRepository extends JpaRepository<PlayerProfile, Long> {
 
-    // skillars-deferred-127 code review (2026-09-21): ORDER BY id — deterministic acquisition order
-    // for GdprErasureService.erase's PARENT-branch loop, each iteration of which now takes a
+    // skillars-deferred-127 code review (2026-09-21): ORDER BY id — deterministic iteration order for
+    // GdprErasureService.eraseParentChildren's PARENT-branch loop, each iteration of which takes a
     // player_profiles pessimistic lock (see deletePlayerDevelopmentData). NOWAIT means a lock
-    // conflict fails fast rather than waits, so unordered acquisition cannot itself produce a
-    // circular-wait deadlock (40P01) — but it does make which acquisition attempt (if any) exhausts
-    // its retry budget nondeterministic, heap-order-dependent, and undocumented. Zero-cost fix.
+    // conflict fails fast rather than waits, so unordered iteration cannot itself produce a
+    // circular-wait deadlock (40P01) — but it does make which iteration (if any) exhausts its retry
+    // budget nondeterministic, heap-order-dependent, and undocumented. Zero-cost fix.
+    //
+    // skillars-deferred-128 AC1/AC7 Task 5: as of AC1, each child's lock is acquired and released in
+    // its OWN inner (REQUIRES_NEW) transaction, one at a time — the loop no longer holds every
+    // child's lock simultaneously the way it did when all of them accumulated on erase()'s single
+    // outer transaction. The retry-budget-determinism half of this rationale is unchanged (still only
+    // one lock outstanding at a time, so still only one attempt's outcome to make deterministic); the
+    // "deterministic ACQUISITION order across N simultaneously-held locks" framing above is now
+    // moot — reworded here, not deleted, since a stable iteration order is still a genuine (if
+    // smaller) benefit: it keeps which specific child processes first, and therefore which child's
+    // log lines/AdminAlert-processed-count appear first on a deadline-exceeded run, reproducible.
     List<PlayerProfile> findByParentIdOrderByIdAsc(Long parentId);
 
     /** Always use this instead of findById — parentId enforces family isolation. */

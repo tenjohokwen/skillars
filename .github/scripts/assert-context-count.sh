@@ -132,7 +132,16 @@ LOG="${1:?usage: assert-context-count.sh <build-log> [ceiling]}"
 # class in the suite combines these two overrides. Expected +1 from local reasoning (no full local
 # `mvn test` run per this project's own no-mvn-verify-locally convention); confirm the exact
 # pre->post missCount against this PR's actual CI run and correct this note if it differs.
-CEILING="${2:-44}"
+#
+# CEILING = 45, deliberate +1 (story skillars-deferred-128, /bmad-code-review response).
+# GdprErasureIT's atomicity test originally raced a 1ms budget; the review replaced that with a
+# @MockitoSpyBean on RefreshTokenRepository (alongside the class's pre-existing @MockitoBean
+# FileStorageService) so it can force a deterministic failure from markAllUsedByUserId, the first
+# step after the PARENT loop, instead of racing AC2's own deadline. No other class in the suite
+# combines these two overrides, so this forks its own context -- same one-new-config-forks-
+# one-context shape as every entry above, not ordering-dependent thrashing. Confirmed against this
+# PR's own CI run (35770394422): missCount went 44 -> 45.
+CEILING="${2:-45}"
 
 if [ ! -f "$LOG" ]; then
   echo "assert-context-count: build log not found: $LOG" >&2

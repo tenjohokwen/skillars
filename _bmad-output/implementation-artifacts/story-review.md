@@ -1,554 +1,541 @@
-# Senior-Dev Audit — `skillars-deferred-127-gdpr-radar-lock-serialization-config-upsert-and-scheduler-pool-fixes`
+# Story Review — `skillars-deferred-128-gdpr-lock-scope-erase-deadline-scheduler-lock-and-claim-clock-fixes`
 
-**Reviewed:** 2026-09-21 · **Against:** working tree at `a0d91f95` (branch `story/deferred-127-lock-config-scheduler-fixes`)
-**Method:** every file, line citation, constraint, precedent and test file named in the story was opened and
-checked against actual source. Findings that could not be substantiated from source were dropped rather than
-reported. Where a claim is *correct*, it is listed in § "Verified correct" so the dev does not re-litigate it.
+**Reviewer:** senior-dev audit (adversarial read against actual source, not against the story's own narrative)
+**Date:** 2026-09-22
+**Reviewed at:** `story/deferred-127-lock-config-scheduler-fixes@4c250cd0` (skillars-deferred-127 **is** merged — `23c912cc`, PR #215)
+**Verdict:** **Changes required before dev.** The story is unusually well-cited (see §4 — nearly every
+line reference checks out exactly), but three of its six fixes rest on premises that do not survive
+contact with the source: AC1 silently breaks a documented transactional-outbox invariant and can
+permanently orphan S3 blobs; AC6 is framed as "mechanical, no design decision needed" when four of its
+five targets are deliberately-concurrent `SKIP LOCKED` workers; and AC1/AC2/AC4 all claim an existing
+PARENT-branch test safety net that does not exist.
 
-**Verdict: `ready-for-dev` is premature.** Two findings are blocking (B1, B2). B1 means AC1 as written will fail
-every PLAYER-role GDPR erasure in production and turn six currently-green integration tests red. B2 means the
-story's own headline "re-verification finding" is wrong by a factor of 4.5x and has already propagated into
-`sprint-status.yaml`. The underlying four fixes are all worth doing; the specifications need correcting first.
+Every finding below was verified by opening the cited file. Findings I *considered and rejected* as
+false positives are listed in §3 so they are not re-raised later.
 
 ---
 
-## Blocking
+## 1. Must fix before implementing
 
-### B1 — AC1 locks on the wrong identifier: the PLAYER-role path passes a `user.id` where a `player_profiles.id` is required
+### H1 — AC1 breaks `BlobDeletionOutboxSupport`'s documented atomicity contract and can permanently orphan performance-report blobs
 
-**Severity:** blocking · **Files:** `GdprErasureService.java:126-131`, `PlayerProfileRepository.java:44-47`,
-`BaseEntity.java`, `V138__baseline_schema.sql:896-912,4087-4105`, `GdprErasureIT.java`
+`GdprErasureService.deletePlayerDevelopmentData` collects every performance report's S3 `storage_key`
+into the caller-owned `blobKeysToDelete` list (`GdprErasureService.java:267-273`) and then deletes the
+`performance_reports` rows (`:274`). The rows are the **only** record of those keys. The enqueue that
+schedules the actual S3 deletion happens later, back in `erase()`'s own transaction
+(`:166`, `blobDeletionOutboxSupport.enqueue(blobKeysToDelete)`).
 
-`deletePlayerDevelopmentData` is called with two structurally different identifiers:
+`BlobDeletionOutboxSupport`'s class Javadoc states the invariant explicitly
+(`src/main/java/com/softropic/skillars/platform/filestorage/service/BlobDeletionOutboxSupport.java:20-22`):
+
+> "Producers call `enqueue` *inside* their business transaction (so the rows commit atomically with
+> the work that decided they should be deleted)"
+
+and `enqueueOne` (`:50-62`) deliberately rethrows on any serialisation failure with the comment
+*"rethrow so the producing (e.g. GDPR erasure) transaction rolls back rather than committing COMPLETED
+with a PII key that was never scheduled for deletion."*
+
+AC1 splits those two halves into **different transactions**. After AC1:
+
+- child's `performance_reports` rows commit in the inner `REQUIRES_NEW` transaction;
+- the outbox rows are written in the outer `erase()` transaction and commit only at outer commit;
+- any failure between the inner commit and the outer commit — `refreshTokenRepository.markAllUsedByUserId`
+  (`:154`), `gdprRequestRepository.deleteExpiredByUserId` (`:157`), the enqueue itself (`:166`), the
+  `request.save` (`:172`), the event publishing (`:175-199`), or the outer commit — rolls back the outbox
+  rows while leaving the `performance_reports` deletes durable.
+
+The storage keys are then **irrecoverable**: on re-drive, `findByPlayerIdOrderByGeneratedAtDesc` returns
+nothing, so the blobs are never enqueued again and are never deleted. That is not "a partially-erased
+player is not less erased than intended" (AC1's own wording) — it is an Article 17 artefact that can
+never be erased, created by the fix.
+
+The story actually *names* `blobDeletionOutboxSupport.enqueue` as its example of a later failure step,
+without noticing that this is the one step that owns the keys.
+
+**Required:** move the blob enqueue for a child's report keys **inside** the same `REQUIRES_NEW` lambda
+as that child's deletes (i.e. `blobDeletionOutboxSupport.enqueue(childKeys)` per child, before the
+lambda returns), so the key-bearing rows and the deletion intent still commit atomically. Keep only the
+GDPR-export zip keys (`:160-162`, derived from `gdpr_requests` rows that survive) on the outer path.
+Update AC1's "accepted tradeoff" paragraph accordingly — the tradeoff is real but must not include
+"permanently unerasable blobs."
+
+---
+
+### H2 — AC6 is not a mechanical fix: four of its five targets are deliberately-concurrent `SKIP LOCKED` workers
+
+AC6 says the five annotations are a *"mechanical fix, no design decision needed."* Verified against
+source, that is wrong for four of the five. Each already has per-row cross-node protection and is
+designed to **scale out**, not to be serialised:
+
+| method | existing cross-node protection | verified at |
+|---|---|---|
+| `UploadSessionExpiryScheduler.processExpired` | `findExpiredPendingForUpdate` = `FOR UPDATE SKIP LOCKED`, plus a `status != PENDING` re-check inside the per-row tx | `UploadSessionRepository.java:27-29`; `UploadSessionExpiryScheduler.java:35-58` |
+| `ReconciliationWorkerScheduler.reconcile` | `findNonTerminalForUpdate` = `FOR UPDATE SKIP LOCKED`, plus `Video.@Version` optimistic locking | `VideoRepository.java:39-41`; `ModerationSlaMonitorService.java:79-94` documents the `@Version` reliance by name |
+| `WebhookEventProcessorScheduler.processPending` | `findPendingForUpdate` = `FOR UPDATE SKIP LOCKED` **plus** an explicit `PENDING → PROCESSING` claim step | `VideoWebhookEventRepository.java:41-43`; `WebhookEventProcessorScheduler.java:52-58` |
+| `ModerationSlaMonitorService.detectSlaViolations` | `findScanningOlderThan` = `FOR UPDATE SKIP LOCKED`; double-pick explicitly analysed and **accepted** | `VideoRepository.java:62-64`; `ModerationSlaMonitorService.java:79-94` |
+
+`WebhookEventProcessorScheduler`'s own class Javadoc (`:39-42`) states the design outright:
+
+> "Concurrent processing is prevented using `FOR UPDATE SKIP LOCKED` during event retrieval, ensuring
+> that only one scheduler node processes a given event at any time."
+
+Adding `@SchedulerLock` to a 5-second-cadence queue drainer converts N-node parallel drain into
+single-node drain. On a 3-node deployment that is a ~3× reduction in webhook throughput under backlog —
+a real capacity change presented as an annotation sweep.
+
+**Second, concrete regression in the same method:** `processPending` publishes two Micrometer gauges
+*before* the batch load (`WebhookEventProcessorScheduler.java:63-66`,
+`videoMetrics.updateWebhookQueueDepth(...)` / `updateActiveUploadSessions(...)`). ShedLock's advisor is
+configured outermost (`AsyncConfig.java:30-36`), so on a losing node the **whole method** is skipped,
+including the gauge updates. N−1 nodes' `webhook_queue_depth` / `active_upload_sessions` gauges freeze
+at their last value forever, and any cross-instance max/avg aggregation silently reports stale data.
+
+**Required:** AC6 must either (a) re-scope to the subset where mutual exclusion is genuinely wanted,
+with a per-method justification of the throughput cost, or (b) keep all five but state the
+serialisation tradeoff explicitly and move `processPending`'s gauge writes outside the locked method
+(e.g. a separate tiny unlocked `@Scheduled` metrics tick). Either way the "no design decision needed"
+framing has to go, and AC7 bullet 4 must not be deleted outright as "fully fixed" on that framing.
+
+---
+
+### H3 — The PARENT branch has **zero** existing test coverage; all three ACs that restructure it claim a safety net that does not exist
+
+AC1, AC2 and AC4 all restructure the same PARENT-branch loop (`GdprErasureService.java:148-151`), and
+all three lean on existing tests:
+
+- AC1 Tests: *"Existing `GdprErasureIT.erase_playerUser_…`/`erase_parentUser_…` tests must stay green."*
+- AC2 Tests: *"Existing `GdprErasureIT` PARENT-branch tests with a small number of children … must stay green."*
+- AC4 Tests: *"Existing PARENT-branch tests with all children present and reachable must stay green."*
+
+Verified in `src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java`:
+
+- There is **no** `erase_parentUser_*` test. (`erase_playerUser_*` tests do exist.)
+- `setUp()` inserts exactly one `main.player_profiles` row (`:118-123`), linked by `user_id` to
+  `SELF_PLAYER_USER_ID`. **No row anywhere in the fixture has `parent_id` set** — grep for `parent_id`
+  in that file returns only `messaging.conversations`, `payment.parent_credit_ledger` and
+  `video_approval_requests` usages.
+- Therefore `playerProfileRepository.findByParentIdOrderByIdAsc(PARENT_ID)` returns an **empty list**
+  in every existing test, and the PARENT loop body has never executed in CI.
+
+The ledger bullet itself says so for AC4's case — *"No test covers it."* — which the story quotes
+elsewhere but does not carry into its Tests sections.
+
+**Required:** budget the missing fixture as explicit scope: a PARENT with ≥2 child `player_profiles`
+rows (`parent_id = PARENT_ID`), each seeded with at least one row in a table
+`deletePlayerDevelopmentData` deletes plus one `performance_reports` row carrying a `storage_key` (so
+H1's path is covered too). Without it AC1/AC2/AC4 ship into an untested branch and none of the three
+"must stay green" statements means anything.
+
+---
+
+## 2. Should fix
+
+### M1 — AC6 + `ModerationSlaMonitorService`'s node-local failure counter: a documented guarantee silently degrades
+
+`videoConsecutiveFailures` is a plain in-memory `HashMap<UUID,Integer>`
+(`ModerationSlaMonitorService.java:49-50`), and the escalation rule is documented as
+*"three consecutive failures = 15 minutes of unrecoverable failure"* (`:181-185` in the per-video catch).
+That arithmetic only holds because **every** instance runs **every** cycle today, so each node
+accumulates a complete local history.
+
+Under `@SchedulerLock`, exactly one arbitrary node runs each cycle. A node observes roughly 1/N of
+cycles, and a node that skips a cycle neither increments nor clears its counter — so the counters
+diverge per node and the "3 consecutive" threshold is reached late, erratically, or not at all. The
+forced-`FAILED` + admin-alert backstop that exists specifically so an infinite failure loop "cannot
+escape notice" becomes the thing that escapes notice.
+
+**Fix:** if `ModerationSlaMonitorService_detectSlaViolations` keeps its lock, move the counter to a
+persisted column (e.g. reuse `moderationRetryCount`-style state) or state the degradation explicitly in
+AC6 and in the class Javadoc.
+
+### M2 — AC6's `AlertEvaluationService` rationale is still wrong, one level deeper than the story looked
+
+The story corrects the ledger's "DB-touching" framing to "duplicate ops-alert emails." That correction
+is also wrong. `AlertEvaluationService.computeMetricValue` is a **stub**
+(`AlertEvaluationService.java:84-88`):
 
 ```java
-// GdprErasureService.java:126-131
-if (role == SkillarsRole.PLAYER) {
-    deletePlayerDevelopmentData(userId, blobKeysToDelete);          // ← main."user".id
-} else if (role == SkillarsRole.PARENT) {
-    playerProfileRepository.findByParentId(userId)
-        .forEach(pp -> deletePlayerDevelopmentData(pp.getId(), blobKeysToDelete));  // ← main.player_profiles.id
+private double computeMetricValue(String metricName) {
+    // TODO: Implement generic metric computation or add domain-specific metrics here.
+    // Payment-specific metrics (FAILURE_RATE, etc.) have been removed during template conversion.
+    return -1.0;
 }
 ```
 
-These are not the same key space:
+`evaluate()` guards on `if (actualValue < 0) continue;` (`:58-61`), so **no rule can ever breach and no
+`AlertFiredEvent` can ever be published**, on any number of instances. There is no duplicate-email risk
+to close. (`getCounter` at `:96-102` is also dead — nothing calls it.)
 
-- `PlayerProfile extends BaseEntity`, whose `id` is `@Id @Tsid` (`BaseEntity.java:26-28`) — an
-  independently generated TSID. A player profile's link to its owning account is the **separate**
-  `user_id` column (`PlayerProfile.java:41-43`), reachable via `PlayerProfileRepository.findByUserId`
-  (`:24`), not via `findById`.
-- `V138__baseline_schema.sql:911` enforces `chk_pp_owner CHECK ((parent_id IS NOT NULL AND user_id IS NULL)
-  OR (parent_id IS NULL AND user_id IS NOT NULL))` — confirming `user_id` is the account link and `id` is not.
-- Every development table keys on `player_profiles.id`, not on a user id:
-  `fk_prb_player_id`, `fk_prc_player_id`, `fk_pswsa_player_id` all
-  `REFERENCES main.player_profiles(id)` (`V138:4091,4098,4105`).
+Net effect of adding `@SchedulerLock` here: a `main.shedlock` row acquire/release every 30 s, forever,
+on a method whose own Javadoc advertises *"This service is NOT @Transactional — it reads in-memory
+Micrometer counters only. No DB call is made during evaluation"* (`:23-24`). The AC turns a
+deliberately DB-free job into a DB-touching one to protect against an impossible outcome.
 
-AC1 Task 3 mandates adding, at the top of that method:
+**Fix:** drop `AlertEvaluationService` from AC6 and record in the ledger closeout that it is inert
+pending `computeMetricValue`'s implementation — then it can be locked as part of whatever story actually
+implements metric computation.
 
-```java
-var playerProfile = lockRetryer.withBoundedRetry(() -> playerProfileRepository.findByIdForUpdate(playerId)
-    .orElseThrow(() -> new ResourceNotFoundException("Player not found: " + playerId, "player_profile")));
-```
+### M3 — AC2 does not close the ledger bullet it is assigned to, but AC7 deletes that bullet anyway
 
-On the PLAYER branch `playerId` is a `user.id`, so `findByIdForUpdate` finds nothing and
-`ResourceNotFoundException` propagates out of `erase()`. `GdprEventListener.onErasureRequested`
-(`:34-41`) catches it, calls `markFailed`, and the whole `REQUIRES_NEW` transaction rolls back.
-**Every PLAYER-role GDPR erasure fails.** `PessimisticLockRetryer.withBoundedRetry` explicitly does *not*
-absorb this — "Any other exception — including a genuine not-found — propagates immediately, unretried"
-(`PessimisticLockRetryer.java:118-124`).
+Bullet 2's concern is `PessimisticLockRetryer`'s own documented precondition: the retryer **sleeps while
+holding the caller's pooled JDBC connection** (`PessimisticLockRetryer.java:40-50`), so a *long-running
+call site* pins a connection for a long time.
 
-**The story's "existing tests must stay green" assertion is false.** `GdprErasureIT` never inserts a
-`main.player_profiles` row — not in `setUp()` (`:67-100`), and not in `secData.sql` (grepped: zero hits).
-`development.performance_reports.player_id` carries no FK (confirmed: no `REFERENCES` for that table in
-V138), which is why the fixtures get away with using `PLAYER_ID = 9210_000_003L` — a `user.id` — as a
-`player_id`. Six tests drive a PLAYER-role erasure and would all go red:
+AC2's deadline is checked **between children** (Task 4: *"before each child's `deletePlayerDevelopmentData`
+call, checks whether `Instant.now()` is already past `deadline`"*). It therefore bounds the *number of
+children processed*, and nothing else. After AC1 each child runs in its own transaction on its own
+connection, so the quantity the Javadoc warns about — one connection held for the duration of one
+long-running call — is **completely unchanged** by AC2. A single child with a slow
+`performance_reports` scan plus a contended `~3.2 s` backoff still holds its connection exactly as long
+as before; the budget only refuses to start child *k+1*.
 
-| Line | Test |
-|---|---|
-| 181 | `requestErasure_playerUser_erasureCompletesSuccessfully` |
-| 316 | `erase_playerUser_deletesPerformanceReportFromS3` |
-| 345 | `erase_playerUser_reportKeyGoesThroughOutbox_thenDrainClearsIt` |
-| 369 | `erase_playerUser_s3DeleteFails_leavesOutboxRow_reDrivableOnceBackoffExpires` |
-| 416 | `erase_playerUser_s3DeleteFails_erasureStillCompletes` |
-| 442 | `erase_playerUser_videoCascade_purgesVideos_resetsQuota_cancelsPendingApprovals` |
+AC7 Task 2 nevertheless instructs: *"Bullet 2 — delete outright if AC2 ships as scoped."*
 
-**Secondary consequence — a pre-existing bug the story assumes away.** Because a TSID `player_profiles.id`
-will essentially never equal a `user.id`, the PLAYER branch's `deleteAllByPlayerId` calls already delete
-*nothing* today. So AC1's own motivating scenario (resurrection of an erased player's radar rows) is
-currently reachable only through the **PARENT** branch. The story's Context section presents it as
-universal.
+**Fix:** either extend AC2 to bound a *single* child's work (a `statement_timeout` / `lock_timeout` on
+the inner transaction, mirroring `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s per-statement approach in
+`RadarCompositeCalculationService`), or change AC7 to annotate bullet 2
+`[DECIDED: accepted risk — skillars-deferred-128]` with this reasoning rather than deleting it.
 
-**What the story must specify instead:**
-1. Resolve the profile correctly per branch — e.g. `playerProfileRepository.findByUserId(userId)` on the
-   PLAYER branch, or hoist id resolution into `erase()` so `deletePlayerDevelopmentData` always receives a
-   `player_profiles.id`. Note this is itself a behaviour change (PLAYER development data would start
-   actually being deleted) and deserves its own owner decision.
-2. Decide explicitly what happens when **no** profile row exists for the account (a PLAYER user who never
-   had a profile). The mandated `orElseThrow` converts today's silent no-op into a hard erasure failure.
-   `orElse`-and-skip is almost certainly the right call for a GDPR path; the story currently forbids it by
-   prescribing `recalculateComposite`'s pattern verbatim.
-3. Add `main.player_profiles` seeding to `GdprErasureIT.setUp()` — see F10 for why the *shape* of that
-   seeding matters.
+Precision note for whoever rewrites AC2's context: the supplier actually passed to `withBoundedRetry`
+is short (`findByIdForUpdate(...).orElseThrow(...)`, `GdprErasureService.java:254-255`) — the 11 deletes
+run *after* it returns. The ledger's "used from the long-running call site its own Javadoc forbids"
+framing is loose; the genuine concern is connection hold-time for the whole inner transaction, which is
+a slightly different (and still real) claim.
 
----
+### M4 — AC2's deadline converts a latency problem into a GDPR request that can never complete
 
-### B2 — AC2's key count and scope characterisation are both wrong: 17 keys, of which only 4 are affected
+AC2 Task 4 says: on deadline expiry, *"stops processing further children and throws (do not silently
+truncate)"*, propagating to `GdprEventListener.onErasureRequested`'s catch (`GdprEventListener.java:36-41`),
+which calls `markFailed` and `log.error`s. Task 4 explicitly declines to add alert/retry machinery,
+citing the existing `[DECIDED: accepted risk — skillars-deferred-127]` on `markFailed`'s lack of alerting.
 
-**Severity:** blocking (factual) · **Files:** `ConfigBounds.java:293-317`, `V139__baseline_seed_data.sql`
+Combined, that means: a PARENT whose child count × per-child time exceeds the budget produces a `FAILED`
+GDPR erasure with **no admin alert and no auto-retry**, on **every** re-drive, indefinitely. The
+statutory obligation the code exists to satisfy is the thing that silently stops being met. This is
+materially worse than the latency it replaces.
 
-The story states, in four places (Priority line, AC2 Context, AC2 Task 2, AC5 Task 2 bullet 4, Change Log),
-that `ConfigBounds.HAS_CODE_DEFAULT` holds **18** keys and that all 18 are unwritable. It frames this as the
-one concrete correction its own re-verification produced ("not just the 3 the original deferral bullet named
-as examples — confirmed by reading `ConfigBounds.HAS_CODE_DEFAULT`'s full `Set.of(...)` in full").
+Note the partial mitigation and its limit: after AC1, already-processed children stay deleted, so a
+re-drive makes forward progress (re-deletes are cheap no-ops). But nothing *triggers* a re-drive, and
+nothing tells an operator one is needed.
 
-**Two independent errors:**
+**Fix:** at minimum, the deadline path must raise an `AdminAlert` (the `adminAlertRepository` is already
+injected at `GdprErasureService.java:57`) rather than relying on a `log.error`. That is a small,
+targeted addition, distinct from the "build AdminAlert machinery across every `markFailed` cause"
+concern the `[DECIDED]` bullet declines.
 
-**(a) The count is 17.** `ConfigBounds.java:300-317` — the `Set.of(...)` opens on 300 and the 17 entries
-occupy lines 301–317. Verified mechanically: `17`.
+### M5 — AC2's "30 s = Hikari `connection-timeout`" derivation is a category error
 
-**(b) 13 of the 17 *are* seeded and are already writable today.** Checked each key's literal against
-`V139__baseline_seed_data.sql`:
+AC2 Task 2's lead justification: *"30 s matches HikariCP's own `connection-timeout: 30000`
+(`application.yaml:134`) — no other caller of the shared pool is expected to wait longer than that for a
+connection, so bounding this call site to the same ceiling keeps it from being an outlier."*
 
-| Key | Seeded in V139? |
-|---|---|
-| `pack.pause.maxDays` | yes |
-| `disputes.submissionWindowDays` | yes |
-| `platform.video.lifecycle.blocked_to_archived_days` | yes |
-| `platform.video.lifecycle.archived_to_deleted_days` | yes |
-| `platform.video.lifecycle.batch_size` | yes |
-| **`platform.moderation_sla_batch_size`** | **no** |
-| `platform.video.playback.signed_url_ttl_minutes` | yes |
-| `platform.video.access.coach_window_days` | yes |
-| `platform.video.deletion.max_attempts` | yes |
-| **`platform.development.radar_composite_dlq.max_attempts`** | **no** |
-| `gdpr.export.urlExpiryHours` | yes |
-| `platform.message_retention_months` | yes |
-| `reviews.submissionWindowDays` | yes |
-| `reviews.autoHoldFlagThreshold` | yes |
-| `development.timeline.coachAccessExpiryDays` | yes |
-| **`security.rate_limiting.bucket_ttl_hours`** | **no** |
-| **`platform.radar_composite_lock_timeout_seconds`** | **no** |
+`connection-timeout` bounds how long a caller waits to **acquire** a connection. AC2's budget bounds how
+long `erase()` **holds** connections (serially) and how long the HTTP request thread is occupied. These
+are unrelated quantities; equating them gives the number a false provenance. The story does hedge
+("verify this reasoning holds … a starting point, not a mandate"), but this is the only derivation
+offered.
 
-The four unseeded keys appear nowhere in `src/main/resources` (grepped). **The real scope of the gap is 4
-keys, not 18** — and three of those four are exactly the three the original ledger bullet named. The correct
-ledger correction in AC5 Task 2 is **"3 keys → 4 keys"**, not "3 → 18". As written, AC5 would write a wrong
-number into `deferred-work.md`.
+**Fix:** derive the budget from something it actually bounds — e.g. the caller's own latency tolerance.
+Worth noting for that derivation: `erase()` runs on the **request thread** via a synchronous
+`@TransactionalEventListener(AFTER_COMMIT)` (`GdprEventListener.java:21-35`), so the budget is directly
+added to an HTTP response time. 30 s is a long time to hold an HTTP request open; 5–10 s may be the
+better ceiling.
 
-**Root cause of the error — a misread Javadoc.** AC2 Context asserts `HAS_CODE_DEFAULT` "is, by its own class
-Javadoc, deliberately the set of keys with **no Flyway seed migration**". The actual Javadoc
-(`ConfigBounds.java:293-299`) says something different:
+### M6 — AC2's test guidance points at a seam that does not exist
 
-> Keys whose call site passes a code default (2-arg `getLong`/`getInt`) or catches the missing-key
-> `IllegalStateException` — an *absent* or *blank* value is survivable there…
+AC2 Tests: *"Check how `RadarCompositeCalculationServiceConcurrencyIT` overrides a normally-fixed timing
+constant for its own tests and follow the same seam if one already exists."*
 
-The set is defined by **call-site tolerance of absence**, not by seeding. "No Flyway seed" appears only as an
-incidental aside in `ConfigStartupAssertion.java:89-90`. The story inherited an imprecise framing from the
-ledger bullet's own title and escalated it into a hard count without checking.
+Verified: that IT has no such seam. Its only timing constant is
+`private static final long LOCK_HOLD_MILLIS = 1200`
+(`RadarCompositeCalculationServiceConcurrencyIT.java:44`) — the **test's own** locker-thread hold
+duration, used at `:77`. There is no `@TestPropertySource`, no `ReflectionTestUtils`, no
+`@DynamicPropertySource`, no production-constant override anywhere in the file.
 
-**Already propagated:** `sprint-status.yaml:2` carries "corrected the config-key gap's scope from the
-original bullet's '3 keys' to the actual 18 HAS_CODE_DEFAULT keys". That line needs correcting too.
+**Fix:** decide the seam in the story rather than deferring to a non-existent precedent. Given AC2
+Task 3 already notes that deferred-127's `createOrReadBack` upsert makes a new bounded key viable, a
+`ConfigBounds` key + `@TestPropertySource` is the cleanest option — but note `createOrReadBack`
+hardcodes `ConfigValueType.LONG` (`ConfigService.java:250-255`), so the key must be seconds-as-long, not
+a `Duration`.
 
-**What is still correct:** the *fix* (upsert on write, scoped to `HAS_CODE_DEFAULT`) and its scoping rationale
-survive. I independently confirmed the scoping argument: every non-`HAS_CODE_DEFAULT` key in
-`ConfigBounds.ALL` — including all 12 generated `video.quota.*` and 6 `video.*` keys — is seeded in V139, so
-narrowing the upsert to `HAS_CODE_DEFAULT` leaves no other bounded key unwritable. Only the framing,
-the count, and the ledger correction need rewriting.
+### M7 — AC3's connection-pressure math is not derivable as instructed
 
----
+AC3 Task 2 asks for a comment stating *"the `PessimisticLockRetryer` backoff-while-holding-a-connection
+mechanism that makes '8 threads busy' translate into 'up to 8 connections parked, not doing DB work.'"*
 
-## High
+That step does not follow. Only **two** `@Scheduled` methods in the whole codebase can reach
+`PessimisticLockRetryer` at all:
 
-### H1 — AC1 Task 4's "locked/unlocked independently" is false: Postgres holds row locks to end of transaction
+- `PaymentPendingSweeper.sweepStrandedPayments` → `sweepOne` → `lockRetryer.withBoundedRetry`
+  (`PaymentPendingSweeper.java:110-112, 141, 149`) — 15-minute cadence, `@SchedulerLock`ed.
+- `RadarCompositeDlqProcessor.process` → `compositeCalculationService.recalculateComposite`
+  (`RadarCompositeDlqProcessor.java:157, 257`) — 60 s cadence, `@SchedulerLock`ed.
 
-**Files:** `GdprErasureService.java:75,128-131`
+Spring's `ReschedulingRunnable` means each `@Scheduled` method has at most one in-flight run per JVM, so
+the true worst case is **2** scheduler threads sleeping in `withBoundedRetry`, not 8 — and both are
+mutually exclusive across instances anyway.
 
-> "confirm the new lock acquisition happens once per player inside the method itself (not hoisted above the
-> loop in `erase()`), so each player in a multi-child family is **locked/unlocked independently**"
+The underlying pressure argument is still sound and worth documenting; it just needs the correct
+mechanism: **8 scheduler threads can hold up to 8 pooled connections for the duration of their
+transactions**, which is the real 8-of-25 claim. The retryer's backoff-while-holding is a narrower,
+2-thread sub-case.
 
-`SELECT … FOR UPDATE` row locks are released only at transaction end. `erase()` is a single
-`@Transactional(propagation = REQUIRES_NEW)` method (`:75`), and the PARENT loop runs entirely inside it.
-Locking inside `deletePlayerDevelopmentData` does **not** release each player's lock per iteration — the
-locks accumulate and are all held until `erase()` commits. The placement decision is still right (per-player
-acquisition keeps the *acquisition* granular and bounded), but the stated reason is wrong, and two
-consequences follow that the story does not account for:
+**Fix:** write the comment with the correct derivation. This is an AC whose entire deliverable is a
+correct derivation, so getting the number right is the whole job.
 
-- A parent with N children holds N `player_profiles` `FOR UPDATE` locks simultaneously.
-- Worst-case added latency is **N × ~3.2s**, not ~3.2s. The "fails fast within ~3.2s" claim in the Context
-  section is per-acquisition, not per-erasure.
+### M8 — AC3's "seven `@Async` executor pools" correction is itself imprecise
 
-Rewrite the task's rationale, and restate the budget as per-player.
+The story corrects the ledger's "six `@Async` executors" to seven, citing `ExecutorShutdown.java:77-83`
+and `:103-114`. Both citations are **exact** (verified). But the seven are
+*`ExecutorShutdown`-covered thread pools*, not seven `@Async` executors:
 
-### H2 — AC1's blast-radius analysis omits FK-induced lock conflicts on `player_profiles`
+- `storageUploadExecutor` is a raw `java.util.concurrent.ThreadPoolExecutor` passed to the AWS SDK
+  (`S3StorageService.java:56`, `AsyncRequestBody.fromInputStream(data, contentLength, storageUploadExecutor)`)
+  — never an `@Async` qualifier target. `ExecutorShutdown.java:104-106` says as much: *"is a raw
+  `ThreadPoolExecutor` rather than a `ThreadPoolTaskExecutor`, which is why an inventory built by
+  grepping for `ThreadPoolTaskExecutor` missed it."*
 
-**Files:** `V138__baseline_schema.sql:4083-4105,4230-4231,4496-4504`
+**Fix:** say "seven application-managed thread pools (not all `@Async`)" in the new comment. Given AC3
+is documentation-only and makes a point of correcting the ledger's count, the replacement wording should
+be right.
 
-The "Why this is lower-risk than it may first look" paragraph reasons only about contention between the
-erasure path and `recalculateComposite`. But `FOR UPDATE` on a `player_profiles` row conflicts with the
-`FOR KEY SHARE` lock Postgres takes on that row for **every referential-integrity check** from a child
-insert. Seven tables reference `main.player_profiles(id)`:
+### M9 — AC1 leaves the outer persistence context holding stale `PlayerProfile` entities
 
-`development.coach_radar_preferences`, `development.player_radar_baselines`,
-`development.player_radar_composites`, `development.player_slu_weekly_snapshot_applied`,
-`main.parent_player_links`, `payment.player_subscriptions`, `payment.player_subscription_changes`.
+After AC1, the tombstone (`playerProfile.setDevelopmentDataErasedAt(...)`, `GdprErasureService.java:279-280`)
+is written in the **inner** EntityManager. The outer persistence context still holds the
+`PlayerProfile` instances returned by `findByParentIdOrderByIdAsc` at `:149`, with
+`developmentDataErasedAt == null`.
 
-Because the lock is now held for the **remainder of the erase transaction** (which continues through
-performance-report iteration, blob-key collection, refresh-token revocation, GDPR-request updates and event
-publication — `:134-182`), any concurrent insert into those seven tables for that player will block on it.
-This is a new exposure specific to the erasure path; `recalculateComposite` already had it but holds the lock
-for a much shorter, bounded window.
+`erase()` then calls `findByParentIdOrderByIdAsc(userId)` **again** at `:191` (for
+`AccountDeletionRequestedEvent`'s `linkedPlayerIds`). Hibernate's first-level cache returns the same
+stale managed instances, not the post-tombstone DB state.
 
-Add this to the AC's risk statement. It does not change the recommended mechanism, but it should be a
-recorded consequence rather than a surprise.
+Harmless **today** — only `PlayerProfile::getId` is read (`:192`) — but it is a real divergence the
+current single-transaction design cannot produce, and the next person to read any other field off those
+entities gets pre-erasure data with no warning.
 
-### H3 — AC1 introduces a new GDPR-erasure failure mode, unweighed
+**Fix:** AC1 Task 5's Javadoc update should state this explicitly, and the PARENT loop should either
+`entityManager.detach(pp)` after each child or re-read by id where freshness matters.
 
-**Files:** `RadarCompositeCalculationService.java:66-67,191-193`, `ConfigBounds.java:255-256`,
-`PessimisticLockRetryer.java:40-50,71-78`, `GdprEventListener.java:36-41`, `GdprRequestService.java:80-101`
+### M10 — AC1 commits the *sticky* tombstone before the erasure is known to succeed
 
-`recalculateComposite` can hold the `player_profiles` lock for up to
-`CUMULATIVE_LOCK_WAIT_BUDGET = Duration.ofSeconds(ConfigBounds.RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS.max())`
-= **120 seconds** (`RadarCompositeCalculationService.java:66-67`; `max` is `120L`,
-`ConfigBounds.java:256`). The erasure's retry budget is ~3.2s (8 attempts, 100ms→800ms×1.6,
-`PessimisticLockRetryer.java:44-45,71-81`).
+`developmentDataErasedAt` is documented as one-way — *"Never reset back to null: a `player_profiles` row
+is never 'un-erased'"* (`GdprErasureService.java:277-278`) — and `RadarCompositeCalculationService`
+hard-skips every recalculation once it is set (`:234-238`, `return;`).
 
-So under genuine contention, the fix's effect is: **a GDPR erasure that previously succeeded now fails.**
-The story acknowledges the fast failure but characterises the outcome benignly — "routed to `markFailed` by
-its existing caller, retriable". Checked against source:
+Pre-AC1 the tombstone committed atomically with the erasure. Post-AC1 it commits early. If `erase()`
+then fails (H1's window, M4's deadline throw, or the already-`[DECIDED]` `PessimisticLockingFailureException`
+path), the outcome is: a **live, non-anonymised, still-logging-in player** whose radar composites
+silently stop updating forever, with no reset path by design.
 
-- "Retriable" is technically true but only manually: `markFailed` sets `status = 'FAILED'`
-  (`GdprErasureService.java:185-192`) and nothing re-drives it — there is no sweeper over FAILED GDPR
-  requests. `requestErasure` blocks only on `PENDING`/`PROCESSING` (`GdprRequestService.java:82-85`), so the
-  user *can* re-submit. Because the transaction rolled back, the user was never anonymised or locked out, so
-  they still can log in to do so. That much holds.
-- But `markFailed` raises **no `AdminAlert`** and emits only `log.error` (`:190`). A regulatory-deadline
-  operation now has a new silent-failure path caused by unrelated background work.
+AC1's "accepted tradeoff" paragraph covers deleted *data* but not this — a permanent behavioural change
+to an account whose erasure never happened.
 
-Recommend either (a) an explicit owner decision to accept this with an `AdminAlert` on `markFailed`, or (b) a
-larger retry budget scoped to this one call site. Either way it needs to be stated, not implied.
+**Fix:** document it in AC1 Task 5, and consider stamping the tombstone from the outer transaction (it
+is the one write in `deletePlayerDevelopmentData` that is not lock-scoped work) — though note that
+changes the lock-ordering argument in `RadarCompositeCalculationService.java:230-233`, so it needs its
+own analysis rather than a drive-by change.
 
-### H4 — AC1 Task 6's documentation correction is scoped to one of four stale locations
+### M11 — AC1 enlarges the blast radius of an already-`[DECIDED]` failure mode, without saying so
 
-**Files:** `ConfigBounds.java:238-249`, `RadarCompositeCalculationServiceConcurrencyIT.java:217,267`,
-`deferred-work.md:2450-2460`
+`deferred-work.md` already records (`[DECIDED: accepted risk — skillars-deferred-127]`) that
+`recalculateComposite` can hold the shared `player_profiles` lock for up to
+`RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS` (120 s) while the erasure's `PessimisticLockRetryer` budget is
+only ~3.2 s — so a contended erasure now fails fast, routing to `markFailed` with no alert.
 
-Task 6 correctly identifies that `RadarCompositeCalculationService`'s Javadoc (`:104-112`) states the gap in
-present tense and will become false. Three other places do the same and are not mentioned:
+AC4 catches only `ResourceNotFoundException`. A `PessimisticLockingFailureException` on child B still
+aborts the whole PARENT erasure — but **after AC1** it aborts with children A…B−1 already durably
+deleted and the account never anonymised. Pre-AC1 that same failure rolled everything back to a clean
+re-drivable state.
 
-1. **`ConfigBounds.java:243-245`** — `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s Javadoc: *"see
-   `recalculateComposite`'s own Javadoc for the write-order deadlock hazard this guards against
-   (`GdprErasureService.deletePlayerDevelopmentData` takes the same two tables in the opposite order)"*.
-2. **`RadarCompositeCalculationServiceConcurrencyIT.java:217` and `:267`** — the deadlock test's Javadoc and
-   inline comment, both framed as *"mirrors `GdprErasureService.deletePlayerDevelopmentData`'s own order"*.
-   The test itself stays valid (it drives both sides with raw SQL), but its framing becomes historical.
-3. **`deferred-work.md:2450-2460`** — this is the substantive one. The
-   `AdminCoachEnforcementService.deleteStrike` `[DECIDED: accepted risk]` bullet justifies *remaining*
-   accepted by contrasting itself against the radar case:
+Not necessarily wrong to accept, but AC1 changes the character of an item the story explicitly lists as
+"not reopened here," and says nothing about it.
 
-   > "the radar case's competing transaction (`GdprErasureService.deletePlayerDevelopmentData`) has
-   > genuinely unbounded work ahead of it — **no lock-retry budget bounds it** — whereas here the winning
-   > transaction is itself already lock-retry-bounded (`PessimisticLockRetryer`'s ~3.2s worst-case budget)"
-
-   AC1 makes `deletePlayerDevelopmentData` lock-retry-bounded by exactly that mechanism, collapsing the
-   stated distinction. That accepted-risk decision's rationale needs rewriting or re-deciding.
-
-AC5 Task 5's grep-sweep is ledger-only ("against the rest of the ledger") and is phrased as "re-confirm each
-hit is either unrelated or already correctly annotated" — wording that invites marking (3) "unrelated". Make
-(1)–(3) explicit tasks. Note the File List currently lists neither `ConfigBounds.java` nor
-`RadarCompositeCalculationServiceConcurrencyIT.java`.
+**Fix:** one paragraph in AC1's tradeoff section connecting the two, and a decision on whether the
+PARENT loop should also skip-and-continue on `PessimisticLockingFailureException` (arguably yes — a
+contended child is retryable, a failed whole-request is not).
 
 ---
 
-## Medium
+## 3. Considered and rejected — do **not** re-raise these
 
-### M1 — AC4's test plan assumes a hostname seam that does not exist
+Checked against source and found sound, to prevent false positives in later review rounds:
 
-**Files:** `ShedLockConfig.java:56-69`, `ShedLockConfigIT.java` (whole file)
-
-AC4 Tests says to construct a hostname "via whatever seam the existing tests already use to control
-`Utils.getHostname()`'s effective value, or a directly-testable extraction of the truncation logic if
-`Utils.getHostname()` itself is not mockable — check the existing test file's own pattern before inventing a
-new one."
-
-I checked. **There is no seam.** All four existing tests in `ShedLockConfigIT` use the machine's real
-hostname (`:88` calls `Utils.getHostname()` directly to build its assertion). The truncation is inlined in
-the `@Bean` method body (`:65-69`) with no extracted, callable unit. `net.javacrumbs.shedlock.support.Utils`
-is a third-party class and `getHostname()` is static.
-
-So AC4 as written cannot be delivered without a **production code change the tasks do not list** — extracting
-the truncation into a package-private static method (mirroring the package-private-for-testing precedent
-already established at `:51-54` for `MAX_HOSTNAME_LENGTH`). Add that to Tasks. Alternatively, `mockStatic`
-precedent does exist in this repo (`JwtManagerImplTest`, `RateLimitingAspectIT`) — name whichever you pick
-rather than leaving the dev to discover the seam is missing.
-
-Also: `ShedLockConfigIT:93-95` re-implements the truncation (`hostname.substring(0,
-ShedLockConfig.MAX_HOSTNAME_LENGTH)`) inside its assertion. Once the production logic gains a
-surrogate-pair branch, that assertion duplicates a now-divergent rule. AC4 Task 3 (comment update) should
-extend to keeping that assertion consistent.
-
-Minor: the File List labels `ShedLockConfigIT.java` as new; it already exists (187 lines). Not a defect, but
-the AC4 Tests section says "New `ShedLockConfigIT` test" where it means "new test method in the existing
-file".
-
-### M2 — AC4's severity claim is unsupported; the fix is still worth shipping
-
-**Files:** `ShedLockConfig.java:41-48,65-69`
-
-The Context asserts a lone high surrogate "cannot be UTF-8-encoded", that the driver "either substitutes
-`U+FFFD` or the `INSERT`/`UPDATE` fails with `invalid byte sequence for encoding "UTF8"`", and concludes it
-would break "**every** `@SchedulerLock` job".
-
-The hedge ("either… or") is doing all the work, and the conclusion does not follow from either branch.
-Java's standard UTF-8 encoder (`String.getBytes(UTF_8)` / `CharsetEncoder` with the default REPLACE action)
-substitutes `?` for an unpaired surrogate — it does not throw and does not emit invalid UTF-8. And in either
-substitution outcome, the `"-" + UUID.randomUUID()` suffix (`:69`) is untouched, so `locked_by` remains
-unique per JVM and the unlock predicate (`name = :name AND locked_by = :lockedBy`) still works. Nothing
-breaks; a hostname prefix is cosmetically mangled in an operational column.
-
-The ledger recorded this as "very low likelihood" and did not verify the consequence. The story promotes it
-to a stated mechanism without new evidence. Keep the fix — it is two lines, correct, and the sketch in
-Task 2 is in fact off-by-one-correct as written (verified: for `length ≥ 219`, `charAt(217)`/`charAt(218)`
-are exactly the boundary pair `substring(0,218)` would split, and the `truncateAt < hostname.length()` guard
-holds) — but do not carry "breaks every `@SchedulerLock` job" into the updated Javadoc unless the optional
-round-trip test in AC4 Tests actually demonstrates it.
-
-### M3 — AC5's `EXPLAIN` task rests on a premise the repo already answers
-
-**Files:** `V144__outbox_dlq_claimed_at.sql:30-36`, `VideoDeletionOutboxRepository.java:99-105`,
-`RadarCompositeDlqRepository.java:81-87`
-
-AC5 Task 2 bullet 7 says to run `EXPLAIN`, "confirm the intended index is still used", and adds: "if index
-coverage turns out NOT to hold, that is itself a new finding to surface, not silently absorb."
-
-It will not hold, and it is not new. `V144__outbox_dlq_claimed_at.sql:30-36` already records the answer and
-the decision:
-
-> Index coverage: `resetStaleClaimed`'s predicate moves from `next_retry_at < :deadline` (served by
-> `idx_radar_composite_dlq_status_retry` ON `(status, next_retry_at)` / `idx_vdoutbox_status_retry`) to
-> `claimed_at < :deadline`, which those indexes **no longer cover past their status prefix** … Both tables
-> are expected to be small enough (near-zero CLAIMED rows at any moment) that **this is accepted as-is**;
-> add a matching partial index only if row-count evidence at a future date says otherwise.
-
-Reframe the task as "record V144's existing accepted-as-is note in the closeout, and confirm empirically that
-it still describes the current predicate" — which is a genuinely useful five-minute task — rather than as a
-discovery exercise with a pre-wired "new finding" branch.
-
-Two precision issues in the same bullet:
-- It cites the predicate as `claimed_at < now() - make_interval(secs => ?)`, omitting the `claimed_at IS NULL
-  OR` disjunct that is actually present in both queries (`VideoDeletionOutboxRepository.java:103`,
-  `RadarCompositeDlqRepository.java:85`). That disjunct is part of why an index-only path is unavailable.
-- Running `EXPLAIN` needs a live Postgres, which sits awkwardly against this project's standing "no local
-  `mvn verify`" convention (Dev Notes). Say how: a throwaway Testcontainers session or a `psql` against a
-  local compose stack.
-
-### M4 — AC1's test plan cannot observe what it asserts, and as specified would mask B1
-
-**Files:** `GdprErasureIT.java` (whole file), `GdprEventListener.java:31-42`,
-`RadarCompositeCalculationServiceConcurrencyIT.java:35-118`
-
-Three concrete problems with placing these tests in `GdprErasureIT`:
-
-1. **The assertion is unobservable through the existing harness.** `GdprErasureIT` drives everything over
-   HTTP. `erase()` runs inside `GdprEventListener.onErasureRequested`'s `AFTER_COMMIT` listener, which
-   **swallows every exception** (`:36-41`) — the HTTP call still returns 202. A test asserting "`erase()` …
-   fails fast … with `PessimisticLockingFailureException`" must invoke `GdprErasureService.erase` directly.
-   `GdprErasureIT` has no `@Autowired GdprErasureService` (fields at `:54-63`) and seeds no
-   `admin.gdpr_requests` row for the erase path, both of which the test would need to add.
-
-2. **No `player_profiles` fixture exists.** Per B1, `setUp()` (`:67-100`) and `secData.sql` create none. The
-   `RadarCompositeCalculationServiceConcurrencyIT` precedent the story points at does seed one
-   (`:52-56`), which is exactly the pattern to copy.
-
-3. **The obvious way to make the test pass hides the real bug.** If the fixture seeds a `player_profiles`
-   row whose `id` equals the erased user's `id` — the only way the PLAYER path works under the story's
-   prescribed lookup — the test goes green while production, where `player_profiles.id` is a TSID unrelated
-   to `user.id`, stays broken. Specify that the test must seed a `player_profiles` row with a **TSID-shaped
-   id distinct from the user id**, linked via `user_id` / `parent_id`, so it actually exercises the
-   production key relationship.
-
-The story's own instruction — "must be written to actually reach that pre-fix failure if run against
-`master@24fe4a80`" — is the right discipline; it just needs the fixture shape nailed down, or the test will
-satisfy the letter of it against a fixture production never produces.
-
-### M5 — AC3 raises scheduler concurrency 8× with no connection-pool or lock-coverage analysis
-
-**Files:** `application.yaml:101-107`, `PessimisticLockRetryer.java:40-56`, `SchedulingConfig.java:15-20`
-
-The counts in AC3 check out (44 `@Scheduled` methods; no `spring.task.*` anywhere in main or test resources;
-`VideoDeletionOutboxProcessor.MAX_RUN_DURATION = Duration.ofMinutes(12)` at `:85`). But the AC treats "a
-one-line static property change" as carrying no risk beyond a grep for stale comments. Two things worth
-sizing:
-
-- **Connection pool.** `spring.datasource.hikari.maximum-pool-size: 25` (`application.yaml:106`), sized
-  as "up to 4 nodes, i.e. 25 for each". Going from 1 to 8 concurrently-running scheduled jobs adds up to 7
-  simultaneous holders. `PessimisticLockRetryer`'s own Javadoc is explicit that a contended caller **holds
-  its pooled JDBC connection while sleeping** for up to ~3.2s and closes with "Watch the timer's p99
-  against the HikariCP pool size" (`:40-56`). Several scheduled jobs go through that retryer
-  (`PaymentPendingSweeper`, `MessageModerationSweeper`, `BookingBatchService`, and after AC1 the erasure
-  path). This deserves a sentence, and ideally a note to watch `persistence.lock_retry` p99 post-deploy.
-- **Jobs without ShedLock.** 44 `@Scheduled` vs 26 `@SchedulerLock` annotations — so ~18 scheduled methods
-  have no distributed lock. Single-threading was incidentally serialising them *against each other*
-  in-process; 8 threads removes that. (Spring still won't run the same `fixedDelay` task concurrently with
-  itself, so self-overlap is not a new risk — cross-job overlap is.) Task 5's grep sweep looks for
-  *comments* asserting single-threaded execution; it will not surface a job that merely happens to share
-  rows with another.
-
-Also worth one line: `spring.task.scheduling.pool.size` governs Spring's `@Scheduled` scheduler only. This
-application also carries Quartz configuration (`application.yaml:~30-44`, `main.qrtz_*` tables in V138);
-that pool is unaffected. The AC never claims otherwise, but a reader closing "single-thread scheduler
-starvation" may assume broader coverage.
-
-*Correct as stated:* AC3 Task 3's claim that the property is inert under `app.scheduling.enabled: false` —
-Boot's `taskScheduler` bean is conditional on the `@EnableScheduling` annotation post-processor, which
-`SchedulingConfig`'s `@ConditionalOnProperty` (`:42`) removes in the test profile. Worth naming that
-mechanism so the "read-and-confirm" task has something concrete to confirm against.
-
-### M6 — AC2's tests cannot prove the claim, and the riskiest part of the change is untested
-
-**Files:** `ConfigServiceTest.java:296-338`, `PlatformConfig.java:26-42`,
-`V138__baseline_schema.sql:855-876,2674-2678`, `ConfigResourceIT.java:213-231`
-
-- `ConfigServiceTest` is a Mockito unit test with a mocked `PlatformConfigRepository` (existing
-  `updateConfig_*` tests all `verify(configRepository).save(...)`). The proposed
-  `updateConfig_unseededHasCodeDefaultKey_createsRow` assertion that "the value is readable afterward"
-  cannot be demonstrated there without stubbing `findAll()` to return the row you just asked the mock to
-  save — which proves nothing.
-- **This AC introduces the first application-side `INSERT` into `main.platform_config`.** Today the only
-  write is `save()` on an already-loaded managed entity. That table is unusual:
-  `id bigint NOT NULL` with `ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY` (`V138:870-876`), while
-  the entity inherits `@Id @Tsid` from `BaseEntity`. Explicit-id insert against a `GENERATED BY DEFAULT`
-  identity is legal, and `V139`'s header (`:39-43`) shows the sequence was deliberately bumped to 606
-  against exactly this scenario — but it has never actually executed. It needs a real-schema test.
-  `ConfigResourceIT` is the natural home: it already does PUT-then-GET at `:213-231`, and no existing test
-  asserts 404-on-unknown-key, so nothing breaks.
-- Task 2 enumerates `value`, `valueType`, `description`, `updatedAt` on the new entity but never **`key`**
-  — which is `nullable = false` (`PlatformConfig.java:28`).
-- Task 3 says "confirm `key` is declared `unique = true` (it is, `PlatformConfig.java:27`) so a racing
-  double-create attempt fails at the DB constraint". Right conclusion, wrong evidence: JPA's
-  `@Column(unique = true)` is inert under Flyway-managed DDL (`spring.jpa.generate-ddl` was removed per
-  `deferred-work.md:2454`). The actual guarantee is `uq_platform_config_key UNIQUE (key)`
-  (`V138:2674-2678`). Cite that.
-- *Correct as stated:* `ConfigValueType.LONG` exists, and "every `HAS_CODE_DEFAULT` key is a `BoundedKey`"
-  is already machine-guarded by `ConfigBoundsEnumCoverageTest:121`
-  (`assertThat(boundedKeys()).containsAll(ConfigBounds.HAS_CODE_DEFAULT)`) — Task 2's "confirm this holds"
-  is satisfied by an existing test, no manual re-check needed.
+1. **"`@SchedulerLock` will break the ~30 existing ITs that call these five methods directly."**
+   Rejected. `SchedulingConfig.java:30-34` confirms tests invoke scheduled methods through the Spring
+   proxy and the lock advisor applies. But AC6 specifies `lockAtLeastFor = "PT0S"` for all five, and
+   with `usingDbTime()` (`ShedLockConfig.java:110`) unlock sets `lock_until = now()`, so back-to-back
+   calls within one test method re-acquire cleanly. The ITs that need `releaseSchedulerLock`
+   (`VideoDeletionOutboxProcessorIT:185`, `VideoSubscriptionLifecycleListenerIT:215`) are precisely the
+   ones whose locks use `lockAtLeastFor = PT30S`. **See L2 for the trap this creates.**
+2. **"AC1's `REQUIRES_NEW` reproduces `ModerationSlaMonitorService`'s same-thread cross-connection
+   self-deadlock (`:58-77`)."** Rejected. That bug needed the *outer* transaction to hold a `FOR UPDATE`
+   lock on a row the inner transaction writes. Here the lock acquisition itself moves into the inner
+   transaction; `erase()`'s outer transaction never locks `player_profiles`, and the inner
+   `UPDATE player_profiles` does not change FK columns so Postgres skips the parent-side RI check.
+3. **"AC1 will break `erase_blockedByCompetingPlayerProfileLock_waitsThenSucceeds` /
+   `erase_concurrentWithRecalculateStyleWriter_doesNotResurrectRadarData`."** Rejected — read both
+   (`GdprErasureIT.java:580-640`, `:681-…`). Both assert on the lock being taken and on contention
+   timing, not on the transaction it is taken in; both survive AC1 unchanged.
+4. **"AC1 weakens deferred-127 AC1's erasure↔recalculation serialization."** Rejected. The tombstone
+   check (`RadarCompositeCalculationService.java:234-238`) is what closes the resurrection race, and
+   AC1 makes it visible *earlier*, not later. Strictly better.
+5. **"AC5's `clock_timestamp()` breaks the claim-batch identity predicate."** Rejected. `clock_timestamp()`
+   is evaluated per row (unlike `now()`), so batch rows get non-identical `claimed_at` — which would
+   have broken the pre-deferred-124 design, but deferred-124 AC4 moved the identity predicate to
+   `claimed_by` in both repositories (`VideoDeletionOutboxRepository.java:44`,
+   `RadarCompositeDlqRepository.java:50/97/114/124`). Safe. **Add it to AC5 as a stated verification
+   item — the story does not mention per-row evaluation at all.**
+6. **"AC5's premise is false — a test already enforces `process()` being non-`@Transactional`."**
+   Rejected. `SchedulerLockTransactionOrderingIT.assertNotTransactional` covers `BookingExpiryScheduler`,
+   `BookingReminderScheduler`, `BandwidthResetService`, `AuthCleanupService`, `UserAdminService` — **not**
+   `VideoDeletionOutboxProcessor.process` or `RadarCompositeDlqProcessor.process`. The story's "nothing
+   enforces it" is correct for exactly the two methods AC5 targets.
+7. **"AC6's five-method inventory is incomplete."** Rejected — enumerated every `@Scheduled` in
+   `src/main/java` and cross-checked for `@SchedulerLock`. Exactly nine are unlocked: the five AC6
+   targets plus `ConfigService.scheduledRefresh`, `AlertRuleCache.refresh`,
+   `MessagingEmitterRegistry.sendHeartbeats`, `RateLimitingService.evictIdleBuckets` — precisely the
+   four the story excludes as node-local. Inventory is exactly right.
+8. **"AC1's `EntityManager` won't rebind inside the `TransactionTemplate`."** Rejected — the pattern
+   (`private final EntityManager` + `@RequiredArgsConstructor`) is used by 13 services here and resolves
+   to a transaction-aware shared proxy, which `JpaTransactionManager` re-binds on `REQUIRES_NEW`
+   suspend/begin. **But see L4** — this is the one line where a mistake would be silent.
 
 ---
 
-## Low / accuracy
+## 4. Citation audit
 
-### L1 — Line-citation drift
+The story claims every citation was re-verified. Spot-checked **all** of them. Result: excellent, with
+one exception.
 
-Several citations have shifted. The story mandates re-verification at implementation time (Task 1 of each
-AC), so these are cheap, but they undercut the Provenance section's claim that everything was checked at
-`master@24fe4a80`.
+**Exact (verified line-by-line):**
 
-| Story citation | Actual |
-|---|---|
-| `RadarCompositeCalculationService.java:167-278` (`recalculateComposite`) | `167-280` |
-| `RadarCompositeCalculationService.java:97-160` / `:102-160` (its Javadoc) | `97-165` |
-| `GdprErasureService.deletePlayerDevelopmentData` `:194-209` | `194-213` |
-| `ConfigService.updateConfig` `:202-209` | `202-211` |
-| `PlatformConfig.java:27` (`key … unique = true`) | `:28-29` (line 27 is blank) |
-| `application-test.yaml:126` (`app.scheduling.enabled: false`) | `scheduling:` at 126, `enabled: false` at 127 |
-| `ConfigServiceTest.java:298-336` (`updateConfig_*`) | `296-338` |
+- All seven `REFERENCES main.player_profiles` FKs — `V138__baseline_schema.sql:4084, 4091, 4098, 4105,
+  4231, 4497, 4504`. Exactly seven in the whole migration tree; every line number correct.
+- `GdprErasureService`: `erase` `:81-203`; PLAYER branch `:139-147`; PARENT branch `:148-150`;
+  `:154`, `:157`, `:166-167`, `:170-199`; helper `:253-281`; lock `:254-256`; tombstone `:279-280`;
+  Javadoc `:214-252`, `:226-232`, `:234-239`. All correct.
+- `GdprEventListener.onErasureRequested` catch `:36-40`, log line `:40`. Correct.
+- `application.yaml`: Quartz `threadCount: 3` `:38`; `isClustered: true` `:42`; scheduler comment
+  `:53-62`; `pool.size: 8` `:63-66`; `connection-timeout: 30000` `:134`; `maximum-pool-size: 25` `:137`;
+  `minimum-idle: 8` `:138`. All correct — and all three corrections the story makes to the ledger's own
+  citations (`:120` → `:137`, `:236-238` → `:254-255`, "six" → "seven") are genuine improvements.
+- `ExecutorShutdown.java:77-83` (the seven-pool list) and `:103-114` (the self-correction). Exact.
+- `PessimisticLockRetryer.java`: cost model `:38-56`; connection-hold `:40-44`; "short call sites"
+  `:45-50`; non-lock-exception behaviour `:118-124`. Correct.
+- `VideoDeletionOutboxRepository.java:40, 49, 103, 105` and `RadarCompositeDlqRepository.java:35, 44,
+  85, 87`. All four pairs exact.
+- `ReconciliationWorkerScheduler.java:174-175` (`PT10M`/`PT0S`), `:176`; `WebhookEventProcessorScheduler.java:62`;
+  `ModerationSlaMonitorService.java:98`; `AlertEvaluationService.java:55`;
+  `UploadSessionExpiryScheduler.java:32`. All correct, all default cadences correct.
+- `BookingExpiryScheduler_expire` `lockAtMostFor = "PT15M"` at `fixedDelay = 5 MINUTES` — the "~3×
+  convention" AC6 cites for `ModerationSlaMonitorService_detectSlaViolations` is real
+  (`BookingExpiryScheduler.java:63-65`).
+- `ConfigStartupAssertion` fail-fast on `lockAtLeastFor > lockAtMostFor` and on
+  negative/unparseable durations — behaves exactly as described (loop `:236-265`, `parseLockDuration`
+  `:273-300`; the cited `:254-296` is a couple of lines off but points at the right code).
+- `ConfigService.updateConfig`'s `HAS_CODE_DEFAULT` upsert (`:213-234` + `createOrReadBack` `:249-267`)
+  — AC2 Task 3's claim about it is accurate.
+- Provenance: deferred-127's section has exactly five bullets, none `[CLOSED]`/`[DECIDED]`
+  (`deferred-work.md:2898-2955`); deferred-126's section has exactly one genuinely open bullet, the
+  `now()`/`clock_timestamp()` one (`:2757-2896`). Verified — the scoping narrative is honest.
 
-### L2 — The Provenance section's bullet arithmetic contradicts AC5
+**Wrong:**
 
-Provenance says the story "closes four (bundled below as AC1–AC4) and leaves three open". Counting actual
-ledger bullets against AC5 Task 2's own instructions:
-
-- AC1 closes **bullets 1 and 2** (two bullets, one AC)
-- AC2 closes bullet 4 · AC3 closes bullet 5 · AC4 closes bullet 6 · AC5 closes bullet 7
-
-So AC1–AC4 close **five** bullets and AC5 closes a sixth, leaving exactly **one** genuinely open (bullet 3,
-`now()` vs `clock_timestamp()`). "Leaves three open" points at an "Explicitly left open" list of four items,
-two of which the same list then says are folded into AC4 and AC5, and one of which ("reaching further into
-the ledger") is not a deferral bullet at all. AC5 Task 2 — which is the operative instruction — is correct
-and internally consistent; only the Provenance narrative is not. Worth fixing because the whole story is
-structured around precise bullet accounting.
-
-### L3 — AC5 omits two ledger-hygiene consequences
-
-**Files:** `deferred-work.md:2679-2687, 2450-2452`
-
-- The section preamble (`:2683-2686`) reads "The first seven bullets below are genuinely pre-existing or
-  latent … The eighth is a residual …". After AC5 deletes bullets 1, 2, 4, 5 and 6, that sentence describes
-  a list that no longer exists. AC5 has no task to update it.
-- AC5 Task 4 adds `## Last audit: 2026-09-21 (skillars-deferred-127 …)`. A `## Last audit: 2026-09-21
-  (skillars-deferred-126 dev-story completion)` heading already exists, and is the target of a
-  cross-reference at `:2450-2452` — a pointer whose own inline note records that it has already resolved to
-  nothing once before. Two same-date audit headings invite a repeat. Either disambiguate the new heading or
-  add a task to re-point the cross-reference.
-
-### L4 — AC1 Task 8's residual claim holds, and the reason is worth recording
-
-Verified rather than assumed, since the story asks for it: a stale `radar_composite_dlq` row for an erased
-player is harmless post-fix. `deletePlayerDevelopmentData` deletes `radar_assessments` (`:203`), so the
-retried `recalculateComposite` finds no aggregates, `bySkill` is empty and the per-skill loop is a no-op.
-Critically, this depends on the `main.player_profiles` row **surviving** erasure — it does: nothing in
-`erase()` deletes it, and the `AccountDeletionRequestedEvent` cascade
-(`video/service/AccountDeletionCascadeListener.java`) only purges videos. If it did not survive,
-`recalculateComposite`'s own `findByIdForUpdate(...).orElseThrow(...)` (`:191-192`) would throw on every DLQ
-retry until `max_attempts`. Worth one clause in the closeout note so a future reader does not have to
-re-derive it.
+- **The delete count, and the story contradicts itself three ways.** AC1 Context says *"13 bulk deletes
+  plus a `performance_reports` scan (`:258-274`)"*; AC1 Task 3 says *"all 14 deletes/scan"*; AC2 says
+  *"14 bulk deletes across 13 tables plus a `performance_reports` scan."* The actual body
+  (`GdprErasureService.java:258-275`) contains **11 bulk deletes across 11 tables**: `player_timeline`,
+  `slu`, `slu_weekly_snapshot`, `player_slu_weekly_snapshot_applied`, `slu_target`,
+  `neglected_skill_flag`, `player_radar_baseline`, `player_radar_composite`, `radar_assessment`,
+  `performance_report`, `homework_completion`. The cited range `:258-274` also **excludes**
+  `homeworkCompletionRepository.deleteAllByPlayerId(playerId)` at `:275`, which is inside the block being
+  lifted into the `TransactionTemplate` lambda. The inherited "14 across 13" comes from the ledger
+  bullet verbatim and was evidently not re-counted.
 
 ---
 
-## Verified correct (do not re-litigate)
+## 5. Lower-priority notes
 
-Checked against source and accurate as written:
+- **L1 — Dev Notes are stale.** *"This worktree's own checkout predates skillars-deferred-127 entirely
+  (its `HEAD` is skillars-deferred-126's merge commit)"* and the "whoever implements this must first
+  confirm 127 is merged" caveat are both obsolete: 127 merged as `23c912cc` (PR #215) and `HEAD` is
+  `4c250cd0`. Harmless — and all `6e9b034c`-based citations survived the merge intact — but the
+  paragraph should be trimmed so nobody re-runs the `git show` verification dance.
 
-- The resurrection interleaving in AC1 is a real race — on the PARENT path. `recalculateComposite` locks
-  only `player_profiles` (`:191-193`) and reads aggregates under READ COMMITTED; nothing stops a concurrent
-  delete of `player_radar_*` rows for that player.
-- The opposite-table-order claim: `deletePlayerDevelopmentData` deletes baselines (`:201`) then composites
-  (`:202`); `recalculateComposite` writes `upsertComposite` then `insertBaselineIfAbsent`. Genuinely
-  inverted.
-- `lock_timeout` cannot break a circular wait — correct, and already stated in
-  `RadarCompositeCalculationService.java:113-120`.
-- `PlayerProfileRepository.findByIdForUpdate` is NOWAIT (`@QueryHint … value = "0"`, `:44-47`), every call
-  site wraps it in `PessimisticLockRetryer.withBoundedRetry`, and the ~3.2s / 8-attempt budget is accurate
-  (`PessimisticLockRetryer.java:44-45,71-81`).
-- The `EntityManager`-via-`@RequiredArgsConstructor` precedent is real and needs no `@PersistenceContext`
-  (`RadarCompositeCalculationService.java:33-34,46-47`).
-- `ResourceNotFoundException(String, String)` exists at
-  `infrastructure/exception/ResourceNotFoundException.java:7-10` and is the constructor
-  `recalculateComposite` uses.
-- `erase()` is `@Transactional(propagation = REQUIRES_NEW)` (`:75`), and `GdprEventListener:34-41` does
-  route a thrown exception to `markFailed` in a fresh transaction.
-- `ConfigStartupAssertion.java:88` is exactly `if (ConfigBounds.HAS_CODE_DEFAULT.contains(bk.key()))`.
-- `ConfigResource` `PUT /api/config/values/{key}` at `:75-81` is the only write path; there is no POST.
-- `ConfigBounds.HAS_CODE_DEFAULT`'s `Set.of(...)` spans exactly `:300-317`.
-- AC2's narrow scoping is sound: all non-`HAS_CODE_DEFAULT` bounded keys in `ConfigBounds.ALL` — including
-  all 18 generated `video.quota.*` / `video.*` keys — are seeded, so widening the condition would change
-  nothing.
-- `invalidate()` is called at the end of `updateConfig` (`:209`) — AC2 Task 4's "confirm it runs on the
-  create path" is the right check.
-- AC3's counts: 44 `@Scheduled`, zero `spring.task.*` in `src/main/resources/application*.yaml` or
-  `src/test/resources/application*.yaml`, `spring:` at `application.yaml:46` with `lifecycle`/`mvc`/
-  `jackson` siblings, `VideoDeletionOutboxProcessor.MAX_RUN_DURATION = 12m` (`:85`).
-- AC4's citations: `ShedLockConfig.java:65-69` (truncation), `:54` (`MAX_HOSTNAME_LENGTH = 255 - 37 = 218`),
-  `:41-48` (the Javadoc to update). All exact.
-- AC4 Task 2's code sketch is off-by-one-correct as written (see M2).
-- Dev Notes' "no new Flyway migration is needed" — correct for all four ACs.
-- Dev Notes' frontend claim — correct; nothing in the expected File List touches `src/frontend/**`.
+- **L2 — AC6's `lockAtLeastFor` is load-bearing, and the story elides the clause that says so.**
+  AC6 quotes `ReconciliationWorkerScheduler`'s precedent comment but stops one clause early. The full
+  comment (`:171-173`) is:
+
+  > "the only goal is mutual exclusion of concurrent runs across instances; the 5-minute `fixedDelay`
+  > already spaces runs out, so there is no reason to hold the lock after the method returns **(and a
+  > minimum hold would make back-to-back calls in a test silently skip)**."
+
+  AC6 Task 2 then invites the implementer to treat the values as *"starting points to verify/adjust
+  during implementation, not a mandate."* Any non-`PT0S` value silently breaks the ~30 existing
+  direct-call sites in `WebhookPipelineIT` (`:50, 64, 75, 89, 103, 110, 122`), `ReconciliationWorkerIT`
+  (`:47, 64, 80, 92, 106`), `VideoUploadPipelineIT` (`:77, 98, 111, 124, 137, 151`) and
+  `VideoUploadConfirmationIT` (`:98, 118`) — as *silently skipped runs*, i.e. confusing assertion
+  failures, not lock errors. **Make `lockAtLeastFor = "PT0S"` a mandate in AC6, not a suggestion**, and
+  quote the full precedent comment.
+
+- **L3 — File List / AC7 sweep gaps.** Three files the story's changes make stale are in neither the
+  File List nor AC7 Task 5's sweep list:
+  - `PlayerProfileRepository.java:16-22` — the `findByParentIdOrderByIdAsc` comment justifies
+    `ORDER BY id` as *"deterministic acquisition order for `GdprErasureService.erase`'s PARENT-branch
+    loop, each iteration of which now takes a `player_profiles` pessimistic lock."* After AC1 the loop
+    holds one lock at a time and releases it before the next, so the acquisition-order rationale needs
+    rewording (the retry-budget-determinism half stays valid).
+  - `SchedulingConfig.java:19-20` — *"all 11 `@SchedulerLock` jobs"*. Actual count today is **26**;
+    AC6 would take it to 31. Already stale before this story, but AC7's sweep is the natural place.
+  - `PessimisticLockRetryer.java` — AC7 Task 5 says its "revisit this" Javadoc *"may now be worth a
+    small update"*, yet the file is absent from the File List. Pick one.
+
+- **L4 — Add an explicit AC1 verification step for the `EntityManager` rebind.** The single line where
+  the `TransactionTemplate` refactor would fail silently-then-loudly is
+  `entityManager.refresh(playerProfile, LockModeType.PESSIMISTIC_WRITE)` (`GdprErasureService.java:256`):
+  it only works if the injected shared-EM proxy resolves to the *inner* transaction's EntityManager, the
+  same one `playerProfileRepository.findByIdForUpdate` used. It does (`JpaTransactionManager` suspends
+  the outer `EntityManagerHolder` on `REQUIRES_NEW`), but AC1 should say so and the first IT run should
+  confirm it rather than leaving a `detached entity passed to refresh` surprise.
+
+- **L5 — AC4's catch should be narrowed.** Task 2 wraps the whole `deletePlayerDevelopmentData` call in
+  `catch (ResourceNotFoundException e)`. Today the only thrower inside is the `orElseThrow` at `:255`,
+  so the catch is precise — but it is precise by accident. Either catch at the lock-acquisition site
+  specifically, or add a comment pinning the assumption so a future `ResourceNotFoundException` from
+  deeper in the delete chain is not silently swallowed as "child vanished."
+
+- **L6 — AC2 Task 5's "fast" assumption is unexamined.** It scopes the deadline clock to the PARENT loop
+  because *"the account anonymisation and message/review deletion work preceding the loop (`:93-123`) is
+  fast."* `messageRepository.deleteAllBySenderId`, `adminAlertRepository.resolveOpenAlertsForDeletedMessages`
+  and `coachReviewRepository.deleteNonApprovedByAuthorId` are unbounded bulk deletes over
+  potentially-large tables. The scoping choice is still probably right (those are not the long-running
+  *lock-holding* concern), but "fast" should be dropped as the reason.
 
 ---
 
-## Recommended disposition
+## 6. Summary of required story edits
 
-1. **B1** — rewrite AC1 Task 3 around correct id resolution plus an explicit absent-profile decision; add
-   `player_profiles` seeding to `GdprErasureIT`. Consider splitting the "PLAYER-path erasure deletes nothing
-   today" bug into its own AC — it is a live Article-17 gap, independent of the lock work.
-2. **B2** — correct 18 → 17 and "all keys" → "4 unseeded keys" in the Priority line, AC2 Context, AC2
-   Task 2, AC5 Task 2 bullet 4, the Change Log, and `sprint-status.yaml:2`. Fix the
-   `HAS_CODE_DEFAULT` characterisation. The fix itself is unchanged.
-3. **H1–H4** — rewrite AC1's Task 4 rationale and Context risk paragraph; extend Task 6's doc scope to
-   `ConfigBounds`, the concurrency IT, and the `deleteStrike` accepted-risk bullet; take an owner decision
-   on H3.
-4. **M1–M6** — add the `ShedLockConfig` extraction task; soften AC4's severity claim; reframe AC5's
-   `EXPLAIN` task; nail down AC1's and AC2's test fixtures and add a real-schema `ConfigResourceIT` case;
-   add the pool-size note to AC3.
-5. **L1–L4** — refresh citations, fix the Provenance arithmetic, add the two ledger-hygiene tasks.
-6. Add to the File List: `ConfigBounds.java`, `RadarCompositeCalculationServiceConcurrencyIT.java`,
-   `ConfigResourceIT.java`.
+| # | Severity | AC | Action |
+|---|---|---|---|
+| H1 | High | AC1 | Move the per-child blob enqueue inside the `REQUIRES_NEW` lambda; rewrite the "accepted tradeoff" paragraph |
+| H2 | High | AC6 | Drop the "mechanical, no design decision" framing; justify or re-scope the four `SKIP LOCKED` workers; fix `processPending`'s gauge staleness |
+| H3 | High | AC1/AC2/AC4 | Add the missing PARENT-with-children `GdprErasureIT` fixture as explicit scope; delete the three false "existing tests must stay green" claims |
+| M1 | Med | AC6 | Address `videoConsecutiveFailures`' node-local counter degradation |
+| M2 | Med | AC6 | Drop `AlertEvaluationService` — `computeMetricValue` is a `-1.0` stub, no alert can ever fire |
+| M3 | Med | AC2/AC7 | AC2 does not close ledger bullet 2; extend it or annotate rather than delete |
+| M4 | Med | AC2 | Deadline path must raise an `AdminAlert`, not just `log.error` |
+| M5 | Med | AC2 | Re-derive the budget from latency, not from Hikari `connection-timeout` |
+| M6 | Med | AC2 | Choose the test seam in-story; the cited `RadarCompositeCalculationServiceConcurrencyIT` precedent does not exist |
+| M7 | Med | AC3 | Correct the mechanism: 8 connections held for transaction duration, not 8 parked in retryer backoff (only 2 jobs reach it) |
+| M8 | Med | AC3 | "Seven application-managed pools (not all `@Async`)" — `storageUploadExecutor` is an SDK executor |
+| M9 | Med | AC1 | Document/handle the stale outer-PC `PlayerProfile` entities re-read at `:191` |
+| M10 | Med | AC1 | Document the early-committed sticky tombstone's effect on a failed erasure |
+| M11 | Med | AC1/AC4 | Connect AC1 to the `[DECIDED]` `PessimisticLockingFailureException` path; decide whether to skip-and-continue on it too |
+| §4 | Low | AC1/AC2 | Fix the delete count: **11 deletes across 11 tables at `:258-275`**, not 13/14 across 13 |
+| L1–L6 | Low | various | Stale Dev Notes; make `PT0S` a mandate; add three files to the sweep; EM-rebind check; narrow AC4's catch; drop "fast" |
+
+**Not disputed and ready as written:** AC5 (both repositories, both queries, all four citations exact;
+premise verified as genuinely unenforced) — add only the per-row-`clock_timestamp()`-evaluation note
+from §3.5. AC7's structure and the provenance/scoping section are sound; only the individual
+delete-vs-annotate decisions for bullets 2 and 4 need revising per M3 and H2.

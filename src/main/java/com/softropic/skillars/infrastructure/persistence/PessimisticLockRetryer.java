@@ -49,6 +49,20 @@ import java.util.function.Supplier;
  * contended row's traffic, revisit this — a connection-releasing mechanism would be a larger change
  * (its own transaction per attempt) and is deliberately out of scope here.
  *
+ * <p><strong>This call site WAS revisited</strong> (skillars-deferred-128 AC2/AC7): the {@code
+ * lockedOperation} passed by {@code GdprErasureService.deletePlayerDevelopmentData} is itself still
+ * short (just {@code findByIdForUpdate(...).orElseThrow(...)} — the connection-hold concern above
+ * remains bounded to that single call's own worst case), but the surrounding {@code REQUIRES_NEW}
+ * transaction that call runs inside (lock + deletes + blob enqueue + tombstone) holds its own pooled
+ * connection for longer, and is invoked once per PARENT child in a loop. A per-erase deadline now
+ * bounds how many of those per-child transactions can run in sequence within one {@code erase()}
+ * call — an accepted mitigation of the AGGREGATE risk across children, not a bound on any SINGLE
+ * child's own connection-hold time (that residual is annotated
+ * {@code [DECIDED: accepted risk — skillars-deferred-128]} in {@code deferred-work.md}). A future
+ * story bounding single-child hold time directly (e.g. a {@code statement_timeout}/
+ * {@code lock_timeout} mirroring {@code RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS}'s approach) would close
+ * that residual fully.
+ *
  * <p>The wait is observable: a {@code persistence.lock_retry} {@link Timer} (tag {@code outcome} =
  * {@code success} / {@code exhausted} / {@code error}) records the wall-clock time spent in
  * {@link #withBoundedRetry}, and {@code persistence.lock_retry.retries} /

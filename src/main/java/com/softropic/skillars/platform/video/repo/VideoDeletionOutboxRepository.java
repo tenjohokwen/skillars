@@ -33,11 +33,31 @@ public interface VideoDeletionOutboxRepository extends JpaRepository<VideoDeleti
     // larger change than this fix's scope. Postgres allows a literal now() call and a bound
     // parameter in the same UPDATE statement freely. See resetStaleClaimed's own Javadoc below for
     // the comparison this stamp change was made for.
+    // skillars-deferred-128 AC5: now() further replaced with clock_timestamp() for THIS claim-stamp
+    // write. now() is Postgres's transaction_timestamp() — constant for the whole transaction, not
+    // statement-accurate — so this stamp was only ever correct because process() carries no
+    // @Transactional and ShedLock's own accessor runs REQUIRES_NEW, giving each @Modifying
+    // @Transactional repository call its own fresh transaction where now() happens to equal
+    // statement time. Nothing enforced that; adding @Transactional to process() (or calling it from
+    // any transactional caller) in some future change would silently join this statement and
+    // resetStaleClaimed's read into one transaction, stamping claimed_at with the OUTER
+    // transaction's start time and freezing the staleness deadline for the whole run — eroding the
+    // MAX_RUN_DURATION < lockAtMostFor < STALE_CLAIM_WINDOW margin (skillars-deferred-126 AC1) from
+    // both ends at once, silently. clock_timestamp() returns the actual wall-clock time at the
+    // moment it is evaluated, independent of transaction boundaries, removing that hidden coupling
+    // entirely — for THIS timestamp symptom specifically (story review, 2026-09-22): a future
+    // @Transactional process() would still break claim visibility (findClaimedBatch's own read would
+    // then run inside the SAME uncommitted transaction as this claim) and deleteAsset's side-effect
+    // atomicity far worse than this one stamp ever could; this fix does not address those. Confirmed
+    // safe against per-row (not per-statement) evaluation: this codebase's
+    // batch-identity predicate moved off claimed_at onto claimed_by back in skillars-deferred-124
+    // AC4 (see findClaimedBatch/releaseClaimed/completeClaimed/failClaimed below), so a multi-row
+    // claim landing slightly different claimed_at values per row is harmless today.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE main.video_deletion_outbox
-        SET status = 'CLAIMED', claimed_at = now(), claimed_by = :runId
+        SET status = 'CLAIMED', claimed_at = clock_timestamp(), claimed_by = :runId
         WHERE id = ANY(
             SELECT id FROM main.video_deletion_outbox
             WHERE status = 'PENDING' AND next_retry_at <= :now
@@ -94,13 +114,20 @@ public interface VideoDeletionOutboxRepository extends JpaRepository<VideoDeleti
     // a "could not determine data type of parameter" error the bare multiplication form can trigger,
     // and it reads unambiguously as "an interval of N seconds" rather than relying on
     // interval-arithmetic operator precedence.
+    // skillars-deferred-128 AC5: the staleness comparison's now() replaced with clock_timestamp() to
+    // match claimPendingBatch's identical stamp change above — see that method's Javadoc for the
+    // full rationale (transaction_timestamp() vs. statement-accurate time). Only the RIGHT side of
+    // this comparison is a live clock call (story review, 2026-09-22, correcting this comment's own
+    // earlier "both sides" framing) — claimed_at on the left is a stored column value, written once
+    // at claim time by claimPendingBatch above, not evaluated here; clock_timestamp() here reads
+    // this statement's own true current time to compare that stored value against.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE main.video_deletion_outbox
         SET status = 'PENDING', claimed_at = NULL, claimed_by = NULL
         WHERE status = 'CLAIMED'
-          AND (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => :staleWindowSeconds))
+          AND (claimed_at IS NULL OR claimed_at < clock_timestamp() - make_interval(secs => :staleWindowSeconds))
         """, nativeQuery = true)
     int resetStaleClaimed(@Param("staleWindowSeconds") long staleWindowSeconds);
 
