@@ -2754,6 +2754,89 @@ mechanism; re-decided as still accepted, for reasons that no longer depend on th
 asymmetry (see that bullet's own updated text, under `## Deferred from: code review of
 skillars-deferred-122…`).
 
+## Last audit: 2026-09-22 (skillars-deferred-128 dev-story completion)
+
+Closed five bullets total, and reclassified one, across the two sections immediately below — four
+closed plus one reclassified from the fresh `## Deferred from: code review of
+skillars-deferred-127…` section (surfaced the same day skillars-deferred-127 merged), and the one
+still-genuinely-open bullet remaining from the `## Deferred from: code review of
+skillars-deferred-126…` section closed too (every other bullet in that section was already
+`[CLOSED]`/`[DECIDED]` before this story):
+
+- **FK-lock exposure on 7 tables during GDPR erasure** — fixed by AC1. `erase()`'s
+  `player_profiles FOR UPDATE` lock no longer spans the whole outer transaction:
+  `deletePlayerDevelopmentData` now commits (lock + 11 deletes + blob enqueue + tombstone) in its
+  own `REQUIRES_NEW` transaction per child, releasing the lock before `erase()`'s unrelated
+  downstream steps (refresh-token revoke, `gdprRequest` cleanup) run. **Required correction found
+  during this story's own pre-implementation review (H1):** the per-child blob-deletion enqueue had
+  to move INSIDE that same inner transaction, not stay on `erase()`'s outer path — otherwise a
+  failure between the inner commit and the outer commit (including AC2's own deadline throw) would
+  roll back the outbox rows while the deletes making those keys unrecoverable stayed durable,
+  permanently orphaning S3 blobs (a real Article 17 regression the naive fix would have introduced).
+  Accepted, documented tradeoffs from narrowing the lock scope: a later `erase()` failure can no
+  longer roll back an already-committed child's deletion (Article 17 only requires eventual erasure,
+  not atomicity of it), and the `developmentDataErasedAt` tombstone can now commit before the whole
+  erasure is known to succeed (both documented on `deletePlayerDevelopmentData`'s own Javadoc, not
+  fixed).
+- **`PessimisticLockRetryer` used from its own documented "long-running call site" precondition** —
+  **not fully closed; reclassified `[DECIDED: accepted risk — skillars-deferred-128]`, see that
+  bullet below** rather than deleted. AC2's per-erase deadline bounds how many per-child transactions
+  can run in sequence within one `erase()` call (the aggregate risk across a PARENT's children); it
+  does not bound any single child's own connection-hold time, which is what the retryer's own Javadoc
+  actually warns about.
+- **Hikari pool pressure from the 8-thread scheduler pool was undocumented, `8` underived** — fixed
+  by AC3 (documentation only). `application.yaml`'s comment now shows the connection-pressure math:
+  11 DB-touching `@Scheduled` methods (re-derived against `HEAD`, not the original ledger's "ten"
+  estimate) run at ≤60s cadence, any of which can hold a pooled connection for its transaction's
+  duration — genuinely more than 8. Two corrections found while re-deriving (story review M7/M8): the
+  original "8 threads parked in `PessimisticLockRetryer` backoff" mechanism was wrong (only 2
+  `@Scheduled` methods ever reach the retryer at all — `PaymentPendingSweeper.sweepStrandedPayments`
+  and `RadarCompositeDlqProcessor.process`; the real 8-of-25 pressure is simpler: any DB-touching
+  scheduled job holds a connection for its transaction's duration, not only those two); and the
+  "seven `@Async` executors" framing was imprecise (`storageUploadExecutor` is a raw SDK
+  `ThreadPoolExecutor`, never an `@Async` target). `pool.size: 8` itself unchanged.
+- **Five DB-touching `@Scheduled` methods flagged as carrying no `@SchedulerLock`** — **ledger
+  premise corrected, not fixed by adding locks (AC6, no production code changed).** Per-method
+  verification (story review H2/M1/M2) found the "mechanical fix" framing did not survive contact
+  with the code for any of the five: `UploadSessionExpiryScheduler.processExpired`,
+  `ReconciliationWorkerScheduler.reconcile`, `WebhookEventProcessorScheduler.processPending`, and
+  `ModerationSlaMonitorService.detectSlaViolations` are already fully protected cross-node by
+  `FOR UPDATE SKIP LOCKED` (plus `@Version`/an explicit claim step) — adding `@SchedulerLock` to any
+  of them would be a pure throughput regression, and for the latter two, a new bug (frozen gauge
+  metrics on the losing nodes; a node-local consecutive-failure counter that would silently diverge
+  per node). `AlertEvaluationService.evaluate` is separately unreachable dead code —
+  `computeMetricValue` unconditionally `return -1.0` (a `TODO` stub), so no rule can ever breach and
+  no duplicate-alert risk exists today.
+  `[DECIDED: accepted risk — skillars-deferred-128 — AlertEvaluationService]` **Re-open the
+  `@SchedulerLock` question specifically for `AlertEvaluationService.evaluate` if/when
+  `computeMetricValue` is ever implemented** — not carried forward as a full ledger bullet, since
+  there is nothing to revisit until that stub is replaced.
+- **`orElseThrow` inside the multi-child PARENT loop aborted an entire erasure if one child's profile
+  row vanished** — fixed by AC4. The PARENT loop now catches `ResourceNotFoundException` (vanished
+  child — benign, already-erased, skip-and-continue) and, per a story-review widening (M11), also
+  `PessimisticLockingFailureException` (a genuinely contended child whose retry budget was
+  exhausted — not benign, but retryable on a later re-drive; skipping it only stops that one child
+  from failing every sibling in the same request) — both `warn`-logged with distinguishable wording,
+  neither fails the whole PARENT request.
+- **`now()`/`clock_timestamp()` claim-stamp fragility** (the one still-open bullet remaining from the
+  skillars-deferred-126 section) — fixed by AC5. Both claim-stamp writes
+  (`VideoDeletionOutboxRepository.claimPendingBatch`/`resetStaleClaimed` and the identical pair in
+  `RadarCompositeDlqRepository`) now use `clock_timestamp()` instead of `now()`, removing the hidden
+  transaction-boundary coupling regardless of whether `process()` ever gains its own `@Transactional`
+  in a future change. Confirmed safe against per-row (not per-statement) evaluation: skillars-
+  deferred-124 AC4 already moved both repositories' batch-identity predicate off `claimed_at` onto
+  `claimed_by`.
+
+One new `[DECIDED: accepted risk — skillars-deferred-128]` bullet added to the section below (the
+`PessimisticLockRetryer` reclassification above); one new
+`[DECIDED: accepted risk — skillars-deferred-128 — AlertEvaluationService]` note added alongside it,
+narrower than a full bullet. This story's own pre-implementation review (`story-review.md`) also
+corrected several citations inherited uncritically from the ledger bullets it closed — AC1's delete
+count (11 across 11 tables, not the ledger's stale "14 across 13"), AC2's budget derivation (re-based
+on `erase()` running synchronously on the request thread, not Hikari's unrelated
+`connection-timeout`), and AC3's connection-pressure mechanism and executor count, all detailed in
+each AC's own Context section in the story file.
+
 ## Deferred from: code review of skillars-deferred-126-stale-claim-db-time-radar-lock-bound-shedlock-identity-and-axios-hash-redirect-fixes (2026-09-21)
 
 Surfaced by `/bmad-code-review` across four parallel layers (Blind Hunter, Edge Case Hunter,
@@ -2761,19 +2844,12 @@ Acceptance Auditor, `/txn-and-concurrency-audit`). Each was independently re-ver
 source before being recorded here. Originally seven genuinely pre-existing/latent bullets plus one
 residual `[DECIDED]` bullet OF skillars-deferred-126's own AC1 fix. **Update (skillars-deferred-127
 AC5, 2026-09-21, story-review.md L3):** the first, second, fourth, fifth and sixth of those original
-seven are now closed and deleted outright (see `## Last audit: 2026-09-21 (skillars-deferred-127
-dev-story completion)` below) — only the `now()`/`clock_timestamp()` bullet remains genuinely open,
-alongside the already-`[DECIDED]` eighth.
-
-- **`now()` is `transaction_timestamp()`, so the AC1 claim stamp and sweep deadline are correct only
-  because each repository call happens to run in its own short transaction — nothing enforces it.**
-  Today `process()` carries no `@Transactional` and ShedLock's accessor runs `REQUIRES_NEW`, so each
-  `@Modifying @Transactional` repository method gets a fresh transaction and `now()` ≈ statement
-  time. Adding `@Transactional` to `process()` (or calling it from any transactional caller) would
-  join both statements into one transaction: `claimed_at` would be stamped with the *outer*
-  transaction's start time and `resetStaleClaimed`'s deadline would freeze for the whole run,
-  eroding the `MAX_RUN_DURATION < lockAtMostFor < STALE_CLAIM_WINDOW` margin from both ends at once.
-  `clock_timestamp()` would make the stamp statement-accurate and remove the hidden coupling.
+seven were closed and deleted outright (see `## Last audit: 2026-09-21 (skillars-deferred-127
+dev-story completion)` below). **Update (skillars-deferred-128 AC5/AC7, 2026-09-22):** the
+`now()`/`clock_timestamp()` bullet (the seventh) is now ALSO closed and deleted outright (see
+`## Last audit: 2026-09-22 (skillars-deferred-128 dev-story completion)` below) — leaving only the
+EXPLAIN/index-coverage bullet (already reframed, not deleted, by skillars-deferred-127) and the
+three `[DECIDED: accepted risk]` bullets below.
 
 - **[CLOSED by skillars-deferred-127 AC5, 2026-09-21] `EXPLAIN`/index-coverage confirmation for
   skillars-deferred-126 AC1 Task 3, performed and recorded.** The task said to confirm (e.g. via
@@ -2902,46 +2978,45 @@ Acceptance Auditor, `/txn-and-concurrency-audit`). Each bullet was independently
 real source before being recorded here. The review's `decision-needed` and `patch` findings are
 tracked in the story file's own `## Review Findings` section, not here.
 
-- **Erase holds `player_profiles FOR UPDATE` for its full remaining transaction, blocking FK
-  `FOR KEY SHARE` RI checks on child tables.** After AC1, `GdprErasureService.erase`'s single
-  `REQUIRES_NEW` transaction holds each locked profile row to commit, then continues through
-  `refreshTokenRepository.markAllUsedByUserId`, `gdprRequestRepository.deleteExpiredByUserId` and
-  `blobDeletionOutboxSupport.enqueue`. Any concurrent INSERT referencing a locked `player_profiles`
-  row runs an RI check (`SELECT 1 ... FOR KEY SHARE`) that conflicts with `FOR UPDATE` and blocks for
-  the rest of that transaction; those inserters set no `lock_timeout`, so the wait is bounded only by
-  Postgres defaults. Seven FK'd tables are exposed (`V138__baseline_schema.sql:4084,4091,4098,4105,4231,4497,4504`).
-  A PARENT erasure widens this to N profiles simultaneously. Already analysed as story-review H2 and
-  noted in the story's risk section; recorded here so it is not lost.
-- **`PessimisticLockRetryer` is now used from exactly the long-running call site its own Javadoc
-  forbids.** `PessimisticLockRetryer.java:44-52` states "all current call sites are short
-  read-then-maybe-refresh operations (`findByIdForUpdate` + optional `refresh`). If a future call site
-  is long-running, or the pool is small relative to the contended row's traffic, revisit this."
-  AC1 made `deletePlayerDevelopmentData` — 14 bulk deletes across 13 tables plus a
-  `performance_reports` scan, invoked once per child — such a call site. A PARENT erasure with N
-  contended children can occupy one HikariCP connection for N × ~3.2s of pure backoff sleep while
-  holding N accumulated row locks. Nothing bounds the total: no per-`erase` deadline, no cap on N.
-  The documented "revisit this" precondition was triggered and not revisited.
-- **Hikari pool pressure from AC3's 8 concurrent schedulers is undocumented and `8` is underived.**
-  `maximum-pool-size: 25` (`application.yaml:120`) is shared with Tomcat request threads, clustered
-  Quartz, and six `@Async` executors (`outboxDrainPool`, `sluRetryExecutor`, `reportExecutor`, two
-  notification executors, the general `taskExecutor`). Ten high-cadence jobs (5s–60s) can now put 8
-  DB-touching jobs in flight where exactly 1 was possible before, and `PessimisticLockRetryer` sleeps
-  while still holding its pooled connection — 8 scheduler threads in backoff park 8/25 connections
-  doing nothing, while `connection-timeout: 30000` makes request threads queue 30s before failing.
-  The yaml comment documents the starvation being fixed but not the pressure it creates, and gives no
-  derivation for `8` over `3` or `4`.
-- **Five DB-touching `@Scheduled` methods still carry no `@SchedulerLock`.**
-  `UploadSessionExpiryScheduler`, `ReconciliationWorkerScheduler.reconcile`,
-  `WebhookEventProcessorScheduler`, `ModerationSlaMonitorService`, `AlertEvaluationService`. Strictly
-  pre-existing and multi-instance-only — Spring's `ReschedulingRunnable` schedules the next execution
-  only after the current one returns, so AC3's pool size cannot make any job overlap *itself* inside
-  one JVM, and this diff does not worsen the gap. (The other four unlocked `@Scheduled` methods —
-  `ConfigService.scheduledRefresh`, `AlertRuleCache.refresh`, `MessagingEmitterRegistry.sendHeartbeats`,
-  `RateLimitingService.evictIdleBuckets` — are node-local caches and correctly need no lock.)
-- **`orElseThrow` inside the multi-child PARENT loop aborts an entire erasure if one child's profile
-  row vanishes.** `GdprErasureService.java:236-238` runs inside `erase`'s single `REQUIRES_NEW`
-  transaction, so for a PARENT with children `[A, B, C]`, B's row disappearing between
-  `findByParentId` and its lock acquisition rolls back A's already-completed deletions and fails the
-  whole GDPR request. The benign case (B was erased concurrently — the data is already gone) becomes
-  a `FAILED` request needing manual intervention. Arguably correct-as-designed per the method's
-  explicit Javadoc reasoning, and rare; deferred rather than changed. No test covers it.
+- **`[DECIDED: accepted risk — skillars-deferred-128]` `PessimisticLockRetryer` is still used from a
+  call site materially longer than its own Javadoc's "short read-then-maybe-refresh" precondition —
+  AC2's per-erase deadline does not fully close this.** Precision correction (story review
+  2026-09-22, M3): the supplier actually passed to `withBoundedRetry` remains short (just
+  `findByIdForUpdate(...).orElseThrow(...)`); the real concern is that the surrounding `REQUIRES_NEW`
+  transaction (lock + 11 deletes + blob enqueue + tombstone, one per child) holds a pooled connection
+  for its own duration, invoked once per PARENT child in a loop. skillars-deferred-128 AC2 added a
+  ~10s cross-child deadline bounding how many of those per-child transactions can run in sequence
+  within one `erase()` call — an accepted mitigation of the *aggregate* risk across children, not a
+  bound on any *single* child's own connection-hold time, which remains unbounded. Revisit if a
+  future story is asked to bound single-child hold time directly (e.g. a `statement_timeout`/
+  `lock_timeout` mirroring `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s approach).
+
+## Deferred from: code review of skillars-deferred-128-gdpr-lock-scope-erase-deadline-scheduler-lock-and-claim-clock-fixes (2026-09-22)
+
+Surfaced by `/bmad-code-review` across four parallel layers (Blind Hunter, Edge Case Hunter,
+Acceptance Auditor, and `/txn-and-concurrency-audit` run as a fourth layer). All other findings from
+that review were either patched in-story or resolved as owner decisions — see the story's own
+`## Review Findings` section for the full set.
+
+- **No `lock_timeout`/`statement_timeout` bounds the inner GDPR erasure transaction's bulk deletes.**
+  `GdprErasureService.deletePlayerDevelopmentData`'s eleven `deleteAllByPlayerId` calls
+  (`GdprErasureService.java:436-453`) are ordinary blocking statements: unlike the
+  `findByIdForUpdate` above them they carry no `NOWAIT`, and unlike
+  `RadarCompositeCalculationService` the transaction issues no
+  `SELECT set_config('lock_timeout', ...)`. There is no global `lock_timeout` either — `application.yaml`'s
+  `connection-init-sql` sets only the time zone. A concurrent writer holding row locks on, say,
+  `development.radar_assessment_entries` therefore blocks the erasure's `DELETE` indefinitely while
+  the request thread holds that child's `player_profiles FOR UPDATE` lock, which in turn blocks
+  `FOR KEY SHARE` RI checks on every insert into the 7 FK'd tables for that child. AC2's per-erase
+  deadline does not help: it is sampled only at the top of each loop iteration
+  (`GdprErasureService.java:280`), so once control is inside a child it is never re-evaluated. The
+  same hole exists on the cheaper path — the inner `REQUIRES_NEW` must acquire a second pooled
+  connection and can wait up to `connection-timeout: 30000` (three times the whole 10s budget)
+  without the deadline firing.
+  **Not worsened by this story's diff** — the missing statement timeout is pre-existing — but this
+  story is the first to document a bound (`gdprEraseLockBudget`) that the missing timeout silently
+  invalidates, which is why it is recorded here rather than left implicit. Already annotated
+  `[DECIDED: accepted risk — skillars-deferred-128]` for the single-child hold-time residual, and
+  named as future work in `PessimisticLockRetryer`'s own Javadoc ("a future story bounding
+  single-child hold time directly (e.g. a `statement_timeout`/`lock_timeout` mirroring
+  `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s approach) would close that residual fully").

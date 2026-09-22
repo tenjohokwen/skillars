@@ -170,6 +170,13 @@ public class AdminQueueService {
                 }
             }
             case STRIKE_THRESHOLD -> "";
+            // skillars-deferred-128 story review (Decision 2): reason distinguishes the three
+            // GdprErasureService.raiseErasureAlert causes (DEADLINE_EXCEEDED / CHILD_VANISHED /
+            // CHILD_CONTENDED) — same reason-prefix pattern MODERATION_UNRESOLVED already uses above.
+            case GDPR_ERASURE_DEADLINE -> {
+                String prefix = reason != null ? reason + ": " : "";
+                yield prefix + "GDPR erasure request " + referenceId;
+            }
             default -> "";
         };
     }
@@ -225,6 +232,12 @@ public class AdminQueueService {
             counts.getOrDefault(AdminAlertType.STRIKE_THRESHOLD, 0L),
             counts.getOrDefault(AdminAlertType.DISPUTE_RAISED, 0L),
             counts.getOrDefault(AdminAlertType.MODERATION_UNRESOLVED, 0L),
+            // skillars-deferred-128 story review (Decision 2): without its own bucket here, an open
+            // GDPR_ERASURE_DEADLINE alert (skillars-deferred-128 AC2/AC4) fell into `default -> ""`
+            // in buildSummary below AND was invisible from this six-bucket summary entirely, while
+            // still counted in `total` above — making `total` silently exceed the sum of every
+            // bucket this DTO actually reports. This bucket closes that gap.
+            counts.getOrDefault(AdminAlertType.GDPR_ERASURE_DEADLINE, 0L),
             total);
     }
 }

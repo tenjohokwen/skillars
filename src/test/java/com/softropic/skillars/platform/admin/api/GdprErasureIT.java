@@ -7,6 +7,7 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.admin.service.GdprErasureService;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,7 +20,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 
@@ -63,6 +66,14 @@ class GdprErasureIT extends AbstractIntegrationTest {
     private static final long SELF_PLAYER_USER_ID    = 9210_000_004L;
     private static final long SELF_PLAYER_PROFILE_ID = 9210_777_951_331L;
 
+    // skillars-deferred-128 AC1 H3: the PARENT branch (erase()'s eraseParentChildren, exercised via
+    // findByParentIdOrderByIdAsc(PARENT_ID)) had ZERO test coverage before this story — no fixture
+    // anywhere set parent_id on main.player_profiles. These two TSID-shaped ids (deliberately
+    // ordered A < B so findByParentIdOrderByIdAsc's own ORDER BY id ASC processes A first) are the
+    // shared multi-child fixture for every AC1/AC2/AC4 PARENT-branch test below.
+    private static final long PARENT_CHILD_A_ID = 9210_777_951_401L;
+    private static final long PARENT_CHILD_B_ID = 9210_777_951_402L;
+
     private static final String PARENT_EMAIL      = "gdpr.erasure.parent.9210@skillars-test.com";
     private static final String COACH_EMAIL       = "gdpr.erasure.coach.9210@skillars-test.com";
     private static final String PLAYER_EMAIL      = "gdpr.erasure.player.9210@skillars-test.com";
@@ -71,6 +82,13 @@ class GdprErasureIT extends AbstractIntegrationTest {
 
     @MockitoBean
     private FileStorageService fileStorageService;
+
+    // (story review, 2026-09-22): a spy, not a full mock — real behavior by default for every other
+    // test in this class, stubbed to throw only inside
+    // erase_parentUser_laterFailureDoesNotRollBackAlreadyCommittedChild, and reset() immediately
+    // after. Mirrors AccountDeletionCascadeIT's own established @MockitoSpyBean pattern.
+    @MockitoSpyBean
+    private RefreshTokenRepository refreshTokenRepository;
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
@@ -753,6 +771,372 @@ class GdprErasureIT extends AbstractIntegrationTest {
         assertThat(baselineCount).as("baseline must not be resurrected after erasure").isZero();
     }
 
+    // ── skillars-deferred-128: PARENT-branch multi-child tests (AC1/AC2/AC4) ────────────────────
+    // story-review.md H3: the PARENT branch had ZERO existing test coverage before this story (no
+    // erase_parentUser_* test existed, no fixture set parent_id) — every test below is genuinely
+    // new coverage, not "kept green."
+
+    /** AC1: the PARENT-branch happy path, no contention, no injected failure — did not exist before
+     * this story. */
+    @Test
+    void erase_parentUser_multiChildFixture_happyPath_deletesAllChildrenDevelopmentData() {
+        seedParentChildren();
+
+        erase(PARENT_ID);
+
+        int childACount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_timeline_events WHERE player_id = ?",
+            Integer.class, PARENT_CHILD_A_ID);
+        int childBCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_timeline_events WHERE player_id = ?",
+            Integer.class, PARENT_CHILD_B_ID);
+        assertThat(childACount).isZero();
+        assertThat(childBCount).isZero();
+        assertThat(childTombstoned(PARENT_CHILD_A_ID)).isTrue();
+        assertThat(childTombstoned(PARENT_CHILD_B_ID)).isTrue();
+
+        int reportCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.performance_reports WHERE player_id IN (?, ?)",
+            Integer.class, PARENT_CHILD_A_ID, PARENT_CHILD_B_ID);
+        assertThat(reportCount).isZero();
+    }
+
+    /**
+     * AC1: proves the {@code player_profiles} lock is genuinely released as soon as each child's own
+     * inner transaction commits — NOT held for the rest of {@code erase()}'s duration.
+     *
+     * <p>(story review, 2026-09-22) Both A's and B's locks are pre-held by their own locker threads
+     * BEFORE {@code erase()} starts — A's briefly ({@code childALockHoldMillis}), B's for the whole
+     * test ({@code childBLockHoldMillis}). The earlier version of this test used
+     * {@code awaitChildTombstoned(A)} (A's own committed-tombstone visibility) as its sync point, but
+     * that is tautological: under the pre-fix wide-lock code, A's tombstone is not durably visible
+     * until {@code erase()}'s WHOLE outer transaction commits — which cannot happen before B's
+     * processing (and thus B's own lock hold) also finishes — so by the time that old sync point
+     * fired, B's lock was ALSO already released, and the FK-insert assertion below would have passed
+     * identically on the bug this test exists to catch. This version instead uses two
+     * INDEPENDENTLY-controlled, fixed hold durations: A's is short enough that
+     * {@code PessimisticLockRetryer}'s own retry budget comfortably re-acquires and finishes A well
+     * before the fixed {@code fkInsertDelayMillis} mark, while B's stays held throughout. Under the
+     * fix, A's lock is released long before that mark (this assertion passes); under the bug, A's
+     * lock cannot release until B's does too — the FK insert would then block past the mark and fail
+     * the assertion.
+     */
+    @Test
+    void erase_parentUser_lockReleasedAfterEachChild_concurrentFkInsertOnEarlierChildNotBlocked() throws Exception {
+        seedParentChildren();
+        long childALockHoldMillis = 50;
+        long childBLockHoldMillis = 1500;
+        long fkInsertDelayMillis = 900;
+        CountDownLatch aLockHeld = new CountDownLatch(1);
+        CountDownLatch bLockHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> lockerFailure = new AtomicReference<>();
+        ExecutorService executor = Executors.newFixedThreadPool(3);
+
+        try {
+            Future<?> lockerA = executor.submit(() ->
+                holdChildLock(PARENT_CHILD_A_ID, aLockHeld, childALockHoldMillis, lockerFailure));
+            Future<?> lockerB = executor.submit(() ->
+                holdChildLock(PARENT_CHILD_B_ID, bLockHeld, childBLockHoldMillis, lockerFailure));
+
+            AtomicReference<Throwable> eraseFailure = new AtomicReference<>();
+            Future<?> eraser = executor.submit(() -> {
+                try {
+                    await(aLockHeld);
+                    await(bLockHeld);
+                    erase(PARENT_ID);
+                } catch (Throwable t) {
+                    eraseFailure.set(t);
+                }
+            });
+
+            await(aLockHeld);
+            await(bLockHeld);
+            // Deterministic (not polled) sync point: a fixed delay chosen relative to the two
+            // KNOWN, test-controlled hold durations above, not to any outcome erase() itself
+            // produces — see this test's own Javadoc for why a polled outcome-based sync point
+            // (the old awaitChildTombstoned(A)) could not distinguish the fix from the bug.
+            Thread.sleep(fkInsertDelayMillis);
+            Instant insertStart = Instant.now();
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.update(
+                    "INSERT INTO development.coach_radar_preferences (coach_id, player_id, updated_at) VALUES (?, ?, ?)",
+                    coachProfileId, PARENT_CHILD_A_ID, Timestamp.from(Instant.now()));
+                return null;
+            });
+            Duration insertElapsed = Duration.between(insertStart, Instant.now());
+
+            lockerA.get(10, TimeUnit.SECONDS);
+            lockerB.get(10, TimeUnit.SECONDS);
+            eraser.get(10, TimeUnit.SECONDS);
+
+            assertThat(lockerFailure.get()).isNull();
+            assertThat(eraseFailure.get()).isNull();
+            assertThat(insertElapsed)
+                .as("an FK-referencing insert against already-processed child A must not block behind "
+                    + "B's still-held lock — A's own player_profiles lock was already released, not held "
+                    + "for the rest of erase()'s duration")
+                .isLessThan(Duration.ofMillis(400));
+        } finally {
+            executor.shutdownNow();
+            executor.awaitTermination(10, TimeUnit.SECONDS);
+        }
+    }
+
+    /**
+     * AC1: proves the accepted atomicity tradeoff from {@code deletePlayerDevelopmentData}'s own
+     * Javadoc is real — a later failure in {@code erase()} can no longer roll back an
+     * already-committed child's development-data deletion, AND (the H1 regression this test also
+     * guards against) each child's blob-deletion keys were genuinely enqueued, not lost.
+     *
+     * <p>(story review, 2026-09-22) Previously this test raced a 1ms {@code gdprEraseLockBudget}
+     * against a sub-millisecond gap between two adjacent {@code Instant.now()} calls to decide
+     * whether A got processed before tripping — inherently flaky, and conflated this AC1 proof with
+     * AC2's own deadline mechanism. AC1's own Tests bullet asked for a spy on a genuine post-loop
+     * step instead: {@code refreshTokenRepository.markAllUsedByUserId} is the very first thing
+     * {@code erase()} calls once the PARENT loop returns, so making it throw deterministically fails
+     * AFTER both children have already committed — a stronger proof than the old test gave, since it
+     * now covers BOTH children, not just A.
+     */
+    @Test
+    void erase_parentUser_laterFailureDoesNotRollBackAlreadyCommittedChild() throws Exception {
+        Map<Long, String> childKeys = seedParentChildren();
+
+        doThrow(new RuntimeException("simulated post-loop failure"))
+            .when(refreshTokenRepository).markAllUsedByUserId(PARENT_ID);
+        try {
+            assertThatThrownBy(() -> erase(PARENT_ID))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("simulated post-loop failure");
+        } finally {
+            reset(refreshTokenRepository);
+        }
+
+        // Both children must have been fully, durably processed despite the overall request having
+        // failed on a step AFTER the PARENT loop returned.
+        assertThat(childTombstoned(PARENT_CHILD_A_ID)).isTrue();
+        assertThat(childTombstoned(PARENT_CHILD_B_ID)).isTrue();
+        int remainingTimelineRows = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_timeline_events WHERE player_id IN (?, ?)",
+            Integer.class, PARENT_CHILD_A_ID, PARENT_CHILD_B_ID);
+        assertThat(remainingTimelineRows).isZero();
+
+        // H1 regression guard: each child's OWN report key must have been genuinely enqueued, not
+        // lost — matched exactly (story review, 2026-09-22), not via a schema-wide 'reports/%' LIKE
+        // that would also pass if the enqueue call were deleted from a DIFFERENT test's fixture.
+        for (String key : childKeys.values()) {
+            int outboxCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM main.outbox_messages WHERE aggregate_type = 'BLOB_DELETION' "
+                    + "AND payload->>'storageKey' = ?",
+                Integer.class, key);
+            assertThat(outboxCount).isEqualTo(1);
+        }
+    }
+
+    /** AC2: a PARENT whose combined per-child processing would exceed the configured budget stops
+     * early, marks the request FAILED (not silently truncated), and raises the targeted AdminAlert.
+     *
+     * <p>(story review, 2026-09-22) Routed through the real HTTP + {@code AFTER_COMMIT} listener
+     * path, not a direct {@code gdprErasureService.erase(...)} call followed by a manual
+     * {@code markFailed(...)} — the earlier version's {@code FAILED} assertion was tautological
+     * (the test itself set that status), proving nothing about whether {@code GdprEventListener}'s
+     * own catch actually reaches this exception. */
+    @Test
+    void erase_parentUser_deadlineExceeded_marksFailedAndRaisesTargetedAdminAlert() throws Exception {
+        seedParentChildren();
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+
+        withEraseLockBudget(Duration.ofSeconds(-1), () ->
+            httpTestClient.makeHttpRequest(
+                baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class));
+
+        UUID requestId = jdbcTemplate.queryForObject(
+            "SELECT id FROM admin.gdpr_requests WHERE user_id = ? AND request_type = 'ERASURE'",
+            UUID.class, PARENT_ID);
+
+        String finalStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.gdpr_requests WHERE id = ?", String.class, requestId);
+        assertThat(finalStatus).isEqualTo("FAILED");
+
+        // Neither child should have been processed — the deadline was already exceeded before the
+        // loop's very first iteration. The same "0 processed" fact the
+        // [GDPR_ERASURE_DEADLINE_EXCEEDED] log line reports as processed=0/2 (story review,
+        // 2026-09-22: not independently assertable here without a log-capturing test appender).
+        assertThat(childTombstoned(PARENT_CHILD_A_ID)).isFalse();
+        assertThat(childTombstoned(PARENT_CHILD_B_ID)).isFalse();
+
+        Map<String, Object> alert = jdbcTemplate.queryForMap(
+            "SELECT type, reference_id, reference_type, status, reason FROM admin.admin_alerts "
+                + "WHERE reference_id = ? AND type = 'GDPR_ERASURE_DEADLINE'",
+            requestId.toString());
+        assertThat(alert.get("reference_type")).isEqualTo("GDPR_REQUEST");
+        assertThat(alert.get("status")).isEqualTo("OPEN");
+        assertThat(alert.get("reason")).isEqualTo("DEADLINE_EXCEEDED");
+    }
+
+    /**
+     * AC4: a vanished child (its {@code player_profiles} row deleted between
+     * {@code findByParentIdOrderByIdAsc}'s read and the loop's lock attempt for it, e.g. by a
+     * concurrent GDPR request that already finished it) is skipped — the rest of the PARENT request
+     * completes successfully, not failed.
+     *
+     * <p>(story review, 2026-09-22) Previously this deleted B BEFORE calling {@code erase()} at all —
+     * meaning {@code findByParentIdOrderByIdAsc} never returned B in the first place, so the
+     * {@code catch (ResourceNotFoundException)} this test claims to cover was never actually reached;
+     * it would have passed identically even if that catch block were deleted. This version instead
+     * holds B's row lock from a second connection BEFORE {@code erase()} starts (so B IS in the list
+     * {@code erase()} reads), then deletes + commits while {@code deletePlayerDevelopmentData(B)}'s
+     * own {@code PessimisticLockRetryer} is mid-retry on B's lock — its next successful lock
+     * acquisition then finds the row genuinely gone, throwing the real
+     * {@code ResourceNotFoundException} this AC's catch exists to handle.
+     */
+    @Test
+    void erase_parentUser_vanishedChild_skipsAndContinues_completesSuccessfully() throws Exception {
+        seedParentChildren();
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> deleterFailure = new AtomicReference<>();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        try {
+            Future<?> deleter = executor.submit(() -> {
+                try {
+                    transactionTemplate.execute(status -> {
+                        jdbcTemplate.queryForObject(
+                            "SELECT id FROM main.player_profiles WHERE id = ? FOR UPDATE",
+                            Long.class, PARENT_CHILD_B_ID);
+                        lockHeld.countDown();
+                        try {
+                            Thread.sleep(500);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError("Interrupted while holding B's player_profiles lock", e);
+                        }
+                        jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PARENT_CHILD_B_ID);
+                        return null;
+                    });
+                } catch (Throwable t) {
+                    deleterFailure.set(t);
+                }
+            });
+
+            AtomicReference<Throwable> eraseFailure = new AtomicReference<>();
+            AtomicReference<UUID> requestIdRef = new AtomicReference<>();
+            Future<?> eraser = executor.submit(() -> {
+                try {
+                    await(lockHeld);
+                    requestIdRef.set(erase(PARENT_ID));
+                } catch (Throwable t) {
+                    eraseFailure.set(t);
+                }
+            });
+
+            deleter.get(15, TimeUnit.SECONDS);
+            eraser.get(15, TimeUnit.SECONDS);
+
+            assertThat(deleterFailure.get()).isNull();
+            assertThat(eraseFailure.get()).isNull();
+
+            UUID requestId = requestIdRef.get();
+            String finalStatus = jdbcTemplate.queryForObject(
+                "SELECT status FROM admin.gdpr_requests WHERE id = ?", String.class, requestId);
+            assertThat(finalStatus).isEqualTo("COMPLETED");
+            assertThat(childTombstoned(PARENT_CHILD_A_ID)).isTrue();
+            int childATimelineCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM development.player_timeline_events WHERE player_id = ?",
+                Integer.class, PARENT_CHILD_A_ID);
+            assertThat(childATimelineCount).isZero();
+
+            Map<String, Object> alert = jdbcTemplate.queryForMap(
+                "SELECT status, reason FROM admin.admin_alerts "
+                    + "WHERE reference_id = ? AND type = 'GDPR_ERASURE_DEADLINE'",
+                requestId.toString());
+            assertThat(alert.get("status")).isEqualTo("OPEN");
+            assertThat(alert.get("reason")).isEqualTo("CHILD_VANISHED");
+        } finally {
+            executor.shutdownNow();
+            executor.awaitTermination(10, TimeUnit.SECONDS);
+        }
+    }
+
+    /**
+     * AC4 (M11, widened scope): a genuinely lock-contended child (its retry budget exhausted by a
+     * concurrent holder, not merely vanished) is also skipped, not just a vanished one — the rest of
+     * the PARENT request still completes successfully.
+     */
+    @Test
+    void erase_parentUser_contendedChild_skipsAndContinues_completesSuccessfully() throws Exception {
+        seedParentChildren();
+        // Hold A's lock for longer than PessimisticLockRetryer's own ~3.2s worst-case retry budget so
+        // deletePlayerDevelopmentData(A) exhausts it and throws PessimisticLockingFailureException —
+        // mirroring this file's own erase_blockedByCompetingPlayerProfileLock_waitsThenSucceeds
+        // raw-JDBC-hold technique, but held long enough to exhaust rather than just delay.
+        // (story review, 2026-09-22): raised from 4000ms — the original margin over the ~3.2s worst
+        // case (~800ms) left too little slack for erase()'s own pre-loop preamble (user
+        // anonymisation, message/review deletion) under a loaded Testcontainers run, risking the
+        // lock clearing before the retry budget actually exhausted.
+        long lockHoldMillis = 6000;
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> lockerFailure = new AtomicReference<>();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        Future<?> locker = executor.submit(() -> {
+            try {
+                transactionTemplate.execute(status -> {
+                    jdbcTemplate.queryForObject(
+                        "SELECT id FROM main.player_profiles WHERE id = ? FOR UPDATE",
+                        Long.class, PARENT_CHILD_A_ID);
+                    lockHeld.countDown();
+                    try {
+                        Thread.sleep(lockHoldMillis);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError("Interrupted while holding A's player_profiles lock", e);
+                    }
+                    return null;
+                });
+            } catch (Throwable t) {
+                lockerFailure.set(t);
+            }
+        });
+
+        AtomicReference<Throwable> eraseFailure = new AtomicReference<>();
+        AtomicReference<UUID> requestIdRef = new AtomicReference<>();
+        Future<?> eraser = executor.submit(() -> {
+            try {
+                await(lockHeld);
+                requestIdRef.set(erase(PARENT_ID));
+            } catch (Throwable t) {
+                eraseFailure.set(t);
+            }
+        });
+
+        try {
+            locker.get(20, TimeUnit.SECONDS);
+            eraser.get(20, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+            executor.awaitTermination(10, TimeUnit.SECONDS);
+        }
+
+        assertThat(lockerFailure.get()).isNull();
+        assertThat(eraseFailure.get()).isNull();
+
+        UUID requestId = requestIdRef.get();
+        String finalStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.gdpr_requests WHERE id = ?", String.class, requestId);
+        assertThat(finalStatus).isEqualTo("COMPLETED");
+        // A was contended and skipped — its development data must NOT have been touched.
+        assertThat(childTombstoned(PARENT_CHILD_A_ID)).isFalse();
+        // B had no contention at all — must have completed normally.
+        assertThat(childTombstoned(PARENT_CHILD_B_ID)).isTrue();
+
+        Map<String, Object> alert = jdbcTemplate.queryForMap(
+            "SELECT status, reason FROM admin.admin_alerts "
+                + "WHERE reference_id = ? AND type = 'GDPR_ERASURE_DEADLINE'",
+            requestId.toString());
+        assertThat(alert.get("status")).isEqualTo("OPEN");
+        assertThat(alert.get("reason")).isEqualTo("CHILD_CONTENDED");
+    }
+
     private void seedCommittedRadarRows(long playerId, String skill) {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
@@ -766,6 +1150,96 @@ class GdprErasureIT extends AbstractIntegrationTest {
                 playerId, skill);
             return null;
         });
+    }
+
+    // ── skillars-deferred-128: PARENT-branch multi-child fixture (AC1/AC2/AC4) ──────────────────
+
+    /**
+     * Seeds two {@code main.player_profiles} children under {@code PARENT_ID} (A's id < B's id, so
+     * {@code findByParentIdOrderByIdAsc} processes A first), each with a
+     * {@code development.player_timeline_events} row (one of the 11 tables
+     * {@code deletePlayerDevelopmentData} deletes) and a {@code development.performance_reports} row
+     * carrying a real {@code storage_key} (so the AC1 H1 per-child blob-enqueue path is exercised by
+     * real data, not an empty scan). Shared scope for every AC1/AC2/AC4 test below — seeded once per
+     * test that needs it, not globally in {@code setUp()}, so every other test in this file keeps
+     * its pre-existing (childless) PARENT_ID fixture unchanged.
+     *
+     * @return each seeded child's own {@code performance_reports.storage_key}, keyed by
+     *     {@code player_profiles.id} — lets a test assert an outbox row for an EXACT key (story
+     *     review, 2026-09-22), rather than a schema-wide {@code LIKE 'reports/%'} that would also
+     *     match a stray row from elsewhere and cannot prove which child's enqueue produced it.
+     */
+    private Map<Long, String> seedParentChildren() {
+        return transactionTemplate.execute(status -> Map.of(
+            PARENT_CHILD_A_ID, seedChildProfile(PARENT_CHILD_A_ID, "GDPR Child A"),
+            PARENT_CHILD_B_ID, seedChildProfile(PARENT_CHILD_B_ID, "GDPR Child B")));
+    }
+
+    private String seedChildProfile(long profileId, String name) {
+        jdbcTemplate.update(
+            "INSERT INTO main.player_profiles "
+                + "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) "
+                + "VALUES (?, ?, ?, 'MIDFIELDER', 'AGE_10_12', ?, false, ?, 'system')",
+            profileId, name, Date.valueOf(LocalDate.now().minusYears(12)), PARENT_ID, Timestamp.from(Instant.now()));
+
+        UUID reportId = UUID.randomUUID();
+        String storageKey = "reports/" + reportId + "/report.pdf";
+        jdbcTemplate.update(
+            "INSERT INTO development.performance_reports "
+                + "(id, coach_id, player_id, generated_at, storage_key, next_steps) "
+                + "VALUES (?, ?, ?, ?, ?, 'x')",
+            reportId, coachProfileId, profileId, Timestamp.from(Instant.now()), storageKey);
+
+        jdbcTemplate.update(
+            "INSERT INTO development.player_timeline_events (id, player_id, event_type, occurred_at) "
+                + "VALUES (?, ?, 'SESSION_COMPLETED', ?)",
+            UUID.randomUUID(), profileId, Timestamp.from(Instant.now()));
+
+        return storageKey;
+    }
+
+    /** Overrides {@code GdprErasureService.gdprEraseLockBudget} for the duration of {@code action},
+     * restoring the original value afterward — this bean is a shared Spring singleton across every
+     * test in this class. Mirrors this project's established seam for a normally-fixed constant. */
+    private void withEraseLockBudget(Duration budget, Runnable action) {
+        Object original = ReflectionTestUtils.getField(gdprErasureService, "gdprEraseLockBudget");
+        ReflectionTestUtils.setField(gdprErasureService, "gdprEraseLockBudget", budget);
+        try {
+            action.run();
+        } finally {
+            ReflectionTestUtils.setField(gdprErasureService, "gdprEraseLockBudget", original);
+        }
+    }
+
+    private boolean childTombstoned(long profileId) {
+        Boolean result = jdbcTemplate.queryForObject(
+            "SELECT development_data_erased_at IS NOT NULL FROM main.player_profiles WHERE id = ?",
+            Boolean.class, profileId);
+        return Boolean.TRUE.equals(result);
+    }
+
+    /** Holds a raw {@code FOR UPDATE} lock on one child's {@code player_profiles} row for exactly
+     * {@code holdMillis}, counting down {@code heldLatch} once the lock is actually acquired — used
+     * by {@code erase_parentUser_lockReleasedAfterEachChild_concurrentFkInsertOnEarlierChildNotBlocked}
+     * to control two independent, deterministic hold windows. */
+    private void holdChildLock(long childId, CountDownLatch heldLatch, long holdMillis,
+                                AtomicReference<Throwable> failure) {
+        try {
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.queryForObject(
+                    "SELECT id FROM main.player_profiles WHERE id = ? FOR UPDATE", Long.class, childId);
+                heldLatch.countDown();
+                try {
+                    Thread.sleep(holdMillis);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError("Interrupted while holding lock for playerId=" + childId, e);
+                }
+                return null;
+            });
+        } catch (Throwable t) {
+            failure.set(t);
+        }
     }
 
     private static void await(CountDownLatch latch) {

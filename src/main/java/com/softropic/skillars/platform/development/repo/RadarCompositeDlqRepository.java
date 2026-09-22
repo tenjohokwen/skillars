@@ -28,11 +28,22 @@ public interface RadarCompositeDlqRepository extends JpaRepository<RadarComposit
     // larger change than this fix's scope. Postgres allows a literal now() call and a bound
     // parameter in the same UPDATE statement freely. See resetStaleClaimed's own Javadoc below for
     // the comparison this stamp change was made for.
+    // skillars-deferred-128 AC5: now() further replaced with clock_timestamp() — see
+    // VideoDeletionOutboxRepository.claimPendingBatch's identical comment for the full
+    // transaction_timestamp()-vs.-statement-accurate-time rationale (this claim-stamp write is
+    // correct today only because process() carries no @Transactional and ShedLock's own accessor
+    // runs REQUIRES_NEW; clock_timestamp() removes that hidden transaction-boundary coupling for
+    // THIS timestamp symptom specifically — story review, 2026-09-22, correcting this comment's own
+    // earlier "regardless of any future change" overclaim: a future @Transactional process() would
+    // still break claim visibility and recalculateComposite's own side-effect atomicity far worse
+    // than this one stamp ever could; this fix does not address those). Per-row evaluation is
+    // confirmed safe: the
+    // batch-identity predicate here is claimed_by (skillars-deferred-124 AC4), not claimed_at.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE development.radar_composite_dlq
-        SET status = 'CLAIMED', claimed_at = now(), claimed_by = :runId
+        SET status = 'CLAIMED', claimed_at = clock_timestamp(), claimed_by = :runId
         WHERE id = ANY(
             SELECT id FROM development.radar_composite_dlq
             WHERE status = 'PENDING' AND next_retry_at <= :now
@@ -76,13 +87,15 @@ public interface RadarCompositeDlqRepository extends JpaRepository<RadarComposit
     // not determine data type of parameter" error the bare multiplication form can trigger, and it
     // reads unambiguously as "an interval of N seconds" rather than relying on interval-arithmetic
     // operator precedence.
+    // skillars-deferred-128 AC5: now() replaced with clock_timestamp() to match claimPendingBatch's
+    // identical stamp change above — see that method's Javadoc for the full rationale.
     @Modifying
     @Transactional
     @Query(value = """
         UPDATE development.radar_composite_dlq
         SET status = 'PENDING', claimed_at = NULL, claimed_by = NULL
         WHERE status = 'CLAIMED'
-          AND (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => :staleWindowSeconds))
+          AND (claimed_at IS NULL OR claimed_at < clock_timestamp() - make_interval(secs => :staleWindowSeconds))
         """, nativeQuery = true)
     int resetStaleClaimed(@Param("staleWindowSeconds") long staleWindowSeconds);
 

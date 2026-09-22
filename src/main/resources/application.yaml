@@ -60,6 +60,50 @@ spring:
   # static property, not a runtime-tunable platform_config key: a thread pool's size cannot be
   # resized at runtime without recreating the scheduler bean, so a runtime-tunable value would not
   # actually be actionable without a restart anyway.
+  #
+  # skillars-deferred-128 AC3: `8` was ALSO chosen with the connection pressure it creates against
+  # the shared datasource.hikari.maximum-pool-size (25, below) in mind -- documented here as a
+  # deliberate derivation, not just a fix for the single-thread-starvation problem above.
+  #
+  # THE MECHANISM: any DB-touching @Scheduled method can hold a pooled JDBC connection for the
+  # duration of its own transaction, for as long as that firing takes. Re-verified 2026-09-22
+  # (grep -rn "@Scheduled" src/main/java, cross-referenced against each hit's own
+  # fixedDelay(String)/cron and whether its body reaches a repository/jdbcTemplate): 11 DB-touching
+  # @Scheduled methods run at a cadence of 60s or less -- WebhookEventProcessorScheduler
+  # .processPending (5s), DeletionSchedulerService (5s), OutboxPollerScheduler (5s),
+  # UploadSessionExpiryScheduler.processExpired (30s), ReconciliationWorkerScheduler.reconcile
+  # (60s), VideoDeletionOutboxProcessor.process (60s), QuotaReservationTimeoutService
+  # .expireStaleReservations (60s), VideoSubscriptionLifecycleListener.processOutbox (60s),
+  # RadarCompositeDlqProcessor.process (60s), EmailRetryScheduler (60s), AlertRuleCache.refresh
+  # (60s) -- so this 8-thread pool can genuinely be saturated with DB-touching work at once; `8` is
+  # not an arbitrary headroom number.
+  #
+  # WHAT THAT LEAVES of the 25-connection pool: worst case, 8 for this scheduler pool, 3 for the
+  # clustered Quartz job store (org.quartz.threadPool.threadCount above), and the remainder shared
+  # by Tomcat request-handling threads and this project's seven application-managed thread pools
+  # (not all @Async -- see infrastructure.threadpool.ExecutorShutdown's own authoritative inventory:
+  # outboxDrainPool, sluRetryExecutor, storageUploadExecutor [a raw java.util.concurrent
+  # .ThreadPoolExecutor passed directly to the AWS SDK, never an @Async target], sendMailPool,
+  # moderationTaskExecutor, taskExecutor, reportExecutor).
+  #
+  # A NARROWER SUB-CASE, not the basis for the claim above: PessimisticLockRetryer's own
+  # backoff-while-holding-a-connection pattern (infrastructure.persistence.PessimisticLockRetryer,
+  # ~3.2s worst case per call) is reachable from only TWO of these @Scheduled methods --
+  # PaymentPendingSweeper.sweepStrandedPayments and RadarCompositeDlqProcessor.process -- so it is a
+  # real but strictly smaller 2-thread contributor to the pressure this pool size accounts for, not
+  # the headline mechanism (every DB-touching scheduled job holds a connection for its transaction's
+  # duration regardless of whether it ever reaches the retryer).
+  #
+  # STALE ON ARRIVAL (story review, 2026-09-22): this story's own AC1 (GdprErasureService, unrelated
+  # to the scheduler pool above) introduced a SEPARATE doubling this derivation does not yet account
+  # for -- deletePlayerDevelopmentData now runs in its own REQUIRES_NEW TransactionTemplate, and
+  # REQUIRES_NEW suspends the caller's (erase()'s) transaction without releasing ITS pooled
+  # connection, so each in-flight GDPR erasure now pins TWO of the 25 Hikari connections at once (a
+  # third, transiently, while AC2's own deadline-alert REQUIRES_NEW block runs). GDPR erasures are
+  # low-frequency admin-triggered calls today, not a DB-touching @Scheduled job, so this does not
+  # change the 8-of-25 scheduler-pool math above -- recorded here only so a future reader of this
+  # comment does not treat it as the complete inventory of REQUIRES_NEW-driven connection doubling in
+  # this codebase.
   task:
     scheduling:
       pool:

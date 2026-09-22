@@ -9,7 +9,7 @@ documented "short call sites only" precondition; two benign/retryable-disappeara
 fail an entire multi-child GDPR erasure) — plus a documentation-only Hikari-pressure justification, a
 latent clock-coupling fix, and a corrected understanding (no code change) of five `@Scheduled` methods the
 ledger had mis-flagged as needing `@SchedulerLock`, plus the standard ledger closeout.
-**Status:** ready-for-dev
+**Status:** done
 **Created:** 2026-09-22
 **Reviewed:** 2026-09-22 (`story-review.md`, senior-dev pre-implementation audit). 3 "must fix" + 11
 "should fix" findings, all independently re-verified against actual source before applying — zero false
@@ -868,7 +868,7 @@ leave everything else exactly as-is).
 
 ---
 
-## File List (expected — reconcile against the actual final diff before AC7)
+## File List (reconciled against the actual final diff)
 
 - `src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java` (AC1, AC2, AC4)
 - `src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java` (AC1, AC2, AC4 tests)
@@ -884,8 +884,174 @@ leave everything else exactly as-is).
 - `_bmad-output/implementation-artifacts/deferred-work.md` (AC7)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (status → review at dev-story completion)
 
+**Added applying `/bmad-code-review`'s Patch findings (2026-09-22) — see `## Review Findings` above:**
+
+- `src/main/java/com/softropic/skillars/platform/admin/contract/AdminQueueSummaryDto.java` (Decision 2
+  — new `gdprErasureDeadlines` field)
+- `src/main/java/com/softropic/skillars/platform/admin/service/AdminQueueService.java` (Decision 2 —
+  summary bucket + `buildSummary` case)
+- `src/test/java/com/softropic/skillars/infrastructure/persistence/ClaimStampUsesClockTimestampTest.java`
+  (new — discharges AC5's own Tests-bullet fallback)
+
 **No files under `platform.video.service` or `platform.notification.service` are touched** — AC6 (post
 story-review correction) makes no production-code changes; see AC6's own Context.
+
+**Not anticipated by this story's original Dev Notes ("No new Flyway migration is needed for any
+AC") — added during implementation, see Dev Agent Record → Completion Notes for why:**
+
+- `src/main/resources/db/migration/V152__admin_alerts_gdpr_erasure_deadline_type.sql` (new — AC2,
+  widens `admin.admin_alerts`' two `CHECK` constraints so the new targeted `AdminAlert` can be
+  written)
+- `src/main/java/com/softropic/skillars/platform/admin/contract/AdminAlertType.java` (AC2, new
+  `GDPR_ERASURE_DEADLINE` constant)
+- `src/main/java/com/softropic/skillars/platform/admin/contract/AdminAlertReferenceType.java` (AC2,
+  new `GDPR_REQUEST` constant)
+
+---
+
+## Dev Agent Record
+
+### Completion Notes
+
+All 7 ACs implemented and tested. Every AC's own re-verification task was performed against actual
+`HEAD` before implementing; citations matched exactly.
+
+- **AC1 (narrow the `player_profiles` lock scope):** `GdprErasureService` gained a
+  `PlatformTransactionManager txManager` field and a `TransactionTemplate requiresNewTemplate` built
+  in a new `@PostConstruct initTemplates()`, mirroring `ModerationSlaMonitorService` exactly.
+  `deletePlayerDevelopmentData(Long playerId)` (parameter list simplified — no longer takes a shared
+  `blobKeysToDelete` list) now wraps its whole body — lock acquisition, all 11 deletes, the
+  `performance_reports` scan, a per-child `List<String> childBlobKeys` enqueued via
+  `blobDeletionOutboxSupport.enqueue(childBlobKeys)`, and the tombstone save — in
+  `requiresNewTemplate.executeWithoutResult(...)`, committing and releasing its lock before returning.
+  `erase()`'s own `blobKeysToDelete` was renamed `exportBlobKeysToDelete` and now only ever receives
+  the GDPR-export-zip keys. A new `eraseParentChildren(UUID, Long)` helper replaces the old
+  `.forEach(...)` PARENT-branch call site (also carries AC2/AC4's logic — see below); each processed
+  child's outer-context `PlayerProfile` instance is `entityManager.detach(child)`ed in a `finally`
+  block (M9) so `erase()`'s later `findByParentIdOrderByIdAsc` re-read for
+  `AccountDeletionRequestedEvent.linkedPlayerIds` reads fresh, not Hibernate's first-level-cache-stale,
+  rows. `deletePlayerDevelopmentData`'s Javadoc documents the two accepted tradeoffs (atomicity;
+  early-committing sticky tombstone) and cross-references AC4. `PlayerProfileRepository
+  .findByParentIdOrderByIdAsc`'s comment and `PessimisticLockRetryer`'s class Javadoc were both
+  reworded (AC7 Task 5) — the retryer's own "revisit this" precondition now documents that it WAS
+  revisited (AC2) and what residual risk remains (see AC7's `[DECIDED]` bullet).
+- **AC2 (per-erase deadline):** added `private Duration gdprEraseLockBudget = Duration.ofSeconds(10)`
+  — a plain instance field (not `static final`), deliberately, so
+  `ReflectionTestUtils.setField(bean, "gdprEraseLockBudget", ...)` can override it per-test against the
+  live Spring singleton, exactly the seam this story's own Tests section anticipated as the fallback if
+  a plain-constant (not `ConfigBounds`) route was chosen. `eraseParentChildren` computes the deadline
+  once before the loop, checks it before each child (not after), logs+raises a targeted `AdminAlert`
+  and throws `IllegalStateException` on trip (propagates through `erase()` to `GdprEventListener`'s
+  existing catch-all → `markFailed`). **Genuine gap found during implementation, not anticipated by the
+  story text:** `raiseErasureDeadlineAlert` must run in `requiresNewTemplate`'s OWN `REQUIRES_NEW`
+  transaction, not `erase()`'s own — the caller throws immediately after it returns, which rolls back
+  `erase()`'s outer transaction, and without its own transaction the alert row would roll back right
+  along with it and never actually be recorded. Fixed by wrapping the alert save in
+  `requiresNewTemplate.executeWithoutResult(...)`, reusing the same template AC1 built.
+- **AdminAlert taxonomy gap (found during implementation, resolved via `AskUserQuestion`):** neither
+  `AdminAlertType` nor `AdminAlertReferenceType` had a value fitting a GDPR-erasure alert, and both are
+  backed by a DB `CHECK` constraint (`V138__baseline_schema.sql`) limiting them to their existing
+  values — directly contradicting this story's own Dev Notes ("No new Flyway migration is needed for
+  any AC"). Asked the user; chose "add a small Flyway migration" over misusing an existing
+  type/reference-type pair or skipping the alert. Added `V152__admin_alerts_gdpr_erasure_deadline_type
+  .sql` (widens both `CHECK`s; `-- migration-lint: allow-validating-constraint` opt-out, justified
+  inline — `admin_alerts` is a small internal admin-queue table, not the large/hot-table case rule 3
+  exists to protect), plus `AdminAlertType.GDPR_ERASURE_DEADLINE` and
+  `AdminAlertReferenceType.GDPR_REQUEST`. Per this project's rolling-deploy rule 5 ("CHECK widening
+  precedes the first write by one release"), this would normally need to ship a release ahead of the
+  code that writes the new values — but per skillars-deferred-117's owner decision (re-confirmed at
+  V149, still true here — no production deploy of this application has ever happened), there is no live
+  rolling-deploy window this could break today, so the widening and its first write ship together in
+  this same migration, mirroring V145's own precedent for a first-time CHECK addition. First draft of
+  the migration failed `MigrationConventionLintTest` (`DROP CONSTRAINT` without `IF EXISTS`); fixed.
+- **AC3 (Hikari pressure documentation):** re-derived the DB-touching `@Scheduled`-methods-at-≤60s-
+  cadence count from scratch (`grep -rn "@Scheduled" src/main/java`, cross-referenced each hit's own
+  cadence and whether its body reaches a repository/`jdbcTemplate`) rather than trusting the ledger
+  bullet's stale "ten" estimate: 11 methods (listed in the new `application.yaml` comment). Extended the
+  existing `task.scheduling.pool` comment block with the connection-pressure math, the seven-pool
+  inventory (corrected to "not all `@Async`" per `ExecutorShutdown`'s own authoritative count), and the
+  `PessimisticLockRetryer` 2-thread sub-case note. Comment-only; `pool.size: 8` unchanged; confirmed via
+  `git diff` that no non-comment line in `application.yaml` changed.
+- **AC4 (skip-and-continue):** `eraseParentChildren`'s per-child loop wraps
+  `deletePlayerDevelopmentData(child.getId())` in `try { … } catch (ResourceNotFoundException e) { … }
+  catch (PessimisticLockingFailureException e) { … }` — two visibly distinct `catch` clauses (not
+  collapsed), each `warn`-logging with distinguishable wording, neither aborting the loop. Both catches
+  are scoped only to this PARENT-branch loop; the PLAYER branch's single call site is unchanged
+  (`ifPresentOrElse`, resolves its own profile first, never reaches either exception).
+- **AC5 (`clock_timestamp()`):** both `claimPendingBatch` (the `claimed_at = now()` write) and
+  `resetStaleClaimed` (the `claimed_at < now() - make_interval(...)` read) changed to
+  `clock_timestamp()` in both `VideoDeletionOutboxRepository` and `RadarCompositeDlqRepository` — four
+  call sites total. `next_retry_at <= :now`/other `now()` usages left untouched, per the story's own
+  explicit scope limit. Comments updated to describe `clock_timestamp()`'s statement-accurate,
+  transaction-boundary-independent semantics while preserving the still-accurate "matches
+  `ShedLockConfig.usingDbTime()`"/"DB time, not app time" framing.
+- **AC6 (ledger correction, no code change):** re-verified the per-method table against `HEAD` —
+  `AlertEvaluationService.computeMetricValue` is still a `return -1.0` stub (confirmed unreachable), and
+  all four `SKIP LOCKED` queries (`UploadSessionRepository.findExpiredPendingForUpdate`,
+  `VideoRepository.findNonTerminalForUpdate`/`findScanningOlderThan`,
+  `VideoWebhookEventRepository.findPendingForUpdate`) are unchanged. No production code touched for
+  this AC, confirmed by the final `git status --short` diff above.
+- **AC7 (ledger closeout):** re-verified the actual diff against this File List before editing
+  `deferred-work.md`. Deleted outright: the FK-lock-exposure bullet, the Hikari-pressure bullet, the
+  five-schedulers bullet, the `orElseThrow` bullet (all from the `skillars-deferred-127` review
+  section), and the `now()`/`clock_timestamp()` bullet (the `skillars-deferred-126` section's one
+  remaining open item). Reclassified, not deleted: the `PessimisticLockRetryer` bullet, now
+  `[DECIDED: accepted risk — skillars-deferred-128]` with the corrected aggregate-vs-single-child
+  framing. Added a narrower `[DECIDED: accepted risk — skillars-deferred-128 — AlertEvaluationService]`
+  note for AC6's re-open condition. New `## Last audit: 2026-09-22 (skillars-deferred-128 dev-story
+  completion)` heading added directly above the `skillars-deferred-126` "Deferred from" section,
+  matching the file's own precedent of positioning the newest audit summary immediately above the
+  sections it closes bullets in.
+
+### Validation performed
+
+Targeted tests only, per this project's `docs/validation-strategy.md` convention — no `mvn verify` run
+locally.
+
+`mvn -o -Dtest=GdprErasureIT test`: **27 tests, 0 failures, 0 errors** (21 pre-existing + 6 new
+PARENT-branch tests — happy path, lock-released-early, later-failure-does-not-roll-back-committed-
+child, deadline-exceeded, vanished-child, contended-child — every one genuinely new coverage per
+story-review H3, the PARENT branch had zero prior tests). Re-run twice to check for flakiness in the
+concurrency-timing-sensitive tests (lock-released-early, contended-child); both runs green.
+
+`mvn -o -Dtest=MigrationConventionLintTest test`: **30 tests, 0 failures** (after the `IF EXISTS` fix
+above).
+
+`mvn -o -Dtest=VideoDeletionOutboxProcessorIT,RadarCompositeDlqRepositoryIT test`: **21 tests, 0
+failures** (AC5's `clock_timestamp()` change; also exercises V152 applying cleanly via Flyway on
+Testcontainers boot).
+
+`mvn -o -Dtest=AdminQueueIT,AdminAlertEventListenerTest test`: **17 tests, 0 failures** (AC2's new
+`AdminAlertType`/`AdminAlertReferenceType` constants against the admin-alert queue/read paths).
+
+`mvn -o -Dtest=PessimisticLockRetryerCallSiteAuditTest,PessimisticLockRetryerTest test`: **12 tests, 0
+failures** — confirms AC1's refactor did not add/remove any `.withBoundedRetry(` call site (still
+exactly 31, the audit test's own hard-coded expectation).
+
+Broader regression sweep (every touched package plus its siblings):
+`mvn -o -Dtest='com.softropic.skillars.platform.admin.**,com.softropic.skillars.platform.video.**,com.softropic.skillars.platform.development.**,com.softropic.skillars.infrastructure.persistence.**,com.softropic.skillars.platform.security.**,com.softropic.skillars.db.**' test`
+— **1139 tests, 0 failures, 0 errors, 4 skipped, BUILD SUCCESS** (7m50s). No regressions found from
+AC1's lock-scope refactor, AC2's deadline logic, AC4's skip-and-continue catches, or AC5's
+`clock_timestamp()` change anywhere in `platform.admin`, `platform.video`, `platform.development`,
+`infrastructure.persistence`, `platform.security`, or the migration-lint suite (`db`). Frontend is
+untouched by this story (confirmed via `git status --short` — no `src/frontend/**` diff); no
+`frontend-tests` PR label needed.
+
+**Validation of the `/bmad-code-review` Patch-finding round (2026-09-22), targeted per
+`docs/validation-strategy.md`:**
+
+`mvn -o -Dtest=GdprErasureIT test`, run twice to re-check the rewritten concurrency-timing tests
+(lock-release, vanished-child) for flakiness: **27 tests, 0 failures, 0 errors** both runs (~59s
+each).
+
+`mvn -o -Dtest=AdminQueueIT,ClaimStampUsesClockTimestampTest,VideoDeletionOutboxProcessorIT,RadarCompositeDlqRepositoryIT test`:
+**34 tests, 0 failures, 0 errors** — confirms `AdminQueueSummaryDto`'s new field/case and the new
+`ClaimStampUsesClockTimestampTest` (AC5's Tests-bullet fallback) both pass, and the
+`clock_timestamp()` comment rewording introduced no behavior change.
+
+`mvn -o -Dtest=PessimisticLockRetryerCallSiteAuditTest,PessimisticLockRetryerTest test`: **12 tests,
+0 failures** — confirms this round's edits (the `volatile` field, the `nanoTime()` deadline, the L5
+comment) did not add/remove any `.withBoundedRetry(` call site.
 
 ---
 
@@ -954,3 +1120,94 @@ story-review correction) makes no production-code changes; see AC6's own Context
   per-row-`clock_timestamp()`-evaluation verification note on AC5 (confirmed safe: skillars-deferred-124
   AC4 already moved the claim-identity predicate to `claimed_by`). See `story-review.md` for full
   finding-by-finding detail.
+
+- 2026-09-22: `/bmad-dev-story` implementation complete, status → review. All 7 ACs implemented and
+  tested (targeted tests per `docs/validation-strategy.md`, no local `mvn verify`). Summary: AC1
+  narrows the `player_profiles` FOR UPDATE lock scope (`deletePlayerDevelopmentData` now commits, with
+  its per-child blob-deletion enqueue, in its own `REQUIRES_NEW` transaction, releasing the lock before
+  `erase()`'s unrelated downstream steps); AC2 adds a ~10s per-erase deadline across a PARENT's
+  children with a targeted `AdminAlert` on trip; AC3 documents (no behavior change) the Hikari
+  connection-pressure derivation behind the 8-thread scheduler pool; AC4 makes the PARENT loop
+  skip-and-continue past a vanished or lock-contended child instead of failing the whole request; AC5
+  switches the outbox/DLQ claim-stamp writes from `now()` to `clock_timestamp()`; AC6 makes no code
+  change (re-verifies and records why none of the five originally-flagged schedulers need
+  `@SchedulerLock`); AC7 closes the ledger. One genuine gap surfaced during implementation and resolved
+  live via `AskUserQuestion`, not anticipated by the story text: AC2's new targeted `AdminAlert` needs
+  an `AdminAlertType`/`AdminAlertReferenceType` pair, but both enums are backed by a DB `CHECK`
+  constraint with no fitting existing value — resolved by adding a small Flyway migration
+  (`V152__admin_alerts_gdpr_erasure_deadline_type.sql`) rather than misusing an existing type or
+  skipping the alert, directly superseding this story's own Dev Notes claim that no migration was
+  needed. A second implementation-time finding, not in the story text: the new `AdminAlert` must be
+  raised in its own `REQUIRES_NEW` transaction (reusing AC1's `requiresNewTemplate`), since the caller
+  throws immediately afterward and would otherwise roll the alert back along with `erase()`'s own
+  transaction. `gdprEraseLockBudget` was implemented as a plain (non-`static final`) instance field
+  rather than a new `ConfigBounds` key, per the story's own "starting point, not a mandate" language —
+  chosen for lower scope/risk; test seam is `ReflectionTestUtils.setField` against the live Spring
+  singleton bean, exactly the fallback the story's own Tests section anticipated. See Dev Agent Record
+  above for full validation detail (107 targeted tests across five focused runs + a 1139-test broader
+  regression sweep, zero regressions).
+
+- 2026-09-22: `/bmad-code-review` response applied (22 findings across four parallel layers — Blind
+  Hunter, Edge Case Hunter, Acceptance Auditor, `/txn-and-concurrency-audit`; 4 dismissed in triage, 3
+  resolved live via `AskUserQuestion` as Decisions, 18 applied as Patch items, 1 accepted as
+  pre-existing/deferred). All three Decisions took the option consistent with this story's own
+  existing decision lineage (AC2's alert-on-narrow-cause precedent; AC4's own skip-and-continue
+  choice; `deletePlayerDevelopmentData`'s own "re-driving makes genuine forward progress" premise).
+  Most significant Patch fixes: two concurrency-timing tests (lock-release, vanished-child) were
+  tautological or non-reproducing — rewritten with deterministic, independently-controlled
+  synchronization instead of racing an outcome the bug/fix pair could not actually distinguish; the
+  atomicity test's 1ms-budget race was replaced with a `@MockitoSpyBean` on a genuine post-loop step
+  (mirrors `AccountDeletionCascadeIT`'s own established pattern); the deadline test's `FAILED`
+  assertion was fabricated by the test itself — rewritten to route through the real HTTP +
+  `AFTER_COMMIT` listener path. AC4's skip-and-continue now also raises a targeted `AdminAlert` per
+  skipped child (reusing `GDPR_ERASURE_DEADLINE`, distinguished by a new `reason` column value,
+  deduplicated per-request) and re-drives make genuine forward progress (children already tombstoned
+  are filtered out before the loop, not re-processed). The deadline itself moved from `Instant.now()`
+  to `System.nanoTime()` (NTP-step-proof, consistent with AC5's own clock-coupling removal). See the
+  `## Review Findings` section above for the full finding-by-finding disposition and outcome notes.
+  Validation: `GdprErasureIT` run twice (27/27 green both times, no flakiness in the rewritten
+  concurrency tests) plus targeted runs on every other touched suite — see Dev Agent Record's
+  Validation performed section above.
+
+---
+
+## Review Findings
+
+`/bmad-code-review` 2026-09-22 — four parallel layers (Blind Hunter, Edge Case Hunter, Acceptance
+Auditor, plus `/txn-and-concurrency-audit` as a fourth layer at the reviewer's request). 22 findings
+survived triage; 4 dismissed. Every finding below was independently re-verified against source by the
+orchestrator before being written here.
+
+### Decisions (resolved 2026-09-22 via AskUserQuestion — all three took the option consistent with this story's own existing decision lineage, no prior owner decision overridden)
+
+- [x] [Review][Decision] **RESOLVED — option 1: raise a targeted `AdminAlert` per skipped child, keep `COMPLETED`.** Rationale: AC2 Task 4 already established the owner's position for this exact shape ("a PARENT that reliably exceeds the budget produces a FAILED request with no admin alert and no auto-retry, indefinitely") — a silent/indefinite/no-auto-retry outcome gets a targeted alert, not a status change. Preserves AC4's skip-and-continue decision and its tests; reuses the `GDPR_REQUEST` reference type and V152 already shipped. Paired with the AC4 (L5) pinning-comment patch below, which is what keeps the catch from silently widening. Original finding: **A lock-contended child is skipped, yet the request is still stamped `COMPLETED` — that child is never erased and there is no re-drive path** — `GdprErasureService.java:300-309` + `:211-213`. Found independently by all three adversarial layers (high confidence each). AC4's `catch (PessimisticLockingFailureException)` swallows the failure and `erase()` falls through to `request.setStatus("COMPLETED")`. Verified: `GdprRequestService.requestErasure:83` only blocks a new request while an ERASURE is `PENDING`/`PROCESSING`, so a `COMPLETED` request is never revisited; the parent's account is already anonymised and `setLocked(true)`/`setActivated(false)` with all refresh tokens revoked (`:131-142`, `:195`), so the user cannot self-serve a re-drive; there is no admin re-drive endpoint (`GdprEventListener.onErasureRequested` is `erase`'s only caller). The only trace is a `log.warn` — no `AdminAlert`, unlike the deadline path at `:284`. Two aggravating factors: (a) the catch wraps the *whole* inner transaction, so `DeadlockLoserDataAccessException`/`CannotSerializeTransactionException` (40P01/40001) raised by any of the 11 bulk deletes at `:436-453` — long after the retryer returned successfully — is swallowed under the same "retry budget exhausted" log line; (b) the accepted tombstone tradeoff at `:398-408` is justified by "re-driving makes genuine forward progress", which this finding falsifies — an already-tombstoned child of a request that ends `COMPLETED` has its radar composites permanently frozen with no reset path. Pre-diff, this exception propagated to `markFailed` and was visible. `GdprErasureIT.java:1037-1041` currently pins the new behaviour as correct. **Options:** (a) keep skip-and-continue but raise an `AdminAlert` per skipped child; (b) track skipped children and end the request `FAILED` rather than `COMPLETED`; (c) narrow the catch to the lock-acquisition call only, letting deletion-phase failures propagate as before. AC4's owner decision explicitly chose "skip and continue", so overriding it is the owner's call.
+- [x] [Review][Decision] **RESOLVED — option 1: add a `gdprErasureDeadlines` field to `AdminQueueSummaryDto` + a `buildSummary` case + an exists-check dedupe before raising; the resolution path is NOT added.** Rationale: this discharges precisely what V152's own header claimed as the justification for the new enum value ("would misrepresent this alert's real subject in the queue UI and in `AdminQueueService`'s per-type counts"), and prevents a repeat of the `AdminAlertRepository:53-63` lesson. A generic dismiss endpoint is out of scope — every existing alert type resolves via a domain action, so adding one would set a new precedent this story did not sanction. Original finding: **The new `GDPR_ERASURE_DEADLINE` alert has no resolution path, no dedupe, and no summary bucket** — `GdprErasureService.java:335-343`, `AdminQueueService.java:220-228`, `AdminQueueSummaryDto`. Verified: every other alert type is closed by a domain action keyed to its own reference type (`AdminMessageService:180`, `AdminConversationService:88`, `DisputeService:360`, `AdminCoachEnforcementService:536`) or by the orphan sweeper `resolveOpenAlertsForDeletedMessages()`, which is hard-scoped to `reference_type = 'MESSAGE'`. Nothing resolves `GDPR_REQUEST`, and the admin API exposes only `GET /queue` and `GET /queue/summary` — no dismiss endpoint. Separately, `AdminQueueSummaryDto` is a fixed six-bucket record plus `total`, and `getSummary()` sums *all* counts into `total` — so one open GDPR alert makes `total` strictly exceed the sum of its own reported buckets, growing monotonically since the alerts never close. `buildSummary`'s `default -> ""` also renders it with a blank summary in the list view. This directly undercuts V152's own stated justification for the new enum value ("would misrepresent this alert's real subject in the queue UI and in `AdminQueueService`'s per-type counts"). **Options:** (a) add a `gdprErasureDeadlines` field to `AdminQueueSummaryDto` (an admin API contract change) + a `buildSummary` case; (b) add an admin dismiss endpoint; (c) auto-resolve on a subsequent successful erasure of the same `requestId`; (d) accept and document.
+- [x] [Review][Decision] **RESOLVED — option 1: filter out children whose `developmentDataErasedAt` is already set.** Rationale: `deletePlayerDevelopmentData`'s own accepted-tradeoff (a) rests on the premise that "re-driving makes genuine forward progress" — filtering makes that premise true rather than overriding it, and reuses the tombstone's already-established "done, never revisit" semantics from `recalculateComposite`. Original finding: **A deadline-truncated erasure is not resumable — a re-drive restarts from child 0 and re-spends the whole budget on already-tombstoned children** — `GdprErasureService.java:272-290`, `:425-429`. The `children` list is unfiltered and `deletePlayerDevelopmentData` never inspects `developmentDataErasedAt` before taking the lock and re-running all 11 bulk deletes against empty sets. Every re-drive therefore re-contends `player_profiles` for children that are already done, with no forward-progress guarantee — a PARENT with enough children can never finish. A `filter(c -> c.getDevelopmentDataErasedAt() == null)` would make the loop resumable, but whether a tombstone alone is sufficient proof a child is "done" is a semantics call, and it interacts with the decision above.
+
+### Patch
+
+- [x] [Review][Patch] **[from Decision 1]** Raise a targeted `AdminAlert` (`GDPR_ERASURE_DEADLINE` / `GDPR_REQUEST`) for each child skipped by either AC4 catch, so a skipped child is no longer visible only as a `log.warn` [`GdprErasureService.java:292-310`] — **Fixed.** `raiseErasureDeadlineAlert` generalized to `raiseErasureAlert(requestId, reason)`, called from both AC4 catches with `reason="CHILD_VANISHED"`/`"CHILD_CONTENDED"` (deadline path keeps `"DEADLINE_EXCEEDED"`); deduplicated per-request via Decision 2's own exists-check. New assertions added to both AC4 tests.
+- [x] [Review][Patch] **[from Decision 2]** Add `gdprErasureDeadlines` to `AdminQueueSummaryDto`, a matching `buildSummary` case, and an exists-check dedupe before raising the alert [`AdminQueueService.java:172`, `:220-228`, `AdminQueueSummaryDto.java`] — **Fixed.** Dedupe uses the already-existing `AdminAlertRepository.findFirstByReferenceIdAndTypeAndStatus`; `buildSummary`'s new case prefixes with `reason` (mirrors `MODERATION_UNRESOLVED`'s pattern).
+- [x] [Review][Patch] **[from Decision 3]** Skip children whose `developmentDataErasedAt` is already set, so a re-driven erasure makes real forward progress instead of re-spending the budget from child 0 [`GdprErasureService.java:272-276`] — **Fixed.** `eraseParentChildren` now filters `findByParentIdOrderByIdAsc`'s result by `developmentDataErasedAt == null` before computing the deadline.
+- [x] [Review][Patch] Vanished-child test never reaches the catch it claims to cover — B is deleted *before* `erase()`, so it never enters the `children` list [`GdprErasureIT.java:959-966`] — **Fixed.** Rewritten to hold B's lock from a second connection BEFORE `erase()` starts (so B IS in the list read), then delete+commit while `PessimisticLockRetryer` is mid-retry on B — its next lock acquisition finds the row genuinely gone, throwing the real `ResourceNotFoundException`.
+- [x] [Review][Patch] Lock-release test's sync point is tautological — `awaitChildTombstoned(A)` observes only committed state, which under the old wide-lock code coincides with B's lock release, so it passes identically pre-narrowing [`GdprErasureIT.java:848`, `:869-873`] — **Fixed.** Rewritten with two independently-controlled, fixed-duration lockers (A short, B long) and a fixed post-latch delay chosen relative to those known durations, not to any outcome `erase()` itself produces — see the rewritten test's own Javadoc for why the old sync point could not distinguish the fix from the bug.
+- [x] [Review][Patch] Atomicity test turns on a 1 ms budget — a sub-millisecond gap between two adjacent statements decides the outcome; comment also describes a negative budget while the code passes `+1 ms`. AC1's Tests bullet prescribed spying a post-loop step instead [`GdprErasureIT.java:890`] — **Fixed.** Rewritten using a `@MockitoSpyBean RefreshTokenRepository` (mirrors `AccountDeletionCascadeIT`'s established spy pattern) throwing from `markAllUsedByUserId` — the first post-loop step — instead of racing AC2's deadline. Now also proves BOTH children survive, not just A.
+- [x] [Review][Patch] Deadline test's `FAILED` assertion is tautological — the test calls `markFailed` itself; the `processed={}/{}` log AC2 names as its diagnosability deliverable is never asserted [`GdprErasureIT.java:930-936`] — **Fixed.** Rewritten to route through the real HTTP + `AFTER_COMMIT` listener path so `FAILED` is genuinely produced by `GdprEventListener`'s own catch, not fabricated by the test. The `processed=0/2` fact is asserted via the same observable the log line reports (neither child tombstoned) — noted inline that the log text itself isn't independently assertable without a log-capturing appender.
+- [x] [Review][Patch] Contended-child test's 4000 ms hold leaves under ~800 ms of margin for `erase()`'s preamble before the retry budget exhausts [`GdprErasureIT.java:990`, `:1041`] — **Fixed.** Raised to 6000 ms; `.get()` timeouts extended to 20s accordingly.
+- [x] [Review][Patch] Executor and DB row lock leak — `awaitChildTombstoned` and the timed insert run outside the `try`/`finally` that shuts the executor down, and the sync point throws on exactly the regression the test exists to catch [`GdprErasureIT.java:848-865`] — **Fixed.** Whole body (locker submission through final assertions) now runs inside one `try { … } finally { executor.shutdownNow(); … }` in the rewritten lock-release test.
+- [x] [Review][Patch] H1 outbox regression guard counts `reports/%` rows schema-wide, so it passes even if the enqueue were deleted entirely [`GdprErasureIT.java:901-905`] — **Fixed.** `seedParentChildren()` now returns each child's own exact `storage_key`; the atomicity test asserts `payload->>'storageKey' = ?` per child instead of a schema-wide `LIKE`.
+- [x] [Review][Patch] PLAYER branch omits the `entityManager.detach` the PARENT branch added — `PlayerProfile` has no `@Version` and is not `@DynamicUpdate`, so any future edit to `pp` in the outer transaction would rewrite the stale snapshot and reset the one-way tombstone to NULL [`GdprErasureService.java:182-184`] — **Fixed.** `entityManager.detach(pp)` added right after `deletePlayerDevelopmentData(pp.getId())` in the PLAYER branch.
+- [x] [Review][Patch] `gdprEraseLockBudget` is non-volatile but written by the test thread and read from executor threads in two concurrency tests [`GdprErasureService.java:110`] — **Fixed.** Field marked `volatile`.
+- [x] [Review][Patch] `processed` counts only successes, so a run where contended children burned the entire budget reports `processed=0/N` and points the operator at the wrong cause [`GdprErasureService.java:281-291`] — **Fixed.** Added a `skipped` counter, incremented in both AC4 catches; both the log line and the exception message now report `processed={}/{} children (skipped={})`.
+- [x] [Review][Patch] Javadoc over-claims the budget "bounds the total wall-clock time" — it is sampled only between children, so the real worst case is budget + one child's full retry budget [`GdprErasureService.java:98-104`, `:256-257`] — **Fixed.** Both the field's and `eraseParentChildren`'s own Javadoc reworded to "bounds how many children can be ATTEMPTED," with the budget-plus-one-child worst case spelled out.
+- [x] [Review][Patch] AC3's pool accounting is stale on arrival — `REQUIRES_NEW` suspends `erase()`'s transaction without releasing its connection, so each in-flight erasure now pins two of the 25 Hikari connections (three transiently on the deadline path); the new derivation block does not mention the doubling this same story introduced [`application.yaml:64-95`] — **Fixed.** New "STALE ON ARRIVAL" comment paragraph added directly after the existing derivation, documenting the doubling without changing the 8-of-25 scheduler-pool math (GDPR erasure is a low-frequency admin call, not a `@Scheduled` job).
+- [x] [Review][Patch] AC4 Task 3's (L5) "pinning" comment was never written, though the Change Log claims it was — nothing warns that the two catches are precise only by construction [`GdprErasureService.java:292-310`] — **Fixed.** Comment added inside the `try` block, right before `deletePlayerDevelopmentData(child.getId())`.
+- [x] [Review][Patch] AC7's `[DECIDED: accepted risk — skillars-deferred-128 — AlertEvaluationService]` note does not exist in the deferred section; the only three occurrences are self-referential narrative claiming it was added [`deferred-work.md:2807`, `:2811`, `:2831`] — **Fixed.** The literal bracketed marker now appears inline in the AC6 closeout bullet itself, not only in narrative referring to it.
+- [x] [Review][Patch] AC5's Tests fallback not discharged — no SQL-text test was added and no "why not" rationale was recorded in the Dev Agent Record, so nothing guards a revert to `now()` [story AC5 Tests bullet 2] — **Fixed.** Added `ClaimStampUsesClockTimestampTest` (plain reflection test, no Spring context) asserting both repositories' `claimPendingBatch`/`resetStaleClaimed` `@Query` text contains `clock_timestamp()` and not `now()`.
+- [x] [Review][Patch] The deadline uses non-monotonic `Instant.now()` for an elapsed-time budget, in a diff whose other half exists to remove clock-semantics coupling; an NTP step makes it unreachable or trips it spuriously [`GdprErasureService.java:274`, `:280`] — **Fixed.** Switched to a `System.nanoTime()`-based deadline (overflow-safe subtraction idiom), immune to wall-clock steps.
+- [x] [Review][Patch] `clock_timestamp()` comment over-claims — it says the coupling is removed "regardless of any future change" to `process()`'s transactionality, but it fixes only the timestamp symptom; a transactional `process()` would break claim visibility and `deleteAsset` side-effect atomicity far worse [`VideoDeletionOutboxRepository.java:38-48`] — **Fixed.** Softened in both `VideoDeletionOutboxRepository` and `RadarCompositeDlqRepository` (the latter is where the literal "regardless of any future change" phrase actually lived) to scope the claim to "this timestamp symptom specifically."
+- [x] [Review][Patch] `resetStaleClaimed`'s comment claims "both sides of this comparison now use the DB's true current time" — `claimed_at` is a stored column, not a clock call [`VideoDeletionOutboxRepository.java:113-117`] — **Fixed.** Reworded to state only the right side is a live clock call; `claimed_at` is a stored value written once at claim time.
+
+### Deferred
+
+- [x] [Review][Defer] No `lock_timeout`/`statement_timeout` on the inner transaction's 11 bulk deletes [`GdprErasureService.java:436-453`] — deferred, pre-existing. The deletes carry no `NOWAIT` (unlike `findByIdForUpdate`) and the transaction sets no `lock_timeout` (unlike `RadarCompositeCalculationService`'s `set_config`), and there is no global one. A blocked `DELETE` hangs the request thread unbounded while holding the child's `player_profiles` lock — the deadline at `:280` is never re-evaluated because control never returns to the loop top. The story already annotates this residual as `[DECIDED: accepted risk — skillars-deferred-128]` and names the fix as future work in `PessimisticLockRetryer`'s own Javadoc.
