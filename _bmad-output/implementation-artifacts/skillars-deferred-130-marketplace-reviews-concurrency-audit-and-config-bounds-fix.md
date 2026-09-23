@@ -1,13 +1,15 @@
-# Story: Marketplace/Reviews Concurrency Audit (Fresh Sweep) & ConfigBounds Min/Max Divergence Fix
+# Story: Marketplace/Reviews Concurrency Audit (Fresh Sweep) & ConfigBounds Drift-Test Fix
 
 **Story Key:** `skillars-deferred-130-marketplace-reviews-concurrency-audit-and-config-bounds-fix`
 **Epic:** Deferred Work
 **Priority:** Medium (one genuine High-severity TOCTOU/lost-update hazard on a production write path,
-one genuine Medium double-submit hardening gap, and one small config-correctness fix; plus closing
-out the last two modules in this codebase's ~30-story concurrency-hardening series that had never
-been swept).
+one genuine Medium lock-omission gap found during story review, one Low double-submit error-code
+hardening gap, and one small test-coverage fix; plus closing out the last two modules in this
+codebase's ~30-story concurrency-hardening series that had never been swept).
 **Status:** ready-for-dev
 **Created:** 2026-09-23
+**Reviewed:** 2026-09-23 (`_bmad-output/implementation-artifacts/story-review.md`, against
+`HEAD = 7ed6d30b`) — see Change Log for what the review changed and why.
 
 ---
 
@@ -25,9 +27,7 @@ anchors on the **fresh concurrency/TOCTOU audit of `platform.marketplace` and `p
 that stories 126, 127, 128, and 129 each explicitly flagged as the only two modules never swept
 under this series' `@Scheduled`/pessimistic-lock/TOCTOU lens (every other module — admin, booking,
 config, development, filestorage, messaging, monitoring, notification, outbox, payment, security,
-session, video — has at least one closed finding from this series already) — and which the owner
-explicitly declined four times running in favor of ledger items that no longer exist in comparable
-volume.
+session, video — has at least one closed finding from this series already).
 
 The audit (`/txn-and-concurrency-audit`, this story's own creation session) found **zero `@Scheduled`
 methods in either module** (confirmed: `grep -rn "@Scheduled" ... platform/marketplace
@@ -36,12 +36,23 @@ duration derivation) do not apply. Both modules already use the codebase's `find
 `entityManager.refresh(..., PESSIMISTIC_WRITE)` pessimistic-lock convention extensively and
 correctly in their hottest write paths — `ReviewSubmissionService.updateReview`,
 `ReviewModerationService.handleReviewSubmitted`, `AdminReviewService.approveReview`/`blockReview`,
-`CoachProfileService.saveStep4` all lock, refresh, and re-check status before mutating, each with
-inline comments reasoning explicitly about the exact TOCTOU class this audit checks for. **Found: one
-genuine High-severity inconsistency where a sibling write path to the identical field skips all of
-that** (AC1 Fix 1), and one genuine Medium double-submit hardening gap (AC1 Fix 2). Checked 0
-schedulers / ~20 `@Transactional` methods / 8 entities across both modules; no N+1, no
-`MultipleBagFetchException` risk, no missed write-skew beyond the two findings below.
+`CoachProfileService.saveStep4` all lock, refresh, and re-check status before mutating.
+
+**Checked 0 schedulers / 26 `@Transactional` annotations across 10 service classes / 11 entities**
+across both modules (`CoachAgeGroup`, `CoachAvailabilityWindow`, `CoachMediaItem`, `CoachPricing`,
+`CoachProfile`, `CoachReliabilityStrike`, `CoachSpecialty`, `CoachSubscription`, `SessionPack`,
+`CoachReview`, `ReviewFlag` — recounted during story review, corrected from an initial estimate of
+8 entities; see Change Log). No N+1, no `MultipleBagFetchException` risk. Findings, corrected during
+story review (see Change Log for what changed from the original draft):
+
+- **AC1 Fix 1 (High):** `ReviewFlagService.flag`'s auto-hold write has no lock, refresh, or re-check —
+  real, but the reachable trigger and correct fix shape both changed during review.
+- **AC1 Fix 2 (Low, downgraded from Medium during review):** `CoachProfileService.publishProfile`
+  double-submit already surfaces as a handled 400, not the unhandled 500 originally claimed — the
+  actual gap is a generic vs. specific error code.
+- **AC1 Fix 3 (Medium, new — found during story review, not the original creation-session audit):**
+  `publishProfile` takes no lock at all, and a concurrent admin suspension of the same profile can be
+  silently reverted.
 
 Two smaller, genuinely-open residuals from the immediately-preceding same-day
 `deferred-work.md:3108-3172` section (`## Deferred from: code review of
@@ -51,12 +62,13 @@ considered:
 - **D1** (worst-case `N × seconds` erasure bound) — NOT reopened. This is the same-day recap of
   deferred-129's own owner-decided, honestly-documented non-ceiling; re-litigating it would
   contradict that decision.
-- **D2** (`ConfigBounds` min/max re-declared as literals at `getBoundedLong` call sites, can diverge
-  from the declared `BoundedKey` bounds) — **closed here, narrowly** (AC2 below). A second owner
-  decision (`AskUserQuestion`, this story's own creation session) scoped this to
-  `GdprErasureService`'s own call site only, not a codebase-wide `getBoundedLong` signature change
-  touching every existing caller (including `RadarCompositeCalculationService`'s own) — the ledger's
-  own text already calls the full refactor "its own story."
+- **D2** (`ConfigBounds` min/max re-declared as literals at `getBoundedLong` call sites) —
+  **re-scoped during story review** (see AC2 below and its Change Log entry). The literal re-typing
+  is not a bug — it is this codebase's own documented drift-detection convention
+  (`ConfigBounds.java:33-35`), confirmed by a dated `/bmad-code-review` reversal of the exact opposite
+  change at the sibling `RadarCompositeCalculationService` call site (2026-09-21). The genuine gap D2
+  names is that `GdprErasureService`'s own new call site has no unit test pinning those literals the
+  way the Radar call site does — AC2 now closes that.
 - **D3** (only 1 of 4 branch × reason catch combinations tested), **D4** (`performance_reports`
   hydrated to read one column, left managed post-delete), **D5** (`lock_timeout` bound re-read once
   per child inside the outer transaction) — NOT reopened. All three are explicitly low-severity,
@@ -74,8 +86,9 @@ finding and why it remains `[DECIDED: accepted risk]` for a fourth consecutive s
 ### Out of scope (explicitly, not re-decided here)
 
 - The full `getBoundedLong` signature refactor (reading `min`/`max` off `BoundedKey` for every
-  existing call site, including `RadarCompositeCalculationService`'s own) — considered and declined
-  in favor of AC2's narrow, single-call-site fix (see above).
+  existing call site) — this would work *against* this codebase's documented literals-as-drift-guard
+  convention (`ConfigBounds.java:33-35`), not toward it. Not pursued at all, in either direction; see
+  AC2's Change Log entry for the full reasoning.
 - A second dedicated HikariCP connection pool to bound `deletePlayerDevelopmentData`'s
   connection-acquisition wait — considered and declined (see AC3's Context for the full reasoning:
   no clean per-call-site override exists through the standard `DataSource.getConnection()` path
@@ -92,15 +105,28 @@ finding and why it remains `[DECIDED: accepted risk]` for a fourth consecutive s
   (`deferred-work.md:2214-2217`) — genuinely open but is the deliberately-left-open half of a bullet
   deferred-129 AC3 already partially closed; re-touching it now would reopen what that story
   deliberately left as a documented residual, not a fresh find from this story's own audit.
+- `ReviewFlagService.java:76` / `ReviewSubmissionService.java:165` re-typing both bounds *and* the
+  key string for `getBoundedInt` calls (found during story review, D1 of `story-review.md`) — noted
+  here because it sits inside a file this story already edits, but not fixed: AC2's owner-decided
+  scope is `GdprErasureService`'s own call site only, and (per the corrected AC2 direction) the right
+  fix for a literal-typo risk is a pinning unit test, not a code change — out of scope for this story
+  to add per-call-site.
+- `ReviewSubmissionService.submitReview`'s `:68-74` catch of `DataIntegrityViolationException` being
+  very likely dead code (`CoachReview` uses `GenerationType.UUID`, so `save()` doesn't flush inside
+  the `try` — the `uq_coach_reviews_author_coach` violation actually surfaces at commit-time flush,
+  outside it) — found during story review (`story-review.md` "Notes for the implementer"), genuinely
+  pre-existing and out of this story's scope; worth its own ledger bullet, not fixed here.
+- `publishProfile` never setting `statusChangedAt` on `DRAFT → ACTIVE` — found during story review,
+  pre-existing, out of scope; worth a ledger line if `deferred-work.md` is being edited anyway for
+  AC3, but not a fix task in this story.
 
 All citations below were independently re-verified against `master@1746965d` (this story's own
-creation-time `HEAD`, the skillars-deferred-129 merge commit) via direct `Read`/`Grep` against the
-actual source files, not assumed from any prior story's own citations. **Re-verify again at actual
-implementation time** if this worktree's `HEAD` has moved.
+creation-time `HEAD`) at creation time, and a second time during story review against the same
+`HEAD`. **Re-verify again at actual implementation time** if this worktree's `HEAD` has moved.
 
 ---
 
-## AC1 — Fix two concurrency/data-integrity gaps found by the first-ever `platform.marketplace`/`platform.reviews` audit
+## AC1 — Fix the concurrency/data-integrity gaps found by the `platform.marketplace`/`platform.reviews` audit
 
 ### Context
 
@@ -112,7 +138,7 @@ does its authorization/dedup checks, persists the new `ReviewFlag` row (`:61-72`
 by a caught `DataIntegrityViolationException` against the `review_flags_unique_flagger` unique
 index — that part is fine), and then, if the open-flag count has just crossed the configured
 threshold, **conditionally mutates the SAME unlocked, possibly-stale `review` instance's
-`moderationStatus`** and saves it (`:79-86`):
+`moderationStatus`** and saves it (`:78-86`):
 
 ```java
 boolean autoHeld = false;
@@ -131,45 +157,67 @@ commented lengths to avoid exactly this class of bug:**
 
 - `ReviewSubmissionService.updateReview` (`:106-126`) — takes `findByIdForUpdate`, then
   `entityManager.refresh(locked, LockModeType.PESSIMISTIC_WRITE)`, then **re-runs the moderation-
-  status guard on the fresh locked instance**, with an inline comment explicitly warning that
-  skipping this "would silently reset [a concurrent decision] to PENDING."
+  status guard on the fresh locked instance**.
 - `ReviewModerationService.handleReviewSubmitted` (`:93-140`, an `AFTER_COMMIT` listener in its own
   `REQUIRES_NEW` transaction) — takes `findByIdForUpdate` as the transaction's first read (so no
-  `refresh` is even needed), and its own comment states: "this verdict must lose to any decision
-  already recorded against the row... an unlocked read plus an unconditional write would silently
-  revert it."
+  `refresh` is even needed).
 - `AdminReviewService.approveReview`/`blockReview` (`:73-143`) — both take `findByIdForUpdate` as
-  their first read, with an inline comment: "a plain check-then-act loses the admin-double-click
-  race."
+  their first read.
 
-**Concrete failure scenario:** a review is `APPROVED`. Two users have already flagged it (below the
-configured threshold, default 3). A third flag arrives — `openFlagCount` now hits the threshold.
-Concurrently, an admin calls `AdminReviewService.blockReview` for the same review (e.g., responding
-to the same flags via the admin queue) — it takes the row lock, sets `BLOCKED`, resolves all open
-flags, and commits. `ReviewFlagService.flag`'s own transaction, still holding its stale `review`
-instance read from before the admin's commit, then reaches its threshold check, sees the **stale**
-`APPROVED` value in memory (Hibernate does not silently re-read a managed entity), and issues an
-unconditional `UPDATE ... SET moderation_status = 'UNDER_REVIEW' WHERE review_id = ?` — **silently
-reverting the admin's `BLOCKED` decision back to `UNDER_REVIEW`**, with no error, no alert, and no
-signal to the admin that their decision was just undone. `coachRatingService.recompute` then also
-runs against a review that should no longer be counted, transiently miscomputing the coach's public
-rating until the next recompute trigger.
+**Why the originally-drafted "admin-block race" scenario does not actually reach the write (story
+review correction):** `reviews.review_flags` carries a non-`DEFERRABLE` foreign key to
+`reviews.coach_reviews` (`V138__baseline_schema.sql:4531-4532`; confirmed zero `DEFERRABLE`
+constraints anywhere in the schema). Postgres's FK referential-integrity check on the flag INSERT at
+`:67` takes `FOR KEY SHARE` on the parent `coach_reviews` row and holds it to commit — which conflicts
+with the `FOR UPDATE` that `CoachReviewRepository.findByIdForUpdate` issues (`:23-25`, a plain
+blocking lock, unlike `CoachProfileRepository`'s `NO_WAIT` variant). At the *default* threshold (3),
+this serialises `AdminReviewService.blockReview`'s locked write against this method's flag INSERT: an
+admin commit before `:67` is seen by the fresh flag-count re-read at `:74` (count becomes 1, below
+threshold, no write); an admin lock attempt after `:67` blocks until this transaction commits or the
+flag INSERT itself blocks first. There is no interleaving that reaches the described stale write —
+**verify this reasoning empirically with a two-session `psql` test before relying on it** (it rests on
+two well-documented but unverified-in-this-codebase Postgres behaviours: RI checks taking `FOR KEY
+SHARE`, and `FOR KEY SHARE` conflicting with `FOR UPDATE` — PG *Explicit Locking* §13.3.2).
 
-This is not hypothetical timing-sensitive-only risk requiring a rare race window narrower than what
-this project's own `RadarCompositeCalculationService`/`GdprErasureService` findings (stories 115,
-121, 124, 126–129) have repeatedly found and fixed in the identical shape elsewhere — the exact
-comments quoted above, in the exact same file's sibling methods, describe this exact scenario as the
-reason those methods lock.
+**The scenario that actually is reachable:** `ReviewSubmissionService.updateReview` is the **only**
+status-writer of `CoachReview` that does not call `ReviewFlagRepository.resolveAllOpenFlags` (confirmed:
+only `AdminReviewService.approveReview`/`.blockReview` call it, `grep -rn resolveAllOpenFlags` returns
+exactly those two call sites). `CoachReview` (`repo/CoachReview.java`) has no `@Version` and no
+`@DynamicUpdate`, so the `save(review)` at `:83` is Hibernate's dirty-check UPDATE of every mapped
+column from the in-memory instance, not a narrow one. So: a review is `APPROVED` with 2 open flags
+(default threshold 3). `flag()` reads the row at `:38`. Before `flag()` reaches `:67`, the author's own
+`updateReview` commits — setting `PENDING`, bumping `moderationEpoch`, rewriting `rating`/`body`,
+clearing `coachResponse*` — and leaves the 2 flags open (it never resolves them). `flag()`'s own flag
+INSERT is unrelated to that commit and proceeds normally; the count re-read at `:74` sees `3`; the
+in-memory `review` still shows the stale `APPROVED`; `:83` flushes a **full-row UPDATE** that both sets
+`UNDER_REVIEW` and **reverts the author's edit** — rating, body, coach response, epoch, all of it — with
+no error. `ReviewModerationService`'s `AFTER_COMMIT` listener for that `updateReview` then finds
+`UNDER_REVIEW != PENDING` (its own guard) and discards its verdict, so the reverted content is never
+re-moderated. `coachRatingService.recompute` then runs on top of the reverted `rating`.
 
-**Fix (owner decision, this story's own creation session, `AskUserQuestion`):** match the established
-sibling pattern exactly — `findByIdForUpdate` + `entityManager.refresh(..., PESSIMISTIC_WRITE)` +
-re-check `moderationStatus == APPROVED` on the fresh locked instance, immediately before the
-conditional write. (The alternative considered — a conditional `@Modifying UPDATE ... WHERE
-moderation_status = 'APPROVED'` checking the affected-row count, avoiding a lock entirely — was
-declined in favor of consistency with the other three call sites in this exact file/module, all of
-which use the lock-and-recheck shape.)
+**Also live at `threshold = 1`:** `ConfigBounds.REVIEWS_AUTO_HOLD_FLAG_THRESHOLD` allows `min = 1`
+(`ReviewFlagService.java:75`'s own comment: "0 → the first flag on any review auto-holds it"). At
+`threshold = 1`, the FK-serialised count read at `:74` already satisfies `openFlagCount >= threshold`
+on the very first flag — so under this non-default configuration, the originally-drafted admin-block
+scenario *is* live (the admin's `BLOCKED` decision, if committed in the right window, can be reverted).
 
-#### Fix 2 (Medium) — `CoachProfileService.publishProfile` double-submit surfaces as an unhandled 500, not a clean error
+**Fix (corrected during story review — see Change Log):** lock the row **first**, replacing the plain
+`findById` at `:38` entirely — not lock-after-insert as originally drafted. Locking after the flag
+INSERT (the original plan) creates a real deadlock risk: two users flagging the same review
+concurrently each hold a compatible `FOR KEY SHARE` on the parent row from their own flag INSERT, then
+each tries to upgrade to `FOR UPDATE` — a textbook Postgres FK-upgrade deadlock, resolved by the
+deadlock detector aborting one side (`CannotAcquireLockException` → `ApiAdvice`'s 409 "resource is
+busy", so a flagging user can lose to a spurious conflict on the single most likely concurrent event on
+this path). Taking `findByIdForUpdate` as the transaction's first read avoids the upgrade entirely
+(mirrors `AdminReviewService.approveReview`'s own "first read of the row in this method" shape — no
+`entityManager.refresh` needed either, for the same reason). Re-check **both** parts of the auto-hold
+guard under the lock — `moderationStatus == APPROVED` **and** the open-flag count, re-running
+`countByReviewIdAndResolvedAtIsNull` after the lock is held, not before — mirroring
+`ReviewSubmissionService.updateReview`, which re-runs its whole guard on the refreshed instance, not
+part of it. (A stale pre-lock count can otherwise justify an auto-hold the fresh count no longer
+supports — e.g., an admin resolved the flags in the window between the pre-lock read and the lock.)
+
+#### Fix 2 (Low, downgraded from Medium during story review) — `CoachProfileService.publishProfile` double-submit returns a generic error instead of `marketplace.alreadyPublished`
 
 `src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java:299-318`.
 Two concurrent `publishProfile(userId)` calls (e.g., a genuine accidental double-click, or a client
@@ -179,130 +227,205 @@ CoachProfileStatus.DRAFT` guard (`:303-305`) before either has committed. Both t
 `CoachSubscription` row (`:309-315`). `marketplace.coach_subscriptions.coach_id` is the table's own
 primary key (`V138__baseline_schema.sql:2852-2853`, confirmed), so the second transaction's
 subscription insert throws a primary-key-violation `DataIntegrityViolationException` at flush/commit
-time, rolling back that entire transaction — including its own `ACTIVE` status write. **Not a data-
-integrity bug** (the PK constraint prevents two subscription rows and the losing transaction's status
-flip is correctly undone with it) **but the loser sees an unhandled 500**, not the clean
-`marketplace.alreadyPublished` error `publishProfile`'s own first line already throws for the
-non-concurrent case (`:304`). `ReviewSubmissionService.submitReview` (`:66-74`) already establishes
-the correct pattern for this exact class of race in a sibling module: catch the constraint violation
-and translate it to the same business error the pre-check throws.
+time, rolling back that entire transaction — including its own `ACTIVE` status write.
 
-**Fix (owner decision, this story's own creation session):** wrap the `CoachSubscription` insert in a
-`try`/`catch (DataIntegrityViolationException)`, using `saveAndFlush` (not a plain `save`, so the
-constraint violation surfaces synchronously inside this method rather than at an unpredictable later
-flush point — matching `ReviewFlagService.flag`'s own `saveAndFlush` precedent for the identical
-"must catch this specific write's violation, not a later one's" reasoning, rather than
-`ReviewSubmissionService.submitReview`'s plain `save()`, which relies on that call being the
-transaction's last write), and rethrow `MarketplaceException("marketplace.alreadyPublished", "Profile
-is already published")` — the identical error the non-concurrent pre-check already throws, so a
-double-submit is indistinguishable to the caller from an already-published profile.
+**Corrected during story review: this is already a handled error today, not an unhandled 500.**
+`ApiAdvice.java:174-200` has a class-wide `@ExceptionHandler(DataIntegrityViolationException.class)`.
+`coach_subscriptions_pkey` is not in `CONSTRAINT_MAPPINGS` (`:135-150`) or `CONFLICT_CONSTRAINTS`
+(`:152-166`), so today the loser gets **HTTP 400, `messageKey = "generic.dataError"`** — not a crash,
+just an unhelpfully generic code, where the non-concurrent pre-check (`:304`) throws
+`MarketplaceException("marketplace.alreadyPublished", ...)` → HTTP 422 via `ApiAdvice:395-400`. The
+gap is real but narrow: a double-submit is not distinguishable from an unrelated data error to the
+caller. This is a UX/error-code polish item, not a data-integrity defect — the PK constraint already
+prevents two subscription rows, and the losing transaction's status flip is correctly rolled back with
+it.
+
+**Fix (corrected during story review):** catch `DataIntegrityViolationException` around the
+subscription insert and translate it to the same `marketplace.alreadyPublished` error the
+non-concurrent pre-check throws — **keeping the status code consistent at 422 for both paths**, which
+is why this is a `try`/`catch` in the service rather than an `ApiAdvice` `CONSTRAINT_MAPPINGS`/
+`CONFLICT_CONSTRAINTS` entry (that route is simpler code but would return 409 for the concurrent loser
+while the pre-check returns 422 for the same `messageKey` — a status-code inconsistency for callers
+that branch on HTTP status, not just the message key). Use `saveAndFlush` so the violation surfaces
+synchronously inside this method, but **do not rely on the flush being scoped to only this insert** (an
+earlier draft of this fix assumed that; it is false — `saveAndFlush` flushes the whole persistence
+context, which at this point also contains the pending `coach_profiles` UPDATE from `:310`). Instead,
+inspect the caught exception's underlying constraint name and only translate to
+`marketplace.alreadyPublished` when it is `coach_subscriptions_pkey`; rethrow anything else unchanged.
+
+(Confirmed during story review, worth a code comment: the only thing preventing a silent *UPDATE* of an
+existing subscription row — resetting `activeSince` — instead of an INSERT-conflict is the
+`status != DRAFT` pre-check at `:303-305`, since `CoachSubscription` has an assigned `@Id` with no
+`@GeneratedValue`/`Persistable`, so `save`/`saveAndFlush` routes through `em.merge()`. No path today
+sets an `ACTIVE` profile's status back to `DRAFT` (`setStatus(DRAFT)` occurs only on newly-constructed
+entities), so this is not live — but it is the invariant that makes Fix 2 correct, and worth recording
+so a future change to profile re-drafting doesn't silently break it.)
+
+#### Fix 3 (Medium, new — found during story review, not the original creation-session audit) — `publishProfile` takes no lock at all; a concurrent admin suspension can be silently reverted
+
+`publishProfile` (`:299-318`) never locks the `CoachProfile` row. `requireProfile(userId)` (`:301`)
+returns a plain managed entity; `validateAllStepsComplete(profile)` (`:307`) runs several queries'
+worth of window before the `:309-310` status write and its `:315` flush. `CoachProfile`
+(`repo/CoachProfile.java`) has no `@Version`/`@DynamicUpdate`, so that flush is a full-row UPDATE from
+the stale in-memory instance — the same shape of bug as Fix 1.
+
+`AdminCoachEnforcementService.suspendCoach` (`:130-144`) has no status guard beyond "already SUSPENDED
+→ return" — it will suspend a `DRAFT` profile — and takes the row lock properly
+(`lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(...))`) before setting
+`SUSPENDED`/`statusChangedAt`. If `suspendCoach` commits inside `publishProfile`'s unlocked window,
+`publishProfile`'s full-row UPDATE **reverts the suspension back to `ACTIVE`** and restores the old
+`statusChangedAt` — no error, no conflict, the coach is bookable again. `suspendCoach`'s own comment
+(`:131-134`) names this exact failure mode: "two writers serialise only when BOTH take it... making
+that lock decorative" — `publishProfile` is the writer that doesn't. Reachability is narrower than
+Fix 1's (needs an admin suspending a `DRAFT`-status profile specifically), hence Medium not High.
+
+**Fix:** apply this module's own established pattern, the same three lines `saveStep4` (`:249-254`)
+already uses — take the lock **after** the non-concurrent `DRAFT` pre-check and `validateAllStepsComplete`
+(matching where `saveStep4` places it, right before the write it's protecting), then **re-check
+`status == DRAFT` on the refreshed instance** before the `ACTIVE` write (this re-check is new relative
+to `saveStep4`'s own shape, since `saveStep4` has no racing status writer to protect against — Fix 3
+does):
+
+```java
+lockRetryer.withBoundedRetry(() -> {
+    coachProfileRepository.findByIdForUpdate(profile.getId())
+        .orElseThrow(() -> new MarketplaceException("marketplace.profileNotFound", ...));
+    entityManager.refresh(profile, LockModeType.PESSIMISTIC_WRITE);
+    return null;
+});
+if (profile.getStatus() != CoachProfileStatus.DRAFT) {
+    throw new MarketplaceException("marketplace.alreadyPublished", "Profile is already published");
+}
+```
+
+This module's `findByIdForUpdate` is `NO_WAIT`, and every one of its existing call sites wraps it in
+`PessimisticLockRetryer` (`CoachProfileRepository.java:28-34`) — do the same here.
+`PessimisticLockRetryerCallSiteAuditTest.EXPECTED_CALL_SITE_COUNT` is pinned and **must be bumped by
+one** (re-read the current value at implementation time — it may have moved since this story was
+written) or the build fails.
 
 ### Tasks
 
-1. [ ] Re-verify all line citations above against current `HEAD` before implementing.
-2. [ ] `ReviewFlagService.flag` (`:37-93`): after the existing `openFlagCount`/`threshold`
-   computation (`:74-76`), replace the unlocked conditional block (`:78-86`) with: `findByIdForUpdate`
-   on `reviewId`, `entityManager.refresh(review, LockModeType.PESSIMISTIC_WRITE)` (inject
-   `EntityManager` — not currently a field on this class, unlike `ReviewSubmissionService`), then
-   re-check `review.getModerationStatus() == ReviewModerationStatus.APPROVED` on the fresh instance
-   before writing `UNDER_REVIEW`/`HeldReason.FLAG_THRESHOLD`/`lastModifiedAt` and calling
-   `coachRatingService.recompute`. If the fresh re-check fails (status is no longer `APPROVED` —
-   e.g., an admin already resolved it), skip the auto-hold write entirely (do not throw — the flag
-   itself was already persisted and committed at `:67`; only the auto-hold escalation is skipped).
-   Add a code comment mirroring the sibling methods' own reasoning (cross-reference
-   `ReviewSubmissionService.updateReview`/`AdminReviewService.approveReview` by name, matching this
-   file's own existing citation convention elsewhere in the module).
-3. [ ] `CoachProfileService.publishProfile` (`:299-318`): wrap the `CoachSubscription` construction +
-   `coachSubscriptionRepository.save(subscription)` in a `try { coachSubscriptionRepository
-   .saveAndFlush(subscription); } catch (DataIntegrityViolationException e) { throw new
-   MarketplaceException("marketplace.alreadyPublished", "Profile is already published"); }`. Import
-   `org.springframework.dao.DataIntegrityViolationException` (already imported elsewhere in this
-   module, e.g. `ReviewFlagService`/`ReviewSubmissionService` — confirm the exact import path matches).
-4. [ ] Confirm `ReviewFlagService` does not already have an `EntityManager` field before adding one —
-   `grep -n "EntityManager" src/main/java/.../reviews/service/ReviewFlagService.java` should return
-   no hits currently; add it as a new constructor-injected field (the class uses Lombok
-   `@RequiredArgsConstructor`, same shape as `ReviewSubmissionService`).
+1. [ ] Re-verify all line citations above against current `HEAD` before implementing, including the
+   two Postgres locking behaviours Fix 1's corrected reasoning rests on (FK RI check takes `FOR KEY
+   SHARE`; `FOR KEY SHARE` conflicts with `FOR UPDATE`) — a 5-minute two-session `psql` check is enough.
+2. [ ] `ReviewFlagService.flag` (`:37-93`): replace the plain `findById` at `:38` with
+   `findByIdForUpdate` (inject `EntityManager`? — **no**, not needed here since this is now the
+   transaction's first read of the row; only add it if a later refresh proves necessary). Move the
+   `openFlagCount`/threshold computation (currently `:74-76`) to run *after* the lock is acquired, not
+   before. Re-check `moderationStatus == APPROVED` on the locked instance immediately before writing
+   `UNDER_REVIEW`/`HeldReason.FLAG_THRESHOLD`/`lastModifiedAt` and calling `coachRatingService.recompute`.
+   If the re-check fails (status is no longer `APPROVED`), skip the auto-hold write without throwing —
+   the flag INSERT at `:67` is part of the same transaction and must still commit regardless; only the
+   escalation is skipped. Add a code comment cross-referencing `ReviewSubmissionService.updateReview`
+   and this fix's actual trigger (the unresolved-flags gap in `updateReview`, not an admin race at the
+   default threshold), matching this file's own citation convention.
+3. [ ] `CoachProfileService.publishProfile` (`:299-318`): wrap
+   `coachSubscriptionRepository.saveAndFlush(subscription)` in a `try`/`catch
+   (DataIntegrityViolationException e)` that inspects the underlying constraint name (matching
+   `ApiAdvice.resolveConstraintName`'s own extraction shape, or an equivalent local check) and throws
+   `MarketplaceException("marketplace.alreadyPublished", "Profile is already published")` only when the
+   constraint is `coach_subscriptions_pkey`; rethrow otherwise. Import
+   `org.springframework.dao.DataIntegrityViolationException` (not currently imported in this file).
+4. [ ] `CoachProfileService.publishProfile`: add the lock-refresh-recheck block from Fix 3 above,
+   placed after `validateAllStepsComplete(profile)` and before the `ACTIVE` status write. Bump
+   `PessimisticLockRetryerCallSiteAuditTest.EXPECTED_CALL_SITE_COUNT` by one (re-read its current value
+   first).
 5. [ ] Confirm no other caller of `ReviewFlagService.flag` or `CoachProfileService.publishProfile`
    depends on the exact prior (buggy) behavior — `grep -rn "\.flag(\|publishProfile(" src/main/java`
    and check each call site.
 
 ### Tests
 
-- A `ReviewFlagIT` (or `ReviewFlagServiceTest`, whichever seam this project's own convention for this
-  service favors — check for an existing unit-test class first) concurrency test mirroring
-  `RadarCompositeCalculationServiceConcurrencyIT`/`GdprErasureIT`'s own real-Testcontainers-Postgres,
-  real-threads-and-latches pattern: seed a review at the auto-hold flag threshold minus one, hold a
-  `blockReview`-style write in flight (or directly seed a `BLOCKED` state via a raced concurrent
-  transaction) between the flagging request's read and its threshold-crossing write, and assert the
-  final `moderation_status` is the admin's `BLOCKED` decision, not a reverted `UNDER_REVIEW` — the
-  exact scenario this AC's Fix 1 closes. A second, simpler test should confirm the ordinary
-  non-concurrent auto-hold path (no admin race) still transitions `APPROVED` → `UNDER_REVIEW` exactly
-  as before — a pure regression check with unchanged externally-observable behavior in the
-  non-contended case.
-- A `CoachProfileBuilderIT` (or a new focused test) proving Fix 2: two concurrent `publishProfile`
-  calls for the same profile result in exactly one `ACTIVE` status, exactly one
-  `marketplace.coach_subscriptions` row, and the losing caller receiving a clean
-  `marketplace.alreadyPublished` `MarketplaceException`/4xx response, not an unhandled 500. A second
-  test should confirm the existing non-concurrent already-published pre-check (`:303-305`) is
+- **Fix 1:** the concurrency scenario needs a service-level test, not an HTTP-level one —
+  `ReviewFlagIT` drives `POST /api/reviews/.../flag` through `HttpTestClient` and has no seam to pause
+  inside `flag()` between its read and its threshold-crossing write. Add a new
+  `ReviewFlagServiceConcurrencyIT` under `src/test/java/.../platform/reviews/service/`, mirroring
+  `RadarCompositeCalculationServiceConcurrencyIT`'s own shape (autowire the service directly against
+  real Testcontainers Postgres; use a `TransactionTemplate` + latch on a separate thread to commit the
+  racing `updateReview` before `flag()`'s threshold check runs) — this is the reachable trigger
+  identified above, not the admin-race originally planned. Confirm the existing
+  `ReviewFlagIT.flagThresholdReached_reviewSetToUnderReview` (`:201`) still passes as the ordinary
+  non-concurrent regression check — it already exists; this AC does not need a new one for that path.
+- **Fix 2/Fix 3:** a `CoachProfileBuilderIT` (or a new focused test) proving: (a) two concurrent
+  `publishProfile` calls for the same profile result in exactly one `ACTIVE` status, exactly one
+  `marketplace.coach_subscriptions` row, and the losing caller receiving
+  `marketplace.alreadyPublished`/422, not a generic 400; (b) a `suspendCoach` committed inside a
+  concurrent `publishProfile`'s window leaves the profile `SUSPENDED`, not reverted to `ACTIVE`. A
+  third test should confirm the existing non-concurrent already-published pre-check (`:303-305`) is
   unaffected.
 
 ---
 
-## AC2 — Close `ConfigBounds`/`GdprErasureService` min-max divergence at its one concrete call site
+## AC2 — Add the missing drift-detection unit test for `GdprErasureService`'s `ConfigBounds` bounds
 
 ### Context
 
-`deferred-work.md:3135-3144` (D2, from skillars-deferred-129's own same-day code review, 2026-09-23):
-`GdprErasureService.java:630-631` calls
-`configService.getBoundedLong(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L,
-120L)`, **re-typing the `2L`/`120L` bounds as literals** instead of reading them from the
-`ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS` `BoundedKey` (`ConfigBounds.java:280-286`,
-confirmed) that already declares them. `ConfigBounds.BoundedKey` is a Java `record(String key, long
-min, long max, boolean failFast, String note)` (`ConfigBounds.java:60`) — its `min()`/`max()` accessor
-methods are already available for free; nothing needs to be added to the record itself. An operator
-who later raises `GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS`'s declared `max` in `ConfigBounds.java`
-(the value shown in any future admin-facing bounds documentation) would get a value the
-`ConfigService.updateConfig` write path accepts and stores (it validates against the same
-`ConfigBounds` registry) but this one read call site would silently clamp back down to the stale
-literal `120L` — a correctness trap with no test or compiler signal today.
+**Rewritten during story review — the original AC2 was wrong in both its diagnosis and its fix; see
+Change Log.** `deferred-work.md:3135-3144` (D2, from skillars-deferred-129's own same-day code review)
+observed that `GdprErasureService.java:630-631` re-types `2L`/`120L` as literals instead of reading
+them from `ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS` (`ConfigBounds.java:280-284`), and
+framed this as a divergence risk.
 
-**Scope (owner decision, this story's own creation session, `AskUserQuestion`): narrow to this one
-call site only.** The ledger's own text already frames the fully-correct fix — `getBoundedLong`
-reading `min`/`max` from the `BoundedKey` itself for every caller — as "its own story," since it
-touches every existing `ConfigBounds` call site codebase-wide, including
-`RadarCompositeCalculationService.java:212`'s own identical-shaped literal re-typing (that call site,
-and every other pre-existing `getBoundedLong`/`getBoundedInt` call site, is explicitly listed as out
-of `ConfigStartupAssertion`'s own scope already, per `ConfigBounds.java:12-18`'s own class-level
-Javadoc — this AC does not touch or attempt to close that wider gap). This AC closes only the one
-concrete divergence risk the ledger bullet names for `GdprErasureService`'s own new key, added by
-deferred-129 in the first place.
+That framing does not hold up: `ConfigBounds.java:33-35`'s own class Javadoc documents that call sites
+**intentionally** re-type `[min, max]` as literals, specifically so a `Mockito verify(...)` in each
+call site's own unit test can pin the exact numbers as a drift detector — "if you change a bound,
+change it in both places." The sibling call site D2's own text cites as precedent,
+`RadarCompositeCalculationService.java:203-212`, carries a dated comment reversing the exact opposite
+change: *"`/bmad-code-review` fix (2026-09-21): min/max passed as the same LITERAL numbers... not
+`.min()`/`.max()` accessor calls... Reading the bound through its own accessors defeats that
+convention."* `RadarCompositeCalculatorTest.java:353-354` is the live drift guard:
+`verify(configService).getBoundedLong(eq(KEY.key()), eq(5L), eq(2L), eq(120L))`. Also corrected during
+review: `getBoundedLong`'s 4-arg overload (`ConfigService.java:110-118`) does not clamp on
+out-of-range — it **falls back to `defaultValue`** — so the divergence risk D2 actually describes was
+mischaracterized too (a raised `max` with a stale literal does not clamp the read value down to the
+old max; it would fall all the way back to the `5L` default with a WARN if the stored value then fell
+outside the stale range).
+
+`GdprErasureService.java:630-631` already follows the documented convention correctly — matching
+`RadarCompositeCalculationService.java:212` exactly, both in key-via-accessor / bounds-as-literals
+shape. **The actual gap D2 names is narrower than originally scoped: there is no unit test pinning
+those literals for `GdprErasureService`, unlike the Radar call site.** `GdprErasureServiceTest.java`
+does not exist today (only `GdprErasureIT.java`, an integration test). That is what this AC now closes.
 
 ### Tasks
 
-1. [ ] Re-verify `GdprErasureService.java:630-631` and `ConfigBounds.java:280-286` against current
-   `HEAD` before implementing.
-2. [ ] Replace the literal `2L, 120L` in `GdprErasureService.java:631`'s `getBoundedLong(...)` call
-   with `ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.min()`,
-   `ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.max()`. Leave the `5L` default-value
-   literal as-is (matching `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s own established call-site
-   convention of keeping the default a literal — `ConfigBounds` has no code-default field on
-   `BoundedKey`, a separate, pre-existing, out-of-scope gap already recorded elsewhere in the ledger
-   as D2's own sibling note, not reopened here).
-3. [ ] Grep for any other `getBoundedLong`/`getBoundedInt` call site that already derives its bounds
-   from a `ConfigBounds.BoundedKey` reference (rather than literals) to confirm the exact syntax
-   precedent, if one already exists; if none does, this is the first, and should be written plainly
-   (`KEY.min()`, `KEY.max()`) with no additional abstraction.
-4. [ ] Do not touch any other `getBoundedLong`/`getBoundedInt` call site — this AC is scoped to this
-   one line by explicit owner decision.
+1. [ ] Re-verify `GdprErasureService.java:630-631` and `ConfigBounds.java:280-284` against current
+   `HEAD` before implementing. **Do not change the literal values or read them via accessors** — the
+   literals are correct as written.
+2. [ ] Create `src/test/java/com/softropic/skillars/platform/admin/service/GdprErasureServiceTest.java`
+   (does not exist today), following `ReviewModerationServiceTest`'s established shape for a
+   `@RequiredArgsConstructor` service that builds a `PROPAGATION_REQUIRES_NEW` `TransactionTemplate`
+   programmatically: `@ExtendWith(MockitoExtension.class)`, `@Mock` every constructor dependency,
+   `@Mock PlatformTransactionManager txManager` + `@Mock TransactionStatus transactionStatus` with
+   `lenient().when(txManager.getTransaction(any())).thenReturn(transactionStatus)` in `@BeforeEach`.
+   Since `GdprErasureService` builds its `requiresNewTemplate` field in a `@PostConstruct
+   initTemplates()` method (`:135-139`) rather than the constructor, and Mockito's `@InjectMocks` does
+   not invoke `@PostConstruct`, call `service.initTemplates()` explicitly in `@BeforeEach` after
+   construction (or construct the service manually via `new GdprErasureService(...)` and call it —
+   either way, do not rely on `@InjectMocks` alone to leave the service usable).
+3. [ ] Drive the test through the `erase(requestId, userId)` public entry point with `role = PLAYER`
+   (the shortest path to `deletePlayerDevelopmentData`, per `:142-220` — avoids the `PARENT` branch's
+   child-loop entirely). Minimal stubs needed to reach the call: `gdprRequestRepository.findById` →
+   present; `userRepository.findOneById` → a `User` with `SkillarsRole.PLAYER`;
+   `coachProfileRepository.findByUserId` → empty; `playerProfileRepository.findByUserId` → present
+   with a non-null id; `playerProfileRepository.findByIdForUpdate` → the same profile (for the lock
+   `deletePlayerDevelopmentData` itself takes). Every other injected repository can be left an
+   unstubbed `@Mock` (default empty/zero returns are fine for a test that only asserts the
+   `getBoundedLong` call).
+4. [ ] Assert `verify(configService).getBoundedLong(eq(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key()),
+   eq(5L), eq(2L), eq(120L))` — mirroring `RadarCompositeCalculatorTest.java:353-354` exactly. This is
+   the entire point of the test: a future edit that changes either the literals or switches to accessor
+   calls without updating both places fails this test.
+5. [ ] Do not touch any other `getBoundedLong`/`getBoundedInt` call site, and do not add a `min`/`max`
+   default field to `ConfigBounds.BoundedKey` — both are out of scope (see Provenance's "Out of scope"
+   section).
 
 ### Tests
 
-- No behavior change for any in-range value (`2`–`120` before and after). Confirm existing
-  `GdprErasureIT` tests that seed `gdpr_erase_statement_lock_timeout_seconds` at the boundary values
-  (`2`, matching `RadarCompositeCalculationServiceConcurrencyIT`'s own precedent per
-  skillars-deferred-129's own test seam) still pass unchanged — this is a refactor of where the bound
-  literals come from, not a behavior change, so no new test is strictly required beyond confirming the
-  existing suite stays green.
+- The new `GdprErasureServiceTest` above **is** the test for this AC — there is no separate behavior
+  change to verify, since the production code is unchanged. Confirm `GdprErasureIT`'s existing
+  boundary-value tests (`2`, `120`) still pass unchanged.
 
 ---
 
@@ -311,15 +434,23 @@ deferred-129 in the first place.
 ### Tasks
 
 1. [ ] Close out the "platform.marketplace/platform.reviews never audited" narrative that stories
-   126, 127, 128, and 129 each recorded (search for each story's own "Out of scope" mention of these
-   two modules, e.g. deferred-129's own Provenance section) — this story is that audit. Record the
-   findings summary (2 findings: 1 High closed by AC1 Fix 1, 1 Medium closed by AC1 Fix 2) and that
-   both modules are now confirmed swept under this series' concurrency lens, alongside every other
-   module.
+   126, 127, 128, and 129 each recorded — this story is that audit. Record the corrected findings
+   summary (1 High fixed by AC1 Fix 1, 1 Low fixed by AC1 Fix 2, 1 Medium fixed by AC1 Fix 3 — the
+   third found only during story review, not the original creation-session audit pass) and that both
+   modules are now confirmed swept under this series' concurrency lens. Record the corrected coverage
+   numbers: 0 schedulers, 26 `@Transactional` annotations across 10 service classes, 11 entities
+   (corrected from an initial miscount of 8 during the original audit — see this story's own
+   Change Log).
 2. [ ] `deferred-work.md:3108-3172` (the fresh same-day skillars-deferred-129 code-review section) —
-   D2 (`:3135-3144`) closed by AC2 above (narrowly — note the codebase-wide `getBoundedLong` gap
-   remains, per AC2's own Context). D1, D3, D4, D5 remain untouched, all already correctly
-   `[Review][Defer]`-annotated by deferred-129's own review response — re-confirm, do not reword.
+   mark D2 (`:3135-3144`) **partially closed, not fully closed**: the literal-bounds shape was already
+   correct (no code change), and the actual gap — a missing pinning unit test — is closed by AC2. Two
+   residuals remain explicitly open and should be named in the ledger entry: (a) the code default `5`
+   still appears nowhere in `ConfigBounds` despite the key being registered in `HAS_CODE_DEFAULT`
+   (`ConfigBounds.java:330-348`) — `BoundedKey` has no default field, a separate pre-existing gap; (b)
+   `ReviewFlagService.java:76` / `ReviewSubmissionService.java:165` re-type both bounds *and* the key
+   string for `getBoundedInt`, found during this story's own review, not fixed (see Provenance's "Out
+   of scope"). D1, D3, D4, D5 remain untouched, all already correctly `[Review][Defer]`-annotated by
+   deferred-129's own review response — re-confirm, do not reword.
 3. [ ] `deferred-work.md:3101-3106` (skillars-deferred-128's own review section, Hazard 2 — the
    pooled connection-acquisition wait) — **re-confirm `[DECIDED: accepted risk — skillars-deferred-128]`
    for a fourth consecutive story**, and extend the bullet's own "revisit if" condition with this
@@ -329,20 +460,23 @@ deferred-129 in the first place.
    is a second, dedicated `HikariDataSource` scoped to `deletePlayerDevelopmentData`'s own
    `REQUIRES_NEW` transaction, which would also need separate wiring for the Testcontainers
    `@ServiceConnection` test path (`DataSourceConfig`'s custom `HikariConfig` bean is entirely skipped
-   there, per `datasource.container=true`) to be exercisable by `GdprErasureIT` at all, per this
-   project's own IT-only validation convention. Declined as a code-change item this story (owner
-   decision, `AskUserQuestion`, this story's own creation session) — record this reasoning in the
-   bullet itself so a future story does not have to re-derive it from scratch.
-4. [ ] Grep-sweep `deferred-work.md` for any other reference to the items above that a targeted
-   reword might miss (narrative mentions inside a `## Last audit:` summary section, etc.) — correct
-   or annotate any such mention, following this file's own established "narrative sections are
-   corrected, not deleted" convention.
-5. [ ] Add a new `## Last audit: <implementation date> (skillars-deferred-130 dev-story completion)`
+   there, per `datasource.container=true`) to be exercisable by `GdprErasureIT` at all. Declined as a
+   code-change item this story (owner decision, `AskUserQuestion`, this story's own creation session).
+4. [ ] Record the two out-of-scope findings from story review as fresh ledger bullets (not fixed by
+   this story, but newly discovered): `ReviewSubmissionService.submitReview`'s `:68-74` catch of
+   `DataIntegrityViolationException` being very likely dead code (`CoachReview` uses
+   `GenerationType.UUID`, so `save()` doesn't flush inside the `try` — the actual violation surfaces at
+   commit-time flush, outside it, so the caller gets a generic 400 instead of
+   `ALREADY_SUBMITTED`/`ReviewErrorCode`); and `publishProfile` never setting `statusChangedAt` on
+   `DRAFT → ACTIVE`, unlike every `AdminCoachEnforcementService` transition (relevant because
+   `findByStatusInOrderByStatusChangedAtAsc` orders on that column).
+5. [ ] Grep-sweep `deferred-work.md` for any other reference to the items above that a targeted
+   reword might miss (narrative mentions inside a `## Last audit:` summary section, etc.).
+6. [ ] Add a new `## Last audit: <implementation date> (skillars-deferred-130 dev-story completion)`
    heading, placed immediately above the freshest section it touches (`:3108`, the skillars-
-   deferred-129 same-day section), summarizing the marketplace/reviews audit outcome and the AC2/AC3
-   ledger edits in its own body text — mirroring deferred-129's own multi-section, non-adjacent
-   cross-referencing precedent.
-6. [ ] Re-confirm this story's own "Out of scope" section above remains correctly untouched.
+   deferred-129 same-day section), summarizing the marketplace/reviews audit outcome (as corrected by
+   story review) and the AC2/AC3 ledger edits in its own body text.
+7. [ ] Re-confirm this story's own "Out of scope" section above remains correctly untouched.
 
 ### Tests
 
@@ -352,53 +486,100 @@ deferred-129 in the first place.
 
 ## Dev Notes
 
-- This is the first story in this series (100–129) to anchor on a **fresh audit** rather than mining
-  an existing ledger deferral — the ledger itself supplied only the two small AC2/AC3-adjacent
-  residuals, not the primary scope. Treat AC1's two findings as the story's real substance.
+- This story went through a senior-dev audit (`story-review.md`) after creation, before
+  implementation started. The version of AC1/AC2 above already reflects that review's corrections —
+  do not re-derive the original (incorrect) framing from the Change Log entries below; they exist to
+  explain *why* the story reads the way it does, not as an alternate valid reading.
+- **Two different lock conventions across the two modules.** `CoachProfileRepository.findByIdForUpdate`
+  is `NO_WAIT` and every one of its call sites wraps it in `PessimisticLockRetryer`.
+  `CoachReviewRepository.findByIdForUpdate` is a plain blocking lock and none of its call sites use the
+  retryer. AC1 Fix 1 is in the reviews module — **no retryer**, do not reach for `lockRetryer` there by
+  analogy with Fix 3. AC1 Fix 3 is in the marketplace module — retryer required, and
+  `PessimisticLockRetryerCallSiteAuditTest.EXPECTED_CALL_SITE_COUNT` must be bumped or the build fails.
+- **`CoachRatingService.recompute` is safe where Fix 1 leaves it, but must stay last.**
+  `CoachProfileRepository.updateRatingAggregate` is `@Modifying(clearAutomatically = true)` with no
+  `flushAutomatically` — safe here only because `recompute` runs a JPQL query that `FlushMode.AUTO`
+  flushes the pending status UPDATE ahead of. Keep `recompute(...)` after every entity mutation in
+  `flag()`, and do not put any `entityManager.refresh(...)` after it.
+- `payment.coach_subscriptions` is a different table (different schema) from
+  `marketplace.coach_subscriptions` — `SubscriptionService`/`PaymentCoachSubscription` is not a second
+  writer of the PK Fix 2 handles. Checked during story review; not a finding.
 - AC1 Fix 1 touches `ReviewFlagService.java` for the first time in this series' history — read the
-  whole file (93 lines) before editing; it is small. AC1 Fix 2 touches `CoachProfileService.java`
-  (515 lines) — read the whole `publishProfile` method and its immediate callers
-  (`ProfileBuilderResource`, presumably) before editing, per this project's "read files being
-  modified" convention.
-- AC2 touches `GdprErasureService.java` and `ConfigBounds.java`, both already touched by
-  skillars-deferred-127/-128/-129 — read each file's own recent history/Javadoc in full before
-  editing, per this project's established convention; do not assume the citations above are still
-  accurate without re-checking `HEAD` first.
+  whole file (94 lines) before editing; it is small. AC1 Fix 2/Fix 3 touch `CoachProfileService.java`
+  (516 lines) — read the whole `publishProfile` method and `saveStep4` (the pattern it now mirrors)
+  before editing.
+- AC2 touches only a new test file — `GdprErasureService.java` and `ConfigBounds.java` are **not**
+  modified by this story (corrected scope; the original draft would have edited
+  `GdprErasureService.java`).
 - No frontend Vue/JS source is touched by this story — no `frontend-tests` PR label needed (confirm
-  via `git status --short` before opening the PR, per this project's own established practice).
+  via `git status --short` before opening the PR).
 - No local `mvn verify` — GitHub CI is the sole full-verification gate, per
   `docs/validation-strategy.md`.
 
 ### References
 
 - `src/main/java/com/softropic/skillars/platform/reviews/service/ReviewFlagService.java` — AC1 Fix 1
-- `src/main/java/com/softropic/skillars/platform/reviews/service/ReviewSubmissionService.java` — AC1 Fix 1 (locked-write pattern precedent)
-- `src/main/java/com/softropic/skillars/platform/reviews/service/ReviewModerationService.java` — AC1 Fix 1 (locked-write pattern precedent)
-- `src/main/java/com/softropic/skillars/platform/admin/service/AdminReviewService.java` — AC1 Fix 1 (locked-write pattern precedent; also the concurrent actor in the failure scenario)
-- `src/main/java/com/softropic/skillars/platform/reviews/repo/CoachReviewRepository.java` — AC1 Fix 1 (`findByIdForUpdate`)
-- `src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java` — AC1 Fix 2
+- `src/main/java/com/softropic/skillars/platform/reviews/service/ReviewSubmissionService.java` — AC1 Fix 1 (the actual racing writer; also the locked-write pattern precedent)
+- `src/main/java/com/softropic/skillars/platform/reviews/service/ReviewModerationService.java` — AC1 Fix 1 (locked-write pattern precedent; `AFTER_COMMIT` discard behavior referenced in the corrected scenario)
+- `src/main/java/com/softropic/skillars/platform/admin/service/AdminReviewService.java` — AC1 Fix 1 (locked-write pattern precedent; `resolveAllOpenFlags` caller)
+- `src/main/java/com/softropic/skillars/platform/reviews/repo/CoachReviewRepository.java` — AC1 Fix 1 (`findByIdForUpdate`, plain blocking, no retryer)
+- `src/main/java/com/softropic/skillars/platform/reviews/repo/CoachReview.java` — AC1 Fix 1 (no `@Version`/`@DynamicUpdate` — why the write is full-row)
+- `src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java` — AC1 Fix 2, Fix 3 (`publishProfile`, `saveStep4` pattern precedent)
+- `src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java` — AC1 Fix 3 (`findByIdForUpdate`, `NO_WAIT` + retryer convention)
 - `src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachSubscriptionRepository.java` — AC1 Fix 2
-- `src/main/resources/db/migration/V138__baseline_schema.sql` — AC1 Fix 2 (`coach_subscriptions_pkey` citation)
-- `src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java` — AC2
-- `src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java` — AC2
+- `src/main/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementService.java` — AC1 Fix 3 (`suspendCoach`, the concurrent actor in the failure scenario)
+- `src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java` — AC1 Fix 2 (existing `DataIntegrityViolationException` handling; `CONSTRAINT_MAPPINGS`/`CONFLICT_CONSTRAINTS` precedent considered and not used)
+- `src/main/resources/db/migration/V138__baseline_schema.sql` — AC1 Fix 1 (`review_flags_review_id_fkey` non-deferrability), Fix 2 (`coach_subscriptions_pkey` citation)
+- `src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java` — AC2 (not modified; new test's subject)
+- `src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java` — AC2 (convention Javadoc at `:33-35`)
+- `src/main/java/com/softropic/skillars/platform/config/service/ConfigService.java` — AC2 (`getBoundedLong` default-fallback vs. clamp behavior)
+- `src/main/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculationService.java` — AC2 (sibling call site and its dated review-reversal comment)
+- `src/test/java/com/softropic/skillars/platform/development/service/RadarCompositeCalculatorTest.java` — AC2 (the `verify(...)` pattern this AC's new test mirrors)
+- `src/test/java/com/softropic/skillars/platform/reviews/service/ReviewModerationServiceTest.java` — AC2 (the `PlatformTransactionManager`/`TransactionStatus` mocking pattern this AC's new test needs)
 - `src/main/java/com/softropic/skillars/infrastructure/config/DataSourceConfig.java` — AC3 (Hazard 2 finding, not fixed)
 - `src/main/resources/application.yaml` — AC3 (`connection-timeout: 30000` citation)
 - `_bmad-output/implementation-artifacts/deferred-work.md` — AC3
-- `src/test/java/com/softropic/skillars/platform/reviews/api/ReviewFlagIT.java` — AC1 Fix 1 test seam
-- `src/test/java/com/softropic/skillars/platform/marketplace/api/CoachProfileBuilderIT.java` — AC1 Fix 2 test seam
+- `_bmad-output/implementation-artifacts/story-review.md` — the senior-dev audit this story's current version was corrected against
+- `src/test/java/com/softropic/skillars/platform/reviews/api/ReviewFlagIT.java` — AC1 Fix 1 (existing non-concurrent regression test); new `ReviewFlagServiceConcurrencyIT` goes in `.../reviews/service/`, not here
+- `src/test/java/com/softropic/skillars/platform/marketplace/api/CoachProfileBuilderIT.java` — AC1 Fix 2/Fix 3 test seam
 
 ## Change Log
 
 - 2026-09-23: Story created via a fresh `/txn-and-concurrency-audit` of `platform.marketplace`/
-  `platform.reviews` (the two modules never swept in this series' history), rather than the manual
-  ledger-mining process this series otherwise uses — the ledger itself was too thin to mine a
-  comparable bundle this time (re-swept end-to-end at creation time; confirmed). Owner decisions
-  taken live (`AskUserQuestion`, this story's own creation session): (1) anchor on the fresh audit
-  over declining it a fifth time; (2) fix `ReviewFlagService.flag`'s TOCTOU via the lock-and-recheck
-  pattern, matching this file's own three sibling call sites exactly, over a conditional-`UPDATE`
-  alternative; (3) scope the `ConfigBounds` min/max divergence fix narrowly to `GdprErasureService`'s
-  own call site, not a codebase-wide `getBoundedLong` signature refactor; (4) after discovering the
-  GDPR connection-acquisition-wait item has no clean scoped-config fix (HikariCP has no per-call-site
-  override; a real fix needs a second dedicated connection pool with separate Testcontainers wiring),
-  decline it as a code-change item this story and instead extend its ledger documentation with that
-  finding.
+  `platform.reviews`, rather than the manual ledger-mining process this series otherwise uses — the
+  ledger itself was too thin to mine a comparable bundle this time. Owner decisions taken live
+  (`AskUserQuestion`): (1) anchor on the fresh audit; (2) fix `ReviewFlagService.flag`'s TOCTOU via a
+  lock-and-recheck pattern; (3) scope the `ConfigBounds` min/max divergence fix narrowly to
+  `GdprErasureService`'s own call site; (4) decline the GDPR connection-acquisition-wait item as a
+  code-change item and extend its ledger documentation instead.
+- 2026-09-23 (story review, `story-review.md`, against `HEAD = 7ed6d30b`): senior-dev audit found the
+  story should not be implemented as originally drafted. Corrections applied to this file:
+  - **AC1 Fix 1:** kept the fix, but the stated failure scenario was wrong (an unverified assumption
+    about FK-lock behavior actually closes that exact window at the default threshold) and the
+    prescribed fix order (lock after the flag insert) introduces a new deadlock between two concurrent
+    flaggers. Replaced the scenario with the one that is actually reachable (`ReviewSubmissionService
+    .updateReview`'s full-row clobber, since it is the only status-writer that doesn't resolve open
+    flags), reordered the fix to lock first, and moved the flag-count re-check under the lock too (the
+    original task only re-checked status). Also corrected an inaccurate claim that the flag insert was
+    already "committed" before the re-check — it is flushed, not committed, since the whole method is
+    one transaction. Retargeted the concurrency test from `ReviewFlagIT` (HTTP-level, no seam for the
+    required interleaving) to a new service-level `ReviewFlagServiceConcurrencyIT`.
+  - **AC1 Fix 2:** downgraded High→Low. The headline justification ("unhandled 500") was false —
+    `ApiAdvice` already returns a handled 400 today; the real gap is a generic vs. specific error code.
+    The originally-approved `saveAndFlush`-scoping reasoning for the `try`/`catch` was also wrong
+    (`saveAndFlush` flushes the whole persistence context, not just the one entity) — corrected the fix
+    to inspect the constraint name explicitly rather than relying on flush scoping.
+  - **AC1 Fix 3 (new):** the review found `publishProfile` has no lock at all — a real, more severe gap
+    in the same method AC1 Fix 2 already opens, missed by the original creation-session audit. Added as
+    a new Medium finding with its own fix, task, and test.
+  - **AC2:** the original fix (reading `min`/`max` via `ConfigBounds` accessors) would have reversed a
+    documented codebase convention (`ConfigBounds.java:33-35`) and a dated review decision at the exact
+    sibling call site cited as precedent — neither was visible when the original scope decision was
+    made. Owner re-decision (`AskUserQuestion`, post-review): replace AC2 with a pinning unit test for
+    `GdprErasureService`'s existing (correct) literals, matching the convention instead of fighting it.
+    No production code is changed by AC2 as corrected.
+  - **AC3:** corrected the audit's own coverage numbers (11 entities, not 8; 26 `@Transactional`
+    annotations, not "~20"), marked ledger item D2 partially- rather than fully-closed with its two
+    named residuals, and added tasks to record the fresh findings the review surfaced (dead-code catch
+    in `ReviewSubmissionService.submitReview`, missing `statusChangedAt` update in `publishProfile`) as
+    new ledger bullets rather than silently dropping them.
