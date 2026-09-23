@@ -28,7 +28,7 @@ public interface CoachProfileRepository
     // skillars-deferred-62: jakarta.persistence.lock.timeout has no effect on Postgres for any finite
     // value — Hibernate's PostgreSQLDialect only special-cases NO_WAIT (0) and SKIP_LOCKED (-2). "0"
     // here means NO_WAIT: contention fails immediately with PessimisticLockingFailureException rather
-    // than blocking. Every one of this method's 7 call sites wraps it in PessimisticLockRetryer,
+    // than blocking. Every one of this method's 14 call sites wraps it in PessimisticLockRetryer,
     // which retries that failure from a JDBC savepoint with a short backoff (~3.2s budget across 8
     // attempts) so a brief, legitimate overlap between two requests still succeeds — contention that
     // outlasts the budget surfaces as ApiAdvice's PessimisticLockingFailureException handler's 409.

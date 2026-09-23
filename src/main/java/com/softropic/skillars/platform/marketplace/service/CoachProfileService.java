@@ -300,21 +300,76 @@ public class CoachProfileService {
     public ProfileBuilderStatusResponse publishProfile(Long userId) {
         CoachProfile profile = requireProfile(userId);
 
-        if (profile.getStatus() != CoachProfileStatus.DRAFT) {
-            throw new MarketplaceException("marketplace.alreadyPublished", "Profile is already published");
-        }
+        requireDraftStatus(profile.getStatus());
 
+        // skillars-deferred-130 AC1 Fix 3: mirrors saveStep4's own lock pattern, placed right before
+        // the write it protects. AdminCoachEnforcementService.suspendCoach's own comment names this
+        // exact failure mode: two writers serialise only when BOTH take the lock, making a one-sided
+        // lock decorative. Without this, a concurrent suspendCoach committed inside this method's
+        // unlocked window would be silently reverted back to ACTIVE by the full-row save() below
+        // (CoachProfile has no @Version/@DynamicUpdate).
+        lockRetryer.withBoundedRetry(() -> {
+            coachProfileRepository.findByIdForUpdate(profile.getId())
+                .orElseThrow(() -> new MarketplaceException("marketplace.profileNotFound",
+                    "Coach profile not found for id=" + profile.getId()));
+            entityManager.refresh(profile, LockModeType.PESSIMISTIC_WRITE);
+            return null;
+        });
+        // Re-check on the refreshed instance (new relative to saveStep4's own shape, which has no
+        // racing status writer to protect against): a concurrent suspendCoach — or another
+        // publishProfile — may have already moved this profile out of DRAFT while this method waited
+        // for the lock. validateAllStepsComplete also moved here (code review 2026-09-23): it was
+        // originally re-run only against the pre-lock snapshot, which is not what is about to be
+        // written; running it after the lock at least reflects the state as of the moment the ACTIVE
+        // write actually happens, even though it still cannot be covered by entityManager.refresh
+        // (CoachProfile has no mapped associations for the four child tables it reads).
+        requireDraftStatus(profile.getStatus());
         validateAllStepsComplete(profile);
 
         profile.setStatus(CoachProfileStatus.ACTIVE);
         coachProfileRepository.save(profile);
 
-        CoachSubscription subscription = new CoachSubscription();
-        subscription.setCoachId(profile.getId());
-        subscription.setTier(CoachSubscriptionTier.SCOUT);
+        // skillars-deferred-130 AC1 Fix 2, withdrawn and replaced during code review (2026-09-23,
+        // Decision 1): CoachSubscription has an assigned @Id (coachId), no @GeneratedValue, no
+        // Persistable override, and no @Version, so SimpleJpaRepository.save() always routes through
+        // em.merge() here — never em.persist() — meaning a coach_subscriptions_pkey violation can
+        // never actually be thrown from this insert, concurrent or not (Fix 3's lock above already
+        // makes the two-concurrent-publishers case race-free by construction). Worse, an unconditional
+        // insert would silently UPDATE — not conflict with — an existing row: SubscriptionService
+        // .subscribeCoach has no DRAFT/ACTIVE guard, so a still-DRAFT coach can already hold a real
+        // PRO/ELITE marketplace.coach_subscriptions row before ever publishing, and overwriting it here
+        // would silently downgrade a paying coach to SCOUT with no error. Find-or-create instead:
+        // preserve an existing row's tier untouched, and default only a genuinely new row to SCOUT.
+        CoachSubscription subscription = coachSubscriptionRepository.findByCoachId(profile.getId())
+            .orElseGet(() -> {
+                CoachSubscription created = new CoachSubscription();
+                created.setCoachId(profile.getId());
+                created.setTier(CoachSubscriptionTier.SCOUT);
+                return created;
+            });
         coachSubscriptionRepository.save(subscription);
 
         return new ProfileBuilderStatusResponse(profile.getId(), CoachProfileStatus.ACTIVE, 5, true);
+    }
+
+    /**
+     * Code review 2026-09-23: {@code marketplace.alreadyPublished} is only factually true for
+     * {@code ACTIVE}. {@code AdminCoachEnforcementService.suspendCoach} has no {@code ACTIVE} guard and
+     * {@code ReliabilityStrikeService}'s {@code PENDING_REVIEW}/{@code REDUCED} transitions only check
+     * the target status, so a profile that is {@code SUSPENDED}/{@code REDUCED}/{@code PENDING_REVIEW}/
+     * {@code DEACTIVATED} can be reached directly from {@code DRAFT}, without ever having been
+     * published — for those, "already published" is both false and unhelpful (it implies nothing needs
+     * to be done, when the profile is actually stuck pending admin/strike resolution).
+     */
+    private static void requireDraftStatus(CoachProfileStatus status) {
+        if (status == CoachProfileStatus.DRAFT) {
+            return;
+        }
+        if (status == CoachProfileStatus.ACTIVE) {
+            throw new MarketplaceException("marketplace.alreadyPublished", "Profile is already published");
+        }
+        throw new MarketplaceException("marketplace.profileNotEligibleToPublish",
+            "Profile cannot be published while in " + status + " status");
     }
 
     public ProfileBuilderStatusResponse getBuilderStatus(Long userId) {
