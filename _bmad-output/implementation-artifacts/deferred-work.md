@@ -3104,6 +3104,92 @@ that review were either patched in-story or resolved as owner decisions — see 
   touch it. Still annotated `[DECIDED: accepted risk — skillars-deferred-128]` for the single-child
   hold-time residual this hazard is part of; revisit if a future story is asked to bound
   connection-acquisition wait directly.
+  **[AUDIT 2026-09-23 (skillars-deferred-130): re-confirmed `[DECIDED: accepted risk —
+  skillars-deferred-128]` for a fourth consecutive story.** Investigated as a possible AC and declined
+  as a code-change item (owner decision, `AskUserQuestion`, this story's own creation session) after
+  discovering the "scoped connection-timeout override" originally imagined as a small fix is not one:
+  HikariCP has no per-call-site connection-acquisition-timeout override through the standard
+  `DataSource.getConnection()` path Spring's transaction manager uses (`connection-timeout` is
+  pool-wide only). The only real fix shape is a second, dedicated `HikariDataSource` scoped to
+  `deletePlayerDevelopmentData`'s own `REQUIRES_NEW` transaction — which would also need separate
+  wiring for the Testcontainers `@ServiceConnection` test path (`DataSourceConfig`'s custom
+  `HikariConfig` bean is entirely skipped there, per `datasource.container=true`) to even be
+  exercisable by `GdprErasureIT`. Extends this bullet's own "revisit if" condition with that concrete
+  finding.]**
+
+## Last audit: 2026-09-23 (skillars-deferred-130 dev-story completion)
+
+`skillars-deferred-130` closed out the "`platform.marketplace`/`platform.reviews` never audited"
+narrative that stories 126, 127, 128, and 129 each recorded (each explicitly declined a fresh
+concurrency/TOCTOU audit of these two modules in favor of ledger items) — this story is that audit.
+Checked 0 `@Scheduled` methods, 26 `@Transactional` annotations across 10 service classes, 11
+entities (`CoachAgeGroup`, `CoachAvailabilityWindow`, `CoachMediaItem`, `CoachPricing`,
+`CoachProfile`, `CoachReliabilityStrike`, `CoachSpecialty`, `CoachSubscription`, `SessionPack`,
+`CoachReview`, `ReviewFlag` — corrected from an initial miscount of 8 during the original
+creation-session audit pass). Both modules are now confirmed swept under this series' concurrency
+lens. Findings, corrected during this story's own senior-dev review before implementation began (see
+the story file's own Change Log for the full corrections): **AC1 Fix 1 (High, fixed)** —
+`ReviewFlagService.flag`'s auto-hold write took no lock, refresh, or re-check before mutating
+`CoachReview.moderationStatus`, unlike every other writer of that field in the module; the reachable
+trigger is `ReviewSubmissionService.updateReview`, the only status-writer that never calls
+`ReviewFlagRepository.resolveAllOpenFlags` — fixed by taking `findByIdForUpdate` as `flag()`'s own
+first read (not a lock-after-insert, which would deadlock two concurrent flaggers via the
+`review_flags` → `coach_reviews` non-deferrable FK). **AC1 Fix 2 (withdrawn and replaced, code review
+2026-09-23, Decision 1)** — the originally-shipped `coach_subscriptions_pkey`-catch was itself dead
+code: `CoachSubscription` has an assigned `@Id` with no `@GeneratedValue`/`@Version`, so
+`save()`/`saveAndFlush()` always routes through `em.merge()`, never `em.persist()` — a PK violation
+can never actually be thrown here, concurrent or not. Worse, an unconditional insert would silently
+*overwrite* an existing `PRO`/`ELITE` subscription row down to `SCOUT`: `SubscriptionService
+.subscribeCoach` has no `DRAFT`/`ACTIVE` guard, so a still-`DRAFT` coach can already hold a real paid
+marketplace subscription row before ever publishing. Replaced with find-or-create
+(`coachSubscriptionRepository.findByCoachId(...).orElseGet(...)`), which preserves an existing row's
+tier untouched and defaults only a genuinely new row to `SCOUT`; race-freedom now comes from AC1
+Fix 3's own lock, not from catching a violation that could never fire. **AC1 Fix 3
+(Medium, fixed, found only during this story's own review — not the original creation-session
+audit)** — `publishProfile` took no row lock at all, so a concurrent
+`AdminCoachEnforcementService.suspendCoach` could be silently reverted back to `ACTIVE`; fixed via
+this module's own `findByIdForUpdate` + refresh + re-check-`DRAFT` pattern — the marketplace module's
+2nd `.withBoundedRetry(` call site (`saveStep4` has the first), the 32nd codebase-wide
+(`PessimisticLockRetryerCallSiteAuditTest.EXPECTED_CALL_SITE_COUNT` bumped 31 → 32), and the 14th of
+`CoachProfileRepository.findByIdForUpdate`'s own wrapped call sites specifically (code review
+2026-09-23: corrected from an original "8th" miscount, which itself compounded a pre-existing stale
+"7" in that repository's own comment — also now corrected). **AC2 (fixed)** — see the `D2` annotation
+directly above:
+no production code changed; a new `GdprErasureServiceTest` now pins the `[2L, 120L]` bounds literal
+at `GdprErasureService`'s own call site, closing the missing-test gap `D2` actually named once its
+divergence-risk framing was corrected. See the section immediately below for two fresh, unfixed
+findings this story's own review surfaced while touching these files.
+
+## Deferred from: story review of skillars-deferred-130-marketplace-reviews-concurrency-audit-and-config-bounds-fix (2026-09-23)
+
+Surfaced by this story's own senior-dev pre-implementation audit (`story-review.md`) while examining
+`ReviewSubmissionService`/`CoachProfileService` for AC1. Neither is fixed by this story — both are
+adjacent to files it already touches but outside its own scope (narrow lock/error-code fixes to
+`ReviewFlagService.flag` and `publishProfile`, not a general sweep of these two services).
+
+- **`ReviewSubmissionService.submitReview`'s `:68-74` catch of `DataIntegrityViolationException` is
+  very likely dead code.** `CoachReview` uses `GenerationType.UUID` for its `@Id`, so the
+  `coachReviewRepository.save(review)` call inside the `try` does not flush — the
+  `uq_coach_reviews_author_coach` unique-index violation this catch exists to translate into
+  `ReviewErrorCode.ALREADY_SUBMITTED` actually surfaces at the enclosing transaction's commit-time
+  flush, outside this `try`/`catch`, uncaught. A concurrent double-submit therefore likely gets a
+  generic 400 (`ApiAdvice`'s unmapped-constraint branch) instead of the specific `ALREADY_SUBMITTED`
+  error the pre-existing `existsByAuthorIdAndCoachId` pre-check already gives the non-concurrent
+  caller. Not verified empirically (no test currently exercises the concurrent path); worth a small IT
+  plus either an `em.flush()` inside the `try` or moving the save to `saveAndFlush`.
+  (Labeled without a `D`-number — code review 2026-09-23 flagged that this section's original `D2`
+  label collided, in the same diff, with the unrelated pre-existing `D2` in the
+  skillars-deferred-129 section directly below, which this same diff separately annotates.)
+- **`CoachProfileService.publishProfile` never sets `statusChangedAt` on the `DRAFT → ACTIVE`
+  transition.** Every `AdminCoachEnforcementService` status transition (`suspendCoach`,
+  `reinstateCoach`, strike-driven auto-suspension) sets `statusChangedAt` alongside `status`, and
+  `CoachProfileRepository.findByStatusInOrderByStatusChangedAtAsc` orders admin review queues on that
+  column — a freshly-published profile sorts as if its status changed at profile-creation time (or
+  `NULL`, ordered last via `NULLS LAST`) rather than at actual publish time. No test currently pins
+  either the presence or absence of this field write. Fix shape: add
+  `profile.setStatusChangedAt(Instant.now())` alongside the existing `profile.setStatus(ACTIVE)` in
+  `CoachProfileService.publishProfile` (line numbers drifted since this story's own `HEAD` — re-verify
+  before fixing).
 
 ## Deferred from: code review of skillars-deferred-129-gdpr-lock-timeout-ci-frontend-auto-detect-and-envelope-test-fixes (2026-09-23)
 
@@ -3142,6 +3228,19 @@ patched or resolved in-story — see that story's own `## Review Findings` secti
   call site (`RadarCompositeCalculationService.java:212`) exactly — the convention the story was
   directed to follow. Fixing it properly means having `getBoundedLong` read min/max from the
   `BoundedKey` itself, which touches every existing caller and is its own story.
+  **[AUDIT 2026-09-23 (skillars-deferred-130): PARTIALLY CLOSED, corrected framing.** The literal-bounds
+  shape above is not a divergence risk — it is this codebase's own documented convention
+  (`ConfigBounds.java:33-35`): call sites intentionally re-type bounds as literals so a `Mockito
+  verify(...)` in the call site's own unit test pins the exact numbers as a drift detector, exactly
+  matching the cited `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS` sibling. The genuine gap this bullet named —
+  no such pinning test existed for this call site — is now closed by `GdprErasureServiceTest`
+  (`skillars-deferred-130` AC2). Two residuals remain open, NOT closed by this story: (a) the code
+  default `5` still appears nowhere in `ConfigBounds` despite the key being registered in
+  `HAS_CODE_DEFAULT` — `BoundedKey` has no default field, a separate pre-existing gap from the literal
+  re-typing this bullet described; (b) `ReviewFlagService.java:76` / `ReviewSubmissionService.java:165`
+  re-type both bounds *and* the key string for their own `getBoundedInt` calls, found during this
+  story's own review — out of this story's scope (its AC2 targeted `GdprErasureService`'s call site
+  only).]**
 
 - **D3 — Only one of four `(branch × reason)` catch combinations in the new erasure error handling is
   tested.** `GdprErasureService.java:226` (PLAYER / `CHILD_CONTENDED` arm) and `:397` (PARENT /
@@ -3171,3 +3270,95 @@ patched or resolved in-story — see that story's own `## Review Findings` secti
   on a TTL boundary one thread holding that monitor while waiting for a Hikari connection stalls
   every `ConfigService` caller in the JVM. Narrow window, pre-existing `ConfigService` shape. Fix
   shape: read the bound once in `erase()`/`eraseParentChildren` and pass it down as a parameter.
+
+## Deferred from: code review of skillars-deferred-130-marketplace-reviews-concurrency-audit-and-config-bounds-fix (2026-09-23)
+
+Surfaced by `/bmad-code-review` (four layers: Blind Hunter, Edge Case Hunter, Acceptance Auditor, and
+`/txn-and-concurrency-audit` as an owner-requested fourth layer) against the story's own uncommitted
+implementation. Each was independently re-verified against real source. None is fixed by this story.
+
+- **`ReviewFlagService.flag` holds its exclusive `coach_reviews` row lock across five write-nothing exit
+  paths** (`ReviewFlagService.java:46`) — self-flag, missing coach profile, coach flagging their own
+  profile, `ALREADY_FLAGGED`, and the `DataIntegrityViolationException` catch. PostgreSQL releases a
+  `FOR UPDATE` row lock only at commit/rollback, so a user repeatedly re-flagging a review they already
+  flagged can serialize `updateReview`/`approveReview`/`blockReview`/`ReviewModerationService` behind a
+  no-op. Newly introduced by skillars-deferred-130 AC1 Fix 1. Deliberately not patched: moving the cheap
+  guards ahead of the lock conflicts with that AC's explicit "locked as this transaction's first read"
+  shape. Revisit if flag-endpoint latency or admin-moderation contention is ever observed.
+
+- **`ReviewFlagService.flag`'s blanket `DataIntegrityViolationException → ALREADY_FLAGGED` mapping**
+  (`ReviewFlagService.java:76-82`) never inspects the constraint name, so a null `reason`, a `details`
+  value over 500 chars, or a `flagged_by` FK failure all report "You have already flagged this review".
+  The REST boundary validates these today (`ReviewFlagRequest` + `@Valid`), so it is only reachable from
+  a non-REST caller. Pre-existing; unrelated to skillars-deferred-130's own changes in this file.
+
+- **Flags cast while a review is `PENDING` are counted, locked for, and event-published, then silently
+  annihilated** — `AdminReviewService.approveReview:94` calls `resolveAllOpenFlags` as it sets
+  `APPROVED`, so a review that accumulated well past the auto-hold threshold during moderation goes live
+  with `openFlagCount == 0`, with no log, alert, or event. `BLOCKED` reviews likewise still accept flags
+  that can never act (`blockReview:126` already resolved them). Pre-existing; AC1 Fix 1 makes the
+  outcome deterministic rather than causing it.
+
+- **`SubscriptionService.syncMarketplaceTier` can orphan a live Stripe subscription**
+  (`SubscriptionService.java:682-694`) — its `marketplace.coach_subscriptions` INSERT needs `FOR KEY
+  SHARE` on `coach_profiles` for `coach_subscriptions_coach_id_fkey`, so it blocks behind
+  `publishProfile`'s `FOR UPDATE`, then violates `coach_subscriptions_pkey` once that commits. The
+  uncaught `DataIntegrityViolationException` rolls back `persistCoachSubscription`, but the Stripe
+  subscription was already created outside the transaction (`SubscriptionService.java:143`) — leaving a
+  live billing subscription with no local record. Pre-existing; AC1 Fix 3 widens the blocking window to
+  the whole retry budget.
+
+- **`AdminCoachEnforcementService.reinstateCoach` mints a marketplace-`ACTIVE` profile that never
+  published** (`:217-232`) — it sets `ACTIVE` unconditionally, so the profile gets no
+  `marketplace.coach_subscriptions` row (making `CoachProfileService.getCoachSubscriptionTier:482-486`
+  throw `ResourceNotFoundException` permanently for that coach) and never runs
+  `validateAllStepsComplete`. `publishProfile` can never repair it, because the status is no longer
+  `DRAFT`. skillars-deferred-130's own `CoachProfileServiceConcurrencyIT` asserts this exact state must
+  not exist.
+
+- **Lock-order inversion between `ReviewFlagService.flag` and `GdprErasureService.erase`** —
+  `flag()` takes `coach_reviews` then `coach_profiles` (via `CoachRatingService.recompute`'s
+  `updateRatingAggregate`); `erase()` writes `coach_profiles` first (`:172`) then `coach_reviews`
+  (`:182-183`). Unreachable today only because the row sets are disjoint by construction (a coach cannot
+  author a review on their own profile). Adding a `recompute` call to `erase()` — a plausible future
+  change — makes the cycle realizable, and `flag()` has no `PessimisticLockRetryer` to absorb the
+  resulting `40P01`.
+
+- **Both new concurrency ITs are timing-dependent** — `ReviewFlagServiceConcurrencyIT` and
+  `CoachProfileServiceConcurrencyIT` use a fixed `Thread.sleep(300)` as the only "contention
+  established" signal, and take wall-clock `Instant.now()` *after* `transactionTemplate.execute` returns
+  (i.e. after the commit that releases the lock) for cross-thread ordering assertions. Nothing verifies
+  the contending thread actually blocked, so on a cold JVM or constrained connection pool the test can
+  pass without exercising the lock at all; conversely the ordering assertion can fail on a correct
+  system if the holder thread is descheduled in the gap. A `pg_locks`/`pg_stat_activity` poll for
+  `wait_event_type = 'Lock'` would make both deterministic. Revisit on the first CI flake.
+
+- **`ReviewFlagService.flag` NPEs on a null `flaggedBy`** (`:61`) — `flaggedBy.equals(coachProfile
+  .getUserId())` dereferences the boxed parameter after the row lock is taken; `flag(null, ...)` also
+  raises a data-access API-usage error rather than the intended `REVIEW_NOT_FOUND`. Unreachable from
+  REST today via `ReviewResource`'s `resolveUserId()`, so recorded rather than guarded.
+
+- **`CoachProfileService.publishProfile` still never sets `statusChangedAt`** on the `DRAFT → ACTIVE`
+  transition, while every sibling status writer does (`suspendCoach:143`, `reinstateCoach:231`). Already
+  recorded by this story's AC3 as out of scope; re-noted here because the code review confirmed it and
+  the fix is one line inside a method skillars-deferred-130 already rewrites.
+
+- **`CoachReviewRepository.findByIdForUpdate` diverges from the documented NOWAIT + `PessimisticLockRetryer`
+  convention** (`CoachReviewRepository.java:23-25`) — it carries no `@QueryHints`, unlike
+  `CoachProfileRepository.findByIdForUpdate` (`:35-38`), whose `jakarta.persistence.lock.timeout = "0"`
+  (NO_WAIT) plus bounded retry is documented at `:28-34` as this codebase's deliberate contention
+  strategy. No runtime `lock_timeout`/`statement_timeout` is set anywhere in `src/main/resources`, so
+  `POST /api/reviews/{reviewId}/flag` now blocks for the full duration of any concurrent admin
+  `approveReview`/`blockReview` or author `updateReview` transaction on that review, and flaggers of one
+  hot review fully serialize. **[DECIDED 2026-09-23 (owner, `AskUserQuestion`, code review of
+  skillars-deferred-130): accepted for now.** `flag()` stays consistent with the reviews module's three
+  existing blocking lockers (`ReviewSubmissionService.updateReview`, `AdminReviewService.approveReview`/
+  `blockReview`, `ReviewModerationService`). Adding NOWAIT means changing a shared repository method used
+  by four call sites, wrapping each in `PessimisticLockRetryer`, and adding a contention test per site —
+  module-wide work that does not belong in a narrow lock-fix story. Revisit if flag-endpoint latency or
+  admin-moderation contention is observed in production, or when the reviews module is next opened for a
+  locking change.**]
+
+  Note the blocking (not NO_WAIT) semantics are also what make the `FOR KEY SHARE` → `FOR UPDATE`
+  upgrade deadlock that skillars-deferred-130 AC1 Fix 1's ordering avoids a genuine PostgreSQL `40P01`
+  rather than a fail-fast `PessimisticLockingFailureException`.
