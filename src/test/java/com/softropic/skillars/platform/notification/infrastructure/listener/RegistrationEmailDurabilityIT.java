@@ -73,21 +73,24 @@ class RegistrationEmailDurabilityIT extends AbstractIntegrationTest {
     }
 
     /**
-     * skillars-deferred-111 AC7: the one {@code findAll()} + in-memory filter this class cannot
-     * avoid — the registration/OTP listener generates the row's {@code sendId} internally, so at the
-     * point a test needs to find its own row for the first time, only the UUID-unique email address
-     * it seeded is known. Paid once per test (every call site here is already followed by caching the
+     * skillars-deferred-111 AC7: the one lookup this class cannot avoid by {@code sendId} instead —
+     * the registration/OTP listener generates the row's {@code sendId} internally, so at the point a
+     * test needs to find its own row for the first time, only the UUID-unique email address it
+     * seeded is known. Paid once per test (every call site here is already followed by caching the
      * result into a local {@code row}, never re-queried), not once per assertion. Any subsequent
      * lookup on the SAME row within a test (e.g. after driving {@code EmailRetryScheduler}) must use
      * {@link #committedRowBySendId} instead — see {@code persistedFailedEnvelope}'s two callers below,
      * which already know their own generated {@code sendId} and no longer need this method at all.
+     *
+     * <p>skillars-deferred-129 AC3: was a {@code findAll().stream().filter(...)} full-table scan,
+     * replaced with {@link EnvelopeEntityRepository#findByRecipientsEmail} — a single targeted
+     * query, not an indexed one (see that method's own Javadoc for why), but one that avoids
+     * materializing every {@code EnvelopeEntity} row in the shared JVM-static test database into the
+     * persistence context just to filter them in memory.
      */
     private EnvelopeEntity committedRowFor(String email) {
         List<EnvelopeEntity> rows = transactionTemplate.execute(status ->
-            envelopeEntityRepository.findAll().stream()
-                .filter(e -> e.getRecipients() != null
-                    && e.getRecipients().stream().anyMatch(r -> email.equals(r.getEmail())))
-                .toList());
+            envelopeEntityRepository.findByRecipientsEmail(email));
         assertThat(rows).as("exactly one committed envelope row for %s", email).hasSize(1);
         return rows.get(0);
     }
@@ -104,6 +107,51 @@ class RegistrationEmailDurabilityIT extends AbstractIntegrationTest {
         EnvelopeEntity row = transactionTemplate.execute(status -> envelopeEntityRepository.findBySendId(sendId));
         assertThat(row).as("a committed envelope row for sendId %s", sendId).isNotNull();
         return row;
+    }
+
+    /**
+     * skillars-deferred-129 AC3: proves {@link EnvelopeEntityRepository#findByRecipientsEmail}
+     * returns the FULL {@code recipients} collection for a matched envelope, not pruned to only the
+     * matching recipient — the specific trap a plain {@code JOIN FETCH} filtered directly on the
+     * fetched association would fall into (silently correct for every OTHER test in this class, all
+     * single-recipient, but wrong in general — see that method's own Javadoc). Seeds a
+     * two-recipient envelope directly via the repository (not through the real send pipeline, which
+     * always sends to exactly one address) so this is a genuine multi-recipient fixture.
+     */
+    @Test
+    @DisplayName("findByRecipientsEmail returns every recipient of a matched envelope, not just the matching one")
+    void findByRecipientsEmail_multiRecipientEnvelope_returnsFullRecipientCollectionNotPrunedToMatch() {
+        String matchedEmail = freshEmail("multi.matched");
+        String otherEmail = freshEmail("multi.other");
+        String sendId = "multi-recipient-" + UUID.randomUUID();
+
+        RecipientEntity matched = new RecipientEntity();
+        matched.setEmail(matchedEmail);
+        matched.setFirstname("Matched");
+        RecipientEntity other = new RecipientEntity();
+        other.setEmail(otherEmail);
+        other.setFirstname("Other");
+
+        transactionTemplate.executeWithoutResult(status -> {
+            EnvelopeEntity envelope = new EnvelopeEntity();
+            envelope.setId(UUID.randomUUID());
+            envelope.setSendId(sendId);
+            envelope.setEmailTemplate(EmailTemplate.COACH_OTP);
+            envelope.setDeadline(Instant.now().plusSeconds(300));
+            envelope.setStatus(EmailDeliveryStatus.SENT);
+            envelope.setData(Map.of());
+            envelope.setRecipients(List.of(matched, other));
+            envelopeEntityRepository.save(envelope);
+        });
+
+        List<EnvelopeEntity> rows = transactionTemplate.execute(status ->
+            envelopeEntityRepository.findByRecipientsEmail(matchedEmail));
+
+        assertThat(rows).as("exactly one committed envelope row for %s", matchedEmail).hasSize(1);
+        assertThat(rows.get(0).getRecipients())
+            .as("the FULL recipient collection, not pruned to only the matching recipient")
+            .extracting(RecipientEntity::getEmail)
+            .containsExactlyInAnyOrder(matchedEmail, otherEmail);
     }
 
     // --- AC1/AC2: the listener actually enqueues BEFORE_COMMIT, and a real send preserves firstname ---

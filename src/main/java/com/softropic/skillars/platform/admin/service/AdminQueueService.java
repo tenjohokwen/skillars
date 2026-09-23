@@ -170,9 +170,10 @@ public class AdminQueueService {
                 }
             }
             case STRIKE_THRESHOLD -> "";
-            // skillars-deferred-128 story review (Decision 2): reason distinguishes the three
+            // skillars-deferred-128 story review (Decision 2): reason distinguishes the
             // GdprErasureService.raiseErasureAlert causes (DEADLINE_EXCEEDED / CHILD_VANISHED /
-            // CHILD_CONTENDED) — same reason-prefix pattern MODERATION_UNRESOLVED already uses above.
+            // CHILD_CONTENDED / CHILD_DELETE_LOCK_TIMEOUT, the last added by skillars-deferred-129
+            // AC1) — same reason-prefix pattern MODERATION_UNRESOLVED already uses above.
             case GDPR_ERASURE_DEADLINE -> {
                 String prefix = reason != null ? reason + ": " : "";
                 yield prefix + "GDPR erasure request " + referenceId;

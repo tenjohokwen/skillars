@@ -5,9 +5,11 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.admin.service.GdprErasureService;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -96,6 +98,7 @@ class GdprErasureIT extends AbstractIntegrationTest {
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private com.softropic.skillars.platform.outbox.service.OutboxService outboxService;
     @Autowired private GdprErasureService gdprErasureService;
+    @Autowired private ConfigService configService;
 
     @LocalServerPort private int randomServerPort;
 
@@ -1060,10 +1063,13 @@ class GdprErasureIT extends AbstractIntegrationTest {
     /**
      * AC4 (M11, widened scope): a genuinely lock-contended child (its retry budget exhausted by a
      * concurrent holder, not merely vanished) is also skipped, not just a vanished one — the rest of
-     * the PARENT request still completes successfully.
+     * the PARENT request's OTHER children still get processed (B below). But (code review
+     * 2026-09-23, Decision 1) the request itself is marked {@code FAILED}, not {@code COMPLETED}:
+     * A's development data survives this run, and CHILD_VANISHED is the only skip reason that leaves
+     * COMPLETED correct.
      */
     @Test
-    void erase_parentUser_contendedChild_skipsAndContinues_completesSuccessfully() throws Exception {
+    void erase_parentUser_contendedChild_skipsOthersProcessed_marksRequestFailed() throws Exception {
         seedParentChildren();
         // Hold A's lock for longer than PessimisticLockRetryer's own ~3.2s worst-case retry budget so
         // deletePlayerDevelopmentData(A) exhausts it and throws PessimisticLockingFailureException —
@@ -1123,7 +1129,10 @@ class GdprErasureIT extends AbstractIntegrationTest {
         UUID requestId = requestIdRef.get();
         String finalStatus = jdbcTemplate.queryForObject(
             "SELECT status FROM admin.gdpr_requests WHERE id = ?", String.class, requestId);
-        assertThat(finalStatus).isEqualTo("COMPLETED");
+        // (code review 2026-09-23, Decision 1): FAILED, not COMPLETED — A's development data
+        // survives this run (asserted below), so reporting COMPLETED would be an Article 17
+        // regression, even though B (asserted below) was processed normally.
+        assertThat(finalStatus).isEqualTo("FAILED");
         // A was contended and skipped — its development data must NOT have been touched.
         assertThat(childTombstoned(PARENT_CHILD_A_ID)).isFalse();
         // B had no contention at all — must have completed normally.
@@ -1135,6 +1144,162 @@ class GdprErasureIT extends AbstractIntegrationTest {
             requestId.toString());
         assertThat(alert.get("status")).isEqualTo("OPEN");
         assertThat(alert.get("reason")).isEqualTo("CHILD_CONTENDED");
+    }
+
+    /**
+     * skillars-deferred-129 AC1: proves the new {@code GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS}
+     * bound is real — holds a conflicting row lock on {@code development.player_timeline_events}
+     * (the exact table Task 4 converted {@code PlayerTimelineRepository.deleteByPlayerId} into a real
+     * bulk {@code @Modifying} delete for, and the FIRST statement {@code
+     * deletePlayerDevelopmentData} issues after taking its own {@code set_config}) from a second
+     * connection/thread, then calls {@code erase()} for a PLAYER-role account whose
+     * {@code deletePlayerDevelopmentData} will contend on that exact row.
+     *
+     * <p>Also proves the H2 fix (Task 7): unlike a pre-fix build, where this failure would propagate
+     * straight out of {@code erase()} to {@code markFailed} (no alert, no auto-retry, silently
+     * unlocking nothing), {@code erase()} here must not hang — it still moves on rather than blocking
+     * until the competing lock is released. It must not hang, but (code review 2026-09-23, Decision
+     * 1) it also must not report {@code COMPLETED}: this child's development data survives (the inner
+     * {@code REQUIRES_NEW} transaction rolled back), so the request is marked {@code FAILED} — the
+     * account is still anonymised and its refresh tokens still revoked, and a distinguished {@code
+     * CHILD_DELETE_LOCK_TIMEOUT} reason is raised (Task 8) — NOT the pre-existing {@code
+     * CHILD_CONTENDED} reason a genuinely-contended {@code player_profiles} lock ACQUISITION produces
+     * (see {@link #erase_parentUser_contendedChild_skipsOthersProcessed_marksRequestFailed} for that
+     * other, already-covered cause), empirically confirming Task 10's cause-class question for the
+     * JPQL {@code @Modifying}/bulk-delete path (not only the native-query path {@code
+     * RadarCompositeCalculationService}'s own precedent was confirmed against).
+     */
+    @Test
+    void erase_selfRegisteredPlayer_downstreamDeleteStatementLockTimeout_boundedNotHanging_marksFailedWithDistinguishedAlert() throws Exception {
+        setGdprEraseStatementLockTimeoutSecondsConfig(2);
+        UUID eventId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO development.player_timeline_events (id, player_id, event_type, occurred_at) "
+                    + "VALUES (?, ?, 'SESSION_COMPLETED', ?)",
+                eventId, SELF_PLAYER_PROFILE_ID, Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        CountDownLatch releaseLock = new CountDownLatch(1);
+        AtomicReference<Throwable> lockerFailure = new AtomicReference<>();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        Future<?> locker = executor.submit(() -> {
+            try {
+                transactionTemplate.execute(status -> {
+                    jdbcTemplate.queryForObject(
+                        "SELECT id FROM development.player_timeline_events WHERE id = ? FOR UPDATE",
+                        UUID.class, eventId);
+                    lockHeld.countDown();
+                    try {
+                        // Bounded wait, not indefinite — mirrors RadarCompositeCalculationServiceConcurrencyIT's
+                        // own locker-thread technique, so a failed assertion below cannot hang the suite.
+                        releaseLock.await(30, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                });
+            } catch (Throwable t) {
+                lockerFailure.set(t);
+            }
+        });
+
+        AtomicReference<Throwable> eraseFailure = new AtomicReference<>();
+        AtomicReference<Duration> eraseElapsed = new AtomicReference<>();
+        AtomicReference<UUID> requestIdRef = new AtomicReference<>();
+        try {
+            assertThat(lockHeld.await(10, TimeUnit.SECONDS))
+                .as("competing lock on the player_timeline_events row must be acquired before erase() starts")
+                .isTrue();
+
+            Instant start = Instant.now();
+            Future<?> eraser = executor.submit(() -> {
+                try {
+                    requestIdRef.set(erase(SELF_PLAYER_USER_ID));
+                } catch (Throwable t) {
+                    eraseFailure.set(t);
+                }
+            });
+            eraser.get(20, TimeUnit.SECONDS);
+            eraseElapsed.set(Duration.between(start, Instant.now()));
+        } finally {
+            releaseLock.countDown();
+            locker.get(10, TimeUnit.SECONDS);
+            executor.shutdown();
+        }
+
+        assertThat(lockerFailure.get()).isNull();
+        assertThat(eraseFailure.get())
+            .as("H2 fix: a downstream delete-statement lock-timeout must NOT propagate out of erase() "
+                + "for the PLAYER branch")
+            .isNull();
+        assertThat(eraseElapsed.get())
+            .as("must resolve (erase() must move on rather than hang until the competing lock is "
+                + "manually released 30s later) within a bounded wall-clock time — the configured 2s "
+                + "lock_timeout plus real margin for CI scheduling jitter — AND must not resolve "
+                + "near-instantly, which would mean no genuine contention occurred at all")
+            .isGreaterThanOrEqualTo(Duration.ofSeconds(2))
+            .isLessThan(Duration.ofSeconds(15));
+
+        UUID requestId = requestIdRef.get();
+        assertThat(requestId).isNotNull();
+        String finalStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.gdpr_requests WHERE id = ?", String.class, requestId);
+        // (code review 2026-09-23, Decision 1): FAILED, not COMPLETED — this child's development
+        // data survives (asserted below), so reporting COMPLETED would be an Article 17 regression.
+        assertThat(finalStatus).isEqualTo("FAILED");
+
+        // The account-level side effects still happen despite the skip — only the development-data
+        // deletion for THIS child rolled back.
+        Boolean activated = jdbcTemplate.queryForObject(
+            "SELECT activated FROM main.\"user\" WHERE id = ?", Boolean.class, SELF_PLAYER_USER_ID);
+        assertThat(activated).isFalse();
+        verify(refreshTokenRepository).markAllUsedByUserId(SELF_PLAYER_USER_ID);
+
+        // The inner REQUIRES_NEW transaction rolled back on the lock_timeout trip, so the row this
+        // test seeded and contended on must still be here — proving the skip is real, not a silent
+        // no-op that happened to also satisfy the FAILED assertion above.
+        Integer residualEventCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_timeline_events WHERE id = ?",
+            Integer.class, eventId);
+        assertThat(residualEventCount).isEqualTo(1);
+
+        Map<String, Object> alert = jdbcTemplate.queryForMap(
+            "SELECT status, reason FROM admin.admin_alerts "
+                + "WHERE reference_id = ? AND type = 'GDPR_ERASURE_DEADLINE'",
+            requestId.toString());
+        assertThat(alert.get("status")).isEqualTo("OPEN");
+        assertThat(alert.get("reason")).isEqualTo("CHILD_DELETE_LOCK_TIMEOUT");
+    }
+
+    private void setGdprEraseStatementLockTimeoutSecondsConfig(int seconds) {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.platform_config (key, value) "
+                    + "VALUES ('platform.gdpr_erase_statement_lock_timeout_seconds', ?) "
+                    + "ON CONFLICT (key) DO UPDATE SET value = ?",
+                String.valueOf(seconds), String.valueOf(seconds));
+            return null;
+        });
+        configService.invalidate();
+    }
+
+    // (code review 2026-09-23): setGdprEraseStatementLockTimeoutSecondsConfig writes into
+    // main.platform_config, which this project's shared JVM-static Testcontainers DB does not reset
+    // between tests — left as-is, the 2s override would leak into every later test in the suite. A
+    // no-op DELETE for every test that never called the setter above, so unconditional in @AfterEach
+    // rather than only in the one test that needs it.
+    @AfterEach
+    void resetGdprEraseStatementLockTimeoutSecondsConfig() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "DELETE FROM main.platform_config WHERE key = 'platform.gdpr_erase_statement_lock_timeout_seconds'");
+            return null;
+        });
+        configService.invalidate();
     }
 
     private void seedCommittedRadarRows(long playerId, String skill) {

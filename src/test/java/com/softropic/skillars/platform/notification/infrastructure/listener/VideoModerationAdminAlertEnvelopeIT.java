@@ -155,13 +155,16 @@ class VideoModerationAdminAlertEnvelopeIT extends AbstractIntegrationTest {
      * A new transaction means a new persistence context and a real round trip to Postgres, so only
      * a genuinely COMMITTED row can satisfy these assertions — a row that existed solely in the
      * rolled-back outer transaction's first-level cache cannot.
+     *
+     * <p>skillars-deferred-129 AC3 (story review M10): was an undocumented {@code
+     * findAll().stream().filter(...)} full-table scan, structurally identical to (and fixed by the
+     * same targeted query as) {@code RegistrationEmailDurabilityIT.committedRowFor} — see {@link
+     * EnvelopeEntityRepository#findByRecipientsEmail}'s own Javadoc for why this is not an indexed
+     * lookup, only an avoided full-table materialization.
      */
     private EnvelopeEntity committedRow() {
         List<EnvelopeEntity> rows = new TransactionTemplate(transactionManager).execute(status ->
-            envelopeEntityRepository.findAll().stream()
-                .filter(e -> e.getRecipients() != null && e.getRecipients().stream()
-                    .anyMatch(r -> adminEmail.equals(r.getEmail())))
-                .toList());
+            envelopeEntityRepository.findByRecipientsEmail(adminEmail));
         assertThat(rows)
             .as("exactly one COMMITTED envelope row for this test's admin recipient")
             .hasSize(1);
