@@ -91,7 +91,15 @@ public class AdminReviewService {
         review.setLastModifiedAt(Instant.now());
         reviewRepository.save(review);
 
-        reviewFlagRepository.resolveAllOpenFlags(reviewId, Instant.now());
+        // skillars-deferred-131 AC2 Fix 8: flags cast while a review is PENDING/UNDER_REVIEW
+        // accumulate, are event-published as real, then were silently wiped here with no log or
+        // alert — the review's final state carried openFlagCount == 0 with no record anything was
+        // ever flagged. WARN, not silently resolve, when this call actually wipes open flags.
+        int resolvedFlagCount = reviewFlagRepository.resolveAllOpenFlags(reviewId, Instant.now());
+        if (resolvedFlagCount > 0) {
+            log.warn("Approving review with open flags — {} flag(s) auto-resolved: reviewId={}",
+                resolvedFlagCount, reviewId);
+        }
         coachRatingService.recompute(review.getCoachId());
 
         ReviewModerationLog entry = new ReviewModerationLog();
@@ -123,7 +131,13 @@ public class AdminReviewService {
         review.setLastModifiedAt(Instant.now());
         reviewRepository.save(review);
 
-        reviewFlagRepository.resolveAllOpenFlags(reviewId, Instant.now());
+        // skillars-deferred-131 AC2 Fix 8: BLOCKED reviews likewise still accept flags that can never
+        // act — same silent-wipe risk as approveReview above.
+        int resolvedFlagCount = reviewFlagRepository.resolveAllOpenFlags(reviewId, Instant.now());
+        if (resolvedFlagCount > 0) {
+            log.warn("Blocking review with open flags — {} flag(s) auto-resolved: reviewId={}",
+                resolvedFlagCount, reviewId);
+        }
 
         if (previousStatus == ReviewModerationStatus.APPROVED) {
             coachRatingService.recompute(review.getCoachId());

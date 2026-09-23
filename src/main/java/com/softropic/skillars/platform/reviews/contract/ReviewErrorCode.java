@@ -20,7 +20,8 @@ public enum ReviewErrorCode implements ErrorCode {
     ALREADY_APPROVED("reviews.alreadyApproved"),
     ALREADY_BLOCKED("reviews.alreadyBlocked"),
     COACH_PROFILE_MISSING("reviews.coachProfileMissing"),
-    REVIEW_NOT_FOUND("reviews.reviewNotFound");
+    REVIEW_NOT_FOUND("reviews.reviewNotFound"),
+    INVALID_FLAGGER("reviews.invalidFlagger");
 
     private final String code;
 

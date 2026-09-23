@@ -66,11 +66,18 @@ public class ReviewSubmissionService {
         review.setModerationStatus(ReviewModerationStatus.PENDING);
         review.setLastModifiedAt(Instant.now());
         try {
-            review = coachReviewRepository.save(review);
+            review = coachReviewRepository.saveAndFlush(review);
         } catch (DataIntegrityViolationException e) {
-            throw new OperationNotAllowedException(
-                "Review already submitted for this coach",
-                ReviewErrorCode.ALREADY_SUBMITTED);
+            // Code review 2026-09-23: mirrors ReviewFlagService.flag's identical Fix 6 —
+            // uq_coach_reviews_author_coach is the only constraint on this insert that means "already
+            // submitted" (V138__baseline_schema.sql:3080-3084); coach_reviews_rating_check and any
+            // NOT NULL violation are different failures and must not be mislabeled as ALREADY_SUBMITTED.
+            if (isAlreadySubmittedViolation(e)) {
+                throw new OperationNotAllowedException(
+                    "Review already submitted for this coach",
+                    ReviewErrorCode.ALREADY_SUBMITTED);
+            }
+            throw e;
         }
         // AC1 (skillars-deferred-88): a freshly-created review keeps the default moderationEpoch = 0.
         eventPublisher.publishEvent(new ReviewSubmittedEvent(
@@ -158,6 +165,14 @@ public class ReviewSubmissionService {
         review.setCoachResponseBody(responseBody);
         review.setCoachResponseAt(Instant.now());
         coachReviewRepository.save(review);
+    }
+
+    private static final String UNIQUE_AUTHOR_COACH_CONSTRAINT = "uq_coach_reviews_author_coach";
+
+    /** Mirrors {@code ReviewFlagService.isUniqueFlaggerViolation}'s single-level unwrap pattern. */
+    private static boolean isAlreadySubmittedViolation(DataIntegrityViolationException ex) {
+        return ex.getCause() instanceof org.hibernate.exception.ConstraintViolationException cve
+            && UNIQUE_AUTHOR_COACH_CONSTRAINT.equals(cve.getConstraintName());
     }
 
     private void checkEligibility(UUID coachId, Long authorId) {

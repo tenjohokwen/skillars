@@ -3,6 +3,8 @@ package com.softropic.skillars.platform.marketplace.service;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.platform.admin.service.AdminCoachEnforcementService;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
+import com.softropic.skillars.utils.ConcurrencyLockWaitSupport;
+import io.micrometer.core.instrument.MeterRegistry;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep1Request;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep2Request;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep3Request;
@@ -47,6 +49,7 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
     @Autowired private AdminCoachEnforcementService adminCoachEnforcementService;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
+    @Autowired private MeterRegistry meterRegistry;
 
     private static final long COACH_USER_ID = 8070_000_001L;
     private static final long ADMIN_ID = 8070_000_099L;
@@ -144,6 +147,10 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
      */
     @Test
     void concurrentSuspend_isNotRevertedByPublish() throws Exception {
+        // skillars-deferred-131 AC3: captured before the publisher's own findByIdForUpdate can retry,
+        // so the poll below asserts genuine growth past this call's own baseline rather than the
+        // JVM-wide cumulative total left over from earlier tests.
+        double lockRetryBaseline = ConcurrencyLockWaitSupport.currentLockRetryCount(meterRegistry);
         CountDownLatch suspendLockHeld = new CountDownLatch(1);
         CountDownLatch releaseSuspend = new CountDownLatch(1);
         AtomicReference<Throwable> suspendFailure = new AtomicReference<>();
@@ -189,7 +196,13 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
             });
 
             assertThat(suspendLockHeld.await(10, TimeUnit.SECONDS)).isTrue();
-            Thread.sleep(300);
+            // skillars-deferred-131 AC3: CoachProfileRepository.findByIdForUpdate is NOWAIT, so the
+            // publisher never sits in a live Postgres wait state a poll could observe — see
+            // ConcurrencyLockWaitSupport's own javadoc for why PessimisticLockRetryer's counter
+            // cannot gate a PRE-release wait here. This bounded delay gives the publisher's own
+            // NOWAIT failure and first backoff a real chance to happen before the lock releases;
+            // assertGenuineLockRetryOccurred below then proves it actually did.
+            ConcurrencyLockWaitSupport.awaitFirstLockAttempt();
             releaseSuspend.countDown();
 
             suspender.get(30, TimeUnit.SECONDS);
@@ -198,6 +211,8 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
             if (suspendFailure.get() != null) {
                 throw new AssertionError("suspendCoach thread failed", suspendFailure.get());
             }
+
+            ConcurrencyLockWaitSupport.assertGenuineLockRetryOccurred(meterRegistry, lockRetryBaseline);
 
             assertThat(publishCompletedAt.get())
                 .as("publishProfile's own UPDATE must not complete until suspendCoach's transaction "
@@ -226,6 +241,31 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    /**
+     * skillars-deferred-131 AC1 Fix 2: {@code publishProfile} was the one status transition in the
+     * enforcement/marketplace surface that never set {@code statusChangedAt} — the column is nullable
+     * with no DB default, so a freshly published profile carried NULL rather than a fresh timestamp.
+     */
+    @Test
+    void publishProfile_setsStatusChangedAtToFreshTimestamp() {
+        // Code review 2026-09-23: a 5-second cushion admitted the fixture row's own creation time
+        // (set moments earlier in @BeforeEach), so the old assertion passed whether or not
+        // publishProfile actually wrote a fresh timestamp. Captured immediately before the call
+        // instead — publishProfile writes statusChangedAt via Instant.now() from this same JVM
+        // (CoachProfileService.java), so no clock-skew cushion is needed.
+        Instant before = Instant.now();
+
+        coachProfileService.publishProfile(COACH_USER_ID);
+
+        Timestamp statusChangedAt = jdbcTemplate.queryForObject(
+            "SELECT status_changed_at FROM marketplace.coach_profiles WHERE id = ?",
+            Timestamp.class, profileId);
+        assertThat(statusChangedAt).as("statusChangedAt must be set, not NULL").isNotNull();
+        assertThat(statusChangedAt.toInstant())
+            .as("statusChangedAt must be a fresh timestamp, not the row's creation time")
+            .isAfter(before);
     }
 
     /** The existing non-concurrent already-published pre-check must remain unaffected by AC1 Fix 3's new lock. */

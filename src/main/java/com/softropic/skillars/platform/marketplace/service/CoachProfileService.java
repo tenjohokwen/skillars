@@ -40,9 +40,11 @@ import com.softropic.skillars.platform.security.contract.exception.OperationNotA
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Comparator;
@@ -55,6 +57,7 @@ import java.util.stream.Stream;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class CoachProfileService {
 
     /**
@@ -327,6 +330,12 @@ public class CoachProfileService {
         validateAllStepsComplete(profile);
 
         profile.setStatus(CoachProfileStatus.ACTIVE);
+        // skillars-deferred-131 AC1 Fix 2: every other status writer in the enforcement/marketplace
+        // surface (suspendCoach, reinstateCoach, deleteStrike's two escalation branches) sets this
+        // alongside its status write; a freshly published profile was the one transition that skipped
+        // it, leaving status_changed_at NULL (no DB default, no entity default) instead of a
+        // stand-in creation timestamp.
+        profile.setStatusChangedAt(Instant.now());
         coachProfileRepository.save(profile);
 
         // skillars-deferred-130 AC1 Fix 2, withdrawn and replaced during code review (2026-09-23,
@@ -490,11 +499,23 @@ public class CoachProfileService {
             .orElse(0);
     }
 
+    /**
+     * skillars-deferred-131 AC1 Fix 3 (belt-and-braces): defaults to {@code SCOUT} on a missing row,
+     * matching every other missing-subscription case in this codebase ({@code publishProfile},
+     * {@code SubscriptionService.syncMarketplaceTier}). {@code reinstateCoach}/{@code deleteStrike}'s
+     * own find-or-create only repairs *future* coaches taking those two write paths — this closes the
+     * read-side failure surface unconditionally, independent of which write path caused the gap, for
+     * any row already in the broken state today or any future path that reaches {@code ACTIVE}
+     * without going through one of those two call sites.
+     */
     @Transactional(readOnly = true)
     public CoachSubscriptionTier getCoachSubscriptionTier(UUID coachId) {
         return coachSubscriptionRepository.findByCoachId(coachId)
             .map(CoachSubscription::getTier)
-            .orElseThrow(() -> new ResourceNotFoundException("CoachSubscription not found", "coach_subscription"));
+            .orElseGet(() -> {
+                log.warn("No coach_subscriptions row for coachId={}, defaulting to SCOUT", coachId);
+                return CoachSubscriptionTier.SCOUT;
+            });
     }
 
     @Transactional(readOnly = true)
@@ -508,6 +529,19 @@ public class CoachProfileService {
         return coachProfileRepository.findByUserId(userId)
             .orElseThrow(() -> new MarketplaceException("marketplace.profileNotFound",
                 "Coach profile not found for userId=" + userId));
+    }
+
+    /**
+     * skillars-deferred-131 AC1 Fix 3: public seam onto {@link #validateAllStepsComplete} for
+     * {@code AdminCoachEnforcementService.reinstateCoach}/{@code .deleteStrike}, whose tier-3 branch
+     * can both write {@code ACTIVE} from {@code SUSPENDED}/{@code PENDING_REVIEW}/{@code REDUCED}
+     * without the profile ever having gone through {@link #publishProfile} — meaning this validation
+     * was never run at all, not merely once. Throws {@link MarketplaceException} on an incomplete
+     * profile; callers must let an admin action fail loudly rather than silently activating (or
+     * silently no-op'ing) a coach whose builder steps are incomplete.
+     */
+    public void validateReadyForActivation(CoachProfile profile) {
+        validateAllStepsComplete(profile);
     }
 
     private void validateAllStepsComplete(CoachProfile profile) {

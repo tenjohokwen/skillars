@@ -3,13 +3,18 @@ package com.softropic.skillars.config;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.notification.service.AlertRuleCache;
 
+import org.awaitility.Awaitility;
+import org.awaitility.core.ConditionTimeoutException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.test.context.TestContext;
 import org.springframework.test.context.support.AbstractTestExecutionListener;
 import org.springframework.transaction.support.TransactionTemplate;
+
+import java.time.Duration;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -103,6 +108,14 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
         ApplicationContext ctx = testContext.getApplicationContext();
         JdbcTemplate jdbc = ctx.getBean(JdbcTemplate.class);
 
+        // skillars-deferred-131 AC4: quiesce BEFORE the reset transaction opens below. See
+        // quiesceAsyncExecutors's own javadoc for the deadlock this closes.
+        quiesceAsyncExecutors(ctx);
+
+        // Code review 2026-09-23: measured from AFTER quiescing, not before. Quiescing can legitimately
+        // wait up to its own 10s bound; folding that into "database reset" cost (AC5.6, baselined at a
+        // ~100ms CI mean) would make the reported metric mostly measure unrelated async-pool drain time
+        // instead of the truncate/restore work it exists to track.
         long startNanos = System.nanoTime();
 
         // Everything touching the database MUST run inside an explicit transaction.
@@ -127,6 +140,88 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
         evictInProcessCaches(ctx);
         resetStatefulStubBeans(ctx);
         recordCost(System.nanoTime() - startNanos);
+    }
+
+    /**
+     * skillars-deferred-131 AC4. Master CI run {@code 35891248593} (post-skillars-deferred-130-merge,
+     * {@code test} job) failed with a genuine PostgreSQL {@code deadlock detected} inside
+     * {@link #truncateApplicationTables}, while resetting the database ahead of
+     * {@code RadarAssessmentResourceIT.getMyEntries_returnsOwnEntriesOnly} — two backends deadlocked
+     * on a {@code ShareLock} while deleting from {@code main.player_profiles}. A rerun of the same
+     * commit passed clean; all ~14 prior master CI runs on this branch were green. First occurrence,
+     * not a known recurring flake.
+     *
+     * <h2>Investigation finding (Task 1)</h2>
+     *
+     * <p>{@code pom.xml}'s {@code maven-failsafe-plugin} configuration documents "all ~135 IT classes
+     * share ONE forked JVM" (no {@code forkCount}/{@code reuseForks}), and no
+     * {@code junit-platform.properties} configures JUnit 5 parallel execution — so test METHODS never
+     * run concurrently with each other. The second concurrent Postgres backend has to be a second
+     * connection from the SAME JVM: an async component still in flight from a preceding test class's
+     * already-committed transaction. Two {@code @Async("reportExecutor")} +
+     * {@code @TransactionalEventListener(phase = AFTER_COMMIT)} listeners share this pool and both
+     * touch {@code player_profiles}-adjacent state — {@code RadarCompositeCalculationService
+     * .onRadarEntrySubmitted} (takes a {@code player_profiles} row lock via
+     * {@code PlayerProfileRepository.findByIdForUpdate}, then writes
+     * {@code development.player_radar_composites}/{@code player_radar_baselines}) and
+     * {@code ReportGenerationService}'s own equivalent listener (reads {@code PlayerProfileRepository}
+     * while generating a report). {@link #truncateApplicationTables}'s single transaction deletes from
+     * every application table in one pass with no fixed cross-table ordering (unlike the async
+     * writer's own fixed table order); if that transaction has already deleted rows in one of the
+     * async writer's target tables (locking them for the remainder of its own transaction) and then
+     * reaches {@code main.player_profiles} while the async writer still holds that row's lock from an
+     * earlier statement, each side ends up waiting on a lock the other holds — a genuine cycle, not
+     * merely a long wait. This is the structural mechanism a code-level reading of both listeners
+     * supports; the race itself was not reproduced locally (first occurrence in ~14 prior green runs,
+     * non-deterministic by nature) — this closes the identified mechanism and reduces risk, it does not
+     * claim to exhaustively rule out any other.
+     *
+     * <h2>Fix (Task 2)</h2>
+     *
+     * <p>A {@code pg_advisory_xact_lock} around the reset was considered and rejected: it only
+     * serializes transactions that ALSO take that same advisory lock, and neither async listener would
+     * — it would leave the actual {@code ShareLock} cycle on {@code player_profiles} exactly as
+     * reachable as before. Quiescing removes the second concurrent actor directly: bounded-poll both
+     * {@code reportExecutor}'s active-task count and its queue down to zero before the reset
+     * transaction below opens, so no async writer from a preceding test's committed transaction can
+     * still be in flight when {@link #truncateApplicationTables}'s {@code DELETE FROM
+     * main.player_profiles} runs. A bounded retry-on-{@code 40P01} around the reset was also
+     * considered (the reset is idempotent test infrastructure, so retry carries none of the
+     * "retry-and-hope" downside applicable to production business logic) but quiescing was chosen
+     * instead because it closes the mechanism rather than merely reducing the odds of colliding with
+     * it.
+     *
+     * <p>Code review 2026-09-23: {@code reportExecutor} alone quiesced only the specific pair that
+     * produced the observed CI failure. {@link #truncateApplicationTables}'s single {@code DO} block
+     * deletes from every non-empty application table with no fixed cross-table order, so the same
+     * ShareLock-cycle mechanism is reachable against <em>any</em> {@code @Async} pool still writing to
+     * an application table when the reset runs — {@code taskExecutor} alone backs
+     * {@code TimelineEventListener} and {@code SluCalculationService}, both of which write rows FK'd to
+     * {@code main.player_profiles} the same way {@code reportExecutor}'s two listeners do. Draining
+     * every {@link ThreadPoolTaskExecutor} bean in the context (not just a hardcoded name) closes the
+     * mechanism generally and stays correct if a future module adds another pool.
+     *
+     * <p>A per-executor {@link ConditionTimeoutException} is caught and logged rather than left to
+     * propagate: letting it escape {@code beforeTestMethod} would skip the reset transaction below
+     * entirely for this test method, leaving stale data in place for both this test and every
+     * subsequent one for the rest of the JVM — strictly worse than proceeding with a residual (small,
+     * now-bounded-to-one-pool) deadlock risk for this single invocation.
+     */
+    private void quiesceAsyncExecutors(ApplicationContext ctx) {
+        for (ThreadPoolTaskExecutor executor : ctx.getBeansOfType(ThreadPoolTaskExecutor.class).values()) {
+            try {
+                Awaitility.await()
+                    .atMost(Duration.ofSeconds(10))
+                    .pollInterval(Duration.ofMillis(25))
+                    .until(() -> executor.getActiveCount() == 0
+                        && executor.getThreadPoolExecutor().getQueue().isEmpty());
+            } catch (ConditionTimeoutException e) {
+                System.err.printf(
+                    "[deferred-131] async executor did not quiesce within 10s (activeCount=%d, "
+                        + "queueSize=%d) — proceeding with the reset anyway%n",
+                    executor.getActiveCount(), executor.getThreadPoolExecutor().getQueue().size());
+            }
+        }
     }
 
     /**

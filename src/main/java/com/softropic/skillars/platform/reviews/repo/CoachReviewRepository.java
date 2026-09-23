@@ -24,6 +24,16 @@ public interface CoachReviewRepository extends JpaRepository<CoachReview, UUID> 
     @Query("SELECT r FROM CoachReview r WHERE r.reviewId = :reviewId")
     Optional<CoachReview> findByIdForUpdate(@Param("reviewId") UUID reviewId);
 
+    // skillars-deferred-131 AC2 Fix 5: an unlocked scalar projection for flag()'s write-independent
+    // guards (self-flag, coach-flags-own-profile), so neither fact is loaded via the entity — nothing
+    // enters the persistence context before flag()'s own findByIdForUpdate below, which stays genuinely
+    // this transaction's first load of the CoachReview entity. List<Object[]>, not Optional<Object[]>
+    // — mirroring computeAggregates's own multi-column projection shape in this same file; an
+    // Optional<Object[]> return type does not unwrap correctly here (Spring Data's null-handling
+    // wrapper double-wraps the tuple), confirmed while implementing this fix.
+    @Query("SELECT r.authorId, r.coachId FROM CoachReview r WHERE r.reviewId = :reviewId")
+    List<Object[]> findAuthorAndCoachIdByReviewId(@Param("reviewId") UUID reviewId);
+
     long countByCoachIdAndModerationStatus(UUID coachId, ReviewModerationStatus status);
 
     @Query("SELECT AVG(r.rating) FROM CoachReview r " +
