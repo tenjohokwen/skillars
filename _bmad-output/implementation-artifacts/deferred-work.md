@@ -116,7 +116,11 @@ see the separate `story-review.md` audit of that story). Of the ~14:
   `HashMap`, no guard restored — confirmed by reading `{Coach,Parent,Player}RegistrationEmailListener.java`);
   ses-1-4's `RegistrationEmailDurabilityIT` global-state fragility note (still `findAll()`-based, no
   `@AfterEach`, confirmed by reading the test file and running it — 7/7 green, matching its own
-  "correct today" framing, not a live failure).
+  "correct today" framing, not a live failure). `[UPDATE 2026-09-22 (skillars-deferred-129 AC3): the
+  findAll()-based subordinate clause this restoration references is now closed — see this bullet's
+  own current text under "Deferred from: code review of ses-1-4-registration-email-durability"
+  below, narrowed rather than deleted since its headline claim (the scheduler's own whole-table
+  poll) remains open.]`
 - **The `ses-1-7-documentation` section's deletion also broke a live cross-reference**:
   `docs/dev-docs/notification/index.html` still linked to "`deferred-work.md`'s `ses-1-7-documentation`
   section" for history that section no longer holds. Fixed in the doc directly (see Files Touched
@@ -2046,18 +2050,28 @@ in code the new specs now touch, so they are cheap to close next time that surfa
 Decision-needed and patch findings from the same review are tracked in the story file's
 `### Review Findings` section, not here.
 
-- **The `skillars-deferred-108` AC1–AC6 specs are real but NOT merge-gating — read the six bullets
-  they closed with that caveat.** `frontend-unit-tests.yml` is deliberately decoupled from the build
-  gate (its own header: not referenced by `ci.yml` or `pr-build.yml`, not a required status check,
-  never invoked by `mvn verify` — the Maven `npm test` execution is a no-op stub). It runs only on
-  manual `workflow_dispatch`, or on a pull request carrying the `frontend-tests` label. So a future
-  PR that re-breaks `slotRows`, the `loadCoachBookingRequests` sequencing guard, `handleLogout`, or
-  the batch-basket `.startDatetime` mapping **can merge green** unless someone remembers the label.
-  deferred-108 AC10 deleted six ledger bullets on the strength of that coverage; the specs do exist
-  and are mutation-sensitive (17 of 18 reverts verified RED at implementation, the 18th closed by the
-  code review's decision 1a), but "closed" here means *a spec guards this*, not *CI enforces this*.
-  Owner decision D2 (2026-09-10) made the job opt-in deliberately — this bullet records the coupling,
-  not a disagreement. Revisit if/when the job is promoted to a required check.
+- **[Narrowed by skillars-deferred-129 AC2, 2026-09-22] The `skillars-deferred-108` AC1–AC6 specs
+  are real but NOT merge-gating — read the six bullets they closed with that caveat.**
+  `frontend-unit-tests.yml` is deliberately decoupled from the build gate (its own header: not
+  referenced by `ci.yml` or `pr-build.yml`, not a required status check, never invoked by
+  `mvn verify` — the Maven `npm test` execution is a no-op stub). This bullet's original claim — "a
+  future PR that re-breaks `slotRows`, the `loadCoachBookingRequests` sequencing guard,
+  `handleLogout`, or the batch-basket `.startDatetime` mapping can merge green **unless someone
+  remembers the label**" — is CLOSED: the job now auto-triggers on any PR whose diff touches
+  `src/frontend/**` (a hand-rolled `git diff` detector job, `.github/scripts/detect-frontend-changes.sh`),
+  removing the human-memory dependency for the common case; the `frontend-tests` label survives as a
+  manual override for a PR that exercises frontend behavior without touching `src/frontend/`
+  directly. **The underlying, narrower claim survives and remains true:** this job is still not
+  referenced by `ci.yml`/`pr-build.yml` and still not a required status check, so a genuinely RED
+  frontend suite still does not by itself block a merge — a reviewer must still notice the failed
+  check. deferred-108 AC10 deleted six ledger bullets on the strength of that coverage; the specs do
+  exist and are mutation-sensitive (17 of 18 reverts verified RED at implementation, the 18th closed
+  by the code review's decision 1a), but "closed" here means *a spec guards this*, not *CI enforces
+  this*. Owner decision D2 (2026-09-10) made the job opt-in deliberately — this bullet records the
+  coupling, not a disagreement; skillars-deferred-129's own owner decision reaffirmed opt-in
+  (auto-detection over promoting to a required check, to avoid costing this job's ~10-minute two-leg
+  budget on every PR regardless of whether frontend was touched). Revisit if/when the job is
+  promoted to a required check.
   [`.github/workflows/frontend-unit-tests.yml`]
 - **[DECIDED 2026-09-11 (skillars-deferred-109 AC10)] `ConfigBounds` hand-list is now complete for
   the seeded tier keys, and the drift guard is fixed.** `VIDEO_QUOTA_TIER_SEGMENTS` gained
@@ -2195,7 +2209,22 @@ headers; **48** raw `[DECIDED` tokens; **38** raw `[DISMISSED` tokens.
 ## Deferred from: code review of ses-1-4-registration-email-durability (2026-09-12)
 
 - **[DECIDED: keep retain-and-alert — skillars-deferred-110]** ~~`EmailTemplate.valueOf(p.template())` creates an immortal poison outbox row for a removed or renamed constant~~ (`platform/notification/service/NotificationEmailOutboxHandler.java:90`). Payloads carry the template as a `String` and can sit in `outbox_messages` for up to the 24h default deadline, so a rename during a rolling deploy makes `valueOf` throw `IllegalArgumentException` — thrown *after* ses-1.4's new deadline guard, so a still-live row is never rescued by it. `OutboxRowProcessor` wraps it, backs the row off and retries forever, consuming a claim slot and eventually reporting `[OUTBOX_STUCK]` with no path to completion. `skillars-deferred-110`'s AC8 explicitly decided **not** to change this: `OutboxRowProcessor:109-113` already makes the identical decision for the structurally-identical missing-handler case ("never dropped: it keeps its data safe until a deploy that carries the handler picks it up"), and a rename/rollback self-resolves the same way — catch-and-drop would trade a loud, recoverable state for irreversible message loss. No code change; retain-and-alert is the documented, intentional precedent, not a silent gap.
-- **`RegistrationEmailDurabilityIT`'s scheduler cases operate on global repository state** (`src/test/java/.../listener/RegistrationEmailDurabilityIT.java`). `emailRetryScheduler.retryFailedEmails()` polls the whole `envelope_entity` table (`EmailRetryScheduler:106`) and the `committedRowFor`/`committedRowBySendId` helpers use `findAll()`. Assertions are scoped by a UUID-unique email address so they are correct today, but the scheduler will also re-drive `FAILED`/`retry=true` rows left by other tests in the shared JVM-static Postgres, and `findAll()` grows with the suite. Fragility note, not a correctness bug. **[Restored 2026-09-15 — see the audit below.]**
+- **[Narrowed by skillars-deferred-129 AC3, 2026-09-22] `RegistrationEmailDurabilityIT`'s scheduler
+  cases operate on global repository state** (`src/test/java/.../listener/RegistrationEmailDurabilityIT.java`).
+  **Headline claim — genuinely open, this story does not touch it:** `emailRetryScheduler.retryFailedEmails()`
+  polls the whole `envelope_entity` table (`EmailRetryScheduler:106`); assertions are scoped by a
+  UUID-unique email address so they are correct today, but the scheduler will also re-drive
+  `FAILED`/`retry=true` rows left by other tests in the shared JVM-static Postgres. **Subordinate
+  clause — CLOSED:** the `committedRowFor`/`committedRow` helpers' own `findAll()` + in-memory
+  filter (this bullet originally also named `committedRowBySendId`, which by this ledger-editing
+  session was already fixed to a targeted `findBySendId` lookup by skillars-deferred-111 AC7 — a
+  drift in this bullet's own text, corrected here) is replaced by a single targeted
+  `EnvelopeEntityRepository.findByRecipientsEmail` query in both `RegistrationEmailDurabilityIT.committedRowFor`
+  and the structurally-identical, previously-undocumented `VideoModerationAdminAlertEnvelopeIT.committedRow`
+  (found during skillars-deferred-129's own story review, M10) — avoiding the full-table
+  materialization into the persistence context, though not an indexed lookup (the recipients table's
+  only index does not cover a bare `email` predicate — see that method's own Javadoc). Fragility
+  note, not a correctness bug, for what remains open. **[Restored 2026-09-15 — see the audit below.]**
 
 ## Last audit: 2026-09-14 (post-merge prune after ses-1-7-documentation)
 
@@ -2991,6 +3020,48 @@ tracked in the story file's own `## Review Findings` section, not here.
   future story is asked to bound single-child hold time directly (e.g. a `statement_timeout`/
   `lock_timeout` mirroring `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s approach).
 
+## Last audit: 2026-09-22 (skillars-deferred-129 dev-story completion)
+
+This story's three source sections are not adjacent (`:2049`, `:2205`, and the section immediately
+below), so — following this file's own established multi-section-prune precedent (e.g. the
+skillars-deferred-110 post-merge prune) — this single heading sits immediately above the freshest
+section it touches and summarizes the edits made to the other two non-adjacent sections in prose
+here, rather than treating physical adjacency to every touched section as achievable.
+
+- **Immediately below (`## Deferred from: code review of skillars-deferred-128…`, the freshest,
+  same-day section):** the "no `lock_timeout`/`statement_timeout` bounds the inner GDPR erasure
+  transaction's bulk deletes" bullet is narrowed, not deleted. Its "a blocked statement can hang
+  forever" hazard is CLOSED by AC1 (a new per-statement `lock_timeout` bound, `ConfigBounds.
+  GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS`, honestly documented as `N ×` the configured seconds
+  per statement, not a method-level ceiling). Its second, distinct hazard — the inner `REQUIRES_NEW`
+  transaction's own pooled-connection-*acquisition* wait, unaffected by `lock_timeout` — remains
+  genuinely open; this story does not touch it.
+- **`## Deferred from: code review of skillars-deferred-108…` (`:2049-2071` in this revision):** the
+  "a red frontend suite still does not block a merge unless someone remembers the label" bullet is
+  narrowed. AC2 closes the "unless someone remembers the label" clause (a new `git diff`-based
+  auto-detector, `.github/scripts/detect-frontend-changes.sh`, triggers the suite automatically on
+  any PR touching `src/frontend/**`, with the label surviving as a manual override). The bullet's
+  underlying non-gating-status claim is unchanged and explicitly reconfirmed still true — this job
+  remains outside `ci.yml`/`pr-build.yml` and is still not a required status check.
+- **`## Deferred from: code review of ses-1-4-registration-email-durability…` (`:2205-2222` in this
+  revision):** the `RegistrationEmailDurabilityIT` global-state bullet is narrowed to its surviving
+  headline claim. Its `findAll()`-based subordinate clause is CLOSED by AC3 (a new targeted
+  `EnvelopeEntityRepository.findByRecipientsEmail` query replaces the scan in both
+  `RegistrationEmailDurabilityIT.committedRowFor` and the structurally identical, previously
+  undocumented `VideoModerationAdminAlertEnvelopeIT.committedRow`, found during this story's own
+  review, M10). The bullet's headline claim — `EmailRetryScheduler.retryFailedEmails()`'s whole-table
+  poll re-driving other tests' rows in the shared JVM-static Postgres — is untouched and remains
+  genuinely open. A stale narrative reference to this same subordinate clause at `:117` (the
+  2026-09-15 full-file re-audit's own restoration note) is annotated, not rewritten, per this file's
+  "narrative sections are corrected, not deleted" convention.
+- **`ConfigResourceIT.java:238`'s own doc comment** ("4" `HAS_CODE_DEFAULT` keys `V139__baseline_seed_data.sql`
+  never seeded) is updated to "5" — AC1 adds `GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS` as a 5th.
+  Doc drift only; no test asserted the count numerically (`ConfigBoundsEnumCoverageTest:112-121`).
+- This story's own "Out of scope" section (the `platform.marketplace`/`platform.reviews` audit
+  candidate, `markFailed`'s generic alerting gap, the `radar_composite_dlq` cleanup gap, the
+  `main."user"` index gap, and the declined cumulative-lock-wait-budget mechanism) remains correctly
+  untouched — none of those five were closed or reworded by this story.
+
 ## Deferred from: code review of skillars-deferred-128-gdpr-lock-scope-erase-deadline-scheduler-lock-and-claim-clock-fixes (2026-09-22)
 
 Surfaced by `/bmad-code-review` across four parallel layers (Blind Hunter, Edge Case Hunter,
@@ -2998,25 +3069,105 @@ Acceptance Auditor, and `/txn-and-concurrency-audit` run as a fourth layer). All
 that review were either patched in-story or resolved as owner decisions — see the story's own
 `## Review Findings` section for the full set.
 
-- **No `lock_timeout`/`statement_timeout` bounds the inner GDPR erasure transaction's bulk deletes.**
-  `GdprErasureService.deletePlayerDevelopmentData`'s eleven `deleteAllByPlayerId` calls
-  (`GdprErasureService.java:436-453`) are ordinary blocking statements: unlike the
-  `findByIdForUpdate` above them they carry no `NOWAIT`, and unlike
-  `RadarCompositeCalculationService` the transaction issues no
-  `SELECT set_config('lock_timeout', ...)`. There is no global `lock_timeout` either — `application.yaml`'s
-  `connection-init-sql` sets only the time zone. A concurrent writer holding row locks on, say,
-  `development.radar_assessment_entries` therefore blocks the erasure's `DELETE` indefinitely while
-  the request thread holds that child's `player_profiles FOR UPDATE` lock, which in turn blocks
-  `FOR KEY SHARE` RI checks on every insert into the 7 FK'd tables for that child. AC2's per-erase
-  deadline does not help: it is sampled only at the top of each loop iteration
-  (`GdprErasureService.java:280`), so once control is inside a child it is never re-evaluated. The
-  same hole exists on the cheaper path — the inner `REQUIRES_NEW` must acquire a second pooled
-  connection and can wait up to `connection-timeout: 30000` (three times the whole 10s budget)
-  without the deadline firing.
-  **Not worsened by this story's diff** — the missing statement timeout is pre-existing — but this
-  story is the first to document a bound (`gdprEraseLockBudget`) that the missing timeout silently
-  invalidates, which is why it is recorded here rather than left implicit. Already annotated
-  `[DECIDED: accepted risk — skillars-deferred-128]` for the single-child hold-time residual, and
-  named as future work in `PessimisticLockRetryer`'s own Javadoc ("a future story bounding
-  single-child hold time directly (e.g. a `statement_timeout`/`lock_timeout` mirroring
-  `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s approach) would close that residual fully").
+- **[Narrowed by skillars-deferred-129 AC1, 2026-09-22] No `lock_timeout`/`statement_timeout` bounds
+  the inner GDPR erasure transaction's bulk deletes.** This bullet documented TWO distinct hazards.
+  **Hazard 1 — a blocked statement hanging indefinitely — CLOSED.**
+  `GdprErasureService.deletePlayerDevelopmentData` (current `HEAD`: `:487-527`, drifted from this
+  bullet's original `:436-453` citation) now issues `SELECT set_config('lock_timeout', ...)` after
+  taking its `player_profiles` lock, via a new `ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS`
+  runtime-tunable key mirroring `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s own bounds (2–120s). **Not a
+  method-level ceiling** — Postgres `lock_timeout` is per-STATEMENT, so this bounds each of the
+  method's ~12 fixed delete/scan statements individually (plus one `INSERT` per distinct
+  performance-report S3 key), and the method's honest real worst case is documented as `N ×` the
+  configured seconds on the method's own Javadoc, not a hard ceiling AC2's `gdprEraseLockBudget`
+  enforces on its own. **Corrected 2026-09-23 code review:** the original text here claimed empirical
+  confirmation across "either" the native-query path and the JPQL path, overstating what this
+  story's own new IT actually exercises — only ONE statement shape, the JPQL `@Modifying`/bulk-delete
+  path (via `PlayerTimelineRepository.deleteByPlayerId`, itself converted from a derived N+1-shaped
+  delete to a real bulk statement by this same AC), is contended by a test here. Empirically
+  confirmed BY THIS STORY's own new IT that a lock-timeout trip on that JPQL path surfaces as
+  `PessimisticLockingFailureException` with cause `org.hibernate.PessimisticLockException`; the
+  equivalent claim for a native-query statement rests on the pre-existing
+  `RadarCompositeCalculationServiceConcurrencyIT` precedent (a different method's native
+  `INSERT ... ON CONFLICT`, not re-verified by this story) — **and further empirically discovered, correcting this
+  AC's own original assumption, that a genuinely-contended `player_profiles` lock ACQUISITION
+  failure (`PessimisticLockRetryer`'s own retry-budget exhaustion) surfaces with the IDENTICAL cause
+  class**, since both share Postgres SQLSTATE `55P03` — cause-inspection alone cannot discriminate
+  the two failure modes; a dedicated `DeleteStatementLockTimeoutException` marker, thrown only for a
+  failure downstream of the lock already being held, is what actually does. Both the PARENT-branch
+  and (newly, this AC) the PLAYER-branch call sites catch this distinctly from a genuine
+  `player_profiles` lock-acquisition contention, raising a new `CHILD_DELETE_LOCK_TIMEOUT`
+  `AdminAlert` reason distinct from the pre-existing `CHILD_CONTENDED`.
+  **Hazard 2 — the inner `REQUIRES_NEW` transaction's own pooled-*connection-acquisition* wait, up
+  to `connection-timeout: 30000` (three times AC2's ~10s `gdprEraseLockBudget`) — remains genuinely
+  open.** `lock_timeout` has no effect on a connection-pool acquisition wait; this story does not
+  touch it. Still annotated `[DECIDED: accepted risk — skillars-deferred-128]` for the single-child
+  hold-time residual this hazard is part of; revisit if a future story is asked to bound
+  connection-acquisition wait directly.
+
+## Deferred from: code review of skillars-deferred-129-gdpr-lock-timeout-ci-frontend-auto-detect-and-envelope-test-fixes (2026-09-23)
+
+Surfaced by `/bmad-code-review`'s four parallel layers (Blind Hunter, Edge Case Hunter, Acceptance
+Auditor, and `/txn-and-concurrency-audit` as an owner-requested extra layer). These five were
+consciously **not** fixed in that story. The blocking/major findings from the same review were
+patched or resolved in-story — see that story's own `## Review Findings` section.
+
+- **D1 — GDPR erasure has no method-level wait ceiling; worst case is `(12 + M) × seconds` per
+  child.** `GdprErasureService.deletePlayerDevelopmentData` (`set_config` at `:596-598`, the twelve
+  bounded statements at `:610-640`). Postgres `lock_timeout` is per-STATEMENT, so the configured
+  value is spent independently by each of the twelve fixed statements plus one outbox `INSERT` per
+  non-null `storage_key` (`M`, unbounded). At the default `5s` that is ≥60s for one child; at
+  `ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS`'s permitted `max = 120L` it is ≥24
+  minutes — on the admin's HTTP request thread (`GdprEventListener.onErasureRequested` is a plain,
+  non-`@Async` `AFTER_COMMIT` listener), holding two pooled Hikari connections and an exclusive lock
+  on the already-anonymised `main."user"` row. `eraseParentChildren`'s `gdprEraseLockBudget` (10s) is
+  sampled only *between* children (`:361`) and cannot interrupt this. **Owner-decided, not an
+  oversight:** story review 2026-09-22 (`AskUserQuestion`) explicitly chose the simpler per-statement
+  bound over porting `RadarCompositeCalculationService`'s cumulative spend-down mechanism
+  (`:259-286` there), and the story documents the `N × seconds` arithmetic honestly rather than
+  overclaiming a ceiling. The change strictly improves on the prior *unbounded* wait. **Revisit if**
+  the bound is ever raised above the default in production, or if erasure moves off the request
+  thread — the fix shape is to re-issue `set_config` before each delete with
+  `min(configured, remaining)` against a running total, bailing once it would fall below the `2s`
+  floor. Bounding `M` (projection + `Pageable` cap, reconcile the remainder on a sweeper) is a
+  separate, smaller win.
+
+- **D2 — Declared config bounds and enforced config bounds are stated in two places and can
+  diverge.** `GdprErasureService` calls `configService.getBoundedLong(KEY.key(), 5L, 2L, 120L)`,
+  retyping as literals the `min`/`max` that `ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS`
+  already declares, and the code default `5` appears nowhere in `ConfigBounds` despite the key being
+  registered in `HAS_CODE_DEFAULT`. An operator who raises the max in `ConfigBounds` gets a value the
+  admin API accepts and stores but the call site silently clamps back down, with no test or compiler
+  signal. **Pre-existing, codebase-wide:** this mirrors `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s own
+  call site (`RadarCompositeCalculationService.java:212`) exactly — the convention the story was
+  directed to follow. Fixing it properly means having `getBoundedLong` read min/max from the
+  `BoundedKey` itself, which touches every existing caller and is its own story.
+
+- **D3 — Only one of four `(branch × reason)` catch combinations in the new erasure error handling is
+  tested.** `GdprErasureService.java:226` (PLAYER / `CHILD_CONTENDED` arm) and `:397` (PARENT /
+  `CHILD_DELETE_LOCK_TIMEOUT` arm) have no coverage. The new IT genuinely exercises the timeout path
+  — it holds a real `FOR UPDATE` lock on a `development.player_timeline_events` row and asserts
+  elapsed ∈ [2s, 15s) — but covers only PLAYER + `CHILD_DELETE_LOCK_TIMEOUT`; the pre-existing
+  `erase_parentUser_contendedChild_…` covers only PARENT + `CHILD_CONTENDED`. The `instanceof`
+  ternary that selects the reason is therefore proven in half its cases. Test debt, no production
+  defect implied.
+
+- **D4 — `performance_reports` rows are fully hydrated to read one column, then left managed after a
+  bulk delete.** `GdprErasureService.java:621` calls `findByPlayerIdOrderByGeneratedAtDesc(playerId)`
+  purely to collect `getStorageKey()`, loading every `PerformanceReport` entity (blob/metadata
+  columns included) into the inner persistence context; `:628`'s bulk `@Modifying` delete has no
+  `clearAutomatically`, so they all stay managed pointing at deleted rows. Benign today — nothing
+  re-reads them in that transaction and they are not dirty, so no stray `UPDATE` is flushed — but it
+  is memory proportional to a player's report count and it inflates `M` in D1. **Pre-existing:** the
+  `forEach`-over-entities shape predates this story; only the surrounding `try` is new. Fix shape:
+  a `SELECT p.storageKey … WHERE p.storageKey IS NOT NULL` projection returning `List<String>`.
+
+- **D5 — The `lock_timeout` bound is re-read from `ConfigService` once per child, inside `erase()`'s
+  outer transaction.** `GdprErasureService.java:587-588`. Hoisting the read above
+  `requiresNewTemplate` (story Task 5) correctly keeps it outside the `player_profiles` lock hold,
+  but it still runs inside the outer transaction — which already holds the flushed exclusive lock on
+  `main."user"` — and once per iteration of `eraseParentChildren`'s loop. `ConfigService.refreshCache()`
+  is `private synchronized` and issues a `configRepository.findAll()` on the caller's connection, so
+  on a TTL boundary one thread holding that monitor while waiting for a Hikari connection stalls
+  every `ConfigService` caller in the JVM. Narrow window, pre-existing `ConfigService` shape. Fix
+  shape: read the bound once in `erase()`/`eraseParentChildren` and pass it down as a parameter.

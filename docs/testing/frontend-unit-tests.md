@@ -25,13 +25,30 @@ The suite runs in exactly two places:
 | Where | How |
 |---|---|
 | Locally, on demand | `cd src/frontend && npm run test:unit` |
-| CI, on demand | `.github/workflows/frontend-unit-tests.yml` — **manual dispatch** (Actions tab) or add the **`frontend-tests` label** to a PR |
+| CI | `.github/workflows/frontend-unit-tests.yml` — **automatically** on a PR whose diff touches `src/frontend/**` (skillars-deferred-129 AC2), or on **manual dispatch** (Actions tab), or by force-adding the **`frontend-tests` label** |
 
-The CI job is never a required status check and is not referenced by `ci.yml` / `pr-build.yml`.
-Apply the `frontend-tests` label to a PR when a change actually touches frontend logic and you
-want the suite to gate your own review.
+The CI job is never a required status check and is not referenced by `ci.yml` / `pr-build.yml` —
+this is unchanged by the auto-detection below (skillars-deferred-129 AC2 only widens *when* the
+job fires automatically, not what blocks a merge). A red frontend suite still does not block a
+merge either way.
 
-### Adding the `frontend-tests` label to a PR
+### Auto-detection (skillars-deferred-129 AC2)
+
+A preliminary `detect-frontend-changes` job computes a three-dot/merge-base `git diff` between the
+PR's base and head SHAs (`.github/scripts/detect-frontend-changes.sh`) and feeds its result into
+`frontend-unit`'s own trigger condition — a PR that touches `src/frontend/**` gets the suite run
+automatically, with no label needed. This closes the gap the manual-label-only design left open: a
+PR that changes frontend logic but whose author forgets the label used to merge green with the
+suite never having run at all.
+
+The detector only runs (and only matters) on `pull_request` events — `workflow_dispatch` has no PR
+diff to compute against and keeps triggering the suite unconditionally, exactly as before.
+
+### The `frontend-tests` label is now a manual override, not the only trigger
+
+Add it to **force a run even when the diff wouldn't auto-trigger one** — for example, a change
+that exercises frontend behavior indirectly (a shared contract, a generated OpenAPI client) without
+touching any file under `src/frontend/`. The instructions below for applying it are unchanged.
 
 The label name the workflow checks is exactly **`frontend-tests`** (lowercase, hyphenated).
 "Frontend Unit Tests" is the *workflow* name shown in the Actions tab, not the label. The

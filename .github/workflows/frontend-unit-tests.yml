@@ -8,15 +8,27 @@
 #
 # It runs only:
 #   1. on manual dispatch (Actions tab → "Frontend Unit Tests" → Run workflow); or
-#   2. on a pull request that carries the `frontend-tests` label (add it when a change
-#      actually touches frontend logic).
+#   2. on a pull request that carries the `frontend-tests` label (a manual override — add it to
+#      force a run even when the diff below wouldn't auto-trigger one); or
+#   3. (skillars-deferred-129 AC2) on a pull request whose diff touches src/frontend/** — computed
+#      by the detect-frontend-changes job below via a hand-rolled `git diff` script
+#      (.github/scripts/detect-frontend-changes.sh), this project's own established convention for
+#      custom CI logic (see assert-context-count.sh / container-sampler.sh) rather than a pinned
+#      third-party diff action. This closes the human-memory dependency case #2 alone previously
+#      left open — deferred-work.md:2049-2061 — without promoting this job to an unconditional
+#      required check (owner decision, skillars-deferred-129: an unconditional run would cost this
+#      job's own ~10-minute two-leg matrix budget on every PR regardless of whether frontend was
+#      touched).
 #
 # `pull_request: types: [labeled, …]` fires the workflow on every label add; the job-level
-# `if` is what keeps it a no-op unless the label is `frontend-tests`. `synchronize` /
-# `reopened` keep an already-labelled PR's result fresh on new pushes. `opened`
-# (skillars-deferred-109 AC13) lets `gh pr create --label frontend-tests` fire the job in ONE
-# step — the job-level `if` still gates on the label, so this stays opt-in and non-gating; it does
-# NOT make the job a required check (owner decisions D2/D6 unchanged).
+# `if` is what keeps it a no-op unless the label is `frontend-tests` OR the diff auto-detector
+# says so. `synchronize` / `reopened` keep an already-triggered PR's result fresh on new pushes.
+# `opened` (skillars-deferred-109 AC13) lets `gh pr create --label frontend-tests` fire the job in
+# ONE step — the job-level `if` still gates on the label/detector, so this stays opt-in and
+# non-gating; it does NOT make the job a required check (owner decisions D2/D6 unchanged — see
+# skillars-deferred-129 AC2 Task 5: this job is still not referenced by ci.yml/pr-build.yml and is
+# still not a required status check; a red frontend suite still does not block a merge — this AC
+# only widens WHEN the job fires automatically, not what blocks a merge).
 #
 # skillars-deferred-109 code review: an earlier revision of this comment claimed GitHub reads this
 # file from the BASE ref for `pull_request` events, so the `opened` trigger would only take effect
@@ -46,11 +58,59 @@ on:
 permissions:
   contents: read
 
+# skillars-deferred-129 AC2 (L5): without this, every push to a frontend-touching PR (now
+# auto-triggered, not only label-driven) queues a fresh ~10-minute two-leg run with no
+# cancellation of the previous one, undercutting this AC's own CI-minutes rationale. Falls back to
+# github.run_id on workflow_dispatch (no pull_request.number exists there), so each manual-dispatch
+# run still gets its own group and is never cancelled by an unrelated one. Known, accepted residual
+# (not engineered around by this AC): the workflow's own `types: [opened, labeled, synchronize,
+# reopened]` trigger means adding ANY unrelated label to a frontend-touching PR also fires a full
+# run today (pre-existing, not introduced here) — this group mitigates the cost via cancellation of
+# the superseded run, it does not eliminate the extra run.
+concurrency:
+  group: frontend-unit-tests-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
+  # skillars-deferred-129 AC2: computes whether this PR's diff touches src/frontend/** — see
+  # .github/scripts/detect-frontend-changes.sh for the diff mechanics (three-dot/merge-base, not
+  # two-dot) and story-review.md M7/M8 for why this must be a separate job, not a step inside
+  # frontend-unit itself: a job-level `if:` is evaluated before that job's own steps run and cannot
+  # reference another step's output from within the SAME job — only a separate job's `outputs:`,
+  # consumed via `needs:`, can feed frontend-unit's own `if:` condition below.
+  detect-frontend-changes:
+    # M8.2: workflow_dispatch has no PR payload (github.event.pull_request.*.sha are empty on that
+    # event) — this job is meaningless there, and frontend-unit's own `if:` below already triggers
+    # unconditionally on workflow_dispatch via its first OR clause regardless of what this job
+    # reports (a skipped job's output is simply empty, which compares false, not an error).
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, not the default shallow single-commit checkout — the merge-base diff in
+          # detect-frontend-changes.sh needs both SHAs' common ancestor resolvable locally.
+          fetch-depth: 0
+
+      - name: Detect changed frontend paths
+        id: diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: .github/scripts/detect-frontend-changes.sh "$BASE_SHA" "$HEAD_SHA"
+
   frontend-unit:
+    needs: detect-frontend-changes
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'frontend-tests')
+      contains(github.event.pull_request.labels.*.name, 'frontend-tests') ||
+      needs.detect-frontend-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

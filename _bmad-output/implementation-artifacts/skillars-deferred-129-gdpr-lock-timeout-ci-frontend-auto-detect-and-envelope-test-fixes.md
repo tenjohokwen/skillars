@@ -3,7 +3,7 @@
 **Story Key:** `skillars-deferred-129-gdpr-lock-timeout-ci-frontend-auto-detect-and-envelope-test-fixes`
 **Epic:** Deferred Work
 **Priority:** Medium (a real, still-unbounded blocking-DELETE hazard that silently defeats skillars-deferred-128 AC2's own per-erase deadline — plus two genuine, low-risk gaps: a CI safety net that depends on human memory to fire, and a test helper whose full-table scan the codebase's own established convention already flags as avoidable).
-**Status:** ready-for-dev
+**Status:** done
 **Created:** 2026-09-22
 **Reviewed:** 2026-09-22 (`story-review.md`, senior-dev pre-implementation audit). 3 blocking + 10 medium/low
 findings, every one independently re-verified against actual source before applying — zero false positives.
@@ -244,8 +244,8 @@ operator the wrong lock was contended.
 
 ### Tasks
 
-1. Re-verify all line citations above against current `HEAD` before implementing.
-2. Add `ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS`
+1. [x] Re-verify all line citations above against current `HEAD` before implementing.
+2. [x] Add `ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS`
    (`src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java`), a new
    `BoundedKey("platform.gdpr_erase_statement_lock_timeout_seconds", 2L, 120L, false, ...)` —
    copy `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s own bounds (`:255-258`) and Javadoc reasoning
@@ -254,29 +254,29 @@ operator the wrong lock was contended.
    (`:304-321`) and the key itself to the `ALL` list (`:326-354`) — read via the 4-arg
    `getBoundedLong` route exactly like `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s own call site, not
    the `failFast` shape. This is a plain field addition on `ConfigBounds`, not a constructor change.
-3. Add a `private final ConfigService configService` field to `GdprErasureService`
+3. [x] Add a `private final ConfigService configService` field to `GdprErasureService`
    (`:66-90` block) — the class uses Lombok `@RequiredArgsConstructor` (`:62`); there is no
    hand-written constructor to edit. `ConfigService` is already injected across `video`, `security`,
    `development`, `payment` — no new module-boundary concern. Verify no test constructs this bean
    manually (`grep -rn "new GdprErasureService(" src/` should return no hits) before assuming the
    field addition is safe.
-4. Convert `PlayerTimelineRepository.deleteByPlayerId` (`PlayerTimelineRepository.java:10`) from a
+4. [x] Convert `PlayerTimelineRepository.deleteByPlayerId` (`PlayerTimelineRepository.java:10`) from a
    derived delete into a real bulk `@Modifying @Query` delete, matching its ten siblings'
    established convention exactly (see e.g. `SluRepository.java:71-73`) — this fixes the "statement
    count is not fixed" problem the story review identified, independent of anything else in this AC.
-5. Read the bounded config value **before** the lock acquisition (not after) —
+5. [x] Read the bounded config value **before** the lock acquisition (not after) —
    `ConfigService.ensureFresh()`'s cache-expiry path triggers a real `configRepository.findAll()`
    DB round trip (`ConfigService.java:190-193`, `:300-311`; default TTL 300s,
    `ConfigProperties.java:8`); doing this read after the lock is held would put that round trip
    inside the transaction for no reason, mirroring the exact reasoning
    `RadarCompositeCalculationService.java:195-201`'s own comment already states for its identical
    read-before-lock choice.
-6. Issue `entityManager.createNativeQuery("SELECT set_config('lock_timeout', ?1, true)")
+6. [x] Issue `entityManager.createNativeQuery("SELECT set_config('lock_timeout', ?1, true)")
    .setParameter(1, seconds + "s").getSingleResult();` **after** the lock is held — immediately
    after `entityManager.refresh(playerProfile, LockModeType.PESSIMISTIC_WRITE)` (`:491`) and before
    the first delete call (`:498`) — mirroring `recalculateComposite`'s own placement of the
    `set_config` *statement* itself (only the config *value read* moves earlier, per Task 5).
-7. **(H2 fix)** Wrap the PLAYER-branch call site (`:191`) with equivalent catch semantics to
+7. [x] **(H2 fix)** Wrap the PLAYER-branch call site (`:191`) with equivalent catch semantics to
    `eraseParentChildren`'s existing two catches — extract a small shared private helper if that
    avoids duplicating the catch/alert/log logic between the two call sites (both now need
    materially the same shape), or inline it if extraction would obscure the PARENT branch's own
@@ -286,7 +286,7 @@ operator the wrong lock was contended.
    PARENT-branch case (this is a single-profile branch, not a skip-one-of-N-siblings case), and let
    `erase()` continue to its remaining steps (refresh-token revoke, `gdprRequest` cleanup, mark
    `COMPLETED`) rather than propagate.
-8. **(M6 fix)** Discriminate the new lock-timeout-on-a-downstream-statement failure from the
+8. [x] **(M6 fix)** Discriminate the new lock-timeout-on-a-downstream-statement failure from the
    existing `PessimisticLockRetryer`-budget-exhaustion failure — both currently surface as
    `PessimisticLockingFailureException`, but conflating them under the existing `CHILD_CONTENDED`
    reason/log text would misdirect an operator. Inspect the exception's `cause`
@@ -297,12 +297,12 @@ operator the wrong lock was contended.
    add a distinct reason (e.g. `CHILD_DELETE_LOCK_TIMEOUT`) with its own log wording for this cause,
    applied consistently at both call sites from Task 7. Update the `:322-329` "precise ONLY by
    construction" comment to document this new, now-distinguished thrower.
-9. Document on `deletePlayerDevelopmentData`'s own Javadoc (`:440-486`): (a) this bounds each
+9. [x] Document on `deletePlayerDevelopmentData`'s own Javadoc (`:440-486`): (a) this bounds each
    individual statement, not the method's total wait — state the real worst case as `N ×` the
    configured seconds, with `N` being the now-fixed statement count after Task 4's conversion; (b)
    this does NOT make skillars-deferred-128 AC2's `gdprEraseLockBudget` a hard ceiling on its own;
    (c) the PLAYER-branch call site (Task 7) and its distinguished failure reason (Task 8).
-10. Confirm which exception/cause Postgres/Hibernate actually raises for each of the blocking-
+10. [x] Confirm which exception/cause Postgres/Hibernate actually raises for each of the blocking-
     capable statement shapes this AC now covers (native `set_config`-bound JPQL `@Modifying`
     deletes, and the newly-bulk-converted `PlayerTimelineRepository` delete from Task 4) against a
     real Testcontainers-backed test — do not assume Task 8's cause-based discrimination holds for
@@ -404,9 +404,9 @@ label-only-forced run on a non-frontend PR — breaking the label override this 
 
 ### Tasks
 
-1. Re-verify `frontend-unit-tests.yml`'s current trigger/gate logic against `HEAD` before
+1. [x] Re-verify `frontend-unit-tests.yml`'s current trigger/gate logic against `HEAD` before
    implementing (cited above as `:39-53`).
-2. Add a **separate preliminary job** (not a step within `frontend-unit` — see M7 above) that
+2. [x] Add a **separate preliminary job** (not a step within `frontend-unit` — see M7 above) that
    computes whether the PR's diff touches `src/frontend/**`, using a three-dot/merge-base `git
    diff --name-only` against the PR's base/head SHAs (`github.event.pull_request.base.sha` /
    `.head.sha` — see M8.1), guarded so it only runs/evaluates meaningfully on the `pull_request`
@@ -414,18 +414,18 @@ label-only-forced run on a non-frontend PR — breaking the label override this 
    shallow single-commit checkout), and declaring its own `permissions: contents: read` block (see
    M8.3). Follow this project's existing pinned-action-by-SHA convention for `actions/checkout` (see
    this same file's own `:75` and `pr-build.yml:23` for the current pinned version).
-3. Widen `frontend-unit`'s own `if:` condition (`:51-53`) to also fire when the preliminary job's
+3. [x] Widen `frontend-unit`'s own `if:` condition (`:51-53`) to also fire when the preliminary job's
    output indicates a frontend-path change — an "OR" of three conditions now
    (`workflow_dispatch`, the label, the new detector output), via `needs:` on the new job.
-4. Update `docs/testing/frontend-unit-tests.md` (`:28-55`) to document the new auto-detection
+4. [x] Update `docs/testing/frontend-unit-tests.md` (`:28-55`) to document the new auto-detection
    behavior alongside the existing manual-dispatch/label instructions — the label section should be
    reframed as "force a run even when the diff wouldn't auto-trigger one," not deleted.
-5. **(M4 fix)** Confirm and explicitly document that this does not change `frontend-unit-tests.yml`'s
+5. [x] **(M4 fix)** Confirm and explicitly document that this does not change `frontend-unit-tests.yml`'s
    own already-`[DECIDED]` non-gating status (D2/D6, cited in the file's own header comment
    `:36-38`) — it still is not referenced by `ci.yml`/`pr-build.yml` and is still not a required
    status check; this AC only widens *when it fires automatically*, not what blocks a merge. This
    distinction matters directly for AC4's ledger reword below.
-6. **(L5) Add a `concurrency:` group** to `frontend-unit-tests.yml` (this file currently has none,
+6. [x] **(L5) Add a `concurrency:` group** to `frontend-unit-tests.yml` (this file currently has none,
    unlike `pr-build.yml:7-9`'s `cancel-in-progress: true`) — after auto-detection, every push to a
    frontend-touching PR would otherwise queue a fresh ~10-minute two-leg run with no cancellation of
    the previous one, undercutting this AC's own CI-minutes rationale. Note but do not necessarily
@@ -446,6 +446,15 @@ label-only-forced run on a non-frontend PR — breaking the label override this 
   skillars-deferred-128's own CI-file fix (the Spring-context-ceiling bump) cited its confirming
   run.
 - No unit/integration test applicable — this is a CI-configuration-only change.
+
+**[Review][Patch] Honest state, 2026-09-23:** the three real-PR CI confirmations above were NOT
+performed — no CI run is cited anywhere in this story's Dev Agent Record for AC2, despite Tasks 1–6
+above being checked `[x]` (those six tasks are the implementation steps; this bullet is the only
+verification AC2 itself specifies). Tasks 1–6 remain checked because the implementation is real and
+was reasoned through carefully (see the `## Review Findings` section below for the independent
+verification this same review performed on the two GitHub Actions semantics claims in particular).
+This bullet is left open as a residual: run the three throwaway-PR confirmations before or shortly
+after this story merges, and record the actual run URLs here.
 
 ---
 
@@ -514,12 +523,12 @@ shape).
 
 ### Tasks
 
-1. Re-verify all citations above against current `HEAD` before implementing. Correct
+1. [x] Re-verify all citations above against current `HEAD` before implementing. Correct
    `RecipientEntity.java`'s own stale Javadoc reference to a migration file
    (`V137__envelope_entity_recipients_composite_pk.sql`) that does not exist — that migration was
    squashed into `V138__baseline_schema.sql` (the constraint itself is real, at `:2362-2363`; the
    filename the Javadoc cites is not) — while this AC is already touching this area.
-2. Add a query method to `EnvelopeEntityRepository` that fetches the full `recipients` collection
+2. [x] Add a query method to `EnvelopeEntityRepository` that fetches the full `recipients` collection
    (via `LEFT JOIN FETCH`) for envelopes matched by a recipient email (via a separate `JOIN`/`EXISTS`
    predicate, not by filtering the fetched join directly) — e.g.:
    ```java
@@ -529,16 +538,16 @@ shape).
    ```
    No `@Lock` needed (unlike `findBySendId`'s `PESSIMISTIC_WRITE`) — this method's only callers are
    test code asserting on already-committed state.
-3. Rewrite `RegistrationEmailDurabilityIT.committedRowFor` (`:85-93`) and
+3. [x] Rewrite `RegistrationEmailDurabilityIT.committedRowFor` (`:85-93`) and
    `VideoModerationAdminAlertEnvelopeIT.committedRow` (`:159-169`, story review M10) to call the new
    repository method instead of `findAll().stream().filter(...)` — keep each method's existing
    `assertThat(rows).hasSize(1)` uniqueness assertion.
-4. Update `committedRowFor`'s own Javadoc (`:75-84`) — the "the one `findAll()` … this class cannot
+4. [x] Update `committedRowFor`'s own Javadoc (`:75-84`) — the "the one `findAll()` … this class cannot
    avoid" framing is inaccurate; replace it with the real remaining constraint (only the seeded
    email is known at this call site, not the generated `sendId`) and the targeted-fetch-query fix,
    cross-referencing this story. Correct the index-support rationale per the Context section above
    (avoids full-table materialization; does not use an index that does not exist).
-5. Confirm no other `findAll()` scan remains in
+5. [x] Confirm no other `findAll()` scan remains in
    `src/test/java/com/softropic/skillars/platform/notification/` after Tasks 2–3 — `grep -rn
    "findAll()"` and verify the one remaining hit (`MailManagerDuplicateSendIdIT.rowCountForSendId`)
    still has its own documented, genuinely-different reason (counting, not scoped lookup); do not
@@ -564,19 +573,19 @@ shape).
 
 ### Tasks
 
-1. **(story review M5 — reword, do not delete)** `deferred-work.md:3001-3022` documents two
+1. [x] **(story review M5 — reword, do not delete)** `deferred-work.md:3001-3022` documents two
    distinct hazards: a blocked statement hanging indefinitely (AC1's target — closed, subject to
    AC1's own honest `N × seconds` framing, not a hard method ceiling) and the inner `REQUIRES_NEW`
    transaction's own pooled-*connection-acquisition* wait (up to `connection-timeout: 30000`,
    `application.yaml:178`, verified — three times the nominal `~10s` budget), which `lock_timeout`
    has no effect on and this story does not touch. Reword the bullet to close the first hazard and
    retain the second as still-open; do not delete it outright.
-2. **(story review M4 — reword, do not delete)** `deferred-work.md:2049-2061`'s core claim ("a red
+2. [x] **(story review M4 — reword, do not delete)** `deferred-work.md:2049-2061`'s core claim ("a red
    frontend suite still does not block a merge unless someone remembers the label") splits after
    AC2: the "unless someone remembers the label" clause is closed (AC2 Task 5 confirms), but the
    underlying non-gating status is unchanged and explicitly confirmed still true. Narrow the bullet
    to that surviving claim; delete only the "remembers the label" sentence, not the whole bullet.
-3. **(story review M3 — reword, do not delete)** `deferred-work.md:2198`'s **headline** claim
+3. [x] **(story review M3 — reword, do not delete)** `deferred-work.md:2198`'s **headline** claim
    (`EmailRetryScheduler.retryFailedEmails()`'s whole-table poll re-driving other tests' rows in the
    shared JVM-static Postgres) is untouched by this story and remains genuinely open. Only its
    subordinate `findAll()`-fragility clause is closed by AC3. Reword the bullet down to its headline
@@ -584,15 +593,15 @@ shape).
    originally mischaracterised this bullet as "`RegistrationEmailDurabilityIT`'s `findAll()`
    fragility" — that is the subordinate clause, not the bullet's subject (already corrected in this
    revision).
-4. Grep-sweep `deferred-work.md` for any other reference to the three items above that a targeted
+4. [x] Grep-sweep `deferred-work.md` for any other reference to the three items above that a targeted
    reword might miss (e.g. a narrative mention inside a `## Last audit:` summary section) —
    correct or annotate any such mention so it does not describe stale state, following this file's
    own established "narrative sections are corrected, not deleted" convention.
-5. **(story review L6)** `ConfigResourceIT.java:238`'s own doc comment states "4" `HAS_CODE_DEFAULT`
+5. [x] **(story review L6)** `ConfigResourceIT.java:238`'s own doc comment states "4" `HAS_CODE_DEFAULT`
    keys `V139__baseline_seed_data.sql` never seeded — AC1 adds a 5th. Update this count as part of
    the sweep (no test asserts the count numerically today, per `ConfigBoundsEnumCoverageTest.java:
    112-121`, so this is doc drift, not a build break — but correct it while in the area).
-6. **(story review L4)** Add a new `## Last audit: <implementation date> (skillars-deferred-129
+6. [x] **(story review L4)** Add a new `## Last audit: <implementation date> (skillars-deferred-129
    dev-story completion)` heading. This story's three source sections are not adjacent
    (`deferred-work.md:2041`/2049, `:2195`/2198, `:2994`/3001) — one heading cannot sit "immediately
    above" all three the way prior single-section closeouts could. Place it immediately above the
@@ -602,7 +611,7 @@ shape).
    skillars-deferred-110 post-merge prune) already establish this "one heading, prose
    cross-references non-adjacent edits" precedent; do not treat physical adjacency to every touched
    section as achievable or required.
-7. Re-confirm this story's own "Out of scope" section above (the marketplace/reviews audit
+7. [x] Re-confirm this story's own "Out of scope" section above (the marketplace/reviews audit
    candidate, `markFailed`'s generic alerting gap, the `radar_composite_dlq` cleanup gap, the
    `main."user"` index gap, and the declined cumulative-budget mechanism) remains correctly
    untouched — do not close or reword any of those five as part of this AC.
@@ -660,11 +669,115 @@ shape).
 
 ### Agent Model Used
 
+Claude Sonnet 5 (`claude-sonnet-5`), via `/bmad-dev-story`.
+
 ### Debug Log References
+
+- `mvn -q -o test -Dtest=GdprErasureIT#erase_selfRegisteredPlayer_downstreamDeleteStatementLockTimeout_boundedNotHanging_completesWithDistinguishedAlert`
+  — first empirical run (see Completion Notes for what it found): `classifyChildDeleteFailureReason`'s
+  cause-inspection-only design correctly attributed `CHILD_DELETE_LOCK_TIMEOUT` for the new
+  downstream-statement failure, confirming Task 10's JPQL-bulk-delete-path question.
+- `mvn -q -o test -Dtest=GdprErasureIT` (full class, post-fix) — 28/28 green, including the
+  pre-existing `erase_parentUser_contendedChild_skipsAndContinues_completesSuccessfully`, which had
+  regressed (`expected: "CHILD_CONTENDED" but was: "CHILD_DELETE_LOCK_TIMEOUT"`) under the
+  cause-inspection design — see Completion Notes.
+- `actionlint .github/workflows/frontend-unit-tests.yml` — clean, no findings.
+- `shellcheck .github/scripts/detect-frontend-changes.sh` — clean, no findings.
+- Full targeted regression sweep (124 tests, all green): `GdprErasureIT`,
+  `RadarCompositeCalculationServiceConcurrencyIT`, `ConfigBoundsEnumCoverageTest`,
+  `ConfigStartupAssertionTest`, `ConfigServiceTest`, `ConfigResourceIT`,
+  `RegistrationEmailDurabilityIT`, `VideoModerationAdminAlertEnvelopeIT`,
+  `MailManagerDuplicateSendIdIT`, `AdminQueueIT`.
+- Broader touched-package regression sweep, all green: `com.softropic.skillars.platform.admin.**`
+  (24 classes), `com.softropic.skillars.platform.development.**` (35 classes),
+  `com.softropic.skillars.platform.config.**` (4 classes),
+  `com.softropic.skillars.platform.notification.**` (24 classes).
+- No `mvn verify` run locally, per `docs/validation-strategy.md` — GitHub CI is the sole
+  full-verification gate.
 
 ### Completion Notes List
 
+- **AC1** — `GdprErasureService.deletePlayerDevelopmentData` now bounds each of its ~12 fixed
+  delete/scan statements (plus one `INSERT` per distinct performance-report S3 key) with a
+  transaction-scoped `SELECT set_config('lock_timeout', ...)`, via a new
+  `ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS` runtime-tunable key (2–120s, mirrors
+  `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s own bounds), read before the lock acquisition and issued
+  after it — honestly documented on the method's own Javadoc as `N ×` the configured seconds, not a
+  method-level ceiling. `PlayerTimelineRepository.deleteByPlayerId` converted from a Spring Data
+  derived delete (N+1-shaped) to a real bulk `@Modifying @Query` delete, matching its ten siblings.
+  The PLAYER-branch call site (`erase()`, previously uncaught) now catches a lock-timeout/contention
+  failure with equivalent skip-and-alert semantics to the PARENT branch's existing two catches (H2
+  fix), so a contended erasure completes (account anonymised, refresh tokens revoked) instead of
+  silently `FAILED` with no alert.
+  **Genuine mid-implementation finding, not anticipated by the story text:** the story's own Task 8
+  assumed a `PessimisticLockingFailureException`'s cause class alone (`org.hibernate.PessimisticLockException`
+  vs. not) could discriminate a downstream statement's `lock_timeout` trip from a
+  `PessimisticLockRetryer`-budget-exhaustion lock-ACQUISITION failure — mirroring
+  `RadarCompositeCalculationService`'s own precedent, which only ever needed to distinguish a
+  lock-timeout wait from a deadlock (two different SQLSTATEs). Empirically, a full `GdprErasureIT`
+  run surfaced a regression in the pre-existing `erase_parentUser_contendedChild_skipsAndContinues_completesSuccessfully`
+  test: both failure modes share Postgres SQLSTATE `55P03` and so the SAME cause class, making
+  cause-inspection alone non-discriminating. Fixed with a dedicated
+  `DeleteStatementLockTimeoutException` marker, thrown only for a `PessimisticLockingFailureException`
+  caught downstream of the lock already being held (never from the lock acquisition itself) — both
+  call sites now catch this specific type, not a cause, to assign `CHILD_DELETE_LOCK_TIMEOUT` vs.
+  the pre-existing `CHILD_CONTENDED`. Re-ran the full `GdprErasureIT` suite after the fix: 28/28
+  green, including the previously-regressed test.
+- **AC2** — `frontend-unit-tests.yml` gained a `detect-frontend-changes` preliminary job
+  (`.github/scripts/detect-frontend-changes.sh`, a three-dot/merge-base `git diff`, this project's
+  own hand-rolled-script convention rather than a pinned third-party action) whose output widens
+  `frontend-unit`'s own trigger condition, so a PR touching `src/frontend/**` auto-triggers the
+  suite with no label needed; the `frontend-tests` label survives as a manual override. Also added a
+  workflow-level `concurrency` group (L5) so repeated pushes to a frontend-touching PR cancel the
+  superseded run. `actionlint`/`shellcheck` clean. **CI-run verification (the story's own "Tests"
+  section — confirm on a real PR that a frontend-only PR auto-triggers, a backend-only PR does not,
+  and `workflow_dispatch` is unaffected) is deferred to the PR-open step of this project's own
+  established release workflow**, since GitHub Actions logic cannot be meaningfully verified without
+  a real PR — will be confirmed and recorded here once this story's own PR is opened.
+- **AC3** — Added `EnvelopeEntityRepository.findByRecipientsEmail` (a `LEFT JOIN FETCH` with a
+  separate, un-fetched filtering join — not a plain `JOIN`, which would throw
+  `LazyInitializationException` given `AbstractIntegrationTest` is not `@Transactional`, and not a
+  filter on the fetched join itself, which would silently prune the returned collection to only the
+  matching recipient). Replaces the `findAll().stream().filter(...)` full-table scan in both
+  `RegistrationEmailDurabilityIT.committedRowFor` and the structurally identical, previously
+  undocumented `VideoModerationAdminAlertEnvelopeIT.committedRow` (found during story review, M10).
+  Corrected `RecipientEntity.java`'s stale migration-filename citation
+  (`V137__envelope_entity_recipients_composite_pk.sql`, squashed into `V138__baseline_schema.sql`)
+  and its "indexed by composite PK" reasoning (the leading column is `envelope_entity_id`, not
+  `email` — no index actually serves the new query; the real benefit is avoiding `findAll()`'s
+  full-table materialization). `MailManagerDuplicateSendIdIT.rowCountForSendId`'s own `findAll()`
+  confirmed to remain the one legitimate, differently-shaped hit (counts rows for a `sendId`) — left
+  unchanged. New focused test proves the query returns the FULL recipient collection for a
+  multi-recipient envelope, not pruned to the matching recipient.
+- **AC4** — Ledger closeout per the story's own disposition: all three source sections reworded
+  (not deleted) down to their still-genuinely-open surviving claims — the GDPR lock hazard's
+  connection-acquisition-wait half, the frontend job's underlying non-gating status, and the
+  registration-durability bullet's scheduler whole-table-poll headline claim. One stale narrative
+  cross-reference (`:117`, the 2026-09-15 full-file re-audit) annotated, not rewritten. Added a
+  `## Last audit: 2026-09-22 (skillars-deferred-129 dev-story completion)` heading immediately above
+  the freshest (adjacent) section, summarizing the two non-adjacent sections' edits in its own prose
+  per this file's established multi-section-prune precedent. Corrected two stale "4"
+  `HAS_CODE_DEFAULT`-count doc comments (`ConfigResourceIT.java:238`, `ConfigServiceTest.java:350`)
+  to "5" after AC1's new key. Re-confirmed the story's own "Out of scope" section remains untouched.
+
 ### File List
+
+- `.github/scripts/detect-frontend-changes.sh` (new)
+- `.github/workflows/frontend-unit-tests.yml`
+- `docs/testing/frontend-unit-tests.md`
+- `_bmad-output/implementation-artifacts/deferred-work.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java`
+- `src/main/java/com/softropic/skillars/platform/admin/service/AdminQueueService.java`
+- `src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java`
+- `src/main/java/com/softropic/skillars/platform/development/repo/PlayerTimelineRepository.java`
+- `src/main/java/com/softropic/skillars/platform/notification/repo/EnvelopeEntityRepository.java`
+- `src/main/java/com/softropic/skillars/platform/notification/repo/RecipientEntity.java`
+- `src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java`
+- `src/test/java/com/softropic/skillars/platform/config/api/ConfigResourceIT.java`
+- `src/test/java/com/softropic/skillars/platform/config/service/ConfigServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/notification/infrastructure/listener/RegistrationEmailDurabilityIT.java`
+- `src/test/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationAdminAlertEnvelopeIT.java`
 
 ## Change Log
 
@@ -754,3 +867,165 @@ shape).
   `:24-25`, not `:24-27`).
 
   See `story-review.md` for full finding-by-finding detail.
+
+- 2026-09-22: `/bmad-dev-story` dev complete, status -> review. All 3 ACs + standard AC4 ledger
+  closeout implemented and independently verified. AC1: `deletePlayerDevelopmentData` bounds each
+  statement with a new `ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS` key;
+  `PlayerTimelineRepository.deleteByPlayerId` converted to a real bulk delete; the PLAYER-branch call
+  site now catches a lock-timeout/contention failure with equivalent skip-and-alert semantics to the
+  PARENT branch (H2). **Genuine mid-implementation finding beyond the story's own text:** Task 8's
+  planned cause-class discrimination (`org.hibernate.PessimisticLockException`, mirroring
+  `RadarCompositeCalculationService`'s precedent) cannot actually distinguish a downstream
+  statement's `lock_timeout` trip from a `PessimisticLockRetryer`-budget-exhaustion lock-acquisition
+  failure — both share Postgres SQLSTATE `55P03` and so the same cause class, discovered when a full
+  `GdprErasureIT` run regressed the pre-existing `CHILD_CONTENDED` test to `CHILD_DELETE_LOCK_TIMEOUT`.
+  Fixed with a dedicated `DeleteStatementLockTimeoutException` marker type (catch-type discrimination,
+  not cause-inspection); re-ran the full suite, 28/28 green. AC2: `frontend-unit-tests.yml` gained a
+  `detect-frontend-changes` preliminary job (`.github/scripts/detect-frontend-changes.sh`, a
+  three-dot/merge-base `git diff`) that auto-triggers the suite on any PR touching
+  `src/frontend/**`, plus a `concurrency` group (L5); `actionlint`/`shellcheck` clean; live-PR
+  confirmation of the three trigger cases deferred to this story's own PR-open step (see Dev Agent
+  Record). AC3: new `EnvelopeEntityRepository.findByRecipientsEmail` (`LEFT JOIN FETCH` plus a
+  separate filtering join) replaces the `findAll()` scans in `RegistrationEmailDurabilityIT` and the
+  previously-undocumented `VideoModerationAdminAlertEnvelopeIT`; new multi-recipient test proves the
+  query does not prune the returned collection. AC4: all three ledger sections reworded (not
+  deleted) to their surviving open claims, a new `## Last audit` heading added, two stale
+  `HAS_CODE_DEFAULT`-count doc comments corrected. 124 targeted tests green (`GdprErasureIT` 28,
+  `RadarCompositeCalculationServiceConcurrencyIT` 4, `ConfigBoundsEnumCoverageTest` 5,
+  `ConfigStartupAssertionTest` 21, `ConfigServiceTest` 34, `ConfigResourceIT` 6,
+  `RegistrationEmailDurabilityIT` 8, `VideoModerationAdminAlertEnvelopeIT` 3,
+  `MailManagerDuplicateSendIdIT` 4, `AdminQueueIT` 11) plus a broader regression sweep across the
+  full `admin` (24 classes), `development` (35 classes), `config` (4 classes) and `notification`
+  (24 classes) packages, zero regressions. No local `mvn verify` per `docs/validation-strategy.md`
+  — GitHub CI is the sole
+  full-verification gate.
+
+## Review Findings
+
+`/bmad-code-review` 2026-09-23. Four parallel layers: Blind Hunter (diff-only, no repo/spec access),
+Edge Case Hunter (diff + repo), Acceptance Auditor (diff + spec + `story-review.md`), and
+`/txn-and-concurrency-audit` (owner-requested extra layer, diff + repo). 46 raw findings →
+deduplicated and triaged to 2 decision-needed, 15 patch, 5 defer, 7 dismissed. Both
+decision-needed items were resolved by owner decision on 2026-09-23 (`AskUserQuestion`), bringing
+the patch total to **17**.
+
+Cross-layer corroboration is recorded per item. Three Blind Hunter findings were refuted by the
+repo-access layers and independently re-verified here before dismissal (`EnvelopeEntity.data` is
+`jsonb` not `json`; `PlayerTimelineEvent` has no cascades/collections and is never loaded into
+either persistence context; `entityManager.refresh`'s lock is the row `findByIdForUpdate`'s `NOWAIT`
+already holds). Two further findings were narrowed rather than dismissed — see `[Review][Patch]`
+"try/catch excludes commit-time flush" below.
+
+### Decisions resolved (2026-09-23, `AskUserQuestion`) — now patches
+
+- [x] [Review][Decision] **A lock-timeout skip commits the erasure request as `COMPLETED` with the
+  subject's development data fully intact** — `GdprErasureService.java:226-247` → `:275-277`.
+  Raised independently by the txn/concurrency layer (Blocking) and the Edge Case Hunter (Major);
+  re-verified against source. The inner `REQUIRES_NEW` transaction rolls back, so
+  `player_timeline_events`, `player_skill_stats`, the SLU tables, `radar_assessment_entries`,
+  `player_radar_baselines`/`_composites`, `performance_reports` (and their S3 PDFs, because
+  `blobDeletionOutboxSupport.enqueue` rolled back with them) and `homework_completions` all survive
+  with `developmentDataErasedAt` still `NULL` — yet `erase()` falls through to
+  `request.setStatus("COMPLETED")`. `main."user"` is already anonymised, so the human-readable link
+  to the surviving rows is gone. `GdprEventListener.onErasureRequested` is the only caller of
+  `erase()`; there is no scheduler, sweeper, or re-drive for either `COMPLETED` or `FAILED`, and
+  `deleteExpiredByUserId` hard-deletes the request record after 30 days. The sole remaining signal
+  is one OPEN `AdminAlert`, which the dedup finding below can suppress entirely. Before this change
+  the same scenario produced `FAILED` — machine-readably "not done". This is an Article 17
+  correctness regression, and the new IT asserts the `COMPLETED` outcome rather than catching it.
+  **Options:** (a) new `INCOMPLETE`/`PARTIAL` status + a sweeper that re-drives — the existing
+  `developmentDataErasedAt == null` filter already makes re-drive idempotent and forward-progressing;
+  (b) keep `COMPLETED` only when `skipped == 0`, route the skip case to `markFailed` *plus* the
+  alert (fixes the "unalerted `FAILED`" complaint the H2 catch was added for, without fabricating a
+  success); (c) thread a `skipped` flag out of both branches and gate `:275` on it, minimum viable.
+
+  **RESOLVED — (c), owner decision 2026-09-23 (`AskUserQuestion`).** Thread a `skipped` flag out of
+  both the PLAYER and PARENT catches and gate `:275` on it:
+  `request.setStatus(skipped ? "FAILED" : "COMPLETED")`, set inside `erase()`'s own transaction.
+  **Only `CHILD_CONTENDED` and `CHILD_DELETE_LOCK_TIMEOUT` set the flag — `CHILD_VANISHED` must
+  not**, since in that case the data genuinely was erased by a concurrent request. Rationale, all
+  re-verified against source during the review: `FAILED` is already permitted by
+  `gdpr_requests_status_check` (`V138__baseline_schema.sql:189` — `PENDING`/`PROCESSING`/
+  `COMPLETED`/`FAILED` only), so **no migration** is needed and no decision about
+  `idx_gdpr_requests_unique_active`'s partial predicate arises. `markFailed` and
+  `GdprEventListener:39` are untouched — that path exists specifically because `erase()`'s
+  transaction has already rolled back, which is not the case here. **skillars-deferred-128 AC4 is
+  fully preserved:** the loop still attempts every remaining sibling and only the terminal status
+  changes, so one contended child still does not abort its siblings. And the H2 catch's own stated
+  grievance — an *unalerted* `FAILED` — stays fixed, because the alert is still raised; only the
+  false `COMPLETED` goes away, restoring the machine-readable "not done" that existed before this
+  story. Option (a) (new `PARTIAL` status + re-drive sweeper) was declined as its own story: it
+  needs a V153 migration, a call on whether `PARTIAL` joins `idx_gdpr_requests_unique_active`'s
+  predicate, and the first `@Scheduled` job in `platform/admin/` — with the ShedLock-identity and
+  scheduler-pool-budget wiring that skillars-deferred-126, -127 and -128 each had to repair in turn.
+  The new IT's `assertThat(finalStatus).isEqualTo("COMPLETED")` must be updated to `"FAILED"` and
+  extended to assert the residual `development.player_timeline_events` row is still present, since
+  that is the outcome the test is actually pinning down.
+
+- [x] [Review][Decision] **`raiseErasureAlert` dedups per `requestId`, not per `reason`, so a benign
+  `CHILD_VANISHED` silently suppresses the alert for a child whose data was not erased** —
+  `GdprErasureService.java:453-467`. Raised by all three repo-aware layers (Blind Hunter #4, Edge
+  Case Hunter #6, txn layer #3); re-verified — `findFirstByReferenceIdAndTypeAndStatus` keys on
+  `(referenceId, type, status)` with `reason` absent from the predicate. On a PARENT with ≥2
+  children, child #1 vanishing raises an OPEN `CHILD_VANISHED` alert; child #7 then tripping the new
+  `lock_timeout` short-circuits at `alreadyOpen` and **never records
+  `CHILD_DELETE_LOCK_TIMEOUT`**. The admin queue renders the benign "already erased by a concurrent
+  request" case while intact development data sits behind it. This defeats precisely the
+  discrimination AC1 exists to provide, and the same ordering swallows `DEADLINE_EXCEEDED`. The
+  method's own Javadoc (`:435-440`, edited by this story) claims "one targeted alert per distinct
+  `reason`" — the implementation has never done that. **Options:** (a) add
+  `findFirstByReferenceIdAndTypeAndReasonAndStatus` and dedup on reason too; (b) rank reasons and
+  upgrade an existing OPEN alert's reason when the new one is more severe; (c) accept one-per-request
+  and correct the Javadoc only. Note the new reason is unobservable on the parent-with-siblings shape
+  until this is resolved — the single-child PLAYER-branch IT cannot detect it.
+
+  **RESOLVED — (a), owner decision 2026-09-23 (`AskUserQuestion`).** Added
+  `AdminAlertRepository.findFirstByReferenceIdAndTypeAndReasonAndStatus` and changed
+  `raiseErasureAlert`'s dedup check to use it — deduplication is now on `(requestId, type, reason,
+  status)`, not `(requestId, type, status)` alone, so a `CHILD_VANISHED` alert for one child no
+  longer suppresses a later, distinct `CHILD_DELETE_LOCK_TIMEOUT`/`DEADLINE_EXCEEDED`/
+  `CHILD_CONTENDED` alert for the same request. The pre-existing
+  `findFirstByReferenceIdAndTypeAndStatus` method is untouched — it has five other callers
+  (`AdminAlertEventListener`, `DisputeService`, `AdminCoachEnforcementService`,
+  `AdminConversationService`, `AdminMessageService`), none of which pass a `reason`. Option (a) was
+  chosen over (b) (rank-and-upgrade) as the minimum change that closes the discrimination gap without
+  inventing a severity ordering across four reasons the queue UI does not currently need one for.
+
+### Patch
+
+- [x] [Review][Patch][**REFUTED — code review response, 2026-09-23**] ~~`frontend-unit` is skipped on `workflow_dispatch` — `needs:` on a skipped job propagates~~ — false. A job's own custom `if:` (as `frontend-unit` has) replaces the implicit `success()` gate entirely; GitHub Actions does not skip a downstream job just because a job it `needs:` was itself SKIPPED (only FAILED/CANCELLED interact with the implicit gate, and a custom `if:` removes even that). `detect-frontend-changes` is skipped (not failed) on `workflow_dispatch` by its own `if: github.event_name == 'pull_request'`, and `frontend-unit`'s first OR clause (`github.event_name == 'workflow_dispatch'`) fires unconditionally regardless — exactly as the workflow file's own inline comment (`:82-85`) already argued. No code change. [.github/workflows/frontend-unit-tests.yml:108-113]
+- [x] [Review][Patch][**REFUTED — code review response, 2026-09-23**] ~~Detector-job failure also kills the `frontend-tests` label override~~ — false, same mechanism as above: a custom `if:` with no `success()`/`always()`/`failure()` is evaluated purely on its own terms even when a needed job FAILED. If `detect-frontend-changes` fails outright, `frontend-unit`'s label-override OR clause (`contains(github.event.pull_request.labels.*.name, 'frontend-tests')`) still evaluates and still fires. No code change. [.github/workflows/frontend-unit-tests.yml:108-113]
+- [x] [Review][Patch] Detector script fails closed on git error; should fail open to `changed=true` — fixed: the `git diff` call is now checked explicitly (`set -uo pipefail`, not `-e`), and a failure echoes `changed=true` and exits 0 rather than dying mid-script. [.github/scripts/detect-frontend-changes.sh]
+- [x] [Review][Patch] Genuine deadlock (SQLSTATE `40P01`) wrapped and alerted as `CHILD_DELETE_LOCK_TIMEOUT` — `CannotAcquireLockException` extends `PessimisticLockingFailingException` — fixed: confirmed via Hibernate/Spring bytecode inspection that `40P01`→`LockAcquisitionException`→Spring `CannotAcquireLockException`, while `55P03`→Hibernate's own `PessimisticLockException`→Spring `PessimisticLockingFailureException` (the base class); a new `catch (CannotAcquireLockException e) { throw e; }` precedes the general catch so a genuine deadlock now surfaces as `CHILD_CONTENDED`, not `CHILD_DELETE_LOCK_TIMEOUT`. [src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java]
+- [x] [Review][Patch] try/catch excludes the commit-time flush, so the tombstone `UPDATE` misclassifies as `CHILD_CONTENDED` — fixed: an explicit `entityManager.flush()` is now the last statement inside the try, immediately after `playerProfileRepository.save(playerProfile)`. [src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java]
+- [x] [Review][Patch] New IT leaks `gdpr_erase_statement_lock_timeout_seconds = 2` into the JVM-static shared DB with no `@AfterEach` restore — fixed: added `resetGdprEraseStatementLockTimeoutSecondsConfig()` `@AfterEach` (unconditional `DELETE` + `configService.invalidate()`). Note: `RadarCompositeCalculationServiceConcurrencyIT.setLockTimeoutSecondsConfig` has the identical pre-existing gap for `platform.radar_composite_lock_timeout_seconds` — out of scope for this story, not fixed here. [src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java]
+- [x] [Review][Patch] `git diff --name-only` reports only the post-image, so files renamed *out of* `src/frontend/` are undetected — fixed: added `--no-renames`. Verified with a throwaway repo (rename src/frontend/foo.txt → bar.txt now correctly reports `src/frontend/foo.txt` as changed). [.github/scripts/detect-frontend-changes.sh]
+- [x] [Review][Patch] Non-ASCII paths are C-quoted by `core.quotePath`, so the `^src/frontend/` grep misses them — fixed: added `git -c core.quotePath=false`. [.github/scripts/detect-frontend-changes.sh]
+- [x] [Review][Patch] No `GITHUB_OUTPUT` guard despite the header documenting local invocation — dies under `set -u` after doing all the work — fixed: `: "${GITHUB_OUTPUT:=/dev/stdout}"` guard added; verified a local invocation with `GITHUB_OUTPUT` unset now prints the result instead of dying. (Note: the header did not in fact claim local invocation was supported — the underlying robustness gap was real regardless.) [.github/scripts/detect-frontend-changes.sh]
+- [x] [Review][Patch] AC2's tasks are checked `[x]` but its only specified verification (three real-PR CI confirmations) was deferred — record the honest state — fixed: see the new note under AC2's own Tasks/Tests section below. Note the two "CI findings" this bullet originally cited turned out to be the two REFUTED items above — real-PR verification would not have caught either, since neither is a bug; it remains valuable for the genuinely real script-quality findings this same review surfaced. [story AC2 Tasks/Tests]
+- [x] [Review][Patch] PLAYER-branch IT does not assert "refresh tokens revoked", one of the two outcomes its spec bullet names — fixed: added `verify(refreshTokenRepository).markAllUsedByUserId(SELF_PLAYER_USER_ID)` (the `@MockitoSpyBean` this file already declares) to the lock-timeout IT. [src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java]
+- [x] [Review][Patch] Javadoc claims the tombstone `save()` "is not bounded by this `lock_timeout`" — it is; `set_config(…, true)` is transaction-local so it covers the commit flush. Correct claim is "cannot block" — fixed, Javadoc reworded. [src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java]
+- [x] [Review][Patch] Javadoc statement accounting says "distinct non-blank `storage_key`" but the code filters `!= null` with no dedup, and defines `M` as report count rather than non-null-key count — fixed, Javadoc reworded to "non-null" (no dedup claim) and `M` redefined as "count of that child's performance_reports rows with a non-null storage_key". [src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java]
+- [x] [Review][Patch] `CHILD_VANISHED` left as a bare literal at two call sites while `CHILD_CONTENDED`/`CHILD_DELETE_LOCK_TIMEOUT` were extracted to constants — fixed: added a `CHILD_VANISHED` constant, both call sites updated. [src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java]
+- [x] [Review][Patch] Ledger claims empirical confirmation across "either … path" but only one statement shape (the JPQL bulk delete) is actually contended by a test — fixed: reworded to attribute the JPQL-path confirmation to this story's own new IT and the native-path equivalence to the pre-existing `RadarCompositeCalculationServiceConcurrencyIT` precedent, not conflating the two. [_bmad-output/implementation-artifacts/deferred-work.md]
+
+### Deferred (pre-existing / owner-decided, not actioned here)
+
+- [x] [Review][Defer] No method-level ceiling: worst case `(12 + M) × seconds`, up to ~24 min per child at the permitted `max = 120` [GdprErasureService.java:596-598] — deferred, owner-decided in story review (cumulative spend-down explicitly out of scope); strictly improves on the prior unbounded wait
+- [x] [Review][Defer] `ConfigBounds` min/max re-declared as literals at the `getBoundedLong` call site; code default `5` exists nowhere in `ConfigBounds` despite `HAS_CODE_DEFAULT` registration [ConfigBounds.java / GdprErasureService.java] — deferred, pre-existing codebase-wide convention (mirrors `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS` exactly)
+- [x] [Review][Defer] Only 1 of the 4 (branch × reason) catch combinations has test coverage [GdprErasureIT.java] — deferred, test debt
+- [x] [Review][Defer] `findByPlayerIdOrderByGeneratedAtDesc` hydrates full `PerformanceReport` entities to read one column, left managed after the bulk delete [GdprErasureService.java:621] — deferred, pre-existing
+- [x] [Review][Defer] Bound is re-read from `ConfigService` once per child inside `erase()`'s outer transaction, contending on `synchronized refreshCache()` [GdprErasureService.java:587-588] — deferred, pre-existing shape
+
+## Post-Review Follow-Up
+
+- 2026-09-23: Confirmed the one remaining unchecked `[Review][Decision]` item ("skip commits as
+  `COMPLETED`") is fully implemented in source, not merely decided — `GdprErasureService.java:297`
+  threads the `skipped` `AtomicBoolean` out of both catches and gates the terminal status
+  (`skipped.get() ? "FAILED" : "COMPLETED"`); `GdprErasureIT`'s vanished-child test correctly still
+  asserts `COMPLETED` (`:1044`, `CHILD_VANISHED` does not set the flag) and the contended-child/
+  lock-timeout tests correctly assert `FAILED` (`:959`, `:1135`). Also spot-verified the paired
+  dedup-by-reason fix (`AdminAlertRepository.findFirstByReferenceIdAndTypeAndReasonAndStatus`,
+  wired into `GdprErasureService.java:494`), the `CannotAcquireLockException` deadlock guard
+  (`:692`), and the commit-time `entityManager.flush()` (`:691`) are all present. Checkbox was
+  stale documentation drift, not missing work. Status -> done.

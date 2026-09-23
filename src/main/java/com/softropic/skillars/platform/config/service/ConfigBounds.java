@@ -257,6 +257,32 @@ public final class ConfigBounds {
             "too low (near Postgres's ~1s deadlock_timeout) → a genuine deadlock could misreport as "
                 + "an ordinary lock timeout; too high → the upsert wait this AC bounds stops failing fast");
 
+    /**
+     * {@code GdprErasureService.deletePlayerDevelopmentData} — skillars-deferred-129 AC1: bounds
+     * each individual bulk-delete/scan/enqueue statement inside the GDPR erasure inner transaction's
+     * {@code player_profiles} lock hold via the same transaction-scoped {@code SELECT set_config(
+     * 'lock_timeout', ..., true)} mechanism {@link #RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS} already
+     * uses — mirrors that key's bounds exactly ({@code min = 2L}, {@code max = 120L}) and the same
+     * reasoning: the floor must stay ABOVE Postgres's own {@code deadlock_timeout} (default ~1s) so
+     * the deadlock detector gets a chance to fire before this timeout would otherwise misreport a
+     * genuine deadlock as an ordinary lock timeout.
+     *
+     * <p><strong>This bounds each STATEMENT, not the method's total wait</strong> (Postgres {@code
+     * lock_timeout} is per-statement, not per-transaction — the same trap {@link
+     * #RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS}'s own Javadoc already documents for its own method).
+     * {@code deletePlayerDevelopmentData} issues this bound once, before its ~12 independently-
+     * timeout-able statements, so the method's real worst case is {@code N ×} this value, not a
+     * method-level ceiling — see that method's own Javadoc for the honest accounting. Read via the
+     * 4-arg {@code getBoundedLong} route and registered in {@link #HAS_CODE_DEFAULT}, exactly like
+     * {@link #RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS}'s own call site — a new migration is out of scope
+     * for this story.
+     */
+    public static final BoundedKey GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS =
+        new BoundedKey("platform.gdpr_erase_statement_lock_timeout_seconds", 2L, 120L, false,
+            "too low (near Postgres's ~1s deadlock_timeout) → a genuine deadlock could misreport as "
+                + "an ordinary lock timeout; too high → a blocked erasure statement stops failing fast, "
+                + "extending how long the player_profiles lock is held");
+
     // ── Templated per-enum key segments — DELIBERATELY hand-listed ──────────────────────────────
     // skillars-deferred-108 AC9 (owner decision 2026-09-10, was deferred-107 code review): these
     // segments are hand-listed on purpose. Deriving them by iterating CoachSubscriptionTier
@@ -318,7 +344,8 @@ public final class ConfigBounds {
         REVIEWS_AUTO_HOLD_FLAG_THRESHOLD.key(),
         TIMELINE_COACH_ACCESS_EXPIRY_DAYS.key(),
         RATE_LIMIT_BUCKET_TTL_HOURS.key(),
-        RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS.key());
+        RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS.key(),
+        GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -351,7 +378,8 @@ public final class ConfigBounds {
             VIDEO_DELETION_MAX_ATTEMPTS,
             RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS,
             RATE_LIMIT_BUCKET_TTL_HOURS,
-            RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS));
+            RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS,
+            GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

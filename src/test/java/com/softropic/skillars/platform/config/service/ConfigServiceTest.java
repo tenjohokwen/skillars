@@ -347,8 +347,10 @@ class ConfigServiceTest {
 
     @Test
     void updateConfig_unseededHasCodeDefaultKey_createsRow() {
-        // platform.radar_composite_lock_timeout_seconds is one of the 4 HAS_CODE_DEFAULT keys
-        // V139__baseline_seed_data.sql never seeded (story-review.md B2's corrected count/list).
+        // platform.radar_composite_lock_timeout_seconds is one of the 5 HAS_CODE_DEFAULT keys
+        // V139__baseline_seed_data.sql never seeded (story-review.md B2's corrected count/list; 4 at
+        // the time, now 5 after skillars-deferred-129 AC1 added
+        // platform.gdpr_erase_statement_lock_timeout_seconds to the same set).
         when(configRepository.findByKey("platform.radar_composite_lock_timeout_seconds"))
                 .thenReturn(Optional.empty());
 
