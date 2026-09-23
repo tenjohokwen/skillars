@@ -1,7 +1,11 @@
 package com.softropic.skillars.platform.reviews.service;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
+import com.softropic.skillars.platform.admin.service.AdminReviewService;
+import com.softropic.skillars.platform.reviews.contract.ReviewErrorCode;
 import com.softropic.skillars.platform.reviews.contract.ReviewFlagReason;
+import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.utils.ConcurrencyLockWaitSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,6 +17,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -39,6 +44,7 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
 
     @Autowired private ReviewFlagService reviewFlagService;
     @Autowired private ReviewSubmissionService reviewSubmissionService;
+    @Autowired private AdminReviewService adminReviewService;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
 
@@ -187,8 +193,12 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
             });
 
             assertThat(updateLockHeld.await(10, TimeUnit.SECONDS)).isTrue();
-            // Give the flagger thread a real chance to reach and block on the row lock before releasing.
-            Thread.sleep(300);
+            // skillars-deferred-131 AC3: CoachReviewRepository.findByIdForUpdate carries no
+            // @QueryHints — a genuine blocking FOR UPDATE, so the flagger truly sits in a Postgres
+            // wait state once it reaches the lock. Poll pg_locks/pg_stat_activity instead of a fixed
+            // sleep, so this blocks until the flagger has genuinely reached and is waiting on the row
+            // lock, not merely dispatched.
+            ConcurrencyLockWaitSupport.awaitBlockingLockWaiter(jdbcTemplate, "%coach_reviews%");
             releaseUpdate.countDown();
 
             updater.get(30, TimeUnit.SECONDS);
@@ -297,7 +307,9 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
             });
 
             assertThat(lockHeld.await(10, TimeUnit.SECONDS)).isTrue();
-            Thread.sleep(300);
+            // skillars-deferred-131 AC3: same blocking-FOR-UPDATE signal as above — the raw locker
+            // thread's SELECT ... FOR UPDATE genuinely blocks flag()'s own findByIdForUpdate.
+            ConcurrencyLockWaitSupport.awaitBlockingLockWaiter(jdbcTemplate, "%coach_reviews%");
             releaseLock.countDown();
 
             locker.get(30, TimeUnit.SECONDS);
@@ -363,6 +375,155 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
         assertThat(moderationStatus)
             .as("openFlagCount (2) is one short of the default threshold (3); auto-hold must not fire")
             .isEqualTo("APPROVED");
+    }
+
+    /**
+     * skillars-deferred-131 AC2 Fix 5. A pre-fix {@code flag()} locked the review row as its very
+     * first statement, so a repeat-flag no-op serialized admin moderation behind a call that was
+     * always going to reject. Post-fix, the four write-independent guards (including
+     * {@code ALREADY_FLAGGED}) run on an unlocked scalar projection before any lock is taken — proven
+     * here by having the repeat-flag call complete WHILE a concurrent holder still has the row's
+     * {@code FOR UPDATE} lock: if {@code flag()} still contended for that lock, this would time out
+     * waiting for {@code releaseLock} instead of completing.
+     */
+    @Test
+    void repeatFlagNoOp_doesNotBlockOnRowLock_completesWhileConcurrentLockIsStillHeld() throws Exception {
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        CountDownLatch releaseLock = new CountDownLatch(1);
+        AtomicReference<Throwable> lockerFailure = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> locker = executor.submit(() -> {
+                try {
+                    transactionTemplate.execute(status -> {
+                        jdbcTemplate.queryForObject(
+                            "SELECT review_id FROM reviews.coach_reviews WHERE review_id = ? FOR UPDATE",
+                            UUID.class, reviewId);
+                        lockHeld.countDown();
+                        try {
+                            boolean released = releaseLock.await(30, TimeUnit.SECONDS);
+                            if (!released) {
+                                throw new AssertionError("releaseLock was never signalled within 30s");
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return null;
+                    });
+                } catch (Throwable t) {
+                    lockerFailure.set(t);
+                }
+            });
+
+            assertThat(lockHeld.await(10, TimeUnit.SECONDS)).isTrue();
+
+            // FLAGGER1 already has an open flag from setUp() — a pure no-op rejection path.
+            Future<Throwable> repeatFlag = executor.submit(() -> {
+                try {
+                    reviewFlagService.flag(reviewId, FLAGGER1_ID, ReviewFlagReason.FAKE_REVIEW, "repeat");
+                    return null;
+                } catch (Throwable t) {
+                    return t;
+                }
+            });
+
+            Throwable outcome = repeatFlag.get(5, TimeUnit.SECONDS);
+            assertThat(outcome).isInstanceOf(OperationNotAllowedException.class);
+            assertThat(((OperationNotAllowedException) outcome).getErrorCode())
+                .isEqualTo(ReviewErrorCode.ALREADY_FLAGGED);
+
+            releaseLock.countDown();
+            locker.get(15, TimeUnit.SECONDS);
+            if (lockerFailure.get() != null) {
+                throw new AssertionError("locker thread failed", lockerFailure.get());
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * skillars-deferred-131 AC2 Fix 6. A Mockito unit test alone only proves the parser matches its
+     * own hand-built fixture — this pins the REAL Postgres exception shape: two concurrent flags from
+     * the same {@code flaggedBy} racing the unique index {@code review_flags_unique_flagger}
+     * genuinely still map to {@code ALREADY_FLAGGED}.
+     *
+     * <p>Code review 2026-09-23: a plain latch-released race (the original shape here) can pass even on
+     * a REVERTED Fix 6. {@code flag()}'s unlocked {@code existsByReviewIdAndFlaggedBy} pre-check runs
+     * before {@code saveAndFlush} — if the OS/JVM happens to fully serialize the two threads, the second
+     * call's own pre-check throws {@code ALREADY_FLAGGED} directly via that pre-existing guard, never
+     * reaching {@code saveAndFlush}'s catch block this test exists to pin. The observable outcome is
+     * identical either way, so that scheduling-dependent shortcut silently defeats the test. The
+     * winner's transaction is now held open (uncommitted) past its own {@code flag()} return, mirroring
+     * this class's own {@code concurrentUpdateReview_doesNotRevertEditOrWronglyAutoHold} hold-open
+     * technique above, so the loser's unlocked pre-check is guaranteed to run — and its own
+     * {@code findByIdForUpdate} is guaranteed to block on the winner's still-held {@code CoachReview}
+     * row lock — while the winner's {@code ReviewFlag} row is still uncommitted, forcing the loser down
+     * the real {@code saveAndFlush} path once released.
+     */
+    @Test
+    void concurrentDuplicateFlagFromSameFlagger_loserGetsAlreadyFlaggedViaRealConstraintViolation() throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            CountDownLatch winnerFlaggedUncommitted = new CountDownLatch(1);
+            CountDownLatch releaseWinner = new CountDownLatch(1);
+            AtomicReference<Throwable> winnerFailure = new AtomicReference<>();
+
+            Future<?> winner = executor.submit(() -> {
+                try {
+                    transactionTemplate.execute(status -> {
+                        reviewFlagService.flag(reviewId, FLAGGER3_ID, ReviewFlagReason.CONFLICT_OF_INTEREST, "race");
+                        winnerFlaggedUncommitted.countDown();
+                        try {
+                            boolean released = releaseWinner.await(30, TimeUnit.SECONDS);
+                            if (!released) {
+                                throw new AssertionError("releaseWinner was never signalled within 30s");
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return null;
+                    });
+                } catch (Throwable t) {
+                    winnerFailure.set(t);
+                }
+            });
+
+            Callable<Throwable> loserTask = () -> {
+                assertThat(winnerFlaggedUncommitted.await(10, TimeUnit.SECONDS)).isTrue();
+                try {
+                    reviewFlagService.flag(reviewId, FLAGGER3_ID, ReviewFlagReason.CONFLICT_OF_INTEREST, "race-loser");
+                    return null;
+                } catch (Throwable t) {
+                    return t;
+                }
+            };
+            Future<Throwable> loser = executor.submit(loserTask);
+
+            // Gives the loser's pre-check + findByIdForUpdate attempt (which blocks on the winner's
+            // still-held CoachReview row lock) a real chance to run before the winner is released.
+            Thread.sleep(300);
+            releaseWinner.countDown();
+
+            winner.get(30, TimeUnit.SECONDS);
+            Throwable loserFailure = loser.get(30, TimeUnit.SECONDS);
+
+            if (winnerFailure.get() != null) {
+                throw new AssertionError("winner thread failed", winnerFailure.get());
+            }
+            assertThat(loserFailure).isInstanceOf(OperationNotAllowedException.class);
+            assertThat(((OperationNotAllowedException) loserFailure).getErrorCode())
+                .as("the real Postgres unique-index violation must still map to ALREADY_FLAGGED, not propagate uncaught")
+                .isEqualTo(ReviewErrorCode.ALREADY_FLAGGED);
+
+            Integer flagCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM reviews.review_flags WHERE review_id = ? AND flagged_by = ?",
+                Integer.class, reviewId, FLAGGER3_ID);
+            assertThat(flagCount).as("exactly one flag row for this flagger, never two").isEqualTo(1);
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private void insertUser(long id, String email, String role) {

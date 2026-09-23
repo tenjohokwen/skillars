@@ -1,6 +1,8 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
 import com.softropic.skillars.platform.payment.contract.CoachSubscriptionResponse;
@@ -23,6 +25,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -50,6 +53,8 @@ public class SubscriptionService {
     private final ApplicationEventPublisher eventPublisher;
     private final ParentPlayerLinkRepository parentPlayerLinkRepository;
     private final TransactionTemplate transactionTemplate;
+    private final CoachProfileRepository coachProfileRepository;
+    private final PessimisticLockRetryer lockRetryer;
 
     /** Self-reference so @Transactional on persist* methods is honoured via the Spring proxy. */
     @Autowired @Lazy
@@ -160,7 +165,21 @@ public class SubscriptionService {
         paymentCoachSubscriptionRepository.save(sub);
 
         // Keep marketplace.coach_subscriptions in sync
-        syncMarketplaceTier(coachId, tier);
+        //
+        // Code review 2026-09-23 (Decision 3): syncMarketplaceTier's Fix 4 lock (see its own comment
+        // below) now contends with CoachProfileService.publishProfile's lock on the same coach_profiles
+        // row. subscribeCoach calls Stripe deliberately outside this transaction, so a contended lock
+        // failing here would roll back this whole method and lose the payment row after Stripe has
+        // already charged the coach — the worst available outcome, worse than a temporarily stale
+        // marketplace tier. marketplace.coach_subscriptions is a derived projection re-synced by
+        // applyPendingChanges/checkPastDueGracePeriod, and getCoachSubscriptionTier's SCOUT default
+        // makes a stale/missing tier fail closed in the meantime, so deferring the sync on lock
+        // contention is safe.
+        try {
+            syncMarketplaceTier(coachId, tier);
+        } catch (PessimisticLockingFailureException e) {
+            log.warn("[COACH_SUBSCRIBE_TIER_SYNC_DEFERRED coachId={} tier={}]", coachId, tier, e);
+        }
 
         log.info("[COACH_SUBSCRIBED coachId={} tier={} status={}]", coachId, tier, sub.getStatus());
         return toCoachResponse(sub);
@@ -679,7 +698,28 @@ public class SubscriptionService {
             });
     }
 
+    // skillars-deferred-131 AC1 Fix 4: this method's INSERT branch needs a FOR KEY SHARE lock on
+    // coach_profiles (coach_subscriptions_coach_id_fkey) at flush time, which blocks behind
+    // CoachProfileService.publishProfile's own FOR UPDATE lock on that same row
+    // (skillars-deferred-130) if the two run concurrently for the same coach — once publishProfile
+    // commits first (having inserted its own coach_subscriptions row), this method's still-pending
+    // INSERT resumes and violates coach_subscriptions_pkey, uncaught, rolling back
+    // persistCoachSubscription's whole transaction while any Stripe subscription created earlier in
+    // the same call chain (outside this DB transaction) survives orphaned. Closing the race at its
+    // source — taking the SAME coach_profiles row lock publishProfile already takes — serializes the
+    // two writers instead of racing them.
+    //
+    // The lock acquisition alone goes inside withBoundedRetry; the ifPresentOrElse writes below run
+    // AFTER it returns, not inside it — PessimisticLockRetryerCallSiteAuditTest's DENYLIST rejects any
+    // .save( inside a retried lambda, and withBoundedRetry's own contract requires the supplier be
+    // read-only since it can legitimately execute more than once per logical call. The Postgres row
+    // lock is held for the whole transaction, not just the lambda's duration, so running the writes
+    // after withBoundedRetry returns preserves the same serialization guarantee.
     private void syncMarketplaceTier(UUID coachId, String tier) {
+        lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
+            .orElseThrow(() -> new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
+                "payment.subscription.coachProfileNotFound")));
+
         coachSubscriptionRepository.findByCoachId(coachId).ifPresentOrElse(
             cs -> {
                 cs.setTier(com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier.valueOf(tier));

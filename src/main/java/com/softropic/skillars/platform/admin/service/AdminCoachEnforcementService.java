@@ -21,11 +21,16 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
+import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
+import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrike;
 import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrikeRepository;
+import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
+import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
+import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.payment.contract.event.StrikeThresholdReachedEvent;
@@ -74,6 +79,8 @@ public class AdminCoachEnforcementService {
     private final ConfigService configService;
     private final ApplicationEventPublisher eventPublisher;
     private final PessimisticLockRetryer lockRetryer;
+    private final CoachSubscriptionRepository coachSubscriptionRepository;
+    private final CoachProfileService coachProfileService;
 
     /**
      * skillars-deferred-124 AC5: self-reference so {@link #recordManualStrikeAudit}'s
@@ -227,9 +234,39 @@ public class AdminCoachEnforcementService {
                 "Coach cannot be reinstated from status: " + coach.getStatus());
         }
 
-        coach.setStatus(CoachProfileStatus.ACTIVE);
-        coach.setStatusChangedAt(Instant.now());
-        coachProfileRepository.save(coach);
+        // skillars-deferred-131 AC1 Fix 3: DRAFT -> SUSPENDED -> reinstate -> ACTIVE (and the
+        // equivalent through deleteStrike's tier-3 branch) is reachable without the profile ever
+        // having gone through CoachProfileService.publishProfile, meaning validateAllStepsComplete
+        // was never run at all. Run it now, under the lock already held above, so an incomplete
+        // profile fails loudly instead of silently reaching ACTIVE.
+        //
+        // Code review 2026-09-23 (Decision 2): a thrown MarketplaceException here used to propagate
+        // out of this @Transactional method uncaught, rolling back the whole transaction — so nothing
+        // ever wrote a status at all, leaving a SUSPENDED coach whose profile is incomplete (e.g. no
+        // availability windows) permanently stuck: saveStep4's own SUSPENDED guard (deferred-64 AC1)
+        // blocks the coach from fixing it themselves, and no other admin action writes a status here.
+        // Caught locally instead: fall back to DRAFT, which returns the coach to a self-serviceable
+        // onboarding state without reaching the ACTIVE this validation exists to gate.
+        try {
+            coachProfileService.validateReadyForActivation(coach);
+
+            coach.setStatus(CoachProfileStatus.ACTIVE);
+            coach.setStatusChangedAt(Instant.now());
+            coachProfileRepository.save(coach);
+
+            // skillars-deferred-131 AC1 Fix 3: mirrors publishProfile's own find-or-create
+            // (skillars-deferred-130) — a coach reaching ACTIVE via reinstate without ever publishing
+            // otherwise gets no coach_subscriptions row, permanently breaking
+            // CoachProfileService.getCoachSubscriptionTier's call sites for that coach.
+            ensureScoutSubscriptionExists(coach.getId());
+        } catch (MarketplaceException e) {
+            coach.setStatus(CoachProfileStatus.DRAFT);
+            coach.setStatusChangedAt(Instant.now());
+            coachProfileRepository.save(coach);
+            log.warn("Coach reinstate could not reach ACTIVE (incomplete profile), reinstated to DRAFT "
+                    + "instead: coachId={} adminId={} reason={}",
+                coachId, adminId, e.getMessage());
+        }
 
         // skillars-deferred-123 code review 2026-09-18 (Decision 2): re-evaluate the live in-window
         // strike count under the lock already held, and let it decide the ALERT, not the status.
@@ -457,15 +494,40 @@ public class AdminCoachEnforcementService {
                 actionLog.setReason("Strike deleted (coach reduced to REDUCED): " + reason);
                 log.info("Strike deleted, coach status reduced to REDUCED: coachId={} strikeId={}", coachId, strikeId);
             } else {
-                coach.setStatus(CoachProfileStatus.ACTIVE);
-                coach.setStatusChangedAt(Instant.now());
-                coachProfileRepository.save(coach);
+                // skillars-deferred-131 AC1 Fix 3: identical gap as reinstateCoach's — this branch
+                // can write ACTIVE from PENDING_REVIEW/REDUCED without the profile ever having
+                // published. Run the same validation, under the same lock, before the write.
+                //
+                // Code review 2026-09-23 (Decision 1): a thrown MarketplaceException is a
+                // RuntimeException, so pre-fix it rolled back this @Transactional method's entire
+                // transaction — silently undoing the strikeRepository.deleteByIdAndCoachId bulk delete
+                // above along with the admin's strike-deletion request. Caught locally instead,
+                // mirroring the tier-1 branch above: the strike stays deleted, the coach's status is
+                // left untouched, and the COACH_STRIKE_DELETED log row is still written on this branch
+                // too, honouring deferred-122 AC1 Fix step 4's invariant that every deleteStrike call
+                // writes it.
+                try {
+                    coachProfileService.validateReadyForActivation(coach);
 
-                resolveOpenStrikeAlert(coachId, adminId);
+                    coach.setStatus(CoachProfileStatus.ACTIVE);
+                    coach.setStatusChangedAt(Instant.now());
+                    coachProfileRepository.save(coach);
 
-                actionLog.setActionType(AdminActionType.COACH_REINSTATE);
-                actionLog.setReason("Strike deleted (coach reinstated to ACTIVE): " + reason);
-                log.info("Strike deleted, coach status reverted to ACTIVE: coachId={} strikeId={}", coachId, strikeId);
+                    // skillars-deferred-131 AC1 Fix 3: same find-or-create as reinstateCoach above.
+                    ensureScoutSubscriptionExists(coach.getId());
+
+                    resolveOpenStrikeAlert(coachId, adminId);
+
+                    actionLog.setActionType(AdminActionType.COACH_REINSTATE);
+                    actionLog.setReason("Strike deleted (coach reinstated to ACTIVE): " + reason);
+                    log.info("Strike deleted, coach status reverted to ACTIVE: coachId={} strikeId={}", coachId, strikeId);
+                } catch (MarketplaceException e) {
+                    actionLog.setActionType(AdminActionType.COACH_STRIKE_DELETED);
+                    actionLog.setReason("Strike deleted (no status change, profile incomplete): " + reason);
+                    log.warn("Strike deleted but coach profile is incomplete, status left at {}: "
+                            + "coachId={} strikeId={} reason={}",
+                        coach.getStatus(), coachId, strikeId, e.getMessage());
+                }
             }
         } else {
             actionLog.setActionType(AdminActionType.COACH_STRIKE_DELETED);
@@ -527,6 +589,19 @@ public class AdminCoachEnforcementService {
                 log.warn("Coach pricing not found for booking={}, defaulting to ZERO", booking.getId());
                 return BigDecimal.ZERO;
             });
+    }
+
+    // skillars-deferred-131 AC1 Fix 3 (code review 2026-09-23): extracted — the same 9-line find-or-create
+    // was duplicated verbatim in reinstateCoach and deleteStrike's tier-3 branch.
+    private void ensureScoutSubscriptionExists(UUID coachId) {
+        CoachSubscription subscription = coachSubscriptionRepository.findByCoachId(coachId)
+            .orElseGet(() -> {
+                CoachSubscription created = new CoachSubscription();
+                created.setCoachId(coachId);
+                created.setTier(CoachSubscriptionTier.SCOUT);
+                return created;
+            });
+        coachSubscriptionRepository.save(subscription);
     }
 
     private void resolveOpenStrikeAlert(UUID coachId, Long adminId) {

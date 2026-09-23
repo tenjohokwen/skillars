@@ -1,6 +1,9 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
+import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
 import com.softropic.skillars.platform.payment.repo.CoachSubscriptionChange;
 import com.softropic.skillars.platform.payment.repo.CoachSubscriptionChangeRepository;
@@ -61,6 +64,8 @@ class SubscriptionSchedulerIsolationTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock ParentPlayerLinkRepository parentPlayerLinkRepository;
     @Mock TransactionTemplate transactionTemplate;
+    @Mock CoachProfileRepository coachProfileRepository;
+    @Mock PessimisticLockRetryer lockRetryer;
 
     @InjectMocks SubscriptionService service;
 
@@ -75,6 +80,12 @@ class SubscriptionSchedulerIsolationTest {
             action.accept(null);
             return null;
         }).when(transactionTemplate).executeWithoutResult(any());
+        // skillars-deferred-131 AC1 Fix 4: syncMarketplaceTier now takes the coach_profiles row lock
+        // before its find-or-create.
+        when(lockRetryer.withBoundedRetry(any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+        when(coachProfileRepository.findByIdForUpdate(any()))
+            .thenReturn(java.util.Optional.of(new CoachProfile()));
     }
 
     // ─── AC1: applyPendingChanges() ────────────────────────────────────────────────

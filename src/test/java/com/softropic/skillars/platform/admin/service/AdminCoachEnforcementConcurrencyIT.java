@@ -4,9 +4,12 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.admin.contract.CoachReinstatedEvent;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
+import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
+import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeConfig;
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.utils.CoachProfileTestFixtures;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +35,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * skillars-deferred-121 AC1: proves {@link AdminCoachEnforcementService#reinstateCoach} and {@code
@@ -105,6 +109,11 @@ class AdminCoachEnforcementConcurrencyIT extends AbstractIntegrationTest {
                 "(id, user_id, display_name, bio, city, languages, canonical_timezone, status, status_changed_at) " +
                 "VALUES (?, ?, 'Enforcement Concurrency Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'PENDING_REVIEW', ?)",
                 coachProfileId, COACH_USER_ID, Timestamp.from(Instant.now()));
+
+            // skillars-deferred-131 AC1 Fix 3: reinstateCoach/deleteStrike's tier-3 branch now
+            // re-validate the profile is publishable before writing ACTIVE, so this coach needs
+            // complete builder-step data for the tests that revert/reinstate it to ACTIVE.
+            CoachProfileTestFixtures.seedCompleteBuilderSteps(jdbcTemplate, coachProfileId);
             return null;
         });
     }
@@ -485,6 +494,151 @@ class AdminCoachEnforcementConcurrencyIT extends AbstractIntegrationTest {
         Long strikeCount = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE id = ?", Long.class, strikeToDelete);
         assertThat(strikeCount).as("the strike must have been deleted exactly once").isEqualTo(0L);
+    }
+
+    /**
+     * skillars-deferred-131 AC1 Fix 3: {@code reinstateCoach} must fail loudly on an incomplete
+     * profile rather than silently activating it — the profile this test's own coach starts with is
+     * complete (seeded by {@link #setUp}), so this test explicitly removes the pricing step to
+     * simulate a coach who never finished the builder.
+     */
+    @Test
+    void reinstateCoach_incompleteProfile_fallsBackToDraftNotSilentActivation() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId);
+            return null;
+        });
+
+        // Code review 2026-09-23 (Decision 2): a thrown MarketplaceException here used to propagate
+        // uncaught, rolling back the whole transaction and leaving the coach permanently stuck
+        // PENDING_REVIEW with no admin path back to any status (saveStep4's own SUSPENDED-only guard
+        // does not even apply to PENDING_REVIEW). reinstateCoach now catches it and falls back to
+        // DRAFT instead of throwing, returning the coach to a self-serviceable onboarding state.
+        enforcementService.reinstateCoach(coachProfileId, "test", ADMIN_ID);
+
+        String status = jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
+        assertThat(status).as("an incomplete profile falls back to DRAFT, not ACTIVE").isEqualTo("DRAFT");
+
+        Integer subscriptionCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_subscriptions WHERE coach_id = ?", Integer.class, coachProfileId);
+        assertThat(subscriptionCount).as("no subscription row for a reinstate that never actually activated").isZero();
+    }
+
+    /**
+     * skillars-deferred-131 AC1 Fix 3: a complete profile with no pre-existing subscription row gets
+     * a fresh SCOUT-tier row on reinstate, mirroring {@code publishProfile}'s own find-or-create.
+     */
+    @Test
+    void reinstateCoach_completeProfileNoSubscription_createsScoutTierRow() {
+        enforcementService.reinstateCoach(coachProfileId, "test", ADMIN_ID);
+
+        String status = jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
+        assertThat(status).isEqualTo("ACTIVE");
+
+        String tier = jdbcTemplate.queryForObject(
+            "SELECT tier FROM marketplace.coach_subscriptions WHERE coach_id = ?", String.class, coachProfileId);
+        assertThat(tier).isEqualTo(CoachSubscriptionTier.SCOUT.name());
+    }
+
+    /**
+     * skillars-deferred-131 AC1 Fix 3: an existing subscription row's tier must survive reinstate
+     * untouched, not be reset to SCOUT — mirrors {@code publishProfile}'s own preserve-not-overwrite
+     * rationale for a coach who already holds a paid tier from a purchase made while off the
+     * marketplace.
+     */
+    @Test
+    void reinstateCoach_existingSubscription_preservesExistingTier() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_subscriptions (coach_id, tier, active_since) VALUES (?, 'INSTRUCTOR', now())",
+                coachProfileId);
+            return null;
+        });
+
+        enforcementService.reinstateCoach(coachProfileId, "test", ADMIN_ID);
+
+        String tier = jdbcTemplate.queryForObject(
+            "SELECT tier FROM marketplace.coach_subscriptions WHERE coach_id = ?", String.class, coachProfileId);
+        assertThat(tier).isEqualTo(CoachSubscriptionTier.INSTRUCTOR.name());
+
+        Long subscriptionCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_subscriptions WHERE coach_id = ?", Long.class, coachProfileId);
+        assertThat(subscriptionCount).as("must not create a second row").isEqualTo(1L);
+    }
+
+    /**
+     * skillars-deferred-131 AC1 Fix 3: {@code deleteStrike}'s tier-3 branch has the identical gap as
+     * {@code reinstateCoach} — deleting the coach's one strike drops the fresh count below
+     * visibilityThreshold, landing on the ACTIVE branch, which must now fail on an incomplete profile.
+     */
+    @Test
+    void deleteStrike_incompleteProfile_keepsDeletionAndSkipsActivation() {
+        UUID strikeToDelete = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId);
+            seedStrike(strikeToDelete);
+            return null;
+        });
+
+        // Code review 2026-09-23 (Decision 1): a thrown MarketplaceException here used to roll back
+        // this @Transactional method's whole transaction — silently undoing the strike deletion itself
+        // along with the admin's request. deleteStrike now catches it: the strike stays deleted, the
+        // coach's status is left untouched, and no exception propagates.
+        enforcementService.deleteStrike(coachProfileId, strikeToDelete, "test", ADMIN_ID);
+
+        Integer strikeCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE id = ?",
+            Integer.class, strikeToDelete);
+        assertThat(strikeCount).as("the strike deletion must survive even though activation failed").isZero();
+
+        String status = jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
+        assertThat(status).as("a failed validation must not leave the coach ACTIVE").isEqualTo("PENDING_REVIEW");
+    }
+
+    /** skillars-deferred-131 AC1 Fix 3: same find-or-create proof as reinstateCoach, for deleteStrike. */
+    @Test
+    void deleteStrike_completeProfileNoSubscription_createsScoutTierRow() {
+        UUID strikeToDelete = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            seedStrike(strikeToDelete);
+            return null;
+        });
+
+        enforcementService.deleteStrike(coachProfileId, strikeToDelete, "test", ADMIN_ID);
+
+        String status = jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
+        assertThat(status).isEqualTo("ACTIVE");
+
+        String tier = jdbcTemplate.queryForObject(
+            "SELECT tier FROM marketplace.coach_subscriptions WHERE coach_id = ?", String.class, coachProfileId);
+        assertThat(tier).isEqualTo(CoachSubscriptionTier.SCOUT.name());
+    }
+
+    /** skillars-deferred-131 AC1 Fix 3: same tier-preservation proof as reinstateCoach, for deleteStrike. */
+    @Test
+    void deleteStrike_existingSubscription_preservesExistingTier() {
+        UUID strikeToDelete = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_subscriptions (coach_id, tier, active_since) VALUES (?, 'ACADEMY', now())",
+                coachProfileId);
+            seedStrike(strikeToDelete);
+            return null;
+        });
+
+        enforcementService.deleteStrike(coachProfileId, strikeToDelete, "test", ADMIN_ID);
+
+        String tier = jdbcTemplate.queryForObject(
+            "SELECT tier FROM marketplace.coach_subscriptions WHERE coach_id = ?", String.class, coachProfileId);
+        assertThat(tier).isEqualTo(CoachSubscriptionTier.ACADEMY.name());
+
+        Long subscriptionCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_subscriptions WHERE coach_id = ?", Long.class, coachProfileId);
+        assertThat(subscriptionCount).as("must not create a second row").isEqualTo(1L);
     }
 
     private void seedStrike(UUID strikeId) {

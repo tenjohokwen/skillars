@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.admin.service.AdminCoachEnforcementServic
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeConfig;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.utils.CoachProfileTestFixtures;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -84,6 +85,11 @@ class ManualStrikeIT extends AbstractIntegrationTest {
                 "VALUES (?, ?, 'Strike Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
                 coachProfileId, COACH_USER_ID);
 
+            // skillars-deferred-131 AC1 Fix 3: deleteStrike's tier-3 ACTIVE branch now re-validates
+            // the profile is publishable before writing ACTIVE, so this shared coach needs complete
+            // builder-step data for the tests that revert it back to ACTIVE.
+            CoachProfileTestFixtures.seedCompleteBuilderSteps(jdbcTemplate, coachProfileId);
+
             jdbcTemplate.update(
                 "INSERT INTO booking.bookings (id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, status, canonical_timezone, version, created_at, updated_at) " +
                 "VALUES (?, 9070999001, 9070999002, ?, ?, ?, 'COMPLETED', 'Europe/Berlin', 0, ?, ?)",
@@ -102,6 +108,14 @@ class ManualStrikeIT extends AbstractIntegrationTest {
             jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE reference_id = ?", coachProfileId.toString());
             jdbcTemplate.update("DELETE FROM marketplace.coach_reliability_strikes WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
+            jdbcTemplate.update("DELETE FROM marketplace.coach_specialties WHERE coach_id = ?", coachProfileId);
+            jdbcTemplate.update("DELETE FROM marketplace.coach_age_groups WHERE coach_id = ?", coachProfileId);
+            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId);
+            jdbcTemplate.update("DELETE FROM marketplace.coach_availability_windows WHERE coach_id = ?", coachProfileId);
+            // skillars-deferred-131 AC1 Fix 3: deleteStrike's tier-3 branch now creates a
+            // coach_subscriptions row (find-or-create) — must be deleted before the FK-referenced
+            // coach_profiles row.
+            jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
             jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
             jdbcTemplate.execute("DELETE FROM main.login_attempts");
@@ -735,4 +749,5 @@ class ManualStrikeIT extends AbstractIntegrationTest {
             "INSERT INTO main.user_authority (user_id, authority_id) VALUES (?, (SELECT id FROM main.authority WHERE name = ?)) ON CONFLICT DO NOTHING",
             userId, roleName);
     }
+
 }

@@ -5,6 +5,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.utils.CoachProfileTestFixtures;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -76,6 +77,11 @@ class ReinstateIT extends AbstractIntegrationTest {
                 "VALUES (?, ?, 'Reinstate Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'SUSPENDED', ?)",
                 coachProfileId, COACH_USER_ID, Timestamp.from(Instant.now()));
 
+            // skillars-deferred-131 AC1 Fix 3: reinstateCoach now re-validates the profile is
+            // publishable (CoachProfileService.validateReadyForActivation) before writing ACTIVE, so
+            // every test in this class needs complete builder-step data, not just a display name.
+            CoachProfileTestFixtures.seedCompleteBuilderSteps(jdbcTemplate, coachProfileId);
+
             jdbcTemplate.update(
                 "INSERT INTO admin.admin_alerts (alert_id, type, reference_id, reference_type, status, created_at) " +
                 "VALUES (?, 'STRIKE_THRESHOLD', ?, 'COACH', 'OPEN', ?)",
@@ -96,6 +102,13 @@ class ReinstateIT extends AbstractIntegrationTest {
             jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE reference_id = ?", coachProfileId.toString());
             // FK from coach_reliability_strikes -> coach_profiles: strikes must go first.
             jdbcTemplate.update("DELETE FROM marketplace.coach_reliability_strikes WHERE coach_id = ?", coachProfileId);
+            jdbcTemplate.update("DELETE FROM marketplace.coach_specialties WHERE coach_id = ?", coachProfileId);
+            jdbcTemplate.update("DELETE FROM marketplace.coach_age_groups WHERE coach_id = ?", coachProfileId);
+            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId);
+            jdbcTemplate.update("DELETE FROM marketplace.coach_availability_windows WHERE coach_id = ?", coachProfileId);
+            // skillars-deferred-131 AC1 Fix 3: reinstateCoach now creates a coach_subscriptions row
+            // (find-or-create) — must be deleted before the FK-referenced coach_profiles row.
+            jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
             jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
             jdbcTemplate.execute("DELETE FROM main.login_attempts");
@@ -299,4 +312,5 @@ class ReinstateIT extends AbstractIntegrationTest {
             "INSERT INTO main.user_authority (user_id, authority_id) VALUES (?, (SELECT id FROM main.authority WHERE name = ?)) ON CONFLICT DO NOTHING",
             userId, roleName);
     }
+
 }

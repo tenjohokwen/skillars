@@ -33,6 +33,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code CoachProfileService.publishProfile} lock-and-recheck site (AC1 Fix 3) — the retried lambda
  * is a {@code findByIdForUpdate}+{@code orElseThrow} read plus an {@code entityManager.refresh},
  * mirroring {@code saveStep4}'s own identical shape, so it passes the same read-only contract too.
+ * Now 33 as of {@code skillars-deferred-131}'s new {@code SubscriptionService.syncMarketplaceTier}
+ * lock-acquisition site (AC1 Fix 4) — the retried lambda is a {@code findByIdForUpdate}+
+ * {@code orElseThrow} read only, the same shape as this class's own {@code deleteVideo}/
+ * {@code initiateUpload} restructure below; the {@code coachSubscriptionRepository} writes run after
+ * {@code withBoundedRetry} returns.
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
  * building this scan against the real call sites (28 at story-creation time) surfaced one genuine violation —
@@ -89,12 +94,13 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * (28 at {@code skillars-deferred-117} story-creation time — the ledger's own stale count was 16 —
      * 30 after {@code skillars-deferred-121} added {@code AdminCoachEnforcementService
      * .reinstateCoach}/{@code .deleteStrike} — 31 after {@code skillars-deferred-127} added
-     * {@code GdprErasureService.deletePlayerDevelopmentData} — now 32 after {@code skillars-deferred-130}
-     * added {@code CoachProfileService.publishProfile}). Asserted explicitly so an added or removed
-     * call site is loud (this count changes) rather than silently changing how much code this test
-     * covers.
+     * {@code GdprErasureService.deletePlayerDevelopmentData} — 32 after {@code skillars-deferred-130}
+     * added {@code CoachProfileService.publishProfile} — now 33 after {@code skillars-deferred-131}
+     * added {@code SubscriptionService.syncMarketplaceTier}). Asserted explicitly so an added or
+     * removed call site is loud (this count changes) rather than silently changing how much code this
+     * test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 32;
+    private static final int EXPECTED_CALL_SITE_COUNT = 33;
 
     private record CallSite(String file, int line, String argument) {
     }
