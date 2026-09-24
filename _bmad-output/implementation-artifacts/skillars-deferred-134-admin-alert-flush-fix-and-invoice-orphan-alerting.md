@@ -146,18 +146,72 @@ a graceful skip. Because `save()` doesn't flush, the violation instead surfaces 
 
 ### The fix
 
-Mirror `GdprErasureService.insertErasureAlertIfAbsent`'s already-shipped fix exactly
-(`GdprErasureService.java:624-641`): change `adminAlertRepository.save(alert)` to
-`adminAlertRepository.saveAndFlush(alert)` at `:138`. This forces the INSERT (and any constraint
-violation) to happen synchronously inside the try block, where the existing catch can actually catch it.
-No other change to `insertAlert`'s signature, callers, or the surrounding `isPresent()` pre-check is
-needed — this is a single-token fix with a large blast-radius test story, same as `deferred-133` AC1's.
+**Correction (post-drafting review, 2026-09-24) — `save` → `saveAndFlush` alone is NOT the same fix
+`GdprErasureService` shipped, and does not actually protect 5 of the 7 callers.** The original draft of
+this section claimed this "mirrors `GdprErasureService.insertErasureAlertIfAbsent`'s already-shipped fix
+exactly" and needs "no other change to `insertAlert`'s signature, callers, or the surrounding
+`isPresent()` pre-check." That is false, and the false claim is precisely why the story's own AC1 corner
+case ("what if a third caller publishes the same alert type before `saveAndFlush` flushes?") was marked
+sound when it is not.
+
+**Why `saveAndFlush` + `catch` alone does not work here, unlike `GdprErasureService`:** once `flush()`
+throws a `ConstraintViolationException`/`DataIntegrityViolationException`, JPA/Hibernate marks the
+*current* `EntityTransaction` rollback-only — catching the exception in application code does not undo
+that marking, and does not un-abort the underlying Postgres transaction either. `GdprErasureService`'s
+fix is safe not because it uses `saveAndFlush`, but because **every one of its call sites already isolates
+the write in its own dedicated `REQUIRES_NEW` transaction** (`markFailed` is itself
+`@Transactional(REQUIRES_NEW)`; `raiseErasureAlert` wraps the call in `requiresNewTemplate
+.executeWithoutResult(...)`, `GdprErasureService.java:584`) — so when the doomed transaction is
+discarded at commit, the only thing lost is the alert insert itself, which is the correct outcome for a
+benign duplicate.
+
+`AdminAlertEventListener.insertAlert` does not have that property for 5 of its 7 callers
+(`onMessageReported`, `onConversationReported`, `onReviewFlagged`, `onStrikeThreshold`,
+`onDisputeRaised` — all plain `@Transactional`, i.e. `REQUIRED` propagation, joining whatever transaction
+their publisher is already in). Concretely: `ReviewFlagService.flag()` (`@Transactional`, class-level)
+calls `reviewFlagRepository.saveAndFlush(flag)` for its own primary write, then later
+`eventPublisher.publishEvent(new ReviewFlaggedEvent(...))` as its last statement — which synchronously
+invokes `onReviewFlagged` → `insertAlert` **inside that same transaction** (`REQUIRED` joins, it does not
+start a new one). If two flaggers race past `insertAlert`'s `isPresent()` pre-check for the same review,
+the loser's `saveAndFlush(alert)` throws, `insertAlert`'s catch swallows it and logs a `debug` line — but
+`ReviewFlagService.flag()`'s own transaction is now marked rollback-only. When
+`ReviewFlagService.flag()`'s own `@Transactional` advice tries to commit, JPA throws (typically surfacing
+to the HTTP caller as `UnexpectedRollbackException`/`TransactionSystemException`), and **the loser's own
+`ReviewFlag` row — the thing they were actually trying to do — is rolled back too**, with the real cause
+(a harmless duplicate-alert race) swallowed inside `insertAlert`'s own `catch` and never attached to the
+exception that surfaces. This does not newly introduce silent data loss (today's uncaught exception at
+commit-time flush already loses the caller's write the same way) but it **actively defeats this AC's own
+purpose** — the whole point was to stop a benign alert-dedup race from taking down the caller's primary
+business operation, and the `saveAndFlush`-only fix does not achieve that for `onMessageReported`,
+`onConversationReported`, `onReviewFlagged`, `onStrikeThreshold`, or `onDisputeRaised`. It also strictly
+regresses debuggability for those 5: the real cause is now swallowed at `debug` level instead of
+propagating as the (at least accurately-typed) `DataIntegrityViolationException` it is today. Only the two
+already-`REQUIRES_NEW` callers (`onMessageHeldForReview`, `onCoachSubscriptionOrphaned`) get the benefit
+the story originally claimed for all seven.
+
+**Corrected fix:** isolate `insertAlert`'s write in its own dedicated `REQUIRES_NEW` transaction,
+matching `GdprErasureService.raiseErasureAlert`'s own established pattern
+(`GdprErasureService.java:583-584`) — inject a `TransactionTemplate` field configured with
+`PROPAGATION_REQUIRES_NEW` (constructed from the injected `PlatformTransactionManager`, same as
+`GdprErasureService.java:160-161`), and wrap the existing `try { ...; saveAndFlush(alert); } catch
+(DataIntegrityViolationException e) { ... }` block in
+`requiresNewTemplate.executeWithoutResult(status -> { ... })`. Apply this uniformly to all 7 callers
+(including the 2 already-`REQUIRES_NEW` ones) rather than special-casing by caller — `onCoachSubscriptionOrphaned`'s
+own Javadoc already documents "this path is not connection-pool-constrained the way `GdprErasureService`'s
+is" (`AdminAlertEventListener.java`, `onCoachSubscriptionOrphaned`'s Javadoc), so a nested
+`REQUIRES_NEW`-within-`REQUIRES_NEW` for those 2 callers costs one extra, brief connection acquisition and
+is not the connection-pool-exhaustion concern `GdprErasureService.markFailed` had to specifically design
+around (`GdprErasureService.java:588-591`'s own comment explains why *that* class avoids nesting
+`requiresNewTemplate` inside an already-`REQUIRES_NEW` caller — a concern this listener does not share).
+The `isPresent()` pre-check stays outside the new transaction, exactly where it is today — only the
+write-and-catch moves inside.
 
 **Do not attempt to also close the outer TOCTOU** (a lock or a `SELECT ... FOR UPDATE` before the check) —
 that would be a materially larger, higher-risk change to code that fires on every admin-alert-worthy event
-in the system, for a race the unique index (once actually reachable via `saveAndFlush`) already closes
-completely. Out of scope, not a residual — the unique index is a complete, correct backstop once the catch
-can see it.
+in the system, for a race the unique index (once actually reachable via `saveAndFlush` inside its own
+transaction) already closes completely. Out of scope, not a residual — the unique index is a complete,
+correct backstop once the catch can see it AND the doomed transaction it belongs to is scoped to just the
+alert write.
 
 ### Test plan
 
@@ -172,20 +226,42 @@ proof by itself.
 **New real-DB proof required**, mirroring `skillars-deferred-133` AC1's own discipline (a "throwaway
 Testcontainers test before fixing, not assumed" plus a permanent regression test): add a concurrency test
 against a real Postgres (via `AbstractIntegrationTest`, the pattern `AdminQueueIT` already uses) that
-races two threads publishing the same event `(referenceId, type)` pair (e.g. `StrikeThresholdReachedEvent`
-for the same `coachId`, via `ApplicationEventPublisher` against a real `AdminAlertEventListener` bean —
-not the repository directly, so `insertAlert`'s own `isPresent()` pre-check is genuinely exercised) and
-asserts: (a) both publish calls return normally — no exception escapes either transaction; (b) exactly one
-`OPEN` `admin_alerts` row exists for that `(referenceId, type)`. Use a real thread-interleaving mechanism
-(a `CountDownLatch`/raw-JDBC-lock pattern, matching this project's own established concurrency-test
-convention — see `AdminCoachEnforcementConcurrencyIT`, `ReliabilityStrikeConcurrencyIT`), not a bare race
-with no ordering guarantee, so the test is deterministic rather than flaky.
+races two threads publishing the same event `(referenceId, type)` pair through a `REQUIRED`-propagation
+caller — deliberately **not** one of the two already-`REQUIRES_NEW` event types (`onMessageHeldForReview`,
+`onCoachSubscriptionOrphaned`), since those two never exercised the bug this AC is actually fixing.
+`ReviewFlaggedEvent` (via a real `ReviewFlagService.flag()` call, not a bare `ApplicationEventPublisher
+.publishEvent`, so the caller's own primary write is genuinely in the same transaction as the alert
+insert) is the strongest fixture, since it makes the caller's-own-write-survives assertion below concrete
+and directly traceable to a real business operation.
 
-**Mutation-check before considering AC1 done:** temporarily revert `saveAndFlush` back to `save`, confirm
-the new concurrency test fails (an uncaught `DataIntegrityViolationException` from one of the two racing
-publishes), then restore the fix. This is the same discipline `skillars-deferred-133`'s own dev-story
-applied to its `GdprErasureService` fix — do not skip it; a test that "passes either way" would not
-actually prove anything.
+Assert all of:
+(a) both `flag()` calls return normally — no exception escapes either caller;
+(b) **both callers' own primary writes are durably persisted** — i.e. both `ReviewFlag` rows exist after
+    the race, re-read from the database in a fresh transaction, not from the in-memory return value. This
+    is the assertion the original draft's test plan omitted, and it is the one that actually catches the
+    bug described above: a plain `save`→`saveAndFlush` fix without `REQUIRES_NEW` isolation would fail
+    exactly this assertion (the loser's own transaction — including its `ReviewFlag` row — gets rolled
+    back, even though the `flag()` call itself may or may not throw depending on exception translation);
+(c) exactly one `OPEN` `admin_alerts` row exists for that `(referenceId, type)`.
+
+Use a real thread-interleaving mechanism (a `CountDownLatch`/raw-JDBC-lock pattern, matching this
+project's own established concurrency-test convention — see `AdminCoachEnforcementConcurrencyIT`,
+`ReliabilityStrikeConcurrencyIT`), not a bare race with no ordering guarantee, so the test is deterministic
+rather than flaky.
+
+**Mutation-check before considering AC1 done — two mutations, not one:**
+1. Revert `saveAndFlush` back to `save` (with the `REQUIRES_NEW` isolation still in place): confirm the
+   test fails because the duplicate is never actually detected during the flush-at-commit of the isolated
+   transaction in a way the test can observe deterministically (the original single-mutation check this
+   AC specified).
+2. **Keep `saveAndFlush` but remove the `REQUIRES_NEW` isolation** (call the write-and-catch block directly,
+   the shape the story originally specified before this correction): confirm assertion (b) above now fails
+   — one of the two `ReviewFlag` rows is missing, proving the isolation is load-bearing, not decorative.
+   Skipping this second mutation would let a regression back to the unsafe shape pass code review silently,
+   since assertion (a)/(c) alone do not discriminate the two designs reliably.
+
+This is the same "empirically reproduced, not assumed" discipline `skillars-deferred-133`'s own dev-story
+applied to its `GdprErasureService` fix — do not skip either mutation.
 
 ---
 
@@ -318,11 +394,15 @@ Standard closeout task for this story series:
 
 ## Tasks
 
-1. **AC1:** `AdminAlertEventListener.insertAlert` — `save` → `saveAndFlush` at `:138`. Update
+1. **AC1:** `AdminAlertEventListener.insertAlert` — `save` → `saveAndFlush`, wrapped in a new
+   `requiresNewTemplate.executeWithoutResult(...)` isolation (see "The fix" section's 2026-09-24
+   correction — `saveAndFlush` alone does not protect the 5 `REQUIRED`-propagation callers). Add the
+   `TransactionTemplate` field (mirrors `GdprErasureService.java:122,160-161`). Update
    `AdminAlertEventListenerTest`'s existing `save`/`saveAndFlush` assertions. Add the new real-DB
-   concurrency IT (new class or an addition to an existing `AdminQueueIT`-style real-DB test — dev's
-   choice, follow this project's existing naming convention for concurrency ITs). Mutation-check per AC1's
-   test plan before marking done.
+   concurrency IT against a `REQUIRED`-propagation caller (new class or an addition to an existing
+   `AdminQueueIT`-style real-DB test — dev's choice, follow this project's existing naming convention for
+   concurrency ITs), asserting both callers' own primary writes survive, not just that no exception
+   escapes. Run both mutation-checks per AC1's test plan before marking done.
 2. **AC2:** `StripeWebhookService` — new `maybeAlertOrphanedInvoicePaymentFailed`, wired into
    `handleInvoicePaymentFailed` before the `subscriptionService.handleSubscriptionWebhook` delegation.
    `AdminAlertType.SUBSCRIPTION_ORPHANED` Javadoc update. Extend `StripeWebhookVerificationTest` with the
@@ -336,14 +416,20 @@ Standard closeout task for this story series:
 
 ## Dev Notes
 
-- **Read `GdprErasureService.java:590-645` before starting AC1** — `insertErasureAlertIfAbsent` is the
-  exact template for the fix and its own Javadoc explains the flush-timing hazard in more detail than this
-  story repeats. Do not re-derive that reasoning from scratch; cite it.
+- **Read `GdprErasureService.java:583-591` and `:624-641` before starting AC1** — `raiseErasureAlert`'s
+  `requiresNewTemplate.executeWithoutResult(...)` wrapping is the load-bearing part of the template, not
+  just `insertErasureAlertIfAbsent`'s `saveAndFlush` call in isolation; its own Javadoc explains both the
+  flush-timing hazard and why the write needs its own transaction in more detail than this story repeats.
+  Do not re-derive that reasoning from scratch; cite it. **A `saveAndFlush`-only port of this fix — without
+  the `REQUIRES_NEW` isolation — was this story's own original draft, corrected during review (2026-09-24)
+  because it silently fails to protect the 5 `REQUIRED`-propagation callers; do not regress to that
+  shape.**
 - **`AdminAlertEventListener.insertAlert`'s callers span 5 different publishing modules** (messaging,
-  reviews, payment/strikes, disputes, payment/subscriptions) — when writing the new concurrency IT, pick
-  whichever publisher has the simplest existing test fixture already in the codebase (likely
-  `StrikeThresholdReachedEvent` or `ReviewFlaggedEvent`, both already used in `AdminQueueIT`'s existing
-  seed data) rather than building new fixtures from scratch.
+  reviews, payment/strikes, disputes, payment/subscriptions) — when writing the new concurrency IT, use
+  `ReviewFlaggedEvent` via a real `ReviewFlagService.flag()` call specifically (not a bare
+  `ApplicationEventPublisher.publishEvent`) so the assertion that the caller's own primary write survives
+  is testing a real business operation, not a synthetic one. `ReviewFlagService.flag()` is `REQUIRED`
+  propagation and already used in `AdminQueueIT`'s existing seed data.
 - **`Invoice.getCustomer()`'s `String` return type was confirmed by decompiling the pinned
   `stripe-java-28.4.0.jar` directly** (`javap -p` against `com/stripe/model/Invoice.class`), not assumed
   from `Subscription`'s identical-looking method — the two classes are unrelated types in the SDK and a
