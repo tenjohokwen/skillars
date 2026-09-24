@@ -4,7 +4,9 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.admin.contract.GdprErasureRequestedEvent;
 import com.softropic.skillars.platform.admin.service.GdprErasureService;
+import com.softropic.skillars.platform.admin.service.GdprEventListener;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.security.SecurityIT;
@@ -105,6 +107,7 @@ class GdprErasureIT extends AbstractIntegrationTest {
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private com.softropic.skillars.platform.outbox.service.OutboxService outboxService;
     @Autowired private GdprErasureService gdprErasureService;
+    @Autowired private GdprEventListener gdprEventListener;
     @Autowired private ConfigService configService;
     @Autowired private DataSource dataSource;
 
@@ -1099,6 +1102,92 @@ class GdprErasureIT extends AbstractIntegrationTest {
                 }
             }
         }
+    }
+
+    /**
+     * skillars-deferred-133 AC1. Proves the previously-unalerted failure path
+     * {@code erase()}'s own {@code assertConnectionPoolNotSaturated} pre-check (skillars-deferred-132
+     * AC1 Fix 4) opened: routed through {@link GdprEventListener#onErasureRequested} — deliberately NOT
+     * a direct {@code gdprErasureService.erase(...)} call like
+     * {@link #erase_connectionPoolSaturated_failsFastInsteadOfBlockingForTheFullConnectionTimeout}
+     * above (which asserts {@code erase()}'s own thrown exception) — this test instead asserts the
+     * listener's own {@code catch (Exception e) { markFailed(...) }} behavior, which a direct
+     * {@code erase()} call bypasses entirely, per this fix's own Test guidance (extending the existing
+     * pool-saturation IT cannot reach {@code markFailed}: it calls {@code erase()} directly and holds
+     * every connection for its own duration).
+     *
+     * <p>Saturates the pool fully (all {@code maxPoolSize} connections held externally) so
+     * {@code erase()}'s synchronous pre-check trips instantly, then frees two connections a short,
+     * fixed delay later — enough for {@code markFailed}'s own {@code REQUIRES_NEW} acquisition
+     * (blocked against the still-saturated pool at the instant {@code erase()} throws, since Hikari
+     * blocks-and-waits rather than failing fast the way {@code erase()}'s own MXBean check does) to
+     * succeed well within the pool's 30s {@code connection-timeout}, proving {@code markFailed}'s alert
+     * write can actually complete under the exact connection pressure that triggered it.
+     */
+    @Test
+    void erase_connectionPoolSaturated_routedThroughListener_marksFailedAndRaisesUnclassifiedFailureAlert()
+        throws Exception {
+        assertThat(dataSource).isInstanceOf(HikariDataSource.class);
+        HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
+        int maxPoolSize = hikariDataSource.getMaximumPoolSize();
+
+        UUID requestId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO admin.gdpr_requests (id, user_id, request_type, status, created_at) "
+                    + "VALUES (?, ?, 'ERASURE', 'PENDING', ?)",
+                requestId, COACH_USER_ID, Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        List<Connection> held = new ArrayList<>();
+        ExecutorService releaser = Executors.newSingleThreadExecutor();
+        try {
+            for (int i = 0; i < maxPoolSize; i++) {
+                held.add(dataSource.getConnection());
+            }
+
+            releaser.submit(() -> {
+                try {
+                    Thread.sleep(150);
+                    held.remove(held.size() - 1).close();
+                    held.remove(held.size() - 1).close();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+            Instant start = Instant.now();
+            gdprEventListener.onErasureRequested(new GdprErasureRequestedEvent(this, requestId, COACH_USER_ID));
+            Duration elapsed = Duration.between(start, Instant.now());
+
+            assertThat(elapsed)
+                .as("markFailed's connection acquisition must succeed shortly after the releaser frees "
+                    + "a connection, not block anywhere near the pool's 30s connection-timeout")
+                .isLessThan(Duration.ofSeconds(5));
+        } finally {
+            releaser.shutdown();
+            releaser.awaitTermination(5, TimeUnit.SECONDS);
+            for (Connection c : held) {
+                try {
+                    c.close();
+                } catch (Exception ignored) {
+                    // best-effort cleanup; see the sibling test's own identical rationale above
+                }
+            }
+        }
+
+        String finalStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.gdpr_requests WHERE id = ?", String.class, requestId);
+        assertThat(finalStatus).isEqualTo("FAILED");
+
+        Map<String, Object> alert = jdbcTemplate.queryForMap(
+            "SELECT type, reference_id, reference_type, status, reason FROM admin.admin_alerts "
+                + "WHERE reference_id = ? AND type = 'GDPR_ERASURE_DEADLINE'",
+            requestId.toString());
+        assertThat(alert.get("reference_type")).isEqualTo("GDPR_REQUEST");
+        assertThat(alert.get("status")).isEqualTo("OPEN");
+        assertThat(alert.get("reason")).isEqualTo("UNCLASSIFIED_FAILURE");
     }
 
     /**

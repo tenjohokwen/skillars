@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.messaging.contract.ConversationReportedEvent;
 import com.softropic.skillars.platform.messaging.contract.MessageHeldForReviewEvent;
 import com.softropic.skillars.platform.messaging.contract.MessageReportedEvent;
+import com.softropic.skillars.platform.payment.contract.event.CoachSubscriptionOrphanedEvent;
 import com.softropic.skillars.platform.payment.contract.event.StrikeThresholdReachedEvent;
 import com.softropic.skillars.platform.reviews.contract.ReviewFlaggedEvent;
 import org.junit.jupiter.api.BeforeEach;
@@ -104,6 +105,21 @@ class AdminAlertEventListenerTest {
         AdminAlert saved = captor.getValue();
         assertThat(saved.getType()).isEqualTo(AdminAlertType.STRIKE_THRESHOLD);
         assertThat(saved.getReferenceId()).isEqualTo(coachId.toString());
+        assertThat(saved.getReferenceType()).isEqualTo(AdminAlertReferenceType.COACH);
+    }
+
+    /** skillars-deferred-133 AC3. */
+    @Test
+    void onCoachSubscriptionOrphaned_insertsAlert() {
+        UUID coachProfileId = UUID.randomUUID();
+        listener.onCoachSubscriptionOrphaned(
+            new CoachSubscriptionOrphanedEvent(this, coachProfileId, "sub_test_001"));
+
+        ArgumentCaptor<AdminAlert> captor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).save(captor.capture());
+        AdminAlert saved = captor.getValue();
+        assertThat(saved.getType()).isEqualTo(AdminAlertType.SUBSCRIPTION_ORPHANED);
+        assertThat(saved.getReferenceId()).isEqualTo(coachProfileId.toString());
         assertThat(saved.getReferenceType()).isEqualTo(AdminAlertReferenceType.COACH);
     }
 

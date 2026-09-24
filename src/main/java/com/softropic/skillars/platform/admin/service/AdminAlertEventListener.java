@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.messaging.contract.ConversationReportedEv
 import com.softropic.skillars.platform.messaging.contract.MessageHeldForReviewEvent;
 import com.softropic.skillars.platform.messaging.contract.MessageReportedEvent;
 import com.softropic.skillars.platform.messaging.contract.MessagesPurgedEvent;
+import com.softropic.skillars.platform.payment.contract.event.CoachSubscriptionOrphanedEvent;
 import com.softropic.skillars.platform.payment.contract.event.StrikeThresholdReachedEvent;
 import com.softropic.skillars.platform.reviews.contract.ReviewFlaggedEvent;
 import lombok.RequiredArgsConstructor;
@@ -99,6 +100,22 @@ public class AdminAlertEventListener {
         insertAlert(AdminAlertType.DISPUTE_RAISED,
             event.getBookingId().toString(),
             AdminAlertReferenceType.BOOKING);
+    }
+
+    /**
+     * skillars-deferred-133 AC3. {@code REQUIRES_NEW}, unlike {@link #onStrikeThreshold}'s plain
+     * {@code @Transactional} above — belt-and-suspenders with {@code StripeWebhookService}'s own
+     * wrapping {@code catch (Exception e)} around its resolve-and-publish block (either alone is
+     * sufficient to keep {@code handleEventAtomically}'s idempotency-record commit unconditional on
+     * this write succeeding; both together is cheap and this path is not connection-pool-constrained
+     * the way {@code GdprErasureService}'s is).
+     */
+    @EventListener
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onCoachSubscriptionOrphaned(CoachSubscriptionOrphanedEvent event) {
+        insertAlert(AdminAlertType.SUBSCRIPTION_ORPHANED,
+            event.getCoachProfileId().toString(),
+            AdminAlertReferenceType.COACH);
     }
 
     private void insertAlert(AdminAlertType type, String referenceId, AdminAlertReferenceType referenceType) {

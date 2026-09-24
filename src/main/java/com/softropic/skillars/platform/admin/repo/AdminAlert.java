@@ -54,7 +54,12 @@ public class AdminAlert {
     @Column(name = "resolved_by")
     private Long resolvedBy;
 
-    /** Why the alert was raised. Populated only by the messaging moderation path; null elsewhere. */
+    /**
+     * Why the alert was raised. Stale as of skillars-deferred-128: no longer populated only by the
+     * messaging moderation path — {@code GdprErasureService} also populates it (e.g.
+     * {@code DEADLINE_EXCEEDED}, {@code CHILD_VANISHED}, {@code UNCLASSIFIED_FAILURE}). Still null for
+     * alert types that don't distinguish sub-causes (e.g. {@code STRIKE_THRESHOLD}).
+     */
     @Column(length = 64)
     private String reason;
 }

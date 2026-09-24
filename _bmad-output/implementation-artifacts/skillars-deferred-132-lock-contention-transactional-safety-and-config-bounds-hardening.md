@@ -1113,3 +1113,91 @@ convention (Dev Notes).
   residual, the Stripe→payment reconciliation sweep, and Fix 6's own `ConditionTimeoutException`
   residual left explicitly open. No `mvn verify` run locally, per project convention. Status →
   `review`.
+
+---
+
+## Code Review (bmad-code-review + txn-and-concurrency-audit)
+
+**Review Date:** 2026-09-24  
+**Layers:** Blind Hunter, Acceptance Auditor, Txn/Concurrency Audit (Edge Case Hunter failed on schema)  
+**Group 1 (Story & Documentation):** 2,380-line diff across 4 files
+
+### CRITICAL Findings (1)
+
+**C1: ConfigBounds test will fail on 0L defaults with non-zero minimums**
+- **File:** `ConfigBoundsEnumCoverageTest.java` (implied in test assertions)
+- **Issue:** The new test `hasCodeDefaultKeysDefaultIsWithinItsOwnBounds` asserts all HAS_CODE_DEFAULT keys have defaultValue within [min, max] bounds. However, 4 keys have 0L defaults but min>0:
+  - BOOKING_QUICK_COMPLETE_TIMEOUT_HOURS: [1L, 168L] with 0L default
+  - MODERATION_SLA_MINUTES: [1L, 10080L] with 0L default
+  - MODERATION_LOCK_TIMEOUT_MINUTES: [1L, 1440L] with 0L default
+  - VIDEO_RESERVATION_TIMEOUT_MINUTES: [1L, 1440L] with 0L default
+- **Impact:** Test assertion `isBetween(k.min(), k.max())` fails at runtime.
+- **Fix:** Either (a) exclude these 4 keys from HAS_CODE_DEFAULT (use 0L as uninitialized sentinel), or (b) update bounds/defaults to allow 0L. Verify intent before patching.
+- **Status:** Unresolved — requires decision.
+
+### MEDIUM Findings (5)
+
+**M1: Pool saturation exceptions misclassified as lock contention**
+- **File:** `GdprErasureService.java:515-534`
+- **Issue:** When HikariCP pool saturates, `assertConnectionPoolNotSaturated` throws `PessimisticLockingFailureException`, caught as CHILD_CONTENDED and logged as "lock was genuinely contended." Misleads admins about root cause (resource exhaustion vs. lock contention).
+- **Impact:** Incorrect alert/diagnostic framing.
+- **Fix:** Introduce distinct exception type or marker field to distinguish pool saturation from lock contention at catch site.
+- **Status:** Unresolved — requires implementation.
+
+**M2: insertErasureAlertIfAbsent only catches DataIntegrityViolationException**
+- **File:** `GdprErasureService.java:616-631`
+- **Issue:** Catch block only handles constraint-race violations. Other DB errors (connection failure, serialization error, CHECK constraint violation on alert type) propagate and roll back entire REQUIRES_NEW transaction in `markFailed`, coupling alert persistence to request status updates.
+- **Impact:** If alerting fails for other reasons, GdprRequest never gets marked FAILED; state inconsistency.
+- **Fix:** Broaden exception handling OR decouple alert write from status update (consider separate outbox pattern if alert persistence is critical).
+- **Status:** Unresolved — requires implementation decision.
+
+**M3: Potential null dereference in maybeAlertOrphanedLiveSubscription logging**
+- **File:** `StripeWebhookService.java:52-54`
+- **Issue:** Catch block logs `sub.getId()` directly: `log.warn("[STRIPE_WEBHOOK_ORPHAN_ALERT_FAILED stripeSubId={}]", sub.getId(), e)`. If getId() returns null, logging emits null instead of safe placeholder.
+- **Impact:** Reduced debuggability in logs.
+- **Fix:** Use `Objects.requireNonNullElse(sub.getId(), "unknown")` or add null check before logging.
+- **Status:** Unresolved — requires implementation.
+
+**M4: AdminQueueService.getAlerts N+1 query pattern**
+- **File:** `AdminQueueService.java:42-74`
+- **Issue:** Initial query fetches alert rows, then per-alert loop calls `buildSummary`, which issues 1-2 queries per alert (messageRepository, conversationReportRepository, reviewFlagRepository). Worst case: 1 + (20 × 2) = 41 queries per page.
+- **Impact:** Scalability concern; works for small page size (20) but not efficient.
+- **Fix:** Batch-fetch all message/conversation/review details in one query each using IN clauses, join in memory during DTO construction.
+- **Status:** Unresolved — requires implementation.
+
+**M5: Missing migration file V153 verification needed**
+- **File:** Implied in diff; migration file not directly visible
+- **Issue:** Diff adds SUBSCRIPTION_ORPHANED to AdminAlertType enum. New test `adminAlertsTypeCheckConstraint_containsEveryAdminAlertTypeEnumValue` expects DB CHECK constraint to include it. Migration V153__admin_alerts_subscription_orphaned_type.sql is referenced in code comments but not confirmed in diff.
+- **Impact:** If migration doesn't properly update CHECK constraint, test fails at runtime; type enum/constraint divergence.
+- **Fix:** Verify (a) V153 is present in commit, (b) it properly alters admin_alerts.type CHECK constraint to include 'SUBSCRIPTION_ORPHANED'. If missing, add migration.
+- **Status:** Unresolved — requires verification.
+
+### LOW Findings (3 — Deferred)
+
+**L1: StripeCustomerRepository.findByStripeCustomerId returns List, not Optional**
+- **Status:** DEFER — Pre-existing design choice; callers already correctly check isEmpty() before access.
+
+**L2: maybeAlertOrphanedLiveSubscription takes first result without uniqueness guarantee**
+- **Status:** DEFER — Pre-existing data model; latent only if multiple parents map to same Stripe customer (unlikely in practice).
+
+**L3: GdprErasureService.eraseParentChildren loads entire children list into memory**
+- **Status:** DEFER — Low risk; deadline filtering mitigates impact. Typical parent child counts unlikely to cause memory pressure.
+
+### Verified CORRECT (5 — No Action)
+
+✅ GdprErasureService: REQUIRES_NEW isolation prevents cross-transaction corruption  
+✅ GdprErasureService: TOCTOU handling is explicit and documented  
+✅ StripeWebhookService: Grace window mitigates provisioning race correctly  
+✅ GdprErasureService: Lock ordering serialized via pessimistic lock (prevents deadlock)  
+✅ StripeWebhookService: Webhook idempotency with ON CONFLICT DO NOTHING is atomic  
+✅ ConfigBounds: Lock timeouts have documented reasoning and correct bounds
+
+### Summary
+
+- **1 CRITICAL** (immediate)
+- **5 MEDIUM** (high priority, 4 patches + 1 verification)
+- **3 LOW** (deferred)
+- **5 CORRECT** (confirmed safe)
+- **1 FAILED LAYER** (Edge Case Hunter schema validation error)
+
+**Next Steps:** Continue review of Groups 2–7, or address findings above before proceeding.

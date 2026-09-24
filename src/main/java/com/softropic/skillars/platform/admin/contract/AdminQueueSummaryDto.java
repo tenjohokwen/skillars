@@ -11,4 +11,8 @@ public record AdminQueueSummaryDto(
     // alert made `total` strictly exceed the sum of this record's own reported buckets — see
     // AdminQueueService.getSummary's own comment for the full rationale.
     long gdprErasureDeadlines,
+    // skillars-deferred-133 AC3: same defect skillars-deferred-128 fixed above, for
+    // SUBSCRIPTION_ORPHANED — without its own bucket, `total` would silently exceed the sum of the
+    // reported buckets the moment one is raised.
+    long subscriptionOrphaned,
     long total) {}

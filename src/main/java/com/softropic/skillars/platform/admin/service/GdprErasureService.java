@@ -49,6 +49,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -149,6 +150,10 @@ public class GdprErasureService {
     // (code review 2026-09-23): extracted for consistency with the two constants above — this one
     // predates skillars-deferred-129 and was left as a bare literal at both its call sites.
     private static final String CHILD_VANISHED = "CHILD_VANISHED";
+    // skillars-deferred-133 AC1: markFailed's own catch-all reason — covers erase()'s pre-transaction
+    // assertConnectionPoolNotSaturated throw and any other exception not one of the three typed
+    // reasons above (a GdprRequest/User "not found" RuntimeException, or anything unforeseen).
+    private static final String UNCLASSIFIED_FAILURE = "UNCLASSIFIED_FAILURE";
 
     @PostConstruct
     void initTemplates() {
@@ -388,13 +393,28 @@ public class GdprErasureService {
         log.info("[GDPR_ERASURE_COMPLETED] requestId={} userId={} role={}", requestId, userId, role);
     }
 
+    /**
+     * skillars-deferred-133 AC1: the alert below runs unconditionally, OUTSIDE the {@code ifPresent}
+     * lambda — {@code eraseTransactional}'s own {@code orElseThrow(() -> new RuntimeException("GdprRequest
+     * not found: " + requestId))} fires exactly when this same {@code findById(requestId)} returns
+     * empty, so an {@code ifPresent}-scoped alert would never run for the one path this fix was
+     * explicitly written to cover. Only the status-update half needs the guard (can't set status on a
+     * nonexistent row) — the alert itself only needs the {@code requestId} string.
+     *
+     * <p>Calls {@link #insertErasureAlertIfAbsent} directly (not {@link #raiseErasureAlert}) — this
+     * method is already {@code @Transactional(REQUIRES_NEW)}; routing through {@code raiseErasureAlert}
+     * would suspend this transaction and open a SECOND, concurrently-held connection from the same
+     * pool, right when {@code erase()}'s own {@code assertConnectionPoolNotSaturated} pre-check — the
+     * headline trigger for this whole fix — just reported the pool saturated.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markFailed(UUID requestId) {
         gdprRequestRepository.findById(requestId).ifPresent(r -> {
             r.setStatus("FAILED");
             gdprRequestRepository.save(r);
-            log.error("[GDPR_ERASURE_MARKED_FAILED] requestId={}", requestId);
         });
+        log.error("[GDPR_ERASURE_MARKED_FAILED] requestId={}", requestId);
+        insertErasureAlertIfAbsent(requestId, UNCLASSIFIED_FAILURE);
     }
 
     /**
@@ -541,14 +561,17 @@ public class GdprErasureService {
      * queue UI — {@code DEADLINE_EXCEEDED}, {@code CHILD_VANISHED}, {@code CHILD_CONTENDED}, and (as
      * of skillars-deferred-129 AC1) {@link #CHILD_DELETE_LOCK_TIMEOUT}.
      *
-     * <p>Deduplicated per {@code (requestId, reason)} (code review 2026-09-23, Decision 2 — corrected
-     * from the original per-{@code requestId}-only dedup): a second skipped child raising the SAME
-     * reason (or a later re-drive) does not raise another one, but a DIFFERENT reason on the same
-     * request does. Deduping on {@code requestId} alone let an earlier, benign {@code CHILD_VANISHED}
-     * alert silently suppress a later, genuinely-actionable {@code CHILD_DELETE_LOCK_TIMEOUT} or
-     * {@code DEADLINE_EXCEEDED} for the same PARENT request — defeating the discrimination this
-     * method's {@code reason} parameter exists to provide, since the admin queue would render only
-     * the already-resolved-looking {@code CHILD_VANISHED} case.
+     * <p><strong>Corrected by skillars-deferred-133 AC1 — dedup is reason-BLIND again</strong> (any
+     * {@code OPEN} {@code GDPR_ERASURE_DEADLINE} alert for this {@code requestId}), not per-{@code
+     * (requestId, reason)} as the 2026-09-23 code review (Decision 2) briefly made it. That reason-aware
+     * dedup was incompatible with {@code admin_alerts_unique_open_per_ref}
+     * ({@code V138__baseline_schema.sql}), a unique index on {@code (reference_id, type)} only —
+     * {@code reason} is not part of it — so a PARENT erasure raising {@code CHILD_VANISHED} for one
+     * child and then {@code CHILD_DELETE_LOCK_TIMEOUT}/{@code CHILD_CONTENDED} for another passed the
+     * reason-aware check for the second alert and then violated this reason-blind DB constraint,
+     * converting a designed skip-and-continue into a full rollback. See
+     * {@link #insertErasureAlertIfAbsent}'s own Javadoc for the fix (a reason-blind check plus a
+     * {@code DataIntegrityViolationException} catch for the remaining race window).
      *
      * <p>Runs in its OWN {@code REQUIRES_NEW} transaction, not {@link #eraseTransactional}'s own — for the
      * deadline-exceeded case, the caller ({@link #eraseParentChildren}) throws immediately after this
@@ -558,20 +581,66 @@ public class GdprErasureService {
      * deadline path rather than depending on {@code erase()}'s own eventual commit.
      */
     private void raiseErasureAlert(UUID requestId, String reason) {
-        requiresNewTemplate.executeWithoutResult(status -> {
-            boolean alreadyOpen = adminAlertRepository.findFirstByReferenceIdAndTypeAndReasonAndStatus(
-                    requestId.toString(), AdminAlertType.GDPR_ERASURE_DEADLINE, reason, AdminAlertStatus.OPEN)
-                .isPresent();
-            if (alreadyOpen) {
-                return;
-            }
+        requiresNewTemplate.executeWithoutResult(status -> insertErasureAlertIfAbsent(requestId, reason));
+    }
+
+    /**
+     * skillars-deferred-133 AC1: extracted from {@link #raiseErasureAlert} so {@link #markFailed} can
+     * call it directly, inside its OWN already-{@code REQUIRES_NEW} transaction — not through {@code
+     * raiseErasureAlert}'s {@code requiresNewTemplate}, which would open a second, concurrently-held
+     * connection from the same pool (see {@code markFailed}'s own Javadoc). Deliberately
+     * non-transactional itself — the caller supplies the transactional context.
+     *
+     * <p><strong>Dedup is reason-BLIND</strong> (any {@code OPEN} {@code GDPR_ERASURE_DEADLINE} alert
+     * for this {@code requestId}, regardless of {@code reason}) — corrected back from the 2026-09-23
+     * code review's reason-aware dedup ({@code findFirstByReferenceIdAndTypeAndReasonAndStatus}),
+     * which is incompatible with {@code admin_alerts_unique_open_per_ref}
+     * ({@code V138__baseline_schema.sql}): that unique index is on {@code (reference_id, type)} only —
+     * {@code reason} is not part of it — so a PARENT erasure raising two different reasons for two
+     * different children (e.g. {@code CHILD_VANISHED} then {@code CHILD_DELETE_LOCK_TIMEOUT}) passed
+     * the reason-aware check for the second alert and then violated this reason-blind DB constraint,
+     * converting a designed skip-and-continue into an uncaught {@link DataIntegrityViolationException}
+     * that rolled back the whole {@code eraseParentChildren} call. Each {@code raiseErasureAlert} call
+     * runs in its OWN {@code REQUIRES_NEW} transaction that commits before the next child's turn in
+     * {@code eraseParentChildren}'s own sequential loop, so the reason-blind {@code alreadyOpen} check
+     * alone (not the {@code catch} below) is what actually closes this specific, sequential-not-
+     * concurrent pre-existing race — the first child's alert is already durably committed by the time
+     * the second child's check runs.
+     *
+     * <p><strong>The {@code catch} below guards a genuinely different, narrower case: two truly
+     * concurrent callers racing for the same {@code (requestId, reason)} slot</strong> (found and
+     * corrected during implementation, not assumed — {@code AdminAlert.alertId} is
+     * {@code GenerationType.UUID}, an in-memory/before-execution id strategy, so Hibernate does not
+     * need to flush on a plain {@code save()}; empirically confirmed via a throwaway Testcontainers
+     * test that a plain {@code save()} of a duplicate row does NOT throw synchronously — the real
+     * {@code DataIntegrityViolationException} only surfaces when the persistence context is flushed,
+     * i.e. at this method's OWN commit, which is outside any try/catch scoped to the {@code save()}
+     * call itself. {@code AdminAlertEventListener.insertAlert}'s superficially-similar catch has this
+     * same latent gap for a genuine concurrent race — pre-existing, out of this story's scope to fix.
+     * {@code saveAndFlush} below (not plain {@code save}) forces the INSERT to execute — and any
+     * constraint violation to surface — synchronously, inside this try block, where it can actually be
+     * caught.
+     */
+    private void insertErasureAlertIfAbsent(UUID requestId, String reason) {
+        boolean alreadyOpen = adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
+                requestId.toString(), AdminAlertType.GDPR_ERASURE_DEADLINE, AdminAlertStatus.OPEN)
+            .isPresent();
+        if (alreadyOpen) {
+            return;
+        }
+        try {
             AdminAlert alert = new AdminAlert();
             alert.setType(AdminAlertType.GDPR_ERASURE_DEADLINE);
             alert.setReferenceId(requestId.toString());
             alert.setReferenceType(AdminAlertReferenceType.GDPR_REQUEST);
             alert.setReason(reason);
-            adminAlertRepository.save(alert);
-        });
+            adminAlertRepository.saveAndFlush(alert);
+        } catch (DataIntegrityViolationException e) {
+            // A genuinely concurrent caller won the (referenceId, type) OPEN slot first, between this
+            // method's own isPresent() check above and its flush. saveAndFlush (not save) is what
+            // makes this catch actually reachable — see this method's own Javadoc.
+            log.debug("[GDPR_ERASURE_ALERT_DUPLICATE_SUPPRESSED] requestId={} reason={}", requestId, reason);
+        }
     }
 
     /**

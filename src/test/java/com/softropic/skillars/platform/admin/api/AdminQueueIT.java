@@ -4,6 +4,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.admin.contract.AdminAlertType;
 import com.softropic.skillars.platform.messaging.service.MessageModerationSweeper;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.BeforeEach;
@@ -344,6 +345,28 @@ class AdminQueueIT extends AbstractIntegrationTest {
     private static final String READ_TYPE_CHECK_DEF =
         "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
         + "WHERE conname = 'admin_alerts_type_check' AND conrelid = 'admin.admin_alerts'::regclass";
+
+    /**
+     * skillars-deferred-133 AC3 Test guidance: no existing test pinned every {@code AdminAlertType}
+     * enum value against the DB's own {@code admin_alerts_type_check} CHECK constraint content — only
+     * {@link #READ_TYPE_CHECK_DEF} reading it dynamically for the rolling-deploy simulation above.
+     * Catches exactly the class of bug this story's own {@code SUBSCRIPTION_ORPHANED} addition could
+     * otherwise introduce silently: an enum constant added without its matching migration (or vice
+     * versa) — a real value the enum knows that the DB would reject at INSERT with a CHECK violation,
+     * or a value the DB accepts that this instance's enum cannot map back (the AC6 rolling-deploy case
+     * the test above already covers on its own, deliberately, since that one is a legitimate
+     * multi-version state, not a bug).
+     */
+    @Test
+    void adminAlertsTypeCheckConstraint_containsEveryAdminAlertTypeEnumValue() {
+        String constraintDef = jdbcTemplate.queryForObject(READ_TYPE_CHECK_DEF, String.class);
+        assertThat(constraintDef).isNotBlank();
+        for (AdminAlertType type : AdminAlertType.values()) {
+            assertThat(constraintDef)
+                .as("admin_alerts_type_check must accept AdminAlertType.%s", type)
+                .contains("'" + type.name() + "'");
+        }
+    }
 
     @Test
     void queue_withRowCarryingAnUnknownAlertType_returns200_rendersEveryMappableRow() {

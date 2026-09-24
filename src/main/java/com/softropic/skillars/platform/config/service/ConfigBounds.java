@@ -51,13 +51,35 @@ public final class ConfigBounds {
     }
 
     /**
-     * @param key      the {@code platform_config} key
-     * @param min      smallest value the code can act on sanely (inclusive)
-     * @param max      largest value that is not obviously a fat-finger (inclusive)
-     * @param failFast whether {@link ConfigStartupAssertion} blocks startup on an out-of-range value
-     * @param note     one line: what a bad value actually does (surfaced in the startup ERROR log)
+     * @param key          the {@code platform_config} key
+     * @param min          smallest value the code can act on sanely (inclusive)
+     * @param max          largest value that is not obviously a fat-finger (inclusive)
+     * @param failFast     whether {@link ConfigStartupAssertion} blocks startup on an out-of-range value
+     * @param note         one line: what a bad value actually does (surfaced in the startup ERROR log)
+     * @param defaultValue skillars-deferred-133 AC2: for a key in {@link #HAS_CODE_DEFAULT}, the same
+     *                     literal its call site actually falls back to on an absent/out-of-range
+     *                     value — 17 of the 18 via the 4-arg {@code getBoundedLong(key, default, min,
+     *                     max)}/{@code getBoundedInt} overload (which does NOT clamp: out-of-range
+     *                     falls back to this default, unlike the 3-arg overload's clamp-to-bound
+     *                     behavior), the one exception being {@link #TIMELINE_COACH_ACCESS_EXPIRY_DAYS}
+     *                     — its call site uses the 3-arg overload wrapped in a manual
+     *                     {@code catch (Exception e)} block, a missing/throwing-key fallback
+     *                     semantically distinct from the other 17 keys' embedded 4-arg default, not a
+     *                     range clamp either. For every key NOT in {@code HAS_CODE_DEFAULT} (a 1-arg,
+     *                     no-code-default call site — absent/blank there is an {@code
+     *                     IllegalStateException}, not a fallback), this is the not-applicable sentinel
+     *                     {@code 0L} — not a real default, since none exists to record.
+     *                     <p><strong>Registry-only, per the owner decision: this is documentation, not
+     *                     a verified contract.</strong> Unlike {@code min}/{@code max} (pinned at most
+     *                     call sites by a {@code verify(...)} in that call site's own unit test), the
+     *                     call-site literal remains the sole source of truth for what actually runs —
+     *                     a future edit to a call site's own default literal that forgets to update
+     *                     this field will not be caught by anything mechanical (only 4 of the 18 keys
+     *                     even reference their constant via {@code .key()} at the call site; a range
+     *                     check here can only catch a default falling outside its own key's
+     *                     {@code min}/{@code max}, not a drift from what the call site actually passes).
      */
-    public record BoundedKey(String key, long min, long max, boolean failFast, String note) {
+    public record BoundedKey(String key, long min, long max, boolean failFast, String note, long defaultValue) {
     }
 
     // ── Long day/hour/minute/count windows (2-arg getBoundedLong call sites) ──────────────────────
@@ -65,37 +87,37 @@ public final class ConfigBounds {
     /** {@code PackSessionService.pausePack} — 0/neg/absurd blocks every pack pause. AC1. */
     public static final BoundedKey PACK_PAUSE_MAX_DAYS =
         new BoundedKey("pack.pause.maxDays", 1L, 3650L, true,
-            "0/neg → every pack pause rejected as booking.pauseDurationInvalid");
+            "0/neg → every pack pause rejected as booking.pauseDurationInvalid", 90L);
 
     /** {@code DisputeService} — 0/neg → no dispute can ever be filed. */
     public static final BoundedKey DISPUTES_SUBMISSION_WINDOW_DAYS =
         new BoundedKey("disputes.submissionWindowDays", 1L, 365L, true,
-            "0/neg → no dispute can ever be filed");
+            "0/neg → no dispute can ever be filed", 14L);
 
     /** {@code QuickCompleteTimeoutService} — 0 → instant timeout; neg → nonsense. */
     public static final BoundedKey BOOKING_QUICK_COMPLETE_TIMEOUT_HOURS =
         new BoundedKey("booking.quick_complete_timeout_hours", 1L, 168L, false,
-            "0 → Quick Complete auto-confirms instantly; neg → nonsense cutoff");
+            "0 → Quick Complete auto-confirms instantly; neg → nonsense cutoff", 0L);
 
     /** {@code ModerationSlaMonitorService} — 0/neg → everything instantly SLA-breached. */
     public static final BoundedKey MODERATION_SLA_MINUTES =
         new BoundedKey("platform.moderation_sla_minutes", 1L, 10080L, true,
-            "0/neg → every SCANNING video is instantly SLA-breached and re-queued");
+            "0/neg → every SCANNING video is instantly SLA-breached and re-queued", 0L);
 
     /** {@code ModerationSlaMonitorService} — neg breaks the retry-count comparison (0 = "no retries"). */
     public static final BoundedKey MODERATION_MAX_RETRIES =
         new BoundedKey("platform.moderation_max_retries", 0L, 100L, false,
-            "neg → retry-count comparison inverts; huge → videos never fail out");
+            "neg → retry-count comparison inverts; huge → videos never fail out", 0L);
 
     /** {@code ModerationOrchestrationService} — 0 → lock instantly stale; huge → stuck rows. */
     public static final BoundedKey MODERATION_LOCK_TIMEOUT_MINUTES =
         new BoundedKey("platform.moderation_lock_timeout_minutes", 1L, 1440L, true,
-            "0 → moderation lock is stale on creation (TOCTOU reopens); huge → permanently stuck rows");
+            "0 → moderation lock is stale on creation (TOCTOU reopens); huge → permanently stuck rows", 0L);
 
     /** {@code VideoLifecycleScheduler} — 0/neg → archives immediately or never. */
     public static final BoundedKey VIDEO_LIFECYCLE_BLOCKED_TO_ARCHIVED_DAYS =
         new BoundedKey("platform.video.lifecycle.blocked_to_archived_days", 1L, 3650L, false,
-            "0/neg → BLOCKED videos archived immediately; huge → never archived");
+            "0/neg → BLOCKED videos archived immediately; huge → never archived", 30L);
 
     /**
      * {@code VideoLifecycleScheduler} — 0/neg → deletes immediately. Ceiling is deliberately wide
@@ -106,74 +128,74 @@ public final class ConfigBounds {
      */
     public static final BoundedKey VIDEO_LIFECYCLE_ARCHIVED_TO_DELETED_DAYS =
         new BoundedKey("platform.video.lifecycle.archived_to_deleted_days", 1L, 36500L, false,
-            "0/neg → ARCHIVED videos physically deleted immediately; huge → never deleted");
+            "0/neg → ARCHIVED videos physically deleted immediately; huge → never deleted", 90L);
 
     /** {@code PlaybackService} — 0 → signed URL dead on arrival (all playback broken). */
     public static final BoundedKey VIDEO_PLAYBACK_SIGNED_URL_TTL_MINUTES =
         new BoundedKey("platform.video.playback.signed_url_ttl_minutes", 1L, 1440L, true,
-            "0 → every signed HLS URL is expired on issue; all playback breaks");
+            "0 → every signed HLS URL is expired on issue; all playback breaks", 120L);
 
     /** {@code VideoAccessGuard} — 0/neg → coach sees nothing. Business cap, kept < Integer.MAX_VALUE (Math.toIntExact). */
     public static final BoundedKey VIDEO_ACCESS_COACH_WINDOW_DAYS =
         new BoundedKey("platform.video.access.coach_window_days", 1L, 3650L, false,
-            "0/neg → a coach with a recent completed booking can no longer view player videos");
+            "0/neg → a coach with a recent completed booking can no longer view player videos", 90L);
 
     /** {@code QuotaConfigService} — 0 → reservations expire instantly. */
     public static final BoundedKey VIDEO_RESERVATION_TIMEOUT_MINUTES =
         new BoundedKey("platform.video_reservation_timeout_minutes", 1L, 1440L, false,
-            "0 → every upload reservation expires instantly");
+            "0 → every upload reservation expires instantly", 0L);
 
     /** {@code TimelineQueryService} — 0/neg → coach timeline access always expired. */
     public static final BoundedKey TIMELINE_COACH_ACCESS_EXPIRY_DAYS =
         new BoundedKey("development.timeline.coachAccessExpiryDays", 1L, 3650L, false,
-            "0/neg → coach development-timeline access reads as always expired");
+            "0/neg → coach development-timeline access reads as always expired", 90L);
 
     /** {@code DevelopmentCorrelationService} — neg → every session qualifies (0 = legitimate). */
     public static final BoundedKey DEVELOPMENT_CORRELATION_MIN_SESSION_COUNT =
         new BoundedKey("development.correlation.minSessionCount", 0L, 10000L, false,
-            "neg → correlation gate never blocks; huge → correlation never runs");
+            "neg → correlation gate never blocks; huge → correlation never runs", 0L);
 
     /** {@code NeglectedSkillDetectionService} — neg → predicate inverts (0 = legitimate). */
     public static final BoundedKey DEVELOPMENT_NEGLECTED_SKILL_WARMUP_SESSION_COUNT =
         new BoundedKey("development.neglectedSkill.warmupSessionCount", 0L, 10000L, false,
-            "neg → neglected-skill warmup predicate inverts");
+            "neg → neglected-skill warmup predicate inverts", 0L);
 
     /** {@code SubscriptionService} — neg → grace math breaks (0 = "no grace" is legitimate). */
     public static final BoundedKey SUBSCRIPTION_PAST_DUE_GRACE_PERIOD_DAYS =
         new BoundedKey("subscription.pastDue.gracePeriodDays", 0L, 365L, false,
-            "neg → PAST_DUE grace cutoff moves into the future, downgrading nobody / everybody");
+            "neg → PAST_DUE grace cutoff moves into the future, downgrading nobody / everybody", 0L);
 
     /** {@code GdprExportService} — 0 → a legally-required export link is dead on arrival. */
     public static final BoundedKey GDPR_EXPORT_URL_EXPIRY_HOURS =
         new BoundedKey("gdpr.export.urlExpiryHours", 1L, 720L, true,
-            "0 → GDPR export download link is expired on issue; huge → compliance exposure");
+            "0 → GDPR export download link is expired on issue; huge → compliance exposure", 48L);
 
     // ── Int retry / batch / window counts (getBoundedInt + (int)getBoundedLong call sites) ───────
 
     /** {@code MessageRetentionScheduler} — 0/neg → the retention query deletes every message. */
     public static final BoundedKey MESSAGE_RETENTION_MONTHS =
         new BoundedKey("platform.message_retention_months", 1L, 600L, true,
-            "0/neg → retention deletes EVERY message on the next run (data-destructive)");
+            "0/neg → retention deletes EVERY message on the next run (data-destructive)", 24L);
 
     /** {@code BookingBatchService} — 0/neg → every batch booking rejected; huge → unbounded batch. */
     public static final BoundedKey BOOKING_BATCH_MAX_SIZE =
         new BoundedKey("booking.batch.maxSize", 1L, 100L, true,
-            "0/neg → every batch booking rejected as booking.batchSizeExceeded");
+            "0/neg → every batch booking rejected as booking.batchSizeExceeded", 0L);
 
     /** {@code ReviewSubmissionService} — 0/neg → no review can ever be submitted. */
     public static final BoundedKey REVIEWS_SUBMISSION_WINDOW_DAYS =
         new BoundedKey("reviews.submissionWindowDays", 1L, 365L, true,
-            "0/neg → no review can ever be submitted (no recent session found)");
+            "0/neg → no review can ever be submitted (no recent session found)", 14L);
 
     /** {@code ReviewFlagService} — 0 → every review auto-held. */
     public static final BoundedKey REVIEWS_AUTO_HOLD_FLAG_THRESHOLD =
         new BoundedKey("reviews.autoHoldFlagThreshold", 1L, 1000L, false,
-            "0 → the first flag on any review auto-holds it");
+            "0 → the first flag on any review auto-holds it", 3L);
 
     /** {@code VideoLifecycleScheduler} + {@code VideoSubscriptionLifecycleListener} — 0 → no progress. */
     public static final BoundedKey VIDEO_LIFECYCLE_BATCH_SIZE =
         new BoundedKey("platform.video.lifecycle.batch_size", 1L, 10000L, false,
-            "0 → lifecycle scheduler makes no progress; huge → load spike");
+            "0 → lifecycle scheduler makes no progress; huge → load spike", 100L);
 
     /**
      * {@code ModerationSlaMonitorService} — skillars-deferred-115 AC1: was a hardcoded literal (50)
@@ -182,22 +204,22 @@ public final class ConfigBounds {
      */
     public static final BoundedKey MODERATION_SLA_BATCH_SIZE =
         new BoundedKey("platform.moderation_sla_batch_size", 1L, 500L, false,
-            "0 → SLA monitor makes no progress on stuck videos; huge → batch lock-contention spike");
+            "0 → SLA monitor makes no progress on stuck videos; huge → batch lock-contention spike", 50L);
 
     /** {@code VideoSubscriptionLifecycleListener} — 0/neg → outbox never drains or loop underflows. */
     public static final BoundedKey VIDEO_LIFECYCLE_OUTBOX_MAX_ATTEMPTS =
         new BoundedKey("platform.video.lifecycle.outbox_max_attempts", 1L, 100L, false,
-            "0/neg → subscription-lifecycle outbox never drains");
+            "0/neg → subscription-lifecycle outbox never drains", 0L);
 
     /** {@code VideoDeletionOutboxProcessor} — 0/neg → deletion outbox never drains / dead-letters everything. */
     public static final BoundedKey VIDEO_DELETION_MAX_ATTEMPTS =
         new BoundedKey("platform.video.deletion.max_attempts", 1L, 100L, false,
-            "0/neg → Bunny.net deletion outbox dead-letters on the first attempt (or never)");
+            "0/neg → Bunny.net deletion outbox dead-letters on the first attempt (or never)", 5L);
 
     /** {@code RadarCompositeDlqProcessor} — 0/neg → DLQ dead-letters on first attempt (or never). */
     public static final BoundedKey RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS =
         new BoundedKey("platform.development.radar_composite_dlq.max_attempts", 1L, 100L, false,
-            "0/neg → radar-composite DLQ dead-letters on the first attempt (or never)");
+            "0/neg → radar-composite DLQ dead-letters on the first attempt (or never)", 5L);
 
     /**
      * {@code RateLimitingService} — skillars-deferred-117 AC4: how long an idle in-process rate-limit
@@ -212,7 +234,7 @@ public final class ConfigBounds {
             "too low → an actively-cycled bucket could be evicted mid-window (harmless — a fresh "
                 + "bucket behaves identically — but defeats the point of keeping it); too high → the "
                 + "eviction sweep provides less protection against the unbounded-map growth it exists "
-                + "to fix");
+                + "to fix", 24L);
 
     /**
      * {@code RadarCompositeCalculationService.recalculateComposite} — skillars-deferred-126 AC2:
@@ -255,7 +277,7 @@ public final class ConfigBounds {
     public static final BoundedKey RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS =
         new BoundedKey("platform.radar_composite_lock_timeout_seconds", 2L, 120L, false,
             "too low (near Postgres's ~1s deadlock_timeout) → a genuine deadlock could misreport as "
-                + "an ordinary lock timeout; too high → the upsert wait this AC bounds stops failing fast");
+                + "an ordinary lock timeout; too high → the upsert wait this AC bounds stops failing fast", 5L);
 
     /**
      * {@code GdprErasureService.deletePlayerDevelopmentData} — skillars-deferred-129 AC1: bounds
@@ -281,7 +303,7 @@ public final class ConfigBounds {
         new BoundedKey("platform.gdpr_erase_statement_lock_timeout_seconds", 2L, 120L, false,
             "too low (near Postgres's ~1s deadlock_timeout) → a genuine deadlock could misreport as "
                 + "an ordinary lock timeout; too high → a blocked erasure statement stops failing fast, "
-                + "extending how long the player_profiles lock is held");
+                + "extending how long the player_profiles lock is held", 5L);
 
     // ── Templated per-enum key segments — DELIBERATELY hand-listed ──────────────────────────────
     // skillars-deferred-108 AC9 (owner decision 2026-09-10, was deferred-107 code review): these
@@ -386,15 +408,15 @@ public final class ConfigBounds {
             // 0, not 1 — a negative quota is the only genuinely broken state. Max Long.MAX_VALUE:
             // only the lower bound is a real risk here.
             all.add(new BoundedKey("video.quota." + tier + ".storageBytes", 0L, Long.MAX_VALUE, false,
-                "neg → storage-quota math breaks; 0 is a legitimate \"no upload\" sentinel"));
+                "neg → storage-quota math breaks; 0 is a legitimate \"no upload\" sentinel", 0L));
             all.add(new BoundedKey("video.quota." + tier + ".bandwidthBytesMonthly", 0L, Long.MAX_VALUE, false,
-                "neg → bandwidth-quota math breaks; 0 is a legitimate \"no streaming\" sentinel"));
+                "neg → bandwidth-quota math breaks; 0 is a legitimate \"no streaming\" sentinel", 0L));
         }
         for (String seg : VIDEO_TYPE_SEGMENTS) {
             all.add(new BoundedKey("video." + seg + ".maxSizeBytes", 1L, Long.MAX_VALUE, false,
-                "0 → every upload of this type rejected"));
+                "0 → every upload of this type rejected", 0L));
             all.add(new BoundedKey("video." + seg + ".maxDurationSeconds", 1L, 86400L, false,
-                "0 → every upload of this type rejected; huge → no effective cap"));
+                "0 → every upload of this type rejected; huge → no effective cap", 0L));
         }
         ALL = List.copyOf(all);
     }
