@@ -16,8 +16,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.softropic.skillars.config.SeaweedFsS3Container;
+
 import org.springframework.beans.factory.annotation.Autowired;
-import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.utility.DockerImageName;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
@@ -44,11 +45,11 @@ class StorageMigrationServiceIT extends BaseStorageIT {
 
     static final String DEST_BUCKET = "test-dest";
 
-    // MinIO stopped publishing to Docker Hub in October 2025; see SharedContainers.MINIO_IMAGE's
-    // javadoc for why this needs quay.io and asCompatibleSubstituteFor.
-    static final MinIOContainer destinationMinio = new MinIOContainer(
-        DockerImageName.parse("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
-            .asCompatibleSubstituteFor("minio/minio"));
+    // quay.io/minio/minio now 401s for anonymous pulls (see SharedContainers.MINIO_IMAGE's
+    // javadoc); this second, independent "destination" store -- used to prove cross-store
+    // migration, not just single-store CRUD -- moved to SeaweedFS alongside the shared one.
+    static final SeaweedFsS3Container destinationMinio =
+        new SeaweedFsS3Container(DockerImageName.parse("chrislusf/seaweedfs:3.97"));
 
     static StorageService destinationService;
 
