@@ -102,7 +102,7 @@ services:
   #
   # Deliberately NOT on MinIO's default 9000/9001 — this project's frontend dev
   # server (Quasar) already owns 9000 by convention (matches app.frontend-url),
-  # so MinIO listens on 9500/9501 instead to avoid stealing that port.
+  # so this listens on 9500 instead to avoid stealing that port.
   #
   # The `app` container reaches this over the compose network as `minio:9500`.
   # Presigned upload URLs the app hands back to the browser use that same host —
@@ -111,22 +111,31 @@ services:
   #   127.0.0.1 minio
   # That plus the published port below (9500:9500) makes `http://minio:9500/...`
   # resolve to this container from both the app and your browser.
+  #
+  # As of 2026-09-24 this runs SeaweedFS, not MinIO — quay.io/minio/minio (both this
+  # pinned tag and :latest) now 401s on anonymous pulls, confirmed via direct `docker pull`;
+  # a widely-reported break, not something specific to this project. Service/volume names
+  # kept as "minio" to minimize the diff; see SharedContainers.MINIO_IMAGE's javadoc
+  # (src/test/java/com/softropic/skillars/config/SharedContainers.java) for the full story
+  # and why SeaweedFS was chosen. Credentials unchanged (minioadmin/minioadmin123, now sourced
+  # from deploy/seaweedfs/s3-identity.json instead of MINIO_ROOT_USER/MINIO_ROOT_PASSWORD env
+  # vars — SeaweedFS's own env-var credential path has a live upstream reliability issue,
+  # seaweedfs/seaweedfs#7311). No web-console port: SeaweedFS has no MinIO-console equivalent
+  # at this scope (its filer UI on 8888 is the closest thing, not wired up here).
   minio:
-    # MinIO stopped publishing to Docker Hub in Oct 2025; see SharedContainers.MINIO_IMAGE javadoc.
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
-    command: server /data --address ":9500" --console-address ":9501"
-    environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin123
-    ports:
-      - "9500:9500"   # S3 API
-      - "9501:9501"   # Web console
+    image: chrislusf/seaweedfs:3.97
+    command: >
+      server -s3 -dir=/data -ip.bind=0.0.0.0 -s3.port=9500
+      -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=1024
     volumes:
       - skillars-local-minio:/data
+      - ./deploy/seaweedfs/s3-identity.json:/etc/seaweedfs/s3.json:ro
+    ports:
+      - "9500:9500"   # S3 API
     healthcheck:
-      # `mc ready local` assumes MinIO's default port 9000 — doesn't work with the
-      # custom --address above, so point an inline alias at the real port instead.
-      test: ["CMD-SHELL", "mc alias set healthcheck http://localhost:9500 minioadmin minioadmin123 >/dev/null 2>&1 && mc ready healthcheck"]
+      # No `mc`-equivalent ships in this image; a plain TCP probe on the S3 port is enough
+      # to gate `depends_on: condition: service_healthy` below.
+      test: ["CMD-SHELL", "nc -z localhost 9500"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -135,16 +144,22 @@ services:
       - skillars-internal
     restart: unless-stopped
 
-  # One-shot: creates the dev bucket on every startup (no-op if it already exists)
+  # One-shot: creates the dev bucket on every startup (no-op if it already exists).
+  # amazon/aws-cli replaces quay.io/minio/mc here — same reasoning as the `minio` service
+  # above (mc's own image is under the same now-blocked quay.io/minio/* namespace), and aws-cli
+  # is a generic S3 client so it works against SeaweedFS's S3 gateway unmodified.
   minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: amazon/aws-cli:2.31.13
     depends_on:
       minio:
         condition: service_healthy
+    environment:
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin123
+      - AWS_DEFAULT_REGION=us-east-1
     entrypoint: >
       /bin/sh -c "
-      mc alias set local http://minio:9500 minioadmin minioadmin123 &&
-      mc mb --ignore-existing local/skillars-dev
+      aws --endpoint-url http://minio:9500 s3 mb s3://skillars-dev || true
       "
     networks:
       - skillars-internal

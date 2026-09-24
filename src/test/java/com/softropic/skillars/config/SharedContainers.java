@@ -1,7 +1,6 @@
 package com.softropic.skillars.config;
 
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
@@ -63,16 +62,21 @@ public final class SharedContainers {
     static final String REDIS_IMAGE = "redis:7-alpine";
 
     /**
-     * MinIO image. No production compose entry — object storage is S3 in production.
+     * S3-compatible test object-storage image. No production compose entry — object storage is
+     * real S3 in production.
      *
-     * <p>MinIO stopped publishing images to Docker Hub in October 2025; the {@code minio/minio}
-     * repository there now 404s entirely, which is why this moved to {@code quay.io} (confirmed
-     * live via {@code quay.io/api/v1/repository/minio/minio/tag/}). {@link Minio#create()} must
-     * mark the parsed name {@code asCompatibleSubstituteFor("minio/minio")} — {@link MinIOContainer}'s
-     * constructor asserts the image is compatible with its {@code minio/minio}-registry default,
-     * and that check compares registry host too, so an unmarked {@code quay.io} image fails it.
+     * <p>MinIO stopped publishing images to Docker Hub in October 2025, moving to {@code quay.io}
+     * (skillars-deferred-133 era). That move stopped working too: as of 2026-09-24,
+     * {@code quay.io/minio/minio} (both this pinned tag and {@code :latest}) returns
+     * {@code 401 unauthorized} for anonymous pulls, confirmed via direct {@code docker pull} and via
+     * quay.io's own tag-listing API also now demanding auth — a widely-reported break (e.g.
+     * upstream issue "MinIO image is no longer public and breaks integration tests for every PR"),
+     * not something specific to this project's registry access. This constant now points at
+     * SeaweedFS instead — see {@link SeaweedFsS3Container} for why it was chosen (S3-API surface
+     * this app actually needs: presigned URLs, path-style, multipart, {@code CopyObject}) and how
+     * it's wired in. {@code chrislusf/seaweedfs:3.97} on Docker Hub, confirmed pullable.
      */
-    static final String MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z";
+    static final String MINIO_IMAGE = "chrislusf/seaweedfs:3.97";
 
     /**
      * Database name for the shared PostgreSQL container.
@@ -136,18 +140,19 @@ public final class SharedContainers {
     }
 
     /**
-     * Lazy holder for the shared MinIO container.
+     * Lazy holder for the shared S3-compatible object-storage container (SeaweedFS — see
+     * {@link #MINIO_IMAGE}'s Javadoc for why it's no longer literally MinIO despite the field/method
+     * names in this class kept as-is to minimize the diff across call sites).
      *
-     * <p>Only touched by {@code MinioTestConfig}, which only the storage/video IT families
-     * import. A JVM that runs no storage test never starts MinIO.
+     * <p>Only touched by {@code MinioTestConfig}, which only the storage IT family imports. A JVM
+     * that runs no storage test never starts this container.
      */
     public static final class Minio {
 
-        static final MinIOContainer INSTANCE = create();
+        static final SeaweedFsS3Container INSTANCE = create();
 
-        private static MinIOContainer create() {
-            MinIOContainer container = new MinIOContainer(
-                DockerImageName.parse(MINIO_IMAGE).asCompatibleSubstituteFor("minio/minio"));
+        private static SeaweedFsS3Container create() {
+            SeaweedFsS3Container container = new SeaweedFsS3Container(DockerImageName.parse(MINIO_IMAGE));
             container.start();
             return container;
         }
@@ -164,7 +169,7 @@ public final class SharedContainers {
         return Redis.INSTANCE;
     }
 
-    public static MinIOContainer minio() {
+    public static SeaweedFsS3Container minio() {
         return Minio.INSTANCE;
     }
 }
