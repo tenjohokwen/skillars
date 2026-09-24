@@ -212,7 +212,7 @@ jobs:
       - name: Email — success
         if: success() && steps.smoke.outputs.result == 'pass'
         continue-on-error: true
-        uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
+        uses: dawidd6/action-send-mail@67ce3558d613188179559c61d3565140cf389968  # v22
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT }}
@@ -229,7 +229,7 @@ jobs:
       - name: Email — failure & revert
         if: always() && (steps.smoke.outputs.result == 'fail' || steps.smoke.outputs.result == 'error' || steps.smoke.outcome == 'failure' || steps.smoke.outcome == 'cancelled')
         continue-on-error: true
-        uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
+        uses: dawidd6/action-send-mail@67ce3558d613188179559c61d3565140cf389968  # v22
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT }}
@@ -273,7 +273,7 @@ jobs:
 
       - name: Email — early failure (pre-smoke)
         if: (failure() || cancelled()) && steps.smoke.outcome == 'skipped'
-        uses: dawidd6/action-send-mail@03a02a49409134de07636216fb379a026c52991e  # v21
+        uses: dawidd6/action-send-mail@67ce3558d613188179559c61d3565140cf389968  # v22
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT }}
