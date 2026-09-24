@@ -1,11 +1,17 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
+import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.config.PaymentProperties;
 import com.softropic.skillars.platform.payment.contract.event.CoachStripeOnboardingCompleteEvent;
+import com.softropic.skillars.platform.payment.contract.event.CoachSubscriptionOrphanedEvent;
 import com.softropic.skillars.platform.payment.contract.exception.WebhookSignatureException;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository;
+import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscription;
 import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscriptionRepository;
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscriptionRepository;
+import com.softropic.skillars.platform.payment.repo.StripeCustomer;
+import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.payment.repo.StripeWebhookEventRepository;
 import com.stripe.exception.EventDataObjectDeserializationException;
 import com.stripe.exception.SignatureVerificationException;
@@ -26,8 +32,13 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -37,12 +48,34 @@ public class StripeWebhookService {
 
     private static final String INVOICE_PAYMENT_FAILED_COUNTER = "subscription.payment.invoice_failed";
 
+    // skillars-deferred-133 AC3: statuses this project's own SubscriptionService.normalizeStripeStatus
+    // maps to ACTIVE/TRIALLING/PAST_DUE — a subscription in one of these is genuinely live/billing, so
+    // an orphan here (no local match) is the ledger's actual concern. Deliberately excludes `canceled`/
+    // `incomplete_expired`/anything else: SubscriptionService.handleSubscriptionDeleted deliberately
+    // nulls stripeSubscriptionId on every normal cancellation (both coach and player sides), so this
+    // "orphan" branch is also the normal post-cancellation state — alerting there would generate
+    // permanently-unresolvable false positives (no generic way to clear an AdminAlert once raised, see
+    // AdminAlertRepository).
+    private static final Set<String> LIVE_SUBSCRIPTION_STATUSES = Set.of("active", "trialing", "past_due");
+
+    // skillars-deferred-133 AC3: subscribeCoach commits a placeholder payment.coach_subscriptions row
+    // (coachId set, stripeSubscriptionId null) BEFORE its own Stripe call, then links
+    // stripeSubscriptionId in a later, separate transaction (persistCoachSubscription) — a
+    // customer.subscription.updated firing when Stripe transitions the new subscription to `active`
+    // (the same status this fix alerts on) can be delivered inside that window, finding no local match
+    // for a subscription that is, in fact, healthy and settling normally. Deliberately generous: a
+    // genuine happy-path settle completes in well under a second — this only needs to rule out the
+    // provisioning race, not compress it.
+    private static final Duration SUBSCRIBE_RACE_GRACE_WINDOW = Duration.ofMinutes(10);
+
     private final CoachStripeAccountRepository coachStripeAccountRepository;
     private final StripeWebhookEventRepository webhookEventRepository;
     private final PaymentProperties paymentProperties;
     private final ApplicationEventPublisher eventPublisher;
     private final PaymentCoachSubscriptionRepository paymentCoachSubscriptionRepository;
     private final PaymentPlayerSubscriptionRepository paymentPlayerSubscriptionRepository;
+    private final StripeCustomerRepository stripeCustomerRepository;
+    private final CoachProfileRepository coachProfileRepository;
     private final MeterRegistry meterRegistry;
 
     private Counter invoicePaymentFailedCounter;
@@ -157,11 +190,64 @@ public class StripeWebhookService {
         boolean playerFound = paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(stripeSubId).isPresent();
         if (!coachFound && !playerFound) {
             log.warn("[STRIPE_WEBHOOK_ORPHANED_SUBSCRIPTION stripeSubId={}]", stripeSubId);
+            maybeAlertOrphanedLiveSubscription(sub);
             return;
         }
 
         Map<String, Object> data = buildSubDataMap(sub);
         subscriptionService.handleSubscriptionWebhook("customer.subscription.updated", stripeSubId, data);
+    }
+
+    /**
+     * skillars-deferred-133 AC3. Scoped to coaches only, matching {@code SubscriptionService.
+     * syncMarketplaceTier}'s own scope — there is no "Stripe → payment" ledger item for players. See
+     * {@link #LIVE_SUBSCRIPTION_STATUSES} and {@link #SUBSCRIBE_RACE_GRACE_WINDOW}'s own Javadoc for
+     * the two false-positive sources this method guards against.
+     *
+     * <p>Deliberately wrapped in its own {@code catch (Exception e)} rather than left to propagate:
+     * a deterministic failure here (an enum/CHECK-constraint mismatch, an unexpected exception from
+     * either repository) would otherwise roll back {@code handleEventAtomically}'s
+     * {@code insertIfAbsent} idempotency row and put Stripe into an indefinite retry loop on every
+     * delivery of this event — this fix must never be the reason a routine webhook stops being
+     * accepted. This is deliberate double protection alongside {@code AdminAlertEventListener.
+     * onCoachSubscriptionOrphaned}'s own {@code REQUIRES_NEW}, not a substitute for it.
+     */
+    private void maybeAlertOrphanedLiveSubscription(Subscription sub) {
+        try {
+            if (sub.getStatus() == null || !LIVE_SUBSCRIPTION_STATUSES.contains(sub.getStatus())) {
+                return;
+            }
+            if (sub.getCustomer() == null) {
+                return;
+            }
+            List<StripeCustomer> stripeCustomers = stripeCustomerRepository.findByStripeCustomerId(sub.getCustomer());
+            if (stripeCustomers.isEmpty()) {
+                return;
+            }
+            // StripeCustomer.parentId is the coach/parent's own main.user.id (despite the field's
+            // name) — see StripeCustomer's own class Javadoc and SubscriptionService.subscribeCoach's
+            // identical findById(coachUserId) lookup.
+            Long userId = stripeCustomers.get(0).getParentId();
+            Optional<CoachProfile> coachProfile = coachProfileRepository.findByUserId(userId);
+            if (coachProfile.isEmpty()) {
+                // A player, or a genuinely unrecognized customer — this fix is scoped to coaches only,
+                // a final decision, not a residual left open (see this method's own Javadoc).
+                return;
+            }
+            UUID coachId = coachProfile.get().getId();
+            Optional<PaymentCoachSubscription> existing = paymentCoachSubscriptionRepository.findByCoachId(coachId);
+            if (existing.isPresent() && existing.get().getUpdatedAt() != null
+                    && Duration.between(existing.get().getUpdatedAt(), Instant.now())
+                        .compareTo(SUBSCRIBE_RACE_GRACE_WINDOW) < 0) {
+                log.debug("[STRIPE_WEBHOOK_ORPHAN_GRACE_WINDOW coachId={} stripeSubId={}] recently-"
+                    + "touched payment.coach_subscriptions row for this coach — treating as still "
+                    + "settling, not alerting", coachId, sub.getId());
+                return;
+            }
+            eventPublisher.publishEvent(new CoachSubscriptionOrphanedEvent(this, coachId, sub.getId()));
+        } catch (Exception e) {
+            log.warn("[STRIPE_WEBHOOK_ORPHAN_ALERT_FAILED stripeSubId={}]", sub.getId(), e);
+        }
     }
 
     private void handleSubscriptionDeleted(Event event) {

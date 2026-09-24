@@ -1,12 +1,18 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
+import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.config.PaymentProperties;
 import com.softropic.skillars.platform.payment.contract.event.CoachStripeOnboardingCompleteEvent;
+import com.softropic.skillars.platform.payment.contract.event.CoachSubscriptionOrphanedEvent;
 import com.softropic.skillars.platform.payment.contract.exception.WebhookSignatureException;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccount;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository;
+import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscription;
 import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscriptionRepository;
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscriptionRepository;
+import com.softropic.skillars.platform.payment.repo.StripeCustomer;
+import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.payment.repo.StripeWebhookEventRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -24,7 +30,9 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -47,6 +55,8 @@ class StripeWebhookVerificationTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock PaymentCoachSubscriptionRepository paymentCoachSubscriptionRepository;
     @Mock PaymentPlayerSubscriptionRepository paymentPlayerSubscriptionRepository;
+    @Mock StripeCustomerRepository stripeCustomerRepository;
+    @Mock CoachProfileRepository coachProfileRepository;
     @Mock SubscriptionService subscriptionService;
 
     // Story Deferred-76 AC7: a real registry, not a mock — Counter.builder(...).register(mock)
@@ -63,7 +73,8 @@ class StripeWebhookVerificationTest {
         meterRegistry = new SimpleMeterRegistry();
         webhookService = new StripeWebhookService(
             coachStripeAccountRepository, webhookEventRepository, paymentProperties, eventPublisher,
-            paymentCoachSubscriptionRepository, paymentPlayerSubscriptionRepository, meterRegistry);
+            paymentCoachSubscriptionRepository, paymentPlayerSubscriptionRepository,
+            stripeCustomerRepository, coachProfileRepository, meterRegistry);
         // Wire the self-reference so @Transactional dispatch works in unit tests without a Spring context
         ReflectionTestUtils.setField(webhookService, "self", webhookService);
         // subscriptionService is @Autowired @Lazy field injection, not constructor injection —
@@ -169,6 +180,159 @@ class StripeWebhookVerificationTest {
         Counter counter = meterRegistry.find("subscription.payment.invoice_failed").counter();
         assertThat(counter).isNotNull();
         assertThat(counter.count()).isEqualTo(0.0);
+    }
+
+    // ── skillars-deferred-133 AC3: orphaned live-subscription alerting ─────────
+
+    private static final String STRIPE_CUSTOMER_ID = "cus_test_orphan_001";
+    private static final String STRIPE_SUB_ID = "sub_test_orphan_001";
+    private static final Long COACH_USER_ID = 9330_000_001L;
+    private static final UUID COACH_PROFILE_ID = UUID.fromString("aaaaaaaa-9330-0001-0001-000000000001");
+
+    @Test
+    void processWebhook_subscriptionUpdated_activeStatus_noLocalMatch_resolvableCoach_noRecentRow_publishesOrphanedEvent()
+        throws Exception {
+        String payload = buildSubscriptionUpdatedPayload(STRIPE_SUB_ID, STRIPE_CUSTOMER_ID, "active");
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerRepository.findByStripeCustomerId(STRIPE_CUSTOMER_ID))
+            .thenReturn(List.of(buildStripeCustomer(COACH_USER_ID, STRIPE_CUSTOMER_ID)));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(buildCoachProfile()));
+        when(paymentCoachSubscriptionRepository.findByCoachId(COACH_PROFILE_ID)).thenReturn(Optional.empty());
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        ArgumentCaptor<CoachSubscriptionOrphanedEvent> captor =
+            ArgumentCaptor.forClass(CoachSubscriptionOrphanedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().getCoachProfileId()).isEqualTo(COACH_PROFILE_ID);
+        assertThat(captor.getValue().getStripeSubscriptionId()).isEqualTo(STRIPE_SUB_ID);
+        verify(subscriptionService, never()).handleSubscriptionWebhook(any(), any(), any());
+    }
+
+    @Test
+    void processWebhook_subscriptionUpdated_activeStatus_recentPaymentCoachSubscriptionRow_doesNotPublishEvent()
+        throws Exception {
+        String payload = buildSubscriptionUpdatedPayload(STRIPE_SUB_ID, STRIPE_CUSTOMER_ID, "active");
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerRepository.findByStripeCustomerId(STRIPE_CUSTOMER_ID))
+            .thenReturn(List.of(buildStripeCustomer(COACH_USER_ID, STRIPE_CUSTOMER_ID)));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(buildCoachProfile()));
+        PaymentCoachSubscription recentRow = new PaymentCoachSubscription();
+        recentRow.setCoachId(COACH_PROFILE_ID);
+        recentRow.setUpdatedAt(Instant.now().minus(2, ChronoUnit.MINUTES));
+        when(paymentCoachSubscriptionRepository.findByCoachId(COACH_PROFILE_ID)).thenReturn(Optional.of(recentRow));
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        verify(eventPublisher, never()).publishEvent(any(CoachSubscriptionOrphanedEvent.class));
+    }
+
+    @Test
+    void processWebhook_subscriptionDeleted_noLocalMatch_doesNotAttemptResolutionOrAlert() throws Exception {
+        String payload = buildSubscriptionDeletedPayload(STRIPE_SUB_ID, STRIPE_CUSTOMER_ID, "canceled");
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        verify(eventPublisher, never()).publishEvent(any(CoachSubscriptionOrphanedEvent.class));
+        verify(stripeCustomerRepository, never()).findByStripeCustomerId(any());
+    }
+
+    @Test
+    void processWebhook_subscriptionUpdated_terminalStatus_noLocalMatch_doesNotAlert() throws Exception {
+        String payload = buildSubscriptionUpdatedPayload(STRIPE_SUB_ID, STRIPE_CUSTOMER_ID, "canceled");
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        verify(eventPublisher, never()).publishEvent(any(CoachSubscriptionOrphanedEvent.class));
+        verify(stripeCustomerRepository, never()).findByStripeCustomerId(any());
+    }
+
+    @Test
+    void processWebhook_subscriptionUpdated_secondActiveEventForSameUnresolvedSubscription_publishesEventEachTime()
+        throws Exception {
+        // insertAlert's own (referenceId, type, OPEN) dedup — not this webhook's own state — is what
+        // suppresses a duplicate AdminAlert; that is AdminAlertEventListener's own responsibility, not
+        // StripeWebhookService's (see this fix's own Test guidance / Javadoc). This webhook always
+        // publishes the event for an unresolved live-status update; verified across two independent
+        // Stripe event ids since handleEventAtomically's own idempotency dedup is per-event-id.
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerRepository.findByStripeCustomerId(STRIPE_CUSTOMER_ID))
+            .thenReturn(List.of(buildStripeCustomer(COACH_USER_ID, STRIPE_CUSTOMER_ID)));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(buildCoachProfile()));
+        when(paymentCoachSubscriptionRepository.findByCoachId(COACH_PROFILE_ID)).thenReturn(Optional.empty());
+
+        String firstPayload = buildSubscriptionUpdatedEventPayload(
+            "evt_orphan_first", STRIPE_SUB_ID, STRIPE_CUSTOMER_ID, "active");
+        webhookService.processWebhook(firstPayload, buildStripeSignature(WEBHOOK_SECRET, firstPayload));
+        String secondPayload = buildSubscriptionUpdatedEventPayload(
+            "evt_orphan_second", STRIPE_SUB_ID, STRIPE_CUSTOMER_ID, "active");
+        webhookService.processWebhook(secondPayload, buildStripeSignature(WEBHOOK_SECRET, secondPayload));
+
+        verify(eventPublisher, org.mockito.Mockito.times(2))
+            .publishEvent(any(CoachSubscriptionOrphanedEvent.class));
+    }
+
+    private static StripeCustomer buildStripeCustomer(Long parentId, String stripeCustomerId) {
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(parentId);
+        customer.setStripeCustomerId(stripeCustomerId);
+        return customer;
+    }
+
+    private static CoachProfile buildCoachProfile() {
+        CoachProfile profile = new CoachProfile();
+        profile.setId(COACH_PROFILE_ID);
+        profile.setUserId(COACH_USER_ID);
+        return profile;
+    }
+
+    private static String buildSubscriptionUpdatedPayload(String subId, String customerId, String status) {
+        return buildSubscriptionUpdatedEventPayload("evt_test_sub_updated_001", subId, customerId, status);
+    }
+
+    private static String buildSubscriptionUpdatedEventPayload(String eventId, String subId, String customerId,
+                                                                 String status) {
+        return buildSubscriptionEventPayload(eventId, "customer.subscription.updated", subId, customerId, status);
+    }
+
+    private static String buildSubscriptionDeletedPayload(String subId, String customerId, String status) {
+        return buildSubscriptionEventPayload("evt_test_sub_deleted_001", "customer.subscription.deleted",
+            subId, customerId, status);
+    }
+
+    private static String buildSubscriptionEventPayload(String eventId, String eventType, String subId,
+                                                          String customerId, String status) {
+        return """
+            {
+              "id": "%s",
+              "object": "event",
+              "type": "%s",
+              "data": {
+                "object": {
+                  "id": "%s",
+                  "object": "subscription",
+                  "customer": "%s",
+                  "status": "%s"
+                }
+              }
+            }
+            """.formatted(eventId, eventType, subId, customerId, status);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

@@ -48,16 +48,6 @@ public interface AdminAlertRepository extends JpaRepository<AdminAlert, UUID> {
     Optional<AdminAlert> findFirstByReferenceIdAndTypeAndStatus(
         String referenceId, AdminAlertType type, AdminAlertStatus status);
 
-    /**
-     * code review 2026-09-23 (Decision 2): {@code
-     * com.softropic.skillars.platform.admin.service.GdprErasureService#raiseErasureAlert} dedups on
-     * {@code reason} too, not just {@code (referenceId, type, status)} — a benign {@code
-     * CHILD_VANISHED} alert must not suppress a later, distinct {@code CHILD_DELETE_LOCK_TIMEOUT}/
-     * {@code DEADLINE_EXCEEDED} for the same request.
-     */
-    Optional<AdminAlert> findFirstByReferenceIdAndTypeAndReasonAndStatus(
-        String referenceId, AdminAlertType type, String reason, AdminAlertStatus status);
-
     @Query("SELECT COUNT(a) FROM AdminAlert a WHERE a.referenceId = :referenceId AND a.status = 'OPEN'")
     long countOpenByReferenceId(@Param("referenceId") String referenceId);
 

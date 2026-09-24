@@ -1,6 +1,10 @@
 package com.softropic.skillars.platform.admin.service;
 
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.admin.contract.AdminAlertReferenceType;
+import com.softropic.skillars.platform.admin.contract.AdminAlertStatus;
+import com.softropic.skillars.platform.admin.contract.AdminAlertType;
+import com.softropic.skillars.platform.admin.repo.AdminAlert;
 import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.admin.repo.GdprRequest;
 import com.softropic.skillars.platform.admin.repo.GdprRequestRepository;
@@ -33,6 +37,7 @@ import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -45,11 +50,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -213,6 +220,71 @@ class GdprErasureServiceTest {
         child.setId(id);
         lenient().when(playerProfileRepository.findByIdForUpdate(id)).thenReturn(Optional.of(child));
         return child;
+    }
+
+    /**
+     * skillars-deferred-133 AC1: {@code markFailed}'s own alert must fire unconditionally, not just
+     * when a {@code GdprRequest} row exists to set {@code FAILED} on.
+     */
+    @Test
+    void markFailed_requestPresent_noExistingAlert_savesUnclassifiedFailureAlert() {
+        GdprRequest request = new GdprRequest();
+        request.setId(REQUEST_ID);
+        when(gdprRequestRepository.findById(REQUEST_ID)).thenReturn(Optional.of(request));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
+            REQUEST_ID.toString(), AdminAlertType.GDPR_ERASURE_DEADLINE, AdminAlertStatus.OPEN))
+            .thenReturn(Optional.empty());
+
+        service.markFailed(REQUEST_ID);
+
+        verify(gdprRequestRepository).save(request);
+        assertThat(request.getStatus()).isEqualTo("FAILED");
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        AdminAlert saved = alertCaptor.getValue();
+        assertThat(saved.getType()).isEqualTo(AdminAlertType.GDPR_ERASURE_DEADLINE);
+        assertThat(saved.getReferenceId()).isEqualTo(REQUEST_ID.toString());
+        assertThat(saved.getReferenceType()).isEqualTo(AdminAlertReferenceType.GDPR_REQUEST);
+        assertThat(saved.getReason()).isEqualTo("UNCLASSIFIED_FAILURE");
+    }
+
+    /**
+     * skillars-deferred-133 AC1: dedup is reason-blind — an already-{@code OPEN} alert for this
+     * {@code requestId} (any reason) must suppress a second one.
+     */
+    @Test
+    void markFailed_priorAlertAlreadyOpenForRequest_doesNotRaiseSecondAlert() {
+        GdprRequest request = new GdprRequest();
+        request.setId(REQUEST_ID);
+        when(gdprRequestRepository.findById(REQUEST_ID)).thenReturn(Optional.of(request));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
+            REQUEST_ID.toString(), AdminAlertType.GDPR_ERASURE_DEADLINE, AdminAlertStatus.OPEN))
+            .thenReturn(Optional.of(new AdminAlert()));
+
+        service.markFailed(REQUEST_ID);
+
+        verify(adminAlertRepository, never()).saveAndFlush(any(AdminAlert.class));
+    }
+
+    /**
+     * skillars-deferred-133 AC1: {@code eraseTransactional}'s own {@code orElseThrow(() -> new
+     * RuntimeException("GdprRequest not found: " + requestId))} fires exactly when this same {@code
+     * findById(requestId)} returns empty — the alert must still fire even though there is no row to
+     * set {@code FAILED} on.
+     */
+    @Test
+    void markFailed_requestNotFound_stillRaisesAlert() {
+        when(gdprRequestRepository.findById(REQUEST_ID)).thenReturn(Optional.empty());
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
+            REQUEST_ID.toString(), AdminAlertType.GDPR_ERASURE_DEADLINE, AdminAlertStatus.OPEN))
+            .thenReturn(Optional.empty());
+
+        service.markFailed(REQUEST_ID);
+
+        verify(gdprRequestRepository, never()).save(any(GdprRequest.class));
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        assertThat(alertCaptor.getValue().getReason()).isEqualTo("UNCLASSIFIED_FAILURE");
     }
 
     private void stubParentErasurePreamble() {

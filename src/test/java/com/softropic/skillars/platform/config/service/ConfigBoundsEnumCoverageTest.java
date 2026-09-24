@@ -108,6 +108,32 @@ class ConfigBoundsEnumCoverageTest {
         }
     }
 
+    /**
+     * skillars-deferred-133 AC2: a registry {@code default} outside its own key's {@code [min, max]}
+     * would be a self-contradictory registry entry — this is the one drift class a range-check CAN
+     * catch (see {@link BoundedKey#defaultValue()}'s own Javadoc for what it cannot: a call site's own
+     * literal drifting away from this registry value, which stays unverified documentation by owner
+     * decision). For keys not in {@link ConfigBounds#HAS_CODE_DEFAULT}, {@code defaultValue} is the
+     * not-applicable sentinel {@code 0L} — asserted unambiguous here since none of the 18 real
+     * {@code HAS_CODE_DEFAULT} defaults is itself {@code 0} today; revisit this assumption if a future
+     * {@code 0}-default key is ever added to {@code HAS_CODE_DEFAULT}.
+     */
+    @Test
+    void hasCodeDefaultKeysDefaultIsWithinItsOwnBounds() {
+        for (BoundedKey k : ConfigBounds.ALL) {
+            if (ConfigBounds.HAS_CODE_DEFAULT.contains(k.key())) {
+                assertThat(k.defaultValue())
+                    .as("defaultValue within [min, max] for %s", k.key())
+                    .isBetween(k.min(), k.max());
+            } else {
+                assertThat(k.defaultValue())
+                    .as("defaultValue is the not-applicable 0L sentinel for non-HAS_CODE_DEFAULT key %s",
+                        k.key())
+                    .isEqualTo(0L);
+            }
+        }
+    }
+
     @Test
     void noDuplicateKeys() {
         Set<String> seen = boundedKeys();

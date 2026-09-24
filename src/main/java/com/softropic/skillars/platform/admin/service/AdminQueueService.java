@@ -171,13 +171,22 @@ public class AdminQueueService {
             }
             case STRIKE_THRESHOLD -> "";
             // skillars-deferred-128 story review (Decision 2): reason distinguishes the
-            // GdprErasureService.raiseErasureAlert causes (DEADLINE_EXCEEDED / CHILD_VANISHED /
-            // CHILD_CONTENDED / CHILD_DELETE_LOCK_TIMEOUT, the last added by skillars-deferred-129
-            // AC1) — same reason-prefix pattern MODERATION_UNRESOLVED already uses above.
+            // GdprErasureService causes (DEADLINE_EXCEEDED / CHILD_VANISHED / CHILD_CONTENDED /
+            // CHILD_DELETE_LOCK_TIMEOUT, the last added by skillars-deferred-129 AC1, plus
+            // UNCLASSIFIED_FAILURE added by skillars-deferred-133 AC1 for markFailed's own
+            // catch-all — an accepted, disclosed semantic widening: this bucket now also counts
+            // non-deadline failures, pool saturation and missing-row cases, not deadline exceedances
+            // alone) — same reason-prefix pattern MODERATION_UNRESOLVED already uses above.
             case GDPR_ERASURE_DEADLINE -> {
                 String prefix = reason != null ? reason + ": " : "";
                 yield prefix + "GDPR erasure request " + referenceId;
             }
+            // skillars-deferred-133 AC3: referenceId is the coach_profiles id (a UUID) —
+            // AdminAlertEventListener.onCoachSubscriptionOrphaned's own dedup is per-coach, not per
+            // orphaned Stripe subscription id, so no free-text field for the subscription id is
+            // needed here (see StripeWebhookService's own Javadoc for that dedup-granularity note).
+            case SUBSCRIPTION_ORPHANED -> "Coach " + referenceId + " has a live Stripe subscription "
+                + "with no matching local payment.coach_subscriptions row";
             default -> "";
         };
     }
@@ -239,6 +248,9 @@ public class AdminQueueService {
             // still counted in `total` above — making `total` silently exceed the sum of every
             // bucket this DTO actually reports. This bucket closes that gap.
             counts.getOrDefault(AdminAlertType.GDPR_ERASURE_DEADLINE, 0L),
+            // skillars-deferred-133 AC3: same fix skillars-deferred-128 applied above, for
+            // SUBSCRIPTION_ORPHANED.
+            counts.getOrDefault(AdminAlertType.SUBSCRIPTION_ORPHANED, 0L),
             total);
     }
 }

@@ -2999,6 +2999,23 @@ three `[DECIDED: accepted risk]` bullets below.
   the first ledger record of it, and AC1 gives it a new, previously-nonexistent trigger path. Accepted
   as documented, not fixed: building `AdminAlert` machinery across every `markFailed` cause is a
   separate, larger concern for a future story, out of AC1's own scoped fix.
+  **[CLOSED by skillars-deferred-133 AC1 Fix 1 — alerting only, auto-retry stays open.]** `markFailed`
+  now raises a `GDPR_ERASURE_DEADLINE` alert (reason `UNCLASSIFIED_FAILURE`) unconditionally — via a new
+  `insertErasureAlertIfAbsent` helper extracted from `raiseErasureAlert`, called directly inside
+  `markFailed`'s own `REQUIRES_NEW` transaction (not through `raiseErasureAlert` itself, which would open
+  a second, concurrently-held connection from the same pool — the very failure mode
+  `skillars-deferred-132` AC1 Fix 4's pool-saturation pre-check exists to guard against). This also
+  widens `AdminQueueSummaryDto.gdprErasureDeadlines`/the `/queue?type=GDPR_ERASURE_DEADLINE` filter to
+  count non-deadline failures (pool saturation, missing-row cases) under the same bucket — an accepted,
+  disclosed semantic widening, not an oversight. **Auto-retry stays explicitly open** — a materially
+  bigger change (a re-drive scheduler); `GdprRequestService.requestErasure`'s own "only blocks on
+  PENDING/PROCESSING" guard already lets a user manually re-submit a `FAILED` request today. **Byproduct
+  fix, found during this same AC:** `raiseErasureAlert`'s per-`(requestId, reason)` dedup (added by the
+  2026-09-23 code review) was incompatible with `admin_alerts_unique_open_per_ref`
+  (`(reference_id, type)`-only) — a PARENT erasure raising two different reasons for two different
+  children could violate that unique index uncaught, converting a designed skip-and-continue into a full
+  rollback. Reverted to a reason-blind dedup plus a `DataIntegrityViolationException` catch (mirroring
+  `AdminAlertEventListener.insertAlert`'s established pattern).
 
 ## Deferred from: code review of skillars-deferred-127-gdpr-radar-lock-serialization-config-upsert-and-scheduler-pool-fixes (2026-09-21)
 
@@ -3258,6 +3275,23 @@ patched or resolved in-story — see that story's own `## Review Findings` secti
   string. **Residual (a) — `BoundedKey`'s missing `default` field — stays explicitly open**, per this
   story's own owner decision: narrower/cheaper to fix only the two call sites than widen `BoundedKey`
   itself.
+  **[CLOSED by skillars-deferred-133 AC2 Fix 2 — registry-only, per a corrected owner decision.]**
+  `BoundedKey` gained a `defaultValue` component, populated for all 18 `HAS_CODE_DEFAULT` keys with the
+  literal each call site actually passes (verified against `HEAD` at implementation time, all 18
+  confirmed unchanged from this story's own drafting table) — the other 14 named + 18 generated
+  non-`HAS_CODE_DEFAULT` entries carry a not-applicable `0L` sentinel. **Registry-only, per the owner
+  decision re-confirmed live during this story's drafting** — the deliberate call-site literal-retyping
+  convention (`ConfigBounds.java`'s own class Javadoc) is untouched; this is documentation, not a
+  verified contract (only a `default ∈ [min, max]` self-consistency check is mechanically enforced,
+  via `ConfigBoundsEnumCoverageTest.hasCodeDefaultKeysDefaultIsWithinItsOwnBounds` — a call site's own
+  literal drifting away from this registry value would NOT be caught). One key,
+  `TIMELINE_COACH_ACCESS_EXPIRY_DAYS`, doesn't fit the 4-arg-`getBoundedLong`-embedded-default pattern
+  the other 17 keys use — its call site (`TimelineQueryService.java:33`) uses the 3-arg overload wrapped
+  in a manual `catch (Exception e)` block, a missing/throwing-key fallback rather than an embedded
+  default — its registry `defaultValue` (`90`) is genuine but reached differently at the call site,
+  documented explicitly in `BoundedKey.defaultValue()`'s own Javadoc so a future reader doesn't assume
+  uniformity. Not the full call-site migration (reading `default`/`min`/`max` off `BoundedKey` itself) —
+  that remains a distinct, larger, separately-scoped change, out of this fix's registry-only scope.
 
 - **D3 — Only one of four `(branch × reason)` catch combinations in the new erasure error handling is
   tested.** `GdprErasureService.java:226` (PLAYER / `CHILD_CONTENDED` arm) and `:397` (PARENT /
@@ -3377,6 +3411,29 @@ implementation. Each was independently re-verified against real source. None is 
   nothing for a coach with a live Stripe subscription and **no local `payment.coach_subscriptions` row
   at all**, which is what this bullet's residual actually calls for (a **Stripe → payment** sweep). The
   two are distinct gaps; closing one does not close the other. Still a separate story.
+  **[CLOSED by skillars-deferred-133 AC3 Fix 3 — alert-only, first step, not the full reconciliation
+  sweep. Ship as `StripeWebhookService`/`SUBSCRIPTION_ORPHANED` (`V153`).]** Extends the existing
+  `handleSubscriptionUpdated` orphan-detection branch (previously `log.warn` + silent drop) to resolve
+  the Stripe customer → coach and publish a `CoachSubscriptionOrphanedEvent` (handled by
+  `AdminAlertEventListener.onCoachSubscriptionOrphaned`, `REQUIRES_NEW`) — but **only** when the
+  incoming event carries a live/non-terminal status (`active`/`trialing`/`past_due`) and no recent
+  (<10min) `PaymentCoachSubscription` row exists for that coach (a `subscribeCoach` provisioning-race
+  guard). **Corrected mid-drafting (story review, not the original design):** the "orphan" branch is
+  also the NORMAL state immediately after every successful cancellation
+  (`SubscriptionService.handleSubscriptionDeleted` deliberately nulls `stripeSubscriptionId` on both
+  sides) — alerting unconditionally would have produced permanently-unresolvable false positives on
+  every routine cancellation (no generic way to clear an `AdminAlert` once raised). The live-status
+  allowlist targets exactly the ledger's actual concern without touching the cancellation path at all.
+  **Alert-only, not auto-heal** — `SubscriptionService.java:663`'s own deliberate no-priceId→tier
+  reverse-map constraint means this cannot safely guess a tier; a human reconciles. **Explicit
+  residuals, not silently closed:** (a) detection latency — `handleEventAtomically` does not dispatch
+  `customer.subscription.created`, so the earliest signal is the next live-status `.updated` event, not
+  immediate; (b) `handleInvoicePaymentFailed` has the identical untouched no-op shape and is out of this
+  fix's scope; (c) player-side orphans are deliberately out of scope (no "Stripe → payment" ledger item
+  for players, matching `syncMarketplaceTier`'s own coach-only scope) — a final decision, not a residual.
+  Dedup is per-coach (`insertAlert`'s `(referenceId, type, OPEN)`), not per orphaned Stripe subscription
+  id — mirrors `STRIKE_THRESHOLD`'s own precedent; a coach has one active marketplace tier subscription
+  at a time in this domain, so this is an accepted choice, not a gap.
 
 - **`AdminCoachEnforcementService.reinstateCoach` mints a marketplace-`ACTIVE` profile that never
   published** (`:217-232`) — it sets `ACTIVE` unconditionally, so the profile gets no
@@ -3421,6 +3478,14 @@ implementation. Each was independently re-verified against real source. None is 
   currently-unreachable issue justifies. Worth flagging structurally: this protection is a contract-enum
   membership plus a role-precedence check in the API layer, not a dedicated self-review guard — a future
   story adding `COACH` to `AuthorRole` would make this reachable with nothing here to catch it.
+  **[DECIDED (skillars-deferred-133 AC4): accepted, unreachable by construction — a formal tag after 3
+  consecutive re-confirms (130, 131, 132), so a 4th story does not need to re-derive this argument from
+  scratch.** A two-legged revisit trigger, not one, since the disjoint-lock-sets argument itself has two
+  independent legs (both genuinely, independently breakable): **revisit if `AuthorRole` ever adds
+  `COACH`, OR `ReviewResource.resolveRole`'s `ROLE_COACH`/`ROLE_PARENT` precedence changes** (currently
+  `ROLE_COACH` is checked first, `ReviewResource.java:142-146` — reordering those two lines alone, with
+  `AuthorRole` itself unchanged, would let a coach author a review as `AuthorRole.PARENT`, overlapping
+  the lock sets nobody reviewing that reorder would connect to GDPR lock ordering).]**
 
 - **Both new concurrency ITs are timing-dependent** — `ReviewFlagServiceConcurrencyIT` and
   `CoachProfileServiceConcurrencyIT` use a fixed `Thread.sleep(300)` as the only "contention
@@ -3494,6 +3559,17 @@ implementation. Each was independently re-verified against real source. None is 
   shared repository method used by four call sites, wrapping each in `PessimisticLockRetryer`, a
   contention test per site) is unchanged and still does not belong in this story's scope. The trigger
   remains armed for a future story that actually touches this lock's discipline.
+  **[Trigger partially discharged by skillars-deferred-132 AC1 Fix 2 (skillars-deferred-133 AC4
+  annotation — NOT `[CLOSED by ...]`, which would overstate what actually happened).** `flag()` no
+  longer blocks — it now takes a separate `findByIdForUpdateNoWait` method
+  (`CoachReviewRepository.java:39`), used only by `flag()`. The shared `findByIdForUpdate` method this
+  ledger item is actually about is unchanged, and still blocks (correctly, per this same decision) at
+  its other 5 call sites, re-verified against current `HEAD`: `ReviewSubmissionService.java:129,:164`,
+  `ReviewModerationService.java:102`, `AdminReviewService.java:81,:121`. The module-wide NOWAIT
+  conversion this decision's own cost estimate described remains armed for whichever of the two
+  original triggers fires first — sustained production contention (still cannot fire; no production
+  deploy of this application has ever happened, per skillars-deferred-117) or the reviews module's
+  locking discipline being opened again.]**
 
 ## Last audit: 2026-09-23 (skillars-deferred-131 dev-story completion)
 
@@ -3701,3 +3777,84 @@ construction, disjoint lock sets for both account shapes); the `BoundedKey` miss
 the Stripe → payment reconciliation sweep (a separate story); and Fix 6's own known residual (the
 `ConditionTimeoutException` catch-and-proceed leaving a >10s async task's race window open). Nothing
 else from this story's own scope remains open.
+
+## Last audit: 2026-09-24 (skillars-deferred-133 dev-story completion)
+
+Every item this story resolves is now closed above, each with its own `[CLOSED by skillars-deferred-133
+...]` note citing the fix and its test. Summary:
+
+- **AC1 (closed, alerting only):** Fix 1 — `GdprErasureService.markFailed`'s pre-existing silent-failure
+  gap ([DECIDED: accepted risk — skillars-deferred-127], widened by skillars-deferred-132 AC1 Fix 4's new
+  pool-saturation pre-check) now raises a `GDPR_ERASURE_DEADLINE` alert (`UNCLASSIFIED_FAILURE`)
+  unconditionally, via a new non-transactional `insertErasureAlertIfAbsent` helper called directly inside
+  `markFailed`'s own `REQUIRES_NEW` transaction (not through `raiseErasureAlert`, which would double the
+  pool connections this exact failure path can least afford). **Auto-retry stays explicitly open** — a
+  materially larger change, narrower than the original `[DECIDED]` bullet's full ask. **Semantic
+  widening, disclosed not hidden:** `AdminQueueSummaryDto.gdprErasureDeadlines`/the
+  `/queue?type=GDPR_ERASURE_DEADLINE` filter now also count non-deadline failures (pool saturation,
+  missing-row cases) under that name. **Byproduct fix:** `raiseErasureAlert`'s per-`(requestId, reason)`
+  dedup (2026-09-23 code review) was incompatible with `admin_alerts_unique_open_per_ref`'s
+  `(reference_id, type)`-only unique index — reverted to reason-blind dedup, which is what actually
+  closes this bug (each `raiseErasureAlert` call runs in its own `REQUIRES_NEW` transaction that
+  commits before the next child's turn in `eraseParentChildren`'s own sequential loop, so the first
+  child's alert is already durably committed by the time the second child's dedup check runs).
+  **Correction found and fixed during independent post-implementation review (code-review response,
+  not the original drafting):** the accompanying `catch (DataIntegrityViolationException e)` — added
+  for the narrower, genuinely-concurrent case (two truly simultaneous callers) — was silently
+  non-functional as first written: `AdminAlert.alertId` is `GenerationType.UUID` (an in-memory,
+  before-execution id strategy), so a plain `adminAlertRepository.save(alert)` does not force Hibernate
+  to flush, and the real `DataIntegrityViolationException` only surfaces at the enclosing transaction's
+  own commit — outside any try/catch scoped to the `save()` call. Empirically confirmed via a throwaway
+  Testcontainers test before fixing (not assumed): switched to `saveAndFlush`, which forces the INSERT
+  (and any constraint violation) to happen synchronously inside the try block, where it is actually
+  caught. `AdminAlertEventListener.insertAlert`'s superficially-similar catch (`save`, not
+  `saveAndFlush`) has this same latent gap for a genuine concurrent race — pre-existing, out of this
+  story's scope to fix, noted here for a future story. New unit tests (`GdprErasureServiceTest`, 3 cases: normal insert, dedup, the
+  `GdprRequest`-not-found path) + a new `GdprErasureIT` case routed through `GdprEventListener` (not
+  `erase()` directly — the existing pool-saturation IT calls `erase()` directly and cannot reach
+  `markFailed`).
+- **AC2 (closed, registry-only):** Fix 2 — `ConfigBounds.BoundedKey` gained a `defaultValue` component
+  (raised at skillars-deferred-130, re-declined at skillars-deferred-132 as narrower-scope-only) —
+  populated for all 18 `HAS_CODE_DEFAULT` keys, `0L` sentinel for the other 14 named + 18 generated
+  entries. Registry-only, per the (re-confirmed) owner decision — the call-site literal-retyping
+  convention is untouched, and the field is documented as unverified documentation, not a checked
+  contract (only a `default ∈ [min, max]` self-consistency check is mechanical, via a new
+  `ConfigBoundsEnumCoverageTest` case). `TIMELINE_COACH_ACCESS_EXPIRY_DAYS`'s catch-block-fallback shape
+  (distinct from the other 17 keys' embedded 4-arg default) is called out explicitly in the field's own
+  Javadoc, not glossed over.
+- **AC3 (closed, alert-only, narrower than the ledger's original ask):** Fix 3 — extends
+  `StripeWebhookService.handleSubscriptionUpdated`'s existing orphan-detection branch (previously
+  `log.warn` + silent drop) to alert on a live/non-terminal-status (`active`/`trialing`/`past_due`)
+  subscription with no local match that resolves to a known coach, via a new
+  `CoachSubscriptionOrphanedEvent` → `AdminAlertEventListener.onCoachSubscriptionOrphaned`
+  (`SUBSCRIPTION_ORPHANED`, `V153`). **Design corrected mid-drafting** (story review, not the original
+  plan): the "orphan" branch is also the normal post-cancellation state, so alerting unconditionally
+  would have produced permanently-unresolvable false positives — the live-status allowlist plus a
+  10-minute `subscribeCoach`-provisioning-race grace check (via `PaymentCoachSubscriptionRepository
+  .findByCoachId`) close both false-positive sources this second pass found. Alert-only, not auto-heal —
+  `SubscriptionService.java:663`'s own deliberate no-priceId→tier reverse-map constraint is a pre-existing
+  design choice, not something to work around. **Explicit residuals:** detection latency
+  (`customer.subscription.created` is not dispatched), `handleInvoicePaymentFailed`'s identical untouched
+  no-op, and player-side orphans (final decision, not a residual). New `StripeCustomerRepository
+  .findByStripeCustomerId` (`List`, not `Optional` — no unique index on `stripe_customer_id`). Tests:
+  6 new `StripeWebhookVerificationTest` cases (orphan alert published, provisioning-race grace-window
+  suppression, `.deleted` never alerts, terminal-status `.updated` never alerts, repeated live-status
+  events each independently publish — `insertAlert`'s own dedup is `AdminAlertEventListener`'s
+  responsibility, not this webhook's) + a new `AdminQueueIT` case pinning every `AdminAlertType` enum
+  value against the live `admin_alerts_type_check` DB constraint (no such generic pinning test existed
+  before this story).
+- **AC4 (this section):** ledger hygiene. Fix 1 lock-order-inversion's re-confirm ritual (3 consecutive
+  stories: 130, 131, 132) now carries a formal `[DECIDED]` tag with an explicit two-legged revisit
+  trigger, so a 4th story does not need to re-derive the argument from scratch. M5-2
+  (`CoachReviewRepository.findByIdForUpdate` NOWAIT-conversion trigger) gained a
+  `[Trigger partially discharged by skillars-deferred-132 AC1 Fix 2 ...]` annotation — deliberately NOT
+  `[CLOSED by ...]`, since only `flag()`'s own call site stopped blocking; the shared method and its
+  other 5 call sites, and the module-wide conversion the original decision costed, remain unchanged and
+  armed.
+
+**What remains open after this story:** the Fix 1 lock-order inversion (formally `[DECIDED]`, unreachable
+today by construction — revisit only if `AuthorRole` adds `COACH` or `ReviewResource.resolveRole`'s
+role-precedence changes); M5-2's module-wide NOWAIT conversion (armed, not pulled); AC1's auto-retry
+residual (alerting-only fix, narrower than the ledger's original ask); AC3's three residuals (detection
+latency, `handleInvoicePaymentFailed`, player-side orphans — the last a final decision, not open work).
+Nothing else from this story's own scope remains open.
