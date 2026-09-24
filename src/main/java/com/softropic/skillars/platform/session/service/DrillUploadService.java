@@ -96,7 +96,7 @@ public class DrillUploadService {
         // moved out to below (still inside this same @Transactional method, so "stays inside the
         // locked region" continues to hold exactly as before) so the supplier is now genuinely
         // read-only, not merely safe-by-luck via statement ordering.
-        LockedDrillState locked = lockRetryer.withBoundedRetry(() -> {
+        LockedDrillState locked = lockRetryer.withBoundedRetry("DrillUploadService.initiateUpload", () -> {
             drillRepository.findByIdForUpdate(drill.getId())
                 .orElseThrow(() -> new ResourceNotFoundException(
                     "Drill was deleted by another user or no longer accessible", "drill"));
@@ -185,7 +185,7 @@ public class DrillUploadService {
         // skillars-deferred-117 AC5: only the locked reads run inside withBoundedRetry now; the
         // clearVideoId write and event publish moved to below (still inside this same
         // @Transactional method) so the retried supplier is genuinely read-only.
-        LockedVideoRef locked = lockRetryer.withBoundedRetry(() -> {
+        LockedVideoRef locked = lockRetryer.withBoundedRetry("DrillUploadService.deleteVideo", () -> {
             drillRepository.findByIdForUpdate(drill.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Drill not found", "drill"));
             entityManager.refresh(drill, LockModeType.PESSIMISTIC_WRITE);

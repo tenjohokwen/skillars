@@ -35,6 +35,7 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -72,8 +73,8 @@ class PaymentPendingSweeperTest {
             configService, coachProfileRepository, userRepository, eventPublisher, transactionTemplate,
             new SimpleMeterRegistry(), lockRetryer);
 
-        lenient().when(lockRetryer.withBoundedRetry(any()))
-            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
         lenient().when(configService.getBoundedLong(eq(PaymentPendingSweeper.GRACE_MINUTES_KEY),
             anyLong(), anyLong(), anyLong())).thenReturn(120L);
         lenient().when(configService.getBoundedLong(eq(PaymentPendingSweeper.CAPTURE_PENDING_MAX_HOURS_KEY),

@@ -24,6 +24,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -59,8 +60,8 @@ class CaptureReservationTest {
 
     @BeforeEach
     void setUpLockRetryer() {
-        lenient().when(lockRetryer.withBoundedRetry(any()))
-            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
     }
 
     private Booking booking(String status) {

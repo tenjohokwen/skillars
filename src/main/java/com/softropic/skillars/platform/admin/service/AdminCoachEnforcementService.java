@@ -139,8 +139,9 @@ public class AdminCoachEnforcementService {
         // row lock — but two writers serialise only when BOTH take it. With a plain findById the
         // suspension could read, write and commit entirely inside the window an accept path holds
         // its lock, making that lock decorative.
-        CoachProfile coach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
-            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
+        CoachProfile coach = lockRetryer.withBoundedRetry("AdminCoachEnforcementService.suspendCoach",
+            () -> coachProfileRepository.findByIdForUpdate(coachId)
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
 
         if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {
             return;
@@ -221,8 +222,9 @@ public class AdminCoachEnforcementService {
         // below, per AC2's own rule and mirroring deleteStrike/ReliabilityStrikeService.issue.
         OffsetDateTime cutoff = OffsetDateTime.now().minusDays(30);
 
-        CoachProfile coach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
-            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
+        CoachProfile coach = lockRetryer.withBoundedRetry("AdminCoachEnforcementService.reinstateCoach",
+            () -> coachProfileRepository.findByIdForUpdate(coachId)
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
 
         if (coach.getStatus() == CoachProfileStatus.ACTIVE) {
             return;
@@ -443,8 +445,9 @@ public class AdminCoachEnforcementService {
         // skillars-deferred-121 AC1: locked read moved before the count computation, mirroring
         // ReliabilityStrikeService.issue's ordering — the count and the revert decision must be
         // read consistently under the same lock, not just the final write guarded by it.
-        CoachProfile coach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
-            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
+        CoachProfile coach = lockRetryer.withBoundedRetry("AdminCoachEnforcementService.deleteStrike",
+            () -> coachProfileRepository.findByIdForUpdate(coachId)
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
 
         AdminActionLog actionLog = new AdminActionLog();
         actionLog.setAdminId(adminId);

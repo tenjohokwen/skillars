@@ -60,8 +60,8 @@ class PlaybackServiceTest {
         // Deferred-64 AC3: withBoundedRetry's Supplier is executed for real, mirroring every other
         // lockRetryer stub in this codebase — entityManager.refresh is a no-op mock, same reasoning
         // as BookingServiceTest/RescheduleServiceTest's own entityManager mock.
-        lenient().when(lockRetryer.withBoundedRetry(any()))
-            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
 
         playbackService = new PlaybackService(videoRepository, playbackTokenRepository, videoProviderAdapter, properties, videoMetrics, configService, quotaService, lockRetryer, entityManager);
     }

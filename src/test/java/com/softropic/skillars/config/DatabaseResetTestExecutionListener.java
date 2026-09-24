@@ -201,6 +201,32 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
      * every {@link ThreadPoolTaskExecutor} bean in the context (not just a hardcoded name) closes the
      * mechanism generally and stays correct if a future module adds another pool.
      *
+     * <h2>skillars-deferred-132 AC1 Fix 6: empirical reproduction attempt</h2>
+     *
+     * <p>This fix shipped against a structural, not empirical, diagnosis (see above). This story
+     * attempted a real reproduction: this method's own quiesce was temporarily short-circuited (an
+     * early return behind a system property, reverted before this story's PR) to reopen the pre-fix
+     * race window, temporary entry/exit diagnostic logging (thread name + timestamp, also since
+     * reverted) was added around {@code RadarCompositeCalculationService.onRadarEntrySubmitted} and
+     * {@code ReportGenerationService.onReportGenerated}, and the full {@code platform.development.**}
+     * package (231 tests) was run repeatedly against real Testcontainers Postgres with the quiesce
+     * disabled — 9 valid consecutive local runs (a 10th run failed on an unrelated compilation error
+     * from concurrent, unrelated file edits mid-run, discarded rather than counted), each confirmed via
+     * the diagnostic log to have genuinely dispatched both async listeners. <strong>Not reproduced</strong>
+     * in any of the 9 runs — no {@code deadlock detected} error, no async task still logged as in-flight
+     * at the moment of a later test class's reset. This is an explicit, temporary, disclosed exception to
+     * this project's "no local {@code mvn verify} — GitHub CI is the sole full-verification gate"
+     * convention, justified because a race that reproduced roughly 1-in-15 on master (first occurrence
+     * in ~14 prior green runs) is not practical to chase through CI-only runs.
+     *
+     * <p>This keeps the mechanism's status exactly as it was: <strong>closed by structural reasoning,
+     * not exhaustively proven</strong> — now with a documented, bounded reproduction attempt behind that
+     * statement instead of none at all, rather than a claim that the race is impossible. One known,
+     * accepted residual in the shipped fix itself, unrelated to whether the race reproduces: a
+     * per-executor {@link ConditionTimeoutException} here is caught and logged, then the reset proceeds
+     * anyway after its own 10s wait — so the race window is not fully closed for an in-flight async task
+     * that runs longer than 10s.
+     *
      * <p>A per-executor {@link ConditionTimeoutException} is caught and logged rather than left to
      * propagate: letting it escape {@code beforeTestMethod} would skip the reset transaction below
      * entirely for this test method, leaving stale data in place for both this test and every

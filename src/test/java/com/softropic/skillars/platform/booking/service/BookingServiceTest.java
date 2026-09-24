@@ -69,6 +69,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -114,8 +115,8 @@ class BookingServiceTest {
 
     @BeforeEach
     void setUp() {
-        lenient().when(lockRetryer.withBoundedRetry(any()))
-            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
         // UAT.2 AC3: every create-path fixture in this class books exactly one hour, which is the
         // platform default. Lenient because the tests that fail before reaching the duration check
         // (unknown player, wrong parent, suspended coach, reversed range) never call it.

@@ -37,13 +37,17 @@ import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.HikariPoolMXBean;
 import jakarta.annotation.PostConstruct;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.PessimisticLockException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
@@ -53,6 +57,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import javax.sql.DataSource;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -94,6 +99,19 @@ public class GdprErasureService {
     private final EntityManager entityManager;
     private final PlatformTransactionManager txManager;
     private final ConfigService configService;
+    private final DataSource dataSource;
+
+    /**
+     * Self-reference so {@link #erase}'s pre-transaction connection-pool check (skillars-deferred-132
+     * AC1 Fix 4) genuinely runs BEFORE {@link #eraseTransactional}'s {@code @Transactional(REQUIRES_NEW)}
+     * proxy advice opens (and blocks acquiring) its own connection — a check placed inside a
+     * declaratively-{@code @Transactional} method's own body runs too late, since the Spring AOP proxy
+     * already acquired the connection before the method body starts executing. Mirrors
+     * {@code SubscriptionService.self}'s identical pattern.
+     */
+    @Autowired
+    @Lazy
+    private GdprErasureService self;
 
     // skillars-deferred-128 AC1: lets deletePlayerDevelopmentData commit (and release its
     // player_profiles lock) independently of erase()'s own outer transaction — mirrors
@@ -138,8 +156,41 @@ public class GdprErasureService {
         requiresNewTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    /**
+     * skillars-deferred-132 AC1 Fix 4. Not itself {@code @Transactional} — deliberately, since the
+     * check below must run BEFORE {@link #eraseTransactional}'s own {@code @Transactional(REQUIRES_NEW)}
+     * proxy advice opens (and, under sustained pool exhaustion, could block up to the full 30s Hikari
+     * {@code connection-timeout} acquiring) its connection. {@code erase()} runs on the HTTP request
+     * thread via a non-{@code @Async} {@code AFTER_COMMIT} listener while the request's own connection
+     * is still briefly held (see {@link #eraseTransactional}'s own Javadoc) — this bounds THAT
+     * acquisition's own risk, on top of {@link #deletePlayerDevelopmentData}'s identical guard for its
+     * nested {@code REQUIRES_NEW} acquisition below.
+     *
+     * <p><strong>Chosen mechanism (this story deliberately left the choice open — recorded here):</strong>
+     * a same-thread, read-only {@link HikariPoolMXBean} pre-check, not a dedicated secondary
+     * {@code EntityManagerFactory}/{@code DataSource} (option (a) — re-costed during story review as
+     * "take over JPA bootstrapping for the whole app", since no {@code @EnableJpaRepositories} exists
+     * anywhere in this codebase) and not a cross-thread {@code Future} (ruled out — can create a
+     * genuine two-transaction deadlock and breaks the typed exception discrimination this file's own
+     * {@link DeleteStatementLockTimeoutException} depends on). This fails fast on the caller's own
+     * thread with zero new infrastructure and zero shared-mutable-pool-config risk, at the cost of a
+     * real TOCTOU gap: the pool's state can change between this check and the real acquisition
+     * immediately after, in either direction — accepted, since closing that gap fully would require one
+     * of the two costlier mechanisms above.
+     */
     public void erase(UUID requestId, Long userId) {
+        assertConnectionPoolNotSaturated(requestId, "erase");
+        self.eraseTransactional(requestId, userId);
+    }
+
+    /**
+     * skillars-deferred-132 AC1 Fix 4: renamed from {@code erase} — the connection-pool pre-check now
+     * lives in the new outer {@link #erase} wrapper above, which this method's own
+     * {@code @Transactional(REQUIRES_NEW)} advice would otherwise run BEFORE any of this method's own
+     * code could execute. Business logic below is unchanged from before this rename.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void eraseTransactional(UUID requestId, Long userId) {
         GdprRequest request = gdprRequestRepository.findById(requestId)
             .orElseThrow(() -> new RuntimeException("GdprRequest not found: " + requestId));
         request.setStatus("PROCESSING");
@@ -208,11 +259,19 @@ public class GdprErasureService {
         // local, because the PLAYER branch's catch runs inside the ifPresentOrElse lambda below.
         AtomicBoolean skipped = new AtomicBoolean(false);
         if (role == SkillarsRole.PLAYER) {
+            // skillars-deferred-132 AC2 Fix 9: read once here, before the lock acquisition inside
+            // deletePlayerDevelopmentData, mirroring eraseParentChildren's own hoisted read below. This
+            // branch already calls deletePlayerDevelopmentData exactly once, so this is a no-op in
+            // practice — only the PARENT loop's N-children repetition is actually fixed — but keeps
+            // deletePlayerDevelopmentData's signature (lockTimeoutSeconds as a parameter, not read
+            // internally) consistent across both callers.
+            long playerBranchLockTimeoutSeconds = configService.getBoundedLong(
+                ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
             playerProfileRepository.findByUserId(userId)
                 .ifPresentOrElse(
                     pp -> {
                         try {
-                            deletePlayerDevelopmentData(pp.getId());
+                            deletePlayerDevelopmentData(pp.getId(), playerBranchLockTimeoutSeconds);
                             // (story review, 2026-09-22): mirrors the PARENT branch's own detach (M9) —
                             // pp is this outer transaction's managed instance, while the tombstone write
                             // now commits in deletePlayerDevelopmentData's INNER transaction/
@@ -352,19 +411,28 @@ public class GdprErasureService {
      * is exactly why it is derived from request-latency tolerance (see the constant's own Javadoc),
      * not from an unrelated connection-pool setting.
      *
-     * <p>The deadline clock starts here, at the top of this loop — not at the top of {@link #erase}
+     * <p>The deadline clock starts here, at the top of this loop — not at the top of {@link #eraseTransactional}
      * as a whole. The account anonymisation and message/review deletion work preceding this call
      * includes its own unbounded bulk deletes, but they do not contend {@code player_profiles}, so
      * they are not the lock-holding concern this budget targets.
      *
      * @return {@code true} if any child was skipped for a {@link #CHILD_CONTENDED}/
      *     {@link #CHILD_DELETE_LOCK_TIMEOUT} reason (code review 2026-09-23, Decision 1) — signals
-     *     {@link #erase} to mark the request {@code FAILED} rather than {@code COMPLETED}, since that
+     *     {@link #eraseTransactional} to mark the request {@code FAILED} rather than {@code COMPLETED}, since that
      *     child's development data survives this run. {@code false} when every child either
      *     succeeded or only vanished ({@code CHILD_VANISHED}, whose data was genuinely already erased
      *     by a concurrent request and does not make this run incomplete).
      */
     private boolean eraseParentChildren(UUID requestId, Long userId) {
+        // skillars-deferred-132 AC2 Fix 9: read once per eraseParentChildren call, unconditionally —
+        // before `children` is even computed, not after any emptiness check — so this key is read
+        // exactly once per erase() call for the PARENT branch regardless of child count, including the
+        // 0-children case. Passed down as a parameter into deletePlayerDevelopmentData instead of that
+        // method reading it once per child, closing this file's own D5 ledger residual (a cache-expiry
+        // read triggering configRepository.findAll() once per child, all on the outer transaction's
+        // connection, which already holds the main."user" lock for this parent).
+        long lockTimeoutSeconds = configService.getBoundedLong(
+            ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
         // (story review, 2026-09-22, Decision 3): filter out children already tombstoned by an
         // earlier, since-failed run. developmentDataErasedAt is a one-way sticky tombstone (see
         // deletePlayerDevelopmentData's own Javadoc) — without this filter, a re-drive of a
@@ -412,7 +480,7 @@ public class GdprErasureService {
                 // deeper in the delete chain starts throwing either exception for an unrelated
                 // reason), that new throw must NOT be silently swallowed here without first
                 // re-verifying these assumptions still hold.
-                deletePlayerDevelopmentData(child.getId());
+                deletePlayerDevelopmentData(child.getId(), lockTimeoutSeconds);
                 processed++;
             } catch (ResourceNotFoundException e) {
                 // skillars-deferred-128 AC4: the child's player_profiles row vanished between
@@ -482,9 +550,9 @@ public class GdprErasureService {
      * method's {@code reason} parameter exists to provide, since the admin queue would render only
      * the already-resolved-looking {@code CHILD_VANISHED} case.
      *
-     * <p>Runs in its OWN {@code REQUIRES_NEW} transaction, not {@link #erase}'s own — for the
+     * <p>Runs in its OWN {@code REQUIRES_NEW} transaction, not {@link #eraseTransactional}'s own — for the
      * deadline-exceeded case, the caller ({@link #eraseParentChildren}) throws immediately after this
-     * returns, which rolls back {@link #erase}'s outer transaction; without its own transaction this
+     * returns, which rolls back {@link #eraseTransactional}'s outer transaction; without its own transaction this
      * alert would be rolled back right along with it and never actually recorded. For the AC4
      * skip-and-continue cases the caller does not throw, but this stays consistent with the
      * deadline path rather than depending on {@code erase()}'s own eventual commit.
@@ -507,6 +575,59 @@ public class GdprErasureService {
     }
 
     /**
+     * skillars-deferred-132 AC1 Fix 4. A same-thread, read-only pre-check that fails fast — with a
+     * {@link PessimisticLockingFailureException} the existing call sites already know how to catch,
+     * classify, and alert on — instead of letting a {@code REQUIRES_NEW} acquisition attempt genuinely
+     * block on an exhausted {@code HikariDataSource} pool for up to its configured
+     * {@code connection-timeout} (30s in this project's own {@code application.yaml}).
+     *
+     * <p>Saturated is defined as: at least one other thread is already queued waiting for a connection
+     * ({@code threadsAwaitingConnection > 0} — direct evidence of contention), OR the pool has grown to
+     * its configured maximum with zero idle connections (this call's OWN attempt would have to wait).
+     * Either condition is read directly off the live {@link HikariPoolMXBean} — no polling, no
+     * artificial delay.
+     *
+     * <p><strong>{@code dataSource} may not be a {@link HikariDataSource} instance</strong> — {@code
+     * DataSourceConfig.dataSourceSpyPostProcessor} wraps the primary {@code dataSource} bean in a
+     * {@code ProxyDataSourceBuilder}-created proxy when {@code log.database.spy=true}. This check is a
+     * no-op (proceeds exactly as before this fix) whenever it cannot resolve a real
+     * {@link HikariPoolMXBean} — a missed check under that specific opt-in debug flag, not a correctness
+     * bug in normal operation.
+     *
+     * <p><strong>Known, accepted residual: a genuine TOCTOU gap.</strong> The pool's state can change
+     * between this read and the real acquisition attempt immediately after it, in either direction — a
+     * healthy-looking pool can still block, and a momentarily-saturated one can free up before the real
+     * attempt. This is the accepted cost of a same-thread, zero-new-infrastructure mechanism (see
+     * {@link #erase}'s own Javadoc for the two costlier alternatives this story ruled out/re-costed).
+     */
+    private void assertConnectionPoolNotSaturated(Object contextId, String callSite) {
+        if (!(dataSource instanceof HikariDataSource hikariDataSource)) {
+            return;
+        }
+        HikariPoolMXBean pool = hikariDataSource.getHikariPoolMXBean();
+        if (pool == null) {
+            return;
+        }
+        int idle = pool.getIdleConnections();
+        int active = pool.getActiveConnections();
+        int total = pool.getTotalConnections();
+        int waiting = pool.getThreadsAwaitingConnection();
+        int max = hikariDataSource.getMaximumPoolSize();
+        boolean saturated = waiting > 0 || (idle <= 0 && total >= max);
+        if (!saturated) {
+            return;
+        }
+        log.error("[GDPR_ERASURE_POOL_SATURATED] callSite={} contextId={} active={} idle={} total={} "
+                + "max={} waiting={} — refusing to attempt a REQUIRES_NEW connection acquisition that "
+                + "could otherwise block this request thread for up to the pool's connection-timeout",
+            callSite, contextId, active, idle, total, max, waiting);
+        throw new PessimisticLockingFailureException(
+            "GDPR erasure's " + callSite + " REQUIRES_NEW connection acquisition was refused: the "
+                + "shared HikariCP pool appears saturated (active=" + active + " idle=" + idle
+                + " total=" + total + " max=" + max + " waiting=" + waiting + ")");
+    }
+
+    /**
      * skillars-deferred-127 AC1: takes the SAME {@code player_profiles} pessimistic lock
      * {@link com.softropic.skillars.platform.development.service.RadarCompositeCalculationService#recalculateComposite}
      * already uses (same {@code findByIdForUpdate} + {@link PessimisticLockRetryer#withBoundedRetry}
@@ -519,7 +640,7 @@ public class GdprErasureService {
      * consequence of the shared lock, not a separate mechanism.
      *
      * <p>{@code playerId} here is always an already-resolved {@code player_profiles.id} (a TSID) —
-     * never a {@code main.user.id} — resolved differently by each caller in {@link #erase}: the
+     * never a {@code main.user.id} — resolved differently by each caller in {@link #eraseTransactional}: the
      * PARENT branch already has it from {@code findByParentIdOrderByIdAsc} (via
      * {@link #eraseParentChildren}); the PLAYER branch resolves it via
      * {@code playerProfileRepository.findByUserId} first and only calls this method when a profile
@@ -531,7 +652,7 @@ public class GdprErasureService {
      *
      * <p><strong>skillars-deferred-128 AC1: this method now commits independently, in its own
      * {@code REQUIRES_NEW} transaction</strong> (via {@link #requiresNewTemplate}), releasing its
-     * {@code player_profiles} lock as soon as it returns — BEFORE {@link #erase}'s own unrelated
+     * {@code player_profiles} lock as soon as it returns — BEFORE {@link #eraseTransactional}'s own unrelated
      * downstream steps (refresh-token revoke, {@code gdprRequest} cleanup) run in {@code erase()}'s
      * own transaction. Before this AC, the lock was held for {@code erase()}'s entire remaining
      * transaction (widening an RI {@code FOR KEY SHARE} exposure window on 7 FK'd tables for
@@ -610,28 +731,36 @@ public class GdprErasureService {
      * findByIdForUpdate}'s own {@code NOWAIT} + {@link PessimisticLockRetryer}, and the tombstone
      * write cannot contend an external lock since this transaction already holds the row exclusively.
      *
-     * <p>The config value is read via {@link ConfigService#getBoundedLong(String, long, long, long)}
-     * <strong>before</strong> the lock acquisition (mirroring {@code recalculateComposite}'s own
-     * identical reasoning) — a cache-expiry read can trigger a real {@code configRepository.findAll()}
-     * DB round trip, which should not happen while this transaction already holds the
-     * {@code player_profiles} lock. The {@code set_config} statement itself is issued
-     * <strong>after</strong> the lock is held (only the value read moves earlier), mirroring
-     * {@code recalculateComposite}'s own placement of that statement.
+     * <p>{@code lockTimeoutSeconds} is a caller-supplied parameter, not read by this method itself
+     * (skillars-deferred-132 AC2 Fix 9 — previously read here, once per call, via
+     * {@link ConfigService#getBoundedLong(String, long, long, long)}). Both callers
+     * ({@link #eraseTransactional}'s PLAYER branch, {@link #eraseParentChildren}'s loop) read it
+     * exactly once per {@code erase()} call and pass it down, closing a repeated-read hazard the PARENT
+     * loop had: a cache-expiry read triggering a real {@code configRepository.findAll()} DB round trip
+     * once per child, all on the outer transaction's own connection, which already holds the
+     * {@code main."user"} lock for that parent. Both callers still read it <strong>before</strong> this
+     * method's own lock acquisition (mirroring {@code recalculateComposite}'s own identical reasoning
+     * for the equivalent placement) — a cache-expiry read should not happen while a transaction already
+     * holds the {@code player_profiles} lock. The {@code set_config} statement itself is issued
+     * <strong>after</strong> the lock is held, mirroring {@code recalculateComposite}'s own placement
+     * of that statement.
      *
      * <p><strong>skillars-deferred-129 AC1 (H2): the {@code role == PLAYER} branch call site in
-     * {@link #erase} now also catches a lock-timeout/contention failure here</strong> — equivalent
+     * {@link #eraseTransactional} now also catches a lock-timeout/contention failure here</strong> — equivalent
      * skip-and-alert semantics to {@link #eraseParentChildren}'s own two catches, rather than letting
      * it propagate and silently convert a previously-successful (if slow) erasure into an unalerted
      * {@code FAILED} on the most common account shape. See {@link DeleteStatementLockTimeoutException}
      * for how the two possible failure causes reaching either call site are distinguished.
      */
-    private void deletePlayerDevelopmentData(Long playerId) {
-        // Task 5: read before the lock acquisition below, not after — see this method's own Javadoc.
-        long lockTimeoutSeconds = configService.getBoundedLong(
-            ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
+    private void deletePlayerDevelopmentData(Long playerId, long lockTimeoutSeconds) {
+        // skillars-deferred-132 AC1 Fix 4: this method's own REQUIRES_NEW acquisition (via
+        // requiresNewTemplate below) is the second of the two acquisitions this fix bounds — see
+        // erase()'s own Javadoc for the shared mechanism and the tradeoffs it accepts.
+        assertConnectionPoolNotSaturated(playerId, "deletePlayerDevelopmentData");
         requiresNewTemplate.executeWithoutResult(status -> {
-            var playerProfile = lockRetryer.withBoundedRetry(() -> playerProfileRepository.findByIdForUpdate(playerId)
-                .orElseThrow(() -> new ResourceNotFoundException("Player not found: " + playerId, "player_profile")));
+            var playerProfile = lockRetryer.withBoundedRetry("GdprErasureService.deletePlayerDevelopmentData",
+                () -> playerProfileRepository.findByIdForUpdate(playerId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Player not found: " + playerId, "player_profile")));
             entityManager.refresh(playerProfile, LockModeType.PESSIMISTIC_WRITE);
 
             // Task 6: issued once, after the lock is held and before the first delete call — mirrors
@@ -661,13 +790,11 @@ public class GdprErasureService {
                 playerRadarBaselineRepository.deleteAllByPlayerId(playerId);
                 playerRadarCompositeRepository.deleteAllByPlayerId(playerId);
                 radarAssessmentRepository.deleteAllByPlayerId(playerId);
-                performanceReportRepository.findByPlayerIdOrderByGeneratedAtDesc(playerId).forEach(report -> {
-                    // Deferred-77 AC2: a PENDING_UPLOAD/UPLOAD_FAILED report may have no storage_key yet.
-                    // skillars-deferred-90 AC13: enqueue the key, don't delete from S3 inside this transaction.
-                    if (report.getStorageKey() != null) {
-                        childBlobKeys.add(report.getStorageKey());
-                    }
-                });
+                // Deferred-77 AC2: a PENDING_UPLOAD/UPLOAD_FAILED report may have no storage_key yet —
+                // the query's own WHERE clause excludes those. skillars-deferred-90 AC13: enqueue the
+                // key, don't delete from S3 inside this transaction. skillars-deferred-132 AC2 Fix 8:
+                // a projection, not full-entity hydration — only the storage_key was ever read.
+                childBlobKeys.addAll(performanceReportRepository.findStorageKeysByPlayerId(playerId));
                 performanceReportRepository.deleteAllByPlayerId(playerId);
                 homeworkCompletionRepository.deleteAllByPlayerId(playerId);
 
@@ -723,7 +850,7 @@ public class GdprErasureService {
      * <p>This marker is thrown ONLY for a {@link PessimisticLockingFailureException} caught AFTER the
      * {@code player_profiles} lock is already held (i.e. from the delete/scan/enqueue block, never
      * from {@code lockRetryer.withBoundedRetry}'s own lock-acquisition attempt above it) — catching
-     * this specific type at {@link #erase} and {@link #eraseParentChildren}'s own call sites, rather
+     * this specific type at {@link #eraseTransactional} and {@link #eraseParentChildren}'s own call sites, rather
      * than inspecting any cause, is what actually distinguishes the two failure modes deterministically.
      */
     private static final class DeleteStatementLockTimeoutException extends RuntimeException {

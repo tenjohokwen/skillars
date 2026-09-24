@@ -32,6 +32,7 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -83,8 +84,8 @@ class PastDueGracePeriodTest {
         // skillars-deferred-131 AC1 Fix 4: syncMarketplaceTier now takes the coach_profiles row lock
         // before its find-or-create — lenient() since several tests below never reach a coach
         // downgrade at all.
-        lenient().when(lockRetryer.withBoundedRetry(any()))
-            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
         lenient().when(coachProfileRepository.findByIdForUpdate(any()))
             .thenReturn(java.util.Optional.of(new CoachProfile()));
     }

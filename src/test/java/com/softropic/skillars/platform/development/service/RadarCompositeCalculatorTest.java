@@ -91,8 +91,8 @@ class RadarCompositeCalculatorTest {
 
         PlayerProfile playerProfile = new PlayerProfile();
         lenient().when(playerProfileRepository.findByIdForUpdate(PLAYER_ID)).thenReturn(Optional.of(playerProfile));
-        lenient().when(lockRetryer.withBoundedRetry(org.mockito.ArgumentMatchers.<Supplier<PlayerProfile>>any()))
-            .thenAnswer(inv -> inv.getArgument(0, Supplier.class).get());
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), org.mockito.ArgumentMatchers.<Supplier<PlayerProfile>>any()))
+            .thenAnswer(inv -> inv.getArgument(1, Supplier.class).get());
 
         // skillars-deferred-126 AC2: recalculateComposite now reads the lock-timeout tunable and
         // issues a SELECT set_config(...) native query before the per-skill loop — stub both so the
@@ -132,7 +132,8 @@ class RadarCompositeCalculatorTest {
 
         service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
 
-        verify(lockRetryer).withBoundedRetry(org.mockito.ArgumentMatchers.<Supplier<Object>>any());
+        verify(lockRetryer).withBoundedRetry(eq("RadarCompositeCalculationService.recalculateComposite"),
+            org.mockito.ArgumentMatchers.<Supplier<Object>>any());
         verify(playerProfileRepository).findByIdForUpdate(PLAYER_ID);
         verify(entityManager).refresh(any(), eq(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE));
     }

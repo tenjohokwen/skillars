@@ -43,4 +43,22 @@ class SubscriptionSchedulerLockTest {
         assertThat(Duration.parse(lock.lockAtMostFor())).isPositive();
         assertThat(Duration.parse(lock.lockAtLeastFor())).isPositive();
     }
+
+    /**
+     * skillars-deferred-132 AC1 Fix 3: a third scheduler, same reasoning as the two above — without
+     * {@code @SchedulerLock}, a concurrent run (overlap or a second instance) could double-process the
+     * same active/trialling coach subscriptions.
+     */
+    @Test
+    void reconcileMarketplaceTiers_carriesSchedulerLock() throws NoSuchMethodException {
+        Method method = SubscriptionTierReconciliationScheduler.class.getMethod("reconcileMarketplaceTiers");
+        SchedulerLock lock = method.getAnnotation(SchedulerLock.class);
+
+        assertThat(lock).as("reconcileMarketplaceTiers() must carry @SchedulerLock, mirroring its two "
+            + "siblings")
+            .isNotNull();
+        assertThat(lock.name()).isNotBlank();
+        assertThat(Duration.parse(lock.lockAtMostFor())).isPositive();
+        assertThat(Duration.parse(lock.lockAtLeastFor())).isPositive();
+    }
 }

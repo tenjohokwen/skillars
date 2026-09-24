@@ -249,7 +249,7 @@ public class CoachProfileService {
         // BookingDuplicationService.duplicateNextWeek's own coach-row lock, so a concurrent
         // accept/duplicate-next-week validated against these windows can no longer race a rewrite of
         // them mid-transaction.
-        lockRetryer.withBoundedRetry(() -> {
+        lockRetryer.withBoundedRetry("CoachProfileService.saveStep4", () -> {
             coachProfileRepository.findByIdForUpdate(profile.getId())
                 .orElseThrow(() -> new MarketplaceException("marketplace.profileNotFound",
                     "Coach profile not found for userId=" + userId));
@@ -311,7 +311,7 @@ public class CoachProfileService {
         // lock decorative. Without this, a concurrent suspendCoach committed inside this method's
         // unlocked window would be silently reverted back to ACTIVE by the full-row save() below
         // (CoachProfile has no @Version/@DynamicUpdate).
-        lockRetryer.withBoundedRetry(() -> {
+        lockRetryer.withBoundedRetry("CoachProfileService.publishProfile", () -> {
             coachProfileRepository.findByIdForUpdate(profile.getId())
                 .orElseThrow(() -> new MarketplaceException("marketplace.profileNotFound",
                     "Coach profile not found for id=" + profile.getId()));

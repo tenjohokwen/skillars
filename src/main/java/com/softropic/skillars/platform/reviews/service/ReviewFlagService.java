@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.reviews.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -17,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -34,7 +37,18 @@ public class ReviewFlagService {
     private final CoachRatingService coachRatingService;
     private final ConfigService configService;
     private final ApplicationEventPublisher eventPublisher;
+    private final PessimisticLockRetryer lockRetryer;
 
+    /**
+     * skillars-deferred-132 AC2 Fix 7: {@code @Transactional(REQUIRES_NEW)}, overriding this class's
+     * own class-level default for this method only — the byte-for-byte identical rollback-only trap as
+     * {@code ReviewSubmissionService.submitReview} (this method's own {@code saveAndFlush}/catch-
+     * {@code DataIntegrityViolationException}/translate-to-{@code ALREADY_FLAGGED} shape is
+     * deliberately mirrored from that method, per that method's own comment), so it gets the identical
+     * fix for the identical reason. See {@code ReviewSubmissionService.submitReview}'s own Javadoc for
+     * the accepted tradeoffs.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public UUID flag(UUID reviewId, Long flaggedBy, ReviewFlagReason reason, String details) {
         // skillars-deferred-131 AC2 Fix 7: unreachable from REST today (resolveUserId() guards
         // against a null caller before this method is invoked) — defensive hardening against an NPE
@@ -89,9 +103,18 @@ public class ReviewFlagService {
         // skillars-deferred-131 AC2 Fix 5: only now, after all four guards pass, is the CoachReview
         // entity loaded for the first time — this comment's "first read of the row" claim (dating
         // from skillars-deferred-130 AC1 Fix 1) therefore stays true verbatim.
-        CoachReview review = reviewRepository.findByIdForUpdate(reviewId)
-            .orElseThrow(() -> new OperationNotAllowedException(
-                "Review not found", ReviewErrorCode.REVIEW_NOT_FOUND));
+        //
+        // skillars-deferred-132 AC1 Fix 2: NOWAIT + PessimisticLockRetryer, not the shared blocking
+        // findByIdForUpdate — a 3rd-time-raised decision to convert this method's own lock away from
+        // an unbounded blocking wait, mirroring the module's established NOWAIT+retry convention
+        // (CoachProfileRepository, PlayerProfileRepository, etc). The other five findByIdForUpdate
+        // call sites in this module are untouched and stay genuinely blocking (see
+        // CoachReviewRepository.findByIdForUpdateNoWait's own comment for why converting the shared
+        // method in place would have been a regression).
+        CoachReview review = lockRetryer.withBoundedRetry("ReviewFlagService.flag",
+            () -> reviewRepository.findByIdForUpdateNoWait(reviewId)
+                .orElseThrow(() -> new OperationNotAllowedException(
+                    "Review not found", ReviewErrorCode.REVIEW_NOT_FOUND)));
 
         ReviewFlag flag = new ReviewFlag();
         flag.setReviewId(reviewId);
@@ -124,7 +147,14 @@ public class ReviewFlagService {
         // this lock) — code review 2026-09-23.
         long openFlagCount = reviewFlagRepository.countByReviewIdAndResolvedAtIsNull(reviewId);
         // skillars-deferred-107 AC2: 0 → the first flag on any review auto-holds it. Clamps to 3 + WARN.
-        int threshold = configService.getBoundedInt("reviews.autoHoldFlagThreshold", 3, 1, 1000);
+        // skillars-deferred-132 AC3 Fix 10: references the existing ConfigBounds constant's key
+        // instead of the raw string literal — future typo-drift protection at this call site (a typo'd
+        // literal would silently create an unrelated, always-defaulted key with no compile-time signal;
+        // ConfigStartupAssertion boot-protects by string lookup either way, so this is not a fail-fast
+        // fix). Bounds (1, 1000) stay re-typed as literals, per this codebase's own documented
+        // drift-detector convention.
+        int threshold = configService.getBoundedInt(
+            ConfigBounds.REVIEWS_AUTO_HOLD_FLAG_THRESHOLD.key(), 3, 1, 1000);
 
         boolean autoHeld = false;
         if (openFlagCount >= threshold && review.getModerationStatus() == ReviewModerationStatus.APPROVED) {

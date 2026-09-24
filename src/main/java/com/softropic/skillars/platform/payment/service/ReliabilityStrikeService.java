@@ -95,8 +95,9 @@ public class ReliabilityStrikeService {
         // retry, a dropped strike-escalation is far less harmful than the refund those listeners
         // exist to protect, and the admin path (AdminCoachEnforcementService.issueManualStrike)
         // surfaces the error for the operator to retry.
-        CoachProfile coach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
-            .orElseThrow(() -> new ResourceNotFoundException("Coach not found", "coach_profile")));
+        CoachProfile coach = lockRetryer.withBoundedRetry("ReliabilityStrikeService.issue",
+            () -> coachProfileRepository.findByIdForUpdate(coachId)
+                .orElseThrow(() -> new ResourceNotFoundException("Coach not found", "coach_profile")));
 
         // skillars-deferred-123 AC1: a coach already off the marketplace has no enforcement value in
         // further escalation — a SUSPENDED coach cannot be knocked further, and could otherwise be

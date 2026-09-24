@@ -72,7 +72,7 @@ class PessimisticLockRetryerTest {
         stubSessionAndConnectionPlumbing();
         AtomicInteger calls = new AtomicInteger();
 
-        String result = retryer.withBoundedRetry(() -> {
+        String result = retryer.withBoundedRetry("TestLock", () -> {
             calls.incrementAndGet();
             return "ok";
         });
@@ -90,7 +90,7 @@ class PessimisticLockRetryerTest {
         stubSessionAndConnectionPlumbing();
         AtomicInteger calls = new AtomicInteger();
 
-        String result = retryer.withBoundedRetry(() -> {
+        String result = retryer.withBoundedRetry("TestLock", () -> {
             if (calls.incrementAndGet() == 1) {
                 throw new PessimisticLockingFailureException("row locked by another transaction");
             }
@@ -112,7 +112,7 @@ class PessimisticLockRetryerTest {
         PessimisticLockingFailureException persistent =
             new PessimisticLockingFailureException("row locked by another transaction");
 
-        assertThatThrownBy(() -> retryer.withBoundedRetry(() -> {
+        assertThatThrownBy(() -> retryer.withBoundedRetry("TestLock", () -> {
             calls.incrementAndGet();
             throw persistent;
         })).isSameAs(persistent);
@@ -136,7 +136,7 @@ class PessimisticLockRetryerTest {
         ReflectionTestUtils.setField(retryer, "backoffMultiplier", 1.5);
         AtomicInteger calls = new AtomicInteger();
 
-        retryer.withBoundedRetry(() -> {
+        retryer.withBoundedRetry("TestLock", () -> {
             if (calls.incrementAndGet() == 1) {
                 throw new PessimisticLockingFailureException("row locked");
             }
@@ -160,7 +160,7 @@ class PessimisticLockRetryerTest {
         ReflectionTestUtils.setField(retryer, "maxBackoffMs", 2L);
         ReflectionTestUtils.setField(retryer, "backoffMultiplier", 1.5);
 
-        assertThatThrownBy(() -> retryer.withBoundedRetry(() -> {
+        assertThatThrownBy(() -> retryer.withBoundedRetry("TestLock", () -> {
             throw new PessimisticLockingFailureException("row locked");
         })).isInstanceOf(PessimisticLockingFailureException.class);
 
@@ -175,7 +175,7 @@ class PessimisticLockRetryerTest {
         AtomicInteger calls = new AtomicInteger();
         IllegalStateException notFound = new IllegalStateException("booking not found");
 
-        assertThatThrownBy(() -> retryer.withBoundedRetry(() -> {
+        assertThatThrownBy(() -> retryer.withBoundedRetry("TestLock", () -> {
             calls.incrementAndGet();
             throw notFound;
         })).isSameAs(notFound);

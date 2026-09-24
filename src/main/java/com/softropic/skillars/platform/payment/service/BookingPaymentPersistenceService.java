@@ -91,7 +91,8 @@ public class BookingPaymentPersistenceService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CaptureReservation reserveCapture(UUID bookingId, BigDecimal intendedCredit,
                                              BigDecimal intendedStripe, UUID batchId) {
-        Booking booking = lockRetryer.withBoundedRetry(() -> bookingRepository.findByIdForUpdate(bookingId).orElse(null));
+        Booking booking = lockRetryer.withBoundedRetry("BookingPaymentPersistenceService.reserveCapture",
+            () -> bookingRepository.findByIdForUpdate(bookingId).orElse(null));
         if (booking == null) {
             return CaptureReservation.BOOKING_NOT_PENDING;
         }

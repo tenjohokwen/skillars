@@ -54,8 +54,8 @@ class PlaybackRevocationWindowUnitTest {
 
         when(configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
-        when(lockRetryer.withBoundedRetry(any()))
-            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+        when(lockRetryer.withBoundedRetry(anyString(), any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
 
         playbackService = new PlaybackService(videoRepository, playbackTokenRepository, videoProviderAdapter, properties, videoMetrics, configService, quotaService, lockRetryer, entityManager);
     }

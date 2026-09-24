@@ -3249,6 +3249,15 @@ patched or resolved in-story — see that story's own `## Review Findings` secti
   re-type both bounds *and* the key string for their own `getBoundedInt` calls, found during this
   story's own review — out of this story's scope (its AC2 targeted `GdprErasureService`'s call site
   only).]**
+  **[CLOSED by skillars-deferred-132 AC3 Fix 10, residual (b) only]** — both call sites now reference
+  `ConfigBounds.REVIEWS_AUTO_HOLD_FLAG_THRESHOLD.key()`/`ConfigBounds.REVIEWS_SUBMISSION_WINDOW_DAYS.key()`
+  instead of the raw string literal; the bounds themselves (`1, 1000` / `1, 365`) stay re-typed as
+  literals, per this codebase's own documented drift-detector convention (`ConfigBounds.java:33-35`) —
+  not a residual, a deliberate match to the sibling pattern. Pinned by new
+  `ReviewFlagServiceTest`/`ReviewSubmissionServiceTest` `Mockito verify(...)` assertions on the exact key
+  string. **Residual (a) — `BoundedKey`'s missing `default` field — stays explicitly open**, per this
+  story's own owner decision: narrower/cheaper to fix only the two call sites than widen `BoundedKey`
+  itself.
 
 - **D3 — Only one of four `(branch × reason)` catch combinations in the new erasure error handling is
   tested.** `GdprErasureService.java:226` (PLAYER / `CHILD_CONTENDED` arm) and `:397` (PARENT /
@@ -3258,6 +3267,10 @@ patched or resolved in-story — see that story's own `## Review Findings` secti
   `erase_parentUser_contendedChild_…` covers only PARENT + `CHILD_CONTENDED`. The `instanceof`
   ternary that selects the reason is therefore proven in half its cases. Test debt, no production
   defect implied.
+  **[CLOSED by skillars-deferred-132 AC4 Fix 12]** — the two missing combinations (PARENT ×
+  `CHILD_DELETE_LOCK_TIMEOUT`, PLAYER × `CHILD_CONTENDED`) are now covered in `GdprErasureIT`, each
+  mirroring its corresponding existing test's exact setup/mocking shape for that branch. All four
+  `(branch × reason)` combinations are now exercised.
 
 - **D4 — `performance_reports` rows are fully hydrated to read one column, then left managed after a
   bulk delete.** `GdprErasureService.java:621` calls `findByPlayerIdOrderByGeneratedAtDesc(playerId)`
@@ -3268,6 +3281,11 @@ patched or resolved in-story — see that story's own `## Review Findings` secti
   is memory proportional to a player's report count and it inflates `M` in D1. **Pre-existing:** the
   `forEach`-over-entities shape predates this story; only the surrounding `try` is new. Fix shape:
   a `SELECT p.storageKey … WHERE p.storageKey IS NOT NULL` projection returning `List<String>`.
+  **[CLOSED by skillars-deferred-132 AC2 Fix 8]** — implemented exactly as this bullet's own suggested
+  fix shape: `PerformanceReportRepository.findStorageKeysByPlayerId` projection replaces the
+  full-entity `findByPlayerIdOrderByGeneratedAtDesc(...).forEach(...)` hydration (the now-dead method
+  deleted, zero remaining callers). Pinned by a new `GdprErasureIT` test: a player with a mix of
+  `PENDING_UPLOAD` (null `storageKey`) and `READY` (non-null) reports enqueues only the non-null key.
 
 - **D5 — The `lock_timeout` bound is re-read from `ConfigService` once per child, inside `erase()`'s
   outer transaction.** `GdprErasureService.java:587-588`. Hoisting the read above
@@ -3278,6 +3296,16 @@ patched or resolved in-story — see that story's own `## Review Findings` secti
   on a TTL boundary one thread holding that monitor while waiting for a Hikari connection stalls
   every `ConfigService` caller in the JVM. Narrow window, pre-existing `ConfigService` shape. Fix
   shape: read the bound once in `erase()`/`eraseParentChildren` and pass it down as a parameter.
+  **[CLOSED by skillars-deferred-132 AC2 Fix 9, PARENT branch only]** — `lockTimeoutSeconds` is now
+  read once at the top of `eraseParentChildren` (before its loop, unconditionally — even for zero
+  children) and passed down as a parameter into `deletePlayerDevelopmentData(playerId,
+  lockTimeoutSeconds)`, closing the N-children repetition this bullet named. The PLAYER branch's own
+  equivalent read is a no-op change in practice — that path already called
+  `deletePlayerDevelopmentData` exactly once, so there was no repeated-read hazard to remove there.
+  **This mitigates frequency, not the underlying hazard class**: `ConfigService.refreshCache()`'s
+  `private synchronized configRepository.findAll()` stalling every other caller in the JVM while this
+  thread holds a lock and a pooled connection is unchanged in kind — hoisting the read makes it happen
+  once per `erase()` call instead of once per child, reducing probability, not eliminating the risk.
 
 ## Deferred from: code review of skillars-deferred-130-marketplace-reviews-concurrency-audit-and-config-bounds-fix (2026-09-23)
 
@@ -3343,6 +3371,12 @@ implementation. Each was independently re-verified against real source. None is 
   survives orphaned — rarer than before (needs a *slow* `publishProfile`, not merely a colliding one),
   but not closed outright. The durable fix (a compensating action or a reconciliation sweep for Stripe
   subscriptions with no local row) is a separate story.
+  **skillars-deferred-132 AC1 Fix 3 note — still explicitly open, not closed by this story:**
+  Fix 3 added a `SubscriptionTierReconciliationScheduler` sweep, but it is **payment → marketplace**
+  only (corrects `marketplace.coach_subscriptions` against `payment.coach_subscriptions`) — it does
+  nothing for a coach with a live Stripe subscription and **no local `payment.coach_subscriptions` row
+  at all**, which is what this bullet's residual actually calls for (a **Stripe → payment** sweep). The
+  two are distinct gaps; closing one does not close the other. Still a separate story.
 
 - **`AdminCoachEnforcementService.reinstateCoach` mints a marketplace-`ACTIVE` profile that never
   published** (`:217-232`) — it sets `ACTIVE` unconditionally, so the profile gets no
@@ -3375,6 +3409,18 @@ implementation. Each was independently re-verified against real source. None is 
   no row lock at all — it is a plain `SELECT`, not `FOR UPDATE`. The recorded lock ORDER (`coach_reviews`
   then `coach_profiles`, via the same downstream `CoachRatingService.recompute` call as before) is
   therefore unchanged. Still open.
+  **RE-CONFIRMED still open (skillars-deferred-132 AC1 Fix 1, 3rd consecutive story):** the reachability
+  argument is now stronger and no longer depends on a guard that turned out not to exist —
+  `erase()`'s own `coach_profiles` lock only runs inside an `ifPresent` branch, so a non-coach `u` takes
+  no `coach_profiles` lock at all, and a coach `u` can author zero reviews (`AuthorRole` excludes
+  `COACH`; `ReviewResource.resolveRole` resolves `ROLE_COACH` before any other role, so
+  `AuthorRole.valueOf("COACH")` always throws before a coach-authored review can exist) — the two lock
+  sets are disjoint by construction for both account shapes, not merely "not the same row pair" for an
+  incidental reason. Still not fixed: reordering `erase()`'s writes to close this defensively would
+  require auditing every other table it touches for the same risk, a larger change than this latent,
+  currently-unreachable issue justifies. Worth flagging structurally: this protection is a contract-enum
+  membership plus a role-precedence check in the API layer, not a dedicated self-review guard — a future
+  story adding `COACH` to `AuthorRole` would make this reachable with nothing here to catch it.
 
 - **Both new concurrency ITs are timing-dependent** — `ReviewFlagServiceConcurrencyIT` and
   `CoachProfileServiceConcurrencyIT` use a fixed `Thread.sleep(300)` as the only "contention
@@ -3518,6 +3564,15 @@ tracked in that story's own `### Review Findings` section.
   here because the real fix is a `Tags`-scoped or per-call-site meter inside `PessimisticLockRetryer`,
   i.e. a production change well outside this story's scope. The helper's own javadoc already discloses
   the limitation and mitigates the stale-baseline half (growth vs `> 0`), just not the attribution half.
+  **[CLOSED by skillars-deferred-132 AC1 Fix 5]** — exactly the fix this bullet named: every
+  `.withBoundedRetry(` call site (all 34, after Fix 2's new `ReviewFlagService.flag` site) now passes a
+  `lockName`, tagged onto `persistence.lock_retry.retries`/`.exhausted` and the `persistence.lock_retry`
+  timer alike (all three meters, not just `retries` — `PrometheusMeterRegistry` requires the same tag
+  set on every registration of a given meter name). `ConcurrencyLockWaitSupport.currentLockRetryCount`/
+  `assertGenuineLockRetryOccurred` now take a `lockName` and poll only that tag. Every concurrency IT
+  using the helper (`CoachProfileServiceConcurrencyIT`, `SubscriptionServiceConcurrencyIT`, this story's
+  own `ReviewFlagServiceConcurrencyIT` rewrite) asserts on its own tagged counter now, closing the false-
+  pass risk this bullet described.
 
 - **`submitReview`'s translated `DataIntegrityViolationException` leaves the transaction rollback-only.**
   `ReviewSubmissionService.java:69`'s `saveAndFlush` + `catch (DataIntegrityViolationException)` returns a
@@ -3528,6 +3583,17 @@ tracked in that story's own `### Review Findings` section.
   outer boundary. The constraint currently lives only in `ReviewSubmissionServiceConcurrencyIT`'s javadoc;
   making it structural needs `Propagation.REQUIRES_NEW` or an architectural test — a design decision, not
   a patch.
+  **[CLOSED by skillars-deferred-132 AC2 Fix 7, widened to `ReviewFlagService.flag` too]** — exactly the
+  fix this bullet named: `submitReview` now carries method-level `@Transactional(propagation =
+  REQUIRES_NEW)`, overriding the class-level default for that method only. `ReviewFlagService.flag()`
+  has the byte-for-byte identical DIVE-catch-and-translate trap (deliberately mirrored code, per
+  `ReviewSubmissionService`'s own comment) and was found during this story's own review to need the
+  identical fix — applying it to only one would have shipped an inconsistent half-fix on two sibling
+  methods in the same module. New regression tests on both methods (in
+  `ReviewSubmissionServiceConcurrencyIT`/`ReviewFlagServiceConcurrencyIT`) wrap a call in a genuine outer
+  transaction (touching an unrelated row, to avoid a self-deadlock on the same unique key) and assert
+  the outer transaction's own commit succeeds cleanly — no `UnexpectedRollbackException` — while the
+  loser still gets the clean `ALREADY_SUBMITTED`/`ALREADY_FLAGGED` from inside it.
 
 - **`PessimisticLockRetryerCallSiteAuditTest` audits the wrong direction and is trivially satisfiable.**
   `PessimisticLockRetryerCallSiteAuditTest.java:80-90,103` matches nine DENYLIST regexes against each
@@ -3538,6 +3604,17 @@ tracked in that story's own `### Review Findings` section.
   during this review), and this story's new 33rd site is legitimately covered by the count bump — nothing
   is broken. Worth a second assertion that every `findByIdForUpdate(` occurrence in `src/main/java` lies
   inside a `withBoundedRetry(` lambda. Pre-existing weakness, not introduced here.
+  **[CLOSED by skillars-deferred-132 AC4 Fix 11, corrected scope]** — this bullet's own "all 15 sites
+  correctly wrapped" claim was narrower than reality: **four** repositories declare `findByIdForUpdate`
+  WITHOUT `@QueryHints(lock.timeout = 0)` — `VideoQuotaRepository`, `CoachPayoutRepository`,
+  `MessageRepository`, and `CoachReviewRepository`'s own (unchanged) `findByIdForUpdate` — genuinely
+  blocking locks that correctly have no retry wrapper, by design. The new assertion (added to
+  `PessimisticLockRetryerCallSiteAuditTest`) is scoped to the confirmed NOWAIT repositories only, with
+  the four blocking ones named as an explicit exemption list in the test's own javadoc; it checks
+  file-scoped (not method-scoped) co-occurrence of a NOWAIT lock call and a `.withBoundedRetry(` — a
+  deliberately cheaper check than full method-boundary parsing, named as a tradeoff in the test's own
+  javadoc. Verified to catch a deliberately-introduced unwrapped call (added to a scratch location, confirmed
+  the assertion fails, then removed) and to pass cleanly against all four exemptions unmodified.
 
 - **New unit tests hand-build entities instead of using Instancio.**
   `AdminReviewServiceTest.review(...)`, `ReviewFlagServiceTest`, and the `new CoachProfile()` stubs added
@@ -3556,3 +3633,71 @@ tracked in that story's own `### Review Findings` section.
   does not claim to exhaustively rule out any other"). Recorded here because it compounds the single-pool
   quiesce gap being patched in the story: a high-blast-radius, suite-wide change shipped against an
   unconfirmed actor on an unconfirmed pool, with no revert-detecting test possible either way.
+  **[CLOSED by skillars-deferred-132 AC1 Fix 6]** — the empirical attempt this bullet named was made:
+  `quiesceAsyncExecutors` was temporarily short-circuited (reopening the pre-fix race window), temporary
+  entry/exit diagnostic logging (thread name + timestamp) was added around both
+  `RadarCompositeCalculationService.onRadarEntrySubmitted` and `ReportGenerationService
+  .onReportGenerated`, and the full `platform.development.**` package (231 tests) was run repeatedly
+  against real Testcontainers Postgres with the quiesce disabled. **9 valid consecutive local runs, zero
+  reproductions** — no `deadlock detected` error, and the diagnostic log confirmed both async listeners
+  were genuinely dispatched on every run (a 10th run failed on an unrelated compilation error from
+  concurrent unrelated file edits mid-run, discarded rather than counted). All temporary logging and the
+  short-circuit were reverted before this story's PR — `quiesceAsyncExecutors` is confirmed back to its
+  shipped, always-on state. This does not newly prove the mechanism impossible; it keeps the status
+  exactly where the original fix left it — **closed by structural reasoning, not exhaustively proven** —
+  now with a documented, bounded reproduction attempt behind that statement instead of none, consistent
+  with a race that reproduced roughly 1-in-15 on master (first occurrence in ~14 prior green runs) not
+  being practical to chase further through repeated local runs. One known, pre-existing residual in the
+  shipped fix itself is unrelated to whether the race reproduces and remains open: a per-executor
+  `ConditionTimeoutException` is caught and logged, then the reset proceeds anyway after its own 10s
+  wait — the race window is not fully closed for an in-flight async task that runs longer than 10s.
+
+## Last audit: 2026-09-24 (skillars-deferred-132 dev-story completion)
+
+Every item this story resolves is now closed above, each with its own `[CLOSED by skillars-deferred-132
+...]` note citing the fix and its test. Summary:
+
+- **AC1 (6 items):** Fix 1 (lock-order inversion, `ReviewFlagService.flag` ↔ `GdprErasureService.erase`)
+  — **documentation-only, RE-CONFIRMED still open** for a 3rd consecutive story, with a stronger
+  disjoint-lock-sets argument (contract-enum membership + role-precedence in the API layer) replacing
+  the original argument's now-nonexistent guard. Fix 2 (`ReviewFlagService.flag()`'s blocking lock →
+  NOWAIT + `PessimisticLockRetryer`, via a new `findByIdForUpdateNoWait` method used only by that call
+  site — CLOSED). Fix 3 (marketplace-tier reconciliation sweep, `SubscriptionTierReconciliationScheduler`
+  — CLOSED; the corrected `Enum`-vs-`String` comparison a pre-drafting fact-check caught is load-bearing,
+  not cosmetic). Fix 4 (GDPR erasure `REQUIRES_NEW` connection-acquisition bound — CLOSED via a same-
+  thread `HikariPoolMXBean` pre-check, not the costlier secondary-EMF or ruled-out cross-thread `Future`
+  mechanisms; see Fix 4's own code comment for the full tradeoff). Fix 5 (`PessimisticLockRetryer` per-
+  call-site retry attribution via a `lockName` parameter, not an overload — CLOSED). Fix 6 (empirical
+  CI-deadlock reproduction attempt — CLOSED; not reproduced in 9 valid local runs, mechanism status
+  unchanged: closed by structural reasoning, not exhaustively proven).
+- **AC2 (3 fixes, all closed):** Fix 7 (`submitReview` **and** `ReviewFlagService.flag()` →
+  `REQUIRES_NEW`, widened from the original single-method finding once the identical mirrored trap was
+  found in the sibling method). Fix 8 (`PerformanceReport` projection query, dead method deleted). Fix 9
+  (single config read per `erase()` call for the PARENT branch, passed down as a parameter — closes the
+  N-children repetition only; the PLAYER branch's own read was already single, and the underlying
+  `ConfigService.refreshCache()` hazard class is unchanged in kind, only less frequent).
+- **AC3 (closed):** Fix 10 (both review config call sites now reference their existing `ConfigBounds`
+  constants by key; bounds stay re-typed as literals, per this codebase's own convention).
+  `BoundedKey`'s missing `default` field stays explicitly open, per this story's own owner decision
+  (narrower/cheaper to fix only the two call sites than widen `BoundedKey` itself).
+- **AC4 (2 fixes, both closed):** Fix 11 (`PessimisticLockRetryerCallSiteAuditTest` now also audits lock
+  sites, not just retry-wrapper sites — scoped to the confirmed NOWAIT repositories, with four
+  genuinely-blocking repositories named as an explicit exemption list; verified to catch a deliberately-
+  introduced unwrapped call). Fix 12 (the two previously-untested `(branch × reason)` combinations —
+  PARENT × `CHILD_DELETE_LOCK_TIMEOUT`, PLAYER × `CHILD_CONTENDED` — now covered in `GdprErasureIT`).
+- **AC5 (this section):** ledger closeout. Three items are explicitly triaged, NOT silently closed
+  over: **Fix 1**'s lock-order inversion (re-confirmed still open, see AC1 above); the **`BoundedKey`
+  missing-`default`-field residual** (still open, out of this story's narrower scope); the **Stripe →
+  payment reconciliation sweep** the ledger separately calls for (still open — distinct from Fix 3's own
+  payment → marketplace sweep, and not closed by it; a coach with a live Stripe subscription and no
+  local `payment.coach_subscriptions` row at all is untouched by Fix 3). A fourth, narrower item —
+  `persistCoachTierUpgrade`'s own missing catch-and-defer around `syncMarketplaceTier` — was found
+  during this story's own review (a live billing-divergence path Fix 3's original draft never traced)
+  and was fixed as part of Task 4 (the "recommended" branch of that task's own owner decision), mirroring
+  `persistCoachSubscription`'s identical Decision 3 pattern — not left open.
+
+**What remains open after this story:** the Fix 1 lock-order inversion (unreachable today by
+construction, disjoint lock sets for both account shapes); the `BoundedKey` missing-`default` residual;
+the Stripe → payment reconciliation sweep (a separate story); and Fix 6's own known residual (the
+`ConditionTimeoutException` catch-and-proceed leaving a >10s async task's race window open). Nothing
+else from this story's own scope remains open.

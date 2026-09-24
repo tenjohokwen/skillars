@@ -40,6 +40,7 @@ import java.util.function.Supplier;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -82,8 +83,8 @@ class DrillUploadServiceTest {
         // identity doesn't need to match the test's own drill fixture. lenient() since not every test
         // reaches the locked section (e.g. tests that throw on ownership/gate/validation checks first).
         lenient().when(drillRepository.findByIdForUpdate(any())).thenReturn(Optional.of(new Drill()));
-        lenient().when(lockRetryer.withBoundedRetry(any())).thenAnswer(inv -> {
-            Supplier<?> supplier = inv.getArgument(0);
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), any())).thenAnswer(inv -> {
+            Supplier<?> supplier = inv.getArgument(1);
             return supplier.get();
         });
     }

@@ -9,11 +9,13 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
+import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -28,11 +30,14 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -45,8 +50,10 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
@@ -99,6 +106,7 @@ class GdprErasureIT extends AbstractIntegrationTest {
     @Autowired private com.softropic.skillars.platform.outbox.service.OutboxService outboxService;
     @Autowired private GdprErasureService gdprErasureService;
     @Autowired private ConfigService configService;
+    @Autowired private DataSource dataSource;
 
     @LocalServerPort private int randomServerPort;
 
@@ -571,6 +579,59 @@ class GdprErasureIT extends AbstractIntegrationTest {
         assertThat(count).isZero();
     }
 
+    /**
+     * skillars-deferred-132 AC2 Fix 8: the {@code findByPlayerIdOrderByGeneratedAtDesc(...).forEach(...)}
+     * full-entity hydration was replaced with a {@code findStorageKeysByPlayerId} projection whose own
+     * {@code WHERE ... storageKey IS NOT NULL} clause now does the null-filtering the old loop body did
+     * in Java — this is the same assertion the pre-fix code already implicitly made, now pinned against
+     * the projection path: a player with a mix of a {@code PENDING_UPLOAD} report (no {@code storage_key}
+     * yet) and a {@code READY} one (a real key) enqueues only the non-null key for blob deletion.
+     *
+     * <p>Asserted via the {@code fileStorageService} mock interaction, mirroring
+     * {@link #erase_playerUser_deletesPerformanceReportFromS3}'s own established pattern — not by
+     * querying {@code main.outbox_messages} for the row afterward. {@code erase(long)} calls
+     * {@code GdprErasureService.erase} directly, whose own {@code @Transactional(REQUIRES_NEW)}
+     * boundary fires the SAME real {@code AFTER_COMMIT} drain synchronously once it commits (confirmed
+     * empirically while writing this test: the outbox row this fix enqueues is already drained — and
+     * removed — by the time {@code erase()} returns), so a post-{@code erase()} row-count query would
+     * always read zero regardless of whether the enqueue happened at all.
+     */
+    @Test
+    void erase_selfRegisteredPlayer_mixOfPendingAndReadyReports_enqueuesOnlyTheNonNullStorageKey() {
+        UUID readyReportId = UUID.randomUUID();
+        UUID pendingReportId = UUID.randomUUID();
+        String readyStorageKey = "reports/" + readyReportId + "/report.pdf";
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO development.performance_reports "
+                    + "(id, coach_id, player_id, generated_at, storage_key, next_steps, status) "
+                    + "VALUES (?, ?, ?, ?, ?, 'Keep working on first touch', 'READY')",
+                readyReportId, coachProfileId, SELF_PLAYER_PROFILE_ID, Timestamp.from(Instant.now()),
+                readyStorageKey);
+            jdbcTemplate.update(
+                "INSERT INTO development.performance_reports "
+                    + "(id, coach_id, player_id, generated_at, storage_key, next_steps, status) "
+                    + "VALUES (?, ?, ?, ?, NULL, 'Still uploading', 'PENDING_UPLOAD')",
+                pendingReportId, coachProfileId, SELF_PLAYER_PROFILE_ID, Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        erase(SELF_PLAYER_USER_ID);
+        // Idempotent (SKIP LOCKED) re-drive, mirroring erase_playerUser_deletesPerformanceReportFromS3's
+        // own belt-and-braces call — guards against relying on AFTER_COMMIT timing alone.
+        outboxService.drain();
+
+        int reportCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.performance_reports WHERE player_id = ?",
+            Integer.class, SELF_PLAYER_PROFILE_ID);
+        assertThat(reportCount).as("both reports deleted regardless of status").isZero();
+
+        // the READY report's real key must have been enqueued and drained
+        verify(fileStorageService).deleteRawBytes(readyStorageKey);
+        // the PENDING_UPLOAD report has no storage_key — exactly one delete, not two
+        verify(fileStorageService, times(1)).deleteRawBytes(any());
+    }
+
     /** story-review.md M4, point 4th bullet: proves the orElse-skip decision — no exception, COMPLETED. */
     @Test
     void erase_playerWithNoProfileRow_completesSuccessfullyWithoutError() {
@@ -977,6 +1038,70 @@ class GdprErasureIT extends AbstractIntegrationTest {
     }
 
     /**
+     * skillars-deferred-132 AC1 Fix 4. Saturates the shared HikariCP pool (every connection borrowed
+     * directly off {@link #dataSource}, bypassing Spring's transaction management entirely) then calls
+     * {@code gdprErasureService.erase(...)} directly — mirroring this class's own established
+     * {@code erase(long userId)} helper's rationale for calling it directly rather than through the
+     * exception-swallowing HTTP/{@code AFTER_COMMIT} path: this test asserts {@code erase()}'s own
+     * thrown behavior, which that path would hide.
+     *
+     * <p>Proves the fix: before it, this scenario would have blocked the calling thread for up to the
+     * pool's full 30s {@code connection-timeout} (this project's own {@code application.yaml}) inside
+     * {@code eraseTransactional}'s {@code @Transactional(REQUIRES_NEW)} proxy advice, attempting to
+     * acquire a connection with none available. After the fix, {@link #dataSource}'s live
+     * {@code HikariPoolMXBean} stats are read synchronously in {@code erase()}'s own pre-transaction
+     * check, which fails fast with a {@link PessimisticLockingFailureException} — well under a second,
+     * asserted here with a generous margin so the test itself cannot be mistaken for having
+     * accidentally exercised the slow path instead.
+     *
+     * <p>No PARENT/PLAYER fixture is needed: {@code erase()}'s new pre-check runs before
+     * {@code eraseTransactional} ever reads the caller's role, so it trips identically for every
+     * account shape — {@code COACH_USER_ID} (already seeded by {@code SecurityIT.SEC_DATA_SQL_PATH})
+     * is used purely as a valid {@code main.user.id}, not because this test exercises any
+     * coach-specific behavior.
+     */
+    @Test
+    void erase_connectionPoolSaturated_failsFastInsteadOfBlockingForTheFullConnectionTimeout() throws Exception {
+        assertThat(dataSource).as("this IT's DataSourceConfig/Boot auto-config must produce a real "
+                + "HikariDataSource for this test's pool-saturation mechanism to apply")
+            .isInstanceOf(HikariDataSource.class);
+        HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
+        int maxPoolSize = hikariDataSource.getMaximumPoolSize();
+
+        List<Connection> held = new ArrayList<>();
+        try {
+            // Borrowed directly off the DataSource, not via transactionTemplate/jdbcTemplate — those
+            // would themselves need a connection from this same pool, which is exactly what this loop
+            // is about to exhaust.
+            for (int i = 0; i < maxPoolSize; i++) {
+                held.add(dataSource.getConnection());
+            }
+
+            Instant start = Instant.now();
+            assertThatThrownBy(() -> gdprErasureService.erase(UUID.randomUUID(), COACH_USER_ID))
+                .as("erase() must refuse to attempt its REQUIRES_NEW connection acquisition against a "
+                    + "saturated pool, not hang trying")
+                .isInstanceOf(PessimisticLockingFailureException.class);
+            Duration elapsed = Duration.between(start, Instant.now());
+
+            assertThat(elapsed)
+                .as("a genuine fail-fast must complete in a small fraction of the pool's 30s "
+                    + "connection-timeout — this generous 5s ceiling only rules out having accidentally "
+                    + "exercised the slow (pre-fix) blocking path")
+                .isLessThan(Duration.ofSeconds(5));
+        } finally {
+            for (Connection c : held) {
+                try {
+                    c.close();
+                } catch (Exception ignored) {
+                    // best-effort cleanup; a leaked connection here would only affect later tests via
+                    // pool exhaustion, which would itself surface loudly as an unrelated test failure
+                }
+            }
+        }
+    }
+
+    /**
      * AC4: a vanished child (its {@code player_profiles} row deleted between
      * {@code findByParentIdOrderByIdAsc}'s read and the loop's lock attempt for it, e.g. by a
      * concurrent GDPR request that already finished it) is skipped — the rest of the PARENT request
@@ -1273,6 +1398,174 @@ class GdprErasureIT extends AbstractIntegrationTest {
             requestId.toString());
         assertThat(alert.get("status")).isEqualTo("OPEN");
         assertThat(alert.get("reason")).isEqualTo("CHILD_DELETE_LOCK_TIMEOUT");
+    }
+
+    /**
+     * skillars-deferred-132 AC4 Fix 12. Closes the PARENT × {@code CHILD_DELETE_LOCK_TIMEOUT}
+     * combination — previously untested (the pre-existing PARENT test above only covers
+     * {@code CHILD_CONTENDED}, and the pre-existing lock-timeout test above only covers PLAYER).
+     * Mirrors {@link #erase_selfRegisteredPlayer_downstreamDeleteStatementLockTimeout_boundedNotHanging_marksFailedWithDistinguishedAlert}'s
+     * exact mechanism — a short configured {@code lock_timeout} plus a competing hold on a downstream
+     * {@code development.player_timeline_events} row (seeded by {@link #seedParentChildren()} for
+     * child A) — but through {@code eraseParentChildren}'s loop instead of the PLAYER branch, so the
+     * OTHER child (B, uncontended) proves the rest of the PARENT request still completes normally, as
+     * in {@link #erase_parentUser_contendedChild_skipsOthersProcessed_marksRequestFailed}.
+     */
+    @Test
+    void erase_parentUser_childDownstreamDeleteStatementLockTimeout_skipsThatChildProcessesOthers_marksRequestFailed()
+            throws Exception {
+        setGdprEraseStatementLockTimeoutSecondsConfig(2);
+        seedParentChildren();
+
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        CountDownLatch releaseLock = new CountDownLatch(1);
+        AtomicReference<Throwable> lockerFailure = new AtomicReference<>();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        Future<?> locker = executor.submit(() -> {
+            try {
+                transactionTemplate.execute(status -> {
+                    jdbcTemplate.queryForObject(
+                        "SELECT id FROM development.player_timeline_events WHERE player_id = ? FOR UPDATE",
+                        UUID.class, PARENT_CHILD_A_ID);
+                    lockHeld.countDown();
+                    try {
+                        releaseLock.await(30, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                });
+            } catch (Throwable t) {
+                lockerFailure.set(t);
+            }
+        });
+
+        AtomicReference<Throwable> eraseFailure = new AtomicReference<>();
+        AtomicReference<UUID> requestIdRef = new AtomicReference<>();
+        try {
+            assertThat(lockHeld.await(10, TimeUnit.SECONDS))
+                .as("competing lock on child A's player_timeline_events row must be acquired before erase() starts")
+                .isTrue();
+
+            Future<?> eraser = executor.submit(() -> {
+                try {
+                    requestIdRef.set(erase(PARENT_ID));
+                } catch (Throwable t) {
+                    eraseFailure.set(t);
+                }
+            });
+            eraser.get(20, TimeUnit.SECONDS);
+        } finally {
+            releaseLock.countDown();
+            locker.get(10, TimeUnit.SECONDS);
+            executor.shutdown();
+        }
+
+        assertThat(lockerFailure.get()).isNull();
+        assertThat(eraseFailure.get())
+            .as("a downstream delete-statement lock-timeout must NOT propagate out of erase() for the "
+                + "PARENT branch either")
+            .isNull();
+
+        UUID requestId = requestIdRef.get();
+        assertThat(requestId).isNotNull();
+        String finalStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.gdpr_requests WHERE id = ?", String.class, requestId);
+        assertThat(finalStatus).isEqualTo("FAILED");
+
+        // Child A's development data survives this run (its inner REQUIRES_NEW transaction rolled
+        // back on the lock_timeout trip) — child B, with no contention, completed normally.
+        assertThat(childTombstoned(PARENT_CHILD_A_ID)).isFalse();
+        assertThat(childTombstoned(PARENT_CHILD_B_ID)).isTrue();
+
+        Map<String, Object> alert = jdbcTemplate.queryForMap(
+            "SELECT status, reason FROM admin.admin_alerts "
+                + "WHERE reference_id = ? AND type = 'GDPR_ERASURE_DEADLINE'",
+            requestId.toString());
+        assertThat(alert.get("status")).isEqualTo("OPEN");
+        assertThat(alert.get("reason"))
+            .as("must be distinguished from a player_profiles lock-ACQUISITION contention "
+                + "(CHILD_CONTENDED) — this is a downstream delete-statement lock_timeout trip")
+            .isEqualTo("CHILD_DELETE_LOCK_TIMEOUT");
+    }
+
+    /**
+     * skillars-deferred-132 AC4 Fix 12. Closes the PLAYER × {@code CHILD_CONTENDED} combination —
+     * previously untested (the pre-existing PARENT test covers {@code CHILD_CONTENDED} but only for
+     * the PARENT branch; the pre-existing PLAYER test above covers only
+     * {@code CHILD_DELETE_LOCK_TIMEOUT}). Mirrors
+     * {@link #erase_parentUser_contendedChild_skipsOthersProcessed_marksRequestFailed}'s exact
+     * mechanism — hold {@code SELF_PLAYER_PROFILE_ID}'s own {@code player_profiles} row lock longer
+     * than {@link com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer}'s ~3.2s
+     * worst-case retry budget — but through {@code erase()}'s PLAYER branch instead of
+     * {@code eraseParentChildren}'s loop.
+     */
+    @Test
+    void erase_selfRegisteredPlayer_contendedPlayerProfilesLockAcquisition_marksFailedWithContendedAlert()
+            throws Exception {
+        long lockHoldMillis = 6000;
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> lockerFailure = new AtomicReference<>();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        Future<?> locker = executor.submit(() -> {
+            try {
+                transactionTemplate.execute(status -> {
+                    jdbcTemplate.queryForObject(
+                        "SELECT id FROM main.player_profiles WHERE id = ? FOR UPDATE",
+                        Long.class, SELF_PLAYER_PROFILE_ID);
+                    lockHeld.countDown();
+                    try {
+                        Thread.sleep(lockHoldMillis);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError("Interrupted while holding player_profiles lock", e);
+                    }
+                    return null;
+                });
+            } catch (Throwable t) {
+                lockerFailure.set(t);
+            }
+        });
+
+        AtomicReference<Throwable> eraseFailure = new AtomicReference<>();
+        AtomicReference<UUID> requestIdRef = new AtomicReference<>();
+        Future<?> eraser = executor.submit(() -> {
+            try {
+                await(lockHeld);
+                requestIdRef.set(erase(SELF_PLAYER_USER_ID));
+            } catch (Throwable t) {
+                eraseFailure.set(t);
+            }
+        });
+
+        try {
+            locker.get(20, TimeUnit.SECONDS);
+            eraser.get(20, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+            executor.awaitTermination(10, TimeUnit.SECONDS);
+        }
+
+        assertThat(lockerFailure.get()).isNull();
+        assertThat(eraseFailure.get()).isNull();
+
+        UUID requestId = requestIdRef.get();
+        assertThat(requestId).isNotNull();
+        String finalStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.gdpr_requests WHERE id = ?", String.class, requestId);
+        assertThat(finalStatus).isEqualTo("FAILED");
+
+        Map<String, Object> alert = jdbcTemplate.queryForMap(
+            "SELECT status, reason FROM admin.admin_alerts "
+                + "WHERE reference_id = ? AND type = 'GDPR_ERASURE_DEADLINE'",
+            requestId.toString());
+        assertThat(alert.get("status")).isEqualTo("OPEN");
+        assertThat(alert.get("reason"))
+            .as("must be distinguished from a downstream delete-statement lock_timeout trip "
+                + "(CHILD_DELETE_LOCK_TIMEOUT) — this is a player_profiles lock-ACQUISITION contention")
+            .isEqualTo("CHILD_CONTENDED");
     }
 
     private void setGdprEraseStatementLockTimeoutSecondsConfig(int seconds) {
