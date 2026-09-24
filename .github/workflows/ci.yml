@@ -24,7 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     # AC10.5 — see pr-build.yml for the derivation. The enforcement gates live in pr-build,
     # which is where regressions should be caught; this job only needs to not hang.
-    timeout-minutes: 25
+    # 2026-09-24: bumped in lockstep with pr-build.yml's own 25->35 change (see that file's
+    # comment for the runner-throughput finding behind it).
+    timeout-minutes: 35
     permissions:
       contents: read
 

@@ -284,7 +284,77 @@ public class StripeWebhookService {
             return;
         }
         invoicePaymentFailedCounter.increment();
+        // skillars-deferred-134 AC2: checked (and, if orphaned, alerted on) BEFORE delegating, mirroring
+        // handleSubscriptionUpdated's own check-then-alert ordering — but unlike that method, this call
+        // never skips the delegation below: SubscriptionService.handleInvoicePaymentFailed's own two
+        // ifPresent-only lookups are already a no-op for an orphaned subscription today, so there is
+        // nothing to skip, matched or not.
+        maybeAlertOrphanedInvoicePaymentFailed(invoice, stripeSubId);
         subscriptionService.handleSubscriptionWebhook("invoice.payment_failed", stripeSubId, Map.of());
+    }
+
+    /**
+     * skillars-deferred-134 AC2. Extends the orphan-alerting {@link #maybeAlertOrphanedLiveSubscription}
+     * shipped for {@code customer.subscription.updated} to this event type — the identical underlying
+     * gap ({@code SubscriptionService.handleInvoicePaymentFailed}'s two {@code ifPresent}-only lookups
+     * are a silent no-op for a Stripe subscription this system has no local row for), reached via a
+     * different webhook event. Reuses the same resolution chain, grace window, event type
+     * ({@code CoachSubscriptionOrphanedEvent} / {@code AdminAlertType.SUBSCRIPTION_ORPHANED}) rather
+     * than minting a new one — {@link AdminAlertEventListener#insertAlert}'s own per-{@code
+     * (referenceId, type, OPEN)} dedup (AC1, this story) means a coach already alerted via
+     * {@code handleSubscriptionUpdated} won't get a second, redundant alert from this method firing
+     * moments later for the same underlying drift.
+     *
+     * <p><strong>No {@link #LIVE_SUBSCRIPTION_STATUSES} allowlist equivalent is needed here</strong> —
+     * {@code invoice.payment_failed} is itself already a live-billing-attempt signal (Stripe only
+     * emits it for an actual failed payment attempt on an actual invoice), unlike {@code
+     * customer.subscription.updated}, which fires on every status transition including the normal
+     * post-cancellation settle that motivated that allowlist in the first place.
+     *
+     * <p>Wrapped in the same {@code catch (Exception e)} pattern as {@link
+     * #maybeAlertOrphanedLiveSubscription}, for the identical reason: a deterministic failure in this
+     * alerting path must never roll back {@code handleEventAtomically}'s idempotency-record insert and
+     * put Stripe into an indefinite retry loop on a routine webhook.
+     */
+    private void maybeAlertOrphanedInvoicePaymentFailed(Invoice invoice, String stripeSubId) {
+        try {
+            boolean coachFound = paymentCoachSubscriptionRepository.findByStripeSubscriptionId(stripeSubId).isPresent();
+            boolean playerFound = paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(stripeSubId).isPresent();
+            if (coachFound || playerFound) {
+                return;
+            }
+            String stripeCustomerId = invoice.getCustomer();
+            if (stripeCustomerId == null) {
+                return;
+            }
+            List<StripeCustomer> stripeCustomers = stripeCustomerRepository.findByStripeCustomerId(stripeCustomerId);
+            if (stripeCustomers.isEmpty()) {
+                return;
+            }
+            // StripeCustomer.parentId is the coach/parent's own main.user.id (despite the field's
+            // name) — see StripeCustomer's own class Javadoc and maybeAlertOrphanedLiveSubscription's
+            // identical lookup.
+            Long userId = stripeCustomers.get(0).getParentId();
+            Optional<CoachProfile> coachProfile = coachProfileRepository.findByUserId(userId);
+            if (coachProfile.isEmpty()) {
+                // A player, or a genuinely unrecognized customer — coach-only, matching
+                // maybeAlertOrphanedLiveSubscription's own scoping (this story's own owner decision).
+                return;
+            }
+            UUID coachId = coachProfile.get().getId();
+            Optional<PaymentCoachSubscription> existing = paymentCoachSubscriptionRepository.findByCoachId(coachId);
+            if (existing.isPresent() && existing.get().getUpdatedAt() != null
+                    && Duration.between(existing.get().getUpdatedAt(), Instant.now())
+                        .compareTo(SUBSCRIBE_RACE_GRACE_WINDOW) < 0) {
+                log.debug("[STRIPE_WEBHOOK_ORPHAN_GRACE_WINDOW coachId={} stripeSubId={}] recently-"
+                    + "touched payment.coach_subscriptions row for this coach — treating as still "
+                    + "settling, not alerting", coachId, stripeSubId);
+                return;
+            }
+            eventPublisher.publishEvent(new CoachSubscriptionOrphanedEvent(this, coachId, stripeSubId));
+        } catch (Exception e) {
+            log.warn("[STRIPE_WEBHOOK_ORPHAN_ALERT_FAILED stripeSubId={}]", stripeSubId, e);
+        }
     }
 
     private Subscription deserializeSubscription(Event event) {

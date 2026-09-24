@@ -288,6 +288,119 @@ class StripeWebhookVerificationTest {
             .publishEvent(any(CoachSubscriptionOrphanedEvent.class));
     }
 
+    // ── skillars-deferred-134 AC2: orphaned invoice.payment_failed alerting ────
+
+    @Test
+    void processWebhook_invoicePaymentFailed_noLocalMatch_resolvableCoach_noRecentRow_publishesOrphanedEvent()
+        throws Exception {
+        String payload = buildInvoicePaymentFailedPayload("evt_test_invoice_orphan_001", STRIPE_SUB_ID, STRIPE_CUSTOMER_ID);
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerRepository.findByStripeCustomerId(STRIPE_CUSTOMER_ID))
+            .thenReturn(List.of(buildStripeCustomer(COACH_USER_ID, STRIPE_CUSTOMER_ID)));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(buildCoachProfile()));
+        when(paymentCoachSubscriptionRepository.findByCoachId(COACH_PROFILE_ID)).thenReturn(Optional.empty());
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        ArgumentCaptor<CoachSubscriptionOrphanedEvent> captor =
+            ArgumentCaptor.forClass(CoachSubscriptionOrphanedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().getCoachProfileId()).isEqualTo(COACH_PROFILE_ID);
+        assertThat(captor.getValue().getStripeSubscriptionId()).isEqualTo(STRIPE_SUB_ID);
+        // Regression coverage for the untouched PAST_DUE update path: the orphan check does not skip
+        // the delegation, unlike handleSubscriptionUpdated's own orphan branch.
+        verify(subscriptionService).handleSubscriptionWebhook("invoice.payment_failed", STRIPE_SUB_ID, java.util.Map.of());
+    }
+
+    @Test
+    void processWebhook_invoicePaymentFailed_matchedCoachSubscription_doesNotPublishEvent() throws Exception {
+        String payload = buildInvoicePaymentFailedPayload("evt_test_invoice_matched_001", STRIPE_SUB_ID, STRIPE_CUSTOMER_ID);
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID))
+            .thenReturn(Optional.of(new PaymentCoachSubscription()));
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        verify(eventPublisher, never()).publishEvent(any(CoachSubscriptionOrphanedEvent.class));
+        verify(stripeCustomerRepository, never()).findByStripeCustomerId(any());
+        // The already-working PAST_DUE update path must still run, matched or not.
+        verify(subscriptionService).handleSubscriptionWebhook("invoice.payment_failed", STRIPE_SUB_ID, java.util.Map.of());
+    }
+
+    @Test
+    void processWebhook_invoicePaymentFailed_orphanedWithinGraceWindow_doesNotPublishEvent() throws Exception {
+        String payload = buildInvoicePaymentFailedPayload("evt_test_invoice_grace_001", STRIPE_SUB_ID, STRIPE_CUSTOMER_ID);
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerRepository.findByStripeCustomerId(STRIPE_CUSTOMER_ID))
+            .thenReturn(List.of(buildStripeCustomer(COACH_USER_ID, STRIPE_CUSTOMER_ID)));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(buildCoachProfile()));
+        PaymentCoachSubscription recentRow = new PaymentCoachSubscription();
+        recentRow.setCoachId(COACH_PROFILE_ID);
+        recentRow.setUpdatedAt(Instant.now().minus(2, ChronoUnit.MINUTES));
+        when(paymentCoachSubscriptionRepository.findByCoachId(COACH_PROFILE_ID)).thenReturn(Optional.of(recentRow));
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        verify(eventPublisher, never()).publishEvent(any(CoachSubscriptionOrphanedEvent.class));
+    }
+
+    @Test
+    void processWebhook_invoicePaymentFailed_orphanedResolvesToPlayer_doesNotPublishEvent() throws Exception {
+        String payload = buildInvoicePaymentFailedPayload("evt_test_invoice_player_001", STRIPE_SUB_ID, STRIPE_CUSTOMER_ID);
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerRepository.findByStripeCustomerId(STRIPE_CUSTOMER_ID))
+            .thenReturn(List.of(buildStripeCustomer(COACH_USER_ID, STRIPE_CUSTOMER_ID)));
+        // Resolves to a customer, but not one with a CoachProfile -- a player -- coach-only scoping.
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.empty());
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        verify(eventPublisher, never()).publishEvent(any(CoachSubscriptionOrphanedEvent.class));
+        verify(paymentCoachSubscriptionRepository, never()).findByCoachId(any());
+    }
+
+    /**
+     * insertAlert's own {@code (referenceId, type, OPEN)} dedup — not this webhook's own state — is
+     * what suppresses a duplicate {@code AdminAlert} for two independent orphaned events resolving to
+     * the same coach; that is {@code AdminAlertEventListener}'s own responsibility (skillars-deferred-134
+     * AC1), proven with a real DB read against a genuine concurrent race by
+     * {@code AdminAlertEventListenerConcurrencyIT} — both this webhook's orphan path and {@code
+     * handleSubscriptionUpdated}'s publish the exact same {@code CoachSubscriptionOrphanedEvent} /
+     * {@code SUBSCRIPTION_ORPHANED} type through that same {@code insertAlert} call, so that proof
+     * covers this trigger path too. This webhook always publishes for an unresolved orphan, mirroring
+     * {@code processWebhook_subscriptionUpdated_secondActiveEventForSameUnresolvedSubscription_publishesEventEachTime}'s
+     * identical mock-level shape.
+     */
+    @Test
+    void processWebhook_invoicePaymentFailed_secondOrphanedEventForSameCoach_publishesEventEachTime()
+        throws Exception {
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(stripeCustomerRepository.findByStripeCustomerId(STRIPE_CUSTOMER_ID))
+            .thenReturn(List.of(buildStripeCustomer(COACH_USER_ID, STRIPE_CUSTOMER_ID)));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(buildCoachProfile()));
+        when(paymentCoachSubscriptionRepository.findByCoachId(COACH_PROFILE_ID)).thenReturn(Optional.empty());
+
+        String firstPayload = buildInvoicePaymentFailedPayload("evt_invoice_orphan_first", STRIPE_SUB_ID, STRIPE_CUSTOMER_ID);
+        webhookService.processWebhook(firstPayload, buildStripeSignature(WEBHOOK_SECRET, firstPayload));
+        String secondPayload = buildInvoicePaymentFailedPayload("evt_invoice_orphan_second", STRIPE_SUB_ID, STRIPE_CUSTOMER_ID);
+        webhookService.processWebhook(secondPayload, buildStripeSignature(WEBHOOK_SECRET, secondPayload));
+
+        verify(eventPublisher, org.mockito.Mockito.times(2))
+            .publishEvent(any(CoachSubscriptionOrphanedEvent.class));
+    }
+
     private static StripeCustomer buildStripeCustomer(Long parentId, String stripeCustomerId) {
         StripeCustomer customer = new StripeCustomer();
         customer.setParentId(parentId);
@@ -365,21 +478,27 @@ class StripeWebhookVerificationTest {
     }
 
     private static String buildInvoicePaymentFailedPayload(String subscriptionId) {
+        return buildInvoicePaymentFailedPayload("evt_test_invoice_001", subscriptionId, null);
+    }
+
+    private static String buildInvoicePaymentFailedPayload(String eventId, String subscriptionId, String customerId) {
         String subscriptionField = subscriptionId == null ? "null" : "\"" + subscriptionId + "\"";
+        String customerField = customerId == null ? "null" : "\"" + customerId + "\"";
         return """
             {
-              "id": "evt_test_invoice_001",
+              "id": "%s",
               "object": "event",
               "type": "invoice.payment_failed",
               "data": {
                 "object": {
                   "id": "in_test_001",
                   "object": "invoice",
-                  "subscription": %s
+                  "subscription": %s,
+                  "customer": %s
                 }
               }
             }
-            """.formatted(subscriptionField);
+            """.formatted(eventId, subscriptionField, customerField);
     }
 
     private static CoachStripeAccount buildAccount(UUID coachId, String stripeAccountId,
