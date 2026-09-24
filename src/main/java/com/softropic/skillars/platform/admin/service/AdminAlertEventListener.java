@@ -13,13 +13,17 @@ import com.softropic.skillars.platform.messaging.contract.MessagesPurgedEvent;
 import com.softropic.skillars.platform.payment.contract.event.CoachSubscriptionOrphanedEvent;
 import com.softropic.skillars.platform.payment.contract.event.StrikeThresholdReachedEvent;
 import com.softropic.skillars.platform.reviews.contract.ReviewFlaggedEvent;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Component
 @RequiredArgsConstructor
@@ -27,6 +31,19 @@ import org.springframework.transaction.annotation.Transactional;
 public class AdminAlertEventListener {
 
     private final AdminAlertRepository adminAlertRepository;
+    private final PlatformTransactionManager txManager;
+
+    // skillars-deferred-134 AC1: mirrors GdprErasureService.raiseErasureAlert's own
+    // requiresNewTemplate — insertAlert's write must commit (or fail) in its own transaction,
+    // isolated from the 5 REQUIRED-propagation callers' own primary business writes. See
+    // insertAlert's own Javadoc for why saveAndFlush alone (without this isolation) does not work.
+    private TransactionTemplate requiresNewTemplate;
+
+    @PostConstruct
+    void initTemplate() {
+        requiresNewTemplate = new TransactionTemplate(txManager);
+        requiresNewTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
 
     @EventListener
     @Transactional
@@ -129,13 +146,35 @@ public class AdminAlertEventListener {
             log.debug("Admin alert already OPEN for type={}, referenceId={} — skipping duplicate", type, referenceId);
             return;
         }
+        // skillars-deferred-134 AC1: isolated in its own REQUIRES_NEW transaction so a duplicate-alert
+        // race (caught below) can never mark the CALLER's own transaction rollback-only. saveAndFlush
+        // (not save) forces the INSERT — and any constraint violation — to surface synchronously,
+        // inside this REQUIRES_NEW transaction, instead of at the CALLER's own eventual commit;
+        // AdminAlert.alertId is GenerationType.UUID, so a plain save() defers the flush past the
+        // method body (see GdprErasureService.raiseErasureAlert's Javadoc for the fully-worked-out
+        // reasoning this mirrors).
+        //
+        // The catch is OUTSIDE executeWithoutResult, not inside it (found and corrected during this
+        // story's own implementation, via a real concurrency IT — see
+        // AdminAlertEventListenerConcurrencyIT's own Javadoc): once saveAndFlush's flush throws, the
+        // underlying Hibernate Session is marked for rollback per the JPA spec, REGARDLESS of whether
+        // the translated DataIntegrityViolationException is caught in application code — catching it
+        // INSIDE the callback and letting the callback return normally does not undo that marking, so
+        // TransactionTemplate's own commit() then finds the (new, top-level) transaction rollback-only
+        // and throws UnexpectedRollbackException right back out, defeating the whole point of this
+        // isolation. Letting the exception propagate OUT of the callback instead makes
+        // TransactionTemplate roll back (not commit) this REQUIRES_NEW transaction and re-throw the
+        // ORIGINAL DataIntegrityViolationException unchanged, which this method's own try/catch below
+        // then catches cleanly, with the caller's transaction never touched either way.
         try {
-            AdminAlert alert = new AdminAlert();
-            alert.setType(type);
-            alert.setReferenceId(referenceId);
-            alert.setReferenceType(referenceType);
-            alert.setReason(reason);
-            adminAlertRepository.save(alert);
+            requiresNewTemplate.executeWithoutResult(status -> {
+                AdminAlert alert = new AdminAlert();
+                alert.setType(type);
+                alert.setReferenceId(referenceId);
+                alert.setReferenceType(referenceType);
+                alert.setReason(reason);
+                adminAlertRepository.saveAndFlush(alert);
+            });
             log.debug("Admin alert created: type={}, referenceId={}", type, referenceId);
         } catch (DataIntegrityViolationException e) {
             // Concurrent insert won the race for the same (referenceId, type) OPEN slot — unique index prevents duplicate.

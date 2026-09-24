@@ -3429,7 +3429,9 @@ implementation. Each was independently re-verified against real source. None is 
   residuals, not silently closed:** (a) detection latency — `handleEventAtomically` does not dispatch
   `customer.subscription.created`, so the earliest signal is the next live-status `.updated` event, not
   immediate; (b) `handleInvoicePaymentFailed` has the identical untouched no-op shape and is out of this
-  fix's scope; (c) player-side orphans are deliberately out of scope (no "Stripe → payment" ledger item
+  fix's scope **[CLOSED by skillars-deferred-134 AC2 — new `maybeAlertOrphanedInvoicePaymentFailed`,
+  reusing the same resolution chain/grace-window/event-type, wired into `handleInvoicePaymentFailed`
+  before its existing delegation]**; (c) player-side orphans are deliberately out of scope (no "Stripe → payment" ledger item
   for players, matching `syncMarketplaceTier`'s own coach-only scope) — a final decision, not a residual.
   Dedup is per-coach (`insertAlert`'s `(referenceId, type, OPEN)`), not per orphaned Stripe subscription
   id — mirrors `STRIKE_THRESHOLD`'s own precedent; a coach has one active marketplace tier subscription
@@ -3809,7 +3811,36 @@ Every item this story resolves is now closed above, each with its own `[CLOSED b
   (and any constraint violation) to happen synchronously inside the try block, where it is actually
   caught. `AdminAlertEventListener.insertAlert`'s superficially-similar catch (`save`, not
   `saveAndFlush`) has this same latent gap for a genuine concurrent race — pre-existing, out of this
-  story's scope to fix, noted here for a future story. New unit tests (`GdprErasureServiceTest`, 3 cases: normal insert, dedup, the
+  story's scope to fix, noted here for a future story.
+  **[CLOSED by skillars-deferred-134 AC1 — `save` → `saveAndFlush`, plus a fix this bullet's own fix
+  did NOT need but `insertAlert` does: isolated in a new `requiresNewTemplate.executeWithoutResult(...)`
+  transaction (`AdminAlertEventListener` had none of its 7 callers' writes isolated from `insertAlert`'s
+  own — unlike every `raiseErasureAlert`/`markFailed` call site here, which already ran inside its own
+  `REQUIRES_NEW`).** A real concurrency IT
+  (`AdminAlertEventListenerConcurrencyIT`, two genuinely concurrent `MessagingReportService.reportMessage`
+  callers racing the same `(referenceId, type)` admin-alert slot) caught a SECOND latent bug during this
+  story's own implementation, found and corrected, not assumed: catching
+  `DataIntegrityViolationException` INSIDE the `REQUIRES_NEW` callback (the shape this bullet's own fix
+  above uses, and the shape this story's own first draft copied) does not actually work — once
+  `saveAndFlush`'s flush throws, Hibernate marks the underlying `EntityTransaction` rollback-only per the
+  JPA spec, *regardless* of whether the translated exception is caught in application code, so
+  `TransactionTemplate`'s own `commit()` then throws `UnexpectedRollbackException` right back out,
+  propagating to the CALLER's transaction anyway — the isolation is silently defeated. The fix: let the
+  exception propagate OUT of the `REQUIRES_NEW` callback (so `TransactionTemplate` rolls the isolated
+  transaction back, not commits it, and re-throws the original `DataIntegrityViolationException`
+  unchanged) and catch it in `insertAlert`'s own method body, outside `executeWithoutResult(...)`. See
+  `AdminAlertEventListener.insertAlert`'s own Javadoc for the full mechanism.
+  **New finding, not closed by this story — `GdprErasureService.raiseErasureAlert`/`markFailed` most
+  likely share this exact same latent bug** (`insertErasureAlertIfAbsent`'s try/catch is INSIDE the
+  `REQUIRES_NEW` boundary in both call shapes, identical to `AdminAlertEventListener`'s pre-134 shape) —
+  never actually proven either way, since no existing `GdprErasureService` test drives a genuinely
+  concurrent two-thread race through `insertErasureAlertIfAbsent`'s own duplicate-insert catch (the
+  "empirically confirmed" throwaway test cited above only proved `save()` vs. `saveAndFlush()`
+  flush-timing, sequentially, not that the catch survives a real race). Left open, out of this story's
+  scope (`GdprErasureService`, not `AdminAlertEventListener`) — a future story should add the
+  `GdprErasureService` analog of `AdminAlertEventListenerConcurrencyIT` and apply the identical
+  catch-outside-the-callback fix if the race reproduces there too.
+  New unit tests (`GdprErasureServiceTest`, 3 cases: normal insert, dedup, the
   `GdprRequest`-not-found path) + a new `GdprErasureIT` case routed through `GdprEventListener` (not
   `erase()` directly — the existing pool-saturation IT calls `erase()` directly and cannot reach
   `markFailed`).
@@ -3835,7 +3866,8 @@ Every item this story resolves is now closed above, each with its own `[CLOSED b
   `SubscriptionService.java:663`'s own deliberate no-priceId→tier reverse-map constraint is a pre-existing
   design choice, not something to work around. **Explicit residuals:** detection latency
   (`customer.subscription.created` is not dispatched), `handleInvoicePaymentFailed`'s identical untouched
-  no-op, and player-side orphans (final decision, not a residual). New `StripeCustomerRepository
+  no-op **[CLOSED by skillars-deferred-134 AC2]**, and player-side orphans (final decision, not a
+  residual). New `StripeCustomerRepository
   .findByStripeCustomerId` (`List`, not `Optional` — no unique index on `stripe_customer_id`). Tests:
   6 new `StripeWebhookVerificationTest` cases (orphan alert published, provisioning-race grace-window
   suppression, `.deleted` never alerts, terminal-status `.updated` never alerts, repeated live-status
@@ -3855,6 +3887,7 @@ Every item this story resolves is now closed above, each with its own `[CLOSED b
 **What remains open after this story:** the Fix 1 lock-order inversion (formally `[DECIDED]`, unreachable
 today by construction — revisit only if `AuthorRole` adds `COACH` or `ReviewResource.resolveRole`'s
 role-precedence changes); M5-2's module-wide NOWAIT conversion (armed, not pulled); AC1's auto-retry
-residual (alerting-only fix, narrower than the ledger's original ask); AC3's three residuals (detection
-latency, `handleInvoicePaymentFailed`, player-side orphans — the last a final decision, not open work).
+residual (alerting-only fix, narrower than the ledger's original ask); AC3's remaining two residuals
+(detection latency, player-side orphans — the latter a final decision, not open work;
+`handleInvoicePaymentFailed` itself closed by skillars-deferred-134 AC2).
 Nothing else from this story's own scope remains open.

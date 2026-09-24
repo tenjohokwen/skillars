@@ -8,5 +8,8 @@ public enum AdminAlertType {
     // skillars-deferred-133 AC3: raised when a Stripe customer.subscription.updated event carries a
     // live/non-terminal status for a subscription that resolves to a known coach but matches no local
     // payment.coach_subscriptions row — see V153__admin_alerts_subscription_orphaned_type.sql.
+    // skillars-deferred-134 AC2: also raised via the identical underlying condition detected from an
+    // invoice.payment_failed event (StripeWebhookService.maybeAlertOrphanedInvoicePaymentFailed) — the
+    // same alert type covers both trigger paths, not a second type.
     SUBSCRIPTION_ORPHANED
 }
