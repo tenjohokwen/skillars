@@ -105,14 +105,23 @@ place.
 
 ---
 
-## Step 3: MinIO stands in for the real S3 API
+## Step 3: MinIO (SeaweedFS) stands in for the real S3 API
 
-UAT uses [MinIO](https://min.io) instead of real AWS credentials — it speaks
+UAT uses an S3-compatible server instead of real AWS credentials — it speaks
 the S3 API, so `BlobstoreConfig`'s `S3Client`/`S3Presigner` beans work
 against it unmodified once `app.storage.s3.path-style-access` is `true`
 (already set in `application-uat.yaml`). This also means test uploads never
 land in a production bucket, and there's nothing to clean up in AWS after
 tearing UAT down.
+
+As of 2026-09-24 the `minio` service in `docker-compose.uat.yml` actually runs
+[SeaweedFS](https://github.com/seaweedfs/seaweedfs), not [MinIO](https://min.io) —
+`quay.io/minio/minio` now 401s on anonymous pulls (a widely-reported break, not
+specific to this project). Service/env-var names below are kept as "MinIO" to
+match `.env.uat`'s existing `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` variables;
+see `SharedContainers.MINIO_IMAGE`'s javadoc
+(`src/test/java/com/softropic/skillars/config/SharedContainers.java`) for the
+full story.
 
 **Why this needs its own public domain, unlike local dev's MinIO:**
 `S3Presigner` bakes `app.storage.endpoint-url` directly into every presigned
@@ -149,12 +158,15 @@ container and every browser resolve the identical HTTPS host.
    openssl rand -base64 32   # MINIO_ROOT_PASSWORD
    ```
 
-The MinIO web console (bucket browser) isn't exposed publicly — adding it
-would mean another DNS record and TLS cert for something that's only useful
-occasionally. Reach it over an SSH tunnel instead when you need to:
+There's no web console (bucket browser) — SeaweedFS has no drop-in
+equivalent to MinIO's at this scope. To inspect a bucket, run the AWS CLI
+against the S3 API directly (needs an SSH session on the box, or the port
+tunnelled to your laptop first):
 ```bash
-ssh -L 9501:localhost:9501 root@<UAT_NODE_IP>
-# then browse http://localhost:9501 locally, log in with MINIO_ROOT_USER/MINIO_ROOT_PASSWORD
+ssh -L 9500:localhost:9500 root@<UAT_NODE_IP>
+# then, locally:
+aws --endpoint-url http://localhost:9500 s3 ls s3://<APP_STORAGE_BUCKET> \
+  --profile <a profile with MINIO_ROOT_USER/MINIO_ROOT_PASSWORD as its keys>
 ```
 
 ---
@@ -311,9 +323,10 @@ any future expiry, any CVC) and confirm:
 Then upload something through a feature that stores a file (e.g. a coach
 profile photo) and confirm:
 
-- `docker compose ... exec minio mc ls local/<APP_STORAGE_BUCKET>` (after
-  `mc alias set local http://localhost:9500 <MINIO_ROOT_USER> <MINIO_ROOT_PASSWORD>`
-  inside the container) shows the uploaded object
+- `aws --endpoint-url http://localhost:9500 s3 ls s3://<APP_STORAGE_BUCKET>`
+  (with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` set to
+  `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`, run from an SSH tunnel to port
+  9500 as in Step 3) shows the uploaded object
 - The image actually renders in the browser — confirms `STORAGE_DOMAIN`'s
   TLS cert is valid and the presigned GET URL `S3Presigner` generated is
   reachable from outside the compose network, not just from the `app`

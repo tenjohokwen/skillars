@@ -106,7 +106,7 @@ production compose file and line it must track.
 |---|---|---|
 | PostgreSQL | `postgres:17-alpine` | `postgres:17-alpine` (`:64`) — **now matched** |
 | Redis | `redis:7-alpine` | `redis:7-alpine` (`:89`) |
-| MinIO | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` | same, via quay.io (`docker-compose.uat.yml`) — MinIO stopped publishing to Docker Hub in Oct 2025 |
+| MinIO (SeaweedFS) | `chrislusf/seaweedfs:3.97` | same, via `docker-compose.uat.yml` — `quay.io/minio/minio` (both this constant's old pinned tag and `:latest`) now 401s on anonymous pulls (2026-09-24), so this moved from MinIO to SeaweedFS; see `SharedContainers.MINIO_IMAGE`'s javadoc |
 
 **The PostgreSQL gap is a real risk, not a cosmetic one:** every integration test currently validates
 against a database three major versions behind the one the product runs on. Deferred-19 bumps it to
