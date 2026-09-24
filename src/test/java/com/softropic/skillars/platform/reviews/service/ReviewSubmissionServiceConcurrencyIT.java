@@ -19,6 +19,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * inside the {@code catch (DataIntegrityViolationException e)} it was written for. Switching to
  * {@code saveAndFlush} forces the constraint check inside the existing {@code try}.
  *
- * <p><strong>Deliberately no outer {@code transactionTemplate.execute(...)} wrapper for either
+ * <p><strong>Deliberately no outer {@code transactionTemplate.execute(...)} wrapper for the LOSING
  * call</strong> (pre-implementation {@code story-review.md} audit finding, mirroring {@code
  * CoachProfileServiceConcurrencyIT#concurrentPublish_exactlyOneSucceeds_loserGetsAlreadyPublishedNotGeneric400}'s
  * own shape exactly): {@code ReviewResource} opens no transaction in production, so {@code
@@ -38,7 +39,23 @@ import static org.assertj.core.api.Assertions.assertThat;
  * loser's call in an outer {@code TransactionTemplate} would instead mark that outer transaction
  * rollback-only on the loser's flush-time {@code DataIntegrityViolationException}, surfacing {@code
  * UnexpectedRollbackException} at the outer boundary instead of the expected {@code
- * ALREADY_SUBMITTED} — a false failure that reads like the fix didn't work.
+ * ALREADY_SUBMITTED} — a false failure that reads like the fix didn't work. (skillars-deferred-132 AC2
+ * Fix 7 deliberately DOES prove the opposite case — an outer transaction surviving that same DIVE — in
+ * {@link #concurrentSubmit_calledFromWithinAnOuterTransaction_loserStillGetsCleanAlreadySubmitted}
+ * below, once {@code submitReview} itself runs in its own {@code REQUIRES_NEW} transaction.)
+ *
+ * <p><strong>skillars-deferred-132 AC2 Fix 7 correction:</strong> the row-holding mechanism below no
+ * longer uses two real {@code submitReview} calls with the winner's own transaction held open via an
+ * outer {@code transactionTemplate.execute(...)} wrapper — Fix 7 makes {@code submitReview} itself run
+ * in its own {@code REQUIRES_NEW} transaction, which commits (and releases the winner's row) as soon as
+ * {@code submitReview} returns, regardless of any enclosing transaction the caller wraps it in. That
+ * silently defeated the old hold-open technique (confirmed empirically: the old test still passed, but
+ * ~20x slower, because timing now decided which of two paths the loser hit — the exact
+ * "scheduling-dependent shortcut" this test's own comment already warned about, now reachable a
+ * different way). {@link #holdConflictingReviewRow} instead holds the conflicting unique-index entry
+ * open from a plain {@code transactionTemplate.execute(...)} block that never calls
+ * {@code submitReview} at all — a mechanism with no dependency on {@code submitReview}'s own
+ * propagation setting, so it stays deterministic regardless of future changes to it.
  */
 class ReviewSubmissionServiceConcurrencyIT extends AbstractIntegrationTest {
 
@@ -89,58 +106,34 @@ class ReviewSubmissionServiceConcurrencyIT extends AbstractIntegrationTest {
     }
 
     /**
-     * Two concurrent {@code submitReview} calls for the same {@code (coachId, authorId)}. Exactly one
-     * must persist a {@code CoachReview} row; the loser must get the clean {@code ALREADY_SUBMITTED}
-     * the non-concurrent pre-check already throws, not an uncaught/generic failure from an unmapped
-     * flush-time constraint violation surfacing outside this method.
+     * A {@code submitReview} call racing a raw, independently-held conflicting
+     * {@code coach_reviews} row (see {@link #holdConflictingReviewRow}) must get the clean
+     * {@code ALREADY_SUBMITTED} the non-concurrent pre-check already throws, not an uncaught/generic
+     * failure from an unmapped flush-time constraint violation surfacing outside this method.
      *
-     * <p>Code review 2026-09-23: a plain {@code CountDownLatch}-released race (the original shape here)
-     * can pass even on a REVERTED Fix 1. {@code submitReview}'s unlocked
-     * {@code existsByAuthorIdAndCoachId} pre-check runs before the save — if the OS/JVM happens to fully
-     * serialize the two threads (the second task not dispatched until the first has already committed),
-     * the second call's own pre-check catches the duplicate and throws {@code ALREADY_SUBMITTED}
-     * directly, without ever reaching {@code saveAndFlush}'s catch block this test exists to pin. The
-     * observable outcome (one success, one {@code ALREADY_SUBMITTED}, one row) is identical either way,
-     * so that scheduling-dependent shortcut silently defeats the test. The winner's transaction is now
-     * deliberately held open (uncommitted) past its own {@code submitReview} return, mirroring
-     * {@code CoachProfileServiceConcurrencyIT}'s own hold-open technique, so the loser's unlocked
-     * pre-check is guaranteed to run while the winner's row is still invisible (READ COMMITTED) — the
-     * loser is thereby forced down the real {@code saveAndFlush} path, where Postgres's unique index
-     * blocks it until the winner commits, deterministically producing the exact flush-time
-     * {@code DataIntegrityViolationException} Fix 1 exists to catch.
+     * <p>Code review 2026-09-23 (original finding, still the reason this test forces the row-holding
+     * mechanism rather than relying on natural thread scheduling): a plain latch-released race can pass
+     * even on a REVERTED Fix 1. {@code submitReview}'s unlocked {@code existsByAuthorIdAndCoachId}
+     * pre-check runs before the save — if the conflicting row were already visible/committed by the
+     * time this call's pre-check runs, that pre-check alone would catch the duplicate directly, without
+     * ever reaching {@code saveAndFlush}'s catch block this test exists to pin. Holding the conflicting
+     * row's transaction open (uncommitted) until after this call has had time to reach its own
+     * {@code saveAndFlush} forces it down the real flush-time path instead, where Postgres's unique
+     * index blocks the second inserter until the first resolves.
      */
     @Test
     void concurrentSubmit_exactlyOnePersists_loserGetsAlreadySubmittedNotGeneric() throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
-            CountDownLatch winnerInsertedUncommitted = new CountDownLatch(1);
-            CountDownLatch releaseWinner = new CountDownLatch(1);
-            java.util.concurrent.atomic.AtomicReference<Throwable> winnerFailure =
-                new java.util.concurrent.atomic.AtomicReference<>();
+            CountDownLatch rowHeld = new CountDownLatch(1);
+            CountDownLatch releaseRow = new CountDownLatch(1);
+            AtomicReference<Throwable> holderFailure = new AtomicReference<>();
 
-            Future<?> winner = executor.submit(() -> {
-                try {
-                    transactionTemplate.execute(status -> {
-                        reviewSubmissionService.submitReview(
-                            coachProfileId, AUTHOR_ID, "PARENT", 5, "Great coach!");
-                        winnerInsertedUncommitted.countDown();
-                        try {
-                            boolean released = releaseWinner.await(30, TimeUnit.SECONDS);
-                            if (!released) {
-                                throw new AssertionError("releaseWinner was never signalled within 30s");
-                            }
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        }
-                        return null;
-                    });
-                } catch (Throwable t) {
-                    winnerFailure.set(t);
-                }
-            });
+            Future<?> holder = executor.submit(() ->
+                holdConflictingReviewRow(coachProfileId, AUTHOR_ID, rowHeld, releaseRow, holderFailure));
 
-            Callable<Throwable> loserTask = () -> {
-                assertThat(winnerInsertedUncommitted.await(10, TimeUnit.SECONDS)).isTrue();
+            Callable<Throwable> submitTask = () -> {
+                assertThat(rowHeld.await(10, TimeUnit.SECONDS)).isTrue();
                 try {
                     reviewSubmissionService.submitReview(
                         coachProfileId, AUTHOR_ID, "PARENT", 4, "Also great!");
@@ -149,26 +142,25 @@ class ReviewSubmissionServiceConcurrencyIT extends AbstractIntegrationTest {
                     return t;
                 }
             };
-            Future<Throwable> loser = executor.submit(loserTask);
+            Future<Throwable> submitter = executor.submit(submitTask);
 
-            // The loser's own pre-check + saveAndFlush attempt must have a chance to run (and block on
-            // Postgres's unique index, uncontended by any lock of ours) before the winner's transaction
-            // is released — same NOWAIT/blocking-distinction rationale as ConcurrencyLockWaitSupport,
-            // just inlined here since this is a genuine blocking wait, not a NOWAIT retry loop.
+            // submitReview's own pre-check + saveAndFlush attempt must have a chance to run (and block
+            // on Postgres's unique index, uncontended by any lock of ours) before the held row's
+            // transaction is released.
             Thread.sleep(300);
-            releaseWinner.countDown();
+            releaseRow.countDown();
 
-            winner.get(30, TimeUnit.SECONDS);
-            Throwable loserFailure = loser.get(30, TimeUnit.SECONDS);
+            holder.get(30, TimeUnit.SECONDS);
+            Throwable submitFailure = submitter.get(30, TimeUnit.SECONDS);
 
-            if (winnerFailure.get() != null) {
-                throw new AssertionError("winner thread failed", winnerFailure.get());
+            if (holderFailure.get() != null) {
+                throw new AssertionError("row-holder thread failed", holderFailure.get());
             }
-            assertThat(loserFailure)
+            assertThat(submitFailure)
                 .as("the losing caller must get the same ALREADY_SUBMITTED code the non-concurrent "
                     + "pre-check throws, not a generic data-error from an unmapped flush-time violation")
                 .isInstanceOf(OperationNotAllowedException.class);
-            assertThat(((OperationNotAllowedException) loserFailure).getErrorCode())
+            assertThat(((OperationNotAllowedException) submitFailure).getErrorCode())
                 .isEqualTo(ReviewErrorCode.ALREADY_SUBMITTED);
 
             Integer reviewCount = jdbcTemplate.queryForObject(
@@ -180,7 +172,129 @@ class ReviewSubmissionServiceConcurrencyIT extends AbstractIntegrationTest {
         }
     }
 
-    private static final Throwable NULL_MARKER = new Throwable();
+    /**
+     * skillars-deferred-132 AC2 Fix 7. Proves the actual point of this fix: {@code submitReview}
+     * called from WITHIN a hypothetical outer transaction (something {@code ReviewResource} itself
+     * never does today, but a future caller might) must not leave that outer transaction rollback-only
+     * when {@code submitReview}'s own {@code saveAndFlush} hits the real unique-constraint violation.
+     * Pre-Fix-7, the shared physical transaction (submitReview joining the outer one under the default
+     * {@code REQUIRED} propagation) would already be marked rollback-only by the DIVE by the time this
+     * test's own {@code transactionTemplate.execute(...)} tries to commit — surfacing
+     * {@code UnexpectedRollbackException} right there, not inside {@code submitReview}'s own catch
+     * block. Post-Fix-7, {@code submitReview}'s {@code REQUIRES_NEW} transaction is a fully separate
+     * physical transaction, so the outer one it was called from is never touched by the inner failure.
+     *
+     * <p>The outer transaction touches an UNRELATED row ({@code main."user"}, not
+     * {@code uq_coach_reviews_author_coach}) per Fix 7's own self-deadlock warning — an outer
+     * transaction that touched the SAME unique key the inner {@code REQUIRES_NEW} call also targets
+     * would hold an uncommitted conflicting entry on this SAME thread while the inner call blocks on
+     * it, forever.
+     */
+    @Test
+    void concurrentSubmit_calledFromWithinAnOuterTransaction_loserStillGetsCleanAlreadySubmitted() throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            CountDownLatch rowHeld = new CountDownLatch(1);
+            CountDownLatch releaseRow = new CountDownLatch(1);
+            AtomicReference<Throwable> holderFailure = new AtomicReference<>();
+
+            Future<?> holder = executor.submit(() ->
+                holdConflictingReviewRow(coachProfileId, AUTHOR_ID, rowHeld, releaseRow, holderFailure));
+
+            assertThat(rowHeld.await(10, TimeUnit.SECONDS)).isTrue();
+
+            AtomicReference<Throwable> submitFailure = new AtomicReference<>();
+            AtomicReference<Throwable> outerTransactionFailure = new AtomicReference<>();
+            Future<?> outerCaller = executor.submit(() -> {
+                try {
+                    transactionTemplate.execute(status -> {
+                        jdbcTemplate.update(
+                            "UPDATE main.\"user\" SET last_modified_date = now() WHERE id = ?", AUTHOR_ID);
+                        try {
+                            reviewSubmissionService.submitReview(
+                                coachProfileId, AUTHOR_ID, "PARENT", 4, "Also great!");
+                        } catch (OperationNotAllowedException e) {
+                            // Deliberately caught HERE, inside the outer transaction, and NOT
+                            // rethrown — mirroring how a future transactional caller would actually
+                            // handle this business exception. Letting it propagate out of this lambda
+                            // would itself abort the outer transaction for an unrelated reason (the
+                            // caller's own exception, not a rollback-only Postgres transaction) and
+                            // would not distinguish pre- from post-Fix-7 behavior.
+                            submitFailure.set(e);
+                        }
+                        return null;
+                    });
+                } catch (Throwable t) {
+                    // Pre-Fix-7, THIS is where UnexpectedRollbackException would surface — at the
+                    // outer transaction's own commit, inside transactionTemplate.execute, not inside
+                    // submitReview's own try/catch above.
+                    outerTransactionFailure.set(t);
+                }
+                return null;
+            });
+
+            Thread.sleep(300);
+            releaseRow.countDown();
+
+            holder.get(30, TimeUnit.SECONDS);
+            outerCaller.get(30, TimeUnit.SECONDS);
+
+            if (holderFailure.get() != null) {
+                throw new AssertionError("row-holder thread failed", holderFailure.get());
+            }
+            assertThat(outerTransactionFailure.get())
+                .as("the outer transaction's own commit must succeed cleanly — an "
+                    + "UnexpectedRollbackException here means submitReview's REQUIRES_NEW isolation "
+                    + "did not actually protect the outer caller")
+                .isNull();
+            assertThat(submitFailure.get())
+                .as("submitReview must still translate the real unique-constraint violation to a clean "
+                    + "business exception even when called from inside an outer transaction")
+                .isInstanceOf(OperationNotAllowedException.class);
+            assertThat(((OperationNotAllowedException) submitFailure.get()).getErrorCode())
+                .isEqualTo(ReviewErrorCode.ALREADY_SUBMITTED);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * skillars-deferred-132 AC2 Fix 7. Holds a raw {@code coach_reviews} row — with the SAME
+     * {@code (coach_id, author_id)} {@code submitReview} would insert — open (uncommitted) in its own
+     * transaction until {@code release} counts down, then commits. Deliberately does NOT call
+     * {@code submitReview} itself: with Fix 7 making {@code submitReview} run in its own
+     * {@code REQUIRES_NEW} transaction, that method's own row now commits as soon as it returns
+     * regardless of any enclosing transaction a caller wraps it in, so a "winner" built from a real
+     * {@code submitReview} call can no longer be held open by an outer {@code TransactionTemplate}
+     * wrapper the way it could before this story. This raw-SQL holder has no dependency on
+     * {@code submitReview}'s own propagation setting at all.
+     */
+    private void holdConflictingReviewRow(UUID coachId, long authorId, CountDownLatch rowHeld,
+                                           CountDownLatch release, AtomicReference<Throwable> failure) {
+        try {
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.update(
+                    "INSERT INTO reviews.coach_reviews " +
+                    "(review_id, coach_id, author_id, author_role, rating, body, moderation_status, " +
+                    " moderation_epoch, created_at, last_modified_at) " +
+                    "VALUES (?, ?, ?, 'PARENT', 5, 'Raw holder row', 'APPROVED', 0, ?, ?)",
+                    UUID.randomUUID(), coachId, authorId,
+                    Timestamp.from(Instant.now()), Timestamp.from(Instant.now()));
+                rowHeld.countDown();
+                try {
+                    boolean released = release.await(30, TimeUnit.SECONDS);
+                    if (!released) {
+                        throw new AssertionError("release was never signalled within 30s");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            });
+        } catch (Throwable t) {
+            failure.set(t);
+        }
+    }
 
     private void insertUser(long id, String email, String role) {
         jdbcTemplate.update(

@@ -2,12 +2,14 @@ package com.softropic.skillars.platform.reviews.repo;
 
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
 import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
@@ -23,6 +25,18 @@ public interface CoachReviewRepository extends JpaRepository<CoachReview, UUID> 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT r FROM CoachReview r WHERE r.reviewId = :reviewId")
     Optional<CoachReview> findByIdForUpdate(@Param("reviewId") UUID reviewId);
+
+    // skillars-deferred-132 AC1 Fix 2: NOWAIT-only, used exclusively by ReviewFlagService.flag(),
+    // wrapped in PessimisticLockRetryer. findByIdForUpdate above stays genuinely blocking and keeps
+    // serving its other five call sites (ReviewSubmissionService.updateReview/submitCoachResponse,
+    // AdminReviewService.approveReview/blockReview, ReviewModerationService's AFTER_COMMIT listener)
+    // unchanged — converting the shared method in place would have silently fail-fast-converted those
+    // five blocking sites with no retry, one of which (ReviewModerationService.handleReviewSubmitted)
+    // relies on the lock genuinely blocking, per its own comment.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0"))
+    @Query("SELECT r FROM CoachReview r WHERE r.reviewId = :reviewId")
+    Optional<CoachReview> findByIdForUpdateNoWait(@Param("reviewId") UUID reviewId);
 
     // skillars-deferred-131 AC2 Fix 5: an unlocked scalar projection for flag()'s write-independent
     // guards (self-flag, coach-flags-own-profile), so neither fact is loaded via the entity — nothing

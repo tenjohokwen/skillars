@@ -1,9 +1,15 @@
 package com.softropic.skillars.platform.payment.service;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
 import com.softropic.skillars.platform.payment.repo.CoachSubscriptionChange;
 import com.softropic.skillars.platform.payment.repo.CoachSubscriptionChangeRepository;
@@ -21,6 +27,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
@@ -35,7 +42,11 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -81,10 +92,11 @@ class SubscriptionSchedulerIsolationTest {
             return null;
         }).when(transactionTemplate).executeWithoutResult(any());
         // skillars-deferred-131 AC1 Fix 4: syncMarketplaceTier now takes the coach_profiles row lock
-        // before its find-or-create.
-        when(lockRetryer.withBoundedRetry(any()))
-            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
-        when(coachProfileRepository.findByIdForUpdate(any()))
+        // before its find-or-create. lenient() since skillars-deferred-132's reconcileMarketplaceTiers
+        // tests include a "tiers already match" case that never reaches syncMarketplaceTier at all.
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+        lenient().when(coachProfileRepository.findByIdForUpdate(any()))
             .thenReturn(java.util.Optional.of(new CoachProfile()));
     }
 
@@ -251,6 +263,105 @@ class SubscriptionSchedulerIsolationTest {
         // asserted here — this test's job is proving neither loop aborts the other.
         assertThat(validCoach.getTier()).isEqualTo("SCOUT");
         assertThat(validPlayer.getTier()).isEqualTo("ATHLETE");
+    }
+
+    // ─── AC1 Fix 3: reconcileMarketplaceTiers() ────────────────────────────────────
+
+    /**
+     * skillars-deferred-132 AC1 Fix 3. A coach whose {@code marketplace.coach_subscriptions} tier is
+     * stale relative to {@code payment.coach_subscriptions} gets corrected by one sweep pass, via the
+     * same {@code syncMarketplaceTier} write path the two sibling schedulers already call.
+     */
+    @Test
+    void reconcileMarketplaceTiers_staleMarketplaceTier_correctedViaSyncMarketplaceTier() {
+        UUID coachId = UUID.randomUUID();
+        PaymentCoachSubscription paymentSub = coachSub(coachId, "INSTRUCTOR");
+        CoachSubscription marketplaceSub = new CoachSubscription();
+        marketplaceSub.setCoachId(coachId);
+        marketplaceSub.setTier(CoachSubscriptionTier.SCOUT);
+
+        when(paymentCoachSubscriptionRepository.findAllByStatusIn(List.of("ACTIVE", "TRIALLING")))
+            .thenReturn(List.of(paymentSub));
+        when(coachSubscriptionRepository.findByCoachId(coachId)).thenReturn(Optional.of(marketplaceSub));
+
+        Logger serviceLogger = (Logger) LoggerFactory.getLogger(SubscriptionService.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        serviceLogger.addAppender(logCapture);
+        try {
+            service.reconcileMarketplaceTiers();
+        } finally {
+            serviceLogger.detachAppender(logCapture);
+        }
+
+        assertThat(marketplaceSub.getTier())
+            .as("the stale SCOUT marketplace projection must be corrected to match the payment-side tier")
+            .isEqualTo(CoachSubscriptionTier.INSTRUCTOR);
+        verify(coachSubscriptionRepository).save(marketplaceSub);
+        assertThat(logCapture.list).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getFormattedMessage()).contains("COACH_TIER_RECONCILED");
+        });
+    }
+
+    /**
+     * skillars-deferred-132 AC1 Fix 3. A coach whose tiers already match must cause no write and no
+     * {@code COACH_TIER_RECONCILED} log line — the corrected enum-vs-{@code valueOf} comparison this
+     * story's own story-review pass fixed (the original snippet's {@code Enum.equals(String)} would
+     * have made this assertion impossible to pass, since it was always false).
+     */
+    @Test
+    void reconcileMarketplaceTiers_tiersAlreadyMatch_noWriteNoReconciledLog() {
+        UUID coachId = UUID.randomUUID();
+        PaymentCoachSubscription paymentSub = coachSub(coachId, "INSTRUCTOR");
+        CoachSubscription marketplaceSub = new CoachSubscription();
+        marketplaceSub.setCoachId(coachId);
+        marketplaceSub.setTier(CoachSubscriptionTier.INSTRUCTOR);
+
+        when(paymentCoachSubscriptionRepository.findAllByStatusIn(List.of("ACTIVE", "TRIALLING")))
+            .thenReturn(List.of(paymentSub));
+        when(coachSubscriptionRepository.findByCoachId(coachId)).thenReturn(Optional.of(marketplaceSub));
+
+        Logger serviceLogger = (Logger) LoggerFactory.getLogger(SubscriptionService.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        serviceLogger.addAppender(logCapture);
+        try {
+            service.reconcileMarketplaceTiers();
+        } finally {
+            serviceLogger.detachAppender(logCapture);
+        }
+
+        verify(coachSubscriptionRepository, never()).save(any());
+        assertThat(logCapture.list).noneSatisfy(event ->
+            assertThat(event.getFormattedMessage()).contains("COACH_TIER_RECONCILED"));
+    }
+
+    /**
+     * skillars-deferred-132 AC1 Fix 3. A payment row with a tier outside {@code CoachSubscriptionTier}
+     * is skipped (logged, not thrown) and must not abort the rest of the sweep.
+     */
+    @Test
+    void reconcileMarketplaceTiers_unrecognizedTier_skippedNotThrown_doesNotAbortSweep() {
+        UUID badCoachId = UUID.randomUUID();
+        UUID validCoachId = UUID.randomUUID();
+        PaymentCoachSubscription badSub = coachSub(badCoachId, "NOT_A_REAL_TIER");
+        PaymentCoachSubscription validSub = coachSub(validCoachId, "ACADEMY");
+        CoachSubscription validMarketplaceSub = new CoachSubscription();
+        validMarketplaceSub.setCoachId(validCoachId);
+        validMarketplaceSub.setTier(CoachSubscriptionTier.SCOUT);
+
+        when(paymentCoachSubscriptionRepository.findAllByStatusIn(List.of("ACTIVE", "TRIALLING")))
+            .thenReturn(List.of(badSub, validSub));
+        when(coachSubscriptionRepository.findByCoachId(validCoachId)).thenReturn(Optional.of(validMarketplaceSub));
+
+        service.reconcileMarketplaceTiers();
+
+        assertThat(validMarketplaceSub.getTier())
+            .as("the bad row's IllegalArgumentException from CoachSubscriptionTier.valueOf must not "
+                + "abort the sweep before the valid row is reconciled")
+            .isEqualTo(CoachSubscriptionTier.ACADEMY);
+        verify(coachSubscriptionRepository).save(validMarketplaceSub);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────────

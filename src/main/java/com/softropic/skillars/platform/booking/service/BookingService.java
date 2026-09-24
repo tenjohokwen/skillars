@@ -160,8 +160,9 @@ public class BookingService {
         // every call site) — this lock is a UX improvement, trading fail-fast-and-retry for
         // blocking, not a correctness fix. Re-acquiring the same row lock across
         // acceptAndInitiatePayment's two same-transaction calls is a no-op, not a deadlock risk.
-        Booking booking = lockRetryer.withBoundedRetry(() -> bookingRepository.findByIdForUpdate(bookingId)
-            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking")));
+        Booking booking = lockRetryer.withBoundedRetry("BookingService.transitionInternal",
+            () -> bookingRepository.findByIdForUpdate(bookingId)
+                .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking")));
         entityManager.refresh(booking, LockModeType.PESSIMISTIC_WRITE);
         BookingStatus currentStatus = readStatusOrThrow(booking);
         bookingStateMachine.validate(currentStatus, event);
@@ -241,7 +242,7 @@ public class BookingService {
         // method and the lock being granted would otherwise still let the booking through.
         // orElseThrow guards against the lock silently no-op'ing if the coach row vanished
         // mid-request.
-        CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> {
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry("BookingService.createBookingRequest", () -> {
             CoachProfile c = coachProfileRepository.findByIdForUpdate(req.coachId())
                 .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
             // The explicit refresh is required, not defensive: findByIdForUpdate is a JPQL query and the
@@ -358,7 +359,7 @@ public class BookingService {
 
         // AC 3: re-check for a slot conflict that may have appeared since this booking was
         // REQUESTED (e.g. the coach already accepted a different overlapping request).
-        CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> {
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry("BookingService.acceptBooking", () -> {
             CoachProfile c = coachProfileRepository.findByIdForUpdate(coach.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
             // Deferred-15 AC4: a suspended coach must not be able to accept work. The refresh is
@@ -735,8 +736,9 @@ public class BookingService {
         if (!Objects.equals(unlocked.getParentId(), parentUserId)) {
             throw new OperationNotAllowedException("Parent does not own this booking", SecurityError.MISSING_RIGHTS);
         }
-        Booking booking = lockRetryer.withBoundedRetry(() -> bookingRepository.findByIdForUpdate(bookingId)
-            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking")));
+        Booking booking = lockRetryer.withBoundedRetry("BookingService.cancelBookingAsParent",
+            () -> bookingRepository.findByIdForUpdate(bookingId)
+                .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking")));
         // Deferred-64 AC2: findByIdForUpdate returns the same managed instance already loaded by
         // getBookingOrThrow above (Hibernate's persistence-context identity map), so without this
         // refresh the "locked" read never actually re-reads the row FOR UPDATE just acquired.

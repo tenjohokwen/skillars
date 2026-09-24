@@ -26,6 +26,7 @@ import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -62,8 +63,8 @@ class ReliabilityStrikeServiceTest {
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(strikeRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         // The retryer is a pass-through in unit context: run the supplier inline.
-        lenient().when(lockRetryer.withBoundedRetry(any())).thenAnswer(inv ->
-            ((Supplier<?>) inv.getArgument(0)).get());
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), any())).thenAnswer(inv ->
+            ((Supplier<?>) inv.getArgument(1)).get());
     }
 
     @Test

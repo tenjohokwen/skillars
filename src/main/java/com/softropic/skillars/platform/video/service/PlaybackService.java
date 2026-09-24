@@ -137,7 +137,7 @@ public class PlaybackService {
             // @Transactional method (findByIdForUpdate is JPQL and video is already managed from the
             // unlocked findById above, so the refresh is required, not defensive — same reasoning as
             // every other lockRetryer call site in this codebase).
-            lockRetryer.withBoundedRetry(() -> videoRepository.findByIdForUpdate(videoId)
+            lockRetryer.withBoundedRetry("PlaybackService.authorizePlayback", () -> videoRepository.findByIdForUpdate(videoId)
                 .orElseThrow(() -> new VideoNotFoundException(videoId)));
             entityManager.refresh(video, LockModeType.PESSIMISTIC_WRITE);
 

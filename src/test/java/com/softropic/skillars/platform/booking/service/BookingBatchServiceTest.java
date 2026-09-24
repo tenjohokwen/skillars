@@ -49,6 +49,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
@@ -87,8 +88,8 @@ class BookingBatchServiceTest {
     void initTemplates() {
         lenient().when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
         service.initTransactionTemplates();
-        lenient().when(lockRetryer.withBoundedRetry(any()))
-            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
         // Deferred-78 AC1: createBatch now locks the coach row before its fresh re-check. Lenient
         // because the tests that fail earlier (batch size, ownership, inactive coach, first-pass
         // duration/availability/overlap checks) never reach the lock at all.

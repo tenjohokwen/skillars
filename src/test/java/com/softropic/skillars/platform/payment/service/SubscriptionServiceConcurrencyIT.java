@@ -108,7 +108,8 @@ class SubscriptionServiceConcurrencyIT extends AbstractIntegrationTest {
         PaymentCoachSubscription paymentSub = new PaymentCoachSubscription();
         paymentSub.setCoachId(coachProfileId);
 
-        double lockRetryBaseline = ConcurrencyLockWaitSupport.currentLockRetryCount(meterRegistry);
+        double lockRetryBaseline = ConcurrencyLockWaitSupport.currentLockRetryCount(
+            meterRegistry, "SubscriptionService.syncMarketplaceTier");
 
         CountDownLatch publishLockHeld = new CountDownLatch(1);
         CountDownLatch releasePublish = new CountDownLatch(1);
@@ -168,7 +169,8 @@ class SubscriptionServiceConcurrencyIT extends AbstractIntegrationTest {
                 .as("persistCoachSubscription must not throw an uncaught DataIntegrityViolationException")
                 .isNull();
 
-            ConcurrencyLockWaitSupport.assertGenuineLockRetryOccurred(meterRegistry, lockRetryBaseline);
+            ConcurrencyLockWaitSupport.assertGenuineLockRetryOccurred(
+                meterRegistry, "SubscriptionService.syncMarketplaceTier", lockRetryBaseline);
 
             Integer rowCount = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM marketplace.coach_subscriptions WHERE coach_id = ?",

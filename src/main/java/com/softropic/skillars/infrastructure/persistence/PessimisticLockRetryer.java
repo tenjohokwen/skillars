@@ -66,8 +66,13 @@ import java.util.function.Supplier;
  * <p>The wait is observable: a {@code persistence.lock_retry} {@link Timer} (tag {@code outcome} =
  * {@code success} / {@code exhausted} / {@code error}) records the wall-clock time spent in
  * {@link #withBoundedRetry}, and {@code persistence.lock_retry.retries} /
- * {@code persistence.lock_retry.exhausted} counters track how hard the loop is working. Watch the
- * timer's p99 against the HikariCP pool size.
+ * {@code persistence.lock_retry.exhausted} counters track how hard the loop is working. Every one of
+ * these meters also carries a {@code lock} tag (the caller-supplied {@code lockName}, skillars-
+ * deferred-132 AC1 Fix 5) so retries can be attributed to a specific call site rather than only a
+ * single JVM-wide total — {@link com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer}
+ * registers every one of these meter names with the same {@code lock} tag key on every call, since
+ * {@code PrometheusMeterRegistry} rejects a second registration of the same meter name with a
+ * different tag-key set. Watch the timer's p99 against the HikariCP pool size.
  */
 @Slf4j
 @Component
@@ -135,8 +140,14 @@ public class PessimisticLockRetryer {
      * current transaction, retrying it from a fresh savepoint each time it fails with a
      * {@link PessimisticLockingFailureException}. Any other exception — including a genuine
      * not-found — propagates immediately, unretried.
+     *
+     * @param lockName a short, stable identifier for the calling site's lock (e.g.
+     *                 {@code "CoachProfileService.publishProfile"}), tagged on every meter this
+     *                 method registers (skillars-deferred-132 AC1 Fix 5) so a test or dashboard can
+     *                 attribute retries/exhaustion to a specific call site instead of a single
+     *                 JVM-wide total shared across every {@code .withBoundedRetry(} caller.
      */
-    public <T> T withBoundedRetry(Supplier<T> lockedOperation) {
+    public <T> T withBoundedRetry(String lockName, Supplier<T> lockedOperation) {
         Session session = entityManager.unwrap(Session.class);
         long backoffMillis = initialBackoffMs;
         Timer.Sample sample = Timer.start(meterRegistry);
@@ -149,15 +160,15 @@ public class PessimisticLockRetryer {
                 try {
                     T result = lockedOperation.get();
                     session.doWork(connection -> connection.releaseSavepoint(savepointHolder[0]));
-                    recordRetries(retries);
-                    sample.stop(timer("success"));
+                    recordRetries(lockName, retries);
+                    sample.stop(timer(lockName, "success"));
                     return result;
                 } catch (PessimisticLockingFailureException e) {
                     if (attempt == maxAttempts) {
                         log.warn("Giving up on a pessimistic lock after {} attempts; surfacing contention", attempt);
-                        recordRetries(retries);
-                        meterRegistry.counter("persistence.lock_retry.exhausted").increment();
-                        sample.stop(timer("exhausted"));
+                        recordRetries(lockName, retries);
+                        meterRegistry.counter("persistence.lock_retry.exhausted", "lock", lockName).increment();
+                        sample.stop(timer(lockName, "exhausted"));
                         throw e;
                     }
                     retries++;
@@ -172,24 +183,25 @@ public class PessimisticLockRetryer {
             // still exits here; record it so the timer's count matches the call count. The
             // exhausted-lock path already stopped the sample above, so skip it to avoid a double stop.
             if (!(e instanceof PessimisticLockingFailureException)) {
-                recordRetries(retries);
-                sample.stop(timer("error"));
+                recordRetries(lockName, retries);
+                sample.stop(timer(lockName, "error"));
             }
             throw e;
         }
     }
 
-    private void recordRetries(int retries) {
+    private void recordRetries(String lockName, int retries) {
         if (retries > 0) {
-            meterRegistry.counter("persistence.lock_retry.retries").increment(retries);
+            meterRegistry.counter("persistence.lock_retry.retries", "lock", lockName).increment(retries);
         }
     }
 
-    private Timer timer(String outcome) {
+    private Timer timer(String lockName, String outcome) {
         return Timer.builder("persistence.lock_retry")
             .description("Wall-clock time a caller spent in PessimisticLockRetryer.withBoundedRetry, "
                 + "holding its pooled JDBC connection while sleeping between attempts")
             .tag("outcome", outcome)
+            .tag("lock", lockName)
             .register(meterRegistry);
     }
 

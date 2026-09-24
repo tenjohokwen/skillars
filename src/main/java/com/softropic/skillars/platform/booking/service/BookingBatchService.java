@@ -199,7 +199,7 @@ public class BookingBatchService {
         // re-check now runs against a coach row this transaction holds locked, so a concurrent
         // addWindow/updateWindow/deleteWindow (also lock-guarded, see AvailabilityService) cannot
         // land between this re-check and the batch/booking writes below.
-        CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> {
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry("BookingBatchService.createBatch", () -> {
             CoachProfile c = coachProfileRepository.findByIdForUpdate(req.coachId())
                 .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
             entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);
@@ -409,7 +409,7 @@ public class BookingBatchService {
         // managed `batch`), same reasoning acceptOneBooking's own comment documents above for why it
         // skips the refresh.
         trailingTx.executeWithoutResult(tx ->
-            lockRetryer.withBoundedRetry(() -> batchRepository.findByIdForUpdate(batchId)).ifPresent(fresh -> {
+            lockRetryer.withBoundedRetry("BookingBatchService.acceptAll", () -> batchRepository.findByIdForUpdate(batchId)).ifPresent(fresh -> {
                 fresh.setStatus(computeBatchStatus(bookingRepository.findByBatchId(batchId)));
                 batchRepository.save(fresh);
                 eventPublisher.publishEvent(new BatchBookingAcceptedEvent(
@@ -463,8 +463,9 @@ public class BookingBatchService {
      * match itself and mask the real state-transition error.
      */
     private void acceptOneBooking(Booking booking, UUID coachId, Long coachUserId) {
-        CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
-            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry("BookingBatchService.acceptOneBooking",
+            () -> coachProfileRepository.findByIdForUpdate(coachId)
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
         // Deferred-15 AC4. No entityManager.refresh here, unlike the other two accept paths: this
         // method runs inside a REQUIRES_NEW transaction with its own persistence context, so the
         // coach row is not already managed and the locked read genuinely returns fresh state. (On
@@ -511,7 +512,7 @@ public class BookingBatchService {
         // skillars-deferred-69 AC6: locked read, same as acceptAll's trailing transaction above —
         // this method's own REQUIRES_NEW transaction gives it a fresh persistence context, so (like
         // acceptOneBooking) no entityManager.refresh is needed here either.
-        lockRetryer.withBoundedRetry(() -> batchRepository.findByIdForUpdate(batchId)).ifPresent(batch -> {
+        lockRetryer.withBoundedRetry("BookingBatchService.updateBatchStatusFromBooking", () -> batchRepository.findByIdForUpdate(batchId)).ifPresent(batch -> {
             batch.setStatus(newStatus);
             batchRepository.save(batch);
             log.info("Batch status updated: batchId={} newStatus={}", batchId, newStatus);

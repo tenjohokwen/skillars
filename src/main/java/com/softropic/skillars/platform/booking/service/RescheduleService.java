@@ -192,7 +192,7 @@ public class RescheduleService {
         // reschedule proposal does not create a new engagement with a coach, it only tests the
         // already-accepted booking's new time against currently-configured windows, so coach
         // suspension has no separate check to duplicate here.
-        CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> {
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry("RescheduleService.validateRescheduleProposal", () -> {
             CoachProfile c = coachProfileRepository.findByIdForUpdate(booking.getCoachId())
                 .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
             entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);
@@ -362,7 +362,7 @@ public class RescheduleService {
         // PENDING, and writes ACCEPTED over the decline. The refresh is what makes the re-read real —
         // findByIdForUpdate is JPQL and the row is already managed from the caller's findById above,
         // so without it Hibernate takes the lock but hands back the same stale instance.
-        BookingRescheduleRequest lockedReq = lockRetryer.withBoundedRetry(() -> {
+        BookingRescheduleRequest lockedReq = lockRetryer.withBoundedRetry("RescheduleService.acceptRescheduleShared", () -> {
             BookingRescheduleRequest r = rescheduleRepo.findByIdForUpdate(rescheduleId)
                 .orElseThrow(() -> new ResourceNotFoundException("Reschedule request not found", "reschedule_request"));
             entityManager.refresh(r, LockModeType.PESSIMISTIC_WRITE);
@@ -380,7 +380,7 @@ public class RescheduleService {
         // coach so two concurrent reschedules for the same coach serialise, then check the
         // PROPOSED window (not the current one). excludeBookingId is mandatory: this booking is
         // itself in an active status and would otherwise match itself.
-        CoachProfile lockedCoach = lockRetryer.withBoundedRetry(() -> {
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry("RescheduleService.acceptRescheduleShared", () -> {
             CoachProfile c = coachProfileRepository.findByIdForUpdate(coach.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
             // Deferred-15 AC4. The refresh is required, not defensive: findByIdForUpdate is JPQL and this
@@ -468,8 +468,9 @@ public class RescheduleService {
         // Deferred-15 AC3: locked read, so this and acceptReschedule are mutually exclusive rather
         // than both reading PENDING and both writing. This is the only lock this method takes —
         // see the ordering note in acceptRescheduleShared before adding another.
-        BookingRescheduleRequest req = lockRetryer.withBoundedRetry(() -> rescheduleRepo.findByIdForUpdate(rescheduleId)
-            .orElseThrow(() -> new ResourceNotFoundException("Reschedule request not found", "reschedule_request")));
+        BookingRescheduleRequest req = lockRetryer.withBoundedRetry("RescheduleService.declineReschedule",
+            () -> rescheduleRepo.findByIdForUpdate(rescheduleId)
+                .orElseThrow(() -> new ResourceNotFoundException("Reschedule request not found", "reschedule_request")));
         if (!req.getBookingId().equals(bookingId)) {
             throw new ResourceNotFoundException("Reschedule request not found", "reschedule_request");
         }
@@ -502,8 +503,9 @@ public class RescheduleService {
         CoachProfile coach = coachProfileRepository.findById(booking.getCoachId())
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
 
-        BookingRescheduleRequest req = lockRetryer.withBoundedRetry(() -> rescheduleRepo.findByIdForUpdate(rescheduleId)
-            .orElseThrow(() -> new ResourceNotFoundException("Reschedule request not found", "reschedule_request")));
+        BookingRescheduleRequest req = lockRetryer.withBoundedRetry("RescheduleService.declineRescheduleAsParent",
+            () -> rescheduleRepo.findByIdForUpdate(rescheduleId)
+                .orElseThrow(() -> new ResourceNotFoundException("Reschedule request not found", "reschedule_request")));
         if (!req.getBookingId().equals(bookingId)) {
             throw new ResourceNotFoundException("Reschedule request not found", "reschedule_request");
         }

@@ -150,7 +150,8 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
         // skillars-deferred-131 AC3: captured before the publisher's own findByIdForUpdate can retry,
         // so the poll below asserts genuine growth past this call's own baseline rather than the
         // JVM-wide cumulative total left over from earlier tests.
-        double lockRetryBaseline = ConcurrencyLockWaitSupport.currentLockRetryCount(meterRegistry);
+        double lockRetryBaseline = ConcurrencyLockWaitSupport.currentLockRetryCount(
+            meterRegistry, "CoachProfileService.publishProfile");
         CountDownLatch suspendLockHeld = new CountDownLatch(1);
         CountDownLatch releaseSuspend = new CountDownLatch(1);
         AtomicReference<Throwable> suspendFailure = new AtomicReference<>();
@@ -212,7 +213,8 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
                 throw new AssertionError("suspendCoach thread failed", suspendFailure.get());
             }
 
-            ConcurrencyLockWaitSupport.assertGenuineLockRetryOccurred(meterRegistry, lockRetryBaseline);
+            ConcurrencyLockWaitSupport.assertGenuineLockRetryOccurred(
+                meterRegistry, "CoachProfileService.publishProfile", lockRetryBaseline);
 
             assertThat(publishCompletedAt.get())
                 .as("publishProfile's own UPDATE must not complete until suspendCoach's transaction "

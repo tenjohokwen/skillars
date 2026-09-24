@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.reviews.contract.ReviewErrorCode;
 import com.softropic.skillars.platform.reviews.contract.ReviewFlagReason;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.utils.ConcurrencyLockWaitSupport;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,10 +36,20 @@ import static org.assertj.core.api.Assertions.assertThat;
  * conditional {@code moderationStatus} write — needs a service-level test instead. Mirrors
  * {@code RadarCompositeCalculationServiceConcurrencyIT}'s own shape: autowire the services directly
  * against real Testcontainers Postgres, and use a {@code TransactionTemplate} + latch on a separate
- * thread to hold {@code updateReview}'s own row lock open past its normal method boundary (by
+ * thread to hold the lock-holding call's own row lock open past its normal method boundary (by
  * calling it INSIDE an outer {@code TransactionTemplate.execute} and pausing before that lambda
- * returns) so a concurrent {@code flag()} call is forced to block on the SAME row lock rather than
+ * returns) so a concurrent {@code flag()} call is forced to contend for the SAME row lock rather than
  * proceeding on a stale unlocked read.
+ *
+ * <p>skillars-deferred-132 AC1 Fix 2: {@code flag()}'s own lock moved from the shared blocking
+ * {@code CoachReviewRepository.findByIdForUpdate} to a NOWAIT-only {@code findByIdForUpdateNoWait}
+ * wrapped in {@code PessimisticLockRetryer}. A NOWAIT contender never sits in a live Postgres wait
+ * state a {@code pg_locks} poll could observe, so the two tests below that used to poll for a genuine
+ * blocking waiter now use {@link ConcurrencyLockWaitSupport#awaitFirstLockAttempt()} as a bounded
+ * pre-release delay, paired with {@link ConcurrencyLockWaitSupport#assertGenuineLockRetryOccurred}
+ * (tagged {@value #FLAG_LOCK_NAME}, skillars-deferred-132 AC1 Fix 5) as a deterministic post-hoc proof
+ * that {@code flag()} genuinely contended for the lock and retried, not merely raced past it
+ * uncontended.
  */
 class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
 
@@ -47,6 +58,9 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
     @Autowired private AdminReviewService adminReviewService;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
+    @Autowired private MeterRegistry meterRegistry;
+
+    private static final String FLAG_LOCK_NAME = "ReviewFlagService.flag";
 
     private static final long AUTHOR_ID = 8060_000_001L;
     private static final long FLAGGER1_ID = 8060_000_002L;
@@ -146,6 +160,11 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
      */
     @Test
     void concurrentUpdateReview_doesNotRevertEditOrWronglyAutoHold() throws Exception {
+        // skillars-deferred-132 AC1 Fix 5: captured before the flagger's own findByIdForUpdateNoWait
+        // can retry, so the poll below asserts genuine growth past this call's own baseline, tagged to
+        // THIS lock site, rather than the JVM-wide (pre-Fix-5) or cross-test (post-Fix-5, untagged)
+        // total left over from other tests in the run.
+        double lockRetryBaseline = ConcurrencyLockWaitSupport.currentLockRetryCount(meterRegistry, FLAG_LOCK_NAME);
         CountDownLatch updateLockHeld = new CountDownLatch(1);
         CountDownLatch releaseUpdate = new CountDownLatch(1);
         AtomicReference<Throwable> updaterFailure = new AtomicReference<>();
@@ -193,12 +212,12 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
             });
 
             assertThat(updateLockHeld.await(10, TimeUnit.SECONDS)).isTrue();
-            // skillars-deferred-131 AC3: CoachReviewRepository.findByIdForUpdate carries no
-            // @QueryHints — a genuine blocking FOR UPDATE, so the flagger truly sits in a Postgres
-            // wait state once it reaches the lock. Poll pg_locks/pg_stat_activity instead of a fixed
-            // sleep, so this blocks until the flagger has genuinely reached and is waiting on the row
-            // lock, not merely dispatched.
-            ConcurrencyLockWaitSupport.awaitBlockingLockWaiter(jdbcTemplate, "%coach_reviews%");
+            // skillars-deferred-132 AC1 Fix 2: flag()'s own findByIdForUpdateNoWait is NOWAIT now —
+            // it never sits in a live Postgres wait state a pg_locks poll could observe. This bounded
+            // delay gives the flagger's own NOWAIT failure and first backoff a real chance to happen
+            // before the lock releases; assertGenuineLockRetryOccurred below then proves it actually
+            // did (see ConcurrencyLockWaitSupport's own javadoc for why a live poll can't replace it).
+            ConcurrencyLockWaitSupport.awaitFirstLockAttempt();
             releaseUpdate.countDown();
 
             updater.get(30, TimeUnit.SECONDS);
@@ -210,6 +229,8 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
             if (flaggerFailure.get() != null) {
                 throw new AssertionError("flag() thread failed", flaggerFailure.get());
             }
+
+            ConcurrencyLockWaitSupport.assertGenuineLockRetryOccurred(meterRegistry, FLAG_LOCK_NAME, lockRetryBaseline);
 
             assertThat(flagCompletedAt.get())
                 .as("flag()'s own row UPDATE (or, before the fix, its plain findById-then-save) must "
@@ -260,6 +281,7 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
      */
     @Test
     void flagUnderGenuineLockContention_stillAppliesAutoHoldOnceThresholdReached() throws Exception {
+        double lockRetryBaseline = ConcurrencyLockWaitSupport.currentLockRetryCount(meterRegistry, FLAG_LOCK_NAME);
         CountDownLatch lockHeld = new CountDownLatch(1);
         CountDownLatch releaseLock = new CountDownLatch(1);
         AtomicReference<Throwable> lockerFailure = new AtomicReference<>();
@@ -307,9 +329,12 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
             });
 
             assertThat(lockHeld.await(10, TimeUnit.SECONDS)).isTrue();
-            // skillars-deferred-131 AC3: same blocking-FOR-UPDATE signal as above — the raw locker
-            // thread's SELECT ... FOR UPDATE genuinely blocks flag()'s own findByIdForUpdate.
-            ConcurrencyLockWaitSupport.awaitBlockingLockWaiter(jdbcTemplate, "%coach_reviews%");
+            // skillars-deferred-132 AC1 Fix 2: flag()'s own findByIdForUpdateNoWait is NOWAIT now —
+            // the raw locker thread's SELECT ... FOR UPDATE still genuinely holds the row lock, but
+            // flag() fails fast against it and retries in Java rather than sitting in a Postgres wait
+            // state, so a pg_locks poll can no longer observe it. Same bounded-delay-then-post-hoc-
+            // assertion pattern as the test above.
+            ConcurrencyLockWaitSupport.awaitFirstLockAttempt();
             releaseLock.countDown();
 
             locker.get(30, TimeUnit.SECONDS);
@@ -321,6 +346,8 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
             if (flaggerFailure.get() != null) {
                 throw new AssertionError("flag() thread failed", flaggerFailure.get());
             }
+
+            ConcurrencyLockWaitSupport.assertGenuineLockRetryOccurred(meterRegistry, FLAG_LOCK_NAME, lockRetryBaseline);
 
             assertThat(flagCompletedAt.get())
                 .as("flag() must not complete until the raw FOR UPDATE lock is released — proving it "
@@ -445,53 +472,44 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
 
     /**
      * skillars-deferred-131 AC2 Fix 6. A Mockito unit test alone only proves the parser matches its
-     * own hand-built fixture — this pins the REAL Postgres exception shape: two concurrent flags from
-     * the same {@code flaggedBy} racing the unique index {@code review_flags_unique_flagger}
-     * genuinely still map to {@code ALREADY_FLAGGED}.
+     * own hand-built fixture — this pins the REAL Postgres exception shape: {@code flag()} racing a
+     * raw, independently-held conflicting {@code review_flags} row (see
+     * {@link #holdConflictingFlagRow}) for the same {@code flaggedBy} against the unique index
+     * {@code review_flags_unique_flagger} genuinely still maps to {@code ALREADY_FLAGGED}.
      *
      * <p>Code review 2026-09-23: a plain latch-released race (the original shape here) can pass even on
      * a REVERTED Fix 6. {@code flag()}'s unlocked {@code existsByReviewIdAndFlaggedBy} pre-check runs
-     * before {@code saveAndFlush} — if the OS/JVM happens to fully serialize the two threads, the second
-     * call's own pre-check throws {@code ALREADY_FLAGGED} directly via that pre-existing guard, never
-     * reaching {@code saveAndFlush}'s catch block this test exists to pin. The observable outcome is
-     * identical either way, so that scheduling-dependent shortcut silently defeats the test. The
-     * winner's transaction is now held open (uncommitted) past its own {@code flag()} return, mirroring
-     * this class's own {@code concurrentUpdateReview_doesNotRevertEditOrWronglyAutoHold} hold-open
-     * technique above, so the loser's unlocked pre-check is guaranteed to run — and its own
-     * {@code findByIdForUpdate} is guaranteed to block on the winner's still-held {@code CoachReview}
-     * row lock — while the winner's {@code ReviewFlag} row is still uncommitted, forcing the loser down
-     * the real {@code saveAndFlush} path once released.
+     * before {@code saveAndFlush} — if the conflicting row were already visible/committed by the time
+     * this call's pre-check runs, that pre-check alone would catch the duplicate directly, without ever
+     * reaching {@code saveAndFlush}'s catch block this test exists to pin. Holding the conflicting row's
+     * transaction open (uncommitted) forces this call down the real flush-time path instead.
+     *
+     * <p><strong>skillars-deferred-132 AC1/AC2 correction:</strong> the original version of this test
+     * held the winner's row open via an outer {@code transactionTemplate.execute(...)} wrapper around a
+     * real {@code flag()} call. Two changes this same story makes broke that: Fix 2 converted
+     * {@code flag()}'s own lock to NOWAIT+retry (so the loser no longer sits in a live Postgres wait a
+     * {@code pg_locks} poll could observe — irrelevant here since this test never polled pg_locks, but
+     * relevant to why a "hold winner open, force loser to block" framing no longer describes the actual
+     * mechanism), and Fix 7 made {@code flag()} run in its own {@code REQUIRES_NEW} transaction, which
+     * commits (and releases the winner's row) as soon as {@code flag()} returns regardless of any
+     * enclosing transaction — silently defeating the outer-wrapper hold-open technique entirely (same
+     * finding as {@code ReviewSubmissionServiceConcurrencyIT}'s own identical correction).
+     * {@link #holdConflictingFlagRow} instead holds the conflicting unique-index entry open from a
+     * plain {@code transactionTemplate.execute(...)} block that never calls {@code flag()} at all.
      */
     @Test
     void concurrentDuplicateFlagFromSameFlagger_loserGetsAlreadyFlaggedViaRealConstraintViolation() throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
-            CountDownLatch winnerFlaggedUncommitted = new CountDownLatch(1);
-            CountDownLatch releaseWinner = new CountDownLatch(1);
-            AtomicReference<Throwable> winnerFailure = new AtomicReference<>();
+            CountDownLatch rowHeld = new CountDownLatch(1);
+            CountDownLatch releaseRow = new CountDownLatch(1);
+            AtomicReference<Throwable> holderFailure = new AtomicReference<>();
 
-            Future<?> winner = executor.submit(() -> {
-                try {
-                    transactionTemplate.execute(status -> {
-                        reviewFlagService.flag(reviewId, FLAGGER3_ID, ReviewFlagReason.CONFLICT_OF_INTEREST, "race");
-                        winnerFlaggedUncommitted.countDown();
-                        try {
-                            boolean released = releaseWinner.await(30, TimeUnit.SECONDS);
-                            if (!released) {
-                                throw new AssertionError("releaseWinner was never signalled within 30s");
-                            }
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        }
-                        return null;
-                    });
-                } catch (Throwable t) {
-                    winnerFailure.set(t);
-                }
-            });
+            Future<?> holder = executor.submit(() ->
+                holdConflictingFlagRow(reviewId, FLAGGER3_ID, rowHeld, releaseRow, holderFailure));
 
-            Callable<Throwable> loserTask = () -> {
-                assertThat(winnerFlaggedUncommitted.await(10, TimeUnit.SECONDS)).isTrue();
+            Callable<Throwable> flagTask = () -> {
+                assertThat(rowHeld.await(10, TimeUnit.SECONDS)).isTrue();
                 try {
                     reviewFlagService.flag(reviewId, FLAGGER3_ID, ReviewFlagReason.CONFLICT_OF_INTEREST, "race-loser");
                     return null;
@@ -499,21 +517,21 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
                     return t;
                 }
             };
-            Future<Throwable> loser = executor.submit(loserTask);
+            Future<Throwable> flagger = executor.submit(flagTask);
 
-            // Gives the loser's pre-check + findByIdForUpdate attempt (which blocks on the winner's
-            // still-held CoachReview row lock) a real chance to run before the winner is released.
+            // Gives flag()'s own pre-check + findByIdForUpdateNoWait + saveAndFlush a real chance to
+            // run before the held row is released.
             Thread.sleep(300);
-            releaseWinner.countDown();
+            releaseRow.countDown();
 
-            winner.get(30, TimeUnit.SECONDS);
-            Throwable loserFailure = loser.get(30, TimeUnit.SECONDS);
+            holder.get(30, TimeUnit.SECONDS);
+            Throwable flagFailure = flagger.get(30, TimeUnit.SECONDS);
 
-            if (winnerFailure.get() != null) {
-                throw new AssertionError("winner thread failed", winnerFailure.get());
+            if (holderFailure.get() != null) {
+                throw new AssertionError("row-holder thread failed", holderFailure.get());
             }
-            assertThat(loserFailure).isInstanceOf(OperationNotAllowedException.class);
-            assertThat(((OperationNotAllowedException) loserFailure).getErrorCode())
+            assertThat(flagFailure).isInstanceOf(OperationNotAllowedException.class);
+            assertThat(((OperationNotAllowedException) flagFailure).getErrorCode())
                 .as("the real Postgres unique-index violation must still map to ALREADY_FLAGGED, not propagate uncaught")
                 .isEqualTo(ReviewErrorCode.ALREADY_FLAGGED);
 
@@ -523,6 +541,108 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
             assertThat(flagCount).as("exactly one flag row for this flagger, never two").isEqualTo(1);
         } finally {
             executor.shutdownNow();
+        }
+    }
+
+    /**
+     * skillars-deferred-132 AC2 Fix 7. Proves the actual point of this fix for {@code flag()}: called
+     * from WITHIN a hypothetical outer transaction, it must not leave that outer transaction
+     * rollback-only when its own {@code saveAndFlush} hits the real unique-constraint violation. See
+     * {@code ReviewSubmissionServiceConcurrencyIT
+     * .concurrentSubmit_calledFromWithinAnOuterTransaction_loserStillGetsCleanAlreadySubmitted}'s own
+     * Javadoc for the full pre-/post-Fix-7 mechanism this mirrors.
+     *
+     * <p>The outer transaction touches an unrelated row ({@code main."user"}, not
+     * {@code review_flags_unique_flagger}) per Fix 7's own self-deadlock warning.
+     */
+    @Test
+    void concurrentFlag_calledFromWithinAnOuterTransaction_loserStillGetsCleanAlreadyFlagged() throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            CountDownLatch rowHeld = new CountDownLatch(1);
+            CountDownLatch releaseRow = new CountDownLatch(1);
+            AtomicReference<Throwable> holderFailure = new AtomicReference<>();
+
+            Future<?> holder = executor.submit(() ->
+                holdConflictingFlagRow(reviewId, FLAGGER3_ID, rowHeld, releaseRow, holderFailure));
+
+            assertThat(rowHeld.await(10, TimeUnit.SECONDS)).isTrue();
+
+            AtomicReference<Throwable> flagFailure = new AtomicReference<>();
+            AtomicReference<Throwable> outerTransactionFailure = new AtomicReference<>();
+            Future<?> outerCaller = executor.submit(() -> {
+                try {
+                    transactionTemplate.execute(status -> {
+                        jdbcTemplate.update(
+                            "UPDATE main.\"user\" SET last_modified_date = now() WHERE id = ?", FLAGGER3_ID);
+                        try {
+                            reviewFlagService.flag(reviewId, FLAGGER3_ID, ReviewFlagReason.CONFLICT_OF_INTEREST,
+                                "race-loser-outer-tx");
+                        } catch (OperationNotAllowedException e) {
+                            flagFailure.set(e);
+                        }
+                        return null;
+                    });
+                } catch (Throwable t) {
+                    outerTransactionFailure.set(t);
+                }
+                return null;
+            });
+
+            Thread.sleep(300);
+            releaseRow.countDown();
+
+            holder.get(30, TimeUnit.SECONDS);
+            outerCaller.get(30, TimeUnit.SECONDS);
+
+            if (holderFailure.get() != null) {
+                throw new AssertionError("row-holder thread failed", holderFailure.get());
+            }
+            assertThat(outerTransactionFailure.get())
+                .as("the outer transaction's own commit must succeed cleanly — an "
+                    + "UnexpectedRollbackException here means flag()'s REQUIRES_NEW isolation did not "
+                    + "actually protect the outer caller")
+                .isNull();
+            assertThat(flagFailure.get())
+                .as("flag() must still translate the real unique-constraint violation to a clean "
+                    + "business exception even when called from inside an outer transaction")
+                .isInstanceOf(OperationNotAllowedException.class);
+            assertThat(((OperationNotAllowedException) flagFailure.get()).getErrorCode())
+                .isEqualTo(ReviewErrorCode.ALREADY_FLAGGED);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * skillars-deferred-132 AC2 Fix 7. Holds a raw {@code review_flags} row — with the SAME
+     * {@code (review_id, flagged_by)} {@code flag()} would insert — open (uncommitted) in its own
+     * transaction until {@code release} counts down, then commits. Deliberately does NOT call
+     * {@code flag()} itself — see {@link #concurrentDuplicateFlagFromSameFlagger_loserGetsAlreadyFlaggedViaRealConstraintViolation}'s
+     * own Javadoc for why a real {@code flag()} call can no longer be held open by an outer
+     * {@code TransactionTemplate} wrapper now that it runs in its own {@code REQUIRES_NEW} transaction.
+     */
+    private void holdConflictingFlagRow(UUID reviewId, long flaggedBy, CountDownLatch rowHeld,
+                                         CountDownLatch release, AtomicReference<Throwable> failure) {
+        try {
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.update(
+                    "INSERT INTO reviews.review_flags (review_id, flagged_by, reason, created_at) " +
+                    "VALUES (?, ?, 'CONFLICT_OF_INTEREST', ?)",
+                    reviewId, flaggedBy, Timestamp.from(Instant.now()));
+                rowHeld.countDown();
+                try {
+                    boolean released = release.await(30, TimeUnit.SECONDS);
+                    if (!released) {
+                        throw new AssertionError("release was never signalled within 30s");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            });
+        } catch (Throwable t) {
+            failure.set(t);
         }
     }
 

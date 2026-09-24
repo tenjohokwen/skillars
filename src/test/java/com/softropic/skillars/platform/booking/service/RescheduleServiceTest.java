@@ -41,6 +41,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -74,8 +75,8 @@ class RescheduleServiceTest {
             bookingService, bookingRepository, rescheduleRepo, coachProfileRepository, userRepository,
             eventPublisher, entityManager, coachAvailabilityWindowRepository, coachAvailabilityBlockRepository, lockRetryer
         );
-        lenient().when(lockRetryer.withBoundedRetry(any()))
-            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(0)).get());
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
 
         confirmedBooking = new Booking();
         confirmedBooking.setParentId(PARENT_ID);

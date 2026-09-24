@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -37,7 +38,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * lock-acquisition site (AC1 Fix 4) — the retried lambda is a {@code findByIdForUpdate}+
  * {@code orElseThrow} read only, the same shape as this class's own {@code deleteVideo}/
  * {@code initiateUpload} restructure below; the {@code coachSubscriptionRepository} writes run after
- * {@code withBoundedRetry} returns.
+ * {@code withBoundedRetry} returns. Now 34 as of {@code skillars-deferred-132}'s new
+ * {@code ReviewFlagService.flag} lock-acquisition site (AC1 Fix 2) — converts {@code flag()}'s own
+ * lock from the shared blocking {@code CoachReviewRepository.findByIdForUpdate} to a new NOWAIT-only
+ * {@code findByIdForUpdateNoWait} method used exclusively by this call site; the retried lambda is a
+ * {@code findByIdForUpdateNoWait}+{@code orElseThrow} read only, the flag insert and auto-hold writes
+ * run after {@code withBoundedRetry} returns.
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
  * building this scan against the real call sites (28 at story-creation time) surfaced one genuine violation —
@@ -95,12 +101,13 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * 30 after {@code skillars-deferred-121} added {@code AdminCoachEnforcementService
      * .reinstateCoach}/{@code .deleteStrike} — 31 after {@code skillars-deferred-127} added
      * {@code GdprErasureService.deletePlayerDevelopmentData} — 32 after {@code skillars-deferred-130}
-     * added {@code CoachProfileService.publishProfile} — now 33 after {@code skillars-deferred-131}
-     * added {@code SubscriptionService.syncMarketplaceTier}). Asserted explicitly so an added or
+     * added {@code CoachProfileService.publishProfile} — 33 after {@code skillars-deferred-131}
+     * added {@code SubscriptionService.syncMarketplaceTier} — now 34 after {@code skillars-deferred-132}
+     * added {@code ReviewFlagService.flag}). Asserted explicitly so an added or
      * removed call site is loud (this count changes) rather than silently changing how much code this
      * test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 33;
+    private static final int EXPECTED_CALL_SITE_COUNT = 34;
 
     private record CallSite(String file, int line, String argument) {
     }
@@ -135,6 +142,102 @@ class PessimisticLockRetryerCallSiteAuditTest {
                 + "transaction, not just the lambda's duration, so this preserves the original locking "
                 + "guarantee) — see DrillUploadService.initiateUpload/deleteVideo for the pattern.")
             .isEmpty();
+    }
+
+    /**
+     * skillars-deferred-132 AC4 Fix 11. The test above only ever looks INSIDE a
+     * {@code .withBoundedRetry(} call it already found — it never asks "does every NOWAIT lock
+     * acquisition have a wrapper at all." A brand-new {@code findByIdForUpdate}-style call added to one
+     * of the NOWAIT repositories below, without a {@code .withBoundedRetry(} anywhere in the same file,
+     * is entirely invisible to {@link #everyCallSite_lambdaIsReadOnly}.
+     *
+     * <p><strong>Scope — file, not method (a deliberate, cheaper choice, named explicitly):</strong>
+     * the existing scan above has no method-boundary parsing (it works on file offsets and
+     * balanced-paren matching from {@code .withBoundedRetry(} itself), and a genuine "is THIS call
+     * inside THIS method wrapped" check would require adding that. This check instead asks the
+     * cheaper question "does this file contain both a NOWAIT lock-method call and at least one
+     * {@code .withBoundedRetry(}" — consistent with the existing test's own rigor level, at the cost of
+     * a higher false-negative rate (an unwrapped call in a file that also happens to wrap something
+     * else elsewhere in that same file would pass undetected).
+     *
+     * <p><strong>Exempt, by design — four repositories declare {@code findByIdForUpdate} WITHOUT
+     * {@code @QueryHints(lock.timeout = 0)}</strong> — genuinely blocking locks that correctly have no
+     * retry wrapper: {@code VideoQuotaRepository} ({@code QuotaService}), {@code CoachPayoutRepository}
+     * ({@code CoachPayoutTransferHandler}, {@code DisputeService}), {@code MessageRepository}
+     * ({@code AdminMessageService}, {@code MessagingService}, {@code ModerationResultApplier},
+     * {@code MessageModerationSweeper}), and {@code CoachReviewRepository}'s OWN {@code
+     * findByIdForUpdate} (its five other call sites — {@code ReviewSubmissionService.updateReview}/
+     * {@code submitCoachResponse}, {@code AdminReviewService.approveReview}/{@code blockReview},
+     * {@code ReviewModerationService}'s {@code AFTER_COMMIT} listener — deliberately stay blocking;
+     * only {@code CoachReviewRepository.findByIdForUpdateNoWait}, added by this story's own Fix 2 for
+     * {@code ReviewFlagService.flag()} alone, is NOWAIT). This is the set that would need revisiting if
+     * the NOWAIT convention is ever made universal across this codebase — not a temporary gap.
+     */
+    @Test
+    @DisplayName("every NOWAIT findByIdForUpdate-style lock call has a .withBoundedRetry( wrapper somewhere in its file")
+    void everyNoWaitLockCallSite_hasAWithBoundedRetryWrapperInItsFile() throws IOException {
+        List<String> offenders = new ArrayList<>();
+        try (Stream<Path> files = Files.walk(SRC_MAIN)) {
+            List<Path> javaFiles = files.filter(Files::isRegularFile)
+                .filter(p -> p.getFileName().toString().endsWith(".java"))
+                .sorted()
+                .toList();
+            for (Path file : javaFiles) {
+                offenders.addAll(findUnwrappedNoWaitLockCallsInFile(file));
+            }
+        }
+
+        assertThat(offenders)
+            .as("A NOWAIT findByIdForUpdate-style lock acquisition was found in a file with no "
+                + ".withBoundedRetry( anywhere in it — see this test's own javadoc for the exempt "
+                + "(genuinely-blocking) repositories that must NOT trigger this, and "
+                + "PessimisticLockRetryer's own javadoc for why an unretried NOWAIT lock is a bug, not a "
+                + "style choice.")
+            .isEmpty();
+    }
+
+    /**
+     * Repository type → its NOWAIT-only lock method name. Only repositories confirmed today (per this
+     * test's own javadoc) to declare {@code @QueryHints(jakarta.persistence.lock.timeout = "0")} on
+     * that method belong here.
+     */
+    private static final Map<String, String> NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE = Map.of(
+        "VideoRepository", "findByIdForUpdate",
+        "PlayerProfileRepository", "findByIdForUpdate",
+        "BookingRescheduleRequestRepository", "findByIdForUpdate",
+        "BookingRepository", "findByIdForUpdate",
+        "BookingBatchRepository", "findByIdForUpdate",
+        "SessionPackPurchaseRepository", "findByIdForUpdate",
+        "CoachProfileRepository", "findByIdForUpdate",
+        "DrillRepository", "findByIdForUpdate",
+        "CoachReviewRepository", "findByIdForUpdateNoWait"
+    );
+
+    private static List<String> findUnwrappedNoWaitLockCallsInFile(Path file) throws IOException {
+        String raw = Files.readString(file, StandardCharsets.UTF_8);
+        String scanned = blankCommentsAndLiterals(raw);
+        boolean fileHasWrapper = CALL_SITE.matcher(scanned).find();
+
+        List<String> offenders = new ArrayList<>();
+        for (Map.Entry<String, String> entry : NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE.entrySet()) {
+            String repoType = entry.getKey();
+            String lockMethod = entry.getValue();
+
+            // Field/param declarations of this repository type, e.g. "CoachProfileRepository
+            // coachProfileRepository" — captures the local variable name this file calls it through.
+            Matcher fieldMatcher = Pattern.compile(
+                "\\b" + Pattern.quote(repoType) + "\\s+(\\w+)\\s*[;,)]").matcher(scanned);
+            while (fieldMatcher.find()) {
+                String varName = fieldMatcher.group(1);
+                Pattern callPattern = Pattern.compile(
+                    Pattern.quote(varName) + "\\." + Pattern.quote(lockMethod) + "\\(");
+                if (callPattern.matcher(scanned).find() && !fileHasWrapper) {
+                    offenders.add(file + ": declares " + repoType + " " + varName + " and calls ."
+                        + lockMethod + "( but the file contains no .withBoundedRetry( anywhere");
+                }
+            }
+        }
+        return offenders;
     }
 
     // --- call-site discovery -------------------------------------------------------------------

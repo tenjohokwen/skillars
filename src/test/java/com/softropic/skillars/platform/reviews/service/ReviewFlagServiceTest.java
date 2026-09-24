@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.reviews.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -20,10 +22,15 @@ import org.springframework.dao.DataIntegrityViolationException;
 import java.sql.SQLException;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -40,6 +47,7 @@ class ReviewFlagServiceTest {
     @Mock private CoachRatingService coachRatingService;
     @Mock private ConfigService configService;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private PessimisticLockRetryer lockRetryer;
 
     @InjectMocks
     private ReviewFlagService service;
@@ -49,6 +57,16 @@ class ReviewFlagServiceTest {
     private static final Long AUTHOR_ID = 500L;
     private static final Long FLAGGER_ID = 600L;
     private static final Long COACH_USER_ID = 700L;
+
+    @org.junit.jupiter.api.BeforeEach
+    void setUp() {
+        // skillars-deferred-132 AC1 Fix 2: flag()'s own lock now runs through PessimisticLockRetryer
+        // (NOWAIT + retry). Executed for real, mirroring every other lockRetryer mock in this codebase
+        // (e.g. PlaybackServiceTest) — these unit tests are not exercising the retry loop itself,
+        // PessimisticLockRetryerTest owns that.
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
+            .thenAnswer(inv -> inv.getArgument(1, Supplier.class).get());
+    }
 
     /**
      * Fix 7: {@code flag(reviewId, null, ...)} must throw a clean exception, not NPE on
@@ -84,13 +102,42 @@ class ReviewFlagServiceTest {
         review.setReviewId(REVIEW_ID);
         review.setCoachId(COACH_ID);
         review.setAuthorId(AUTHOR_ID);
-        when(reviewRepository.findByIdForUpdate(REVIEW_ID)).thenReturn(Optional.of(review));
+        when(reviewRepository.findByIdForUpdateNoWait(REVIEW_ID)).thenReturn(Optional.of(review));
 
         DataIntegrityViolationException unrelated = dive("review_flags_review_id_fkey");
         when(reviewFlagRepository.saveAndFlush(any())).thenThrow(unrelated);
 
         assertThatThrownBy(() -> service.flag(REVIEW_ID, FLAGGER_ID, ReviewFlagReason.FAKE_REVIEW, "details"))
             .isSameAs(unrelated);
+    }
+
+    /**
+     * skillars-deferred-132 AC3 Fix 10. Pins the exact key string {@code flag()} passes to
+     * {@code getBoundedInt} — a {@code Mockito verify(...)} drift detector mirroring
+     * {@code GdprErasureServiceTest}'s own established pattern, per {@code ConfigBounds}'s own
+     * documented convention. The bounds (1, 1000) stay re-typed as literals deliberately.
+     */
+    @Test
+    void flag_readsAutoHoldFlagThresholdConfigWithTheDocumentedKeyAndBoundsLiterally() {
+        when(reviewRepository.findAuthorAndCoachIdByReviewId(REVIEW_ID))
+            .thenReturn(java.util.List.<Object[]>of(new Object[] {AUTHOR_ID, COACH_ID}));
+        CoachProfile coachProfile = new CoachProfile();
+        coachProfile.setUserId(COACH_USER_ID);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile));
+        when(reviewFlagRepository.existsByReviewIdAndFlaggedBy(REVIEW_ID, FLAGGER_ID)).thenReturn(false);
+
+        CoachReview review = new CoachReview();
+        review.setReviewId(REVIEW_ID);
+        review.setCoachId(COACH_ID);
+        review.setAuthorId(AUTHOR_ID);
+        when(reviewRepository.findByIdForUpdateNoWait(REVIEW_ID)).thenReturn(Optional.of(review));
+        when(configService.getBoundedInt(anyString(), any(Integer.class), any(Integer.class), any(Integer.class)))
+            .thenReturn(3);
+
+        service.flag(REVIEW_ID, FLAGGER_ID, ReviewFlagReason.FAKE_REVIEW, "details");
+
+        verify(configService).getBoundedInt(
+            eq(ConfigBounds.REVIEWS_AUTO_HOLD_FLAG_THRESHOLD.key()), eq(3), eq(1), eq(1000));
     }
 
     private static DataIntegrityViolationException dive(String constraintName) {

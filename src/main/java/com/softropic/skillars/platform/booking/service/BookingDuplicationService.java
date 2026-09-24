@@ -63,7 +63,7 @@ public class BookingDuplicationService {
         // re-check; duplicateNextWeek never did, so a concurrent saveStep4 rewrite of this coach's windows
         // was never serialized against this method's read of them (or against its overlap check, which
         // otherwise only has V87's exclusion constraint as a commit-time backstop).
-        lockRetryer.withBoundedRetry(() -> {
+        lockRetryer.withBoundedRetry("BookingDuplicationService.duplicateNextWeek", () -> {
             coachProfileRepository.findByIdForUpdate(coach.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
             entityManager.refresh(coach, LockModeType.PESSIMISTIC_WRITE);

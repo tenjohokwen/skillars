@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
@@ -34,6 +35,7 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -232,7 +234,18 @@ public class SubscriptionService {
         voidPendingCoachDowngrade(coachId);
         sub.setTier(newTier);
         paymentCoachSubscriptionRepository.save(sub);
-        syncMarketplaceTier(coachId, newTier);
+        // skillars-deferred-132 AC1 Fix 3: mirrors persistCoachSubscription's own Decision 3
+        // catch-and-defer above — unlike that path, changeCoachTier's own Stripe call
+        // (stripeClient.updateSubscriptionTier) already happened outside this transaction before
+        // this method was invoked, so letting a contended syncMarketplaceTier lock roll back this
+        // whole method would leave Stripe billing at newTier while payment.coach_subscriptions rolls
+        // back to the OLD tier — worse than a temporarily stale marketplace projection. This story's
+        // own reconcileMarketplaceTiers sweep now closes the temporary staleness this defer creates.
+        try {
+            syncMarketplaceTier(coachId, newTier);
+        } catch (PessimisticLockingFailureException e) {
+            log.warn("[COACH_TIER_UPGRADE_SYNC_DEFERRED coachId={} newTier={}]", coachId, newTier, e);
+        }
         log.info("[COACH_TIER_UPGRADED coachId={} newTier={}]", coachId, newTier);
     }
 
@@ -578,6 +591,60 @@ public class SubscriptionService {
         }
     }
 
+    // ─── Scheduled: Marketplace Tier Reconciliation ──────────────────────────────
+
+    /**
+     * skillars-deferred-132 AC1 Fix 3. Neither {@link #applyPendingChanges()} nor
+     * {@link #checkPastDueGracePeriod()} re-syncs a coach outside its own narrow trigger (a pending
+     * scheduled downgrade, or a past-due status). A coach whose {@code subscribeCoach} upgrade hits
+     * lock contention at exactly the wrong moment (Decision 3's own catch-and-defer in
+     * {@link #persistCoachSubscription}, or {@link #persistCoachTierUpgrade}'s identical defer above)
+     * is otherwise left reading a stale {@code marketplace.coach_subscriptions} tier indefinitely. This
+     * sweep closes that gap directly: every {@code ACTIVE}/{@code TRIALLING} payment-side coach
+     * subscription is compared against its marketplace projection, and any mismatch is corrected via
+     * the same already-locked {@link #syncMarketplaceTier} write path the two sibling schedulers
+     * already call — no new lock discipline needed here.
+     *
+     * <p>This is a payment → marketplace sweep only — it treats {@code payment.coach_subscriptions} as
+     * the source of truth. It does NOT close the separate, still-open Stripe → payment reconciliation
+     * residual (a coach with a Stripe subscription but no local {@code payment.coach_subscriptions}
+     * row) the ledger calls for elsewhere.
+     */
+    public void reconcileMarketplaceTiers() {
+        // Same status set countActiveByTier's own JPQL literal encodes (see
+        // PaymentCoachSubscriptionRepository.findAllByStatusIn's own comment) — duplicated
+        // deliberately rather than sharing a constant, per this codebase's literal-pin convention.
+        List<PaymentCoachSubscription> active = transactionTemplate.execute(
+            status -> paymentCoachSubscriptionRepository.findAllByStatusIn(List.of("ACTIVE", "TRIALLING")));
+        if (active == null) active = List.of();
+        log.info("[SUBSCRIPTION_TIER_RECONCILIATION] {} active/trialling coach subscription(s) loaded", active.size());
+        for (PaymentCoachSubscription sub : active) {
+            try {
+                transactionTemplate.executeWithoutResult(status -> {
+                    Optional<CoachSubscription> marketplace = coachSubscriptionRepository.findByCoachId(sub.getCoachId());
+                    CoachSubscriptionTier paymentTier;
+                    try {
+                        paymentTier = CoachSubscriptionTier.valueOf(sub.getTier());
+                    } catch (IllegalArgumentException e) {
+                        // skillars-deferred-132 AC1 Fix 3: a payment row with a tier outside
+                        // CoachSubscriptionTier's own values (COACH_TIERS above uses raw strings, not
+                        // this enum) is skipped, not thrown — a per-row data issue must not abort the
+                        // rest of the sweep.
+                        log.error("[COACH_TIER_RECONCILE_SKIPPED coachId={} unrecognizedTier={}]",
+                            sub.getCoachId(), sub.getTier(), e);
+                        return;
+                    }
+                    if (marketplace.isEmpty() || marketplace.get().getTier() != paymentTier) {
+                        syncMarketplaceTier(sub.getCoachId(), sub.getTier());
+                        log.warn("[COACH_TIER_RECONCILED coachId={} tier={}]", sub.getCoachId(), sub.getTier());
+                    }
+                });
+            } catch (Exception e) {
+                log.error("Failed to reconcile marketplace tier for coach {}", sub.getCoachId(), e);
+            }
+        }
+    }
+
     // ─── Webhook Handler ──────────────────────────────────────────────────────────
 
     @Transactional
@@ -716,7 +783,7 @@ public class SubscriptionService {
     // lock is held for the whole transaction, not just the lambda's duration, so running the writes
     // after withBoundedRetry returns preserves the same serialization guarantee.
     private void syncMarketplaceTier(UUID coachId, String tier) {
-        lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)
+        lockRetryer.withBoundedRetry("SubscriptionService.syncMarketplaceTier", () -> coachProfileRepository.findByIdForUpdate(coachId)
             .orElseThrow(() -> new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
                 "payment.subscription.coachProfileNotFound")));
 

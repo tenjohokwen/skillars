@@ -147,8 +147,9 @@ public class SessionPackPaymentService {
         CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
 
-        SessionPackPurchase purchase = lockRetryer.withBoundedRetry(() -> sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)
-            .orElseThrow(() -> new ResourceNotFoundException("Session pack purchase not found", "session_pack_purchase")));
+        SessionPackPurchase purchase = lockRetryer.withBoundedRetry("SessionPackPaymentService.extendPack",
+            () -> sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Session pack purchase not found", "session_pack_purchase")));
 
         if (!purchase.getCoachId().equals(coach.getId())) {
             throw new OperationNotAllowedException("Coach does not own this session pack", SecurityError.MISSING_RIGHTS);

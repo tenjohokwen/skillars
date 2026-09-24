@@ -296,7 +296,7 @@ public class AvailabilityService {
      * {@code RescheduleService} take before reading windows.
      */
     private CoachProfile lockProfile(UUID coachId) {
-        return lockRetryer.withBoundedRetry(() -> {
+        return lockRetryer.withBoundedRetry("AvailabilityService.lockProfile", () -> {
             CoachProfile c = coachProfileRepository.findByIdForUpdate(coachId)
                 .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
             entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);

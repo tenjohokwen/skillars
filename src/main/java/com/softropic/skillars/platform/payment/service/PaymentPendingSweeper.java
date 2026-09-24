@@ -146,7 +146,8 @@ public class PaymentPendingSweeper {
         // money moved" over a booking whose charge may already have reached Stripe, which is the
         // exact harm this class refuses to risk. Taking the same booking-row lock reserveCapture
         // takes serialises the two: whichever wins, the loser observes the winner's committed state.
-        Booking booking = lockRetryer.withBoundedRetry(() -> bookingRepository.findByIdForUpdate(bookingId).orElse(null));
+        Booking booking = lockRetryer.withBoundedRetry("PaymentPendingSweeper.sweepOne",
+            () -> bookingRepository.findByIdForUpdate(bookingId).orElse(null));
         if (booking == null) return;
         // The row may have settled between the select above and this transaction opening.
         if (!"PAYMENT_PENDING".equals(booking.getStatus())) return;

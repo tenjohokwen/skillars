@@ -215,8 +215,9 @@ public class RadarCompositeCalculationService {
         // read aggregates before either upserted, so the later commit silently clobbered the
         // earlier one's result (last-writer-wins, not a merge). Locking the player row for the
         // duration of read+upsert serializes concurrent recalculations for the same player.
-        var playerProfile = lockRetryer.withBoundedRetry(() -> playerProfileRepository.findByIdForUpdate(playerId)
-            .orElseThrow(() -> new ResourceNotFoundException("Player not found: " + playerId, "player_profile")));
+        var playerProfile = lockRetryer.withBoundedRetry("RadarCompositeCalculationService.recalculateComposite",
+            () -> playerProfileRepository.findByIdForUpdate(playerId)
+                .orElseThrow(() -> new ResourceNotFoundException("Player not found: " + playerId, "player_profile")));
         entityManager.refresh(playerProfile, LockModeType.PESSIMISTIC_WRITE);
 
         // skillars-deferred-127 code review (2026-09-21): the shared player_profiles lock alone does

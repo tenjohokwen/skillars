@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.reviews.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.reviews.contract.AuthorRole;
@@ -19,6 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -38,6 +40,20 @@ public class ReviewSubmissionService {
     private final ConfigService configService;
     private final EntityManager entityManager;
 
+    /**
+     * skillars-deferred-132 AC2 Fix 7: {@code @Transactional(REQUIRES_NEW)}, overriding this class's
+     * own default (class-level {@code @Transactional}, {@code REQUIRED} propagation) for this method
+     * only. This method's own catch below translates a {@code DataIntegrityViolationException} at
+     * {@code saveAndFlush} into a clean {@code ALREADY_SUBMITTED} 4xx — safe only because Postgres has
+     * already marked the underlying transaction rollback-only by the time that catch runs. Today that
+     * is harmless because {@code ReviewResource} never wraps this call in its own transaction, making
+     * this method's own {@code @Transactional} the outermost boundary; REQUIRES_NEW makes that true
+     * unconditionally; regardless of what any future caller does, so a caught-and-translated DIVE can
+     * never surface as {@code UnexpectedRollbackException} at an outer boundary. See this fix's own
+     * story for the accepted tradeoffs (a second pooled connection per call; the row surviving an outer
+     * rollback; a self-deadlock risk this method's own regression test is built to avoid).
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public SubmitReviewResponse submitReview(UUID coachId, Long authorId, String authorRoleStr,
                                              Integer rating, String body) {
         if (!coachProfileRepository.existsById(coachId)) {
@@ -177,7 +193,12 @@ public class ReviewSubmissionService {
 
     private void checkEligibility(UUID coachId, Long authorId) {
         // skillars-deferred-107 AC2: 0/neg → no review can ever be submitted (failFast). Clamps to 14 + WARN.
-        int windowDays = configService.getBoundedInt("reviews.submissionWindowDays", 14, 1, 365);
+        // skillars-deferred-132 AC3 Fix 10: references the existing ConfigBounds constant's key
+        // instead of the raw string literal — see ReviewFlagService's identical fix for why (future
+        // typo-drift protection, not a fail-fast gap: ConfigStartupAssertion boot-protects by string
+        // lookup either way). Bounds (1, 365) stay re-typed as literals, per convention.
+        int windowDays = configService.getBoundedInt(
+            ConfigBounds.REVIEWS_SUBMISSION_WINDOW_DAYS.key(), 14, 1, 365);
         Instant windowStart = Instant.now().minus(windowDays, ChronoUnit.DAYS);
         boolean eligible = bookingRepository.existsRecentCompletedBookingByAuthor(
             coachId, authorId, windowStart);
