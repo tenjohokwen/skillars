@@ -11,6 +11,7 @@ import com.softropic.skillars.platform.reviews.repo.CoachReview;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
 import com.softropic.skillars.platform.reviews.repo.ReviewFlagRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import org.instancio.Instancio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -26,6 +27,7 @@ import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.instancio.Select.field;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -93,15 +95,17 @@ class ReviewFlagServiceTest {
     void flag_dataIntegrityViolationOnUnrelatedConstraint_propagatesUncaught() {
         when(reviewRepository.findAuthorAndCoachIdByReviewId(REVIEW_ID))
             .thenReturn(java.util.List.<Object[]>of(new Object[] {AUTHOR_ID, COACH_ID}));
-        CoachProfile coachProfile = new CoachProfile();
-        coachProfile.setUserId(COACH_USER_ID);
+        CoachProfile coachProfile = Instancio.of(CoachProfile.class)
+            .set(field(CoachProfile::getUserId), COACH_USER_ID)
+            .create();
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile));
         when(reviewFlagRepository.existsByReviewIdAndFlaggedBy(REVIEW_ID, FLAGGER_ID)).thenReturn(false);
 
-        CoachReview review = new CoachReview();
-        review.setReviewId(REVIEW_ID);
-        review.setCoachId(COACH_ID);
-        review.setAuthorId(AUTHOR_ID);
+        CoachReview review = Instancio.of(CoachReview.class)
+            .set(field(CoachReview::getReviewId), REVIEW_ID)
+            .set(field(CoachReview::getCoachId), COACH_ID)
+            .set(field(CoachReview::getAuthorId), AUTHOR_ID)
+            .create();
         when(reviewRepository.findByIdForUpdateNoWait(REVIEW_ID)).thenReturn(Optional.of(review));
 
         DataIntegrityViolationException unrelated = dive("review_flags_review_id_fkey");
@@ -121,15 +125,17 @@ class ReviewFlagServiceTest {
     void flag_readsAutoHoldFlagThresholdConfigWithTheDocumentedKeyAndBoundsLiterally() {
         when(reviewRepository.findAuthorAndCoachIdByReviewId(REVIEW_ID))
             .thenReturn(java.util.List.<Object[]>of(new Object[] {AUTHOR_ID, COACH_ID}));
-        CoachProfile coachProfile = new CoachProfile();
-        coachProfile.setUserId(COACH_USER_ID);
+        CoachProfile coachProfile = Instancio.of(CoachProfile.class)
+            .set(field(CoachProfile::getUserId), COACH_USER_ID)
+            .create();
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile));
         when(reviewFlagRepository.existsByReviewIdAndFlaggedBy(REVIEW_ID, FLAGGER_ID)).thenReturn(false);
 
-        CoachReview review = new CoachReview();
-        review.setReviewId(REVIEW_ID);
-        review.setCoachId(COACH_ID);
-        review.setAuthorId(AUTHOR_ID);
+        CoachReview review = Instancio.of(CoachReview.class)
+            .set(field(CoachReview::getReviewId), REVIEW_ID)
+            .set(field(CoachReview::getCoachId), COACH_ID)
+            .set(field(CoachReview::getAuthorId), AUTHOR_ID)
+            .create();
         when(reviewRepository.findByIdForUpdateNoWait(REVIEW_ID)).thenReturn(Optional.of(review));
         when(configService.getBoundedInt(anyString(), any(Integer.class), any(Integer.class), any(Integer.class)))
             .thenReturn(3);

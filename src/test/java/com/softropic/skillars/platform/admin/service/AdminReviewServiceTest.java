@@ -12,6 +12,7 @@ import com.softropic.skillars.platform.reviews.repo.CoachReview;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
 import com.softropic.skillars.platform.reviews.repo.ReviewFlagRepository;
 import com.softropic.skillars.platform.reviews.service.CoachRatingService;
+import org.instancio.Instancio;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -25,6 +26,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.instancio.Select.field;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
@@ -54,11 +56,11 @@ class AdminReviewServiceTest {
     private static final Long ADMIN_ID = 900L;
 
     private static CoachReview review(ReviewModerationStatus status) {
-        CoachReview review = new CoachReview();
-        review.setReviewId(REVIEW_ID);
-        review.setCoachId(COACH_ID);
-        review.setModerationStatus(status);
-        return review;
+        return Instancio.of(CoachReview.class)
+            .set(field(CoachReview::getReviewId), REVIEW_ID)
+            .set(field(CoachReview::getCoachId), COACH_ID)
+            .set(field(CoachReview::getModerationStatus), status)
+            .create();
     }
 
     /**

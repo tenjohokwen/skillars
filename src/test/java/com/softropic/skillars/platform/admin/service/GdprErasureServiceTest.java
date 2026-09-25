@@ -37,15 +37,20 @@ import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.Timeout;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 
 import javax.sql.DataSource;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -53,6 +58,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -264,6 +270,52 @@ class GdprErasureServiceTest {
         service.markFailed(REQUEST_ID);
 
         verify(adminAlertRepository, never()).saveAndFlush(any(AdminAlert.class));
+    }
+
+    // ---- skillars-deferred-136 AC2: retryFailedErasures ---------------------------------------
+
+    /**
+     * The bug this pins: a dedup-guard-SKIPPED candidate is left completely unchanged (still
+     * {@code FAILED}, {@code failedAt} untouched, {@code retryCount} untouched), so a naive
+     * "re-query page 0 until empty" loop would see the SAME row forever and never terminate — caught
+     * live during this AC's own implementation via a genuinely hung IT run, not by static review.
+     * {@code consideredThisSweep} fixes it: the repository stub below returns the identical single-row
+     * page on every call (simulating the row never leaving the filter), and this test's own
+     * {@code @Timeout} would fail on a real hang; {@code times(1)} on the dedup check proves the
+     * candidate was considered exactly once, not re-processed every iteration.
+     */
+    @Test
+    @Timeout(10)
+    void retryFailedErasures_persistentlyDedupSkippedCandidate_terminatesAndConsidersItExactlyOnce() {
+        GdprRequest sticky = new GdprRequest(USER_ID, "ERASURE", "FAILED");
+        sticky.setId(REQUEST_ID);
+        sticky.setFailedAt(Instant.now().minus(GdprErasureService.ERASURE_RETRY_GRACE_WINDOW).minusSeconds(1));
+        Page<GdprRequest> stickyPage = new PageImpl<>(List.of(sticky), PageRequest.of(0, 50), 1);
+        when(gdprRequestRepository.findByRequestTypeAndStatusAndFailedAtBeforeAndRetryCountLessThan(
+                eq("ERASURE"), eq("FAILED"), any(Instant.class), eq(GdprErasureService.MAX_ERASURE_RETRY_ATTEMPTS), any()))
+            .thenReturn(stickyPage);
+        // Always has a concurrent PENDING/PROCESSING row for this user — persistently dedup-skipped.
+        when(gdprRequestRepository.existsByUserIdAndRequestTypeAndStatusIn(
+                eq(USER_ID), eq("ERASURE"), eq(List.of("PENDING", "PROCESSING"))))
+            .thenReturn(true);
+
+        service.retryFailedErasures();
+
+        verify(gdprRequestRepository, times(1)).existsByUserIdAndRequestTypeAndStatusIn(
+            eq(USER_ID), eq("ERASURE"), eq(List.of("PENDING", "PROCESSING")));
+        verify(gdprRequestRepository, never()).save(any(GdprRequest.class));
+    }
+
+    @Test
+    void retryFailedErasures_noCandidates_doesNothing() {
+        when(gdprRequestRepository.findByRequestTypeAndStatusAndFailedAtBeforeAndRetryCountLessThan(
+                eq("ERASURE"), eq("FAILED"), any(Instant.class), eq(GdprErasureService.MAX_ERASURE_RETRY_ATTEMPTS), any()))
+            .thenReturn(Page.empty());
+
+        service.retryFailedErasures();
+
+        verify(gdprRequestRepository, never()).existsByUserIdAndRequestTypeAndStatusIn(
+            anyLong(), anyString(), any());
     }
 
     /**

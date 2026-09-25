@@ -21,6 +21,7 @@ import com.softropic.skillars.platform.payment.repo.PlayerSubscriptionChange;
 import com.softropic.skillars.platform.payment.repo.PlayerSubscriptionChangeRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLinkRepository;
+import org.instancio.Instancio;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,6 +42,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.instancio.Select.field;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
@@ -97,7 +99,7 @@ class SubscriptionSchedulerIsolationTest {
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
         lenient().when(coachProfileRepository.findByIdForUpdate(any()))
-            .thenReturn(java.util.Optional.of(new CoachProfile()));
+            .thenReturn(java.util.Optional.of(Instancio.create(CoachProfile.class)));
     }
 
     // ─── AC1: applyPendingChanges() ────────────────────────────────────────────────
@@ -276,9 +278,10 @@ class SubscriptionSchedulerIsolationTest {
     void reconcileMarketplaceTiers_staleMarketplaceTier_correctedViaSyncMarketplaceTier() {
         UUID coachId = UUID.randomUUID();
         PaymentCoachSubscription paymentSub = coachSub(coachId, "INSTRUCTOR");
-        CoachSubscription marketplaceSub = new CoachSubscription();
-        marketplaceSub.setCoachId(coachId);
-        marketplaceSub.setTier(CoachSubscriptionTier.SCOUT);
+        CoachSubscription marketplaceSub = Instancio.of(CoachSubscription.class)
+            .set(field(CoachSubscription::getCoachId), coachId)
+            .set(field(CoachSubscription::getTier), CoachSubscriptionTier.SCOUT)
+            .create();
 
         when(paymentCoachSubscriptionRepository.findAllByStatusIn(List.of("ACTIVE", "TRIALLING")))
             .thenReturn(List.of(paymentSub));
@@ -314,9 +317,10 @@ class SubscriptionSchedulerIsolationTest {
     void reconcileMarketplaceTiers_tiersAlreadyMatch_noWriteNoReconciledLog() {
         UUID coachId = UUID.randomUUID();
         PaymentCoachSubscription paymentSub = coachSub(coachId, "INSTRUCTOR");
-        CoachSubscription marketplaceSub = new CoachSubscription();
-        marketplaceSub.setCoachId(coachId);
-        marketplaceSub.setTier(CoachSubscriptionTier.INSTRUCTOR);
+        CoachSubscription marketplaceSub = Instancio.of(CoachSubscription.class)
+            .set(field(CoachSubscription::getCoachId), coachId)
+            .set(field(CoachSubscription::getTier), CoachSubscriptionTier.INSTRUCTOR)
+            .create();
 
         when(paymentCoachSubscriptionRepository.findAllByStatusIn(List.of("ACTIVE", "TRIALLING")))
             .thenReturn(List.of(paymentSub));
@@ -347,9 +351,10 @@ class SubscriptionSchedulerIsolationTest {
         UUID validCoachId = UUID.randomUUID();
         PaymentCoachSubscription badSub = coachSub(badCoachId, "NOT_A_REAL_TIER");
         PaymentCoachSubscription validSub = coachSub(validCoachId, "ACADEMY");
-        CoachSubscription validMarketplaceSub = new CoachSubscription();
-        validMarketplaceSub.setCoachId(validCoachId);
-        validMarketplaceSub.setTier(CoachSubscriptionTier.SCOUT);
+        CoachSubscription validMarketplaceSub = Instancio.of(CoachSubscription.class)
+            .set(field(CoachSubscription::getCoachId), validCoachId)
+            .set(field(CoachSubscription::getTier), CoachSubscriptionTier.SCOUT)
+            .create();
 
         when(paymentCoachSubscriptionRepository.findAllByStatusIn(List.of("ACTIVE", "TRIALLING")))
             .thenReturn(List.of(badSub, validSub));
@@ -367,60 +372,66 @@ class SubscriptionSchedulerIsolationTest {
     // ─── Helpers ─────────────────────────────────────────────────────────────────
 
     private CoachSubscriptionChange coachChange(UUID coachId, String toTier) {
-        CoachSubscriptionChange change = new CoachSubscriptionChange();
-        change.setCoachId(coachId);
-        change.setFromTier("INSTRUCTOR");
-        change.setToTier(toTier);
-        change.setEffectiveAt(Instant.now().minus(1, ChronoUnit.HOURS));
-        change.setTriggerSource("SCHEDULED");
-        return change;
+        return Instancio.of(CoachSubscriptionChange.class)
+            .set(field(CoachSubscriptionChange::getCoachId), coachId)
+            .set(field(CoachSubscriptionChange::getFromTier), "INSTRUCTOR")
+            .set(field(CoachSubscriptionChange::getToTier), toTier)
+            .set(field(CoachSubscriptionChange::getEffectiveAt), Instant.now().minus(1, ChronoUnit.HOURS))
+            .set(field(CoachSubscriptionChange::getTriggerSource), "SCHEDULED")
+            // isApplied() defaults to false on the real entity and several tests here depend on that
+            // starting value (e.g. "malformed tier leaves applied=false so it is re-selected next
+            // run") — Instancio's random boolean generation would otherwise flip it non-deterministically.
+            .set(field(CoachSubscriptionChange::isApplied), false)
+            .create();
     }
 
     private PlayerSubscriptionChange playerChange(long playerId, String toTier) {
-        PlayerSubscriptionChange change = new PlayerSubscriptionChange();
-        change.setPlayerId(playerId);
-        change.setFromTier("SEMI_PRO");
-        change.setToTier(toTier);
-        change.setEffectiveAt(Instant.now().minus(1, ChronoUnit.HOURS));
-        change.setTriggerSource("SCHEDULED");
-        return change;
+        return Instancio.of(PlayerSubscriptionChange.class)
+            .set(field(PlayerSubscriptionChange::getPlayerId), playerId)
+            .set(field(PlayerSubscriptionChange::getFromTier), "SEMI_PRO")
+            .set(field(PlayerSubscriptionChange::getToTier), toTier)
+            .set(field(PlayerSubscriptionChange::getEffectiveAt), Instant.now().minus(1, ChronoUnit.HOURS))
+            .set(field(PlayerSubscriptionChange::getTriggerSource), "SCHEDULED")
+            // See coachChange's identical comment above.
+            .set(field(PlayerSubscriptionChange::isApplied), false)
+            .create();
     }
 
     private PaymentCoachSubscription coachSub(UUID coachId, String tier) {
-        PaymentCoachSubscription sub = new PaymentCoachSubscription();
-        sub.setCoachId(coachId);
-        sub.setTier(tier);
-        sub.setStatus("ACTIVE");
-        return sub;
+        return Instancio.of(PaymentCoachSubscription.class)
+            .set(field(PaymentCoachSubscription::getCoachId), coachId)
+            .set(field(PaymentCoachSubscription::getTier), tier)
+            .set(field(PaymentCoachSubscription::getStatus), "ACTIVE")
+            .create();
     }
 
     private PaymentPlayerSubscription playerSub(long playerId, String tier) {
-        PaymentPlayerSubscription sub = new PaymentPlayerSubscription();
-        sub.setPlayerId(playerId);
-        sub.setTier(tier);
-        sub.setStatus("ACTIVE");
-        return sub;
+        return Instancio.of(PaymentPlayerSubscription.class)
+            .set(field(PaymentPlayerSubscription::getPlayerId), playerId)
+            .set(field(PaymentPlayerSubscription::getTier), tier)
+            .set(field(PaymentPlayerSubscription::getStatus), "ACTIVE")
+            .create();
     }
 
     private PaymentCoachSubscription pastDueCoach(String tier) {
-        PaymentCoachSubscription sub = new PaymentCoachSubscription();
-        sub.setCoachId(UUID.randomUUID());
-        sub.setTier(tier);
-        sub.setStatus("PAST_DUE");
-        sub.setPastDueSince(Instant.now().minus(8, ChronoUnit.DAYS));
-        return sub;
+        return Instancio.of(PaymentCoachSubscription.class)
+            .set(field(PaymentCoachSubscription::getCoachId), UUID.randomUUID())
+            .set(field(PaymentCoachSubscription::getTier), tier)
+            .set(field(PaymentCoachSubscription::getStatus), "PAST_DUE")
+            .set(field(PaymentCoachSubscription::getPastDueSince), Instant.now().minus(8, ChronoUnit.DAYS))
+            .create();
     }
 
     private static long nextPastDuePlayerId = 9000L;
 
     private PaymentPlayerSubscription pastDuePlayer(String tier) {
-        PaymentPlayerSubscription sub = new PaymentPlayerSubscription();
         // Direct list members in these tests, not looked up by id — uniqueness only avoids
         // confusing test failure output, no functional dependency on the value.
-        sub.setPlayerId(nextPastDuePlayerId++);
-        sub.setTier(tier);
-        sub.setStatus("PAST_DUE");
-        sub.setPastDueSince(Instant.now().minus(8, ChronoUnit.DAYS));
-        return sub;
+        return Instancio.of(PaymentPlayerSubscription.class)
+            .set(field(PaymentPlayerSubscription::getPlayerId), nextPastDuePlayerId++)
+            .set(field(PaymentPlayerSubscription::getTier), tier)
+            .set(field(PaymentPlayerSubscription::getStatus), "PAST_DUE")
+            .set(field(PaymentPlayerSubscription::getPastDueSince), Instant.now().minus(8, ChronoUnit.DAYS))
+            .create();
     }
 }

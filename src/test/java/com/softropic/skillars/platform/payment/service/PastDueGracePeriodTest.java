@@ -13,6 +13,7 @@ import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscriptionRep
 import com.softropic.skillars.platform.payment.repo.PlayerSubscriptionChangeRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLinkRepository;
+import org.instancio.Instancio;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -31,6 +32,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.instancio.Select.field;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
@@ -87,7 +89,7 @@ class PastDueGracePeriodTest {
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
         lenient().when(coachProfileRepository.findByIdForUpdate(any()))
-            .thenReturn(java.util.Optional.of(new CoachProfile()));
+            .thenReturn(java.util.Optional.of(Instancio.create(CoachProfile.class)));
     }
 
     @Test
@@ -161,20 +163,20 @@ class PastDueGracePeriodTest {
     }
 
     private PaymentCoachSubscription pastDueCoach(Instant pastDueSince) {
-        PaymentCoachSubscription sub = new PaymentCoachSubscription();
-        sub.setCoachId(COACH_ID);
-        sub.setTier("INSTRUCTOR");
-        sub.setStatus("PAST_DUE");
-        sub.setPastDueSince(pastDueSince);
-        return sub;
+        return Instancio.of(PaymentCoachSubscription.class)
+            .set(field(PaymentCoachSubscription::getCoachId), COACH_ID)
+            .set(field(PaymentCoachSubscription::getTier), "INSTRUCTOR")
+            .set(field(PaymentCoachSubscription::getStatus), "PAST_DUE")
+            .set(field(PaymentCoachSubscription::getPastDueSince), pastDueSince)
+            .create();
     }
 
     private PaymentPlayerSubscription pastDuePlayer(Instant pastDueSince) {
-        PaymentPlayerSubscription sub = new PaymentPlayerSubscription();
-        sub.setPlayerId(PLAYER_ID);
-        sub.setTier("SEMI_PRO");
-        sub.setStatus("PAST_DUE");
-        sub.setPastDueSince(pastDueSince);
-        return sub;
+        return Instancio.of(PaymentPlayerSubscription.class)
+            .set(field(PaymentPlayerSubscription::getPlayerId), PLAYER_ID)
+            .set(field(PaymentPlayerSubscription::getTier), "SEMI_PRO")
+            .set(field(PaymentPlayerSubscription::getStatus), "PAST_DUE")
+            .set(field(PaymentPlayerSubscription::getPastDueSince), pastDueSince)
+            .create();
     }
 }
