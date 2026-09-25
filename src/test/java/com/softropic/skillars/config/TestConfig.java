@@ -11,9 +11,12 @@ import com.zaxxer.hikari.HikariDataSource;
 
 
 import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.data.redis.RedisConnectionDetails;
 import org.springframework.boot.autoconfigure.jdbc.JdbcConnectionDetails;
+import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
@@ -73,45 +76,78 @@ public class TestConfig {
 
     /**
      * skillars-deferred-136 AC1: test-side equivalent of {@link DataSourceConfig}'s own
-     * {@code dataSource}/{@code gdprErasureHikariConfig} pair — an explicit {@code DataSource} bean,
-     * conditioned the same way (opposite {@code datasource.container} value) so exactly one of the two
-     * is ever active. Providing this bean makes Boot's own {@code DataSourceAutoConfiguration} back off
-     * (it is {@code @ConditionalOnMissingBean(DataSource.class)}), so {@link #jdbcConnectionDetails()}
-     * is no longer what builds the primary pool — both pools here read the same container coordinates
-     * that bean already exposed, directly from {@link SharedContainers#postgres()}, so
-     * {@code GdprErasureIT} exercises a genuinely separate, independently-pooled dedicated
-     * {@code DataSource} rather than a silently-skipped no-op.
+     * {@code dataSource}/{@code hikariConfig}/{@code gdprErasureHikariConfig} trio — an explicit
+     * {@code DataSource} bean, conditioned the same way (opposite {@code datasource.container} value)
+     * so exactly one of the two is ever active. Providing this bean makes Boot's own
+     * {@code DataSourceAutoConfiguration} back off (it is {@code @ConditionalOnMissingBean(DataSource.class)}),
+     * so {@link #jdbcConnectionDetails()} is no longer what builds the primary pool — both pools here
+     * read the same container coordinates that bean already exposed, directly from
+     * {@link SharedContainers#postgres()}, so {@code GdprErasureIT} exercises a genuinely separate,
+     * independently-pooled dedicated {@code DataSource} rather than a silently-skipped no-op.
      */
     @Bean
     @ConditionalOnProperty(name = "datasource.container", havingValue = "true")
-    DataSource dataSource() {
-        final PostgreSQLContainer<?> postgres = SharedContainers.postgres();
-        return new RoutingDataSource(containerHikariDataSource(postgres, "hikari-db-pool", 25, 30_000, 25),
-            Map.of(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY,
-                containerHikariDataSource(postgres, "gdpr-erasure-pool", 3, 10_000, 0)));
+    DataSource dataSource(@Qualifier("hikariConfig") HikariConfig hikariConfig,
+            @Qualifier("gdprErasureHikariConfig") HikariConfig gdprErasureHikariConfig) {
+        return new RoutingDataSource(new HikariDataSource(hikariConfig),
+            Map.of(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY, new HikariDataSource(gdprErasureHikariConfig)));
     }
 
-    // skillars-deferred-136 AC1 review follow-up: minimumIdle must be passed explicitly, not left to
-    // Hikari's default (== maximumPoolSize) -- the dedicated GDPR pool's 3 connections were previously
-    // opened eagerly per Spring test context, and across the suite's ~40 cached context permutations that
-    // pushed the CI Postgres container past its own max_connections ("sorry, too many clients already"),
-    // failing the whole build. minimumIdle(0) mirrors DataSourceConfig.gdprErasureHikariConfig's own
-    // production setting: connections open on demand instead of being held idle by every context that
-    // never actually touches the GDPR-erasure path.
-    private static HikariDataSource containerHikariDataSource(
-            PostgreSQLContainer<?> postgres, String poolName, int maximumPoolSize, long connectionTimeoutMs,
-            int minimumIdle) {
-        HikariConfig cfg = new HikariConfig();
+    /**
+     * skillars-deferred-136 AC1 CI-build fix: the primary pool MUST bind {@code @ConfigurationProperties}
+     * to {@code spring.datasource.hikari.*} exactly like production's own {@link DataSourceConfig#hikariConfig}
+     * does — a first version of this bean hardcoded {@code maximumPoolSize=25}/{@code minimumIdle=25}
+     * (production's own sizing) instead, silently discarding this test profile's own carefully-tuned
+     * {@code application-test.yaml} overrides ({@code maximum-pool-size: 16}, {@code minimum-idle: 0},
+     * {@code idle-timeout: 10000} — see that file's own extensive comment on why: with one shared
+     * Postgres container and up to 32 cached Spring contexts, minimum-idle above 0 multiplies into the
+     * server's own connection limit). That silent discard reintroduced the exact "too many clients
+     * already" failure mode {@code application-test.yaml}'s comment already documents fixing once before
+     * — caught by a real CI run, not by review. Binding via {@code @ConfigurationProperties} here instead
+     * of hardcoding literals means any future tuning of that yaml file is picked up automatically, the
+     * same guarantee production's own {@code hikariConfig} bean already has.
+     */
+    @Bean
+    @ConfigurationProperties(prefix = "spring.datasource.hikari")
+    @ConditionalOnProperty(name = "datasource.container", havingValue = "true")
+    HikariConfig hikariConfig() {
+        final PostgreSQLContainer<?> postgres = SharedContainers.postgres();
+        final HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(postgres.getJdbcUrl());
         cfg.setUsername(postgres.getUsername());
         cfg.setPassword(postgres.getPassword());
-        cfg.setPoolName(poolName);
-        cfg.setMaximumPoolSize(maximumPoolSize);
-        cfg.setMinimumIdle(minimumIdle);
-        cfg.setConnectionTimeout(connectionTimeoutMs);
-        cfg.setAutoCommit(false);
-        cfg.setConnectionInitSql("SET TIME ZONE 'UTC'");
-        return new HikariDataSource(cfg);
+        return cfg;
+    }
+
+    /**
+     * skillars-deferred-136 AC1: test-side equivalent of {@link DataSourceConfig#gdprErasureHikariConfig}
+     * — deliberately NOT bound to {@code spring.datasource.hikari.*} (same reasoning as production: that
+     * prefix's pool size is for ordinary traffic, not this narrow purpose), but {@code auto-commit} and
+     * {@code connection-init-sql} are still read from the same keys to avoid drift, matching production.
+     * {@code idle-timeout} is also read from that same test-tuned key (10s, not production's 300s) so an
+     * idle connection from this pool is reclaimed on the same fast cadence the primary pool's own
+     * {@code application-test.yaml} tuning already relies on, instead of sitting idle for 5 minutes across
+     * many subsequent cached contexts.
+     */
+    @Bean
+    @ConditionalOnProperty(name = "datasource.container", havingValue = "true")
+    HikariConfig gdprErasureHikariConfig(
+            @Value("${spring.datasource.hikari.auto-commit}") boolean autoCommit,
+            @Value("${spring.datasource.hikari.connection-init-sql}") String connectionInitSql,
+            @Value("${spring.datasource.hikari.idle-timeout}") long idleTimeoutMs) {
+        final PostgreSQLContainer<?> postgres = SharedContainers.postgres();
+        final HikariConfig cfg = new HikariConfig();
+        cfg.setJdbcUrl(postgres.getJdbcUrl());
+        cfg.setUsername(postgres.getUsername());
+        cfg.setPassword(postgres.getPassword());
+        cfg.setPoolName("gdpr-erasure-pool");
+        cfg.setMaximumPoolSize(3);
+        cfg.setMinimumIdle(0);
+        cfg.setConnectionTimeout(10_000);
+        cfg.setIdleTimeout(idleTimeoutMs);
+        cfg.setAutoCommit(autoCommit);
+        cfg.setConnectionInitSql(connectionInitSql);
+        return cfg;
     }
 
     @Bean
