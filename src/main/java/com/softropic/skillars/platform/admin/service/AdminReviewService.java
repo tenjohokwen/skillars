@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.admin.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.admin.repo.ReviewModerationLog;
 import com.softropic.skillars.platform.admin.repo.ReviewModerationLogRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -38,6 +39,9 @@ public class AdminReviewService {
     private final CoachRatingService coachRatingService;
     private final ReviewModerationLogRepository moderationLogRepository;
     private final ApplicationEventPublisher eventPublisher;
+    // skillars-deferred-135 AC3: converts approveReview/blockReview's own findByIdForUpdate calls
+    // below to NOWAIT + bounded retry, mirroring ReviewFlagService.flag()'s own shipped pattern.
+    private final PessimisticLockRetryer lockRetryer;
 
     @Transactional(readOnly = true)
     public Page<AdminReviewQueueEntryDto> getUnderReviewQueue(int page) {
@@ -78,8 +82,16 @@ public class AdminReviewService {
         // first read of the row in this method, so the locked query returns fresh state (contrast
         // BookingService.createBookingRequest, where an earlier findById makes the entity managed
         // and the later locked read returns stale in-memory state).
-        CoachReview review = reviewRepository.findByIdForUpdate(reviewId)
-            .orElseThrow(() -> new ResourceNotFoundException("Review not found", "coach_review"));
+        //
+        // skillars-deferred-135 AC3: NOWAIT + bounded retry, not a genuinely blocking wait — mirrors
+        // ReviewFlagService.flag()'s own shipped pattern exactly. See
+        // CoachReviewRepository.findByIdForUpdateNoWait's own Javadoc and
+        // ReviewModerationServiceConcurrencyIT for the empirical confirmation this conversion is safe
+        // across this module's own genuine contention pairing (an admin resolving a review while
+        // ReviewModerationService's own AFTER_COMMIT listener is mid-flight for the same row).
+        CoachReview review = lockRetryer.withBoundedRetry("AdminReviewService.approveReview",
+            () -> reviewRepository.findByIdForUpdateNoWait(reviewId)
+                .orElseThrow(() -> new ResourceNotFoundException("Review not found", "coach_review")));
         ReviewModerationStatus previousStatus = review.getModerationStatus();
 
         if (previousStatus == ReviewModerationStatus.APPROVED) {
@@ -118,8 +130,10 @@ public class AdminReviewService {
     public void blockReview(UUID reviewId, String reason, Long adminId) {
         // Pessimistic read, not findById: same admin-double-click race as approveReview above.
         // This is the first read of the row in this method, so the locked query returns fresh state.
-        CoachReview review = reviewRepository.findByIdForUpdate(reviewId)
-            .orElseThrow(() -> new ResourceNotFoundException("Review not found", "coach_review"));
+        // skillars-deferred-135 AC3: NOWAIT + bounded retry — see approveReview's own comment above.
+        CoachReview review = lockRetryer.withBoundedRetry("AdminReviewService.blockReview",
+            () -> reviewRepository.findByIdForUpdateNoWait(reviewId)
+                .orElseThrow(() -> new ResourceNotFoundException("Review not found", "coach_review")));
         ReviewModerationStatus previousStatus = review.getModerationStatus();
 
         if (previousStatus == ReviewModerationStatus.BLOCKED) {

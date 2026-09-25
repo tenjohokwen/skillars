@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.reviews.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -40,6 +41,10 @@ class ReviewSubmissionServiceTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private ConfigService configService;
     @Mock private EntityManager entityManager;
+    // skillars-deferred-135 AC3: unused by this file's own sole test (submitReview throws before
+    // reaching updateReview/submitCoachResponse's lockRetryer.withBoundedRetry calls) — present only
+    // so @InjectMocks has a non-null value for ReviewSubmissionService's new constructor dependency.
+    @Mock private PessimisticLockRetryer lockRetryer;
 
     @InjectMocks
     private ReviewSubmissionService service;

@@ -1,0 +1,34 @@
+# Team override for bmad-code-review. Committed to the repo — applies to
+# everyone running code review (including the multi-layer "ultra"/three-layer
+# audit) on this project.
+#
+# Added 2026-09-25 after skillars-deferred-135's two review passes surfaced a
+# batch of false positives (claimed-missing test coverage that already
+# existed, stale/wrong line numbers, a recommended annotation that doesn't
+# exist, null-safety flags on values already guaranteed non-null by their
+# source, and one pass self-contradicting its own dismissed-findings list).
+# These facts are standing verification discipline, not project-specific
+# rules — they load as context on every review run.
+
+[workflow]
+
+persistent_facts = [
+  # --- Scope: read this before/while reviewing, not just the diff's changed lines ---
+  "Before reviewing, read the full Javadoc/comment block on every changed method, not just its code lines — this codebase documents design tradeoffs at length (e.g. GdprErasureService.markFailed's own 'Accepted tradeoff' paragraph), and many apparent gaps are already addressed there.",
+  "Before flagging a catch block, retry pattern, or logging/instrumentation gap as wrong or missing, find and read sibling implementations of the same pattern elsewhere in the module (e.g. compare a catch block's scope against the closest related handler, such as AdminAlertEventListener's) — verify the flagged code actually diverges from the established shape rather than assuming it should look different.",
+  "Verify external API/library contracts (Stripe SDK, Spring Data JPA, etc.) directly before flagging nullability or defensive-check gaps — e.g. Spring Data JPA collection-returning queries never return null, and Stripe SDK resource objects always carry their own id. Check a flagged value's actual origin (SDK result, JPA query, method signature) against its real contract, not assumptions.",
+  "When tracing an exception or null-degradation path, follow it all the way to its terminal handling (the actual catch, guard, or no-op skip that resolves it), not just the first check encountered — a value that looks unguarded at one line may already degrade gracefully a few lines later (e.g. findByUserId(null) returning empty, handled by the next isEmpty() check). When flagging a missing guard specifically, confirm no equivalent guard exists within the surrounding 5-10 lines, or at the closest call site, before reporting it as absent.",
+  "Before suggesting added logging, instrumentation, or a fix, check whether it's already centralized in a shared utility or base class (e.g. PessimisticLockRetryer's own retry-exhaustion logging and metrics) — don't recommend per-call-site duplication of what a shared component already provides.",
+
+  # --- Test coverage claims ---
+  "Check test coverage for every new or changed method, but never claim coverage is 'missing' without first grepping the test tree and checking the story's own File List and Test Plan sections — a claim of absence requires a recorded negative search, not an impression.",
+  "If a story's own AC/Test Plan explicitly scopes some coverage as optional or left to judgment, treat that as a resolved design decision, not a newly discovered gap, unless new evidence contradicts the reasoning given at the time.",
+  "Empirically verify ORM/JPA exception-handling and transaction/rollback claims against a real database (the project's existing Testcontainers/integration-test harness), not from framework documentation alone — actual translated-exception types and rollback behavior under a real DB can differ from the generic contract.",
+
+  # --- Citation accuracy ---
+  "Every file:line citation in a finding must be read directly from the current HEAD of that exact file and line before being included — do not extrapolate, remember, or guess line numbers; stale or fabricated locations undermine the whole finding.",
+  "Before recommending a specific fix pattern, validator, or annotation, confirm it actually applies to this context and that it exists in the project's real dependencies (e.g. ConfigStartupAssertion validates operator-editable registry config, not hardcoded enum literals; there is no @PackagePrivate annotation in Java or Spring).",
+
+  # --- Multi-layer / multi-pass triage ---
+  "When multiple reviewer passes or layers (e.g. Blind Hunter / Edge Case Hunter / Concurrency Auditor) run over the same diff, deduplicate their findings against each other before final triage — a finding one layer dismisses as a false positive or already-handled must not also appear as an actionable patch from another layer in the same report.",
+]

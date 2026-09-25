@@ -56,7 +56,11 @@ public class StripeWebhookService {
     // "orphan" branch is also the normal post-cancellation state — alerting there would generate
     // permanently-unresolvable false positives (no generic way to clear an AdminAlert once raised, see
     // AdminAlertRepository).
-    private static final Set<String> LIVE_SUBSCRIPTION_STATUSES = Set.of("active", "trialing", "past_due");
+    // skillars-deferred-135 AC2: package-visible (not private) so SubscriptionService's own scheduled
+    // reconciliation sweep can derive the identical Stripe SubscriptionListParams.Status values from
+    // this SAME set (see StripeClient.listSubscriptionsByStatus's own Javadoc for why Stripe's list
+    // API needs one status per call) instead of duplicating this 3-status literal set a second time.
+    static final Set<String> LIVE_SUBSCRIPTION_STATUSES = Set.of("active", "trialing", "past_due");
 
     // skillars-deferred-133 AC3: subscribeCoach commits a placeholder payment.coach_subscriptions row
     // (coachId set, stripeSubscriptionId null) BEFORE its own Stripe call, then links
@@ -217,37 +221,60 @@ public class StripeWebhookService {
             if (sub.getStatus() == null || !LIVE_SUBSCRIPTION_STATUSES.contains(sub.getStatus())) {
                 return;
             }
-            if (sub.getCustomer() == null) {
-                return;
-            }
-            List<StripeCustomer> stripeCustomers = stripeCustomerRepository.findByStripeCustomerId(sub.getCustomer());
-            if (stripeCustomers.isEmpty()) {
-                return;
-            }
-            // StripeCustomer.parentId is the coach/parent's own main.user.id (despite the field's
-            // name) — see StripeCustomer's own class Javadoc and SubscriptionService.subscribeCoach's
-            // identical findById(coachUserId) lookup.
-            Long userId = stripeCustomers.get(0).getParentId();
-            Optional<CoachProfile> coachProfile = coachProfileRepository.findByUserId(userId);
-            if (coachProfile.isEmpty()) {
-                // A player, or a genuinely unrecognized customer — this fix is scoped to coaches only,
-                // a final decision, not a residual left open (see this method's own Javadoc).
-                return;
-            }
-            UUID coachId = coachProfile.get().getId();
-            Optional<PaymentCoachSubscription> existing = paymentCoachSubscriptionRepository.findByCoachId(coachId);
-            if (existing.isPresent() && existing.get().getUpdatedAt() != null
-                    && Duration.between(existing.get().getUpdatedAt(), Instant.now())
-                        .compareTo(SUBSCRIBE_RACE_GRACE_WINDOW) < 0) {
-                log.debug("[STRIPE_WEBHOOK_ORPHAN_GRACE_WINDOW coachId={} stripeSubId={}] recently-"
-                    + "touched payment.coach_subscriptions row for this coach — treating as still "
-                    + "settling, not alerting", coachId, sub.getId());
-                return;
-            }
-            eventPublisher.publishEvent(new CoachSubscriptionOrphanedEvent(this, coachId, sub.getId()));
+            resolveCoachAndAlertIfOrphaned(sub.getCustomer(), sub.getId());
         } catch (Exception e) {
             log.warn("[STRIPE_WEBHOOK_ORPHAN_ALERT_FAILED stripeSubId={}]", sub.getId(), e);
         }
+    }
+
+    /**
+     * skillars-deferred-135 AC2: extracted from {@link #maybeAlertOrphanedLiveSubscription} and
+     * {@link #maybeAlertOrphanedInvoicePaymentFailed} — both webhook-path callers shared this identical
+     * resolution chain before this extraction — so {@code SubscriptionService}'s own new scheduled
+     * reconciliation sweep can reuse it too, rather than duplicating the chain a third time (per this
+     * story's own explicit instruction). Package-visible, not private: {@code SubscriptionService} calls
+     * it via a plain (non-{@code @Lazy}) constructor-injected {@code StripeWebhookService} dependency —
+     * safe against a circular-construction issue because THIS class's own reverse dependency on {@code
+     * SubscriptionService} is {@code @Lazy} field-injected (see {@link #subscriptionService}'s own
+     * field comment), so this class's constructor never needs {@code SubscriptionService} to exist
+     * first.
+     *
+     * <p>Deliberately starts from "I already have a {@code stripeCustomerId} and {@code stripeSubId}
+     * worth checking" — both existing webhook-path callers' own preconditions (live-status allowlist,
+     * customer-null guard) happen at the caller, since the sweep's own preconditions differ (it already
+     * filters to live-status subscriptions via {@code StripeClient#listSubscriptionsByStatus}'s own
+     * per-status Stripe API calls, and Stripe subscriptions always carry a customer id) — this method
+     * itself only needs a null check on {@code stripeCustomerId}, not a duplicate live-status check.
+     */
+    void resolveCoachAndAlertIfOrphaned(String stripeCustomerId, String stripeSubId) {
+        if (stripeCustomerId == null) {
+            return;
+        }
+        List<StripeCustomer> stripeCustomers = stripeCustomerRepository.findByStripeCustomerId(stripeCustomerId);
+        if (stripeCustomers.isEmpty()) {
+            return;
+        }
+        // StripeCustomer.parentId is the coach/parent's own main.user.id (despite the field's
+        // name) — see StripeCustomer's own class Javadoc and SubscriptionService.subscribeCoach's
+        // identical findById(coachUserId) lookup.
+        Long userId = stripeCustomers.get(0).getParentId();
+        Optional<CoachProfile> coachProfile = coachProfileRepository.findByUserId(userId);
+        if (coachProfile.isEmpty()) {
+            // A player, or a genuinely unrecognized customer — this fix is scoped to coaches only,
+            // a final decision, not a residual left open (see this method's own Javadoc).
+            return;
+        }
+        UUID coachId = coachProfile.get().getId();
+        Optional<PaymentCoachSubscription> existing = paymentCoachSubscriptionRepository.findByCoachId(coachId);
+        if (existing.isPresent() && existing.get().getUpdatedAt() != null
+                && Duration.between(existing.get().getUpdatedAt(), Instant.now())
+                    .compareTo(SUBSCRIBE_RACE_GRACE_WINDOW) < 0) {
+            log.debug("[STRIPE_WEBHOOK_ORPHAN_GRACE_WINDOW coachId={} stripeSubId={}] recently-"
+                + "touched payment.coach_subscriptions row for this coach — treating as still "
+                + "settling, not alerting", coachId, stripeSubId);
+            return;
+        }
+        eventPublisher.publishEvent(new CoachSubscriptionOrphanedEvent(this, coachId, stripeSubId));
     }
 
     private void handleSubscriptionDeleted(Event event) {
@@ -323,35 +350,7 @@ public class StripeWebhookService {
             if (coachFound || playerFound) {
                 return;
             }
-            String stripeCustomerId = invoice.getCustomer();
-            if (stripeCustomerId == null) {
-                return;
-            }
-            List<StripeCustomer> stripeCustomers = stripeCustomerRepository.findByStripeCustomerId(stripeCustomerId);
-            if (stripeCustomers.isEmpty()) {
-                return;
-            }
-            // StripeCustomer.parentId is the coach/parent's own main.user.id (despite the field's
-            // name) — see StripeCustomer's own class Javadoc and maybeAlertOrphanedLiveSubscription's
-            // identical lookup.
-            Long userId = stripeCustomers.get(0).getParentId();
-            Optional<CoachProfile> coachProfile = coachProfileRepository.findByUserId(userId);
-            if (coachProfile.isEmpty()) {
-                // A player, or a genuinely unrecognized customer — coach-only, matching
-                // maybeAlertOrphanedLiveSubscription's own scoping (this story's own owner decision).
-                return;
-            }
-            UUID coachId = coachProfile.get().getId();
-            Optional<PaymentCoachSubscription> existing = paymentCoachSubscriptionRepository.findByCoachId(coachId);
-            if (existing.isPresent() && existing.get().getUpdatedAt() != null
-                    && Duration.between(existing.get().getUpdatedAt(), Instant.now())
-                        .compareTo(SUBSCRIBE_RACE_GRACE_WINDOW) < 0) {
-                log.debug("[STRIPE_WEBHOOK_ORPHAN_GRACE_WINDOW coachId={} stripeSubId={}] recently-"
-                    + "touched payment.coach_subscriptions row for this coach — treating as still "
-                    + "settling, not alerting", coachId, stripeSubId);
-                return;
-            }
-            eventPublisher.publishEvent(new CoachSubscriptionOrphanedEvent(this, coachId, stripeSubId));
+            resolveCoachAndAlertIfOrphaned(invoice.getCustomer(), stripeSubId);
         } catch (Exception e) {
             log.warn("[STRIPE_WEBHOOK_ORPHAN_ALERT_FAILED stripeSubId={}]", stripeSubId, e);
         }
