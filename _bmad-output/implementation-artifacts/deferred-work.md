@@ -3292,6 +3292,8 @@ patched or resolved in-story — see that story's own `## Review Findings` secti
   documented explicitly in `BoundedKey.defaultValue()`'s own Javadoc so a future reader doesn't assume
   uniformity. Not the full call-site migration (reading `default`/`min`/`max` off `BoundedKey` itself) —
   that remains a distinct, larger, separately-scoped change, out of this fix's registry-only scope.
+  **Declined a 4th consecutive time (skillars-deferred-135, owner decision)** — nothing new has surfaced
+  to change the calculus since the prior decline.
 
 - **D3 — Only one of four `(branch × reason)` catch combinations in the new erasure error handling is
   tested.** `GdprErasureService.java:226` (PLAYER / `CHILD_CONTENDED` arm) and `:397` (PARENT /
@@ -3436,6 +3438,21 @@ implementation. Each was independently re-verified against real source. None is 
   Dedup is per-coach (`insertAlert`'s `(referenceId, type, OPEN)`), not per orphaned Stripe subscription
   id — mirrors `STRIKE_THRESHOLD`'s own precedent; a coach has one active marketplace tier subscription
   at a time in this domain, so this is an accepted choice, not a gap.
+  **[CLOSED by skillars-deferred-135 AC2 — the durable Stripe → payment reconciliation sweep this
+  bullet's own residual always named as "a separate story" is now built:
+  `SubscriptionService.reconcileStripeSubscriptions()` (new
+  `StripeSubscriptionReconciliationScheduler`, `@Scheduled(cron = "0 0 5 * * *")`,
+  `@SchedulerLock(lockAtMostFor = PT15M, lockAtLeastFor = PT2M)`) lists every live Stripe subscription
+  (one paginated `StripeClient.listSubscriptionsByStatus(...)` call per status in
+  `StripeWebhookService.LIVE_SUBSCRIPTION_STATUSES`'s own 3-status set — Stripe's list API accepts
+  exactly one status per call), skips anything `paymentCoachSubscriptionRepository
+  .findByStripeSubscriptionId` already matches, and reuses the exact same resolution chain both webhook
+  handlers already shared (extracted to a new package-visible `StripeWebhookService
+  .resolveCoachAndAlertIfOrphaned`, so this sweep is a THIRD caller of that logic, not a third
+  duplicate copy of it) — alert-only, not auto-heal, matching this bullet's own AC3 Fix 3 precedent. 5
+  new `SubscriptionServiceStripeReconciliationIT` cases (orphan alert raised, matched-locally no alert,
+  grace-window suppression, multiple orphans in one status page, no duplicate alert when the webhook
+  path already raised one for the same drift).]**
 
 - **`AdminCoachEnforcementService.reinstateCoach` mints a marketplace-`ACTIVE` profile that never
   published** (`:217-232`) — it sets `ACTIVE` unconditionally, so the profile gets no
@@ -3572,6 +3589,21 @@ implementation. Each was independently re-verified against real source. None is 
   original triggers fires first — sustained production contention (still cannot fire; no production
   deploy of this application has ever happened, per skillars-deferred-117) or the reviews module's
   locking discipline being opened again.]**
+  **[CLOSED by skillars-deferred-135 AC3 — the remaining 5 call sites converted to
+  `findByIdForUpdateNoWait` + `PessimisticLockRetryer.withBoundedRetry`, matching `flag()`'s own
+  precedent exactly: `AdminReviewService.approveReview`/`.blockReview`, `ReviewSubmissionService
+  .updateReview`/`.submitCoachResponse`, `ReviewModerationService.handleReviewSubmitted`. The
+  `ReviewModerationService` site — flagged by `findByIdForUpdateNoWait`'s own comment as possibly
+  needing genuinely blocking semantics — was empirically confirmed safe first, via a new dedicated
+  `ReviewModerationServiceConcurrencyIT` racing it against a REAL concurrent
+  `AdminReviewService.blockReview` call during the Gemini "thinking time" window: the admin's decision
+  correctly survives (the existing PENDING-only guard discards the stale verdict once NOWAIT+retry
+  finally lets it land), so all 5 sites converted, not 4. `PessimisticLockRetryerCallSiteAuditTest
+  .EXPECTED_CALL_SITE_COUNT` bumped 34→39. One pre-existing test
+  (`AdminReviewQueueIT.blockReview_whenAConcurrentBlockCommitsFirst_readsFreshStateAndRefuses`) assumed
+  genuinely-blocking semantics (a 5-second `Future.get` timeout) and needed restructuring to
+  `ConcurrencyLockWaitSupport`'s own bounded-delay-then-post-hoc-retry-proof pattern — the property it
+  proves (fresh-state read after contention, no duplicate audit row) is unchanged.]**
 
 ## Last audit: 2026-09-23 (skillars-deferred-131 dev-story completion)
 
@@ -3840,6 +3872,17 @@ Every item this story resolves is now closed above, each with its own `[CLOSED b
   scope (`GdprErasureService`, not `AdminAlertEventListener`) — a future story should add the
   `GdprErasureService` analog of `AdminAlertEventListenerConcurrencyIT` and apply the identical
   catch-outside-the-callback fix if the race reproduces there too.
+  **[CLOSED by skillars-deferred-135 AC1 — the identical catch-outside-`REQUIRES_NEW` fix, ported
+  exactly. `raiseErasureAlert`'s catch moved outside `requiresNewTemplate.executeWithoutResult(...)`;
+  `markFailed` split into two SEQUENTIAL `REQUIRES_NEW` transactions (`markFailedStatusUpdate` for the
+  status write, then `raiseErasureAlert` for the alert — previously one combined transaction, which is
+  what made the catch-outside fix impossible without this split). New
+  `GdprErasureServiceConcurrencyIT` proves it empirically against a real Testcontainers Postgres: two
+  concurrent `markFailed(requestId)` calls for the SAME `requestId` (the only reachable racer for the
+  identical `(requestId, GDPR_ERASURE_DEADLINE)` slot — two duplicate `GdprRequest` rows was considered
+  and ruled out, since `GdprRequestService.requestErasure` already blocks a second `PENDING`/
+  `PROCESSING` `ERASURE` request per user), with both mutation checks (catch-inside regression,
+  single-transaction-`markFailed` regression) reproducing the predicted failure exactly.]**
   New unit tests (`GdprErasureServiceTest`, 3 cases: normal insert, dedup, the
   `GdprRequest`-not-found path) + a new `GdprErasureIT` case routed through `GdprEventListener` (not
   `erase()` directly — the existing pool-saturation IT calls `erase()` directly and cannot reach

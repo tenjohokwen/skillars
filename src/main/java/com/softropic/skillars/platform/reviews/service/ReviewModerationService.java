@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.reviews.service;
 
 import com.softropic.skillars.infrastructure.gemini.GeminiClient;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.messaging.contract.ModerationVerdict;
 import com.softropic.skillars.platform.reviews.contract.HeldReason;
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
@@ -31,6 +32,11 @@ public class ReviewModerationService {
     // REQUIRES_NEW: suspends the stale TX1 entity manager that is still bound to the thread
     // during AFTER_COMMIT, guaranteeing a fresh EntityManager and active JPA transaction.
     private final TransactionTemplate requiresNewTx;
+    // skillars-deferred-135 AC3: converts the locked read below to NOWAIT + bounded retry, mirroring
+    // ReviewFlagService.flag()'s own shipped pattern — see CoachReviewRepository.findByIdForUpdateNoWait's
+    // own Javadoc and ReviewModerationServiceConcurrencyIT for why this specific call site's conversion
+    // needed its own dedicated empirical confirmation, unlike the other four sites.
+    private final PessimisticLockRetryer lockRetryer;
 
     @Value("${platform.reviews.moderation.gemini.prompt-template}")
     private String promptTemplate;
@@ -42,12 +48,14 @@ public class ReviewModerationService {
     public ReviewModerationService(CoachReviewRepository reviewRepository,
                                    GeminiClient geminiClient,
                                    CoachRatingService coachRatingService,
-                                   PlatformTransactionManager txManager) {
+                                   PlatformTransactionManager txManager,
+                                   PessimisticLockRetryer lockRetryer) {
         this.reviewRepository = reviewRepository;
         this.geminiClient = geminiClient;
         this.coachRatingService = coachRatingService;
         this.requiresNewTx = new TransactionTemplate(txManager);
         this.requiresNewTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.lockRetryer = lockRetryer;
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -91,15 +99,23 @@ public class ReviewModerationService {
         final ReviewModerationStatus finalStatus = status;
         try {
             requiresNewTx.execute(tx -> {
-                // findByIdForUpdate, not findById: this verdict must lose to any decision already
-                // recorded against the row. The Gemini call above runs outside any transaction and
-                // can take seconds, which is ample room for an admin to resolve the review in the
-                // meantime; an unlocked read plus an unconditional write would silently revert it.
-                // This is the FIRST read of the row in this transaction (REQUIRES_NEW suspends the
-                // AFTER_COMMIT thread's stale EntityManager), so the locked query returns fresh DB
-                // state and needs no entityManager.refresh — contrast BookingService
-                // .createBookingRequest, where an earlier findById forces one.
-                reviewRepository.findByIdForUpdate(reviewId).ifPresentOrElse(
+                // findByIdForUpdateNoWait (skillars-deferred-135 AC3), not findById: this verdict must
+                // lose to any decision already recorded against the row. The Gemini call above runs
+                // outside any transaction and can take seconds, which is ample room for an admin to
+                // resolve the review in the meantime; an unlocked read plus an unconditional write
+                // would silently revert it. This is the FIRST read of the row in this transaction
+                // (REQUIRES_NEW suspends the AFTER_COMMIT thread's stale EntityManager), so the locked
+                // query returns fresh DB state and needs no entityManager.refresh — contrast
+                // BookingService.createBookingRequest, where an earlier findById forces one.
+                //
+                // NOWAIT + bounded retry, not a genuinely blocking wait: empirically confirmed safe by
+                // ReviewModerationServiceConcurrencyIT (see that test's own Javadoc, and
+                // CoachReviewRepository.findByIdForUpdateNoWait's own Javadoc, for the full reasoning —
+                // in short, this method's own surrounding try/catch below already treats a
+                // lock-acquisition failure as a safe, handled outcome, so NOWAIT-exhaustion reaches the
+                // identical safe fallback a genuinely blocking wait's own eventual failure would).
+                lockRetryer.withBoundedRetry("ReviewModerationService.handleReviewSubmitted",
+                    () -> reviewRepository.findByIdForUpdateNoWait(reviewId)).ifPresentOrElse(
                     review -> {
                         // AC1 (skillars-deferred-88): epoch guard FIRST — it is the more specific
                         // signal. A superseded review edit re-sets the row to PENDING with a higher

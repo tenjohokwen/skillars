@@ -39,11 +39,21 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code orElseThrow} read only, the same shape as this class's own {@code deleteVideo}/
  * {@code initiateUpload} restructure below; the {@code coachSubscriptionRepository} writes run after
  * {@code withBoundedRetry} returns. Now 34 as of {@code skillars-deferred-132}'s new
- * {@code ReviewFlagService.flag} lock-acquisition site (AC1 Fix 2) — converts {@code flag()}'s own
+ * {@code ReviewFlagService.flag} lock-acquisition site (AC1 Fix 2) -- converts {@code flag()}'s own
  * lock from the shared blocking {@code CoachReviewRepository.findByIdForUpdate} to a new NOWAIT-only
  * {@code findByIdForUpdateNoWait} method used exclusively by this call site; the retried lambda is a
  * {@code findByIdForUpdateNoWait}+{@code orElseThrow} read only, the flag insert and auto-hold writes
- * run after {@code withBoundedRetry} returns.
+ * run after {@code withBoundedRetry} returns. Now 39 as of {@code skillars-deferred-135} AC3's 5 new
+ * sites -- {@code findByIdForUpdateNoWait} is no longer exclusive to {@code flag()}: {@code
+ * AdminReviewService.approveReview}/{@code .blockReview}, {@code ReviewSubmissionService
+ * .updateReview}/{@code .submitCoachResponse}, and {@code ReviewModerationService
+ * .handleReviewSubmitted} all converted from the shared blocking {@code findByIdForUpdate} to it too,
+ * each wrapped in its own {@code withBoundedRetry} call mirroring {@code flag()}'s exact shape. Every
+ * one of the 5 retried lambdas is a {@code findByIdForUpdateNoWait}+{@code orElseThrow} (or, for
+ * {@code handleReviewSubmitted}, a bare {@code findByIdForUpdateNoWait} with the {@code orElseThrow}
+ * moved to the caller's own {@code .ifPresentOrElse}) read only -- every write (status/body updates,
+ * {@code ReviewModerationLog}/event publishes, {@code coachRatingService.recompute}) runs after
+ * {@code withBoundedRetry} returns, the same read-only contract as every other site here.
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
  * building this scan against the real call sites (28 at story-creation time) surfaced one genuine violation —
@@ -102,12 +112,15 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * .reinstateCoach}/{@code .deleteStrike} — 31 after {@code skillars-deferred-127} added
      * {@code GdprErasureService.deletePlayerDevelopmentData} — 32 after {@code skillars-deferred-130}
      * added {@code CoachProfileService.publishProfile} — 33 after {@code skillars-deferred-131}
-     * added {@code SubscriptionService.syncMarketplaceTier} — now 34 after {@code skillars-deferred-132}
-     * added {@code ReviewFlagService.flag}). Asserted explicitly so an added or
+     * added {@code SubscriptionService.syncMarketplaceTier} -- 34 after {@code skillars-deferred-132}
+     * added {@code ReviewFlagService.flag} -- now 39 after {@code skillars-deferred-135} AC3
+     * added 5 sites: {@code AdminReviewService.approveReview}/{@code .blockReview}, {@code
+     * ReviewSubmissionService.updateReview}/{@code .submitCoachResponse}, and {@code
+     * ReviewModerationService.handleReviewSubmitted}). Asserted explicitly so an added or
      * removed call site is loud (this count changes) rather than silently changing how much code this
      * test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 34;
+    private static final int EXPECTED_CALL_SITE_COUNT = 39;
 
     private record CallSite(String file, int line, String argument) {
     }

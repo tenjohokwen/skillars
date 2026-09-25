@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.reviews.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -39,6 +40,9 @@ public class ReviewSubmissionService {
     private final ApplicationEventPublisher eventPublisher;
     private final ConfigService configService;
     private final EntityManager entityManager;
+    // skillars-deferred-135 AC3: converts updateReview/submitCoachResponse's own findByIdForUpdate
+    // calls below to NOWAIT + bounded retry, mirroring ReviewFlagService.flag()'s own shipped pattern.
+    private final PessimisticLockRetryer lockRetryer;
 
     /**
      * skillars-deferred-132 AC2 Fix 7: {@code @Transactional(REQUIRES_NEW)}, overriding this class's
@@ -126,13 +130,20 @@ public class ReviewSubmissionService {
         // order-of-operations rationale as MessagingService.softDeleteMessage). Every mutation below
         // runs on the locked instance. Author identity is already confirmed by the pre-check, so a
         // missing row here can only mean a concurrent delete — a not-found condition, not an authz one.
-        CoachReview locked = coachReviewRepository.findByIdForUpdate(reviewId)
-            .orElseThrow(() -> new ResourceNotFoundException("Review", reviewId.toString()));
-        // findByIdForUpdate is a JPQL query and the row is already managed from the unlocked load
+        // skillars-deferred-135 AC3: NOWAIT + bounded retry, not a genuinely blocking wait — mirrors
+        // ReviewFlagService.flag()'s own shipped pattern exactly.
+        CoachReview locked = lockRetryer.withBoundedRetry("ReviewSubmissionService.updateReview",
+            () -> coachReviewRepository.findByIdForUpdateNoWait(reviewId)
+                .orElseThrow(() -> new ResourceNotFoundException("Review", reviewId.toString())));
+        // findByIdForUpdateNoWait is a JPQL query and the row is already managed from the unlocked load
         // above, so Hibernate takes the DB lock but returns the existing instance without refreshing
         // its fields. Without this refresh, two near-simultaneous edits would both read epoch N off a
         // stale instance and both publish N+1 (a lost update). Mirrors MessagingService.softDeleteMessage
         // / BookingService.createBookingRequest for the identical Hibernate identity-map gotcha.
+        // Safe to call plain (no lock-timeout hint) after the NOWAIT read above: this re-requests the
+        // SAME row lock this SAME transaction already holds — Postgres row locks are transaction-scoped,
+        // so a same-transaction re-request never blocks, regardless of any other transaction's own
+        // contention for the row.
         entityManager.refresh(locked, LockModeType.PESSIMISTIC_WRITE);
 
         // Re-run the moderation-status guard on the FRESH locked instance (review finding). The
@@ -161,8 +172,10 @@ public class ReviewSubmissionService {
     }
 
     public void submitCoachResponse(UUID reviewId, UUID coachId, String responseBody) {
-        CoachReview review = coachReviewRepository.findByIdForUpdate(reviewId)
-            .orElseThrow(() -> new ResourceNotFoundException("Review", reviewId.toString()));
+        // skillars-deferred-135 AC3: NOWAIT + bounded retry — see updateReview's own comment above.
+        CoachReview review = lockRetryer.withBoundedRetry("ReviewSubmissionService.submitCoachResponse",
+            () -> coachReviewRepository.findByIdForUpdateNoWait(reviewId)
+                .orElseThrow(() -> new ResourceNotFoundException("Review", reviewId.toString())));
         if (!review.getCoachId().equals(coachId)) {
             throw new OperationNotAllowedException(
                 "Authenticated coach does not own this review",

@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.admin.repo.ReviewModerationLogRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
@@ -43,6 +44,7 @@ class AdminReviewServiceTest {
     @Mock private CoachRatingService coachRatingService;
     @Mock private ReviewModerationLogRepository moderationLogRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private PessimisticLockRetryer lockRetryer;
 
     @InjectMocks
     private AdminReviewService service;
@@ -59,9 +61,20 @@ class AdminReviewServiceTest {
         return review;
     }
 
+    /**
+     * skillars-deferred-135 AC3: approveReview/blockReview now route their locked read through
+     * lockRetryer.withBoundedRetry — mirrors GdprErasureServiceTest's own identical stubbing pattern.
+     */
+    @SuppressWarnings("unchecked")
+    private void stubLockRetryerPassthrough() {
+        when(lockRetryer.withBoundedRetry(any(String.class), any(java.util.function.Supplier.class)))
+            .thenAnswer(inv -> inv.getArgument(1, java.util.function.Supplier.class).get());
+    }
+
     @Test
     void approveReview_openFlagsResolved_logsWarnWithCount() {
-        when(reviewRepository.findByIdForUpdate(REVIEW_ID))
+        stubLockRetryerPassthrough();
+        when(reviewRepository.findByIdForUpdateNoWait(REVIEW_ID))
             .thenReturn(Optional.of(review(ReviewModerationStatus.UNDER_REVIEW)));
         when(reviewFlagRepository.resolveAllOpenFlags(any(), any())).thenReturn(3);
 
@@ -87,7 +100,8 @@ class AdminReviewServiceTest {
 
     @Test
     void approveReview_noOpenFlags_doesNotLogWarn() {
-        when(reviewRepository.findByIdForUpdate(REVIEW_ID))
+        stubLockRetryerPassthrough();
+        when(reviewRepository.findByIdForUpdateNoWait(REVIEW_ID))
             .thenReturn(Optional.of(review(ReviewModerationStatus.UNDER_REVIEW)));
         when(reviewFlagRepository.resolveAllOpenFlags(any(), any())).thenReturn(0);
 
@@ -108,7 +122,8 @@ class AdminReviewServiceTest {
 
     @Test
     void blockReview_openFlagsResolved_logsWarnWithCount() {
-        when(reviewRepository.findByIdForUpdate(REVIEW_ID))
+        stubLockRetryerPassthrough();
+        when(reviewRepository.findByIdForUpdateNoWait(REVIEW_ID))
             .thenReturn(Optional.of(review(ReviewModerationStatus.PENDING)));
         when(reviewFlagRepository.resolveAllOpenFlags(any(), any())).thenReturn(2);
 

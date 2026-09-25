@@ -394,27 +394,64 @@ public class GdprErasureService {
     }
 
     /**
-     * skillars-deferred-133 AC1: the alert below runs unconditionally, OUTSIDE the {@code ifPresent}
-     * lambda — {@code eraseTransactional}'s own {@code orElseThrow(() -> new RuntimeException("GdprRequest
-     * not found: " + requestId))} fires exactly when this same {@code findById(requestId)} returns
-     * empty, so an {@code ifPresent}-scoped alert would never run for the one path this fix was
-     * explicitly written to cover. Only the status-update half needs the guard (can't set status on a
-     * nonexistent row) — the alert itself only needs the {@code requestId} string.
+     * skillars-deferred-133 AC1: the alert below runs unconditionally, regardless of whether {@link
+     * #markFailedStatusUpdate} found a row to update — {@code eraseTransactional}'s own {@code
+     * orElseThrow(() -> new RuntimeException("GdprRequest not found: " + requestId))} fires exactly when
+     * the same {@code findById(requestId)} returns empty, so a guard-scoped alert would never run for the
+     * one path this fix was explicitly written to cover.
      *
-     * <p>Calls {@link #insertErasureAlertIfAbsent} directly (not {@link #raiseErasureAlert}) — this
-     * method is already {@code @Transactional(REQUIRES_NEW)}; routing through {@code raiseErasureAlert}
-     * would suspend this transaction and open a SECOND, concurrently-held connection from the same
-     * pool, right when {@code erase()}'s own {@code assertConnectionPoolNotSaturated} pre-check — the
-     * headline trigger for this whole fix — just reported the pool saturated.
+     * <p><strong>skillars-deferred-135 AC1: split into two SEQUENTIAL {@code REQUIRES_NEW} transactions,
+     * not one.</strong> Before this fix, {@code markFailed} was itself a single {@code
+     * @Transactional(REQUIRES_NEW)} method that wrote the {@code FAILED} status AND called {@link
+     * #insertErasureAlertIfAbsent} directly, with the catch for a duplicate-alert race sitting INSIDE
+     * that one transaction — which does not work: once {@code saveAndFlush}'s flush throws, Hibernate
+     * marks the whole transaction (status update included) rollback-only regardless of the catch, so the
+     * proxy's own commit-time logic throws {@code UnexpectedRollbackException} back at this method's own
+     * caller, silently discarding the {@code FAILED} status write along with the alert (the identical
+     * failure mode {@link AdminAlertEventListener#insertAlert}'s own pre-134 shape had — see its inline
+     * comment for the general mechanism this mirrors). Splitting into {@link #markFailedStatusUpdate}
+     * (its own committed-and-released {@code REQUIRES_NEW} transaction) followed by {@link
+     * #raiseErasureAlert} (which now owns the catch-outside-the-boundary fix, see its own Javadoc) means
+     * the status write is durable BEFORE the alert-raise even begins — a losing alert race can no longer
+     * roll back the status update, because by the time it could race, that transaction has already
+     * committed and released its connection.
+     *
+     * <p><strong>Accepted tradeoff: two sequential connection acquisitions, not one.</strong> The
+     * original single-transaction design was chosen specifically to avoid opening a SECOND,
+     * CONCURRENTLY-HELD connection from the same pool on this path — the headline trigger for
+     * skillars-deferred-132 AC1 Fix 4's own {@link #assertConnectionPoolNotSaturated} pre-check, since
+     * {@code markFailed} is reached (via {@link GdprEventListener}'s own catch block) precisely when
+     * {@code erase()}'s pre-check just reported the pool saturated. That specific concern — two
+     * connections held AT THE SAME TIME — still does not apply here: {@link #markFailedStatusUpdate}'s
+     * own transaction fully commits and releases its connection before {@link #raiseErasureAlert}'s own
+     * transaction ever requests one, so at most one connection is ever held at once. What DOES change is
+     * the total number of sequential acquisition attempts (one, before this fix; two, after) — each one
+     * individually still bounded by Hikari's own {@code connection-timeout}. This is a genuine, disclosed
+     * tension between the pool-conservation property and the catch-outside-boundary correctness fix — both
+     * could not be preserved exactly as originally shaped — resolved in favor of correctness, since a
+     * silently-discarded {@code FAILED} status write is a worse outcome than one extra bounded
+     * connection-acquisition attempt on an already-degraded pool.
+     */
+    public void markFailed(UUID requestId) {
+        self.markFailedStatusUpdate(requestId);
+        raiseErasureAlert(requestId, UNCLASSIFIED_FAILURE);
+    }
+
+    /**
+     * skillars-deferred-135 AC1: extracted from {@link #markFailed} so the status write commits (and
+     * releases its connection) independently of — and before — {@link #raiseErasureAlert}'s own separate
+     * {@code REQUIRES_NEW} transaction. See {@link #markFailed}'s own Javadoc for the full reasoning.
+     * {@code public}, not {@code private} — self-invoked via {@link #self} so the {@code
+     * @Transactional} proxy advice actually applies (mirrors {@link #eraseTransactional}'s identical
+     * self-invocation pattern).
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markFailed(UUID requestId) {
+    public void markFailedStatusUpdate(UUID requestId) {
         gdprRequestRepository.findById(requestId).ifPresent(r -> {
             r.setStatus("FAILED");
             gdprRequestRepository.save(r);
         });
         log.error("[GDPR_ERASURE_MARKED_FAILED] requestId={}", requestId);
-        insertErasureAlertIfAbsent(requestId, UNCLASSIFIED_FAILURE);
     }
 
     /**
@@ -579,17 +616,40 @@ public class GdprErasureService {
      * alert would be rolled back right along with it and never actually recorded. For the AC4
      * skip-and-continue cases the caller does not throw, but this stays consistent with the
      * deadline path rather than depending on {@code erase()}'s own eventual commit.
+     *
+     * <p><strong>skillars-deferred-135 AC1: the catch sits OUTSIDE {@code
+     * requiresNewTemplate.executeWithoutResult(...)}, not inside it</strong> (mirrors {@link
+     * AdminAlertEventListener#insertAlert}'s own shipped fix exactly — read that method's inline comment
+     * for the full mechanism). Before this fix, the catch lived inside {@link
+     * #insertErasureAlertIfAbsent} itself, which ran INSIDE this callback — once {@code saveAndFlush}'s
+     * flush threw, Hibernate marked this {@code REQUIRES_NEW} transaction rollback-only regardless of
+     * that catch, so {@code TransactionTemplate}'s own {@code commit()} threw {@code
+     * UnexpectedRollbackException} right back out, defeating the isolation this method exists to provide.
+     * Letting the exception propagate OUT of the callback instead makes {@code TransactionTemplate} roll
+     * back (not commit) this transaction and re-throw the ORIGINAL {@code DataIntegrityViolationException}
+     * unchanged, caught here — outside the boundary — where it can be safely suppressed.
+     *
+     * <p>Also the shared entry point for {@link #markFailed}'s own alert-raise as of
+     * skillars-deferred-135 (previously a direct call to {@link #insertErasureAlertIfAbsent}) — see that
+     * method's own Javadoc for why the direct-call shape was retired.
      */
     private void raiseErasureAlert(UUID requestId, String reason) {
-        requiresNewTemplate.executeWithoutResult(status -> insertErasureAlertIfAbsent(requestId, reason));
+        try {
+            requiresNewTemplate.executeWithoutResult(status -> insertErasureAlertIfAbsent(requestId, reason));
+        } catch (DataIntegrityViolationException e) {
+            // A genuinely concurrent caller won the (referenceId, type) OPEN slot first, between
+            // insertErasureAlertIfAbsent's own isPresent() check and its flush. See this method's own
+            // Javadoc and insertErasureAlertIfAbsent's own Javadoc for why the catch must sit here, not
+            // inside insertErasureAlertIfAbsent.
+            log.debug("[GDPR_ERASURE_ALERT_DUPLICATE_SUPPRESSED] requestId={} reason={}", requestId, reason);
+        }
     }
 
     /**
      * skillars-deferred-133 AC1: extracted from {@link #raiseErasureAlert} so {@link #markFailed} can
-     * call it directly, inside its OWN already-{@code REQUIRES_NEW} transaction — not through {@code
-     * raiseErasureAlert}'s {@code requiresNewTemplate}, which would open a second, concurrently-held
-     * connection from the same pool (see {@code markFailed}'s own Javadoc). Deliberately
-     * non-transactional itself — the caller supplies the transactional context.
+     * share the identical mechanism (skillars-deferred-135: now via {@link #raiseErasureAlert} itself,
+     * not a direct call — see that method's own Javadoc for why the direct-call shape was retired).
+     * Deliberately non-transactional itself — the caller supplies the transactional context.
      *
      * <p><strong>Dedup is reason-BLIND</strong> (any {@code OPEN} {@code GDPR_ERASURE_DEADLINE} alert
      * for this {@code requestId}, regardless of {@code reason}) — corrected back from the 2026-09-23
@@ -603,23 +663,31 @@ public class GdprErasureService {
      * that rolled back the whole {@code eraseParentChildren} call. Each {@code raiseErasureAlert} call
      * runs in its OWN {@code REQUIRES_NEW} transaction that commits before the next child's turn in
      * {@code eraseParentChildren}'s own sequential loop, so the reason-blind {@code alreadyOpen} check
-     * alone (not the {@code catch} below) is what actually closes this specific, sequential-not-
-     * concurrent pre-existing race — the first child's alert is already durably committed by the time
-     * the second child's check runs.
+     * alone (not the {@code catch} in {@link #raiseErasureAlert}) is what actually closes this specific,
+     * sequential-not-concurrent pre-existing race — the first child's alert is already durably committed
+     * by the time the second child's check runs.
      *
-     * <p><strong>The {@code catch} below guards a genuinely different, narrower case: two truly
-     * concurrent callers racing for the same {@code (requestId, reason)} slot</strong> (found and
-     * corrected during implementation, not assumed — {@code AdminAlert.alertId} is
-     * {@code GenerationType.UUID}, an in-memory/before-execution id strategy, so Hibernate does not
-     * need to flush on a plain {@code save()}; empirically confirmed via a throwaway Testcontainers
-     * test that a plain {@code save()} of a duplicate row does NOT throw synchronously — the real
-     * {@code DataIntegrityViolationException} only surfaces when the persistence context is flushed,
-     * i.e. at this method's OWN commit, which is outside any try/catch scoped to the {@code save()}
-     * call itself. {@code AdminAlertEventListener.insertAlert}'s superficially-similar catch has this
-     * same latent gap for a genuine concurrent race — pre-existing, out of this story's scope to fix.
-     * {@code saveAndFlush} below (not plain {@code save}) forces the INSERT to execute — and any
-     * constraint violation to surface — synchronously, inside this try block, where it can actually be
-     * caught.
+     * <p><strong>A genuinely different, narrower case: two truly concurrent callers racing for the same
+     * {@code (requestId, reason)} slot</strong> (found and corrected during implementation, not assumed —
+     * {@code AdminAlert.alertId} is {@code GenerationType.UUID}, an in-memory/before-execution id
+     * strategy, so Hibernate does not need to flush on a plain {@code save()}; empirically confirmed via
+     * a throwaway Testcontainers test that a plain {@code save()} of a duplicate row does NOT throw
+     * synchronously — the real {@code DataIntegrityViolationException} only surfaces when the
+     * persistence context is flushed. {@code saveAndFlush} below (not plain {@code save}) forces the
+     * INSERT to execute — and any constraint violation to surface — synchronously, inside THIS method's
+     * own execution, while it is still running inside whatever {@code REQUIRES_NEW} transaction the
+     * caller opened. {@code AdminAlertEventListener.insertAlert}'s own catch has this same latent gap for
+     * a genuine concurrent race until it was closed by skillars-deferred-134's own fix — the identical
+     * fix this AC ports here.
+     *
+     * <p><strong>skillars-deferred-135 AC1: the catch for a losing race lives in the CALLER ({@link
+     * #raiseErasureAlert}), not here.</strong> Catching {@link DataIntegrityViolationException} INSIDE
+     * this method — i.e. inside whatever {@code REQUIRES_NEW} transaction the caller has already opened
+     * — would leave that transaction marked rollback-only by Hibernate regardless of the catch (per the
+     * JPA spec, once a flush throws), so the caller's own commit would still throw {@code
+     * UnexpectedRollbackException} right back out, defeating the isolation entirely — the exact bug this
+     * AC fixes. Only {@link #raiseErasureAlert}, sitting OUTSIDE that transaction's own commit, can catch
+     * this safely; this method lets the exception propagate uncaught.
      */
     private void insertErasureAlertIfAbsent(UUID requestId, String reason) {
         boolean alreadyOpen = adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
@@ -628,19 +696,12 @@ public class GdprErasureService {
         if (alreadyOpen) {
             return;
         }
-        try {
-            AdminAlert alert = new AdminAlert();
-            alert.setType(AdminAlertType.GDPR_ERASURE_DEADLINE);
-            alert.setReferenceId(requestId.toString());
-            alert.setReferenceType(AdminAlertReferenceType.GDPR_REQUEST);
-            alert.setReason(reason);
-            adminAlertRepository.saveAndFlush(alert);
-        } catch (DataIntegrityViolationException e) {
-            // A genuinely concurrent caller won the (referenceId, type) OPEN slot first, between this
-            // method's own isPresent() check above and its flush. saveAndFlush (not save) is what
-            // makes this catch actually reachable — see this method's own Javadoc.
-            log.debug("[GDPR_ERASURE_ALERT_DUPLICATE_SUPPRESSED] requestId={} reason={}", requestId, reason);
-        }
+        AdminAlert alert = new AdminAlert();
+        alert.setType(AdminAlertType.GDPR_ERASURE_DEADLINE);
+        alert.setReferenceId(requestId.toString());
+        alert.setReferenceType(AdminAlertReferenceType.GDPR_REQUEST);
+        alert.setReason(reason);
+        adminAlertRepository.saveAndFlush(alert);
     }
 
     /**

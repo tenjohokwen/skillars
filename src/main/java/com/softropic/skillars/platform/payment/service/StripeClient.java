@@ -15,6 +15,7 @@ import com.stripe.param.PaymentIntentCreateParams;
 import com.stripe.param.RefundCreateParams;
 import com.stripe.param.SetupIntentCreateParams;
 import com.stripe.param.SubscriptionCreateParams;
+import com.stripe.param.SubscriptionListParams;
 import com.stripe.param.SubscriptionUpdateParams;
 import com.stripe.param.TransferCreateParams;
 import com.stripe.param.TransferReversalCollectionCreateParams;
@@ -164,5 +165,32 @@ public class StripeClient {
             .build();
         Subscription updated = sub.update(params, options);
         return Instant.ofEpochSecond(updated.getCurrentPeriodEnd());
+    }
+
+    /**
+     * skillars-deferred-135 AC2: lists every Stripe subscription in a single status, paginated, for
+     * {@code SubscriptionService}'s own scheduled Stripe→payment reconciliation sweep. The pinned SDK
+     * (stripe-java 28.4.0, confirmed via {@code javap} against the actual jar)'s {@code
+     * SubscriptionListParams$Status} filter accepts exactly ONE status per call — not the 3-way
+     * {@code LIVE_SUBSCRIPTION_STATUSES} set {@link StripeWebhookService} filters by — so the sweep
+     * calls this once per status in that set and merges the results; see the sweep's own Javadoc for
+     * why a single {@code ALL}-status call plus client-side filtering was not chosen instead (touches
+     * every canceled subscription too, most of which vastly outnumber the live ones over time).
+     *
+     * <p>{@code autoPagingIterable()} (the SDK's own standard pagination mechanism, confirmed present
+     * on this pinned version) fetches lazily — a {@link StripeException} raised by Stripe mid-pagination
+     * surfaces from the RETURNED {@code Iterable}'s own iteration, not from this method's own {@code
+     * throws} clause, wrapped by the SDK itself in an unchecked {@code RuntimeException} (confirmed via
+     * {@code javap -c} against {@code PagingIterator}'s own bytecode: {@code catch (Exception e) throw
+     * new RuntimeException("Unable to lazy-load stripe objects", e)}) — the caller's own iteration loop
+     * must be prepared to catch that unchecked wrapper, not just this method's checked one.
+     */
+    public Iterable<Subscription> listSubscriptionsByStatus(SubscriptionListParams.Status status)
+            throws StripeException {
+        SubscriptionListParams params = SubscriptionListParams.builder()
+            .setStatus(status)
+            .setLimit(100L)
+            .build();
+        return Subscription.list(params).autoPagingIterable();
     }
 }

@@ -20,7 +20,9 @@ import com.softropic.skillars.platform.payment.repo.PlayerSubscriptionChange;
 import com.softropic.skillars.platform.payment.repo.PlayerSubscriptionChangeRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLinkRepository;
+import com.stripe.exception.StripeException;
 import com.stripe.model.Subscription;
+import com.stripe.param.SubscriptionListParams;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -57,6 +59,13 @@ public class SubscriptionService {
     private final TransactionTemplate transactionTemplate;
     private final CoachProfileRepository coachProfileRepository;
     private final PessimisticLockRetryer lockRetryer;
+    // skillars-deferred-135 AC2: reuses StripeWebhookService's own resolveCoachAndAlertIfOrphaned
+    // resolution chain for the new Stripe->payment reconciliation sweep below. Plain (non-@Lazy)
+    // constructor injection is safe here: StripeWebhookService's OWN reverse dependency on
+    // SubscriptionService is @Lazy field-injected (see that class's own `subscriptionService` field
+    // comment), so StripeWebhookService's constructor never needs a SubscriptionService bean to exist
+    // first, and there is no circular-construction cycle.
+    private final StripeWebhookService stripeWebhookService;
 
     /** Self-reference so @Transactional on persist* methods is honoured via the Spring proxy. */
     @Autowired @Lazy
@@ -642,6 +651,92 @@ public class SubscriptionService {
             } catch (Exception e) {
                 log.error("Failed to reconcile marketplace tier for coach {}", sub.getCoachId(), e);
             }
+        }
+    }
+
+    // ─── Scheduled: Stripe → Payment Reconciliation ──────────────────────────────
+
+    // skillars-deferred-135 AC2: mirrors StripeWebhookService.LIVE_SUBSCRIPTION_STATUSES exactly,
+    // derived from that SAME field rather than a second hand-typed literal set — Stripe's list API
+    // (confirmed via javap against the pinned stripe-java 28.4.0 jar) accepts exactly one status per
+    // call, unlike the 3-status Set<String> that field is, so this sweep issues one paginated
+    // StripeClient.listSubscriptionsByStatus(...) call per entry here.
+    private static final List<SubscriptionListParams.Status> STRIPE_LIVE_STATUSES =
+        StripeWebhookService.LIVE_SUBSCRIPTION_STATUSES.stream()
+            .map(s -> SubscriptionListParams.Status.valueOf(s.toUpperCase(java.util.Locale.ROOT)))
+            .toList();
+
+    /**
+     * skillars-deferred-135 AC2. {@link #reconcileMarketplaceTiers()}'s own Javadoc (above) names the
+     * gap this closes but does not close it: that sweep treats {@code payment.coach_subscriptions} as
+     * the source of truth and only corrects the DOWNSTREAM {@code marketplace.coach_subscriptions}
+     * projection — it never asks whether the payment-side row itself is missing.
+     * {@link StripeWebhookService#maybeAlertOrphanedLiveSubscription}/{@code
+     * maybeAlertOrphanedInvoicePaymentFailed} only fire when a relevant Stripe webhook event actually
+     * arrives for the drifted subscription — a coach whose local row was deleted, or never created, for
+     * some other reason, with no subsequent webhook ever touching that specific subscription again,
+     * generates no signal at all, indefinitely. This sweep asks Stripe directly instead of waiting for
+     * Stripe to tell us: it lists every live Stripe subscription and reuses the EXACT resolution chain
+     * both webhook handlers already share ({@link StripeWebhookService#resolveCoachAndAlertIfOrphaned}),
+     * rather than duplicating that chain a third time.
+     *
+     * <p><strong>Explicitly NOT auto-heal</strong>, matching {@code skillars-deferred-133} AC3's own
+     * precedent (see {@link #syncMarketplaceTier}'s own comment on the deliberate no-{@code priceId}
+     * -to-tier reverse-map constraint) — this sweep only alerts; a human reconciles, exactly like the
+     * webhook path.
+     *
+     * <p><strong>Rate limits: deliberately no bespoke retry.</strong> This is the first Stripe-{@code
+     * list}-heavy call site in this codebase ({@link StripeTransferErrorClassifier} already classifies
+     * {@code RateLimitException} as retryable, but for {@code Transfer.create}/{@code createReversal} —
+     * a narrower, different call shape, triggered per-payout, not by a daily sweep). At most 3
+     * sequential paginated list calls, once a day, against a marketplace with no production deployment
+     * yet ({@code skillars-deferred-117}) — a {@code RateLimitException} (or any other {@link
+     * StripeException}) simply propagates out of this method (or, if raised mid-pagination, as the
+     * SDK's own unchecked wrapper — see {@link StripeClient#listSubscriptionsByStatus}'s own Javadoc),
+     * is caught and logged per-status below, and the remaining statuses/next day's cron tick still run.
+     * Accepted for now, per this story's own explicit decision point; revisit if actual coach volume
+     * ever approaches Stripe's real rate-limit thresholds.
+     *
+     * <p><strong>No new {@code ConfigBounds} key.</strong> Mirrors the three sibling schedulers' own
+     * fixed-cron precedent (none of them expose a config-driven cadence either) — the per-status page
+     * size ({@link StripeClient#listSubscriptionsByStatus}'s own fixed {@code 100}, Stripe's own
+     * per-request maximum) is a fixed SDK-level constant, not a business-tunable value, so a registry
+     * key for it would be unwarranted scope (this story's own Dev Notes decision point).
+     */
+    public void reconcileStripeSubscriptions() {
+        int checked = 0;
+        for (SubscriptionListParams.Status status : STRIPE_LIVE_STATUSES) {
+            try {
+                for (Subscription sub : stripeClient.listSubscriptionsByStatus(status)) {
+                    checked++;
+                    reconcileOneStripeSubscription(sub);
+                }
+            } catch (StripeException e) {
+                log.error("[STRIPE_RECONCILIATION_LIST_FAILED status={}]", status, e);
+            } catch (RuntimeException e) {
+                // StripeClient.listSubscriptionsByStatus's own Javadoc: a StripeException raised
+                // mid-pagination surfaces wrapped in an unchecked RuntimeException from the SDK itself,
+                // not via this method's own checked StripeException catch above.
+                log.error("[STRIPE_RECONCILIATION_PAGE_FAILED status={}]", status, e);
+            }
+        }
+        log.info("[STRIPE_RECONCILIATION] checked {} live Stripe subscription(s) across {} status(es)",
+            checked, STRIPE_LIVE_STATUSES.size());
+    }
+
+    /**
+     * A per-item failure (an unexpected exception from either repository, or from the alert-publish
+     * chain) must not abort the rest of the sweep — mirrors {@link #reconcileMarketplaceTiers()}'s own
+     * per-row try/catch shape exactly.
+     */
+    private void reconcileOneStripeSubscription(Subscription sub) {
+        try {
+            if (paymentCoachSubscriptionRepository.findByStripeSubscriptionId(sub.getId()).isPresent()) {
+                return;
+            }
+            stripeWebhookService.resolveCoachAndAlertIfOrphaned(sub.getCustomer(), sub.getId());
+        } catch (Exception e) {
+            log.error("[STRIPE_RECONCILIATION_ROW_FAILED stripeSubId={}]", sub.getId(), e);
         }
     }
 

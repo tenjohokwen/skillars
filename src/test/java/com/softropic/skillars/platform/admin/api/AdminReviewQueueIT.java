@@ -5,6 +5,8 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.utils.ConcurrencyLockWaitSupport;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,7 +41,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -67,6 +68,7 @@ class AdminReviewQueueIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private MeterRegistry meterRegistry;
 
     @LocalServerPort private int randomServerPort;
 
@@ -548,29 +550,45 @@ class AdminReviewQueueIT extends AbstractIntegrationTest {
     /**
      * The deterministic proof of AC1's pessimistic read, added by code review 2026-08-05 after both
      * barrier-based tests were found to pass unchanged against a plain {@code findById}. Verified by
-     * mutation: reverting {@code blockReview}'s {@code findByIdForUpdate} to {@code findById} makes
-     * this test fail every run.
+     * mutation: reverting {@code blockReview}'s locked read to {@code findById} makes this test fail
+     * every run.
      * <p>
      * Simply holding {@code SELECT … FOR UPDATE} is <em>not</em> enough to tell the two apart — a
      * plain {@code findById} still blocks later, at the {@code UPDATE}, so the request waits either
      * way. The discriminator is what the request <em>observes</em> once it is unblocked. Here a
      * concurrent transaction blocks the review and commits while the request is in flight:
      * <ul>
-     *   <li>with {@code findByIdForUpdate} the read itself waits, so after the commit it observes
-     *       the fresh {@code BLOCKED} status, the guard fires, and the caller gets 409 — no second
-     *       audit row;</li>
+     *   <li>with a locked read the read itself waits (skillars-deferred-135 AC3: via NOWAIT +
+     *       bounded retry rather than a genuine Postgres wait — see below), so after the commit it
+     *       observes the fresh {@code BLOCKED} status, the guard fires, and the caller gets 409 — no
+     *       second audit row;</li>
      *   <li>with a plain {@code findById} the read completes immediately against the pre-commit
      *       READ COMMITTED snapshot, observes a stale {@code UNDER_REVIEW}, sails through the guard,
      *       then blocks at the {@code UPDATE} — and on release writes a duplicate log row and
      *       answers 200. That is exactly the forged-audit-row defect AC1 exists to prevent.</li>
      * </ul>
-     * No {@code Thread.sleep}: the wait is a {@code Future.get} timeout and the release is an
-     * explicit commit.
+     *
+     * <p><strong>skillars-deferred-135 AC3 update:</strong> {@code AdminReviewService.blockReview}'s
+     * own locked read converted from a genuinely blocking {@code findByIdForUpdate} to NOWAIT +
+     * {@code PessimisticLockRetryer.withBoundedRetry} (mirroring {@code ReviewFlagService.flag()}'s
+     * own already-shipped pattern). This test's original fixture asserted the second caller's HTTP
+     * request stayed genuinely blocked for a real 5-second {@code Future.get} timeout — that no longer
+     * holds: a NOWAIT contender fails fast and retries in Java rather than sitting in a live Postgres
+     * wait state, so the second call now completes well inside 5 seconds regardless of outcome.
+     * Restructured to mirror {@code ReviewFlagServiceConcurrencyIT}'s own established pattern for
+     * this exact situation: a bounded {@link ConcurrencyLockWaitSupport#awaitFirstLockAttempt()} delay
+     * before releasing the first admin's lock, then a post-hoc {@link
+     * ConcurrencyLockWaitSupport#assertGenuineLockRetryOccurred} proof that real contention (not a
+     * lucky uncontended race) is what produced the result. The actual property this test exists to
+     * prove — a fresh-state read after contention resolves, with no duplicate audit row — is
+     * unchanged.
      */
     @Test
     void blockReview_whenAConcurrentBlockCommitsFirst_readsFreshStateAndRefuses() throws Exception {
         String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
         String blockUrl = baseUrl() + "/api/admin/reviews/" + reviewId + "/block";
+        String lockName = "AdminReviewService.blockReview";
+        double lockRetryBaseline = ConcurrencyLockWaitSupport.currentLockRetryCount(meterRegistry, lockName);
 
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try (Connection firstAdmin = dataSource.getConnection()) {
@@ -603,10 +621,9 @@ class AdminReviewQueueIT extends AbstractIntegrationTest {
                 }
             });
 
-            assertThatThrownBy(() -> second.get(5, TimeUnit.SECONDS))
-                .as("the second block must be held up by the first admin's uncommitted row lock")
-                .isInstanceOf(TimeoutException.class);
-
+            // Let the second caller make its first NOWAIT attempt (an instant failure against the
+            // first admin's still-uncommitted lock) and begin its jittered backoff, before releasing.
+            ConcurrencyLockWaitSupport.awaitFirstLockAttempt();
             firstAdmin.commit();
 
             assertThat(second.get(30, TimeUnit.SECONDS))
@@ -614,6 +631,8 @@ class AdminReviewQueueIT extends AbstractIntegrationTest {
                     + "409s; a plain findById would still hold the stale UNDER_REVIEW snapshot and "
                     + "answer 200")
                 .isEqualTo(HttpStatus.CONFLICT.value());
+
+            ConcurrencyLockWaitSupport.assertGenuineLockRetryOccurred(meterRegistry, lockName, lockRetryBaseline);
         } finally {
             executor.shutdownNow();
             executor.awaitTermination(30, TimeUnit.SECONDS);
