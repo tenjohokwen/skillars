@@ -86,19 +86,28 @@ public class TestConfig {
     @ConditionalOnProperty(name = "datasource.container", havingValue = "true")
     DataSource dataSource() {
         final PostgreSQLContainer<?> postgres = SharedContainers.postgres();
-        return new RoutingDataSource(containerHikariDataSource(postgres, "hikari-db-pool", 25, 30_000),
+        return new RoutingDataSource(containerHikariDataSource(postgres, "hikari-db-pool", 25, 30_000, 25),
             Map.of(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY,
-                containerHikariDataSource(postgres, "gdpr-erasure-pool", 3, 10_000)));
+                containerHikariDataSource(postgres, "gdpr-erasure-pool", 3, 10_000, 0)));
     }
 
+    // skillars-deferred-136 AC1 review follow-up: minimumIdle must be passed explicitly, not left to
+    // Hikari's default (== maximumPoolSize) -- the dedicated GDPR pool's 3 connections were previously
+    // opened eagerly per Spring test context, and across the suite's ~40 cached context permutations that
+    // pushed the CI Postgres container past its own max_connections ("sorry, too many clients already"),
+    // failing the whole build. minimumIdle(0) mirrors DataSourceConfig.gdprErasureHikariConfig's own
+    // production setting: connections open on demand instead of being held idle by every context that
+    // never actually touches the GDPR-erasure path.
     private static HikariDataSource containerHikariDataSource(
-            PostgreSQLContainer<?> postgres, String poolName, int maximumPoolSize, long connectionTimeoutMs) {
+            PostgreSQLContainer<?> postgres, String poolName, int maximumPoolSize, long connectionTimeoutMs,
+            int minimumIdle) {
         HikariConfig cfg = new HikariConfig();
         cfg.setJdbcUrl(postgres.getJdbcUrl());
         cfg.setUsername(postgres.getUsername());
         cfg.setPassword(postgres.getPassword());
         cfg.setPoolName(poolName);
         cfg.setMaximumPoolSize(maximumPoolSize);
+        cfg.setMinimumIdle(minimumIdle);
         cfg.setConnectionTimeout(connectionTimeoutMs);
         cfg.setAutoCommit(false);
         cfg.setConnectionInitSql("SET TIME ZONE 'UTC'");
