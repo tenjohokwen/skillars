@@ -975,7 +975,7 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D5: `stripe_customers.last_payment_intent_id` not in AC 1 spec schema — intentional addition to support cash-out refund flow (Group 2 Decision D1 resolution); AC 1 should be updated to document this column [`V62__session_payment_credit_wallet.sql`, `StripeCustomer.java`]
 
 ## Deferred from: code review of skillars-7-1-stripe-connect-onboarding-commission-engine (2026-06-24)
-- D4: `acceptBooking` fires `INITIATE_PAYMENT` → `PAYMENT_CAPTURED` state transitions without performing actual payment — pre-existing state machine flow, not introduced by Story 7.1; Story 7.2 must retrofit a failure path and prevent the state being committed before capture succeeds [`BookingService.java:203-204`]
+- D4: `acceptBooking` fires `INITIATE_PAYMENT` → `PAYMENT_CAPTURED` state transitions without performing actual payment — pre-existing state machine flow, not introduced by Story 7.1; Story 7.2 must retrofit a failure path and prevent the state being committed before capture succeeds [`BookingService.java:203-204`] **[CLOSED by skillars-deferred-136 AC6 — re-verified factually incorrect at current HEAD, closing the 2026-09-08 "stays — genuinely open" re-confirmation below too.** `BookingService.acceptBooking` (`:350-414`) only ever transitions a booking to `PAYMENT_PENDING` via `acceptAndInitiatePayment` (`:394`, comment at `:412`: "Return PAYMENT_PENDING status — PaymentLifecycleService handles CONFIRMED/DECLINED") — it has not fired `PAYMENT_CAPTURED` directly for some time. The real `PAYMENT_CAPTURED` transition now fires only from `BookingPaymentPersistenceService.transitionOrReport(bookingId, BookingEvent.PAYMENT_CAPTURED)` (confirmed present at `:234,279,307`, all three re-verified against current HEAD) after a real Stripe/session-pack capture. This architecture was built by Story 7.2 and has matured since; this ledger entry's own "still open" re-confirmations were themselves wrong by the time they were written, or the code changed after without the ledger being updated.]**
 <!-- skillars-deferred-89 code review (2026-09-01): D2 and D4 above were removed by this story's AC10 pass without any AC authorising it — restored here. They are untagged, still-open Story 7.2 follow-up work; their sibling D3 was left in place. The AC10 pass DID also delete ~34 already-closed/-tagged bullets and 7 spent section headings as ledger hygiene (the "2026-08-24 audit" delete-outright convention) — that prune is retained; only these two open items are put back. -->
 <!-- skillars-deferred-100 AC7: verified stale at 8af28a42 by AC7 staleness-check — grep providerUnavailable -> src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java:46 (onboarding only, no pack-purchase path) -->
 <!-- skillars-deferred-100 AC7 (2026-09-08): D2 deleted again, this time authorised — verified stale. `payment.providerUnavailable` no longer appears on any session-pack-purchase path (grep: only StripeOnboardingService.java:46,56,70 — Stripe Connect onboarding); Story 7.2's real charging shipped long ago. D3 and D4 remain: D4 (`acceptBooking` fires PAYMENT_CAPTURED without a real capture) is genuinely still open and out of scope for deferred-100. -->
@@ -1191,9 +1191,9 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D5: `CoachCancellationHistory.createdAt` with `@Column(updatable=false)` + `@PrePersist` — in-memory entity is null until DB round-trip if ever used with batch `saveAll`; low risk given single-save usage [`CoachCancellationHistory.java`]
 
 ## Deferred from: code review of skillars-11-1-payment-path-parity-gaps (2026-08-03)
-- D1: Partial/mismatched `confirmedCancellationIds` lets `PackSessionService.pausePack()` apply the pause even when not all currently-conflicting bookings are confirmed for cancellation (or the confirmed ids don't match any real conflict) — verified byte-for-byte identical to legacy `SessionPackService.pausePack()`; AC4 explicitly requires mirroring legacy here. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
-- D5: `pausePack` holds a pessimistic row lock across booking cancellations and event publishing within one `@Transactional` method — same single-transaction shape as the legacy method this story mirrors. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
-- D8: TOCTOU between the conflicting-bookings query and the per-booking `cancelDueToPause` calls in `pausePack` — same risk shape as the legacy method being mirrored. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`]
+- D1: Partial/mismatched `confirmedCancellationIds` lets `PackSessionService.pausePack()` apply the pause even when not all currently-conflicting bookings are confirmed for cancellation (or the confirmed ids don't match any real conflict) — verified byte-for-byte identical to legacy `SessionPackService.pausePack()`; AC4 explicitly requires mirroring legacy here. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`] **[CLOSED by skillars-deferred-136 AC3 — the legacy `SessionPackService` this justification depended on was deleted by Story 11.3; the justification no longer holds. Fixed: after computing `validatedIds`, verifies every conflicting booking id is covered by `confirmedIds` (`validatedIds.containsAll(conflictMap.keySet())`) — a partial confirmation now returns the same unconfirmed-conflict response as the zero-confirmation case, instead of silently cancelling the confirmed subset and applying the pause anyway.]**
+- D5: `pausePack` holds a pessimistic row lock across booking cancellations and event publishing within one `@Transactional` method — same single-transaction shape as the legacy method this story mirrors. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`] **[CLOSED by skillars-deferred-136 AC3 — investigated and DISCLOSED-AND-DECLINED, not narrowed.** `BookingService.transition()` (reached via the cancellation loop) was read in full and confirmed to acquire exactly one lock, on the `booking` table's own single row — no lock-ordering hazard from other tables. But narrowing would also require moving the pre-existing "one pause per pack lifetime" (`purchase.getPausedUntil() != null`) check from the top of the method (read once, under the lock) to immediately before the final write, so a second concurrent `pausePack` on the SAME purchase can't pass that check under an unlocked read and only discover the conflict after already cancelling bookings — a second, independent correctness surface disproportionate to what D5 itself (a contention/timing concern, not a functional bug) asked for. Lock scope left exactly as-is; D1 and D8 fixed unconditionally instead per this AC's own disclosed-fallback path.]**
+- D8: TOCTOU between the conflicting-bookings query and the per-booking `cancelDueToPause` calls in `pausePack` — same risk shape as the legacy method being mirrored. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`] **[CLOSED by skillars-deferred-136 AC3 — immediately before the final pause-apply write, `pausePack` now re-runs `findConflictingBookingsForPause` with the identical parameters under the still-held lock; any id not already accounted for in the original conflict set aborts the pause instead of applying it. Because the cancellation loop above may have already written to this transaction by that point, the abort is a thrown exception (`PauseWindowConflictException`), not a normal return — `pausePack` was split into a thin non-transactional wrapper plus `pausePackTransactional` (mirroring `GdprErasureService.erase`/`eraseTransactional`'s established self-invocation pattern) so the exception crosses the `@Transactional` proxy boundary and genuinely rolls back the loop's cancellations, while still returning the client the same `PauseConflictResponse(false, items, null)` shape as every other conflict path.]**
 - D9: Stringly-typed computed `status` field and hardcoded `CONFLICT_STATUSES` list rather than shared enums — consistent with existing codebase convention; legacy also uses string status constants. [`src/main/java/com/softropic/skillars/platform/payment/contract/SessionPackPurchaseResponse.java`, `PackSessionService.java`]
 
 ## Deferred from: code review of skillars-deferred-15-payment-pending-sweeper-accept-path-integrity (2026-08-05)
@@ -1684,7 +1684,8 @@ delete-outright convention — no `[CLOSED by …]` tag left behind):
 - `skillars-7-1` code review D3 (unbounded `VARCHAR` on `stripe_webhook_events.event_id`) → **AC10**
   (`V132`, `VARCHAR(255)` with a bounded `lock_timeout`). D4 (`acceptBooking` fires
   `PAYMENT_CAPTURED` without a real capture) **stays** — genuinely open, its own payment-architecture
-  concern.
+  concern. **[CLOSED by skillars-deferred-136 AC6 — see the D4 bullet's own closure note above; this
+  2026-09-08 re-confirmation was itself stale.]**
 - `skillars-3-6` code review W1 (JPQL `'COMPLETED'` literal in `findPendingQuickCompletes`) → **AC12**.
   Citation had drifted — the literal at HEAD was `'COMPLETED_PENDING_CONFIRMATION'`; the concern
   (hardcoded status string in JPQL) is closed regardless (`SessionStatus` / `BookingStatus.name()`
@@ -3016,6 +3017,19 @@ three `[DECIDED: accepted risk]` bullets below.
   children could violate that unique index uncaught, converting a designed skip-and-continue into a full
   rollback. Reverted to a reason-blind dedup plus a `DataIntegrityViolationException` catch (mirroring
   `AdminAlertEventListener.insertAlert`'s established pattern).
+  **[CLOSED by skillars-deferred-136 AC2 — the "auto-retry stays explicitly open" residual this bullet
+  named is now built.** A new `GdprErasureService.retryFailedErasures()` (thin `@Scheduled`/
+  `@SchedulerLock` wrapper `GdprErasureRetryScheduler`, daily `0 0 6 * * *`) re-drives `FAILED`
+  `GdprRequest` rows past a 1-hour grace window (`failed_at`, a new column stamped by
+  `markFailedStatusUpdate`) and under a 3-attempt retry cap (`retry_count`, also new — V154 migration),
+  reusing `erase()`'s own entry point/safety mechanisms and its identical
+  `catch (Exception e) { markFailed(...) }` failure path. Dedup guard mirrors
+  `GdprRequestService.requestErasure`'s own PENDING/PROCESSING precondition so the sweep never races a
+  concurrent manual resubmit. **Real bug found and fixed during this AC's own implementation, not by
+  static review:** the first version's re-query loop (blindly re-querying page 0 until empty) hung
+  indefinitely in a real IT run whenever the dedup guard persistently skipped a candidate — a skipped
+  row is left completely unchanged, so it re-matched the identical filter forever. Fixed by tracking
+  already-considered ids within one sweep invocation, guaranteeing termination.]**
 
 ## Deferred from: code review of skillars-deferred-127-gdpr-radar-lock-serialization-config-upsert-and-scheduler-pool-fixes (2026-09-21)
 
@@ -3133,6 +3147,25 @@ that review were either patched in-story or resolved as owner decisions — see 
   `HikariConfig` bean is entirely skipped there, per `datasource.container=true`) to even be
   exercisable by `GdprErasureIT`. Extends this bullet's own "revisit if" condition with that concrete
   finding.]**
+  **[CLOSED by skillars-deferred-136 AC1 — the dedicated `HikariDataSource` this bullet's own audit
+  named as the only real fix shape is now built, but NOT via the mechanism originally sketched.** A
+  pre-implementation spike (a `JpaTransactionManager` built against a deliberately-unreachable
+  `DataSource` but the app's real, shared `EntityManagerFactory`) empirically disproved "swap in a
+  second `PlatformTransactionManager` sharing the existing `EntityManagerFactory`" — Hibernate binds
+  one `EntityManagerFactory` to one `ConnectionProvider`/`DataSource` at bootstrap, so that design
+  would have left the dedicated pool completely unused. Built instead via a `RoutingDataSource`
+  (`infrastructure.config`, wraps `AbstractRoutingDataSource`) as the app's single `DataSource` bean,
+  routing to a small dedicated pool (max 3, `connection-timeout` 10s vs. the primary's 30s) via a
+  `ThreadLocal` key (`RoutingDataSourceContext`) set immediately before `erase()`'s/
+  `deletePlayerDevelopmentData`'s own `REQUIRES_NEW` acquisitions and cleared after — `initTemplates()`
+  itself was NOT changed. `assertConnectionPoolNotSaturated` updated to check the dedicated pool
+  specifically (it silently checked nothing once `dataSource` stopped being a plain `HikariDataSource` —
+  caught by the existing `GdprErasureIT` pool-saturation tests, not by inspection).
+  `TestConfig.java` gained the equivalent routing wiring (`datasource.container=true`), replacing its
+  prior reliance on Boot's own `JdbcConnectionDetails`-driven auto-configuration for the primary pool.
+  New `GdprErasureDataSourceRoutingIT` proves the dedicated pool is genuinely used
+  (`HikariPoolMXBean.getActiveConnections()` delta) and independently bounded (a saturation test fails
+  at ~10s, not the primary's 30s).]**
 
 ## Last audit: 2026-09-23 (skillars-deferred-130 dev-story completion)
 
@@ -3732,6 +3765,11 @@ tracked in that story's own `### Review Findings` section.
   `project-context.md`'s Testing Rules ("Use **Instancio** for generating DTO and Entity test data").
   Deferred because this matches wider practice across the existing test suite rather than being a
   regression introduced by this story — closing it properly is a suite-wide convention sweep.
+  **[CLOSED by skillars-deferred-136 AC5 — all 4 named files converted to `Instancio.of(...).set(field(...),
+  ...).create()`, one file at a time, each file's own tests re-run and confirmed passing after its own
+  conversion.** Scoped to exactly these 4 files (18 hand-built instances), not a suite-wide sweep — the
+  wider "matches existing practice elsewhere" residual this bullet also named is unaffected and remains
+  the wider convention until a future story chooses to sweep it further.]**
 
 - **AC4 Task 1's empirical investigation requirement was not met.**
   Task 1 required investigating the CI reset deadlock's actual concurrent actor *empirically* — "this
@@ -3761,6 +3799,13 @@ tracked in that story's own `### Review Findings` section.
   shipped fix itself is unrelated to whether the race reproduces and remains open: a per-executor
   `ConditionTimeoutException` is caught and logged, then the reset proceeds anyway after its own 10s
   wait — the race window is not fully closed for an in-flight async task that runs longer than 10s.
+  **[CLOSED by skillars-deferred-136 AC4 — the only lever this residual's own reasoning leaves open
+  (the catch-and-proceed shape itself is not up for revisiting, per the Javadoc above) has been raised:
+  `atMost` 10s → 30s.** No empirical async-task-duration data exists to size a tighter bound from (the
+  9-run reproduction study above confirmed dispatch, not duration) — a conservative 3x multiple was used
+  instead. Test infrastructure only; verified via the many other `AbstractIntegrationTest`-extending
+  suites this same story's own targeted runs already exercised, which implicitly exercise this listener
+  on every test method.]**
 
 ## Last audit: 2026-09-24 (skillars-deferred-132 dev-story completion)
 
@@ -3934,3 +3979,26 @@ residual (alerting-only fix, narrower than the ledger's original ask); AC3's rem
 (detection latency, player-side orphans — the latter a final decision, not open work;
 `handleInvoicePaymentFailed` itself closed by skillars-deferred-134 AC2).
 Nothing else from this story's own scope remains open.
+
+## Deferred from: code review of skillars-deferred-136-gdpr-datasource-retry-packsession-lock-fix (2026-09-25)
+
+Source: `/bmad-code-review`, three parallel layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor)
+over the story's uncommitted implementation diff. 16 raw findings (12 Blind Hunter, 4 Edge Case Hunter,
+0 Acceptance Auditor — full AC1–AC6 compliance confirmed) → 15 unique after dedup → 8 dismissed (5 as
+verified false positives/hallucinations, 3 as already-adequately-disclosed or matching established
+codebase convention) → 7 actionable, of which the one below is deferred as a pre-existing/low-severity
+test-infra tradeoff. The other 6 (1 decision-needed, 5 patch) are tracked in that story's own
+`### Review Findings` section.
+
+- **`TestConfig`'s new dedicated-pool `DataSource` bean adds connection-pool pressure on an
+  already-flaky shared test suite.** `TestConfig.java:94-106`'s `containerHikariDataSource` helper now
+  backs a second, 3-connection pool per Spring test context (on top of the existing 25-connection
+  primary pool), and this story's own Dev Agent Record independently acknowledges resource-contention
+  failures from running "~40 Spring context permutations back-to-back in one local JVM" against one
+  shared Testcontainers Postgres instance. Not fixed here because it's required by AC1's own test plan
+  (a genuinely separate, independently-pooled dedicated `DataSource` is the whole point of
+  `GdprErasureDataSourceRoutingIT`), and it matches the existing primary-pool bean's own shape (neither
+  sets `minimumIdle`, so both default to eagerly maintaining `minIdle == maxPoolSize`). Revisit if test
+  suite flakiness measurably worsens — e.g. lowering `gdpr-erasure-pool`'s `minimumIdle` to 0 to match
+  production's own `gdprErasureHikariConfig` bean (`DataSourceConfig.java:91`) would reduce eager
+  connection creation without weakening what the routing test proves.

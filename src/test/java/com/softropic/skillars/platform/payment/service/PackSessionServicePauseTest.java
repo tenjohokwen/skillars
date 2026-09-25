@@ -24,6 +24,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -64,6 +65,12 @@ class PackSessionServicePauseTest {
 
     @BeforeEach
     void setUpCollaborators() {
+        // skillars-deferred-136 AC3: pausePack now delegates to self.pausePackTransactional(...) so
+        // the D8 fix's exception-based rollback can cross a real proxy boundary in production —
+        // self-referenced directly to the same instance since there is no Spring context here to
+        // supply the @Autowired @Lazy self field, mirroring GdprErasureServiceTest's identical fix for
+        // its own self field.
+        ReflectionTestUtils.setField(packSessionService, "self", packSessionService);
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
         // skillars-deferred-103 AC5: pausePack resolves today via clock.withZone(zone). Return a
@@ -196,6 +203,79 @@ class PackSessionServicePauseTest {
         verify(bookingService).cancelDueToPause(bookingId, COACH_ID, PARENT_ID);
         assertThat(purchase.getPausedUntil()).isEqualTo(pauseStart.plus(14, ChronoUnit.DAYS));
         verify(sessionPackPurchaseRepository).save(purchase);
+    }
+
+    // ---- skillars-deferred-136 AC3 (D1 / D8) --------------------------------------------------
+
+    @Test
+    void pausePack_partialConfirmation_returnsConflictsWithoutCancellingAnyBooking() {
+        // D1: two real conflicts exist, but the client confirms only one of them (or a stale/racing
+        // request omits the field for a booking it never saw) — must be rejected the same way as
+        // zero confirmations, not silently cancel the confirmed subset and pause anyway.
+        SessionPackPurchase purchase = buildPurchase();
+        when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
+        when(configService.getBoundedLong(eq("pack.pause.maxDays"), anyLong(), anyLong(), anyLong())).thenReturn(90L);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
+
+        Booking conflictA = mock(Booking.class);
+        UUID bookingIdA = UUID.randomUUID();
+        when(conflictA.getId()).thenReturn(bookingIdA);
+        when(conflictA.getRequestedStartTime()).thenReturn(Instant.now().plus(6, ChronoUnit.DAYS));
+
+        Booking conflictB = mock(Booking.class);
+        UUID bookingIdB = UUID.randomUUID();
+        when(conflictB.getId()).thenReturn(bookingIdB);
+        when(conflictB.getRequestedStartTime()).thenReturn(Instant.now().plus(7, ChronoUnit.DAYS));
+
+        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
+            .thenReturn(List.of(conflictA, conflictB));
+
+        Instant pauseStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        // Confirms bookingIdA only — bookingIdB is a real conflict the client never confirmed.
+        PausePackRequest req = new PausePackRequest(pauseStart, 14, List.of(bookingIdA));
+
+        PauseConflictResponse response = packSessionService.pausePack(PARENT_ID, PURCHASE_ID, req);
+
+        assertThat(response.pauseApplied()).isFalse();
+        assertThat(response.conflictingBookings()).hasSize(2);
+        assertThat(purchase.getPausedUntil()).isNull();
+        verify(bookingService, never()).cancelDueToPause(any(), any(), any());
+        verify(sessionPackPurchaseRepository, never()).save(any());
+    }
+
+    @Test
+    void pausePack_newConflictAppearsBeforeFinalWrite_blocksPauseAndAppliesNothing() {
+        // D8: no conflicts at the initial read, so the cancellation loop is a no-op — but a booking
+        // appears (simulated via a re-sequenced mock stub per this AC's own test plan) by the time the
+        // re-check runs immediately before the final write. Must block the pause, not silently apply
+        // it against a window that now has an un-confirmed conflict.
+        SessionPackPurchase purchase = buildPurchase();
+        when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
+        when(configService.getBoundedLong(eq("pack.pause.maxDays"), anyLong(), anyLong(), anyLong())).thenReturn(90L);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
+
+        Booking lateBooking = mock(Booking.class);
+        UUID lateBookingId = UUID.randomUUID();
+        when(lateBooking.getId()).thenReturn(lateBookingId);
+        when(lateBooking.getRequestedStartTime()).thenReturn(Instant.now().plus(6, ChronoUnit.DAYS));
+        when(lateBooking.getRequestedEndTime()).thenReturn(Instant.now().plus(6, ChronoUnit.DAYS).plusSeconds(3600));
+        when(lateBooking.getStatus()).thenReturn("CONFIRMED");
+        when(lateBooking.getCanonicalTimezone()).thenReturn("UTC");
+
+        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
+            .thenReturn(List.of())             // initial read (:195-196): no conflicts
+            .thenReturn(List.of(lateBooking));  // D8 re-check, immediately before the write: one appeared
+
+        Instant pauseStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        PausePackRequest req = new PausePackRequest(pauseStart, 14, List.of());
+
+        PauseConflictResponse response = packSessionService.pausePack(PARENT_ID, PURCHASE_ID, req);
+
+        assertThat(response.pauseApplied()).isFalse();
+        assertThat(response.conflictingBookings()).hasSize(1);
+        assertThat(response.conflictingBookings().get(0).id()).isEqualTo(lateBookingId);
+        assertThat(purchase.getPausedUntil()).isNull();
+        verify(sessionPackPurchaseRepository, never()).save(any());
     }
 
     // ---- skillars-deferred-103 AC5 / AC6 / AC7 ------------------------------------------------

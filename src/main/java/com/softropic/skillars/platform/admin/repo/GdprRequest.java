@@ -45,6 +45,17 @@ public class GdprRequest {
     @Column(name = "expires_at")
     private Instant expiresAt;
 
+    // skillars-deferred-136 AC2: how many times the scheduled sweep has already re-driven this row —
+    // bounds the retry cap (see GdprErasureRetryScheduler).
+    @Column(name = "retry_count", nullable = false)
+    private int retryCount = 0;
+
+    // skillars-deferred-136 AC2: when this row most recently became FAILED — NOT createdAt (set once
+    // at construction, see that field's own comment), so the grace window measures time since the
+    // actual failure, not time since the row was first created. Set by markFailedStatusUpdate.
+    @Column(name = "failed_at")
+    private Instant failedAt;
+
     public GdprRequest(Long userId, String requestType, String status) {
         this.userId = userId;
         this.requestType = requestType;

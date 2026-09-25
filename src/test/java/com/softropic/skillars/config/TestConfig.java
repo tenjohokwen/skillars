@@ -1,9 +1,13 @@
 package com.softropic.skillars.config;
 
+import com.softropic.skillars.infrastructure.config.DataSourceConfig;
+import com.softropic.skillars.infrastructure.config.RoutingDataSource;
 import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.utils.TestMailManager;
 import com.softropic.skillars.utils.sql.EntityFetchAsserter;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 
 import org.apache.hc.client5.http.impl.classic.HttpClients;
@@ -19,7 +23,8 @@ import org.springframework.web.client.RestTemplate;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 
-
+import javax.sql.DataSource;
+import java.util.Map;
 
 import jakarta.persistence.EntityManagerFactory;
 
@@ -41,6 +46,10 @@ public class TestConfig {
      * stop the container every other context is still using.
      */
 
+    // skillars-deferred-136 AC1: no longer what builds the primary DataSource in the test path (the
+    // explicit dataSource() bean below does, which backs off Boot's DataSourceAutoConfiguration) — kept
+    // for any other ConnectionDetails-consuming auto-configuration and as this bean's own established
+    // access point to SharedContainers.postgres()'s coordinates.
     @Bean
     JdbcConnectionDetails jdbcConnectionDetails() {
         final PostgreSQLContainer<?> postgres = SharedContainers.postgres();
@@ -60,6 +69,40 @@ public class TestConfig {
                 return postgres.getJdbcUrl();
             }
         };
+    }
+
+    /**
+     * skillars-deferred-136 AC1: test-side equivalent of {@link DataSourceConfig}'s own
+     * {@code dataSource}/{@code gdprErasureHikariConfig} pair — an explicit {@code DataSource} bean,
+     * conditioned the same way (opposite {@code datasource.container} value) so exactly one of the two
+     * is ever active. Providing this bean makes Boot's own {@code DataSourceAutoConfiguration} back off
+     * (it is {@code @ConditionalOnMissingBean(DataSource.class)}), so {@link #jdbcConnectionDetails()}
+     * is no longer what builds the primary pool — both pools here read the same container coordinates
+     * that bean already exposed, directly from {@link SharedContainers#postgres()}, so
+     * {@code GdprErasureIT} exercises a genuinely separate, independently-pooled dedicated
+     * {@code DataSource} rather than a silently-skipped no-op.
+     */
+    @Bean
+    @ConditionalOnProperty(name = "datasource.container", havingValue = "true")
+    DataSource dataSource() {
+        final PostgreSQLContainer<?> postgres = SharedContainers.postgres();
+        return new RoutingDataSource(containerHikariDataSource(postgres, "hikari-db-pool", 25, 30_000),
+            Map.of(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY,
+                containerHikariDataSource(postgres, "gdpr-erasure-pool", 3, 10_000)));
+    }
+
+    private static HikariDataSource containerHikariDataSource(
+            PostgreSQLContainer<?> postgres, String poolName, int maximumPoolSize, long connectionTimeoutMs) {
+        HikariConfig cfg = new HikariConfig();
+        cfg.setJdbcUrl(postgres.getJdbcUrl());
+        cfg.setUsername(postgres.getUsername());
+        cfg.setPassword(postgres.getPassword());
+        cfg.setPoolName(poolName);
+        cfg.setMaximumPoolSize(maximumPoolSize);
+        cfg.setConnectionTimeout(connectionTimeoutMs);
+        cfg.setAutoCommit(false);
+        cfg.setConnectionInitSql("SET TIME ZONE 'UTC'");
+        return new HikariDataSource(cfg);
     }
 
     @Bean

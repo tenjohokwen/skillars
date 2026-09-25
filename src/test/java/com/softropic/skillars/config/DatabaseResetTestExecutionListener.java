@@ -231,19 +231,32 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
      * propagate: letting it escape {@code beforeTestMethod} would skip the reset transaction below
      * entirely for this test method, leaving stale data in place for both this test and every
      * subsequent one for the rest of the JVM — strictly worse than proceeding with a residual (small,
-     * now-bounded-to-one-pool) deadlock risk for this single invocation.
+     * now-bounded-to-one-pool) deadlock risk for this single invocation. This is the only lever this
+     * method's own reasoning above leaves open — the catch-and-proceed shape itself is not up for
+     * revisiting (see the Javadoc paragraph just above).
+     *
+     * <h2>skillars-deferred-136 AC4: {@code atMost} raised 10s -&gt; 30s</h2>
+     *
+     * <p>The skillars-deferred-132 AC1 Fix 6 reproduction study above (9 consecutive runs, quiesce
+     * disabled) confirmed both async listeners were genuinely dispatched each time but did NOT record
+     * how long either one actually took to complete — there is no empirical duration data to size a
+     * tighter bound from. Absent that, a conservative 3x multiple of the original 10s bound (30s) is
+     * used instead: generous enough that a real async task under ordinary CI load has essentially no
+     * chance of tripping this timeout and falling back to the accepted residual race, while still
+     * bounded (this runs once per test method, so an actually-wedged executor still fails fast enough
+     * not to stall a whole CI run).
      */
     private void quiesceAsyncExecutors(ApplicationContext ctx) {
         for (ThreadPoolTaskExecutor executor : ctx.getBeansOfType(ThreadPoolTaskExecutor.class).values()) {
             try {
                 Awaitility.await()
-                    .atMost(Duration.ofSeconds(10))
+                    .atMost(Duration.ofSeconds(30))
                     .pollInterval(Duration.ofMillis(25))
                     .until(() -> executor.getActiveCount() == 0
                         && executor.getThreadPoolExecutor().getQueue().isEmpty());
             } catch (ConditionTimeoutException e) {
                 System.err.printf(
-                    "[deferred-131] async executor did not quiesce within 10s (activeCount=%d, "
+                    "[deferred-131] async executor did not quiesce within 30s (activeCount=%d, "
                         + "queueSize=%d) — proceeding with the reset anyway%n",
                     executor.getActiveCount(), executor.getThreadPoolExecutor().getQueue().size());
             }

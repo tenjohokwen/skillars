@@ -1,6 +1,8 @@
 package com.softropic.skillars.platform.admin.api;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
+import com.softropic.skillars.infrastructure.config.DataSourceConfig;
+import com.softropic.skillars.infrastructure.config.RoutingDataSource;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
@@ -1057,6 +1059,14 @@ class GdprErasureIT extends AbstractIntegrationTest {
      * asserted here with a generous margin so the test itself cannot be mistaken for having
      * accidentally exercised the slow path instead.
      *
+     * <p><strong>skillars-deferred-136 AC1:</strong> {@code eraseTransactional}'s own acquisition (and
+     * this pre-check) now route to the DEDICATED GDPR-erasure pool, not the primary one — {@link
+     * #dataSource} is now a {@code RoutingDataSource} wrapping both, so this test saturates the
+     * dedicated target specifically ({@link RoutingDataSource#getNamedTarget}), matching what {@code
+     * assertConnectionPoolNotSaturated} itself now checks. Saturating the PRIMARY pool instead would
+     * prove nothing post-fix — that pool no longer has anything to do with this acquisition, which is
+     * the entire point of AC1.
+     *
      * <p>No PARENT/PLAYER fixture is needed: {@code erase()}'s new pre-check runs before
      * {@code eraseTransactional} ever reads the caller's role, so it trips identically for every
      * account shape — {@code COACH_USER_ID} (already seeded by {@code SecurityIT.SEC_DATA_SQL_PATH})
@@ -1065,19 +1075,20 @@ class GdprErasureIT extends AbstractIntegrationTest {
      */
     @Test
     void erase_connectionPoolSaturated_failsFastInsteadOfBlockingForTheFullConnectionTimeout() throws Exception {
-        assertThat(dataSource).as("this IT's DataSourceConfig/Boot auto-config must produce a real "
-                + "HikariDataSource for this test's pool-saturation mechanism to apply")
-            .isInstanceOf(HikariDataSource.class);
-        HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
+        assertThat(dataSource).as("this IT's DataSourceConfig/TestConfig must produce a real "
+                + "RoutingDataSource wrapping a dedicated GDPR-erasure HikariDataSource")
+            .isInstanceOf(RoutingDataSource.class);
+        HikariDataSource hikariDataSource = (HikariDataSource) ((RoutingDataSource) dataSource)
+            .getNamedTarget(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY);
         int maxPoolSize = hikariDataSource.getMaximumPoolSize();
 
         List<Connection> held = new ArrayList<>();
         try {
-            // Borrowed directly off the DataSource, not via transactionTemplate/jdbcTemplate — those
-            // would themselves need a connection from this same pool, which is exactly what this loop
-            // is about to exhaust.
+            // Borrowed directly off the DEDICATED pool target, not the routing DataSource (which
+            // without a routing key set would hand out PRIMARY-pool connections instead — exhausting
+            // the wrong pool for this test's purpose).
             for (int i = 0; i < maxPoolSize; i++) {
-                held.add(dataSource.getConnection());
+                held.add(hikariDataSource.getConnection());
             }
 
             Instant start = Instant.now();
@@ -1127,8 +1138,11 @@ class GdprErasureIT extends AbstractIntegrationTest {
     @Test
     void erase_connectionPoolSaturated_routedThroughListener_marksFailedAndRaisesUnclassifiedFailureAlert()
         throws Exception {
-        assertThat(dataSource).isInstanceOf(HikariDataSource.class);
-        HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
+        assertThat(dataSource).isInstanceOf(RoutingDataSource.class);
+        // skillars-deferred-136 AC1: saturate the DEDICATED pool, not the primary one — see the sibling
+        // test's own identical rationale above.
+        HikariDataSource hikariDataSource = (HikariDataSource) ((RoutingDataSource) dataSource)
+            .getNamedTarget(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY);
         int maxPoolSize = hikariDataSource.getMaximumPoolSize();
 
         UUID requestId = UUID.randomUUID();
@@ -1144,7 +1158,7 @@ class GdprErasureIT extends AbstractIntegrationTest {
         ExecutorService releaser = Executors.newSingleThreadExecutor();
         try {
             for (int i = 0; i < maxPoolSize; i++) {
-                held.add(dataSource.getConnection());
+                held.add(hikariDataSource.getConnection());
             }
 
             releaser.submit(() -> {

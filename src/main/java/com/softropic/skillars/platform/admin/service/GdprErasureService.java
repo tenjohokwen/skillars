@@ -1,5 +1,8 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.infrastructure.config.DataSourceConfig;
+import com.softropic.skillars.infrastructure.config.RoutingDataSource;
+import com.softropic.skillars.infrastructure.config.RoutingDataSourceContext;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.admin.contract.AdminAlertReferenceType;
@@ -46,6 +49,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.PessimisticLockException;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.CannotAcquireLockException;
@@ -64,7 +70,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
@@ -155,6 +163,18 @@ public class GdprErasureService {
     // reasons above (a GdprRequest/User "not found" RuntimeException, or anything unforeseen).
     private static final String UNCLASSIFIED_FAILURE = "UNCLASSIFIED_FAILURE";
 
+    // skillars-deferred-136 AC2: retryFailedErasures's own sweep sizing — mirrors
+    // EmailRetryScheduler.MAX_RETRY_ATTEMPTS's shape, not its value. GDPR erasure failures are
+    // expected to be rare and each retry is a heavier full-erasure attempt (unlike a single email
+    // send), so a lower cap than email's 6 is deliberate: three failed full attempts is a stronger
+    // signal that this needs a human, not transient contention. One hour's grace mirrors the
+    // scheduler's own once-daily cadence (see GdprErasureRetryScheduler) — long enough that a
+    // transient lock-contention failure has almost certainly cleared, short enough that a real
+    // failure still gets its first automatic re-drive well within the same day.
+    static final int MAX_ERASURE_RETRY_ATTEMPTS = 3;
+    static final Duration ERASURE_RETRY_GRACE_WINDOW = Duration.ofHours(1);
+    private static final int RETRY_SWEEP_PAGE_SIZE = 50;
+
     @PostConstruct
     void initTemplates() {
         requiresNewTemplate = new TransactionTemplate(txManager);
@@ -185,7 +205,17 @@ public class GdprErasureService {
      */
     public void erase(UUID requestId, Long userId) {
         assertConnectionPoolNotSaturated(requestId, "erase");
-        self.eraseTransactional(requestId, userId);
+        // skillars-deferred-136 AC1: routes eraseTransactional's own REQUIRES_NEW connection
+        // acquisition to the dedicated GDPR pool instead of the primary one — see RoutingDataSource's
+        // own Javadoc for why this, not a second PlatformTransactionManager, is the mechanism. Set
+        // BEFORE the call (transaction begin is synchronous on this thread) and always cleared,
+        // success or failure, so this thread never carries the key into unrelated later work.
+        RoutingDataSourceContext.set(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY);
+        try {
+            self.eraseTransactional(requestId, userId);
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
     }
 
     /**
@@ -449,9 +479,108 @@ public class GdprErasureService {
     public void markFailedStatusUpdate(UUID requestId) {
         gdprRequestRepository.findById(requestId).ifPresent(r -> {
             r.setStatus("FAILED");
+            // skillars-deferred-136 AC2: stamps the grace-window clock GdprErasureRetryScheduler's
+            // sweep reads — every path to FAILED goes through this one method, so this is the single
+            // place that needs to set it.
+            r.setFailedAt(Instant.now());
             gdprRequestRepository.save(r);
         });
         log.error("[GDPR_ERASURE_MARKED_FAILED] requestId={}", requestId);
+    }
+
+    /**
+     * skillars-deferred-136 AC2: scheduled re-drive for {@code FAILED} {@code GdprRequest} rows —
+     * {@code markFailed} (skillars-deferred-135 AC1) reliably alerts an admin, but nothing before this
+     * automatically retried. Called from {@link
+     * com.softropic.skillars.platform.admin.service.GdprErasureRetryScheduler}'s thin
+     * {@code @Scheduled}/{@code @SchedulerLock} wrapper.
+     *
+     * <p>Re-queries page 0 in a loop, filtering out ids this SAME sweep invocation has already
+     * considered, rather than advancing an offset: a successful {@code erase()} or a re-failure's own
+     * {@code markFailedStatusUpdate} always changes the row enough to drop it out of the filter on the
+     * next read (leaves {@code FAILED} entirely, or stamps a fresh {@code failedAt} never before this
+     * sweep's own {@code graceDeadline} snapshot) — but a dedup-guard-SKIPPED candidate is left
+     * completely unchanged, so it would re-match the identical filter forever. An offset-based {@code
+     * page.next()} would silently skip rows shifted earlier by successful-redrive shrinkage; blindly
+     * re-querying page 0 without tracking already-seen ids would spin forever on a persistently-skipped
+     * row. Tracking {@code consideredThisSweep} closes both: bounded by the total FAILED-row count,
+     * terminates even when every remaining candidate is skipped.
+     *
+     * <p><strong>Dedup guard:</strong> skips any candidate whose {@code userId} currently has a
+     * PENDING/PROCESSING {@code ERASURE} row — mirrors {@code GdprRequestService.requestErasure}'s own
+     * precondition. A persistently-skipped row (its user's PENDING/PROCESSING row never clears) simply
+     * waits for the NEXT scheduled sweep, which re-evaluates it fresh — not an infinite retry within one
+     * invocation.
+     *
+     * <p><strong>Known, accepted residual (story review): a narrow TOCTOU window still exists</strong>
+     * between this check and the {@link #erase} call immediately below it — a manual resubmit created by
+     * the user in that exact window is not caught, only a resubmit that already exists AT the check.
+     * Low-severity and disclosed rather than closed: the worst outcome is duplicate erasure work on the
+     * same user (both {@code erase()} is independently idempotent, per {@link
+     * #deletePlayerDevelopmentData}'s own Javadoc), not data corruption — not worth a DB-level guard or a
+     * second re-check for this narrow a window.
+     *
+     * <p><strong>Reuses {@code erase()}'s own entry point and safety mechanisms</strong> (AC1's
+     * dedicated pool/pre-check, the per-child deadline budget) rather than bypassing them — and {@code
+     * erase()}'s own failure path ({@code catch (Exception e) { markFailed(...) }}), mirroring {@link
+     * GdprEventListener#onErasureRequested}'s identical shape, so a re-drive that fails again gets the
+     * exact same alerting a first-time failure would.
+     */
+    public void retryFailedErasures() {
+        Instant graceDeadline = Instant.now().minus(ERASURE_RETRY_GRACE_WINDOW);
+        int redriven = 0;
+        int skippedDedup = 0;
+        Set<UUID> consideredThisSweep = new HashSet<>();
+        Pageable pageable = PageRequest.of(0, RETRY_SWEEP_PAGE_SIZE);
+        boolean sawUnconsideredCandidate;
+        do {
+            sawUnconsideredCandidate = false;
+            Page<GdprRequest> page = gdprRequestRepository
+                .findByRequestTypeAndStatusAndFailedAtBeforeAndRetryCountLessThan(
+                    "ERASURE", "FAILED", graceDeadline, MAX_ERASURE_RETRY_ATTEMPTS, pageable);
+            for (GdprRequest candidate : page) {
+                UUID requestId = candidate.getId();
+                if (!consideredThisSweep.add(requestId)) {
+                    continue;
+                }
+                sawUnconsideredCandidate = true;
+                Long userId = candidate.getUserId();
+                // story review: the try now wraps the dedup check and the retry-count increment too,
+                // not just erase() — an exception from either previously propagated out of this whole
+                // sweep, aborting every remaining candidate instead of just this one.
+                try {
+                    if (gdprRequestRepository.existsByUserIdAndRequestTypeAndStatusIn(
+                            userId, "ERASURE", List.of("PENDING", "PROCESSING"))) {
+                        skippedDedup++;
+                        continue;
+                    }
+                    self.incrementRetryCount(requestId);
+                    erase(requestId, userId);
+                    redriven++;
+                } catch (Exception e) {
+                    markFailed(requestId);
+                    log.error("[GDPR_ERASURE_RETRY_FAILED] requestId={} userId={}", requestId, userId, e);
+                }
+            }
+        } while (sawUnconsideredCandidate);
+        log.info("[GDPR_ERASURE_RETRY_SWEEP] redriven={} skippedDedup={}", redriven, skippedDedup);
+    }
+
+    /**
+     * {@code public}, not {@code private} — self-invoked via {@link #self} so the {@code
+     * @Transactional} proxy advice actually applies (mirrors {@link #markFailedStatusUpdate}'s
+     * identical self-invocation pattern). A separate, short {@code REQUIRES_NEW} transaction rather
+     * than folded into {@code erase()}'s own: the count must persist even if the redrive attempt that
+     * follows fails immediately, and incrementing it as part of {@code eraseTransactional}'s own
+     * transaction would rollback the count together with everything else on that failure — defeating
+     * the retry cap.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void incrementRetryCount(UUID requestId) {
+        gdprRequestRepository.findById(requestId).ifPresent(r -> {
+            r.setRetryCount(r.getRetryCount() + 1);
+            gdprRequestRepository.save(r);
+        });
     }
 
     /**
@@ -717,12 +846,20 @@ public class GdprErasureService {
      * Either condition is read directly off the live {@link HikariPoolMXBean} — no polling, no
      * artificial delay.
      *
-     * <p><strong>{@code dataSource} may not be a {@link HikariDataSource} instance</strong> — {@code
-     * DataSourceConfig.dataSourceSpyPostProcessor} wraps the primary {@code dataSource} bean in a
-     * {@code ProxyDataSourceBuilder}-created proxy when {@code log.database.spy=true}. This check is a
-     * no-op (proceeds exactly as before this fix) whenever it cannot resolve a real
-     * {@link HikariPoolMXBean} — a missed check under that specific opt-in debug flag, not a correctness
-     * bug in normal operation.
+     * <p><strong>skillars-deferred-136 AC1: checks the DEDICATED GDPR-erasure pool, not the primary
+     * one.</strong> Both call sites of this method precede an acquisition that {@link
+     * RoutingDataSourceContext} now routes to {@code DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY}'s
+     * target (see {@link #erase} and {@link #deletePlayerDevelopmentData}'s own comments) — checking the
+     * primary pool's saturation here would no longer describe the pool the real acquisition is actually
+     * about to draw from. {@code dataSource} is the app's single, routing {@code DataSource} bean; this
+     * resolves the DEDICATED target off it specifically.
+     *
+     * <p><strong>{@code dataSource} may not resolve to a {@link HikariDataSource} instance</strong> —
+     * {@code DataSourceConfig.dataSourceSpyPostProcessor} wraps the primary {@code dataSource} bean (the
+     * whole {@link RoutingDataSource}, not its individual targets) in a {@code ProxyDataSourceBuilder}-
+     * created proxy when {@code log.database.spy=true}. This check is a no-op (proceeds exactly as before
+     * this fix) whenever it cannot resolve a real {@link HikariPoolMXBean} — a missed check under that
+     * specific opt-in debug flag, not a correctness bug in normal operation.
      *
      * <p><strong>Known, accepted residual: a genuine TOCTOU gap.</strong> The pool's state can change
      * between this read and the real acquisition attempt immediately after it, in either direction — a
@@ -731,7 +868,10 @@ public class GdprErasureService {
      * {@link #erase}'s own Javadoc for the two costlier alternatives this story ruled out/re-costed).
      */
     private void assertConnectionPoolNotSaturated(Object contextId, String callSite) {
-        if (!(dataSource instanceof HikariDataSource hikariDataSource)) {
+        DataSource gdprPoolTarget = dataSource instanceof RoutingDataSource routing
+            ? routing.getNamedTarget(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY)
+            : dataSource;
+        if (!(gdprPoolTarget instanceof HikariDataSource hikariDataSource)) {
             return;
         }
         HikariPoolMXBean pool = hikariDataSource.getHikariPoolMXBean();
@@ -887,6 +1027,17 @@ public class GdprErasureService {
         // requiresNewTemplate below) is the second of the two acquisitions this fix bounds — see
         // erase()'s own Javadoc for the shared mechanism and the tradeoffs it accepts.
         assertConnectionPoolNotSaturated(playerId, "deletePlayerDevelopmentData");
+        // skillars-deferred-136 AC1: see erase()'s identical comment — same routing mechanism, this
+        // method's own REQUIRES_NEW acquisition.
+        RoutingDataSourceContext.set(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY);
+        try {
+            deletePlayerDevelopmentDataInDedicatedPool(playerId, lockTimeoutSeconds);
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
+    }
+
+    private void deletePlayerDevelopmentDataInDedicatedPool(Long playerId, long lockTimeoutSeconds) {
         requiresNewTemplate.executeWithoutResult(status -> {
             var playerProfile = lockRetryer.withBoundedRetry("GdprErasureService.deletePlayerDevelopmentData",
                 () -> playerProfileRepository.findByIdForUpdate(playerId)
