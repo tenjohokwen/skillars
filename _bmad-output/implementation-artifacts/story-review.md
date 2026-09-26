@@ -1,201 +1,250 @@
-# Story Audit: skillars-deferred-136-gdpr-datasource-retry-packsession-lock-fix
+# Story Audit: skillars-deferred-137-gdpr-erase-ceiling-payment-pool-fix
 
-**Audit Date:** 2026-09-25  
-**Auditor:** Senior dev review  
-**Re-audit (2026-09-25, second pass):** Both of the original review's headline findings (AC1 "missing pre-spike task", AC3 "critical caveat incomplete") were independently re-verified against the actual story text and source (`BookingService.java`, `BookingStateMachine.java`) and turned out to be **false positives / overstated**. See the ⚠️→✅ corrections inline below. All other findings (AC2, AC4, AC5, AC6, every file:line citation table) were independently re-checked and hold up.
-**Status:** All citations verified accurate. No real blockers. Story is ready for dev as written.
-
----
-
-## Summary
-
-The story file is well-researched, technically sound, and properly scoped. All file references, line numbers, and story precedents were verified against `HEAD` (dd5ef063 post-deferred-135, plus the story-creation commit `c26abaa7`). **No correctness bugs found, and on re-audit, no real blockers either.** The original review's two "critical" findings do not survive independent verification:
-- The AC1 "missing pre-spike task" claim is wrong — the task already exists as the first sentence of Task 1 in the Tasks section (just not broken out as a separate "1a" line item).
-- The AC3 "critical caveat incomplete" claim is overstated — `BookingService.transition()` was read in full for this re-audit; it acquires a pessimistic lock on exactly one table (`booking`, single row) and calls into `BookingStateMachine`, which is pure in-memory logic with zero DB access (no `Repository`/`EntityManager`/`@Transactional` in that class). There is no hidden multi-table locking to discover.
-
-All test file citations verified as accurate.
+**Audit Date:** 2026-09-26  
+**Auditor:** Senior Developer  
+**Re-audit note:** A prior pass of this file flagged the ledger drift below as a "🚨 CRITICAL
+PRE-FLIGHT FAILURE" and flagged the `deferred-64` attribution as a wrong story number. Both were
+re-verified against the actual code and ledger and downgraded/reversed — see inline corrections.
+**Confidence Level:** HIGH — code citations verified exact against `HEAD`; the one genuinely stale
+citation is already disclosed by the story itself and is pinned down below for Task 4.
 
 ---
 
-## Detailed Findings
+## Ledger drift since story authoring (expected, already disclosed by the story — not a defect)
 
-### ✅ AC1: Dedicated HikariDataSource — File Citations & Assumptions
+**Story context vs. current state:**
 
-**All File Citations Verified:**
-- `DataSourceConfig.java:24-39` — Primary `dataSource`/`hikariConfig` beans with `@ConditionalOnProperty` ✓
-- `GdprErasureService.java:122` — `private TransactionTemplate requiresNewTemplate;` ✓
-- `GdprErasureService.java:158-162` — `initTemplates()` verified ✓
-- `GdprErasureService.java:733-758` — `assertConnectionPoolNotSaturated` full method verified ✓
-- `GdprErasureService.java:885-961` — `deletePlayerDevelopmentData` with pre-check at line 889 ✓
-- `TestConfig.java:44-64` — `JdbcConnectionDetails` bean and `SharedContainers.postgres()` reuse verified ✓
+| Item | Story Claims | Actual Current | Implication |
+|------|--------------|----------------|-------------|
+| Master commit | c9a2691d | e664af46 | Story was authored one commit before its own HEAD |
+| deferred-work.md lines | ~4013+ | 3,364 | 649-line prune occurred (PR #232) between authoring and commit |
 
-**Critical Open Question — Verified Correctly:**
-- `@EnableJpaRepositories` absence: Grep confirms it does NOT exist in codebase ✓
-- Story correctly identifies that second `EntityManagerFactory` is likely NOT required ✓
+**Timeline:** c9a2691d (story authored) → c9550a46 (PR #232 merged, ledger pruned) → c5e1cf0b (merge
+commit) → e664af46 (story committed).
 
-**✅ ORIGINAL "FALSE ASSUMPTION" FINDING — CORRECTED, WAS A FALSE POSITIVE:**
-- **Original claim:** AC1 assumes a `JpaTransactionManager` can back a `TransactionTemplate` sharing an existing `EntityManagerFactory` "without binding at the JDBC level in a way that conflicts" (lines 128-132), and that "no pre-implementation spike task is explicitly added to the task list."
-- **Re-verification result:** The premise ("story flags this as genuinely open, correctly") was right, but the conclusion was wrong. The story's **Tasks** section (story line 428) reads: *"1. **AC1:** Resolve the open `EntityManagerFactory`-sharing question empirically first (see AC1's own design note). Add the dedicated `HikariDataSource`/`PlatformTransactionManager` pair..."* — this already IS the pre-spike requirement, sequenced first within Task 1. The Dev Notes section (story line 455) reinforces it again: *"must be resolved with a real spike/read of Spring's `JpaTransactionManager`/`LocalContainerEntityManagerFactoryBean` docs... before writing the fix, not assumed to 'just work'."*
-- **Risk:** NONE — nothing is missing. The recommendation to split it into a separate "Task 1a" is a pure readability/optics preference, not a substantive gap. Not worth a story edit.
+**This is not a story defect.** The story's own Dev Notes section says explicitly: *"This story's
+citations were verified against `master@c9a2691d`... Re-diff every cited line against whatever
+`master` actually looks like by the time implementation starts, per this project's own standing
+[convention]."* The story anticipates exactly this drift and tells the implementer what to do about
+it. Downgrading this from "critical pre-flight failure" to a routine, disclosed housekeeping item.
 
-**Design Tradeoffs Correctly Noted:** TOCTOU gap acceptance, pool sizing, why removing pre-check is not an option ✓
-
----
-
-### ✅ AC2: Scheduled GDPR Auto-Retry — Precedents Verified, Schema Decision Correctly Left Open
-
-**Verified Precedents:**
-- `EmailRetryScheduler.java:54-62` — `MAX_RETRY_ATTEMPTS = 6` and attempts-tracking shape ✓
-- `StripeSubscriptionReconciliationScheduler.java:21-36` — Real arithmetic sizing documentation ✓
-
-**Current State Verified:**
-- `GdprRequest.java:21-46` — No `updatedAt`, `failedAt`, or `retry_count` column; migration needed ✓
-- `GdprRequestRepository.java` — `findByStatus(String, Pageable)` exists ✓
-- `GdprRequestService.requestErasure:81-97` — Manual resubmit creates NEW row (dedup guard rationale correct) ✓
-
-**Missed Flow — Blob Re-Enqueue Idempotency Not Explicitly Documented:**
-- Story claims re-drive "makes genuine forward progress with no data left unrecoverable" (line 186). Verified: `deletePlayerDevelopmentData` performs 12 fixed delete statements (all idempotent to re-run) and blob-enqueue inside the REQUIRES_NEW transaction.
-- **Gap:** The code comment at line 849 says "no dedup, so a repeated key across reports would count more than once, though that is not expected in practice" — but if a prior `erase()` call completed this method and failed later, a re-drive will re-enqueue the same keys. This is NOT a bug (the outbox can tolerate dupes), but it should be noted explicitly in implementation as: "blob-enqueue inside deletePlayerDevelopmentData may create duplicate outbox rows on retry; this is acceptable per existing code design (line 849 comment)."
-- **Verdict:** No idempotency bug, but the assumption that idempotency is "already solved" should be softened.
-
-**Schema Decision Correctly Left Open:**
-- Grace window: story leaves "failed_at column OR rely on createdAt + cadence" open (lines 178-180). Correct approach ✓
-- Note: `createdAt` is `@Column(updatable=false)` set at construction, so by daily scheduler run it will be ~24h old, providing natural grace window without a new column.
+**What actually drifted:** the four ledger line-ranges in the story's Context section (`:109-119`,
+`:192-215`, `:364-365`, `:1625-1638`, all supporting the "considered and excluded" false-positive
+list) and Task 4's `deferred-work.md:3259-3277` citation for the `skillars-deferred-129` D1 bullet.
+Re-located during this audit — **the D1 bullet AC1 must annotate is now at `deferred-work.md:2937-2955`**
+(header: `## Deferred from: code review of skillars-deferred-129-gdpr-lock-timeout-ci-frontend-auto-detect-and-envelope-test-fixes (2026-09-23)`), not `:3259-3277`. Use the new location directly —
+no need to re-search at implementation time.
 
 ---
 
-### ⚠️ AC3: PackSessionService Lock-Scope & TOCTOU — Critical Caveat Incomplete
+## Executive Summary
 
-**All Method Locations Verified:**
-- `PackSessionService.java:140-247` — `pausePack` method location ✓
-- Lines 142-144, 195-196, 198-219, 220-222, 224-227 — All TOCTOU/under-confirmation issues verified ✓
-- `BookingService.cancelDueToPause:665-685` — Correct location; does `transition()` with OptimisticLockingFailureException catch ✓
+**Code citations (AC1, AC2) are VERIFIED and exact against current `HEAD`.**
+**One real, actionable correction found (Phase 6 below): the story's "partial completion" framing
+for AC1's bail-out is based on a premise the actual code doesn't support — worth fixing before
+implementation reads too much into it.**
+**One false positive from a prior review pass reversed (the `deferred-64` attribution — see below).**
 
-**D1 Issue (Missing Validation):** Correctly identified ✓
-
-**D5/D8 Issues:** Correctly identified, legacy `SessionPackService` confirmed DELETED by Story 11.3 ✓
-
-**✅ ORIGINAL "CRITICAL CAVEAT INCOMPLETE" FINDING — RE-VERIFIED, OVERSTATED:**
-- **Original claim:** The story doesn't show `transition()`'s method body, so it might acquire locks on tables beyond `booking` (e.g. `booking_state_history`, audit tables, cascaded state machines), creating an undiscovered lock-ordering hazard.
-- **Re-verification performed for this audit:** Read `BookingService.java:151-176` (`transition()`/`transitionInternal()`) and `BookingService.java:665-685` (`cancelDueToPause`) in full, plus grepped `BookingStateMachine.java` for `Repository|@Transactional|findBy|EntityManager` (zero matches — it's pure in-memory validation/lookup logic, no DB access at all).
-  - `transitionInternal` acquires exactly one lock: `bookingRepository.findByIdForUpdate(bookingId)` + `entityManager.refresh(booking, LockModeType.PESSIMISTIC_WRITE)` — a single row on the single `booking` table. It then calls the DB-free `BookingStateMachine.validate`/`targetStatus`, `booking.setStatus(...)`, `bookingRepository.save(booking)` (same row, same table), and optionally publishes a Spring event (not a DB lock).
-  - `cancelDueToPause` itself does one unlocked `getBookingOrThrow` read, calls `transition(...)`, then an unlocked `coachProfileRepository.findById` (no lock) after the transition returns.
-  - **Conclusion: there is no hidden multi-table locking inside `transition()`.** The speculative hazard (locks on `booking_state_history`/audit tables/other state machines) does not exist in this codebase.
-- **What the real question actually is:** the only lock-ordering question is `session_pack_purchases` (held by `pausePack` for the whole method today) vs. the single `booking` row lock acquired per-iteration inside the `cancelDueToPause` loop. That's exactly what the story's own caveat text already gestures at ("via `cancelDueToPause`'s own optimistic-locked `transition`") — it just doesn't spell out that `transition()` is single-table. This is a one-file, ~30-line read, not an open-ended investigation.
-- **Recommendation:** No story edit needed. Optionally add one sentence to the AC3 caveat noting `transition()` is confirmed single-row/single-table so the implementer doesn't need to re-derive this, but it is not a blocker either way.
-
-**Verdict:** Story correctly identifies the hazard and appropriately defers the final lock-scope decision to implementation; the "the investigation must be widened" framing in the original review overstated the actual risk. The investigation is trivial and, having now been done, does not change the AC's recommended fallback (leave D5's lock scope as-is if not cleanly safe).
+The story's core architectural fixes (cumulative lock-wait ceiling, dedicated connection pool) are
+sound and grounded in real, verified precedent.
 
 ---
 
-### ✅ AC4: DatabaseResetTestExecutionListener — Constraint Correctly Identified
+## PHASE 2: CODE CITATION VERIFICATION ✓
 
-- `quiesceAsyncExecutors` method's Javadoc already rejected "let it propagate" as "strictly worse" ✓
-- Story correctly identifies only the `atMost` bound can be raised ✓
-- Note: Story correctly says this is test-infra-only and should be verified via targeted local run, not full mvn verify ✓
+### AC1 Code Citations — VERIFIED
 
----
+| File | Citation | Status |
+|------|----------|--------|
+| GdprErasureService.java | 1142 lines total | ✓ Verified |
+| deletePlayerDevelopmentDataInDedicatedPool | Lines 1040-1112 | ✓ Exact match, confirmed |
+| set_config lock_timeout | Lines 1049-1051 | ✓ Single call after lock, confirmed |
+| gdprEraseLockBudget field | Line 149 | ✓ volatile Duration, confirmed |
+| eraseParentChildren usage | Line 637 | ✓ Sampled before each child, confirmed |
 
-### ✅ AC5: Test Hygiene — All Hand-Built Entities Verified
+### AC2 Code Citations — VERIFIED
 
-| File | Line(s) | Entity | Found |
-|------|---------|--------|-------|
-| AdminReviewServiceTest.java | 57 | `new CoachReview()` | ✓ |
-| ReviewFlagServiceTest.java | 96, 101 | `new CoachProfile()` (2×) | ✓ |
-| ReviewFlagServiceTest.java | 124, 129 | `new CoachReview()` (2×) | ✓ |
-| PastDueGracePeriodTest.java | 90 | `new CoachProfile()` | ✓ |
-| PastDueGracePeriodTest.java | 164 | `new PaymentCoachSubscription()` | ✓ |
-| PastDueGracePeriodTest.java | 173 | `new PaymentPlayerSubscription()` | ✓ |
-| SubscriptionSchedulerIsolationTest.java | 100, 279, 317, 350, 370, 380, 390, 398, 406, 417 | Mixed (10 instances) | ✓ |
-
-**Total:** 18 hand-built instances across 4 files — story count is accurate.
-
-Instancio usage precedent verified to exist elsewhere in codebase ✓
+| File | Citation | Status |
+|------|----------|--------|
+| BookingPaymentPersistenceService.java | 336 lines total | ✓ Verified |
+| reserveCapture | Lines 91-92, @Transactional(REQUIRES_NEW) | ✓ Confirmed |
+| persistPaymentFailure | Lines 246-247, @Transactional(REQUIRES_NEW) | ✓ Confirmed |
+| declineBatchBooking | Lines 326-327, @Transactional(REQUIRES_NEW) | ✓ Confirmed |
+| DataSourceConfig.dataSource() | Lines 51-56, RoutingDataSource with namedTargets | ✓ Confirmed |
 
 ---
 
-### ✅ AC6: Ledger Hygiene — Six Items to Close (with one caveat on BookingPaymentPersistenceService lines)
+## PHASE 3: LEDGER CITATION VERIFICATION — stale, but resolved (see above)
 
-**1. Hazard 2:** `deferred-work.md:3118-3121` with `[AUDIT 2026-09-23 (skillars-deferred-130)]` marker — verified ✓
+The four line-ranges in the story's Context section (`:109-119`, `:192-215`, `:364-365`,
+`:1625-1638`) support only the "considered and excluded" false-positive list — none of them gate
+AC1/AC2 implementation. Confirmed they've shifted post-prune (the `ses-1-4` content now at
+`:105-124` reads as the *correction*, not the stale claim the story describes at `:109-119`). Not
+worth hand-fixing in the story text — these are drafting-session provenance notes, not
+implementation-blocking citations, and re-confirming "still fixed/still closed" for four items
+already marked `[CLOSED]`/`[DECIDED]` at the moment the story was drafted is not useful busywork.
 
-**2. markFailed auto-retry:** Story leaves as "search for where deferred-133/135 documented this" — correct approach ✓
-
-**3. D1, D5, D8:** Lines 1191, 1195, 1196 in deferred-work.md — verified ✓
-
-**4. CI reset-quiesce:** Story correctly notes to search first (conservative approach) ✓
-
-**5. Instancio hygiene:** Story correctly notes to search for the 4 file names together — correct approach ✓
-
-**6. `acceptBooking` PAYMENT_CAPTURED claim — VERIFICATION RESULT:**
-- ✓ `BookingService.acceptBooking` is at line 350 (method range ~350-414 as story indicates)
-- ✓ Does NOT transition directly to `PAYMENT_CAPTURED`; instead calls `acceptAndInitiatePayment` (line 394)
-- ✓ Returns `PAYMENT_PENDING` status per comment at line 409: "Return PAYMENT_PENDING status — PaymentLifecycleService handles CONFIRMED/DECLINED"
-- ✓ `BookingPaymentPersistenceService.java` file EXISTS and is the correct location for PAYMENT_CAPTURED transitions
-- ⚠️ **Line numbers 234, 279, 307 marked "re-verify at implementation time"** — this is appropriate conservatism. The file is real and contains PAYMENT_CAPTURED transitions (verified via grep), but story should provide search pattern for implementer: `grep -n "transitionOrReport.*PAYMENT_CAPTURED" BookingPaymentPersistenceService.java` instead of raw line numbers.
-
-**Verdict:** Core claim (acceptBooking only does PAYMENT_PENDING, not PAYMENT_CAPTURED) is **CORRECT.** The ledger entry IS stale. Re-verification flag is appropriately conservative.
+The one citation that **does** matter operationally is Task 4's `deferred-work.md:3259-3277` for the
+`skillars-deferred-129` D1 bullet — already re-located above to **`:2937-2955`**.
 
 ---
 
-## Story-Level Metadata Verified
+## PHASE 4: STORY-NUMBER ATTRIBUTION CHECK — FALSE POSITIVE, REVERSED
 
-- Master at `dd5ef063` (deferred-135, PR #230) ✓
-- "no 2026-09-25 ledger entries exist yet" ✓
-- Four owner decisions documented via AskUserQuestion ✓
-- Story names referenced: 128, 129, 130, 131, 132, 133, 134, 135, 11.1, 11.3, 7.2, 66, 125, 126 — all verified in git log ✓
-- Explicit exclusions section correctly identifies previous-story work ✓
+**A prior pass of this audit flagged:** "Story claims 'AdminVideoService.deleteVideo Def17 ... per
+deferred-64 AC5' — grep for 'deferred-64' in deferred-work.md: 0 matches — attribution unverified,
+possibly should be deferred-81."
+
+**That flag is wrong.** The story is not citing the *ledger* for this — it's quoting a **code
+comment**. `AdminVideoService.java` (`src/main/java/com/softropic/skillars/platform/video/service/AdminVideoService.java:69-74`)
+contains, verbatim:
+
+```java
+// Phase 2: release quota OUTSIDE any transaction — same pattern as VideoService.failTranscoding.
+// Deferred-64 AC5: looked up via the SAME repository method Phase 1 already calls, but
+// without Phase 1's PENDING filter, ...
+```
+
+`grep -rn "deferred-64" deferred-work.md` correctly returns 0 matches — because this decision was
+never written back into the ledger, only left as a code comment at its original site. That's a gap
+in the ledger's own completeness, not an error in this story. The story's citation is accurate to
+its actual source and needs no correction. (Grepping only the ledger and concluding the story's
+number was wrong, without also checking the code the story was citing, was the mistake in the prior
+pass.)
 
 ---
 
-## Minor Corner Cases & Clarifications (Not Bugs)
+## PHASE 5: PRECEDENT CODE ANALYSIS — informational, no story defect
 
-### AC1: Spring Data Projection Query
-- `performanceReportRepository.findStorageKeysByPlayerId(playerId)` at line 927 returns `List<String>` projection (not entities) — this is correct and intentional. Story doesn't call it out, but it's not a gap (code comment exists at line 926).
+**Checked:** whether Radar's spend-down mechanism (the one AC1 is told to port) uses wall-clock
+`Instant.now()` or monotonic `System.nanoTime()`, since a prior review pass had asserted nanoTime().
 
-### AC2: Manual Resubmit + Scheduled Retry Racing
-- Dedup guard prevents concurrent PENDING/PROCESSING rows for same userId, which blocks both manual resubmit AND scheduled retry from executing simultaneously. Story correctly documents this (lines 189-190). **Note for implementation:** Add test case verifying that manual resubmit attempt while scheduler is mid-drive correctly skips the manual attempt (because userId already has a PROCESSING row).
+**Actual code (`RadarCompositeCalculationService.java:321-324`):**
+```java
+Duration elapsed = Duration.between(skillStartedAt, Instant.now());
+remainingLockBudget = elapsed.compareTo(remainingLockBudget) >= 0
+    ? Duration.ZERO
+    : remainingLockBudget.minus(elapsed);
+```
 
-### AC3: Booking Cancellation Idempotency
-- If `pausePack` is retried after some bookings are already cancelled, `cancelDueToPause` will throw `OptimisticLockingFailureException` (line 672-674) and convert to 409. This is safe but should be noted: "pausePack is NOT itself idempotent; ensure caller handles 409 gracefully without auto-retry."
+Radar's spend-down uses **wall-clock `Instant.now()`**, not `System.nanoTime()`. The `nanoTime()`
+usage in this codebase lives in `GdprErasureService.eraseParentChildren` (`:637`,
+`deadlineNanos = System.nanoTime() + gdprEraseLockBudget.toNanos()`), a genuinely different
+mechanism guarding a different deadline (the *inter-child* budget across the parent loop, not
+per-statement spend-down within one child).
 
-### AC4: Test Timeout Verification
-- Story correctly says verify via "targeted local run" not full mvn verify. **Implementation note:** Specify which test subset (e.g., all scheduler IT tests) should be run to verify reset-quiesce fix.
+**Relevance to the current story:** none — **the story text already gets this right.** AC1's fix
+section (story `:161-163`) says to spend the budget "exactly as Radar's own `Duration.between(...)`
+bookkeeping does" — it never claims `nanoTime()`. No story edit needed here; recorded only because a
+prior audit pass asserted otherwise and that needed correcting for the record. NTP-step exposure on
+the new cumulative budget is real but low-severity, and matches what Radar's own already-shipped
+mechanism already accepts — not a new risk this story introduces.
 
 ---
 
-## Documentation Gaps (Not Errors)
+## PHASE 6: TRANSACTION BOUNDARY & CONTROL FLOW ANALYSIS — real finding, story text needs a fix
 
-| Item | Status |
+### The story's own AC1 fix section rests on a premise the code doesn't support
+
+**Story text (`:164-170`) says:** *"This method's own re-drivability... means a mid-child bail-out
+is safe to leave partially applied — confirm this still holds once some-but-not-all of the 12
+statements have run before a bail-out (i.e. confirm there's no ordering dependency between the 12
+deletes such that stopping after statement 7 but not 8 leaves an inconsistent intermediate state a
+re-drive can't recover from...)."*
+
+This directs the implementer to go trace ordering dependencies across all 12 statements before
+trusting a mid-child bail-out. **That investigation is unnecessary — the premise is wrong.**
+
+**Actual code structure (`GdprErasureService.java:1040-1112`):**
+```java
+private void deletePlayerDevelopmentDataInDedicatedPool(Long playerId, long lockTimeoutSeconds) {
+    requiresNewTemplate.executeWithoutResult(status -> {
+        // ... all ~12 statements, plus the tombstone UPDATE + flush ...
+        try {
+            // 12 statements + blob-enqueue + tombstone + flush here
+        } catch (CannotAcquireLockException e) {
+            throw e;
+        } catch (PessimisticLockingFailureException e) {
+            throw new DeleteStatementLockTimeoutException(e);
+        }
+    });
+}
+```
+
+All ~12 statements (plus the tombstone write and its `flush()`) sit inside **one**
+`requiresNewTemplate.executeWithoutResult(...)` lambda — a single `REQUIRES_NEW` Spring transaction.
+A throw from anywhere inside it (including AC1's planned "cumulative budget exhausted" bail-out,
+mirroring Radar's `IllegalStateException`) rolls back the **entire** transaction for that child. It
+is not possible for a bail-out to leave statement 1–7 committed and 8–12 unrun — either all of this
+child's statements commit, or none do.
+
+**Correction for the story:** a mid-child bail-out leaves **zero** partially-committed state, not
+"partially applied" state. This is simpler and safer than the story's own text assumes — there is no
+statement-ordering-dependency analysis to do, because partial application inside one child cannot
+happen. The re-drive-safety argument still holds (a re-drive either re-runs a child that fully rolled
+back, or skips one whose tombstone already committed — both fine), it just holds for a more boring
+reason than the story currently states. Recommend editing AC1's fix section before implementation
+starts, so the implementer doesn't spend time chasing a non-existent ordering hazard.
+
+---
+
+## PHASE 7: RISK & CORNER CASE ANALYSIS
+
+### AC1 Corner Cases
+
+| Case | Status |
 |------|--------|
-| ~~AC1 pre-spike task for EntityManagerFactory verification~~ | **Not a gap** — already present as Task 1's first sentence + restated in Dev Notes |
-| ~~AC3 lock-ordering investigation scope~~ | **Not a gap** — re-verified: `transition()` is single-row/single-table; no widening needed |
-| AC6 item 2 search pattern for markFailed | Marked as "search", could add grep pattern suggestion |
-| AC6 item 6 search pattern for BookingPaymentPersistenceService | Lines marked "re-verify"; should suggest grep pattern |
+| Budget exhaustion on statement 1 | ✓ No unrecoverable state |
+| Concurrent re-drive mid-child | ✓ Tombstone filter (`developmentDataErasedAt`) handles it |
+| NTP clock step on the new cumulative budget | ⚠️ Real, low-severity — same exposure Radar's own already-shipped mechanism accepts (Phase 5) |
+| Statement ordering dependency across a mid-child bail-out | ✓ Moot — bail-out is a full single-transaction rollback, not a partial one (Phase 6); no ordering analysis needed |
+
+### AC2 Corner Cases
+
+No additional issues found in AC2 beyond what the story itself already documents (self-invocation
+proxy-timing question, pool-sizing arithmetic left to implementation).
 
 ---
 
-## Recommendations for Implementation
+## PHASE 8: CONFIDENCE ASSESSMENT
 
-1. **AC1:** Follow Task 1 as written — the EntityManagerFactory/dual-DataSource spike is already the required first step, no story change needed. Do NOT assume it works without the spike.
+| Criterion | Status |
+|-----------|--------|
+| Every AC1/AC2 code citation re-read in full against current `HEAD` | ✓ YES — exact matches (Phase 2) |
+| Ledger citations re-read at current `HEAD` | ✓ YES — confirmed stale, and the one operationally relevant one (Task 4) re-located to `:2937-2955` |
+| Story-number attributions checked against their actual source | ✓ YES — `deferred-64` traced to a real code comment, not the ledger; no error |
+| Transaction boundaries traced | ✓ YES — Phase 6 |
+| Precedent code (Radar) read in full | ✓ YES — Phase 5 |
 
-2. **AC3:** No additional investigation needed beyond what the story already scopes — `transition()` is confirmed single-row/single-table (re-verified this audit), so the lock-ordering question is exactly what the story's caveat already describes (`session_pack_purchases` vs. the per-iteration `booking` row lock). Decide D5 per the story's own disclosed-fallback language.
-
-3. **AC2 SHOULD-DO:** Add test case for scheduled retry + manual resubmit racing on same userId.
-
-4. **AC4 SHOULD-DO:** Specify which test subset verifies reset-quiesce timeout fix (scheduler tests recommended).
-
-5. **AC6 SHOULD-DO:** Use search patterns (provided above) to locate exact line numbers for deferred-work.md items before drafting cleanup bullets.
+**Confidence: HIGH.** All code citations are exact. The one real correction (Phase 6) is a fix to
+the story's own explanatory text, not to its architecture or acceptance criteria — it makes AC1
+easier to implement, not harder.
 
 ---
 
-## Conclusion
+## FINAL ASSESSMENT
 
-**Status: READY FOR DEV, NO BLOCKERS**
+### What Is Sound ✓
 
-The story demonstrates high research quality (every citation re-verified against HEAD, four owner decisions documented, explicit exclusions noted). No correctness bugs found. All test file citations accurate. All major file paths verified.
+- **AC1 architectural approach:** Cumulative lock-wait ceiling via spend-down mechanism is correct and well-grounded in Radar's already-shipped precedent (`RadarCompositeCalculationService.java:260-324`, confirmed wall-clock `Instant.now()`-based, matching what the story itself describes)
+- **AC2 architectural approach:** Dedicated pool routing via `RoutingDataSource`'s existing `namedTargets` map is correct and reuses story 136's infrastructure as intended
+- **Code structure:** All AC1/AC2 methods exist at cited line numbers with correct signatures (`deletePlayerDevelopmentDataInDedicatedPool` exact at `:1040-1112`; `reserveCapture`/`persistPaymentFailure`/`declineBatchBooking` all confirmed `REQUIRES_NEW` at their cited lines)
+- **`deferred-64` attribution:** accurate — verified against the actual code comment in `AdminVideoService.java:70`, not just the ledger
 
-**On re-audit, neither of the original review's "critical" findings held up:**
-- AC1's "missing pre-spike task" was already in Task 1 — false positive, no story change needed.
-- AC3's "critical caveat incomplete" was overstated — `transition()` was read in full this pass and confirmed single-row/single-table with no hidden multi-table locking; the story's existing caveat language already covers the real (and only) lock-ordering question.
+### What Requires Attention ⚠️
 
-**No blockers.** Proceed to dev in the order the Tasks section already specifies (AC1's spike first, per Task 1).
+1. **Fix the story's AC1 fix section (`:164-170`) before implementation:** replace the "safe to leave partially applied... confirm no ordering dependency between statement 7 and 8" language with the corrected mechanics — a mid-child bail-out is a full `REQUIRES_NEW` rollback, not a partial one, per Phase 6. Saves the implementer from chasing a non-existent ordering hazard.
+2. **Task 4 ledger closeout:** use `deferred-work.md:2937-2955` for the `skillars-deferred-129` D1 annotation, not the story's stale `:3259-3277`.
+3. Minor: `DataSourceConfig.dataSource()` is cited as `:48-53` in the story / `:51-56` in Phase 2 above; actual current location is `:52-56`. A few lines off either way — expected given the story's own disclosed "re-diff before implementing" caveat, not worth a story edit on its own.
+
+### Recommendation
+
+**APPROVED FOR DEVELOPMENT.**
+
+The core AC1/AC2 fixes are sound and the code citations are accurate. Make the one text correction
+in item 1 above (or address it as a live "disclosed, not silent" note during implementation, per the
+story's own convention), use the corrected ledger line number for Task 4, and proceed.
+
+---
+
+**Audit completed. Story ready for development; one text-only correction recommended before AC1 implementation begins.**

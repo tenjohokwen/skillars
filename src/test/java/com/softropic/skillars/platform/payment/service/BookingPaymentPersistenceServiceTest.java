@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -58,6 +59,12 @@ class BookingPaymentPersistenceServiceTest {
         // @InjectMocks constructs the service but never invokes @PostConstruct — Mockito is not a
         // Spring container. Without this, every settle*Counter field stays null.
         service.initializeCounters();
+        // skillars-deferred-137 AC2: persistPaymentFailure now delegates to
+        // self.persistPaymentFailureTransactional(...) so its own routing-key set runs before the
+        // @Transactional(REQUIRES_NEW) proxy advice would otherwise acquire a connection —
+        // self-referenced directly to the same instance since there is no Spring context here to
+        // supply the @Autowired @Lazy self field, mirroring GdprErasureServiceTest's identical fix.
+        ReflectionTestUtils.setField(service, "self", service);
     }
 
     @Test

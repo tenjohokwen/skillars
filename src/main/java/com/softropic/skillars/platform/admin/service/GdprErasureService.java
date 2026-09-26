@@ -148,6 +148,29 @@ public class GdprErasureService {
     // concurrency tests — without `volatile` that read is not guaranteed to observe the write.
     private volatile Duration gdprEraseLockBudget = Duration.ofSeconds(10);
 
+    // skillars-deferred-137 AC1: bounds deletePlayerDevelopmentData's own cumulative statement-group
+    // lock wait — see that method's own Javadoc for the "(12 + M) x lockTimeoutSeconds, not a
+    // method-level ceiling" accounting this closes, and deletePlayerDevelopmentDataInDedicatedPool's
+    // own Javadoc for the statement-grouping mechanism itself. Ports
+    // RadarCompositeCalculationService.recalculateComposite's own CUMULATIVE_LOCK_WAIT_BUDGET — same
+    // shape (Duration.ofSeconds(the sibling per-statement bound's own .max())), same reasoning (a
+    // caller-configured lockTimeoutSeconds can be much smaller than this ceiling; this is the outer
+    // bound on how much cumulative wait a single deletePlayerDevelopmentData call can ever rack up
+    // regardless of how many statement groups it runs).
+    //
+    // Deliberately a plain instance field, not Radar's `private static final Duration` — for the
+    // IDENTICAL reason gdprEraseLockBudget above already is one: this project's own established test
+    // seam for a normally-fixed duration constant on a singleton Spring bean is
+    // ReflectionTestUtils.setField(bean, "fieldName", ...), which needs a genuine instance field to
+    // target. A real-Postgres IT proving the cumulative bail-out fires would otherwise need to hold a
+    // contended lock for most of this constant's own 120s value to spend the budget down for real —
+    // Radar's own identical mechanism has ZERO test coverage for its cumulative-exhaustion path
+    // anywhere in this codebase today (verified by grep before choosing this shape), which this
+    // divergence is specifically meant to avoid repeating here. `volatile` for the same cross-thread
+    // visibility reason documented on gdprEraseLockBudget above.
+    private volatile Duration cumulativeLockWaitBudget =
+        Duration.ofSeconds(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.max());
+
     // skillars-deferred-129 AC1 (M6): the pre-existing CHILD_CONTENDED reason (PessimisticLockRetryer's
     // own retry budget exhausted acquiring the player_profiles lock) vs. this AC's new
     // CHILD_DELETE_LOCK_TIMEOUT reason (a downstream delete/scan/enqueue statement tripping the new
@@ -158,6 +181,12 @@ public class GdprErasureService {
     // (code review 2026-09-23): extracted for consistency with the two constants above — this one
     // predates skillars-deferred-129 and was left as a bare literal at both its call sites.
     private static final String CHILD_VANISHED = "CHILD_VANISHED";
+    // skillars-deferred-137 AC1: distinct from CHILD_DELETE_LOCK_TIMEOUT above — that reason means one
+    // statement tripped its own per-statement lock_timeout; this one means enough statements (or slow
+    // enough ones) ran that the CUMULATIVE budget below was exhausted before a later statement group
+    // even started, which is a materially different signal for an operator triaging the alert queue
+    // (single hot statement vs. broad, sustained contention across this child's whole delete sequence).
+    private static final String CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED = "CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED";
     // skillars-deferred-133 AC1: markFailed's own catch-all reason — covers erase()'s pre-transaction
     // assertConnectionPoolNotSaturated throw and any other exception not one of the three typed
     // reasons above (a GdprRequest/User "not found" RuntimeException, or anything unforeseen).
@@ -351,6 +380,17 @@ public class GdprErasureService {
                             raiseErasureAlert(requestId, reason);
                             // (Decision 1): unlike CHILD_VANISHED above, this player's development
                             // data genuinely survives this run — the request must not read COMPLETED.
+                            skipped.set(true);
+                        } catch (CumulativeLockBudgetExhaustedException e) {
+                            // skillars-deferred-137 AC1: distinct from the catch above — this fires
+                            // when enough statements (or slow enough ones) ran to exhaust the
+                            // cumulative budget, not because any single statement tripped its own
+                            // per-statement lock_timeout. Same skip-and-alert semantics otherwise.
+                            log.warn("[GDPR_ERASURE] PLAYER-branch playerId={} development-data deletion "
+                                    + "exceeded its cumulative lock-wait budget partway through (single-"
+                                    + "profile branch, not a skip-one-of-N-siblings case) — skipping, "
+                                    + "requestId={} userId={}", pp.getId(), requestId, userId, e);
+                            raiseErasureAlert(requestId, CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED);
                             skipped.set(true);
                         }
                     },
@@ -700,6 +740,17 @@ public class GdprErasureService {
                             + "re-drive), requestId={} userId={}", child.getId(), requestId, userId);
                 }
                 raiseErasureAlert(requestId, reason);
+            } catch (CumulativeLockBudgetExhaustedException e) {
+                // skillars-deferred-137 AC1: distinct from the catch above — this child exhausted its
+                // cumulative lock-wait budget across enough (or slow enough) statement groups, not
+                // because any single statement tripped its own per-statement lock_timeout.
+                skipped++;
+                anyUnrecoverableSkip = true;
+                log.warn("[GDPR_ERASURE] PARENT-branch child playerId={} exceeded its cumulative "
+                        + "lock-wait budget partway through its own delete sequence — skipping "
+                        + "(retryable on a later re-drive), requestId={} userId={}",
+                    child.getId(), requestId, userId, e);
+                raiseErasureAlert(requestId, CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED);
             } finally {
                 // skillars-deferred-128 AC1 (M9): deletePlayerDevelopmentData's tombstone write now
                 // commits in an INNER transaction/EntityManager, while this outer persistence context
@@ -977,29 +1028,41 @@ public class GdprErasureService {
      * and binds a fresh one on {@code REQUIRES_NEW} — confirmed by this method's own {@code GdprErasureIT}
      * coverage, not merely assumed.
      *
-     * <p><strong>skillars-deferred-129 AC1: each statement below is now bounded by a
+     * <p><strong>skillars-deferred-129 AC1: each statement below is bounded by a
      * {@code lock_timeout}, not the method's total wait.</strong> Postgres {@code lock_timeout} is
      * per-STATEMENT — mirroring {@code RadarCompositeCalculationService.recalculateComposite}'s own
-     * documented trap (see that method's Javadoc) — so a single {@code set_config} call before the
-     * delete block bounds each of this method's ~12 independently-timeout-able statements
-     * individually, not the method's cumulative wait. There are 12 fixed delete/scan statements below
-     * (the nine {@code deleteAllByPlayerId}/{@code deleteByPlayerId} calls, the
+     * documented trap (see that method's Javadoc) — so a {@code set_config} call bounds each of this
+     * method's ~12 independently-timeout-able statements individually. There are 12 fixed delete/scan
+     * statements below (the nine {@code deleteAllByPlayerId}/{@code deleteByPlayerId} calls, the
      * {@code performance_reports} scan, its own delete, and the {@code homework_completions} delete),
      * plus one additional {@code INSERT} per non-null {@code storage_key} the blob-enqueue below
      * issues (zero or more, via {@link BlobDeletionOutboxSupport#enqueue} — no dedup, so a repeated
-     * key across reports would count more than once, though that is not expected in practice) — so
-     * this method's real worst case is {@code (12 + M) ×} the configured seconds, where {@code M} is
-     * the count of that child's {@code performance_reports} rows with a non-null {@code storage_key}
-     * (not its total report count — a {@code PENDING_UPLOAD}/{@code UPLOAD_FAILED} report has none),
-     * <strong>not</strong> a method-level ceiling. This does NOT make {@link #gdprEraseLockBudget}
-     * (skillars-deferred-128 AC2) a hard ceiling on its own — it converts a previously-unbounded hang
-     * into a bounded (if, under simultaneous multi-statement contention, possibly larger than that
-     * nominal budget) one. The lock acquisition above and the final tombstone {@code save()} below
-     * cannot themselves BLOCK on this {@code lock_timeout} (corrected 2026-09-23: they are not exempt
-     * from it — {@code set_config(…, true)} is transaction-local and covers every statement through
-     * commit, this one included) — the lock acquisition is already bounded by {@code
-     * findByIdForUpdate}'s own {@code NOWAIT} + {@link PessimisticLockRetryer}, and the tombstone
-     * write cannot contend an external lock since this transaction already holds the row exclusively.
+     * key across reports would count more than once, though that is not expected in practice), so
+     * <strong>before skillars-deferred-137 AC1</strong> this method's real worst case was
+     * {@code (12 + M) ×} the configured per-statement seconds — {@code M} being the count of that
+     * child's {@code performance_reports} rows with a non-null {@code storage_key} (not its total
+     * report count — a {@code PENDING_UPLOAD}/{@code UPLOAD_FAILED} report has none) — with no
+     * method-level ceiling at all.
+     *
+     * <p><strong>skillars-deferred-137 AC1 closes that gap:</strong> the 12+M statements are batched
+     * into four logical groups (see {@link #deletePlayerDevelopmentDataInDedicatedPool}'s own Javadoc
+     * for the exact grouping and the per-group budget-shrink mechanism, ported from
+     * {@code RadarCompositeCalculationService.recalculateComposite}'s own cumulative spend-down), so
+     * this method's real worst case is now bounded by {@link #cumulativeLockWaitBudget} regardless of
+     * how large {@code M} grows — a group whose shrunk timeout would fall below the per-statement
+     * floor instead throws {@link CumulativeLockBudgetExhaustedException}, rolling back this whole
+     * REQUIRES_NEW call (see that method's own Javadoc for why a mid-child bail-out has no
+     * partial-commit risk here) rather than letting the wait keep growing unbounded. This does NOT
+     * make {@link #gdprEraseLockBudget} (skillars-deferred-128 AC2, a DIFFERENT budget scoped to
+     * {@link #eraseParentChildren}'s own PARENT loop, sampled only BETWEEN children) redundant — that
+     * budget still cannot interrupt a single child's own in-progress call, which is exactly the gap
+     * {@link #cumulativeLockWaitBudget} closes at the single-child level. The lock acquisition above
+     * and the final tombstone {@code save()} below cannot themselves BLOCK on this {@code lock_timeout}
+     * (corrected 2026-09-23: they are not exempt from it — {@code set_config(…, true)} is
+     * transaction-local and covers every statement through commit, this one included) — the lock
+     * acquisition is already bounded by {@code findByIdForUpdate}'s own {@code NOWAIT} + {@link
+     * PessimisticLockRetryer}, and the tombstone write cannot contend an external lock since this
+     * transaction already holds the row exclusively.
      *
      * <p>{@code lockTimeoutSeconds} is a caller-supplied parameter, not read by this method itself
      * (skillars-deferred-132 AC2 Fix 9 — previously read here, once per call, via
@@ -1037,6 +1100,28 @@ public class GdprErasureService {
         }
     }
 
+    /**
+     * skillars-deferred-137 AC1: the ~12 fixed statements plus the variable-length blob-enqueue are
+     * grouped into four logical steps (mirroring this method's own pre-existing statement ORDER
+     * exactly, just batched) rather than bounded per-individual-statement like
+     * {@code RadarCompositeCalculationService.recalculateComposite}'s own per-SKILL grain — this
+     * method's 12 statements have no natural per-skill-style grouping, so a coarser, table-domain
+     * grouping (timeline/SLU, radar, performance-report/homework, blob-enqueue) keeps the fix legible
+     * without a budget check between every single {@code deleteAllByPlayerId} call. Each group re-issues
+     * {@code set_config} with a timeout shrunk to {@code remainingBudget / (statements in that group)},
+     * so that group's own worst case ({@code statementCount * thisGroupTimeout}) can never exceed the
+     * remaining budget — the same invariant Radar's own per-skill halving establishes for its pairs,
+     * generalized to N statements per group. {@link #cumulativeLockWaitBudget}'s own Javadoc explains
+     * why this is a plain field, not a {@code static final} constant like Radar's.
+     *
+     * <p>A bail-out here (via {@link CumulativeLockBudgetExhaustedException}) rolls back the ENTIRE
+     * {@code requiresNewTemplate} transaction this method runs in — including every earlier group's
+     * already-executed statements in THIS SAME call — because they all share the one REQUIRES_NEW
+     * transaction below; there is no partial-commit risk to reason about (unlike a naive reading of
+     * "mid-child bail-out" might suggest), and the method's own re-drivability Javadoc continues to
+     * hold unchanged: a bailed-out child is retried from scratch on the next re-drive, exactly like a
+     * single-statement {@link DeleteStatementLockTimeoutException} trip already causes today.
+     */
     private void deletePlayerDevelopmentDataInDedicatedPool(Long playerId, long lockTimeoutSeconds) {
         requiresNewTemplate.executeWithoutResult(status -> {
             var playerProfile = lockRetryer.withBoundedRetry("GdprErasureService.deletePlayerDevelopmentData",
@@ -1044,11 +1129,9 @@ public class GdprErasureService {
                     .orElseThrow(() -> new ResourceNotFoundException("Player not found: " + playerId, "player_profile")));
             entityManager.refresh(playerProfile, LockModeType.PESSIMISTIC_WRITE);
 
-            // Task 6: issued once, after the lock is held and before the first delete call — mirrors
-            // recalculateComposite's own placement of this exact statement.
-            entityManager.createNativeQuery("SELECT set_config('lock_timeout', ?1, true)")
-                .setParameter(1, lockTimeoutSeconds + "s")
-                .getSingleResult();
+            // skillars-deferred-137 AC1: remaining cumulative lock-wait budget for this child's whole
+            // statement-group sequence below — see cumulativeLockWaitBudget's own Javadoc.
+            Duration remainingLockBudget = cumulativeLockWaitBudget;
 
             // (Task 8, corrected empirically — see DeleteStatementLockTimeoutException's own Javadoc)
             // wraps every statement below that can trip the lock_timeout bound just set, so a
@@ -1062,31 +1145,61 @@ public class GdprErasureService {
                 // these keys unrecoverable elsewhere.
                 List<String> childBlobKeys = new ArrayList<>();
 
+                // Group 1 (6 statements): timeline + SLU deletes, in this method's own pre-existing order.
+                long group1Timeout = nextGroupLockTimeoutSecondsOrThrow(
+                    remainingLockBudget, 6, lockTimeoutSeconds, playerId, "timeline/SLU deletes");
+                Instant group1StartedAt = Instant.now();
+                setStatementLockTimeout(group1Timeout);
                 playerTimelineRepository.deleteByPlayerId(playerId);
                 sluRepository.deleteAllByPlayerId(playerId);
                 sluWeeklySnapshotRepository.deleteAllByPlayerId(playerId);
                 playerSluWeeklySnapshotAppliedRepository.deleteAllByPlayerId(playerId);
                 sluTargetRepository.deleteAllByPlayerId(playerId);
                 neglectedSkillFlagRepository.deleteAllByPlayerId(playerId);
+                remainingLockBudget = spendDownLockBudget(remainingLockBudget, group1StartedAt);
+
+                // Group 2 (3 statements): radar deletes.
+                long group2Timeout = nextGroupLockTimeoutSecondsOrThrow(
+                    remainingLockBudget, 3, lockTimeoutSeconds, playerId, "radar deletes");
+                Instant group2StartedAt = Instant.now();
+                setStatementLockTimeout(group2Timeout);
                 playerRadarBaselineRepository.deleteAllByPlayerId(playerId);
                 playerRadarCompositeRepository.deleteAllByPlayerId(playerId);
                 radarAssessmentRepository.deleteAllByPlayerId(playerId);
+                remainingLockBudget = spendDownLockBudget(remainingLockBudget, group2StartedAt);
+
+                // Group 3 (3 statements): performance-report scan + delete, homework-completion delete.
                 // Deferred-77 AC2: a PENDING_UPLOAD/UPLOAD_FAILED report may have no storage_key yet —
                 // the query's own WHERE clause excludes those. skillars-deferred-90 AC13: enqueue the
                 // key, don't delete from S3 inside this transaction. skillars-deferred-132 AC2 Fix 8:
                 // a projection, not full-entity hydration — only the storage_key was ever read.
+                long group3Timeout = nextGroupLockTimeoutSecondsOrThrow(
+                    remainingLockBudget, 3, lockTimeoutSeconds, playerId, "performance-report/homework deletes");
+                Instant group3StartedAt = Instant.now();
+                setStatementLockTimeout(group3Timeout);
                 childBlobKeys.addAll(performanceReportRepository.findStorageKeysByPlayerId(playerId));
                 performanceReportRepository.deleteAllByPlayerId(playerId);
                 homeworkCompletionRepository.deleteAllByPlayerId(playerId);
+                remainingLockBudget = spendDownLockBudget(remainingLockBudget, group3StartedAt);
 
-                // (H1 fix) enqueue INSIDE this transaction, atomically with the deletes above. Do NOT
-                // call requestDrainAfterCommit() here — that stays a single call in erase()'s own
-                // transaction, since it only needs to fire once per erase() invocation, not once per
-                // child.
+                // Group 4 (M statements, M = childBlobKeys.size()): the blob-deletion outbox INSERTs.
+                // Skipped entirely when M is zero — nothing to bound, and dividing by zero statements
+                // would be nonsensical. (H1 fix) enqueue INSIDE this transaction, atomically with the
+                // deletes above. Do NOT call requestDrainAfterCommit() here — that stays a single call
+                // in erase()'s own transaction, since it only needs to fire once per erase() invocation,
+                // not once per child.
+                if (!childBlobKeys.isEmpty()) {
+                    long group4Timeout = nextGroupLockTimeoutSecondsOrThrow(remainingLockBudget,
+                        childBlobKeys.size(), lockTimeoutSeconds, playerId, "blob-deletion outbox enqueue");
+                    setStatementLockTimeout(group4Timeout);
+                }
                 blobDeletionOutboxSupport.enqueue(childBlobKeys);
 
                 // Sticky tombstone — see this method's own Javadoc. Never reset back to null: a
-                // player_profiles row is never "un-erased".
+                // player_profiles row is never "un-erased". Inherits whichever group's set_config value
+                // is currently in effect (group 4's if M > 0, else group 3's) — this statement cannot
+                // itself contend an external lock (the transaction already holds player_profiles
+                // exclusively), so which value is in effect is immaterial to its own outcome.
                 playerProfile.setDevelopmentDataErasedAt(Instant.now());
                 playerProfileRepository.save(playerProfile);
                 // (code review 2026-09-23): without this, the tombstone UPDATE above is only flushed
@@ -1109,6 +1222,87 @@ public class GdprErasureService {
                 throw new DeleteStatementLockTimeoutException(e);
             }
         });
+    }
+
+    /** skillars-deferred-137 AC1: issues the transaction-scoped {@code lock_timeout} bound ahead of one statement group — extracted since AC1 now calls this up to four times per {@code deletePlayerDevelopmentData} invocation instead of once. */
+    private void setStatementLockTimeout(long seconds) {
+        entityManager.createNativeQuery("SELECT set_config('lock_timeout', ?1, true)")
+            .setParameter(1, seconds + "s")
+            .getSingleResult();
+    }
+
+    /**
+     * skillars-deferred-137 AC1: shrinks the next statement group's own {@code lock_timeout} to
+     * whatever cumulative budget remains, so that group's own worst case ({@code statementsInGroup *}
+     * the returned value) can never push the running total past {@link #cumulativeLockWaitBudget} —
+     * mirrors {@code RadarCompositeCalculationService.recalculateComposite}'s identical per-skill
+     * shrink, generalized from a fixed pair to an arbitrary group size. Throws rather than returning a
+     * near-zero, contention-indistinguishable value once the shrunk timeout would fall below the floor
+     * {@link ConfigBounds#GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS} already enforces as its own
+     * {@code min} — mirroring Radar's own {@code IllegalStateException} bail-out, adapted to this
+     * method's own typed-exception classification shape (see {@link CumulativeLockBudgetExhaustedException}).
+     */
+    private long nextGroupLockTimeoutSecondsOrThrow(Duration remainingBudget, int statementsInGroup,
+            long lockTimeoutSeconds, Long playerId, String groupName) {
+        long shrunk = Math.min(lockTimeoutSeconds, remainingBudget.toSeconds() / statementsInGroup);
+        if (shrunk < ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.min()) {
+            throw new CumulativeLockBudgetExhaustedException(
+                "deletePlayerDevelopmentData exceeded its cumulative lock-wait budget ("
+                    + cumulativeLockWaitBudget + ") for playerId=" + playerId + " before group=" + groupName
+                    + " — remaining statements deferred to a later re-drive");
+        }
+        return shrunk;
+    }
+
+    /**
+     * skillars-deferred-137 AC1: spends the cumulative budget down by a statement group's ACTUAL
+     * elapsed wall-clock time, not its worst-case timeout — mirrors
+     * {@code RadarCompositeCalculationService.recalculateComposite}'s identical bookkeeping, including
+     * its zero-floor guard against elapsed exceeding the remaining budget.
+     *
+     * <p><strong>story review 2026-09-26: also floors a NEGATIVE {@code elapsed} at zero</strong> —
+     * {@code Instant.now()} is wall-clock, not monotonic, so a backward clock step (NTP correction, VM
+     * time adjustment) between {@code groupStartedAt} and this call can make {@code Duration.between}
+     * return a negative duration. Without this guard, {@code remainingBudget.minus(elapsed)} would
+     * ADD to the budget instead of spending it down, silently defeating the cumulative ceiling this AC
+     * exists to enforce. Radar's own identical mechanism has this same gap unguarded — not fixed here,
+     * out of this story's own file scope, but worth a follow-up given the shared origin.
+     *
+     * <p>Package-private, not {@code private}: a pure static helper with no Spring/mocking
+     * dependencies, so {@code GdprErasureServiceTest} calls it directly rather than needing a
+     * reflection or Clock-injection seam to exercise the clock-regression branch deterministically.
+     */
+    static Duration spendDownLockBudget(Duration remainingBudget, Instant groupStartedAt) {
+        Duration elapsed = Duration.between(groupStartedAt, Instant.now());
+        if (elapsed.isNegative()) {
+            elapsed = Duration.ZERO;
+        }
+        return elapsed.compareTo(remainingBudget) >= 0 ? Duration.ZERO : remainingBudget.minus(elapsed);
+    }
+
+    /**
+     * skillars-deferred-137 AC1: thrown by {@link #nextGroupLockTimeoutSecondsOrThrow} when the
+     * cumulative lock-wait budget is exhausted before a statement group has even been attempted — a
+     * DIFFERENT condition from {@link DeleteStatementLockTimeoutException} (one statement tripping its
+     * own per-statement {@code lock_timeout}): this can fire even when every individual statement so
+     * far succeeded well within its own per-statement timeout, simply because enough of them ran (or
+     * ran slowly enough under real contention) to exhaust the budget. Given its own alert reason
+     * ({@link #CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED}) rather than folded into
+     * {@link #CHILD_DELETE_LOCK_TIMEOUT} — distinguishing "one contended statement" from "cumulative
+     * contention across many statements" is meaningful operator-triage information, and this class
+     * (not a cause-inspection) is what lets the two call sites tell them apart deterministically,
+     * exactly like {@link DeleteStatementLockTimeoutException}'s own Javadoc explains for its pair.
+     *
+     * <p>Uncaught by both catch clauses in {@link #deletePlayerDevelopmentDataInDedicatedPool} (it is
+     * neither a {@link CannotAcquireLockException} nor a {@link PessimisticLockingFailureException}), so
+     * it propagates out of that method's {@code requiresNewTemplate} transaction as-is, rolling back
+     * every statement this child's call has executed so far — see that method's own Javadoc for why
+     * this has no partial-commit risk to reason about.
+     */
+    private static final class CumulativeLockBudgetExhaustedException extends RuntimeException {
+        CumulativeLockBudgetExhaustedException(String message) {
+            super(message);
+        }
     }
 
     /**

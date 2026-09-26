@@ -50,6 +50,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 
 import javax.sql.DataSource;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -61,6 +62,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -127,6 +129,14 @@ class GdprErasureServiceTest {
         lenient().when(lockTimeoutQuery.getSingleResult()).thenReturn("on");
         lenient().when(lockRetryer.withBoundedRetry(anyString(), org.mockito.ArgumentMatchers.<java.util.function.Supplier<PlayerProfile>>any()))
             .thenAnswer(inv -> inv.getArgument(1, java.util.function.Supplier.class).get());
+        // skillars-deferred-137 AC1: without this, configService.getBoundedLong(...) falls back to
+        // Mockito's unstubbed-primitive default of 0L, which the new cumulative-budget floor check in
+        // deletePlayerDevelopmentDataInDedicatedPool now treats as an immediate budget-exhausted
+        // bail-out (0 < the 2s floor) — silently skipping every child's development-data deletion in
+        // every test below instead of exercising the happy path these tests otherwise assume. Real
+        // ConfigService.getBoundedLong always returns a value inside [2, 120] by construction, so this
+        // stub only restores that already-true production invariant to the mock.
+        lenient().when(configService.getBoundedLong(anyString(), anyLong(), anyLong(), anyLong())).thenReturn(5L);
 
         service = new GdprErasureService(
             gdprRequestRepository, adminAlertRepository, userRepository, coachProfileRepository,
@@ -175,6 +185,195 @@ class GdprErasureServiceTest {
         // would pass identically; this test detects VALUE drift only, not a switch to accessor calls).
         verify(configService).getBoundedLong(
             eq(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key()), eq(5L), eq(2L), eq(120L));
+    }
+
+    // ---- skillars-deferred-137 AC1: cumulative lock-wait budget -------------------------------
+
+    /**
+     * Test plan (a): a child whose statements individually stay well within budget must be
+     * unaffected. The tombstone write is the LAST statement in the whole grouped sequence, so
+     * asserting it happened proves every earlier statement group ran too, not just the first.
+     */
+    @Test
+    void deletePlayerDevelopmentData_wellWithinCumulativeBudget_happyPath_deletesAndCompletesUnaffected() {
+        GdprRequest request = new GdprRequest();
+        request.setId(REQUEST_ID);
+        request.setUserId(USER_ID);
+        when(gdprRequestRepository.findById(REQUEST_ID)).thenReturn(Optional.of(request));
+
+        User user = new User();
+        user.setSkillarsRole(SkillarsRole.PLAYER);
+        when(userRepository.findOneById(USER_ID)).thenReturn(Optional.of(user));
+
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
+
+        PlayerProfile playerProfile = new PlayerProfile();
+        playerProfile.setId(PLAYER_PROFILE_ID);
+        when(playerProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(playerProfile));
+        when(playerProfileRepository.findByIdForUpdate(PLAYER_PROFILE_ID)).thenReturn(Optional.of(playerProfile));
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        verify(playerProfileRepository).save(playerProfile);
+        assertThat(playerProfile.getDevelopmentDataErasedAt()).isNotNull();
+        assertThat(request.getStatus()).isEqualTo("COMPLETED");
+        verify(adminAlertRepository, never()).saveAndFlush(any(AdminAlert.class));
+    }
+
+    /**
+     * Test plan (b): a child that would exceed the cumulative budget bails out partway through
+     * rather than running unbounded, via a distinguishable exception/alert reason. Shrinking {@link
+     * GdprErasureService#cumulativeLockWaitBudget} to 1s (rather than simulating real elapsed wait
+     * time) makes group 1's own shrunk timeout ({@code 1s / 6 statements = 0s}) fall below the 2s
+     * floor deterministically, before any delete statement is even attempted — see that field's own
+     * Javadoc for why a plain instance field (this project's established test seam), not Radar's
+     * {@code static final}, was chosen specifically to make this fast and deterministic.
+     */
+    @Test
+    void deletePlayerDevelopmentData_cumulativeLockWaitBudgetExhausted_bailsOutBeforeAnyStatement_marksRequestFailedWithDistinguishedAlert() {
+        GdprRequest request = new GdprRequest();
+        request.setId(REQUEST_ID);
+        request.setUserId(USER_ID);
+        when(gdprRequestRepository.findById(REQUEST_ID)).thenReturn(Optional.of(request));
+
+        User user = new User();
+        user.setSkillarsRole(SkillarsRole.PLAYER);
+        when(userRepository.findOneById(USER_ID)).thenReturn(Optional.of(user));
+
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
+
+        PlayerProfile playerProfile = new PlayerProfile();
+        playerProfile.setId(PLAYER_PROFILE_ID);
+        when(playerProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(playerProfile));
+        when(playerProfileRepository.findByIdForUpdate(PLAYER_PROFILE_ID)).thenReturn(Optional.of(playerProfile));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
+            REQUEST_ID.toString(), AdminAlertType.GDPR_ERASURE_DEADLINE, AdminAlertStatus.OPEN))
+            .thenReturn(Optional.empty());
+
+        ReflectionTestUtils.setField(service, "cumulativeLockWaitBudget", Duration.ofSeconds(1));
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        // No statement in group 1 (or any later group) ever ran — this is a bail-out BEFORE the
+        // first statement, not a mid-sequence trip, confirming the floor check runs ahead of the
+        // set_config call and every delete it guards.
+        verify(playerTimelineRepository, never()).deleteByPlayerId(any());
+        verify(playerProfileRepository, never()).save(playerProfile);
+        assertThat(playerProfile.getDevelopmentDataErasedAt()).isNull();
+        assertThat(request.getStatus()).isEqualTo("FAILED");
+
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        assertThat(alertCaptor.getValue().getReason()).isEqualTo("CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED");
+    }
+
+    /**
+     * skillars-deferred-137 review finding ("Test Plan (b) Does Not Verify Partway Bail-Out"): the
+     * test above bails out BEFORE any statement runs — it doesn't prove the rollback-safety claim for
+     * a bail-out that happens AFTER some statements already executed. This test forces the trip at
+     * GROUP 4 specifically (the only group whose divisor, {@code M = childBlobKeys.size()}, is not
+     * fixed at 6/3/3): seeding a 20s budget lets groups 1–3's own divisors (6, 3, 3) pass comfortably
+     * (20/6=3, 20/3=6, both {@code >=} the 2s floor) while a deliberately large {@code M=15} makes
+     * group 4's shrunk timeout (20/15=1) fall below it — proving groups 1–3's deletes genuinely ran
+     * before the bail-out, not just that the mechanism can fire at all.
+     */
+    @Test
+    void deletePlayerDevelopmentData_cumulativeLockWaitBudgetExhausted_bailsOutPartwayAfterGroups1Through3_rollsBackTombstoneOnly() {
+        GdprRequest request = new GdprRequest();
+        request.setId(REQUEST_ID);
+        request.setUserId(USER_ID);
+        when(gdprRequestRepository.findById(REQUEST_ID)).thenReturn(Optional.of(request));
+
+        User user = new User();
+        user.setSkillarsRole(SkillarsRole.PLAYER);
+        when(userRepository.findOneById(USER_ID)).thenReturn(Optional.of(user));
+
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
+
+        PlayerProfile playerProfile = new PlayerProfile();
+        playerProfile.setId(PLAYER_PROFILE_ID);
+        when(playerProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(playerProfile));
+        when(playerProfileRepository.findByIdForUpdate(PLAYER_PROFILE_ID)).thenReturn(Optional.of(playerProfile));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
+            REQUEST_ID.toString(), AdminAlertType.GDPR_ERASURE_DEADLINE, AdminAlertStatus.OPEN))
+            .thenReturn(Optional.empty());
+        // M = 15 non-null storage keys — large enough that group 4's own divisor (15) shrinks a 20s
+        // budget below the 2s floor (20/15=1), while groups 1-3's fixed divisors (6, 3, 3) do not.
+        when(performanceReportRepository.findStorageKeysByPlayerId(PLAYER_PROFILE_ID))
+            .thenReturn(java.util.stream.IntStream.range(0, 15).mapToObj(i -> "key-" + i).toList());
+
+        ReflectionTestUtils.setField(service, "cumulativeLockWaitBudget", Duration.ofSeconds(20));
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        // Groups 1-3 genuinely ran — this is the partway proof the before-any-statement test above
+        // cannot provide.
+        verify(playerTimelineRepository).deleteByPlayerId(PLAYER_PROFILE_ID);
+        verify(playerRadarBaselineRepository).deleteAllByPlayerId(PLAYER_PROFILE_ID);
+        verify(performanceReportRepository).deleteAllByPlayerId(PLAYER_PROFILE_ID);
+        // Group 4 and the tombstone commit never ran — the whole REQUIRES_NEW transaction (including
+        // groups 1-3's own statements above) rolled back, so nothing is left half-applied to reason
+        // about. (eraseTransactional's own OUTER enqueue() call for export-zip keys still fires with
+        // an empty list regardless — unrelated to this child's own blob keys, captured and asserted
+        // empty below rather than asserting enqueue() was never called at all.)
+        ArgumentCaptor<List<String>> blobKeysCaptor = ArgumentCaptor.forClass(List.class);
+        verify(blobDeletionOutboxSupport).enqueue(blobKeysCaptor.capture());
+        assertThat(blobKeysCaptor.getValue()).isEmpty();
+        verify(playerProfileRepository, never()).save(playerProfile);
+        assertThat(playerProfile.getDevelopmentDataErasedAt()).isNull();
+        assertThat(request.getStatus()).isEqualTo("FAILED");
+
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        assertThat(alertCaptor.getValue().getReason()).isEqualTo("CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED");
+    }
+
+    /**
+     * PARENT-branch equivalent of the bail-out test above, proving {@link
+     * GdprErasureService#eraseParentChildren}'s own loop catches the same exception type and raises
+     * the same distinguished reason — mirrors this file's own established PLAYER/PARENT-branch
+     * pairing for {@code CHILD_DELETE_LOCK_TIMEOUT}/{@code CHILD_CONTENDED}.
+     */
+    @Test
+    void erase_parentUser_childCumulativeLockWaitBudgetExhausted_skipsChild_marksRequestFailedWithDistinguishedAlert() {
+        stubParentErasurePreamble();
+        PlayerProfile child = parentChild(9590_777_001L);
+        when(playerProfileRepository.findByParentIdOrderByIdAsc(USER_ID)).thenReturn(List.of(child));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
+            REQUEST_ID.toString(), AdminAlertType.GDPR_ERASURE_DEADLINE, AdminAlertStatus.OPEN))
+            .thenReturn(Optional.empty());
+
+        ReflectionTestUtils.setField(service, "cumulativeLockWaitBudget", Duration.ofSeconds(1));
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        verify(playerTimelineRepository, never()).deleteByPlayerId(any());
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        assertThat(alertCaptor.getValue().getReason()).isEqualTo("CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED");
+
+        ArgumentCaptor<GdprRequest> requestCaptor = ArgumentCaptor.forClass(GdprRequest.class);
+        verify(gdprRequestRepository, atLeastOnce()).save(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getStatus()).isEqualTo("FAILED");
+    }
+
+    /**
+     * skillars-deferred-137 review finding ("Clock regression in budget spend-down inflates cumulative
+     * ceiling"): a backward system-clock step between a group's own start and
+     * {@link GdprErasureService#spendDownLockBudget}'s own {@code Instant.now()} read makes {@code
+     * Duration.between} return a negative elapsed duration — passing {@code groupStartedAt} 10s in the
+     * FUTURE relative to "now" reproduces this deterministically without mocking the system clock.
+     * Without the fix, {@code remainingBudget.minus(negativeElapsed)} would ADD to the budget instead
+     * of spending it down; this pins that the budget is floored at its ORIGINAL value instead.
+     */
+    @Test
+    void spendDownLockBudget_negativeElapsedFromBackwardClockStep_flooredAtZero_doesNotInflateBudget() {
+        Duration remainingBudget = Duration.ofSeconds(10);
+        Instant groupStartedAtInTheFuture = Instant.now().plusSeconds(10);
+
+        Duration result = GdprErasureService.spendDownLockBudget(remainingBudget, groupStartedAtInTheFuture);
+
+        assertThat(result).isEqualTo(remainingBudget);
     }
 
     /**
@@ -339,7 +538,7 @@ class GdprErasureServiceTest {
         assertThat(alertCaptor.getValue().getReason()).isEqualTo("UNCLASSIFIED_FAILURE");
     }
 
-    private void stubParentErasurePreamble() {
+    private GdprRequest stubParentErasurePreamble() {
         GdprRequest request = new GdprRequest();
         request.setId(REQUEST_ID);
         request.setUserId(USER_ID);
@@ -350,5 +549,6 @@ class GdprErasureServiceTest {
         when(userRepository.findOneById(USER_ID)).thenReturn(Optional.of(user));
 
         when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
+        return request;
     }
 }
