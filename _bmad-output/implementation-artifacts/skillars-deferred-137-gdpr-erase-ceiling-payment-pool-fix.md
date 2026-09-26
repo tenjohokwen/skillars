@@ -5,7 +5,7 @@
 **Priority:** Medium (two real, currently-open hazards — one an owner-decided-but-revisitable aggregate
 wait bound, one a resource-isolation gap with no prior owner decision at all — but deliberately a
 **smaller story than this series' recent norm**; see Context below for why).
-**Status:** ready-for-dev
+**Status:** done
 **Created:** 2026-09-26
 
 ---
@@ -286,19 +286,19 @@ routing mechanism
 
 ## Tasks
 
-- [ ] 1. **AC1:** Read `RadarCompositeCalculationService.recalculateComposite`'s cumulative spend-down
+- [x] 1. **AC1:** Read `RadarCompositeCalculationService.recalculateComposite`'s cumulative spend-down
    mechanism in full (`:260-324`). Design the equivalent for `deletePlayerDevelopmentData` (statement
    grouping granularity, bail-out exception/alert-reason shape, config key or fixed constant for the
    cumulative budget). Implement and add new tests per AC1's test plan.
-- [ ] 2. **AC2:** Add a new `HikariConfig` bean + `DataSourceConfig` named-target key, sized from real
+- [x] 2. **AC2:** Add a new `HikariConfig` bean + `DataSourceConfig` named-target key, sized from real
    reasoning about this class's own concurrent-call volume. Wrap the three `REQUIRES_NEW` methods with
    the routing-key set/clear pattern, investigating the self-invocation-split question before assuming
    a drop-in wrap is safe. Test-side `TestConfig.java` equivalent. New tests per AC2's test plan.
-- [ ] 3. Full targeted-suite regression run for every touched class/package (`GdprErasureService` and
+- [x] 3. Full targeted-suite regression run for every touched class/package (`GdprErasureService` and
    its existing IT/unit suites, `BookingPaymentPersistenceService` and whichever ITs currently exercise
    `reserveCapture`/`persistPaymentFailure`/`declineBatchBooking`) — no local `mvn verify` per standing
    convention.
-- [ ] 4. Ledger closeout: annotate the `skillars-deferred-129` D1 bullet (`deferred-work.md:3259-3277`)
+- [x] 4. Ledger closeout: annotate the `skillars-deferred-129` D1 bullet (`deferred-work.md:3259-3277`)
    `[CLOSED by skillars-deferred-137 AC1 — <summary>]`; annotate both 2026-06-25/2026-08-24
    `BookingPaymentPersistenceService` pool-pressure bullets `[CLOSED by skillars-deferred-137 AC2 —
    <summary>]`. Add `last_updated`/`development_status` entries to `sprint-status.yaml`.
@@ -309,11 +309,113 @@ routing mechanism
 
 ### Completion Notes
 
-(Not yet implemented.)
+**AC1 — `GdprErasureService.deletePlayerDevelopmentData` cumulative lock-wait ceiling.**
+
+- Ported `RadarCompositeCalculationService.recalculateComposite`'s cumulative spend-down mechanism.
+  The ~12+M statements are batched into **four logical groups** (chosen over per-statement granularity,
+  per the story's own Dev Notes): (1) timeline/SLU deletes (6 statements), (2) radar deletes (3), (3)
+  performance-report scan+delete / homework-completion delete (3), (4) blob-deletion outbox enqueue (M
+  statements, skipped entirely when M = 0). Each group re-issues `set_config('lock_timeout', ...)` with
+  a timeout shrunk to `remainingBudget / groupSize`, so that group's own worst case can never push the
+  running total past the budget — the same invariant Radar's own per-skill halving establishes,
+  generalized from a fixed pair to an arbitrary group size.
+- New `cumulativeLockWaitBudget` field, seeded from `Duration.ofSeconds(GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.max())`
+  (120s default) — **deliberately a plain instance field, not Radar's `static final`**, for the same
+  reason the pre-existing `gdprEraseLockBudget` field already is one: this project's established
+  `ReflectionTestUtils.setField` test seam needs a genuine instance field. Verified by grep before
+  choosing this shape: Radar's own identical cumulative-exhaustion mechanism has **zero test coverage**
+  anywhere in this codebase for exactly this reason (a real-Postgres test would otherwise need to hold
+  a contended lock for most of a 120s budget).
+- New `CumulativeLockBudgetExhaustedException`, distinguished from a single-statement
+  `DeleteStatementLockTimeoutException` trip by a new `CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED` alert
+  reason at both call sites (`eraseTransactional`'s PLAYER branch and `eraseParentChildren`'s loop) —
+  an operator distinguishing "one contended statement" from "cumulative contention across many
+  statements" is meaningful triage information.
+- **Genuine finding, corrects the story's own drafting-session worry:** re-reading
+  `deletePlayerDevelopmentDataInDedicatedPool`'s structure confirmed a mid-child bail-out has **no
+  partial-commit risk to reason about** — the whole method already runs inside one
+  `requiresNewTemplate` REQUIRES_NEW transaction, so a bail-out at any group rolls back every statement
+  the child's call already executed, not just the remaining ones. The story's own Dev Notes asked to
+  "confirm there's no ordering dependency between the 12 deletes" before assuming this is a non-issue —
+  there is no ordering dependency to check, because nothing partially commits in the first place.
+- **Genuine test-fixture bug found and fixed:** `GdprErasureServiceTest` never stubbed
+  `configService.getBoundedLong(...)`'s return value, so it defaulted to Mockito's unstubbed-primitive
+  `0L`. The pre-existing code never validated this value, so it was harmless; the new floor check
+  correctly treats `0 < 2s floor` as an immediate budget-exhausted bail-out, which silently short-
+  circuited every existing test's delete flow before a fix (added a `lenient()` stub returning `5L`,
+  restoring the same invariant `ConfigBounds` already guarantees in production).
+- Tests: 3 new `GdprErasureServiceTest` cases (happy path unaffected; PLAYER-branch bail-out
+  deterministic via a shrunk budget; PARENT-branch equivalent) — 12/12 pass. 1 new
+  `GdprErasureIT` (`erase_selfRegisteredPlayer_cumulativeLockWaitBudgetExhausted_bailsOutThenReDriveCompletesCleanly`)
+  proving a bailed-out child survives untouched (real Postgres row count unchanged) and a manual
+  resubmit re-drives cleanly — deliberately does NOT attempt a real multi-group contention cascade
+  (mathematically shown impractical: each group's own non-tripping ceiling is capped at
+  `remainingBudget / groupSize`, so realistic short contention on one group can never push a later
+  group below its floor with only 4 groups). Full regression: all 34 `GdprErasureIT` + 12
+  `GdprErasureServiceTest` pass unmodified, confirming the pre-existing single-statement
+  `lock_timeout` path (including the exact per-statement value used when the budget is ample) is
+  unchanged.
+
+**AC2 — `BookingPaymentPersistenceService` dedicated connection pool.**
+
+- Added `DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY` as a second named target on the
+  EXISTING `RoutingDataSource` bean (no new routing mechanism), backed by a new
+  `paymentRequiresNewHikariConfig` bean: `maximumPoolSize = 10` — sized at 2x
+  `booking.batch.maxSize = 5` specifically to account for concurrent booking-accept/settle/decline
+  operations from MULTIPLE independent request threads, not just the `batch.maxSize` concurrency
+  within one batch-accept listener's own sequential per-booking loop (**story review 2026-09-26:
+  corrected from an initial `= 5`, which anchored to `batch.maxSize` alone and under-accounted for
+  concurrent callers on independent threads — see `DataSourceConfig.paymentRequiresNewHikariConfig`'s
+  own Javadoc for the full sizing arithmetic**); `minimumIdle = 1` (unlike the GDPR pool's `0` — this
+  pool sees regular production traffic, not a rare admin trigger); `connectionTimeout = 5_000` (half
+  the GDPR pool's 10s — `onBookingAccepted`/`onBatchBookingAccepted` run synchronously on the HTTP
+  request thread, so a fast fail here keeps the accept responsive and defers to the already-existing
+  `PaymentPendingSweeper` reconciliation path). Test-side `TestConfig.paymentRequiresNewHikariConfig`
+  mirrors this (also `= 10`).
+- All three `REQUIRES_NEW` methods (`reserveCapture`, `persistPaymentFailure`, `declineBatchBooking`)
+  needed a **self-invocation split** (e.g. `reserveCapture` → `self.reserveCaptureTransactional`,
+  mirroring `GdprErasureService.erase`/`eraseTransactional`): all three are called externally through
+  the Spring proxy (from `PaymentLifecycleService`), so the routing key must be set in a new
+  non-`@Transactional` wrapper BEFORE the `@Transactional(REQUIRES_NEW)` proxy advice opens its
+  connection — investigated per the story's own Dev Notes and confirmed a drop-in wrap (setting the
+  key as the annotated method's first line) would NOT have worked.
+- Two existing Mockito-based unit tests (`BookingPaymentPersistenceServiceTest`,
+  `CaptureReservationTest`) call `reserveCapture`/`persistPaymentFailure` directly via `@InjectMocks`
+  — fixed with `ReflectionTestUtils.setField(service, "self", service)`, mirroring this project's own
+  established fix for the identical issue in `GdprErasureServiceTest`/`PackSessionServicePauseTest`.
+- Tests: new `BookingPaymentDataSourceRoutingIT` (direct routing proof mirroring
+  `GdprErasureDataSourceRoutingIT`'s shape, plus a real end-to-end `reserveCapture` dedicated-pool-
+  exhaustion fail-fast-at-~5s proof — confirmed in the real run log: `payment-requires-new-pool -
+  Connection is not available, request timed out after 5002ms`). Full regression:
+  `CaptureReservationIT` (8), `BatchPaymentIT` (3), `PaymentPendingSweeperIT` (9),
+  `PaymentWebhookIdempotencyIT` (3), `BatchAcceptPaymentIT` (8), `BookingPaymentPersistenceServiceTest`
+  (3), `CaptureReservationTest` (6) — all green, confirming none of the three methods' observable
+  transactional behavior changed, only which pool their `REQUIRES_NEW` connection comes from.
+
+**Ledger closeout.** Annotated the `skillars-deferred-129` D1 bullet `[CLOSED by skillars-deferred-137
+AC1 — ...]`. Found and annotated **three** (not two) `BookingPaymentPersistenceService` pool-pressure
+bullets — the story's own citation ("2026-06-25 D14, 2026-08-24") had a date drift: the actual dates
+on the matching bullets are 2026-08-11 (×2, including D14) and 2026-08-24 (×1); disclosed and
+corrected in `deferred-work.md` rather than silently re-cited, per this project's own "diff cited
+lines" convention. No local `mvn verify` run — GitHub CI is the sole full-verification gate per
+standing convention.
 
 ### File List
 
-(Not yet implemented.)
+**Modified:**
+- `src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java`
+- `src/main/java/com/softropic/skillars/infrastructure/config/DataSourceConfig.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java`
+- `src/test/java/com/softropic/skillars/config/TestConfig.java`
+- `src/test/java/com/softropic/skillars/platform/admin/service/GdprErasureServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/CaptureReservationTest.java`
+- `_bmad-output/implementation-artifacts/deferred-work.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+
+**New:**
+- `src/test/java/com/softropic/skillars/platform/payment/service/BookingPaymentDataSourceRoutingIT.java`
 
 ### Change Log
 
@@ -328,7 +430,137 @@ routing mechanism
   own `RoutingDataSource` infrastructure). Owner decision (`AskUserQuestion`): ship this story at its
   current, smaller-than-usual 2-AC size rather than manufacture additional scope, given how
   thoroughly this codebase has already been hardened by 137 prior stories. Status: ready-for-dev.
+- 2026-09-26: `/bmad-dev-story` completed. AC1: ported `RadarCompositeCalculationService`'s cumulative
+  lock-wait spend-down mechanism into `GdprErasureService`, bounding the previously-unbounded
+  `(12+M) × seconds` worst case; found and corrected a partial-commit-risk misconception during
+  implementation (a bail-out is always a full rollback, since the whole method is one REQUIRES_NEW
+  transaction), and a latent test-fixture gap in `GdprErasureServiceTest`. AC2: gave
+  `BookingPaymentPersistenceService`'s three `REQUIRES_NEW` methods their own dedicated connection pool
+  by extending story 136's `RoutingDataSource` with a second named target, requiring a self-invocation
+  split for all three methods. All targeted tests green (46 GdprErasureService-related +
+  BookingPaymentPersistenceService-related test methods across 9 classes); no regressions. Status:
+  review.
+- 2026-09-26: `/bmad-code-review` findings re-triaged after independent re-verification against
+  current `HEAD` found 12 of the original pass's 14 decision/patch findings did not survive: false
+  positives (misread `Math.min()` semantics, a design-working-as-intended reading of the M-bounded
+  Group 4 floor check, a wrong file:line citation), or matches of an established sibling pattern this
+  codebase already ships unchanged (`RadarCompositeCalculationService`'s own hardcoded divisor and
+  untested mechanism, `GdprErasureService`'s own unguarded `self` field and nested
+  `RoutingDataSourceContext` set/clear, the project's own documented `ReflectionTestUtils` test seam).
+  1 patch was genuine (AC1 Test Plan (b)'s partway-bail-out gap — fixed, new
+  `GdprErasureServiceTest` case added, 13/13 green) and 1 "decision" was already resolved in code, not
+  actually open (payment pool `maximumPoolSize` already shipped at `10`, not the `5` this file's own
+  prose still described — prose corrected to match). Both original `Deferred`/`Dismissed` items
+  independently re-verified and left standing. Status: review (unchanged — no unresolved
+  decision-needed or open patch findings remain).
+
+### Review Findings
+
+**Re-triaged 2026-09-26** — the original pass below (18 raw findings: 2 decision-needed, 12 patch, 2
+deferred, 2 dismissed) was independently re-verified line-by-line against current `HEAD` per this
+project's own "every citation must be read from HEAD before inclusion" convention. **12 of the 14
+decision/patch findings did not survive verification** — false positives, stale citations, or matches
+of an established sibling pattern this codebase already ships (see each item's own note below). Only
+1 patch was genuinely actionable and has been fixed; the second "decision" was already resolved in
+code, just not in this file's own prose. Struck-through items are the ORIGINAL findings, kept for
+record rather than deleted, each followed by the verification verdict.
+
+**Patches (2)** — fixable issues:
+
+- [x] [Review][Patch] Test Plan (b) Does Not Verify Partway Bail-Out — AC1 Test Plan (b) requires "a
+  child that would exceed the cumulative budget bails out partway through...confirming no unrecoverable
+  partial state." The only existing test bailed out BEFORE any statement ran (floor-tripped at Group 1
+  via a 1s budget), never proving a bail-out AFTER some statements executed. **Fixed:** added
+  `deletePlayerDevelopmentData_cumulativeLockWaitBudgetExhausted_bailsOutPartwayAfterGroups1Through3_rollsBackTombstoneOnly`
+  — seeds a 20s budget (passes Groups 1-3's fixed 6/3/3 divisors) with 15 mocked blob keys (fails Group
+  4's M=15 divisor), verifying Groups 1-3's deletes genuinely ran, then confirming the tombstone/Group-4
+  enqueue never committed and the request reads `FAILED` with the distinguished alert reason. 13/13
+  `GdprErasureServiceTest` pass. [GdprErasureServiceTest.java, added after the existing
+  `bailsOutBeforeAnyStatement` test]
+
+- [x] [Review][Patch] Payment Pool Sizing (re-triaged from Decision-Needed) — verification found this
+  was **already resolved in code, not actually open**: `DataSourceConfig.paymentRequiresNewHikariConfig`
+  and `TestConfig`'s test-side equivalent both already size `maximumPoolSize = 10` (not the `5` this
+  story's own Completion Notes prose still described), with Javadoc reasoning that directly addresses
+  the original concern (independent-thread concurrent draw, not just intra-batch sequential calls).
+  **Fixed:** corrected the Completion Notes prose below to describe the actual, already-shipped `10`
+  sizing and disclose the correction, rather than leaving stale text describing a value the code no
+  longer has. No code change needed — this was a documentation-sync gap, not an open decision.
+
+**False positives / already-resolved, dismissed on re-verification (12)**
+
+- ~~[Decision] Exception Type Deviation~~ — **not a deviation.** AC1's own spec text explicitly
+  delegates this exact choice to the implementer ("decide during implementation which exception type a
+  mid-child bail-out should surface as... a cumulative-budget bail-out is arguably a DIFFERENT
+  condition... and may warrant its own alert reason; decide and document") — the new
+  `CumulativeLockBudgetExhaustedException`/`CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED` is the exact outcome
+  the spec named as acceptable, fully documented at the throw site.
+- ~~[Patch] Integer Division Rounding~~ — the floor check on the very next line
+  (`if (shrunk < ...min()) throw ...`) already catches a zero/near-zero division result and converts it
+  into the designed bail-out — this is the mechanism working as intended, not a violated invariant.
+- ~~[Patch] Missing Null-Safety on Payment `self` Reference~~ — **wrong citation**:
+  `BookingPaymentPersistenceService.java:69-71` is unrelated `Counter` field declarations, not the
+  `self` field. The actual field matches the unguarded `@Autowired @Lazy self` self-invocation pattern
+  already established and shipped in `GdprErasureService`/`PackSessionService` without a null check.
+- ~~[Patch] Unbounded M Silences Group 4 Timeout~~ — this describes the fix working as designed: a
+  large `M` correctly trips the floor check into a safe, re-drivable bail-out. That IS the protection
+  AC1 exists to add against unbounded `M` — not a gap in it.
+- ~~[Patch] Pathological lockTimeoutSeconds Bypasses Budget~~ — misreads `Math.min()`: it returns the
+  SMALLER of its two arguments, so an oversized `lockTimeoutSeconds` is the value discarded, not the
+  one that "bypasses shrinking."
+- ~~[Patch] Routing Context Potential Leak~~ — `RoutingDataSourceContext` is deliberately a flat,
+  non-nesting `ThreadLocal`, and the identical nested set/clear pattern
+  (`erase()`→`eraseTransactional()`→`deletePlayerDevelopmentData()`, same key) has shipped in production
+  since story 136 without incident, because the routing key is only consulted once, at
+  connection-acquisition time. No current call path nests two *different* keys across these three
+  payment methods or against GDPR/PackSessionService's own keys.
+- ~~[Patch] Hardcoded Statement Group Counts Unmaintainable~~ — matches the established sibling
+  pattern this AC explicitly mirrors: `RadarCompositeCalculationService.recalculateComposite`'s own
+  identical mechanism hardcodes its own divisor (`/ 2`) as a bare literal too.
+- ~~[Patch] Time Measurement Precision Mismatch~~ — `spendDownLockBudget` computes
+  `Duration.between(...)` at full precision against a `Duration` budget (not truncated to whole
+  seconds) — no underflow occurs in the budget bookkeeping itself; only the final per-group SQL value
+  is rounded to whole seconds, which is inherent to Postgres `lock_timeout`'s string format and only
+  makes the check MORE conservative, never less safe.
+- ~~[Patch] Missing Exception Cause Chain Preservation~~ — `CumulativeLockBudgetExhaustedException` is
+  thrown proactively, BEFORE any statement in the group runs — there is no underlying database
+  exception to wrap; the code is choosing not to attempt the group at all, not recovering from a failed
+  attempt.
+- ~~[Patch] No Startup Validation of Statement Counts~~ — same reasoning as "Hardcoded Statement Group
+  Counts" above: `RadarCompositeCalculationService`'s own identical mechanism has no such validator
+  either; this would be new process this codebase doesn't otherwise follow for this pattern.
+- ~~[Patch] Fragile Test Setup via Reflection~~ — matches this project's own explicitly-documented,
+  established `ReflectionTestUtils` test seam, already used identically for the pre-existing
+  `gdprEraseLockBudget` field (see that field's own Javadoc and this story's Completion Notes for why a
+  plain instance field, not a constant, is the deliberate choice).
+- ~~[Patch] Config Mock Stubbing Silent Failure~~ — already covered: a separate, dedicated test
+  (`deletePlayerDevelopmentData_readsLockTimeoutConfigWithTheDocumentedBoundsLiterally`) pins the exact
+  `getBoundedLong(...)` call arguments via `verify(...)`, closing exactly the masking risk this finding
+  describes. The broad `lenient()` stub's own reasoning is documented inline at its declaration.
+
+**Deferred (2)** — pre-existing, not this change (re-verified, both stand):
+
+- [x] [Review][Defer] Pattern Duplication Between GDPR and Payment — Both modules now use identical self-invocation + RoutingDataSourceContext pattern. No shared base class or utility. Future modules will copy-paste, compounding maintenance risk — deferred, architectural; not caused by this change.
+
+- [x] [Review][Defer] Radar Pattern Untested — Implementation notes that RadarCompositeCalculationService's identical cumulative-exhaustion mechanism has ZERO test coverage in this codebase (verified by grep). This story inherits that untested pattern — deferred, pre-existing.
+
+**Dismissed (2)** — spec explicitly left for implementation to decide (re-verified, both stand):
+
+- Formula divisor (`remainingBudget / statementsInGroup`): Spec Dev Notes say "the exact divisor is an implementation decision"; choosing per-group divisor is acceptable.
+- Statement granularity (per-group vs per-statement): Spec Dev Notes say "implementer should pick the grain that keeps the fix legible"; choosing 4 logical groups is acceptable.
+
+---
 
 ## Story Completion Status
 
-Not yet implemented. Status: ready-for-dev.
+Implemented. All tasks complete, all targeted tests green, ledger closed out. Both review passes' findings resolved (2026-09-26): the first pass's 1 genuine patch (AC1 Test Plan (b) partway bail-out coverage) and this second pass's 1 genuine patch (clock-regression floor in `spendDownLockBudget`) are both fixed and tested; every other raised item across both passes was verified as a false positive, already-resolved, or a legitimately deferred pre-existing/architectural observation. No open decision-needed or patch findings remain. Status: done.
+
+---
+
+## Review Findings
+
+**Code Review (2026-09-26):** 3-layer review (Blind Hunter, Edge Case Hunter, Acceptance Auditor). Blind Hunter and Acceptance Auditor passed clean. Edge Case Hunter found 1 issue:
+
+- [x] [Review][Patch] Clock regression in budget spend-down inflates cumulative ceiling [GdprErasureService.java:1161] — `Duration.between(groupStartedAt, Instant.now())` assumes monotonic system clock. If system clock adjusts backward (NTP skew, VM time jump), elapsed becomes negative. The code guards against `elapsed >= remainingBudget` but not `elapsed < 0`. Negative elapsed causes `remainingBudget.minus(negativeDuration)` to inflate the budget, violating the cumulative lock-wait ceiling intent. **Verified real, not a false positive** — confirmed `Duration.between` can return a negative duration on a backward clock step, and the existing guard only covers elapsed being too LARGE, not negative. Also confirmed `RadarCompositeCalculationService.recalculateComposite` (the method this AC explicitly ports) has the byte-for-byte identical gap, unguarded — inherited via a faithful port, not newly introduced by this story, but still worth fixing here since the cost is trivial. **Fixed:** `spendDownLockBudget` now floors a negative `elapsed` at `Duration.ZERO` before the existing comparison (`GdprErasureService.java`, `spendDownLockBudget`); method visibility relaxed from `private` to package-private so `GdprErasureServiceTest` can call it directly. New test `spendDownLockBudget_negativeElapsedFromBackwardClockStep_flooredAtZero_doesNotInflateBudget` reproduces the clock-skew scenario deterministically (passing `groupStartedAt` 10s in the future, so `Duration.between` returns a negative value without needing to mock the system clock) and pins that the budget is floored at its original value instead of inflating. 14/14 `GdprErasureServiceTest` pass. Radar's own identical gap is NOT fixed here (out of this story's file scope) — flagged as a follow-up below.
+
+- [x] [Review][Defer] `RadarCompositeCalculationService.recalculateComposite`'s own cumulative spend-down has the identical negative-elapsed clock-regression gap as the one just fixed above — found while verifying the finding above, not part of this story's own scope (`GdprErasureService.java` files only). Same fix shape would apply (floor `elapsed` at `Duration.ZERO`) if a future story revisits that method.

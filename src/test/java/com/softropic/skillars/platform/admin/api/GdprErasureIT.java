@@ -9,6 +9,7 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.admin.contract.GdprErasureRequestedEvent;
 import com.softropic.skillars.platform.admin.service.GdprErasureService;
 import com.softropic.skillars.platform.admin.service.GdprEventListener;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.security.SecurityIT;
@@ -1669,6 +1670,100 @@ class GdprErasureIT extends AbstractIntegrationTest {
             .as("must be distinguished from a downstream delete-statement lock_timeout trip "
                 + "(CHILD_DELETE_LOCK_TIMEOUT) — this is a player_profiles lock-ACQUISITION contention")
             .isEqualTo("CHILD_CONTENDED");
+    }
+
+    /**
+     * skillars-deferred-137 AC1 test plan (c). Orchestrating a REAL multi-statement-group contention
+     * cascade that lands the cumulative bail-out on a group AFTER the first is impractical to do
+     * reliably here: each group's own per-statement timeout is capped at {@code remainingBudget /
+     * groupSize}, so a single group's own non-tripping real wait can consume at most a small fraction
+     * of the CURRENT remaining budget (1/6th for group 1, etc.) — with only four groups, compounding
+     * that across realistic wait times cannot drive a later group below the floor without either an
+     * unreasonably long test or exact-timing choreography across several simultaneous held locks. This
+     * mirrors {@code RadarCompositeCalculationService.recalculateComposite}'s own identical mechanism,
+     * whose cumulative-exhaustion path has ZERO real-contention test coverage anywhere in this codebase
+     * today for the same reason. {@link GdprErasureServiceTest}'s own unit tests already prove the
+     * bail-out/exception-routing/alert-reason logic deterministically and fast (test plan item (b)),
+     * shrinking {@link GdprErasureService#cumulativeLockWaitBudget} directly rather than via real wait.
+     *
+     * <p>What THIS test proves instead, against the real Spring-managed singleton bean and a real
+     * Postgres transaction (not mocks): (c) a bailed-out child leaves no unrecoverable partial state —
+     * the seeded row survives the bail-out untouched — and a subsequent manual resubmit (a fresh
+     * {@code erase()} call, once the budget is no longer artificially starved) completes cleanly and
+     * actually deletes it, exactly like a single-statement {@code CHILD_DELETE_LOCK_TIMEOUT} trip is
+     * already known to be re-drivable.
+     */
+    @Test
+    void erase_selfRegisteredPlayer_cumulativeLockWaitBudgetExhausted_bailsOutThenReDriveCompletesCleanly() {
+        UUID eventId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO development.player_timeline_events (id, player_id, event_type, occurred_at) "
+                    + "VALUES (?, ?, 'SESSION_COMPLETED', ?)",
+                eventId, SELF_PLAYER_PROFILE_ID, Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        // 1s leaves group 1's own shrunk timeout (1s / 6 statements = 0s) below the 2s floor
+        // immediately — deterministic, no real contention needed to prove the bail-out itself; this
+        // test's own value-add is entirely in what happens BEFORE and AFTER it (real DB state).
+        ReflectionTestUtils.setField(gdprErasureService, "cumulativeLockWaitBudget", Duration.ofSeconds(1));
+
+        UUID failedRequestId = erase(SELF_PLAYER_USER_ID);
+
+        String failedStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.gdpr_requests WHERE id = ?", String.class, failedRequestId);
+        assertThat(failedStatus).isEqualTo("FAILED");
+
+        Map<String, Object> alert = jdbcTemplate.queryForMap(
+            "SELECT status, reason FROM admin.admin_alerts "
+                + "WHERE reference_id = ? AND type = 'GDPR_ERASURE_DEADLINE'",
+            failedRequestId.toString());
+        assertThat(alert.get("status")).isEqualTo("OPEN");
+        assertThat(alert.get("reason")).isEqualTo("CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED");
+
+        // Bail-out happened before the FIRST statement even ran (group 1's own floor check trips
+        // ahead of its set_config call) — the whole REQUIRES_NEW transaction rolled back, so nothing
+        // was touched. Proven directly against real Postgres state, not inferred from mock interactions.
+        Integer residualEventCount = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_timeline_events WHERE id = ?",
+            Integer.class, eventId);
+        assertThat(residualEventCount).isEqualTo(1);
+        Boolean tombstoned = jdbcTemplate.queryForObject(
+            "SELECT development_data_erased_at IS NOT NULL FROM main.player_profiles WHERE id = ?",
+            Boolean.class, SELF_PLAYER_PROFILE_ID);
+        assertThat(tombstoned).isFalse();
+
+        // Manual resubmit, budget restored to its real (non-starved) default: this is test plan item
+        // (c) — the bailed-out child makes genuine forward progress on a later attempt, exactly as
+        // deletePlayerDevelopmentData's own re-drivability Javadoc claims.
+        ReflectionTestUtils.setField(gdprErasureService, "cumulativeLockWaitBudget",
+            Duration.ofSeconds(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.max()));
+
+        UUID redriveRequestId = erase(SELF_PLAYER_USER_ID);
+
+        String redriveStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.gdpr_requests WHERE id = ?", String.class, redriveRequestId);
+        assertThat(redriveStatus).isEqualTo("COMPLETED");
+        Integer eventCountAfterRedrive = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_timeline_events WHERE id = ?",
+            Integer.class, eventId);
+        assertThat(eventCountAfterRedrive).isEqualTo(0);
+        Boolean tombstonedAfterRedrive = jdbcTemplate.queryForObject(
+            "SELECT development_data_erased_at IS NOT NULL FROM main.player_profiles WHERE id = ?",
+            Boolean.class, SELF_PLAYER_PROFILE_ID);
+        assertThat(tombstonedAfterRedrive).isTrue();
+    }
+
+    // (code review 2026-09-23 precedent, skillars-deferred-137 AC1): cumulativeLockWaitBudget is a
+    // plain field on the shared Spring-managed singleton, mutated directly by the test above via
+    // ReflectionTestUtils rather than through platform_config — unconditional in @AfterEach, mirroring
+    // resetGdprEraseStatementLockTimeoutSecondsConfig below, so a shrunk value cannot leak into any
+    // later test in this shared-context suite.
+    @AfterEach
+    void resetCumulativeLockWaitBudget() {
+        ReflectionTestUtils.setField(gdprErasureService, "cumulativeLockWaitBudget",
+            Duration.ofSeconds(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.max()));
     }
 
     private void setGdprEraseStatementLockTimeoutSecondsConfig(int seconds) {

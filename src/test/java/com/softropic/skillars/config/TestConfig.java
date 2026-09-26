@@ -88,9 +88,11 @@ public class TestConfig {
     @Bean
     @ConditionalOnProperty(name = "datasource.container", havingValue = "true")
     DataSource dataSource(@Qualifier("hikariConfig") HikariConfig hikariConfig,
-            @Qualifier("gdprErasureHikariConfig") HikariConfig gdprErasureHikariConfig) {
+            @Qualifier("gdprErasureHikariConfig") HikariConfig gdprErasureHikariConfig,
+            @Qualifier("paymentRequiresNewHikariConfig") HikariConfig paymentRequiresNewHikariConfig) {
         return new RoutingDataSource(new HikariDataSource(hikariConfig),
-            Map.of(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY, new HikariDataSource(gdprErasureHikariConfig)));
+            Map.of(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY, new HikariDataSource(gdprErasureHikariConfig),
+                DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY, new HikariDataSource(paymentRequiresNewHikariConfig)));
     }
 
     /**
@@ -144,6 +146,35 @@ public class TestConfig {
         cfg.setMaximumPoolSize(3);
         cfg.setMinimumIdle(0);
         cfg.setConnectionTimeout(10_000);
+        cfg.setIdleTimeout(idleTimeoutMs);
+        cfg.setAutoCommit(autoCommit);
+        cfg.setConnectionInitSql(connectionInitSql);
+        return cfg;
+    }
+
+    /**
+     * skillars-deferred-137 AC2: test-side equivalent of {@link DataSourceConfig#paymentRequiresNewHikariConfig}
+     * — same reasoning as {@link #gdprErasureHikariConfig} above: not bound to {@code
+     * spring.datasource.hikari.*} (production sizing is for ordinary traffic, not this narrow purpose),
+     * but {@code auto-commit}/{@code connection-init-sql}/{@code idle-timeout} still read from the same
+     * test-tuned keys to avoid drift. {@code maximumPoolSize = 10} (2x booking.batch.maxSize) provides
+     * headroom for concurrent booking-accept/settle/decline operations from independent request threads.
+     */
+    @Bean
+    @ConditionalOnProperty(name = "datasource.container", havingValue = "true")
+    HikariConfig paymentRequiresNewHikariConfig(
+            @Value("${spring.datasource.hikari.auto-commit}") boolean autoCommit,
+            @Value("${spring.datasource.hikari.connection-init-sql}") String connectionInitSql,
+            @Value("${spring.datasource.hikari.idle-timeout}") long idleTimeoutMs) {
+        final PostgreSQLContainer<?> postgres = SharedContainers.postgres();
+        final HikariConfig cfg = new HikariConfig();
+        cfg.setJdbcUrl(postgres.getJdbcUrl());
+        cfg.setUsername(postgres.getUsername());
+        cfg.setPassword(postgres.getPassword());
+        cfg.setPoolName("payment-requires-new-pool");
+        cfg.setMaximumPoolSize(10);
+        cfg.setMinimumIdle(1);
+        cfg.setConnectionTimeout(5_000);
         cfg.setIdleTimeout(idleTimeoutMs);
         cfg.setAutoCommit(autoCommit);
         cfg.setConnectionInitSql(connectionInitSql);

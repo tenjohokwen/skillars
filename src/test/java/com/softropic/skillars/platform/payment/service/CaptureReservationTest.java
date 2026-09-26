@@ -17,6 +17,7 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.Optional;
@@ -62,6 +63,12 @@ class CaptureReservationTest {
     void setUpLockRetryer() {
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+        // skillars-deferred-137 AC2: reserveCapture now delegates to
+        // self.reserveCaptureTransactional(...) so its own routing-key set runs before the
+        // @Transactional(REQUIRES_NEW) proxy advice would otherwise acquire a connection —
+        // self-referenced directly to the same instance since there is no Spring context here to
+        // supply the @Autowired @Lazy self field, mirroring GdprErasureServiceTest's identical fix.
+        ReflectionTestUtils.setField(service, "self", service);
     }
 
     private Booking booking(String status) {

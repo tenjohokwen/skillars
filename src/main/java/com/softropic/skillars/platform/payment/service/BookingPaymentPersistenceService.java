@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.infrastructure.config.DataSourceConfig;
+import com.softropic.skillars.infrastructure.config.RoutingDataSourceContext;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
@@ -18,7 +20,9 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,6 +50,19 @@ public class BookingPaymentPersistenceService {
     private final MeterRegistry meterRegistry;
     private final PessimisticLockRetryer lockRetryer;
     private final ConfigService configService;
+
+    /**
+     * skillars-deferred-137 AC2: self-reference so {@code reserveCapture}/{@code persistPaymentFailure}/
+     * {@code declineBatchBooking} can set {@link RoutingDataSourceContext} BEFORE their own {@code
+     * @Transactional(REQUIRES_NEW)} proxy advice opens (and acquires a connection for) the actual
+     * transactional method — a routing key set inside an already-{@code @Transactional} method's own
+     * body runs too late, since the Spring AOP proxy already acquired the connection before the method
+     * body starts executing. Mirrors {@code GdprErasureService.self}/{@code PackSessionService.self}'s
+     * identical pattern.
+     */
+    @Autowired
+    @Lazy
+    private BookingPaymentPersistenceService self;
 
     private Counter settleConflictCounter;
     private Counter settleErrorCounter;
@@ -87,9 +104,26 @@ public class BookingPaymentPersistenceService {
      * <p>The {@code booking_payments} read below is deliberately unlocked: two concurrent
      * reservations for the same booking serialise on the booking-row lock taken first, so the
      * read-then-insert is protected by it, with {@code pk_booking_payments} as the backstop.
+     *
+     * <p>skillars-deferred-137 AC2: thin, non-transactional wrapper around {@link
+     * #reserveCaptureTransactional} — required so {@link RoutingDataSourceContext} is set BEFORE
+     * that method's own {@code @Transactional(REQUIRES_NEW)} proxy advice opens its connection (see
+     * {@link #self}'s own Javadoc), routing this method's {@code REQUIRES_NEW} acquisition to the
+     * dedicated payment pool instead of the primary one. Mirrors {@code
+     * GdprErasureService.erase}/{@code eraseTransactional}'s own established self-invocation split.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CaptureReservation reserveCapture(UUID bookingId, BigDecimal intendedCredit,
+                                             BigDecimal intendedStripe, UUID batchId) {
+        RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
+        try {
+            return self.reserveCaptureTransactional(bookingId, intendedCredit, intendedStripe, batchId);
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public CaptureReservation reserveCaptureTransactional(UUID bookingId, BigDecimal intendedCredit,
                                              BigDecimal intendedStripe, UUID batchId) {
         Booking booking = lockRetryer.withBoundedRetry("BookingPaymentPersistenceService.reserveCapture",
             () -> bookingRepository.findByIdForUpdate(bookingId).orElse(null));
@@ -243,8 +277,25 @@ public class BookingPaymentPersistenceService {
             .build());
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    /**
+     * skillars-deferred-137 AC2: thin, non-transactional wrapper — see {@link #reserveCapture}'s own
+     * Javadoc for why this split (and not a routing-key set inside the transactional method's body)
+     * is required to route this REQUIRES_NEW acquisition to the dedicated payment pool.
+     */
     public void persistPaymentFailure(UUID bookingId, BigDecimal creditToReverse,
+                                       Long parentId, String parentEmail, String coachDisplayName,
+                                       Instant requestedStartTime, String canonicalTimezone) {
+        RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
+        try {
+            self.persistPaymentFailureTransactional(bookingId, creditToReverse, parentId, parentEmail,
+                coachDisplayName, requestedStartTime, canonicalTimezone);
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void persistPaymentFailureTransactional(UUID bookingId, BigDecimal creditToReverse,
                                        Long parentId, String parentEmail, String coachDisplayName,
                                        Instant requestedStartTime, String canonicalTimezone) {
         settleFailedCounter.increment();
@@ -322,9 +373,22 @@ public class BookingPaymentPersistenceService {
      * own transaction. Its own transaction keeps the DECLINED write independent of both the failed
      * settle and the listener's surrounding transaction, so the booking is never left stranded in
      * PAYMENT_PENDING with no record of why.
+     *
+     * <p>skillars-deferred-137 AC2: thin, non-transactional wrapper — see {@link #reserveCapture}'s own
+     * Javadoc for why this split is required to route this REQUIRES_NEW acquisition to the dedicated
+     * payment pool.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void declineBatchBooking(UUID bookingId, UUID batchId) {
+        RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
+        try {
+            self.declineBatchBookingTransactional(bookingId, batchId);
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void declineBatchBookingTransactional(UUID bookingId, UUID batchId) {
         BookingPayment bp = loadOrCreate(bookingId);
         bp.setBatchPaymentIntentId(batchId);
         bp.setCreditDebited(BigDecimal.ZERO);

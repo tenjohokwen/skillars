@@ -33,6 +33,16 @@ public class DataSourceConfig {
      */
     public static final String GDPR_ERASURE_DATASOURCE_KEY = "gdpr-erasure";
 
+    /**
+     * skillars-deferred-137 AC2: the {@link RoutingDataSourceContext} key {@code
+     * BookingPaymentPersistenceService} sets around its three {@code REQUIRES_NEW} connection
+     * acquisitions ({@code reserveCapture}, {@code persistPaymentFailure}, {@code declineBatchBooking})
+     * — the second named target on the SAME {@link RoutingDataSource} bean {@link #GDPR_ERASURE_DATASOURCE_KEY}
+     * already uses, per that mechanism's own Javadoc ("business-agnostic, reusable by any future module
+     * needing a second dedicated pool").
+     */
+    public static final String PAYMENT_REQUIRES_NEW_DATASOURCE_KEY = "payment-requires-new";
+
     // Skipped when datasource.container=true (tests/dev) — Boot auto-configures from @ServiceConnection
     // instead (see TestConfig's own equivalent routing bean, conditioned the opposite way).
     //
@@ -50,9 +60,11 @@ public class DataSourceConfig {
     @Bean
     @ConditionalOnProperty(name = "datasource.container", havingValue = "false", matchIfMissing = true)
     DataSource dataSource(@Qualifier("hikariConfig") HikariConfig hikariConfig,
-            @Qualifier("gdprErasureHikariConfig") HikariConfig gdprErasureHikariConfig) {
+            @Qualifier("gdprErasureHikariConfig") HikariConfig gdprErasureHikariConfig,
+            @Qualifier("paymentRequiresNewHikariConfig") HikariConfig paymentRequiresNewHikariConfig) {
         return new RoutingDataSource(new HikariDataSource(hikariConfig),
-            Map.of(GDPR_ERASURE_DATASOURCE_KEY, new HikariDataSource(gdprErasureHikariConfig)));
+            Map.of(GDPR_ERASURE_DATASOURCE_KEY, new HikariDataSource(gdprErasureHikariConfig),
+                PAYMENT_REQUIRES_NEW_DATASOURCE_KEY, new HikariDataSource(paymentRequiresNewHikariConfig)));
     }
 
     @Bean
@@ -98,6 +110,57 @@ public class DataSourceConfig {
         hikariConfig.setMaximumPoolSize(3);
         hikariConfig.setMinimumIdle(0);
         hikariConfig.setConnectionTimeout(10_000);
+        hikariConfig.setIdleTimeout(300_000);
+        hikariConfig.setMaxLifetime(900_000);
+        hikariConfig.setAutoCommit(autoCommit);
+        hikariConfig.setConnectionInitSql(connectionInitSql);
+        return hikariConfig;
+    }
+
+    /**
+     * skillars-deferred-137 AC2: small, dedicated pool for {@code BookingPaymentPersistenceService}'s
+     * three {@code REQUIRES_NEW} connection acquisitions ({@code reserveCapture}, {@code
+     * persistPaymentFailure}, {@code declineBatchBooking}) — reuses the exact mechanism
+     * skillars-deferred-136 built for {@link #gdprErasureHikariConfig} (its own Javadoc explicitly
+     * invites this: "business-agnostic, reusable by any future module needing a second dedicated
+     * pool"), extending the SAME {@link RoutingDataSource} bean with a second named target rather than
+     * building a parallel routing mechanism.
+     *
+     * <p><strong>Sizing, derived independently of the GDPR pool's own {@code max 3}/{@code 10s}:</strong>
+     * these three methods run on live booking-accept/settle/batch-listener request-thread traffic, not
+     * GDPR's admin-only trigger, so a pool-pressure gap here is more production-realistic (flagged
+     * twice, 2026-06-25 and 2026-08-24, never fixed). {@code maximumPoolSize = 10} accounts for
+     * concurrent booking-accept/settle/decline operations from MULTIPLE independent request threads —
+     * not just the {@code booking.batch.maxSize = 5} concurrency within a single batch-accept listener
+     * invocation (where these three methods are called SEQUENTIALLY per-booking). The real concurrent
+     * draw on this pool is driven by how many DIFFERENT concurrent booking-accept/settle/decline
+     * requests are in flight at once across the request thread pool (e.g., 5 batch operations + 5
+     * non-batch direct calls = 10 concurrent draw), not by the sequential per-booking calls within one
+     * batch. Sizing conservatively at 2x batch.maxSize (10) provides headroom while staying far below
+     * the primary pool's own 25. {@code minimumIdle = 1} (unlike the GDPR pool's {@code 0}): this pool
+     * sees regular production traffic, not a rare admin trigger, so keeping one warm connection avoids
+     * paying a cold-open penalty on every booking accept. {@code connectionTimeout = 5_000} (half the
+     * GDPR pool's 10s): {@code onBookingAccepted}/{@code onBatchBookingAccepted} are non-{@code @Async}
+     * {@code AFTER_COMMIT} listeners that run SYNCHRONOUSLY on the same request thread that just
+     * accepted the booking, so a slow acquisition here directly extends that HTTP response — failing
+     * faster keeps the accept responsive and defers cleanly to the already-existing
+     * {@code PaymentPendingSweeper} reconciliation path for a dropped reservation, exactly as
+     * {@link com.softropic.skillars.platform.payment.service.PaymentLifecycleService#reserveOrReport}
+     * already treats any {@code reserveCapture} failure today.
+     */
+    @Bean
+    @ConditionalOnProperty(name = "datasource.container", havingValue = "false", matchIfMissing = true)
+    HikariConfig paymentRequiresNewHikariConfig(DataSourceProperties dataSourceProperties,
+            @Value("${spring.datasource.hikari.auto-commit}") boolean autoCommit,
+            @Value("${spring.datasource.hikari.connection-init-sql}") String connectionInitSql) {
+        final HikariConfig hikariConfig = new HikariConfig();
+        hikariConfig.setPassword(dataSourceProperties.getPassword());
+        hikariConfig.setUsername(dataSourceProperties.getUsername());
+        hikariConfig.setJdbcUrl(dataSourceProperties.getUrl());
+        hikariConfig.setPoolName("payment-requires-new-pool");
+        hikariConfig.setMaximumPoolSize(10);
+        hikariConfig.setMinimumIdle(1);
+        hikariConfig.setConnectionTimeout(5_000);
         hikariConfig.setIdleTimeout(300_000);
         hikariConfig.setMaxLifetime(900_000);
         hikariConfig.setAutoCommit(autoCommit);

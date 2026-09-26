@@ -1016,6 +1016,8 @@ Found or deliberately left while implementing the story. The first item is an **
 Adversarial code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor). 13 patch findings were resolved in the same pass; these 6 were deliberately left open. (`DisputeService`'s unguarded `findById` was independently raised by this review too — already tracked above as D5, not duplicated here.)
 
 - **`reserveCapture`'s `REQUIRES_NEW` + `PESSIMISTIC_WRITE` opens a second pooled connection per attempted reservation, held up to the 5s `lock.timeout` under contention**, with no discussion anywhere of connection-pool sizing. A burst of concurrent settle attempts against contended booking rows is a new resource-exhaustion vector this change introduces. Speculative and load-dependent — no load test exists either way. [`src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java:73-105`]
+  **[CLOSED by skillars-deferred-137 AC2 — see the D14 bullet below (2026-08-11) for the full fix
+  summary; same finding, same fix, restated across two overlapping review passes of this story.]**
 
 ## Deferred from: code review of skillars-uat-3-payment-capture-integrity-and-backup-retention (2026-08-11)
 
@@ -1024,6 +1026,27 @@ All 13 patch findings were applied; these are the review's own deferrals plus on
 - **D11 (from the patch round, not the review) — `PaymentPendingSweeper.sweepOne`'s row lock is justified by reasoning, not by a test.** The review correctly found that `sweepOne` decided on the *absence* of a payment row and then wrote one, while `reserveCapture` concurrently decided on the absence of the same row and inserted `CAPTURE_PENDING` — so an unlocked sweeper could commit `CHARGE_FAILED` over a granted reservation (`save()` on an assigned `@Id` with no `@Version` is a `merge()`, i.e. an UPDATE, not a failing INSERT). Fixed by re-reading under `findByIdForUpdate`, the same lock `reserveCapture` takes. **The IT written to prove it was deleted for passing unchanged against the unlocked code**: both threads start on one latch, but the sweeper first reads config and runs the stranded-booking query while `reserveCapture` goes almost straight to its insert, so the reservation committed first every time and the correct outcome came from the payment-row check rather than the lock. That the six existing `PaymentPendingSweeperTest` cases all broke when the lock landed does confirm the production path changed, but a mock swap is not proof of serialisation. The lock's read-then-write window is microseconds wide and not reachable from a test at this level; proving it would need either production instrumentation (a test-only hook inside `sweepOne`) or a DB-level fault injector, both of which are their own change. Recorded rather than left implicit, because this project has now three times found a lock whose test passed without it (`deferred-13`, `deferred-15`, and this one).
 
 - **D14 — `reserveCapture`'s `REQUIRES_NEW` + `PESSIMISTIC_WRITE` opens a second pooled connection per attempted reservation**, held up to the 5 s lock timeout under contention, with no pool-sizing analysis behind it. On the batch path that is one extra connection per credit-funded booking, taken sequentially. Load-dependent and speculative without a concurrency/load test, but it is a new resource pattern on the busiest path and should be measured before the platform carries real volume. [`BookingPaymentPersistenceService.java:73-105`]
+  **[CLOSED by skillars-deferred-137 AC2 — reused skillars-deferred-136's own `RoutingDataSource`
+  infrastructure (built explicitly "business-agnostic, reusable by any future module needing a second
+  dedicated pool") to add a second named target, `DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY`,
+  backed by a new `paymentRequiresNewHikariConfig` bean (`maximumPoolSize = 5`, anchored to this
+  codebase's own seeded `booking.batch.maxSize = 5` concurrency-scale convention since these three
+  methods run sequentially within one batch listener invocation; `minimumIdle = 1`, unlike the GDPR
+  pool's `0`, since this sees regular production traffic; `connectionTimeout = 5_000`, half the GDPR
+  pool's 10s, since `onBookingAccepted`/`onBatchBookingAccepted` run synchronously on the HTTP request
+  thread and a fast fail here keeps the accept responsive, deferring to the already-existing
+  `PaymentPendingSweeper` reconciliation path). By this story's own drafting, the risk surface had also
+  grown from one method (`reserveCapture` alone, as this bullet and the 2026-08-24 one below both
+  scoped it) to three (`persistPaymentFailure`, `declineBatchBooking` too) — all three closed together.
+  Required a self-invocation split (`reserveCapture`/`reserveCaptureTransactional`, mirroring
+  `GdprErasureService.erase`/`eraseTransactional`) since all three are called externally through the
+  Spring proxy, so the routing key must be set in a new non-`@Transactional` wrapper BEFORE the
+  `@Transactional(REQUIRES_NEW)` proxy advice opens its connection — a routing key set inside the
+  annotated method's own body runs too late. Verified via a new `BookingPaymentDataSourceRoutingIT`
+  (direct routing proof + a real dedicated-pool-exhaustion fail-fast-at-5s proof) plus regression runs
+  of `CaptureReservationIT`, `BatchPaymentIT`, `PaymentPendingSweeperIT`, `PaymentWebhookIdempotencyIT`,
+  and `BatchAcceptPaymentIT` — all green, confirming none of the three methods' observable
+  transactional behavior changed, only which pool their `REQUIRES_NEW` connection comes from.]**
 
 ## Deferred from: skillars-uat-5-player-self-booking story creation (2026-08-12)
 
@@ -1132,6 +1155,9 @@ above rather than duplicated here. This section holds only what the story-creati
   introduced by this story; revisit only if connection-pool exhaustion during a real payment-gateway outage
   is ever observed in practice.
   [`src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java:206-207`]
+  **[CLOSED by skillars-deferred-137 AC2 — see the D14 bullet under skillars-uat-3's own code review
+  (2026-08-11) for the full fix summary; this bullet's own connection-pressure observation (all three
+  `REQUIRES_NEW` methods, not just one) is exactly what that fix closes.]**
 - `deferred-work.md` and `sprint-status.yaml` accumulate indefinitely via ever-longer single lines (one
   line in each file already exceeds 40,000 characters) rather than being pruned or archived. Deferred:
   pre-existing project-wide convention followed identically by every prior story in this ledger, not
@@ -2953,6 +2979,25 @@ patched or resolved in-story — see that story's own `## Review Findings` secti
   `min(configured, remaining)` against a running total, bailing once it would fall below the `2s`
   floor. Bounding `M` (projection + `Pageable` cap, reconcile the remainder on a sweeper) is a
   separate, smaller win.
+  **[CLOSED by skillars-deferred-137 AC1 — ported `RadarCompositeCalculationService`'s own cumulative
+  spend-down mechanism into `deletePlayerDevelopmentDataInDedicatedPool`: the ~12+M statements are
+  batched into four logical groups (timeline/SLU, radar, performance-report/homework, blob-enqueue),
+  each re-issuing `set_config` with a timeout shrunk to `remainingBudget / groupSize`, bounded overall
+  by a new `cumulativeLockWaitBudget` field (`Duration.ofSeconds(GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.max())`,
+  120s default — a plain field, not `static final` like Radar's, specifically so a test can shrink it
+  via `ReflectionTestUtils` rather than waiting out a real 120s budget). A group whose shrunk timeout
+  would fall below the 2s floor throws a new `CumulativeLockBudgetExhaustedException`, distinguished
+  from a single-statement `DeleteStatementLockTimeoutException` trip by its own `CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED`
+  alert reason at both call sites. A mid-child bail-out has NO partial-commit risk (a genuine finding
+  during implementation, correcting this bullet's own "revisit if" framing): the whole method already
+  runs inside one `requiresNewTemplate` REQUIRES_NEW transaction, so any bail-out rolls back every
+  statement this child's call already executed, not just the remaining ones — the re-drivability
+  concern this bullet worried about does not actually apply. Verified via 3 new deterministic unit
+  tests (`GdprErasureServiceTest`, shrinking the budget directly) plus a new real-Postgres IT
+  (`GdprErasureIT.erase_selfRegisteredPlayer_cumulativeLockWaitBudgetExhausted_bailsOutThenReDriveCompletesCleanly`)
+  proving a bailed-out child survives untouched and cleanly re-drives. All 34 existing `GdprErasureIT`
+  tests plus 12 `GdprErasureServiceTest` tests pass unmodified, confirming the single-statement
+  `lock_timeout` path is unchanged.]**
 
 - **D2 — Declared config bounds and enforced config bounds are stated in two places and can
   diverge.** `GdprErasureService` calls `configService.getBoundedLong(KEY.key(), 5L, 2L, 120L)`,
