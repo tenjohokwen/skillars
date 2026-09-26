@@ -17,69 +17,6 @@ One bullet = one open item. Grouped by the review that raised it; the heading ca
   Verify against the code before trusting an unannotated forward-reference.
 - **File paths and line numbers age fast.** They were accurate at the review date in the heading.
 
-## Last audit: 2026-09-17 (post-merge prune after skillars-deferred-117, narrow scope)
-
-Routine sweep after `skillars-deferred-117` (PR #197) merged to master, per this file's own
-delete-outright-when-closed convention. Not a full-file re-audit — grepped the whole file for every
-symbol this story touched (`PendingBlobDeletion`/`pending_blob_deletions`, `VideoLifecycleScheduler`,
-`VideoRepository`, `markPurged`, `SessionPackForfeitureScheduler`, `RateLimitingService`,
-`PessimisticLockRetryer`, `withBoundedRetry`, `DrillUploadService`) and checked every live hit.
-
-- The story's own AC6 already deleted all five bullets it targeted (the `pending_blob_deletions`
-  follow-up under `## Deferred from: skillars-deferred-100 implementation`, and the `markPurged()`
-  bullet formerly under `## Deferred from: code review of story-115` — confirmed gone, only the
-  unrelated `@SchedulerLock` `PT12H` sizing bullet remains under that header).
-- Every other hit is either historical `## Last audit` narrative text (not a live bullet) or an
-  unrelated pre-existing item that names the same class/file for a different concern this story
-  didn't touch: `SessionPackForfeitureScheduler` D2-era mention in the 2026-08-05 deferred-15 audit
-  (a different scheduler's delivery bug, used only as a working-precedent citation); `RateLimitingService`
-  D2 under Group B (IP-keyed timing-oracle limitation — unrelated to AC4's eviction-sweep fix);
-  `PessimisticLockRetryer`'s `setSavepoint`-failure note under the deferred-62 review (unrelated to
-  AC5's idempotency call-site audit); `DrillUploadService` W9 (hypothetical `@TransactionalEventListener`
-  outside a transaction — still true, `DrillUploadService` is still `@Transactional`, unaffected by
-  AC5's refactor). None closed by this story; all left in place.
-- No other bullet in the file names any of the nine grepped symbols.
-
-## Last audit: 2026-09-16 (skillars-deferred-116 story creation)
-
-While mining the next deferred story, re-verified two untagged bullets from the old, largely-picked-over
-2026-06/2026-08 range (lines ~908-1550) against current code, per the ledger's own repeated finding that
-this range is "heavily picked over" but not fully exhausted:
-
-- **`code review of skillars-6-5-video-privacy-rbac-account-deletion-cascades` W4** (ownerId format
-  ambiguity, `VideoAccessGuard.java`) — **CLOSED, deleted.** `VideoAccessGuard.java`'s class javadoc now
-  carries an explicit "ownerId format (confirmed Task 0 investigation)" block documenting exactly the
-  resolution this bullet was waiting on. That was the section's only remaining bullet — header kept (the
-  W9 bullet below it is untouched and still open).
-- **`code review of skillars-3-10-session-pack-expiry-pause-management` D2** (`@TransactionalEventListener
-  (AFTER_COMMIT)` silently losing coach cancellation notifications, `BookingEmailListener.java`/
-  `SessionPackEmailListener.java`) — **CLOSED, deleted.** Both classes are now uniformly
-  `@TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)` (verified by direct read), per
-  the deferred-91/92 migration already documented elsewhere in this file (~line 1370). This was the only
-  bullet under its header — **header removed with it**.
-
-`skillars-deferred-116-subscription-scheduler-lock` was created from a fresh finding (not a pre-existing
-ledger bullet) — see the new `## Deferred from: ad-hoc audit of payment module subscription schedulers
-(2026-09-16)` section below for its provenance.
-
-## Last audit: 2026-09-16 (post-merge prune after skillars-deferred-115, narrow scope)
-
-Routine sweep after `skillars-deferred-115` (PR #194) merged to master, per this file's own
-delete-outright-when-closed convention. Not a full-file re-audit — checked only what this story
-could plausibly have closed: the `## Deferred from: ad-hoc audit of notification + video modules
-(2026-09-16)` section (the story's own origin) and any other bullet naming
-`ModerationSlaMonitorService`, `VideoLifecycleScheduler`, `VideoRepository`, or `@SchedulerLock`.
-
-- **Confirmed already closed by the story's own AC3**, not this pass: the ad-hoc-audit section's
-  two original findings (batch lock/entity-lifetime shape; missing per-item isolation) were deleted
-  outright during story implementation, leaving only narrative provenance text — verified by direct
-  read, no bullets remain under that header.
-- **`## Deferred from: code review of story-115 (2026-09-16)`** — its two bullets (`@SchedulerLock`
-  `PT12H` sizing vs. realistic provider-timeout duration; `markPurged()` not flipping `accessState`)
-  are genuinely open, not done — both are explicitly "no code change needed" / "pre-existing,
-  low-severity, unrelated to this story's scope" per their own text. Left in place.
-- No other bullet in the file names any of the four grepped symbols.
-
 ## Last audit: 2026-09-15 (full-file re-audit + premature-prune correction)
 
 Two parts, both requested directly (not tied to a merge): (1) correct a process violation from the
@@ -91,40 +28,16 @@ outright once implemented" rule; (2) a full re-audit of every remaining section 
 
 **Part 1 — premature-deletion correction.** Every bullet `bdcf782d` removed was checked directly
 against current code (not against the new story's own claims, several of which turned out wrong —
-see the separate `story-review.md` audit of that story). Of the ~14:
-- **9 were genuinely fixed** (mostly by `skillars-deferred-111`, merged after the prior ledger prune
-  but before this deletion) and correctly stay gone: SES DOWN-health-caching TTL (`SesHealthIndicator`
-  now has a configurable `downTtl`, deferred-111 AC4); rate-limit WARN-log-level (`SesSendRateLimiter`
-  now WARNs only on the throttle transition, DEBUGs while sustained, deferred-111 AC5);
-  `MailManager`'s log-masking-bypass (the exception argument is now a pre-sanitized String, not
-  SLF4J's raw-Throwable arg, deferred-111 AC11 — confirmed by re-reading the code and by running
-  `RegistrationEmailDurabilityIT`, whose log output shows `data={verifyUrl=[REDACTED]}`);
-  `LoggingEmailSender`'s collision-exhaustion throttle and text-part discard (both fixed, separate
-  throttle flags / per-file writes now exist); `implicitTls` handling (`MailSenderProvider` now
-  branches on it, deferred-111 AC10); SMTP recipient-address masking asymmetry and
-  `MailAuthenticationException` retried-forever (both closed in `SmtpErrorClassifier` — `MailAuthenticationException`/
-  `AuthenticationFailedException` joined `NON_REPAIRABLE_ERRORS`, and its message is now
-  `EmailPiiSanitizer.sanitize`d); `envelope_entity_recipients` missing PK (the baseline schema now
-  carries a composite PK on `(envelope_entity_id, email)`).
-- **4 were NOT fixed and are restored below**, each verified against current code: ses-1-2's
-  adapter-wrap-depth guard (no test drives `MailManager.isRetryable` through the real adapters at
-  both wrap depths — confirmed via `requirements/ses-email-consolidation.md:1072-1082`, the item's
-  actual source, which the deleted-then-recreated bullet had been citing correctly); ses-1-1's "no
-  non-production environment exercises the SES path" (dev/uat still run `smtp`, confirmed in
-  `application-{dev,uat}.yaml`; its own closing condition, the Phase 5 cutover, hasn't happened);
-  ses-1-4's `Map.of`→`HashMap` null-token guard in the three registration listeners (still bare
-  `HashMap`, no guard restored — confirmed by reading `{Coach,Parent,Player}RegistrationEmailListener.java`);
-  ses-1-4's `RegistrationEmailDurabilityIT` global-state fragility note (still `findAll()`-based, no
-  `@AfterEach`, confirmed by reading the test file and running it — 7/7 green, matching its own
-  "correct today" framing, not a live failure). `[UPDATE 2026-09-22 (skillars-deferred-129 AC3): the
-  findAll()-based subordinate clause this restoration references is now closed — see this bullet's
-  own current text under "Deferred from: code review of ses-1-4-registration-email-durability"
-  below, narrowed rather than deleted since its headline claim (the scheduler's own whole-table
-  poll) remains open.]`
-- **The `ses-1-7-documentation` section's deletion also broke a live cross-reference**:
-  `docs/dev-docs/notification/index.html` still linked to "`deferred-work.md`'s `ses-1-7-documentation`
-  section" for history that section no longer holds. Fixed in the doc directly (see Files Touched
-  below) rather than resurrecting a correctly-closed ledger bullet just to keep a link alive.
+see the separate `story-review.md` audit of that story). Of the ~14, 9 were genuinely fixed (mostly by
+`skillars-deferred-111`) and correctly stayed gone; the other ~4 were restored as still-open at the
+time. **[CLEANUP 2026-09-26: Part 1's restoration is now fully superseded — every one of the ~4 items
+it restored was independently re-closed by the very next section below (same day: ses-1-2's
+adapter-wrap-depth guard, ses-1-1's no-non-prod-SES-path, and ses-1-4's null-token guard were all
+confirmed already-fixed there; ses-1-4's `RegistrationEmailDurabilityIT` global-state note was later
+narrowed and its current live copy moved to the `ses-1-4-registration-email-durability` section, per
+that bullet's own `[UPDATE 2026-09-22]` annotation). Nothing from Part 1 remains open; the detailed
+restoration text (which four items, why) was removed as pure superseded history — see the next section
+for their actual closures.]**
 
 **Part 2 — full re-audit, every section.** Read all 89 `## Deferred from:` sections (then ~2000
 lines) end to end, not sampled. Result: this file has already been pruned extremely aggressively and
@@ -252,77 +165,6 @@ own draft re-added it as a new "AC9", re-traced it to the same conclusion (does 
 the real `CircuitBreakerFactory`), and closed it again in the story file itself rather than the ledger,
 since it was never re-added here.
 
-## Last audit: 2026-09-14 (post-merge prune after ses-1-4, narrow scope)
-
-Routine sweep after `skillars-ses-1-4` (PR #183) merged to master. Same narrow-scope method as the
-ses-1-3 prune below: not a full-file re-audit, just the four `ses-1-*` sections checked against what
-ses-1-4 actually touched (`EmailTemplate`, `NotificationOutboxSupport`, `NotificationEmailOutboxHandler`,
-`MailManager`, the three registration listeners).
-
-- **No live `[CLOSED by ...]` / `[STALE ...]` / `[WITHDRAWN ...]` tag found anywhere in the file**
-  outside historical `## Last audit` narrative text (full-file grep before writing) — nothing to
-  mechanically delete under this file's own convention.
-- **Checked all four `ses-1-*` code-review sections against ses-1-4's actual diff.** Nothing closed:
-  the `ses-1-3` "mid-loop rate-limit rejection duplicates earlier recipients" item names
-  `MailManager.java:74`'s per-recipient loop, which ses-1-4 did not touch (verified by direct read —
-  the loop shape is unchanged; ses-1-4's `MailManager` edits were `save`→`saveAndFlush`, breaker-name
-  derivation, and log masking, none of which are in that loop). The `ses-1-2` items (`SmtpErrorClassifier`,
-  `MailSenderProvider`, SMTP validator gap, adapter-wrap-depth guard, stale dev-doc line) and the
-  `ses-1-1` items (`LoggingEmailSender` throttling/text-part gaps, no non-prod SES path,
-  `NoHardcodedSenderTest` first-match-only) are all in files or concerns ses-1-4 never touches — left
-  in place, unchecked beyond confirming they're out of this story's diff.
-- **ses-1-4's own code review added 5 new deferred items** (the `## Deferred from: code review of
-  ses-1-4-registration-email-durability (2026-09-12)` section below) — these are new open work, not
-  closures, and are correctly still present.
-
-**Not done this pass:** re-verifying any item outside the four `ses-1-*` sections. Those were swept
-2026-09-11/2026-09-12 and are trusted current.
-
-## Last audit: 2026-09-12 (post-merge prune after ses-1-3, narrow scope)
-
-Routine sweep after `skillars-ses-1-3` (PR #181) merged to master. Two checks, not a full-file
-re-audit (the whole file was last swept 2026-09-11; this pass trusts that and looks only at what
-ses-1-3 could plausibly have closed):
-
-- **No live `[CLOSED by ...]` / `[STALE ...]` / `[WITHDRAWN ...]` tag found anywhere in the file**
-  outside historical `## Last audit` narrative text (full-file grep before writing) — nothing to
-  mechanically delete under this file's own convention.
-- **Checked the three `ses-1-*` code-review sections** (the only ones a just-merged SES story could
-  affect) against current code. One item was closed and deleted: `ses-1-1`'s "`app.ses.max-send-
-  rate-per-second` is validated and warned on but never enforced" — `SesSendRateLimiter` (new in
-  ses-1-3) now builds its bucket from `props.getMaxSendRatePerSecond()` and `SesEmailSender.send`
-  calls `rateLimiter.acquireOrThrow()` before every send (verified by direct read, not by trusting
-  the story note). Every other item under `ses-1-1`/`ses-1-2`/`ses-1-3` was checked against ses-1-3's
-  actual diff and confirmed still open (none are in scope of what ses-1-3 touched) — left in place.
-
-**Not done this pass:** re-verifying any item outside the three `ses-1-*` sections. Those were swept
-2026-09-11 and are trusted current.
-
-## Last audit: 2026-09-11 (post-merge prune — deferred-work.md hygiene)
-
-Routine sweep after `skillars-deferred-109` (PR #176) merged to master, per this file's own
-delete-outright-when-closed convention. Found two live bullets that had accumulated a
-`[CLOSED by ...]` / "closing" tag but were never actually removed:
-
-- `## Deferred from: code review of skillars-deferred-94 (2026-09-07)` — the actuator
-  health-endpoint bullet, tagged `[skillars-deferred-100 AC7 (2026-09-08) reframe: … Nothing left
-  to do here — closing.]`. Deleted outright; it was the only bullet under that header, so the
-  header was removed with it.
-- `## Deferred from: skillars-deferred-104 implementation (2026-09-09)` — the "~6 frontend
-  coverage gaps are now unblocked, not closed" bullet, tagged `[CLOSED by skillars-deferred-108
-  AC1–AC6 (2026-09-10): …]` — `deferred-108`'s own audit added the tag but never deleted the
-  bullet. Deleted outright; the sibling "Quasar Vitest AE library-only" bullet under the same
-  header is untouched and stays open.
-
-No other item in the file carries a `[CLOSED by ...]` / `[STALE ...]` / `[WITHDRAWN ...]` tag
-outside historical `## Last audit` narrative text (checked by full-file grep before writing).
-`[DECIDED ...]` and `[DISMISSED ...]` bullets are untouched by design — declined / decided-wont-fix,
-not closures. Reconstruction check: every surviving line matches the pre-prune file, in order, with
-nothing added or reworded besides the two deletions above. Baseline before this pass: 1998 lines,
-88 `## Deferred from:` headers. **Measured after writing** (fresh `wc -l` / `grep -c` / `grep -o`,
-this audit block itself included): **2005** lines; **87** `## Deferred from:` headers; **50** raw
-`[DECIDED` tokens; **40** raw `[DISMISSED` tokens (both raw counts read higher than the real
-±0 item delta because this block's own prose names both tokens, same as every prior audit block).
 
 ## Last audit: 2026-09-04 (deferred-work.md prune + first-ever `deploy-*` re-audit)
 
@@ -350,60 +192,21 @@ Every item below was checked against the live file at `c2c47c1`, not against the
 
 | Item | Verdict |
 |---|---|
-| `deploy-3-4` DROP DATABASE / open connections | ~~open, **narrowed** — `app` is the only container with a datasource; the real blocker is a human `psql` session. Citation corrected to the script.~~ **CLOSED by `skillars-deferred-101` AC6** — `restore-from-dump.sh:140-141` runs `SELECT pg_terminate_backend(pid) … WHERE datname = '<db>' AND pid <> pg_backend_pid();` immediately before `DROP DATABASE IF EXISTS`. Standalone bullet already deleted by `deferred-101`. |
-| `deploy-3-4` hardcoded container UIDs 65534/10001/472 | ~~`[PICKED UP by skillars-deferred-94 AC2]` — comments added; verify no regression.~~ **CLOSED by `skillars-deferred-107` AC8** — `provision.sh` / `restore-from-volume-backup.sh` now probe each service image's real runtime uid (`image_runtime_uid` → `chown_probed`, reads `docker inspect .Config.User`); the numeric constants survive only as a WARN-on-mismatch fallback, so an upstream UID change WARNs instead of silently breaking ownership. Standalone bullet deleted by `deferred-107` post-merge prune (2026-09-10). |
-| `deploy-3-4` APP_CID capture race | ~~open, **partly mitigated** — now fails fast with a diagnostic instead of a 90 s timeout. Citation corrected.~~ **CLOSED by `skillars-deferred-102` AC2** — `restore-from-dump.sh:205-222` is a 5×/2s bounded retry loop around `${DC} ps -q app`, then a clear `err` + EXIT-trap recovery. Standalone bullet already deleted by `deferred-102`. |
-| `deploy-3-4` WebhookPermanentFailure Admin API | **STALE, deleted** — the alert no longer exists |
-| `deploy-3-4` CallbackRateZero endpoint undocumented | **STALE, deleted** — the alert no longer exists |
-| `deploy-3-3` double notification if Alertmanager added | ~~`[PICKED UP by skillars-deferred-94 AC4]` — design gate comment added to docker-compose.yml; decision-deferred (Alertmanager not deployed yet).~~ **DECIDED by `skillars-deferred-107` AC7** — Grafana-only delivery; Prometheus rules stay non-delivering; a future Alertmanager change carries a documented checklist. See `docs/deployment/monitoring.md#alerting-architecture-the-alertmanager-decision`. |
-| `deploy-3-3` node_exporter network isolation | ~~open, **substantially narrowed** by `skillars-deferred-88` AC8 — see the corrected bullet~~ **DECIDED by `skillars-deferred-107` AC5** — accept & document: the only on-host peers are first-party `app`/`grafana`, a compromised `app` already holds the DB/Stripe/Bunny/OTLP credentials, a dedicated network was evaluated and rejected. Full rationale in the `docker-compose.yml` `node_exporter` comment. |
-| `deploy-3-3` DiskDataVolumeHigh needs the Volume mounted | ~~`[PICKED UP by skillars-deferred-94 AC6]` — comment + docs added; volume mount prerequisite documented.~~ **CLOSED by `skillars-deferred-94` AC6** — the clarifying comment shipped (`deploy/lgtm/alerts.yml:62-65`: "DiskDataVolumeHigh requires the Hetzner volume to be mounted … If unmounted, the … metric is absent and this alert silent") and the volume-mount verification step is documented (`docs/deployment/first-time-setup.md:388`). Standalone bullet deleted 2026-09-10 (post-`deferred-108`-merge prune). |
-| `deploy-3-1` PGPASSWORD via `docker exec -e` | ~~`[PICKED UP by skillars-deferred-94 AC1]`~~ **CLOSED (skillars-deferred-94 AC1, shipped 2026-09-07):** all occurrences now use `PGPASSWORD="…" docker exec -e PGPASSWORD "$CID"` env-var inheritance — no secret in `ps aux`. Bullet deleted 2026-09-10. The separate `/proc/<pid>/environ` bullet remains. |
-| `deploy-3-1` credentials in `/proc/<pid>/environ` | ~~open, unchanged, project-wide~~ **DECIDED by `skillars-deferred-107` AC6** — accept as won't-fix: `env-guard.sh` bare-sources `.env` (no `set -a`), so the scripts hold the creds as unexported shell vars, not in their own `/proc/<pid>/environ`; the real surfaces (the short-lived `PGPASSWORD=… docker exec -e` child, the postgres/app container envs) are root-only, single-tenant VPS, `.env` is `root:root 0600`. See `docs/deployment/secrets-reference.md#accepted-credential-exposure-surface`. |
-| `deploy-3-1` awscli v1 from Ubuntu apt | ~~open, unchanged — `provision.sh:131`~~ **CLOSED by `skillars-deferred-102` AC9** — official AWS CLI v2 installer, GPG-fingerprint-pinned + signature-verified fail-closed, replaces the apt package. |
-| `deploy-1-5` repo cloned before the Volume is mounted | open, unchanged |
-| `deploy-1-5` repo cloned as root, `.git` beside runtime data | open, unchanged |
-| `deploy-1-5` no rollback / DR documentation | **CLOSED, deleted** — `rollback.md`, `backup-restore.md` and `runbook.md` all shipped with Epic 3, exactly as the item predicted |
-| `deploy-1-5` `git clean` vs the data subdirectory | ~~open, **narrowed** — `.gitignore` now covers `/data/`; only `git clean -fdx` still reaches it~~ **CLOSED by `skillars-deferred-102` AC6/AC7** — the checkout moved to `/opt/skillars/app`, a *sibling* of the Volume mount `/opt/skillars/data`, owned by non-root `deploy`; `.env` is at `/opt/skillars/.env`, outside the checkout. `git clean -fdx` inside the checkout reaches neither. Standalone bullets already deleted by `deferred-102`. |
-| `deploy-1-3` LGTM `mkdir -p` gated inside the `[ -b ]` check | ~~`[PICKED UP by skillars-deferred-94 AC14]` — clarifying comment added; no code change.~~ **CLOSED — premise stale (skillars-deferred-103 AC12, 2026-09-09):** `mkdir -p "${DEPLOY_ROOT}/lgtm"` runs unconditionally at `provision.sh:349`, well before the `if [ -b "${VOLUME_DEVICE}" ]` gate at `:567`. Bullet deleted. |
+| `deploy-3-3` double notification if Alertmanager added | **DECIDED by `skillars-deferred-107` AC7** — Grafana-only delivery; Prometheus rules stay non-delivering; a future Alertmanager change carries a documented checklist. See `docs/deployment/monitoring.md#alerting-architecture-the-alertmanager-decision`. |
+| `deploy-3-3` node_exporter network isolation | **DECIDED by `skillars-deferred-107` AC5** — accept & document: the only on-host peers are first-party `app`/`grafana`, a compromised `app` already holds the DB/Stripe/Bunny/OTLP credentials, a dedicated network was evaluated and rejected. Full rationale in the `docker-compose.yml` `node_exporter` comment. |
+| `deploy-3-1` credentials in `/proc/<pid>/environ` | **DECIDED by `skillars-deferred-107` AC6** — accept as won't-fix: `env-guard.sh` bare-sources `.env` (no `set -a`), so the scripts hold the creds as unexported shell vars, not in their own `/proc/<pid>/environ`; the real surfaces (the short-lived `PGPASSWORD=… docker exec -e` child, the postgres/app container envs) are root-only, single-tenant VPS, `.env` is `root:root 0600`. See `docs/deployment/secrets-reference.md#accepted-credential-exposure-surface`. |
 
-Net: 18 items examined, **3 closed or stale and deleted**, 6 corrected in place (stale citations, narrowed or
-widened scope), 9 confirmed unchanged, **0 new `deploy-*` findings filed** — the one bullet originally filed
-here (the booking-reminder wiring gap below) came from the story review, not this audit, and has since
-shipped. `[AUDIT 2026-09-04, chunk-5 code review: the original "2 new findings filed below" count was wrong
-on both axes — it counted a non-deploy-* finding, and it counted it twice against a section that only ever
-held one bullet. Corrected here rather than re-filed as its own residual.]`
+**[CLEANUP 2026-09-26: table pruned to its 3 surviving `[DECIDED]` rows** — every other row (15 of 18)
+was `[CLOSED]`/`[STALE]`-tagged and deleted per this file's own convention, including two rows
+(`deploy-1-5` "repo cloned before the Volume is mounted" / "repo cloned as root … beside runtime data")
+that had incorrectly still read "open, unchanged" here despite being `CLOSED by skillars-deferred-102
+AC6/AC7` per the later, authoritative "Items re-verified still open" list further down this file.]**
 
 **Scope of this audit, so the gaps stay explicit.** It covered every `## Deferred from: deploy-*` section
 and every file those items name. It did **not** re-check the deployment items filed under non-`deploy-*`
 headings (`skillars-uat-6`, `skillars-deferred-20`/`-87`/`-88`) — those were written between 2026-08-13 and
 2026-08-31 and are recent enough to trust. It did not review the `deploy/` scripts for defects nobody has
 filed yet; it verified the filed claims only.
-
-## Last audit: 2026-08-24 (deferred-work.md pruning pass)
-
-This file's own first rule above says closed items are **deleted outright, not kept with a tag** — but
-recent stories (`skillars-deferred-41` onward) drifted from that: they left the original bullet in place
-and appended a `[CLOSED by ...]` / `[STALE ...]` annotation instead of removing it, so the file grew even
-as more items closed. This pass restores the stated convention: every bullet carrying a `[CLOSED by ...]`
-or `[STALE ...]` tag (175 total — 136 `[CLOSED]`, 39 `[STALE]`, added across every story from
-`skillars-deferred-16` through `skillars-deferred-60`) was deleted outright, mechanically, by a script
-verified against this exact file before running (line-for-line reconstruction check: every surviving
-non-blank line matches the pre-prune file's non-tagged content, in order, with nothing added or reworded).
-28 `## Deferred from:`/`###` section headers that had zero items left after their tagged bullets were
-removed were deleted along with them, since an empty section serves no purpose. `[PICKED UP by ...]`
-bullets (claimed by a story, not yet shipped), `[DISMISSED ...]` bullets, decision-needed items, and every
-untagged open item were left untouched, including their full original text, with one exception: a
-section-header's non-bullet intro paragraph is deleted along with it when every bullet under that header
-is tagged (one instance — the old `## Deferred from: code review of skillars-deferred-28-...` header's
-"review-layer coverage was incomplete" process footnote, whose own three bullets were all `[CLOSED by
-...]`-tagged and removed, collapsing the section per this pass's own stated rule). Nothing in this pass
-re-verified or re-judged any open item, it only removed items already closed by a prior pass.
-File size: 1854 → 1523 lines (exact). **Not touched:** the content of every other `## Last audit:` section in
-this file (each is a narrative record of its own audit, not itself a set of taggable items — confirmed
-none contain a `[CLOSED` or `[STALE` tag) and every item this pass didn't already find carrying one of
-those two tags. Full removed text remains recoverable from git history of this file, per this file's own
-first rule.
 
 ## Last audit: 2026-08-04
 
@@ -677,13 +480,6 @@ one booking-module item corrected below. Gaps stay explicit:
     `resolveLastReadAt` (the per-role `*LastReadAt` columns), and `lastMessageAt` is read only for the two
     conversation-list sorts (`MessagingService:117,:222`) and a relative-time label
     (`MessagingPage.vue:30`). `deferred-16` AC6b keeps the fix as plain correctness and drops the framing.
-- **Scope correction found while drafting AC4, recorded because neither owned item mentions it:**
-  `skillars-8-2` D1/D2 and `skillars-8-1` D1/D6 all name `MessagingService`, but
-  `MessagingReportService.verifyIsParty:134-155` was an acknowledged hand-copy of
-  `MessagingService.verifyIsParty` — its comment (`:129-133`) said "Duplicates `MessagingService.verifyIsParty()` —
-  injecting `MessagingService` would create a circular dep" — and carried the identical silent
-  `default -> Objects.equals(conv.getPlayerId(), callerUserId)` arm, gating the abuse-report
-  endpoints. **[CLOSED by skillars-deferred-16 AC4 — both copies fixed; method is now role-aware with proper PlayerProfileRepository injection and identical logic to MessagingService. Commit `c7301e0` (shipped 2026-08-05). The circular dependency duplication remains by design — untangling it is a separate concern.]**
 - **Added by this audit:** one new item under `## Deferred from: skillars-deferred-16 story creation
   (2026-08-05)` — `messaging.conversations.parent_id` is `NOT NULL` while a self-registered adult
   player's profile has `parent_id IS NULL`, so conversation creation for such a player would fail at the
@@ -974,12 +770,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D3: `SessionPackPurchase.expiresAt` mutable with no `updatable=false` — service-layer enforced via `extendPack()` business rules; open setter is a footgun [`SessionPackPurchase.java`]
 - D5: `stripe_customers.last_payment_intent_id` not in AC 1 spec schema — intentional addition to support cash-out refund flow (Group 2 Decision D1 resolution); AC 1 should be updated to document this column [`V62__session_payment_credit_wallet.sql`, `StripeCustomer.java`]
 
-## Deferred from: code review of skillars-7-1-stripe-connect-onboarding-commission-engine (2026-06-24)
-- D4: `acceptBooking` fires `INITIATE_PAYMENT` → `PAYMENT_CAPTURED` state transitions without performing actual payment — pre-existing state machine flow, not introduced by Story 7.1; Story 7.2 must retrofit a failure path and prevent the state being committed before capture succeeds [`BookingService.java:203-204`] **[CLOSED by skillars-deferred-136 AC6 — re-verified factually incorrect at current HEAD, closing the 2026-09-08 "stays — genuinely open" re-confirmation below too.** `BookingService.acceptBooking` (`:350-414`) only ever transitions a booking to `PAYMENT_PENDING` via `acceptAndInitiatePayment` (`:394`, comment at `:412`: "Return PAYMENT_PENDING status — PaymentLifecycleService handles CONFIRMED/DECLINED") — it has not fired `PAYMENT_CAPTURED` directly for some time. The real `PAYMENT_CAPTURED` transition now fires only from `BookingPaymentPersistenceService.transitionOrReport(bookingId, BookingEvent.PAYMENT_CAPTURED)` (confirmed present at `:234,279,307`, all three re-verified against current HEAD) after a real Stripe/session-pack capture. This architecture was built by Story 7.2 and has matured since; this ledger entry's own "still open" re-confirmations were themselves wrong by the time they were written, or the code changed after without the ledger being updated.]**
-<!-- skillars-deferred-89 code review (2026-09-01): D2 and D4 above were removed by this story's AC10 pass without any AC authorising it — restored here. They are untagged, still-open Story 7.2 follow-up work; their sibling D3 was left in place. The AC10 pass DID also delete ~34 already-closed/-tagged bullets and 7 spent section headings as ledger hygiene (the "2026-08-24 audit" delete-outright convention) — that prune is retained; only these two open items are put back. -->
-<!-- skillars-deferred-100 AC7: verified stale at 8af28a42 by AC7 staleness-check — grep providerUnavailable -> src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java:46 (onboarding only, no pack-purchase path) -->
-<!-- skillars-deferred-100 AC7 (2026-09-08): D2 deleted again, this time authorised — verified stale. `payment.providerUnavailable` no longer appears on any session-pack-purchase path (grep: only StripeOnboardingService.java:46,56,70 — Stripe Connect onboarding); Story 7.2's real charging shipped long ago. D3 and D4 remain: D4 (`acceptBooking` fires PAYMENT_CAPTURED without a real capture) is genuinely still open and out of scope for deferred-100. -->
-
 ## Deferred from: adversarial code review of skillars-5-6-parent-development-portal (2026-06-19)
 - AD2: MapStruct not used for `Object[]` → `CoachContributionDto` mapping — MapStruct cannot transform raw JDBC Object[] projections; inherent native query limitation [`SluContributionService.java`]
 - AD3: `@Testcontainers` annotation absent from IT class — tests pass (6/6); infrastructure activated via TestConfig; add annotation for explicitness in future test-hardening pass [`ParentDevelopmentPortalResourceIT.java`]
@@ -1161,13 +951,8 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - Def5: `expireBatch()` exception mid-loop not caught — exception terminates the do-while; Spring `@Scheduled` catches it at the framework level; next firing will retry. [`QuotaReservationTimeoutService.java:expireStaleReservations`]
 ## Deferred from: code review of skillars-6-1-video-module-foundation-quota-system Run 2 (2026-06-20)
 - Def9: `sumActiveReservedBytes` includes expired-but-unreaped ACTIVE rows — brief (<60s) window between expiry and reaper firing causes conservative over-reporting; intentional design. [`VideoQuotaReservationRepository.java:22`]
-- Def17: `AdminVideoService.deleteVideo()` — `release()` exception inside `TransactionTemplate` kills delete transaction — pre-existing. [`AdminVideoService.java`]
 - Def18: V53 platform_config IDs 117-132 hardcoded — verify against all intermediate migrations (V43–V52) before deploying; any ID conflict causes Flyway failure. [`V53__video_quota_system.sql:32-50`]
 - Def19: `sumActiveReservedBytes` theoretical `ClassCastException` — PostgreSQL BIGINT SUM typically maps to Long via JDBC but no compile-time guarantee. [`VideoQuotaReservationRepository.java:22`]
-
-## Deferred from: code review of skillars-6-2 (2026-06-22)
-
-- Def22: `UploadSessionExpiryScheduler` releases quota outside TX then marks session EXPIRED in separate TX — non-atomic; safe because `release()` is idempotent, but ordering is fragile to future refactors. Pre-existing design decision. [`UploadSessionExpiryScheduler.java`]
 
 ## Deferred from: code review of skillars-6-3-content-moderation-pipeline (2026-06-22)
 
@@ -1191,9 +976,7 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D5: `CoachCancellationHistory.createdAt` with `@Column(updatable=false)` + `@PrePersist` — in-memory entity is null until DB round-trip if ever used with batch `saveAll`; low risk given single-save usage [`CoachCancellationHistory.java`]
 
 ## Deferred from: code review of skillars-11-1-payment-path-parity-gaps (2026-08-03)
-- D1: Partial/mismatched `confirmedCancellationIds` lets `PackSessionService.pausePack()` apply the pause even when not all currently-conflicting bookings are confirmed for cancellation (or the confirmed ids don't match any real conflict) — verified byte-for-byte identical to legacy `SessionPackService.pausePack()`; AC4 explicitly requires mirroring legacy here. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`] **[CLOSED by skillars-deferred-136 AC3 — the legacy `SessionPackService` this justification depended on was deleted by Story 11.3; the justification no longer holds. Fixed: after computing `validatedIds`, verifies every conflicting booking id is covered by `confirmedIds` (`validatedIds.containsAll(conflictMap.keySet())`) — a partial confirmation now returns the same unconfirmed-conflict response as the zero-confirmation case, instead of silently cancelling the confirmed subset and applying the pause anyway.]**
 - D5: `pausePack` holds a pessimistic row lock across booking cancellations and event publishing within one `@Transactional` method — same single-transaction shape as the legacy method this story mirrors. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`] **[CLOSED by skillars-deferred-136 AC3 — investigated and DISCLOSED-AND-DECLINED, not narrowed.** `BookingService.transition()` (reached via the cancellation loop) was read in full and confirmed to acquire exactly one lock, on the `booking` table's own single row — no lock-ordering hazard from other tables. But narrowing would also require moving the pre-existing "one pause per pack lifetime" (`purchase.getPausedUntil() != null`) check from the top of the method (read once, under the lock) to immediately before the final write, so a second concurrent `pausePack` on the SAME purchase can't pass that check under an unlocked read and only discover the conflict after already cancelling bookings — a second, independent correctness surface disproportionate to what D5 itself (a contention/timing concern, not a functional bug) asked for. Lock scope left exactly as-is; D1 and D8 fixed unconditionally instead per this AC's own disclosed-fallback path.]**
-- D8: TOCTOU between the conflicting-bookings query and the per-booking `cancelDueToPause` calls in `pausePack` — same risk shape as the legacy method being mirrored. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`] **[CLOSED by skillars-deferred-136 AC3 — immediately before the final pause-apply write, `pausePack` now re-runs `findConflictingBookingsForPause` with the identical parameters under the still-held lock; any id not already accounted for in the original conflict set aborts the pause instead of applying it. Because the cancellation loop above may have already written to this transaction by that point, the abort is a thrown exception (`PauseWindowConflictException`), not a normal return — `pausePack` was split into a thin non-transactional wrapper plus `pausePackTransactional` (mirroring `GdprErasureService.erase`/`eraseTransactional`'s established self-invocation pattern) so the exception crosses the `@Transactional` proxy boundary and genuinely rolls back the loop's cancellations, while still returning the client the same `PauseConflictResponse(false, items, null)` shape as every other conflict path.]**
 - D9: Stringly-typed computed `status` field and hardcoded `CONFLICT_STATUSES` list rather than shared enums — consistent with existing codebase convention; legacy also uses string status constants. [`src/main/java/com/softropic/skillars/platform/payment/contract/SessionPackPurchaseResponse.java`, `PackSessionService.java`]
 
 ## Deferred from: code review of skillars-deferred-15-payment-pending-sweeper-accept-path-integrity (2026-08-05)
@@ -1227,7 +1010,6 @@ Found or deliberately left while implementing the story. The first item is an **
 
 - **D7 — `PaymentWebhookIdempotencyIT` seeded no `booking.bookings` rows at all.** Found in Task 0's triage; the story's regression table predicted only that it might assert "exactly N rows". The class mocks `BookingService` specifically so transitions do not need a real booking, which meant `reserveCapture`'s locked read found nothing, returned `BOOKING_NOT_PENDING`, and left zero payment rows. Fixed by seeding a real `PAYMENT_PENDING` booking in the one test that reaches Stripe — the fixture, not the check, per `uat-2`'s recorded lesson. Recorded because it generalises: **any test that drives a settlement path now needs a real booking row**, which was not true before this story, and the other two tests in that class pass only because they never reach Stripe (full credit cover and pack-funded both skip the reservation).
 
-- **D9 — no frontend test coverage.** Standing gap (`uat-1`, `uat-2` D6, `deferred-17` D6, `deferred-18`): there is no frontend test suite in this repo. This story touches **no** `.vue` file, so unlike its two predecessors nothing here is verified by code reading alone — recorded only to note that the gap is unchanged, not that it bit this story. `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): Vitest runner now stood up — no frontend changes in this story, so nothing to backfill; noted for completeness]` ~~there is no frontend test suite in this repo~~ `[SUPERSEDED 2026-09-10 (skillars-deferred-108 AC1–AC6): a frontend suite now exists — 12 spec files / 66 tests. The `uat-2` D6, `deferred-17` D6 and `deferred-18` cross-references above were deleted by that story's AC10 and no longer resolve; `uat-1` remains. Applied by the deferred-108 code review — AC10 specified this strike-through but it was not carried out in the implementation commit.]`
 
 ## Deferred from: code review of skillars-uat-3-payment-capture-integrity-and-backup-retention (2026-08-11)
 
@@ -2502,10 +2284,6 @@ about.)
   difference between the two and should not be read as still distinguishing them. Remains
   `[DECIDED: accepted risk — skillars-deferred-123]`, open.
 
-## Deferred from: code review of skillars-deferred-122-coach-enforcement-round-2-and-user-cleanup-fixes (2026-09-18)
-
-- **Schema drift from `spring.jpa.generate-ddl: true` — CLOSED AT SOURCE by the skillars-deferred-123 code review (2026-09-18); every divergence it caused is now reconciled.** Surfaced by skillars-deferred-123 AC5's investigation into a `main.user_aud`/`User.skillarsRole`+`verificationStatus` Envers-coverage gap. Empirically confirmed: raising `org.hibernate.SQL` to DEBUG showed Hibernate issuing `alter table if exists ... add column ... varchar(255) check (... in (...))` and `alter table if exists ... alter column ... set data type varchar(255)` at application boot — for both the audit table's missing enum columns and the *entity's own* `main."user".skillars_role`/`verification_status` columns (silently widening them from their declared `varchar(20)`) — while `main.flyway_schema_history` showed no migration responsible. **Cause, corrected:** the story originally attributed this to Hibernate acting "regardless of `hibernate.ddl-auto`" and proposed hunting for "a schema-generation property beyond simple `none`, if one exists". No such property is needed and no such Hibernate behaviour exists. The cause was `spring.jpa.generate-ddl: true` sitting one line above `ddl-auto: none` in `application.yaml`. Decompiled chain: `HibernateProperties.getAdditionalProperties` (spring-boot-autoconfigure 3.5.16) *removes* the `hibernate.hbm2ddl.auto` key when `ddl-auto` is `none` rather than setting it; `HibernateJpaVendorAdapter.getJpaPropertyMap` (spring-orm 6.2.19) then puts it as `"update"` because `isGenerateDdl()` is true; `AbstractEntityManagerFactoryBean` merges vendor properties only when the key is absent, so `"update"` won. Effective `hbm2ddl.auto=update` in every profile, production and test alike — which is also why no IT had ever caught Flyway/entity drift. The line has been removed. **Pre-removal audit (done before the change, not assumed):** every `@Table` entity has a `CREATE TABLE` in a Flyway migration, and `main.user_aud`'s only two missing columns are supplied by `V145`, so nothing depended on auto-DDL to boot. **`main.user_aud`'s own `CHECK`-constraint divergence CLOSED** (2026-09-18, code review Patch pass on skillars-deferred-123): `V145` now adds `user_aud_skillars_role_check`/`user_aud_verification_status_check` as `NOT VALID` constraints, named to match Postgres's own default naming for Hibernate's unnamed inline CHECK — a no-op on an already-Hibernate-patched database, a genuine fix on a Flyway-only one. **`main."user".skillars_role`/`verification_status` width divergence — `[CLOSED by skillars-deferred-124 AC3]`.** `V149__widen_user_skillars_role_verification_status.sql` widened both columns to `varchar(255)`, matching what every already-booted environment already carried (Hibernate's own auto-DDL width), reconciling the divergence against `V138`'s originally-declared `varchar(20)`. No CHECK constraint was added alongside it (confirmed via direct inspection of `V138`'s own `CONSTRAINT user_*` list — none exists on either column in any environment; `V145`'s add-column-with-CHECK precedent does not transfer to an existing column's type-only `ALTER`, which carries no CHECK clause of its own).
-
 ## Explicitly out of scope (skillars-deferred-123, 2026-09-18)
 
 Confirmed still correctly out of scope for this story, left untouched — recorded explicitly per this
@@ -2870,69 +2648,9 @@ each AC's own Context section in the story file.
 ## Deferred from: code review of skillars-deferred-126-stale-claim-db-time-radar-lock-bound-shedlock-identity-and-axios-hash-redirect-fixes (2026-09-21)
 
 Surfaced by `/bmad-code-review` across four parallel layers (Blind Hunter, Edge Case Hunter,
-Acceptance Auditor, `/txn-and-concurrency-audit`). Each was independently re-verified against actual
-source before being recorded here. Originally seven genuinely pre-existing/latent bullets plus one
-residual `[DECIDED]` bullet OF skillars-deferred-126's own AC1 fix. **Update (skillars-deferred-127
-AC5, 2026-09-21, story-review.md L3):** the first, second, fourth, fifth and sixth of those original
-seven were closed and deleted outright (see `## Last audit: 2026-09-21 (skillars-deferred-127
-dev-story completion)` below). **Update (skillars-deferred-128 AC5/AC7, 2026-09-22):** the
-`now()`/`clock_timestamp()` bullet (the seventh) is now ALSO closed and deleted outright (see
-`## Last audit: 2026-09-22 (skillars-deferred-128 dev-story completion)` below) — leaving only the
-EXPLAIN/index-coverage bullet (already reframed, not deleted, by skillars-deferred-127) and the
-three `[DECIDED: accepted risk]` bullets below.
-
-- **[CLOSED by skillars-deferred-127 AC5, 2026-09-21] `EXPLAIN`/index-coverage confirmation for
-  skillars-deferred-126 AC1 Task 3, performed and recorded.** The task said to confirm (e.g. via
-  `EXPLAIN`) rather than assume that the rewritten predicate
-  `claimed_at IS NULL OR claimed_at < now() - make_interval(secs => ?)` still uses the intended
-  index. `V144__outbox_dlq_claimed_at.sql:30-36`'s own "Index coverage" comment already answers this
-  and already accepted the answer as-is — and draws a real distinction between the two tables that a
-  quick re-read can miss: `radar_composite_dlq` has no dedicated `CLAIMED`-only index, so its
-  predicate is served only by `idx_radar_composite_dlq_status_retry`'s `status` prefix; `main.
-  video_deletion_outbox` additionally has `idx_vdoutbox_status_claimed ON (status) WHERE status =
-  'CLAIMED'`, which the comment says "still covers the video side's status predicate" even after the
-  predicate moved off `next_retry_at`. Both tables are expected to stay small enough (near-zero
-  `CLAIMED` rows at any moment) that this is accepted as-is regardless.
-  **Correction to V144's own comment (skillars-deferred-127 code review, 2026-09-21):** that
-  comment's framing that the PRE-V144 predicate (`next_retry_at < :deadline`) was "served by …
-  `idx_vdoutbox_status_retry`" does not hold for the video table — `idx_vdoutbox_status_retry`
-  (`V138__baseline_schema.sql:3670`) is itself `WHERE status = 'PENDING'`, a partial index that could
-  never have served a `status = 'CLAIMED'` query, before or after V144's predicate change. This
-  appears to be inherited from the radar table's citation, where `idx_radar_composite_dlq_status_retry`
-  is a full, non-partial `(status, next_retry_at)` index that genuinely did serve the old CLAIMED-scoped
-  query — the two tables are not actually symmetric here, and V144's own file is left unedited
-  (changing an already-applied migration's checksum is unsafe) with this correction recorded here
-  instead. The video table's `resetStaleClaimed` `status = 'CLAIMED'` prefix has always been served
-  by `idx_vdoutbox_status_claimed`, both before and after V144.
-  **Empirically confirmed** (skillars-deferred-127, 2026-09-21) — `EXPLAIN` run against a real
-  Testcontainers-backed Postgres session via a throwaway integration test (same container
-  image/schema this project's IT suite uses; deleted after use — not run against the production
-  database, consistent with this project's "no local `mvn verify`"/no-ad-hoc-prod-access convention).
-  Literal plan output, quoted verbatim for reproducibility (code review, 2026-09-21: an earlier draft
-  of this bullet paraphrased the result without quoting it, and the test that produced it had already
-  been deleted, leaving nothing to reproduce it against):
-  ```
-  === radar_composite_dlq.resetStaleClaimed ===
-  Update on radar_composite_dlq  (cost=4.16..9.52 rows=0 width=0)
-    ->  Bitmap Heap Scan on radar_composite_dlq  (cost=4.16..9.52 rows=1 width=80)
-          Recheck Cond: ((status)::text = 'CLAIMED'::text)
-          Filter: ((claimed_at IS NULL) OR (claimed_at < (now() - '00:15:00'::interval)))
-          ->  Bitmap Index Scan on idx_radar_composite_dlq_status_retry  (cost=0.00..4.16 rows=2 width=0)
-                Index Cond: ((status)::text = 'CLAIMED'::text)
-  === main.video_deletion_outbox.resetStaleClaimed ===
-  Update on video_deletion_outbox  (cost=0.12..8.15 rows=0 width=0)
-    ->  Index Scan using idx_vdoutbox_status_claimed on video_deletion_outbox  (cost=0.12..8.15 rows=1 width=80)
-          Index Cond: ((status)::text = 'CLAIMED'::text)
-          Filter: ((claimed_at IS NULL) OR (claimed_at < (now() - '00:15:00'::interval)))
-  ```
-  Confirms both predictions above: `radar_composite_dlq` plans a Bitmap Index Scan on
-  `idx_radar_composite_dlq_status_retry` filtered to `status` only, with the `claimed_at` disjunct
-  applied as a row-level filter afterward; `video_deletion_outbox` plans an Index Scan on
-  `idx_vdoutbox_status_claimed` (never `idx_vdoutbox_status_retry`), also filtering `claimed_at` at
-  the row level. To reproduce: seed either table with a `CLAIMED` row and run `EXPLAIN UPDATE …`
-  with the exact predicate above against a Testcontainers-backed (or any real) Postgres instance
-  running this schema — no throwaway test file is needed, a plain `psql`/JDBC session suffices. No
-  index or query change made; this bullet only confirms and records what was already decided.
+Acceptance Auditor, `/txn-and-concurrency-audit`). All originally-filed items (seven pre-existing/latent
+bullets plus the EXPLAIN/index-coverage confirmation) have since been closed and deleted outright —
+leaving only the three `[DECIDED: accepted risk]` bullets below.
 
 - **`[DECIDED: accepted risk — skillars-deferred-126]` AC1's skew fix is half-applied: `next_retry_at`
   eligibility stays on the app clock, so a sufficiently-skewed instance can prematurely dead-letter a
@@ -3207,47 +2925,7 @@ this module's own `findByIdForUpdate` + refresh + re-check-`DRAFT` pattern — t
 directly above:
 no production code changed; a new `GdprErasureServiceTest` now pins the `[2L, 120L]` bounds literal
 at `GdprErasureService`'s own call site, closing the missing-test gap `D2` actually named once its
-divergence-risk framing was corrected. See the section immediately below for two fresh, unfixed
-findings this story's own review surfaced while touching these files.
-
-## Deferred from: story review of skillars-deferred-130-marketplace-reviews-concurrency-audit-and-config-bounds-fix (2026-09-23)
-
-Surfaced by this story's own senior-dev pre-implementation audit (`story-review.md`) while examining
-`ReviewSubmissionService`/`CoachProfileService` for AC1. Neither is fixed by this story — both are
-adjacent to files it already touches but outside its own scope (narrow lock/error-code fixes to
-`ReviewFlagService.flag` and `publishProfile`, not a general sweep of these two services).
-
-- **`ReviewSubmissionService.submitReview`'s `:68-74` catch of `DataIntegrityViolationException` is
-  very likely dead code.** `CoachReview` uses `GenerationType.UUID` for its `@Id`, so the
-  `coachReviewRepository.save(review)` call inside the `try` does not flush — the
-  `uq_coach_reviews_author_coach` unique-index violation this catch exists to translate into
-  `ReviewErrorCode.ALREADY_SUBMITTED` actually surfaces at the enclosing transaction's commit-time
-  flush, outside this `try`/`catch`, uncaught. A concurrent double-submit therefore likely gets a
-  generic 400 (`ApiAdvice`'s unmapped-constraint branch) instead of the specific `ALREADY_SUBMITTED`
-  error the pre-existing `existsByAuthorIdAndCoachId` pre-check already gives the non-concurrent
-  caller. Not verified empirically (no test currently exercises the concurrent path); worth a small IT
-  plus either an `em.flush()` inside the `try` or moving the save to `saveAndFlush`.
-  (Labeled without a `D`-number — code review 2026-09-23 flagged that this section's original `D2`
-  label collided, in the same diff, with the unrelated pre-existing `D2` in the
-  skillars-deferred-129 section directly below, which this same diff separately annotates.)
-  **[CLOSED by skillars-deferred-131 AC1 Fix 1]** — `coachReviewRepository.save(review)` changed to
-  `saveAndFlush(review)`, forcing the constraint check inside the existing `try` so its `catch` now
-  does what its comment already claimed. Verified empirically (the gap this bullet itself named) by a
-  new `ReviewSubmissionServiceConcurrencyIT`, racing two concurrent `submitReview` calls for the same
-  `(coachId, authorId)`: exactly one persists, the loser gets `ALREADY_SUBMITTED`.
-- **`CoachProfileService.publishProfile` never sets `statusChangedAt` on the `DRAFT → ACTIVE`
-  transition.** Every `AdminCoachEnforcementService` status transition (`suspendCoach`,
-  `reinstateCoach`, strike-driven auto-suspension) sets `statusChangedAt` alongside `status`, and
-  `CoachProfileRepository.findByStatusInOrderByStatusChangedAtAsc` orders admin review queues on that
-  column — a freshly-published profile sorts as if its status changed at profile-creation time (or
-  `NULL`, ordered last via `NULLS LAST`) rather than at actual publish time. No test currently pins
-  either the presence or absence of this field write. Fix shape: add
-  `profile.setStatusChangedAt(Instant.now())` alongside the existing `profile.setStatus(ACTIVE)` in
-  `CoachProfileService.publishProfile` (line numbers drifted since this story's own `HEAD` — re-verify
-  before fixing).
-  **[CLOSED by skillars-deferred-131 AC1 Fix 2]** — see the identical closure note on this same finding
-  in the code-review-of-130 section above; recorded once, closed once, cross-referenced here since this
-  older section named it first.
+divergence-risk framing was corrected.
 
 ## Deferred from: code review of skillars-deferred-129-gdpr-lock-timeout-ci-frontend-auto-detect-and-envelope-test-fixes (2026-09-23)
 
@@ -3328,34 +3006,6 @@ patched or resolved in-story — see that story's own `## Review Findings` secti
   **Declined a 4th consecutive time (skillars-deferred-135, owner decision)** — nothing new has surfaced
   to change the calculus since the prior decline.
 
-- **D3 — Only one of four `(branch × reason)` catch combinations in the new erasure error handling is
-  tested.** `GdprErasureService.java:226` (PLAYER / `CHILD_CONTENDED` arm) and `:397` (PARENT /
-  `CHILD_DELETE_LOCK_TIMEOUT` arm) have no coverage. The new IT genuinely exercises the timeout path
-  — it holds a real `FOR UPDATE` lock on a `development.player_timeline_events` row and asserts
-  elapsed ∈ [2s, 15s) — but covers only PLAYER + `CHILD_DELETE_LOCK_TIMEOUT`; the pre-existing
-  `erase_parentUser_contendedChild_…` covers only PARENT + `CHILD_CONTENDED`. The `instanceof`
-  ternary that selects the reason is therefore proven in half its cases. Test debt, no production
-  defect implied.
-  **[CLOSED by skillars-deferred-132 AC4 Fix 12]** — the two missing combinations (PARENT ×
-  `CHILD_DELETE_LOCK_TIMEOUT`, PLAYER × `CHILD_CONTENDED`) are now covered in `GdprErasureIT`, each
-  mirroring its corresponding existing test's exact setup/mocking shape for that branch. All four
-  `(branch × reason)` combinations are now exercised.
-
-- **D4 — `performance_reports` rows are fully hydrated to read one column, then left managed after a
-  bulk delete.** `GdprErasureService.java:621` calls `findByPlayerIdOrderByGeneratedAtDesc(playerId)`
-  purely to collect `getStorageKey()`, loading every `PerformanceReport` entity (blob/metadata
-  columns included) into the inner persistence context; `:628`'s bulk `@Modifying` delete has no
-  `clearAutomatically`, so they all stay managed pointing at deleted rows. Benign today — nothing
-  re-reads them in that transaction and they are not dirty, so no stray `UPDATE` is flushed — but it
-  is memory proportional to a player's report count and it inflates `M` in D1. **Pre-existing:** the
-  `forEach`-over-entities shape predates this story; only the surrounding `try` is new. Fix shape:
-  a `SELECT p.storageKey … WHERE p.storageKey IS NOT NULL` projection returning `List<String>`.
-  **[CLOSED by skillars-deferred-132 AC2 Fix 8]** — implemented exactly as this bullet's own suggested
-  fix shape: `PerformanceReportRepository.findStorageKeysByPlayerId` projection replaces the
-  full-entity `findByPlayerIdOrderByGeneratedAtDesc(...).forEach(...)` hydration (the now-dead method
-  deleted, zero remaining callers). Pinned by a new `GdprErasureIT` test: a player with a mix of
-  `PENDING_UPLOAD` (null `storageKey`) and `READY` (non-null) reports enqueues only the non-null key.
-
 - **D5 — The `lock_timeout` bound is re-read from `ConfigService` once per child, inside `erase()`'s
   outer transaction.** `GdprErasureService.java:587-588`. Hoisting the read above
   `requiresNewTemplate` (story Task 5) correctly keeps it outside the `player_profiles` lock hold,
@@ -3381,129 +3031,6 @@ patched or resolved in-story — see that story's own `## Review Findings` secti
 Surfaced by `/bmad-code-review` (four layers: Blind Hunter, Edge Case Hunter, Acceptance Auditor, and
 `/txn-and-concurrency-audit` as an owner-requested fourth layer) against the story's own uncommitted
 implementation. Each was independently re-verified against real source. None is fixed by this story.
-
-- **`ReviewFlagService.flag` holds its exclusive `coach_reviews` row lock across five write-nothing exit
-  paths** (`ReviewFlagService.java:46`) — self-flag, missing coach profile, coach flagging their own
-  profile, `ALREADY_FLAGGED`, and the `DataIntegrityViolationException` catch. PostgreSQL releases a
-  `FOR UPDATE` row lock only at commit/rollback, so a user repeatedly re-flagging a review they already
-  flagged can serialize `updateReview`/`approveReview`/`blockReview`/`ReviewModerationService` behind a
-  no-op. Newly introduced by skillars-deferred-130 AC1 Fix 1. Deliberately not patched: moving the cheap
-  guards ahead of the lock conflicts with that AC's explicit "locked as this transaction's first read"
-  shape. Revisit if flag-endpoint latency or admin-moderation contention is ever observed.
-  **[CLOSED by skillars-deferred-131 AC2 Fix 5]** — the four write-nothing guards (self-flag, missing
-  coach profile, coach-flags-own-profile, `ALREADY_FLAGGED`) now run against an unlocked scalar
-  projection (`CoachReviewRepository.findAuthorAndCoachIdByReviewId`) before any lock is taken, so
-  `findByIdForUpdate` remains genuinely this transaction's first entity load — mirrors, not
-  reintroduces, the stale-read guard skillars-deferred-130 AC1 Fix 1 itself closed (a naive unlocked
-  `findById` pre-read was considered and rejected during story review for exactly that reason). Proven
-  by `ReviewFlagServiceConcurrencyIT.repeatFlagNoOp_doesNotBlockOnRowLock_completesWhileConcurrentLockIsStillHeld`.
-
-- **`ReviewFlagService.flag`'s blanket `DataIntegrityViolationException → ALREADY_FLAGGED` mapping**
-  (`ReviewFlagService.java:76-82`) never inspects the constraint name, so a null `reason`, a `details`
-  value over 500 chars, or a `flagged_by` FK failure all report "You have already flagged this review".
-  The REST boundary validates these today (`ReviewFlagRequest` + `@Valid`), so it is only reachable from
-  a non-REST caller. Pre-existing; unrelated to skillars-deferred-130's own changes in this file.
-  **[CLOSED by skillars-deferred-131 AC2 Fix 6]** — the catch now checks the violated constraint name
-  (`review_flags_unique_flagger`, a unique INDEX rather than a named table constraint, but Postgres
-  still reports it in a `23505`'s `constraint` field) before mapping to `ALREADY_FLAGGED`; any other
-  violation now propagates uncaught. Pinned by a Testcontainers IT
-  (`ReviewFlagServiceConcurrencyIT.concurrentDuplicateFlagFromSameFlagger_loserGetsAlreadyFlaggedViaRealConstraintViolation`,
-  the real Postgres exception shape) plus a Mockito negative-branch test
-  (`ReviewFlagServiceTest.flag_dataIntegrityViolationOnUnrelatedConstraint_propagatesUncaught`).
-
-- **Flags cast while a review is `PENDING` are counted, locked for, and event-published, then silently
-  annihilated** — `AdminReviewService.approveReview:94` calls `resolveAllOpenFlags` as it sets
-  `APPROVED`, so a review that accumulated well past the auto-hold threshold during moderation goes live
-  with `openFlagCount == 0`, with no log, alert, or event. `BLOCKED` reviews likewise still accept flags
-  that can never act (`blockReview:126` already resolved them). Pre-existing; AC1 Fix 1 makes the
-  outcome deterministic rather than causing it.
-  **[CLOSED by skillars-deferred-131 AC2 Fix 8]** — `ReviewFlagRepository.resolveAllOpenFlags` now
-  returns the row count its own `@Modifying` `UPDATE` already computes (no extra query, no window
-  between a separate count and the update), and both `approveReview` and `blockReview` WARN, naming the
-  reviewId and count, whenever that count is non-zero. Pinned by `AdminReviewServiceTest`.
-
-- **`SubscriptionService.syncMarketplaceTier` can orphan a live Stripe subscription**
-  (`SubscriptionService.java:682-694`) — its `marketplace.coach_subscriptions` INSERT needs `FOR KEY
-  SHARE` on `coach_profiles` for `coach_subscriptions_coach_id_fkey`, so it blocks behind
-  `publishProfile`'s `FOR UPDATE`, then violates `coach_subscriptions_pkey` once that commits. The
-  uncaught `DataIntegrityViolationException` rolls back `persistCoachSubscription`, but the Stripe
-  subscription was already created outside the transaction (`SubscriptionService.java:143`) — leaving a
-  live billing subscription with no local record. Pre-existing; AC1 Fix 3 widens the blocking window to
-  the whole retry budget.
-  **[CLOSED by skillars-deferred-131 AC1 Fix 4, common case only]** — `syncMarketplaceTier` now takes
-  the same `coach_profiles` row lock `publishProfile` already takes (lock acquisition inside
-  `PessimisticLockRetryer.withBoundedRetry`, the find-or-create writes after it returns, preserving
-  `withBoundedRetry`'s read-only-supplier contract), so a fast colliding `publishProfile` now waits for
-  it instead of racing it — proven by `SubscriptionServiceConcurrencyIT`. **Not eliminated entirely:**
-  `findByIdForUpdate` is NOWAIT, so sustained contention can still exhaust `PessimisticLockRetryer`'s
-  ~3.2s budget and roll back `persistCoachSubscription` while an already-created Stripe subscription
-  survives orphaned — rarer than before (needs a *slow* `publishProfile`, not merely a colliding one),
-  but not closed outright. The durable fix (a compensating action or a reconciliation sweep for Stripe
-  subscriptions with no local row) is a separate story.
-  **skillars-deferred-132 AC1 Fix 3 note — still explicitly open, not closed by this story:**
-  Fix 3 added a `SubscriptionTierReconciliationScheduler` sweep, but it is **payment → marketplace**
-  only (corrects `marketplace.coach_subscriptions` against `payment.coach_subscriptions`) — it does
-  nothing for a coach with a live Stripe subscription and **no local `payment.coach_subscriptions` row
-  at all**, which is what this bullet's residual actually calls for (a **Stripe → payment** sweep). The
-  two are distinct gaps; closing one does not close the other. Still a separate story.
-  **[CLOSED by skillars-deferred-133 AC3 Fix 3 — alert-only, first step, not the full reconciliation
-  sweep. Ship as `StripeWebhookService`/`SUBSCRIPTION_ORPHANED` (`V153`).]** Extends the existing
-  `handleSubscriptionUpdated` orphan-detection branch (previously `log.warn` + silent drop) to resolve
-  the Stripe customer → coach and publish a `CoachSubscriptionOrphanedEvent` (handled by
-  `AdminAlertEventListener.onCoachSubscriptionOrphaned`, `REQUIRES_NEW`) — but **only** when the
-  incoming event carries a live/non-terminal status (`active`/`trialing`/`past_due`) and no recent
-  (<10min) `PaymentCoachSubscription` row exists for that coach (a `subscribeCoach` provisioning-race
-  guard). **Corrected mid-drafting (story review, not the original design):** the "orphan" branch is
-  also the NORMAL state immediately after every successful cancellation
-  (`SubscriptionService.handleSubscriptionDeleted` deliberately nulls `stripeSubscriptionId` on both
-  sides) — alerting unconditionally would have produced permanently-unresolvable false positives on
-  every routine cancellation (no generic way to clear an `AdminAlert` once raised). The live-status
-  allowlist targets exactly the ledger's actual concern without touching the cancellation path at all.
-  **Alert-only, not auto-heal** — `SubscriptionService.java:663`'s own deliberate no-priceId→tier
-  reverse-map constraint means this cannot safely guess a tier; a human reconciles. **Explicit
-  residuals, not silently closed:** (a) detection latency — `handleEventAtomically` does not dispatch
-  `customer.subscription.created`, so the earliest signal is the next live-status `.updated` event, not
-  immediate; (b) `handleInvoicePaymentFailed` has the identical untouched no-op shape and is out of this
-  fix's scope **[CLOSED by skillars-deferred-134 AC2 — new `maybeAlertOrphanedInvoicePaymentFailed`,
-  reusing the same resolution chain/grace-window/event-type, wired into `handleInvoicePaymentFailed`
-  before its existing delegation]**; (c) player-side orphans are deliberately out of scope (no "Stripe → payment" ledger item
-  for players, matching `syncMarketplaceTier`'s own coach-only scope) — a final decision, not a residual.
-  Dedup is per-coach (`insertAlert`'s `(referenceId, type, OPEN)`), not per orphaned Stripe subscription
-  id — mirrors `STRIKE_THRESHOLD`'s own precedent; a coach has one active marketplace tier subscription
-  at a time in this domain, so this is an accepted choice, not a gap.
-  **[CLOSED by skillars-deferred-135 AC2 — the durable Stripe → payment reconciliation sweep this
-  bullet's own residual always named as "a separate story" is now built:
-  `SubscriptionService.reconcileStripeSubscriptions()` (new
-  `StripeSubscriptionReconciliationScheduler`, `@Scheduled(cron = "0 0 5 * * *")`,
-  `@SchedulerLock(lockAtMostFor = PT15M, lockAtLeastFor = PT2M)`) lists every live Stripe subscription
-  (one paginated `StripeClient.listSubscriptionsByStatus(...)` call per status in
-  `StripeWebhookService.LIVE_SUBSCRIPTION_STATUSES`'s own 3-status set — Stripe's list API accepts
-  exactly one status per call), skips anything `paymentCoachSubscriptionRepository
-  .findByStripeSubscriptionId` already matches, and reuses the exact same resolution chain both webhook
-  handlers already shared (extracted to a new package-visible `StripeWebhookService
-  .resolveCoachAndAlertIfOrphaned`, so this sweep is a THIRD caller of that logic, not a third
-  duplicate copy of it) — alert-only, not auto-heal, matching this bullet's own AC3 Fix 3 precedent. 5
-  new `SubscriptionServiceStripeReconciliationIT` cases (orphan alert raised, matched-locally no alert,
-  grace-window suppression, multiple orphans in one status page, no duplicate alert when the webhook
-  path already raised one for the same drift).]**
-
-- **`AdminCoachEnforcementService.reinstateCoach` mints a marketplace-`ACTIVE` profile that never
-  published** (`:217-232`) — it sets `ACTIVE` unconditionally, so the profile gets no
-  `marketplace.coach_subscriptions` row (making `CoachProfileService.getCoachSubscriptionTier:482-486`
-  throw `ResourceNotFoundException` permanently for that coach) and never runs
-  `validateAllStepsComplete`. `publishProfile` can never repair it, because the status is no longer
-  `DRAFT`. skillars-deferred-130's own `CoachProfileServiceConcurrencyIT` asserts this exact state must
-  not exist.
-  **[CLOSED by skillars-deferred-131 AC1 Fix 3]** — both halves fixed, on both `reinstateCoach` and the
-  identical gap in `deleteStrike`'s tier-3 branch: (1) a `coach_subscriptions` find-or-create defaulting
-  a genuinely new row to `SCOUT`, mirroring `publishProfile`'s own skillars-deferred-130 pattern; (2)
-  `CoachProfileService.validateReadyForActivation` (a new public seam onto the previously-`private`
-  `validateAllStepsComplete`) run under the lock already held, before each `ACTIVE` write — an admin
-  action on an incomplete profile now fails loudly (`MarketplaceException`) rather than silently
-  activating it. Belt-and-braces: `getCoachSubscriptionTier` now defaults to `SCOUT` on a missing row
-  instead of throwing, closing the read-side failure surface unconditionally for any row already in the
-  broken state today. Proven by six new `AdminCoachEnforcementConcurrencyIT` tests (three per method:
-  incomplete-profile rejection, fresh-SCOUT creation, existing-tier preservation).
 
 - **Lock-order inversion between `ReviewFlagService.flag` and `GdprErasureService.erase`** —
   `flag()` takes `coach_reviews` then `coach_profiles` (via `CoachRatingService.recompute`'s
@@ -3538,49 +3065,6 @@ implementation. Each was independently re-verified against real source. None is 
   `ROLE_COACH` is checked first, `ReviewResource.java:142-146` — reordering those two lines alone, with
   `AuthorRole` itself unchanged, would let a coach author a review as `AuthorRole.PARENT`, overlapping
   the lock sets nobody reviewing that reorder would connect to GDPR lock ordering).]**
-
-- **Both new concurrency ITs are timing-dependent** — `ReviewFlagServiceConcurrencyIT` and
-  `CoachProfileServiceConcurrencyIT` use a fixed `Thread.sleep(300)` as the only "contention
-  established" signal, and take wall-clock `Instant.now()` *after* `transactionTemplate.execute` returns
-  (i.e. after the commit that releases the lock) for cross-thread ordering assertions. Nothing verifies
-  the contending thread actually blocked, so on a cold JVM or constrained connection pool the test can
-  pass without exercising the lock at all; conversely the ordering assertion can fail on a correct
-  system if the holder thread is descheduled in the gap. A `pg_locks`/`pg_stat_activity` poll for
-  `wait_event_type = 'Lock'` would make both deterministic. Revisit on the first CI flake.
-  **[CLOSED by skillars-deferred-131 AC3]** — a shared `ConcurrencyLockWaitSupport` test utility now
-  provides two signals, one per lock discipline actually present in this codebase:
-  `awaitBlockingLockWaiter` (a live `pg_locks`/`pg_stat_activity` poll) for `ReviewFlagServiceConcurrencyIT`'s
-  blocking `FOR UPDATE` (`CoachReviewRepository.findByIdForUpdate` carries no `@QueryHints`); a bounded
-  `awaitFirstLockAttempt` delay plus a post-hoc `assertGenuineLockRetryOccurred` poll on
-  `PessimisticLockRetryer`'s own `persistence.lock_retry.retries` meter for `CoachProfileServiceConcurrencyIT`
-  and the new `SubscriptionServiceConcurrencyIT` (both lock via the NOWAIT
-  `CoachProfileRepository.findByIdForUpdate`). **Implementation-time correction:** the story's own
-  suggested `Awaitility.await().until(() -> retriesCounter.count() > 0)` as a PRE-release gate does not
-  work against the real `PessimisticLockRetryer` implementation — `recordRetries(...)` fires only once
-  the whole retry loop CONCLUDES (success or exhaustion), not per failed attempt, so polling it before
-  releasing the holder's lock either returns immediately (a stale JVM-wide value) or blocks until the
-  contender has already given up. Used instead as a bounded pre-release delay plus a real POST-HOC proof
-  after both threads join — genuine determinism about whether contention was hit, just not as a blocking
-  gate. Applied across all three ITs; each now also asserts the retry/wait signal directly rather than
-  only inferring it from timing.
-
-- **`ReviewFlagService.flag` NPEs on a null `flaggedBy`** (`:61`) — `flaggedBy.equals(coachProfile
-  .getUserId())` dereferences the boxed parameter after the row lock is taken; `flag(null, ...)` also
-  raises a data-access API-usage error rather than the intended `REVIEW_NOT_FOUND`. Unreachable from
-  REST today via `ReviewResource`'s `resolveUserId()`, so recorded rather than guarded.
-  **[CLOSED by skillars-deferred-131 AC2 Fix 7]** — an explicit null check at the top of `flag()`, before
-  any repository call, now throws `OperationNotAllowedException` with a new `ReviewErrorCode
-  .INVALID_FLAGGER` (`reviews.invalidFlagger`) instead of NPE-ing. Still defensive hardening, not a live
-  bug — `ReviewResource.resolveUserId()` still guards against a null caller before this method is ever
-  invoked from REST. Pinned by `ReviewFlagServiceTest.flag_nullFlaggedBy_throwsInvalidFlaggerNotNpe`.
-
-- **`CoachProfileService.publishProfile` still never sets `statusChangedAt`** on the `DRAFT → ACTIVE`
-  transition, while every sibling status writer does (`suspendCoach:143`, `reinstateCoach:231`). Already
-  recorded by this story's AC3 as out of scope; re-noted here because the code review confirmed it and
-  the fix is one line inside a method skillars-deferred-130 already rewrites.
-  **[CLOSED by skillars-deferred-131 AC1 Fix 2]** — `profile.setStatusChangedAt(Instant.now())` added
-  alongside the `ACTIVE` write, matching every sibling writer's convention. Pinned by
-  `CoachProfileServiceConcurrencyIT.publishProfile_setsStatusChangedAtToFreshTimestamp`.
 
 - **`CoachReviewRepository.findByIdForUpdate` diverges from the documented NOWAIT + `PessimisticLockRetryer`
   convention** (`CoachReviewRepository.java:23-25`) — it carries no `@QueryHints`, unlike
@@ -3692,121 +3176,6 @@ and Fix 4's residual slow-`publishProfile` Stripe-orphan window (rarer post-fix,
 durable remedy is a separate compensating-action/reconciliation-sweep story). Nothing else from this
 story's own scope remains open.
 
-## Deferred from: code review of skillars-deferred-131-marketplace-reviews-hardening-and-ci-reset-deadlock-fix (2026-09-23)
-
-Source: `/bmad-code-review`, four parallel layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor,
-`/txn-and-concurrency-audit`). 58 raw findings → 33 unique → 8 dismissed → 25 actionable, of which the
-five below are deferred as out-of-scope or pre-existing. The other 20 (3 decision-needed, 17 patch) are
-tracked in that story's own `### Review Findings` section.
-
-- **`assertGenuineLockRetryOccurred` asserts on a JVM-wide cumulative meter.**
-  `ConcurrencyLockWaitSupport.java:104-109` polls `persistence.lock_retry.retries` for growth past a
-  baseline, but that counter is a single cumulative total across all 33 `PessimisticLockRetryer` call
-  sites and every test in the forked JVM. Any unrelated in-flight retry — and the concurrency audit
-  established that five other async pools are live during tests — satisfies the assertion. Not fixed
-  here because the real fix is a `Tags`-scoped or per-call-site meter inside `PessimisticLockRetryer`,
-  i.e. a production change well outside this story's scope. The helper's own javadoc already discloses
-  the limitation and mitigates the stale-baseline half (growth vs `> 0`), just not the attribution half.
-  **[CLOSED by skillars-deferred-132 AC1 Fix 5]** — exactly the fix this bullet named: every
-  `.withBoundedRetry(` call site (all 34, after Fix 2's new `ReviewFlagService.flag` site) now passes a
-  `lockName`, tagged onto `persistence.lock_retry.retries`/`.exhausted` and the `persistence.lock_retry`
-  timer alike (all three meters, not just `retries` — `PrometheusMeterRegistry` requires the same tag
-  set on every registration of a given meter name). `ConcurrencyLockWaitSupport.currentLockRetryCount`/
-  `assertGenuineLockRetryOccurred` now take a `lockName` and poll only that tag. Every concurrency IT
-  using the helper (`CoachProfileServiceConcurrencyIT`, `SubscriptionServiceConcurrencyIT`, this story's
-  own `ReviewFlagServiceConcurrencyIT` rewrite) asserts on its own tagged counter now, closing the false-
-  pass risk this bullet described.
-
-- **`submitReview`'s translated `DataIntegrityViolationException` leaves the transaction rollback-only.**
-  `ReviewSubmissionService.java:69`'s `saveAndFlush` + `catch (DataIntegrityViolationException)` returns a
-  clean `ALREADY_SUBMITTED` to the caller, but the physical Postgres transaction is aborted and marked
-  rollback-only. Verified safe today: `ReviewResource` carries no `@Transactional`, so the service's own
-  class-level annotation is the outermost boundary. The first caller that wraps `submitReview` in its own
-  transaction (a bulk import, an admin tool) converts the 4xx into `UnexpectedRollbackException` at the
-  outer boundary. The constraint currently lives only in `ReviewSubmissionServiceConcurrencyIT`'s javadoc;
-  making it structural needs `Propagation.REQUIRES_NEW` or an architectural test — a design decision, not
-  a patch.
-  **[CLOSED by skillars-deferred-132 AC2 Fix 7, widened to `ReviewFlagService.flag` too]** — exactly the
-  fix this bullet named: `submitReview` now carries method-level `@Transactional(propagation =
-  REQUIRES_NEW)`, overriding the class-level default for that method only. `ReviewFlagService.flag()`
-  has the byte-for-byte identical DIVE-catch-and-translate trap (deliberately mirrored code, per
-  `ReviewSubmissionService`'s own comment) and was found during this story's own review to need the
-  identical fix — applying it to only one would have shipped an inconsistent half-fix on two sibling
-  methods in the same module. New regression tests on both methods (in
-  `ReviewSubmissionServiceConcurrencyIT`/`ReviewFlagServiceConcurrencyIT`) wrap a call in a genuine outer
-  transaction (touching an unrelated row, to avoid a self-deadlock on the same unique key) and assert
-  the outer transaction's own commit succeeds cleanly — no `UnexpectedRollbackException` — while the
-  loser still gets the clean `ALREADY_SUBMITTED`/`ALREADY_FLAGGED` from inside it.
-
-- **`PessimisticLockRetryerCallSiteAuditTest` audits the wrong direction and is trivially satisfiable.**
-  `PessimisticLockRetryerCallSiteAuditTest.java:80-90,103` matches nine DENYLIST regexes against each
-  lambda's *raw source text*, so `withBoundedRetry(() -> doTheWrite(id))` — any write hidden one method
-  call deep — passes silently. More importantly it enumerates `.withBoundedRetry(` call sites, never
-  `findByIdForUpdate(` call sites, so a new NOWAIT lock added *without* a retry wrapper is invisible to
-  it. All 15 `coachProfileRepository.findByIdForUpdate` sites are correctly wrapped today (hand-checked
-  during this review), and this story's new 33rd site is legitimately covered by the count bump — nothing
-  is broken. Worth a second assertion that every `findByIdForUpdate(` occurrence in `src/main/java` lies
-  inside a `withBoundedRetry(` lambda. Pre-existing weakness, not introduced here.
-  **[CLOSED by skillars-deferred-132 AC4 Fix 11, corrected scope]** — this bullet's own "all 15 sites
-  correctly wrapped" claim was narrower than reality: **four** repositories declare `findByIdForUpdate`
-  WITHOUT `@QueryHints(lock.timeout = 0)` — `VideoQuotaRepository`, `CoachPayoutRepository`,
-  `MessageRepository`, and `CoachReviewRepository`'s own (unchanged) `findByIdForUpdate` — genuinely
-  blocking locks that correctly have no retry wrapper, by design. The new assertion (added to
-  `PessimisticLockRetryerCallSiteAuditTest`) is scoped to the confirmed NOWAIT repositories only, with
-  the four blocking ones named as an explicit exemption list in the test's own javadoc; it checks
-  file-scoped (not method-scoped) co-occurrence of a NOWAIT lock call and a `.withBoundedRetry(` — a
-  deliberately cheaper check than full method-boundary parsing, named as a tradeoff in the test's own
-  javadoc. Verified to catch a deliberately-introduced unwrapped call (added to a scratch location, confirmed
-  the assertion fails, then removed) and to pass cleanly against all four exemptions unmodified.
-
-- **New unit tests hand-build entities instead of using Instancio.**
-  `AdminReviewServiceTest.review(...)`, `ReviewFlagServiceTest`, and the `new CoachProfile()` stubs added
-  to `PastDueGracePeriodTest`/`SubscriptionSchedulerIsolationTest` all construct entities by hand, against
-  `project-context.md`'s Testing Rules ("Use **Instancio** for generating DTO and Entity test data").
-  Deferred because this matches wider practice across the existing test suite rather than being a
-  regression introduced by this story — closing it properly is a suite-wide convention sweep.
-  **[CLOSED by skillars-deferred-136 AC5 — all 4 named files converted to `Instancio.of(...).set(field(...),
-  ...).create()`, one file at a time, each file's own tests re-run and confirmed passing after its own
-  conversion.** Scoped to exactly these 4 files (18 hand-built instances), not a suite-wide sweep — the
-  wider "matches existing practice elsewhere" residual this bullet also named is unaffected and remains
-  the wider convention until a future story chooses to sweep it further.]**
-
-- **AC4 Task 1's empirical investigation requirement was not met.**
-  Task 1 required investigating the CI reset deadlock's actual concurrent actor *empirically* — "this
-  project's own established convention: verify, don't guess… do not implement a fix that assumes it
-  without verifying first" — and named two concrete options (temporary diagnostic logging around the async
-  entry points; `pg_stat_activity` capture at a reproduced deadlock). Neither was attempted; the
-  investigation was a grep-level structural reading. The story and ledger both disclose this honestly
-  ("the race itself was not reproduced locally… this closes the identified mechanism and reduces risk, it
-  does not claim to exhaustively rule out any other"). Recorded here because it compounds the single-pool
-  quiesce gap being patched in the story: a high-blast-radius, suite-wide change shipped against an
-  unconfirmed actor on an unconfirmed pool, with no revert-detecting test possible either way.
-  **[CLOSED by skillars-deferred-132 AC1 Fix 6]** — the empirical attempt this bullet named was made:
-  `quiesceAsyncExecutors` was temporarily short-circuited (reopening the pre-fix race window), temporary
-  entry/exit diagnostic logging (thread name + timestamp) was added around both
-  `RadarCompositeCalculationService.onRadarEntrySubmitted` and `ReportGenerationService
-  .onReportGenerated`, and the full `platform.development.**` package (231 tests) was run repeatedly
-  against real Testcontainers Postgres with the quiesce disabled. **9 valid consecutive local runs, zero
-  reproductions** — no `deadlock detected` error, and the diagnostic log confirmed both async listeners
-  were genuinely dispatched on every run (a 10th run failed on an unrelated compilation error from
-  concurrent unrelated file edits mid-run, discarded rather than counted). All temporary logging and the
-  short-circuit were reverted before this story's PR — `quiesceAsyncExecutors` is confirmed back to its
-  shipped, always-on state. This does not newly prove the mechanism impossible; it keeps the status
-  exactly where the original fix left it — **closed by structural reasoning, not exhaustively proven** —
-  now with a documented, bounded reproduction attempt behind that statement instead of none, consistent
-  with a race that reproduced roughly 1-in-15 on master (first occurrence in ~14 prior green runs) not
-  being practical to chase further through repeated local runs. One known, pre-existing residual in the
-  shipped fix itself is unrelated to whether the race reproduces and remains open: a per-executor
-  `ConditionTimeoutException` is caught and logged, then the reset proceeds anyway after its own 10s
-  wait — the race window is not fully closed for an in-flight async task that runs longer than 10s.
-  **[CLOSED by skillars-deferred-136 AC4 — the only lever this residual's own reasoning leaves open
-  (the catch-and-proceed shape itself is not up for revisiting, per the Javadoc above) has been raised:
-  `atMost` 10s → 30s.** No empirical async-task-duration data exists to size a tighter bound from (the
-  9-run reproduction study above confirmed dispatch, not duration) — a conservative 3x multiple was used
-  instead. Test infrastructure only; verified via the many other `AbstractIntegrationTest`-extending
-  suites this same story's own targeted runs already exercised, which implicitly exercise this listener
-  on every test method.]**
-
 ## Last audit: 2026-09-24 (skillars-deferred-132 dev-story completion)
 
 Every item this story resolves is now closed above, each with its own `[CLOSED by skillars-deferred-132
@@ -3853,9 +3222,10 @@ Every item this story resolves is now closed above, each with its own `[CLOSED b
 
 **What remains open after this story:** the Fix 1 lock-order inversion (unreachable today by
 construction, disjoint lock sets for both account shapes); the `BoundedKey` missing-`default` residual;
-the Stripe → payment reconciliation sweep (a separate story); and Fix 6's own known residual (the
-`ConditionTimeoutException` catch-and-proceed leaving a >10s async task's race window open). Nothing
-else from this story's own scope remains open.
+and Fix 6's own known residual (the `ConditionTimeoutException` catch-and-proceed leaving a >10s async
+task's race window open). Nothing else from this story's own scope remains open.
+**[CLEANUP 2026-09-26: struck "the Stripe → payment reconciliation sweep (a separate story)" from this
+list — it was built by `skillars-deferred-135` the following day, so it is no longer open.]**
 
 ## Last audit: 2026-09-24 (skillars-deferred-133 dev-story completion)
 
@@ -3980,25 +3350,15 @@ residual (alerting-only fix, narrower than the ledger's original ask); AC3's rem
 `handleInvoicePaymentFailed` itself closed by skillars-deferred-134 AC2).
 Nothing else from this story's own scope remains open.
 
-## Deferred from: code review of skillars-deferred-136-gdpr-datasource-retry-packsession-lock-fix (2026-09-25)
-
-Source: `/bmad-code-review`, three parallel layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor)
-over the story's uncommitted implementation diff. 16 raw findings (12 Blind Hunter, 4 Edge Case Hunter,
-0 Acceptance Auditor — full AC1–AC6 compliance confirmed) → 15 unique after dedup → 8 dismissed (5 as
-verified false positives/hallucinations, 3 as already-adequately-disclosed or matching established
-codebase convention) → 7 actionable, of which the one below is deferred as a pre-existing/low-severity
-test-infra tradeoff. The other 6 (1 decision-needed, 5 patch) are tracked in that story's own
-`### Review Findings` section.
-
-- **`TestConfig`'s new dedicated-pool `DataSource` bean adds connection-pool pressure on an
-  already-flaky shared test suite.** `TestConfig.java:94-106`'s `containerHikariDataSource` helper now
-  backs a second, 3-connection pool per Spring test context (on top of the existing 25-connection
-  primary pool), and this story's own Dev Agent Record independently acknowledges resource-contention
-  failures from running "~40 Spring context permutations back-to-back in one local JVM" against one
-  shared Testcontainers Postgres instance. Not fixed here because it's required by AC1's own test plan
-  (a genuinely separate, independently-pooled dedicated `DataSource` is the whole point of
-  `GdprErasureDataSourceRoutingIT`), and it matches the existing primary-pool bean's own shape (neither
-  sets `minimumIdle`, so both default to eagerly maintaining `minIdle == maxPoolSize`). Revisit if test
-  suite flakiness measurably worsens — e.g. lowering `gdpr-erasure-pool`'s `minimumIdle` to 0 to match
-  production's own `gdprErasureHikariConfig` bean (`DataSourceConfig.java:91`) would reduce eager
-  connection creation without weakening what the routing test proves.
+**[CLEANUP 2026-09-26: `## Deferred from: code review of skillars-deferred-136-...` section removed —
+its sole bullet (`TestConfig`'s new dedicated-pool `DataSource` bean adding connection-pool pressure on
+an already-flaky shared test suite) was closed the same day PR #231's own `build` CI check failed twice
+with `FATAL: sorry, too many clients already`. Root cause was two-fold: the dedicated `gdpr-erasure-pool`
+did need `minimumIdle(0)` as this bullet's own "revisit if" suggested, but the bigger factor was
+`TestConfig`'s primary-pool bean hardcoding `maximumPoolSize=25`/`minimumIdle=25` instead of binding
+`@ConfigurationProperties(prefix = "spring.datasource.hikari")` like `DataSourceConfig.hikariConfig()`
+does — silently discarding `application-test.yaml`'s own already-tuned `maximum-pool-size: 16`/
+`minimum-idle: 0` overrides. Fixed in the same PR: `TestConfig.hikariConfig()` now binds via
+`@ConfigurationProperties`, `TestConfig.gdprErasureHikariConfig()` reads `minimumIdle=0` plus
+`auto-commit`/`connection-init-sql`/`idle-timeout` from the same yaml keys. Verified:
+`GdprErasureDataSourceRoutingIT` 2/2 passing, PR #231's `build` check passed on the next run.]**
