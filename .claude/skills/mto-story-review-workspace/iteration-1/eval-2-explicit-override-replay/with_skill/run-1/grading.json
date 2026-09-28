@@ -1,0 +1,36 @@
+{
+  "run_id": "eval2-with_skill",
+  "expectations": [
+    {
+      "text": "The mto-story-review skill triggered naturally from this phrasing",
+      "passed": true,
+      "evidence": "notes.txt: 'Skill used: mto-story-review (loaded via Skill tool)'"
+    },
+    {
+      "text": "Report does not declare the 'deferred-64 AC5' attribution fabricated/wrong without checking the AdminVideoService.java code comment",
+      "passed": true,
+      "evidence": "Row 18 and Layer 2 item 3: 'CONFIRMED by all three sources' (ledger, source comment, git log), quotes the verbatim comment"
+    },
+    {
+      "text": "Report states the real current git HEAD rather than any stale commit reference",
+      "passed": true,
+      "evidence": "'Real HEAD verified against: 0d5897a8 ... never trusted from the story's own self-description or its claimed baseline (master@c9a2691d)'"
+    },
+    {
+      "text": "story-review.md was written with the review output",
+      "passed": true,
+      "evidence": "File present at with_skill/outputs/story-review.md, 126 lines"
+    },
+    {
+      "text": "Report proceeds despite the story's status being 'done', since it was named explicitly by the user",
+      "passed": true,
+      "evidence": "notes.txt: explicit statement that the status/auto-discovery gate was skipped because the user named the file directly, per Step 1 instruction 4's override path"
+    }
+  ],
+  "summary": {
+    "passed": 5,
+    "failed": 0,
+    "total": 5,
+    "pass_rate": 1.0
+  }
+}

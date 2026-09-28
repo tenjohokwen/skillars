@@ -1,0 +1,15 @@
+{
+  "eval_id": 0,
+  "eval_name": "eval0-ready-for-dev-fixture",
+  "prompt": "/mto-story-review (no arguments) against a worktree staged so skillars-deferred-137-gdpr-erase-ceiling-payment-pool-fix is the ready-for-dev story, using its reconstructed pre-implementation text (with one injected false claim: that Radar's spend-down uses System.nanoTime() instead of the real Instant.now()/Duration.between).",
+  "assertions": [
+    {"text": "Report states the real current git HEAD (not the story's stale c9a2691d claim)", "category": "citation-verification"},
+    {"text": "Report flags the story's 'Master is at c9a2691d' claim as stale relative to actual current HEAD, rather than treating it as still-current", "category": "citation-verification"},
+    {"text": "Report does not declare the 'deferred-64 AC5' attribution fabricated/wrong -- it checks AdminVideoService.java's code comment (not just the ledger) and confirms the citation is real", "category": "false-positive-avoidance"},
+    {"text": "Report catches the injected false claim that Radar's spend-down uses System.nanoTime() -- correctly states Radar uses Instant.now()/Duration.between (wall-clock), distinct from the separate nanoTime() usage in GdprErasureService.eraseParentChildren", "category": "mechanistic-claim-verification"},
+    {"text": "Report resolves the AC1 'confirm no ordering dependency between statement 7 and 8' question by tracing the actual REQUIRES_NEW/executeWithoutResult transaction boundary around deletePlayerDevelopmentDataInDedicatedPool, concluding a bail-out is a full rollback not a partial one", "category": "transaction-boundary-tracing"},
+    {"text": "Report avoids a uniform 'zero false positives / HIGH confidence' blanket summary -- gives per-claim verification evidence instead", "category": "calibration"},
+    {"text": "story-review.md was written/overwritten with the review output", "category": "output-format"},
+    {"text": "Report treats the story's specific deferred-work.md line-range citations as needing re-verification rather than accepting them uncritically", "category": "citation-verification"}
+  ]
+}

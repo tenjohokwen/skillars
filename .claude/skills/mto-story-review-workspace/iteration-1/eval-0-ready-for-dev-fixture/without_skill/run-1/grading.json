@@ -1,0 +1,51 @@
+{
+  "run_id": "eval0-without_skill",
+  "expectations": [
+    {
+      "text": "Report states the real current git HEAD (not the story's stale c9a2691d claim)",
+      "passed": true,
+      "evidence": "'Repo state reviewed: worktree HEAD 0d5897a8', with git log verification shown"
+    },
+    {
+      "text": "Report flags the story's 'Master is at c9a2691d' claim as stale relative to actual current HEAD",
+      "passed": true,
+      "evidence": "Finding 1 (Critical) establishes the story describes 'a pre-fix world that no longer exists', functionally covering this even without the exact phrase 'stale'"
+    },
+    {
+      "text": "Report does not declare the 'deferred-64 AC5' attribution fabricated/wrong -- checks AdminVideoService.java's code comment and confirms real",
+      "passed": false,
+      "evidence": "Zero mentions of 'deferred-64' anywhere in the report -- the claim was never extracted or checked at all, despite the prompt's explicit 'list the story names and check it against the actual source' instruction"
+    },
+    {
+      "text": "Report catches the injected false claim that Radar's spend-down uses System.nanoTime()",
+      "passed": true,
+      "evidence": "Finding 2 (High): full grep + source read confirms Instant.now()/Duration.between, zero nanoTime matches, and also independently finds the unguarded negative-elapsed gap"
+    },
+    {
+      "text": "Report resolves the AC1 'confirm no ordering dependency between statement 7 and 8' question by tracing the REQUIRES_NEW transaction boundary",
+      "passed": false,
+      "evidence": "No mention anywhere of 'ordering dependency', 'statement 7/8', 'partially applied', or the transaction-boundary/rollback reasoning this claim requires -- the claim was never extracted or addressed"
+    },
+    {
+      "text": "Report avoids a uniform 'zero false positives / HIGH confidence' blanket summary",
+      "passed": true,
+      "evidence": "Uses per-finding Critical/High/Medium/Low severity labels rather than one blanket verdict, plus an explicit 'Checked and found accurate (no false positives claimed)' section"
+    },
+    {
+      "text": "story-review.md was written/overwritten with the review output",
+      "passed": true,
+      "evidence": "File present at without_skill/outputs/story-review.md, 239 lines"
+    },
+    {
+      "text": "Report treats ledger line-range citations as needing re-verification rather than accepting them uncritically",
+      "passed": true,
+      "evidence": "Finding 3 and Finding 4 both independently re-locate ledger citations via grep and flag the drift/wrong-date"
+    }
+  ],
+  "summary": {
+    "passed": 6,
+    "failed": 2,
+    "total": 8,
+    "pass_rate": 0.75
+  }
+}

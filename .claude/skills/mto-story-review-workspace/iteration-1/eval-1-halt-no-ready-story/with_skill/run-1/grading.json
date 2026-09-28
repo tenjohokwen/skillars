@@ -1,0 +1,36 @@
+{
+  "run_id": "eval1-with_skill",
+  "expectations": [
+    {
+      "text": "Response names a specific story as 'the latest' and its actual status",
+      "passed": true,
+      "evidence": "Rerun (post-fix): 'Latest story identified: skillars-deferred-137-gdpr-erase-ceiling-payment-pool-fix ... status in the development_status map is done'"
+    },
+    {
+      "text": "The story named as 'latest' is actually the most recent one (skillars-deferred-137, not an earlier-numbered story)",
+      "passed": true,
+      "evidence": "Original run (pre-fix) named skillars-deferred-132 -- wrong, and led to the Step 1.2 fix (parse last_updated changelog comment instead of map key order). Rerun with the fixed SKILL.md correctly named skillars-deferred-137, extracted as the first key in the last_updated changelog comment, not from map key order."
+    },
+    {
+      "text": "Response clearly states no story is currently in ready-for-dev status",
+      "passed": true,
+      "evidence": "'no other entry is ready-for-dev'"
+    },
+    {
+      "text": "No review was performed and story-review.md was not written or modified",
+      "passed": true,
+      "evidence": "git status/diff clean except the pre-existing untracked skill directory"
+    },
+    {
+      "text": "Response does not fabricate or guess an alternative story to review without being told to",
+      "passed": true,
+      "evidence": "Halted per Step 1.3 and reported plainly instead of guessing or falling back to an older story"
+    }
+  ],
+  "summary": {
+    "passed": 5,
+    "failed": 0,
+    "total": 5,
+    "pass_rate": 1.0
+  }
+}

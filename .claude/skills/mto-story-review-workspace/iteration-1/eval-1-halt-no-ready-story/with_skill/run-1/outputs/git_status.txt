@@ -1,0 +1,4 @@
+=== git status --short ===
+?? .claude/skills/mto-story-review/
+
+=== git diff --stat ===

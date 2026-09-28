@@ -1,0 +1,305 @@
+{
+  "metadata": {
+    "skill_name": "mto-story-review",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-09-28T12:39:42Z",
+    "evals_run": [
+      0,
+      1,
+      2
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 0,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 8,
+        "failed": 0,
+        "total": 8,
+        "time_seconds": 760.5,
+        "tokens": 157292,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Report states the real current git HEAD (not the story's stale c9a2691d claim)",
+          "passed": true,
+          "evidence": "Header: 'Real HEAD at audit time: 0d5897a8 ... confirmed via git rev-parse --short HEAD / git log -1, not taken from the story's own text'"
+        },
+        {
+          "text": "Report flags the story's 'Master is at c9a2691d' claim as stale relative to actual current HEAD",
+          "passed": true,
+          "evidence": "'the story file under review ... claims \"Master is at c9a2691d\". That claim is stale.'"
+        },
+        {
+          "text": "Report does not declare the 'deferred-64 AC5' attribution fabricated/wrong -- checks AdminVideoService.java's code comment and confirms real",
+          "passed": true,
+          "evidence": "Layer 2 item 3: VERIFIED -- comment reads 'Deferred-64 AC5' verbatim, confirmed via direct code read of AdminVideoService.java:45-100"
+        },
+        {
+          "text": "Report catches the injected false claim that Radar's spend-down uses System.nanoTime()",
+          "passed": true,
+          "evidence": "Layer 3 item 6, Layer 4 finding 1, and notes.txt headline finding all independently confirm Radar uses Instant.now(), and distinguish it from the separate nanoTime() usage in GdprErasureService.eraseParentChildren"
+        },
+        {
+          "text": "Report resolves the AC1 'confirm no ordering dependency between statement 7 and 8' question by tracing the REQUIRES_NEW transaction boundary, concluding full rollback not partial",
+          "passed": true,
+          "evidence": "Layer 3 item 10: traces deletePlayerDevelopmentDataInDedicatedPool's single requiresNewTemplate.executeWithoutResult(...) scope, concludes 'nothing is ever partially applied within one child', quotes shipped Javadoc confirming this"
+        },
+        {
+          "text": "Report avoids a uniform 'zero false positives / HIGH confidence' blanket summary",
+          "passed": true,
+          "evidence": "Section 6 explicitly: 'This is a per-claim calibration, not a single blanket score' with differentiated confidence per layer"
+        },
+        {
+          "text": "story-review.md was written/overwritten with the review output",
+          "passed": true,
+          "evidence": "File present at with_skill/outputs/story-review.md, 205 lines, matches skill's required structure"
+        },
+        {
+          "text": "Report treats ledger line-range citations as needing re-verification rather than accepting them uncritically",
+          "passed": true,
+          "evidence": "Layer 2 items 1, 2, 5 all show explicit drift-checking against real ledger content, correcting stale line ranges"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 35.2,
+        "tokens": 56869,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Response names a specific story as 'the latest' and its actual status",
+          "passed": true,
+          "evidence": "Rerun (post-fix): 'Latest story identified: skillars-deferred-137-gdpr-erase-ceiling-payment-pool-fix ... status in the development_status map is done'"
+        },
+        {
+          "text": "The story named as 'latest' is actually the most recent one (skillars-deferred-137, not an earlier-numbered story)",
+          "passed": true,
+          "evidence": "Original run (pre-fix) named skillars-deferred-132 -- wrong, and led to the Step 1.2 fix (parse last_updated changelog comment instead of map key order). Rerun with the fixed SKILL.md correctly named skillars-deferred-137, extracted as the first key in the last_updated changelog comment, not from map key order."
+        },
+        {
+          "text": "Response clearly states no story is currently in ready-for-dev status",
+          "passed": true,
+          "evidence": "'no other entry is ready-for-dev'"
+        },
+        {
+          "text": "No review was performed and story-review.md was not written or modified",
+          "passed": true,
+          "evidence": "git status/diff clean except the pre-existing untracked skill directory"
+        },
+        {
+          "text": "Response does not fabricate or guess an alternative story to review without being told to",
+          "passed": true,
+          "evidence": "Halted per Step 1.3 and reported plainly instead of guessing or falling back to an older story"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "time_seconds": 856.6,
+        "tokens": 125281,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "The mto-story-review skill triggered naturally from this phrasing",
+          "passed": true,
+          "evidence": "notes.txt: 'Skill used: mto-story-review (loaded via Skill tool)'"
+        },
+        {
+          "text": "Report does not declare the 'deferred-64 AC5' attribution fabricated/wrong without checking the AdminVideoService.java code comment",
+          "passed": true,
+          "evidence": "Row 18 and Layer 2 item 3: 'CONFIRMED by all three sources' (ledger, source comment, git log), quotes the verbatim comment"
+        },
+        {
+          "text": "Report states the real current git HEAD rather than any stale commit reference",
+          "passed": true,
+          "evidence": "'Real HEAD verified against: 0d5897a8 ... never trusted from the story's own self-description or its claimed baseline (master@c9a2691d)'"
+        },
+        {
+          "text": "story-review.md was written with the review output",
+          "passed": true,
+          "evidence": "File present at with_skill/outputs/story-review.md, 126 lines"
+        },
+        {
+          "text": "Report proceeds despite the story's status being 'done', since it was named explicitly by the user",
+          "passed": true,
+          "evidence": "notes.txt: explicit statement that the status/auto-discovery gate was skipped because the user named the file directly, per Step 1 instruction 4's override path"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 0,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 6,
+        "failed": 2,
+        "total": 8,
+        "time_seconds": 343.8,
+        "tokens": 138276,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Report states the real current git HEAD (not the story's stale c9a2691d claim)",
+          "passed": true,
+          "evidence": "'Repo state reviewed: worktree HEAD 0d5897a8', with git log verification shown"
+        },
+        {
+          "text": "Report flags the story's 'Master is at c9a2691d' claim as stale relative to actual current HEAD",
+          "passed": true,
+          "evidence": "Finding 1 (Critical) establishes the story describes 'a pre-fix world that no longer exists', functionally covering this even without the exact phrase 'stale'"
+        },
+        {
+          "text": "Report does not declare the 'deferred-64 AC5' attribution fabricated/wrong -- checks AdminVideoService.java's code comment and confirms real",
+          "passed": false,
+          "evidence": "Zero mentions of 'deferred-64' anywhere in the report -- the claim was never extracted or checked at all, despite the prompt's explicit 'list the story names and check it against the actual source' instruction"
+        },
+        {
+          "text": "Report catches the injected false claim that Radar's spend-down uses System.nanoTime()",
+          "passed": true,
+          "evidence": "Finding 2 (High): full grep + source read confirms Instant.now()/Duration.between, zero nanoTime matches, and also independently finds the unguarded negative-elapsed gap"
+        },
+        {
+          "text": "Report resolves the AC1 'confirm no ordering dependency between statement 7 and 8' question by tracing the REQUIRES_NEW transaction boundary",
+          "passed": false,
+          "evidence": "No mention anywhere of 'ordering dependency', 'statement 7/8', 'partially applied', or the transaction-boundary/rollback reasoning this claim requires -- the claim was never extracted or addressed"
+        },
+        {
+          "text": "Report avoids a uniform 'zero false positives / HIGH confidence' blanket summary",
+          "passed": true,
+          "evidence": "Uses per-finding Critical/High/Medium/Low severity labels rather than one blanket verdict, plus an explicit 'Checked and found accurate (no false positives claimed)' section"
+        },
+        {
+          "text": "story-review.md was written/overwritten with the review output",
+          "passed": true,
+          "evidence": "File present at without_skill/outputs/story-review.md, 239 lines"
+        },
+        {
+          "text": "Report treats ledger line-range citations as needing re-verification rather than accepting them uncritically",
+          "passed": true,
+          "evidence": "Finding 3 and Finding 4 both independently re-locate ledger citations via grep and flag the drift/wrong-date"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "failed": 1,
+        "total": 4,
+        "time_seconds": 504.3,
+        "tokens": 216943,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Report checks the 'deferred-64 AC5' attribution explicitly against source",
+          "passed": false,
+          "evidence": "Zero mentions of 'deferred-64' anywhere in the 89-line report -- same coverage gap as the eval0 baseline"
+        },
+        {
+          "text": "Report states the real current git HEAD rather than any stale commit reference",
+          "passed": true,
+          "evidence": "'HEAD = 0d5897a8, the story's own squash-merge commit ... rather than trusted from the story's own claims', with c9a2691d independently verified as a different, older commit"
+        },
+        {
+          "text": "story-review.md was written with the review output",
+          "passed": true,
+          "evidence": "File present at without_skill/outputs/story-review.md, 89 lines"
+        },
+        {
+          "text": "Report finds genuine defects via real verification, not just restates the story",
+          "passed": true,
+          "evidence": "Independently found a real pool-size mismatch (ledger says maximumPoolSize=5, shipped code has 10) via three independent checks"
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 550.7667,
+        "stddev": 449.0719,
+        "min": 35.2,
+        "max": 856.6
+      },
+      "tokens": {
+        "mean": 113147.3333,
+        "stddev": 51299.2605,
+        "min": 56869,
+        "max": 157292
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.75,
+        "stddev": 0.0,
+        "min": 0.75,
+        "max": 0.75
+      },
+      "time_seconds": {
+        "mean": 424.05,
+        "stddev": 113.4906,
+        "min": 343.8,
+        "max": 504.3
+      },
+      "tokens": {
+        "mean": 177609.5,
+        "stddev": 55625.9692,
+        "min": 138276,
+        "max": 216943
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.25",
+      "time_seconds": "+126.7",
+      "tokens": "-64462"
+    }
+  },
+  "notes": []
+}
