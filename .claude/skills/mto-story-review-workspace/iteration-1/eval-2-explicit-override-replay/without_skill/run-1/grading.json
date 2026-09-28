@@ -1,0 +1,31 @@
+{
+  "run_id": "eval2-without_skill",
+  "expectations": [
+    {
+      "text": "Report checks the 'deferred-64 AC5' attribution explicitly against source",
+      "passed": false,
+      "evidence": "Zero mentions of 'deferred-64' anywhere in the 89-line report -- same coverage gap as the eval0 baseline"
+    },
+    {
+      "text": "Report states the real current git HEAD rather than any stale commit reference",
+      "passed": true,
+      "evidence": "'HEAD = 0d5897a8, the story's own squash-merge commit ... rather than trusted from the story's own claims', with c9a2691d independently verified as a different, older commit"
+    },
+    {
+      "text": "story-review.md was written with the review output",
+      "passed": true,
+      "evidence": "File present at without_skill/outputs/story-review.md, 89 lines"
+    },
+    {
+      "text": "Report finds genuine defects via real verification, not just restates the story",
+      "passed": true,
+      "evidence": "Independently found a real pool-size mismatch (ledger says maximumPoolSize=5, shipped code has 10) via three independent checks"
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 1,
+    "total": 4,
+    "pass_rate": 0.75
+  }
+}

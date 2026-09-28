@@ -1,0 +1,61 @@
+mto-story-review run notes — eval0-ready-for-dev-fixture (with_skill)
+=======================================================================
+
+Real git HEAD resolved and used for all verification:
+  0d5897a8 — "skillars-deferred-137: GDPR erasure lock-wait ceiling + payment REQUIRES_NEW pool
+  isolation (#233)"
+  (confirmed via `git rev-parse --short HEAD` and `git log -1` run directly, not taken from the
+  story file's own "Master is at c9a2691d" claim, which was stale by design of this fixture — the
+  real HEAD already contains this exact story's shipped implementation.)
+
+Target story auto-discovery (no argument given, per task):
+  - Read sprint-status.yaml's `last_updated:` comment, extracted first story key named
+    (skillars-deferred-137-gdpr-erase-ceiling-payment-pool-fix), per the skill's explicit
+    instruction NOT to trust "last key in the map" as the recency signal.
+  - Looked up that key's status FROM THE development_status MAP (not the comment prose, which said
+    "done" — stale/lagging), found `ready-for-dev` in the map. This is the documented trap the
+    skill is built to avoid, and it worked as designed.
+
+HALT checkpoints auto-confirmed (per task instructions, since this is an unattended run):
+  1. Step 1.3 — story status was ready-for-dev, so no HALT was actually triggered here (this branch
+     only fires for non-ready-for-dev statuses).
+  2. Step 1.4 — "Present the story key/file path/title and HALT for explicit confirmation before
+     doing any verification work." This HALT WAS triggered and was auto-confirmed ("yes, proceed")
+     per the task's instructions, since no human was available. Work proceeded immediately after.
+  No other HALT points in the skill were encountered.
+
+Verification method:
+  - Launched 4 parallel read-only subagents (Layer 1 Citation Verifier, Layer 2 Ledger/Precedent
+    Verifier, Layer 3 Mechanistic Claim Verifier, Layer 4 Corner Case/Missed-Flow Hunter), each
+    given the real HEAD and its own worklist slice extracted from the story text.
+  - Performed the mandatory Step 4b adversarial re-check myself: independently re-read and
+    re-derived (not just trusted) the three highest-stakes findings directly from source —
+    RadarCompositeCalculationService's actual clock mechanism (Instant.now(), not nanoTime()),
+    the transaction boundary of deletePlayerDevelopmentDataInDedicatedPool (single REQUIRES_NEW
+    scope, no partial-commit risk), and the cross-pool HikariCP connection-budget arithmetic
+    (25 primary + 3 GDPR + 10 payment = 38/node x 4 nodes = 152 vs. documented 100-connection
+    ceiling in application.yaml).
+
+Claims/citations verified: 13 code citations (Layer 1) + 13 ledger/precedent attributions (Layer 2)
++ 10 mechanistic claims (Layer 3) + Layer 4's full-AC corner-case walk (4 genuine findings + 13
+explicitly-confirmed-clean checks) = 40 discrete checkable items verified by the 4 subagents, plus
+3 of the highest-stakes ones independently re-derived a second time by me directly against source
+during Step 4b. Total independent tool-based verification actions across all agents: well over 100
+(Layer 1: 24 tool uses, Layer 2: 51, Layer 3: 9, Layer 4: 32, plus my own ~10 direct reads/greps).
+
+Headline findings (see story-review.md for full detail):
+  - Story's claim that RadarCompositeCalculationService's spend-down uses System.nanoTime()
+    (monotonic) is FALSE — it actually uses Instant.now() (wall-clock). The nanoTime() mechanism
+    the story is describing actually belongs to a different method (GdprErasureService's own
+    eraseParentChildren PARENT-loop deadline). Genuine method-confusion in the story text.
+  - Story's claim that a mid-child bail-out is "safe to leave partially applied" is FALSE — the
+    shipped code's own Javadoc explicitly refutes this: the whole child runs in one REQUIRES_NEW
+    transaction, so a bail-out rolls back everything, not just the remainder.
+  - Real, unaddressed cross-pool connection-budget risk: adding the GDPR (3) and payment (10)
+    dedicated pools atop the primary (25) pushes the per-node total to 38, i.e. 152 across the
+    documented 4-node/100-connection convention — never re-derived by this story or its
+    predecessor (deferred-136).
+  - 11 of 13 code citations were line-drifted (not fabricated) because the story's own fix had
+    already landed at real HEAD, shifting line numbers and in several cases splitting methods
+    into wrapper + *Transactional sibling pairs. This drift is fully explained, not a sign of a
+    bad story.

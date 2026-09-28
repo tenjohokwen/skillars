@@ -1,0 +1,51 @@
+{
+  "run_id": "eval0-with_skill",
+  "expectations": [
+    {
+      "text": "Report states the real current git HEAD (not the story's stale c9a2691d claim)",
+      "passed": true,
+      "evidence": "Header: 'Real HEAD at audit time: 0d5897a8 ... confirmed via git rev-parse --short HEAD / git log -1, not taken from the story's own text'"
+    },
+    {
+      "text": "Report flags the story's 'Master is at c9a2691d' claim as stale relative to actual current HEAD",
+      "passed": true,
+      "evidence": "'the story file under review ... claims \"Master is at c9a2691d\". That claim is stale.'"
+    },
+    {
+      "text": "Report does not declare the 'deferred-64 AC5' attribution fabricated/wrong -- checks AdminVideoService.java's code comment and confirms real",
+      "passed": true,
+      "evidence": "Layer 2 item 3: VERIFIED -- comment reads 'Deferred-64 AC5' verbatim, confirmed via direct code read of AdminVideoService.java:45-100"
+    },
+    {
+      "text": "Report catches the injected false claim that Radar's spend-down uses System.nanoTime()",
+      "passed": true,
+      "evidence": "Layer 3 item 6, Layer 4 finding 1, and notes.txt headline finding all independently confirm Radar uses Instant.now(), and distinguish it from the separate nanoTime() usage in GdprErasureService.eraseParentChildren"
+    },
+    {
+      "text": "Report resolves the AC1 'confirm no ordering dependency between statement 7 and 8' question by tracing the REQUIRES_NEW transaction boundary, concluding full rollback not partial",
+      "passed": true,
+      "evidence": "Layer 3 item 10: traces deletePlayerDevelopmentDataInDedicatedPool's single requiresNewTemplate.executeWithoutResult(...) scope, concludes 'nothing is ever partially applied within one child', quotes shipped Javadoc confirming this"
+    },
+    {
+      "text": "Report avoids a uniform 'zero false positives / HIGH confidence' blanket summary",
+      "passed": true,
+      "evidence": "Section 6 explicitly: 'This is a per-claim calibration, not a single blanket score' with differentiated confidence per layer"
+    },
+    {
+      "text": "story-review.md was written/overwritten with the review output",
+      "passed": true,
+      "evidence": "File present at with_skill/outputs/story-review.md, 205 lines, matches skill's required structure"
+    },
+    {
+      "text": "Report treats ledger line-range citations as needing re-verification rather than accepting them uncritically",
+      "passed": true,
+      "evidence": "Layer 2 items 1, 2, 5 all show explicit drift-checking against real ledger content, correcting stale line ranges"
+    }
+  ],
+  "summary": {
+    "passed": 8,
+    "failed": 0,
+    "total": 8,
+    "pass_rate": 1.0
+  }
+}

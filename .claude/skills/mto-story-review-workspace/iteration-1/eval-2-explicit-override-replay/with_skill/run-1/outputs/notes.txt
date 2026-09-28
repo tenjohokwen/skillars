@@ -1,0 +1,21 @@
+Skill used: mto-story-review (loaded via Skill tool).
+
+The story file's Status field was "done" (already implemented), not "ready-for-dev". Per the
+skill's Step 1 instruction 4, the user named this specific file directly, so I skipped the
+auto-discovery/status-gate flow and treated the explicit naming as authorization to proceed,
+per the task's stated override instructions. All other HALT checkpoints in the skill (Step 1
+instruction 4's "present + halt for confirmation") were likewise auto-confirmed per the task's
+unattended-run instructions.
+
+Followed the skill's full process: read the story end to end, extracted a worklist of code
+citations, ledger/precedent attributions, mechanistic claims, and corner-case angles, then
+launched 4 parallel read-only subagents (Citation Verifier, Ledger & Precedent Verifier,
+Mechanistic Claim Verifier, Corner Case Hunter) against real HEAD (0d5897a8), followed by my
+own adversarial re-verification (Step 4b) of the two highest-stakes claims by reading the raw
+source myself: (1) the transaction-boundary/rollback claim underlying AC1's bail-out safety,
+and (2) a genuine corner-case finding the story's own review had NOT caught (a
+RoutingDataSourceContext leak into cascaded AFTER_COMMIT REQUIRES_NEW listeners triggered
+inside a routed payment call).
+
+Report written to _bmad-output/implementation-artifacts/story-review.md in the worktree and
+copied here.

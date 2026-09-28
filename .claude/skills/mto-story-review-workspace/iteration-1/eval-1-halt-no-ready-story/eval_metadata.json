@@ -1,0 +1,12 @@
+{
+  "eval_id": 1,
+  "eval_name": "eval1-halt-no-ready-story",
+  "prompt": "/mto-story-review (no arguments) against the real, unmodified repo state -- no story is currently ready-for-dev.",
+  "assertions": [
+    {"text": "Response names a specific story as 'the latest' and its actual status", "category": "discovery"},
+    {"text": "The story named as 'latest' is actually the most recent one (skillars-deferred-137, not an earlier-numbered story like skillars-deferred-132)", "category": "discovery-correctness"},
+    {"text": "Response clearly states no story is currently in ready-for-dev status", "category": "halt-behavior"},
+    {"text": "No review was performed and story-review.md was not written or modified (git status/diff clean)", "category": "halt-behavior"},
+    {"text": "Response does not fabricate or guess an alternative story to review without being told to", "category": "halt-behavior"}
+  ]
+}

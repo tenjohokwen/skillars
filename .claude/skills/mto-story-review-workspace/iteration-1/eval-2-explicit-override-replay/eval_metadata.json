@@ -1,0 +1,12 @@
+{
+  "eval_id": 2,
+  "eval_name": "eval2-explicit-override-replay",
+  "prompt": "As a senior dev, audit the story _bmad-output/implementation-artifacts/skillars-deferred-137-gdpr-erase-ceiling-payment-pool-fix.md for missed corner cases, false assumptions, missed flows etc. Ensure the review does not include false positives. open every file, line citation, constraint, precedent and test-file, list the story names and check it against the actual source. write the results here: _bmad-output/implementation-artifacts/story-review.md",
+  "assertions": [
+    {"text": "The mto-story-review skill triggered naturally from this phrasing (confirmed in notes.txt)", "category": "triggering"},
+    {"text": "Report does not declare the 'deferred-64 AC5' attribution fabricated/wrong without checking the AdminVideoService.java code comment", "category": "false-positive-avoidance"},
+    {"text": "Report states the real current git HEAD rather than any stale commit reference", "category": "citation-verification"},
+    {"text": "story-review.md was written with the review output", "category": "output-format"},
+    {"text": "Report proceeds despite the story's status being 'done', since it was named explicitly by the user", "category": "explicit-override"}
+  ]
+}

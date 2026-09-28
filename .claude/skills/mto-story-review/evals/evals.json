@@ -1,0 +1,26 @@
+{
+  "skill_name": "mto-story-review",
+  "evals": [
+    {
+      "id": 0,
+      "eval_name": "eval0-ready-for-dev-fixture",
+      "prompt": "/mto-story-review (no arguments) -- auto-discover the latest ready-for-dev story from sprint-status.yaml and review it.",
+      "expected_output": "A story-review.md that: (1) states the real current git HEAD, not the c9a2691d the story claims as 'Master'; (2) does not treat the deferred-64/AC5 attribution as fabricated without checking the AdminVideoService.java code comment; (3) catches and corrects the injected false claim that Radar's spend-down uses System.nanoTime() -- Radar actually uses Instant.now()/Duration.between, a separate nanoTime() usage exists elsewhere in GdprErasureService and must not be conflated with Radar's; (4) resolves the 'confirm no ordering dependency between statement 7 and 8' question by tracing the actual REQUIRES_NEW transaction boundary and concluding a bail-out is a full rollback, not partial; (5) avoids a uniform 'zero false positives, HIGH confidence' blanket summary in favor of per-claim verification evidence.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "eval_name": "eval1-halt-no-ready-story",
+      "prompt": "/mto-story-review (no arguments), run against the real repo state where the latest story (skillars-deferred-137) is already 'done'.",
+      "expected_output": "The skill reports the latest story's key and its actual (non-ready-for-dev) status, mentions any other ready-for-dev story if one exists, and halts -- it does not review anything, does not guess, does not write to story-review.md.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "eval_name": "eval2-explicit-override-replay",
+      "prompt": "As a senior dev, audit the story _bmad-output/implementation-artifacts/skillars-deferred-137-gdpr-erase-ceiling-payment-pool-fix.md for missed corner cases, false assumptions, missed flows etc. Ensure the review does not include false positives. open every file, line citation, constraint, precedent and test-file, list the story names and check it against the actual source. write the results here: _bmad-output/implementation-artifacts/story-review.md",
+      "expected_output": "A near-verbatim replay of the prompt that originally triggered this skill's creation, against the real (already-'done') story file. The skill should trigger naturally from this phrasing, proceed despite the story not being ready-for-dev because it was named explicitly, state the real current HEAD, and not repeat the four original failure modes (especially not mis-flagging the deferred-64 attribution as fabricated).",
+      "files": []
+    }
+  ]
+}
