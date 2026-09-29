@@ -89,9 +89,9 @@ These are all the variables you may need to set depending on your mode. Defaults
 | Variable | Used in | Required? | Mode A | Mode B | Purpose |
 |----------|---------|-----------|--------|--------|---------|
 | `APP_PAYMENT_STRIPE_API_KEY` | Both | Yes | Already in compose | Export before `mvn` | Placeholder to satisfy PaymentConfig validation |
-| `APP_EMAIL_TRANSPORT` | Both | No (with defaults) | Already in compose (`log`) | Not set — defaults to `smtp` (`application-dev.yaml`) | Switch mail to file-dump (`log`, writes to `target/mails/`) instead of SMTP |
-| `GMX_PASSWORD` | Both | No (with defaults) | Unused while transport is `log` | Export if real mail needed | GMX SMTP credentials for registration email |
-| `GMAIL_PASSWORD` | Both | No (with defaults) | Unused while transport is `log` | Export if real mail needed | Gmail SMTP credentials for registration email |
+| `APP_EMAIL_TRANSPORT` | Mode B only | No (with defaults) | Not settable — never allowed in a committed compose file (`NoHardcodedSenderTest`) | Not set — defaults to `smtp` (`application-dev.yaml`); export it yourself for `log` | Switch mail to file-dump (`log`, writes to `target/mails/`) instead of SMTP |
+| `GMX_PASSWORD` | Both | No (with defaults) | Defaults to a placeholder that fails SMTP auth (mail never sent) | Export if real mail needed | GMX SMTP credentials for registration email |
+| `GMAIL_PASSWORD` | Both | No (with defaults) | Defaults to a placeholder that fails SMTP auth (mail never sent) | Export if real mail needed | Gmail SMTP credentials for registration email |
 | `APP_VIDEO_BUNNY_LIBRARY_ID` | Both | Yes | Already in compose (123456) | Already in dev profile | Bunny CDN library ID |
 | `MANAGEMENT_HEALTH_MAIL_ENABLED` | Both | Yes | Already in compose | Already in dev profile | Disable Mail health check |
 | `APP_STORAGE_ENDPOINT_URL` | Mode A | Yes | Already in compose | N/A | SeaweedFS (S3-compatible) endpoint for file uploads |
@@ -298,25 +298,22 @@ Register through the UI like a real user. Two things worth understanding as
 you do — neither is really a difference from production any more, just a
 local wrinkle:
 
-**No real mail arrives locally by default — mail is dumped to a file instead.**
+**No real mail arrives locally by default, in either mode.**
 `application-dev.yaml` sets `app.email.transport: smtp` — the same kind of
-real delivery path production uses (production instead runs `ses`). But it
-also defaults `GMX_PASSWORD`/`GMAIL_PASSWORD` to literal placeholder strings
-(`dev_gmx_password`/`dev_gmail_password`) whenever the real env vars aren't
-set, and with those in place the send fails SMTP authentication server-side
-(the envelope is recorded `FAILED`, then retried and eventually exhausted;
-nothing reaches an inbox). **Mode A avoids this entirely**:
-`docker-compose.local.yml` overrides the transport to `app.email.transport=log`
-for the `app` container, which writes the full rendered email — verification
-link or OTP, in plaintext — to `target/mails/<correlationId>.html`/`.txt` on
-your host instead of attempting SMTP (the compose file mounts that directory
-out of the container for exactly this). **Mode B still uses
-`application-dev.yaml`'s own `smtp` default**, since it runs `mvn
-spring-boot:run` directly rather than through `docker-compose.local.yml` —
-export `APP_EMAIL_TRANSPORT=log` yourself before `mvn spring-boot:run` to get
-the same file-dump behavior (it lands in your own `target/mails/`, no mount
-needed), or set real `GMX_PASSWORD`/`GMAIL_PASSWORD` to actually receive mail
-in either mode.
+real delivery path production uses (production instead runs `ses`) — and this
+applies to Mode A and Mode B alike: the env var that switches transport to
+`log` (file-dump) is deliberately never allowed to appear in a committed
+compose file (`NoHardcodedSenderTest` enforces this — see
+`requirements/ses-email-consolidation.md#4.5`), so Mode A cannot override it
+that way. `application-dev.yaml` also defaults `GMX_PASSWORD`/`GMAIL_PASSWORD`
+to literal placeholder strings (`dev_gmx_password`/`dev_gmail_password`)
+whenever the real env vars aren't set, and with those in place the send fails
+SMTP authentication server-side (the envelope is recorded `FAILED`, then
+retried and eventually exhausted; nothing reaches an inbox). In Mode B you can
+still get the file-dump behavior for yourself, uncommitted, by exporting that
+transport override before `mvn spring-boot:run` (it lands in your own
+`target/mails/`) — or set real `GMX_PASSWORD`/`GMAIL_PASSWORD` in either mode
+to actually receive mail.
 
 The verification token is always written to the database regardless of
 whether the email send itself succeeds, so pulling it from there (see "Fetch
@@ -631,15 +628,15 @@ there is no `marketplace.coach_profiles` row in a usable state. Finish the
 profile builder first.
 
 **Registration succeeds but no verification link** — see "Creating the
-accounts" above. In Mode A, check `target/mails/` on your host first (that's
-where the `log` transport dumps it). In Mode B, dev delivers real SMTP mail by
-default, so check `GMX_PASSWORD`/`GMAIL_PASSWORD` are set to real credentials
-rather than the placeholder defaults; with placeholders, the send fails SMTP
-auth and no email arrives. Either way, query `main.email_verification_tokens`
-as shown above — the token is written regardless of whether the email send
-itself succeeds. This does **not** work for the OTP email, though — its code
-is only ever stored as a hash in the database, so `target/mails/` (or a real
-inbox) is the only place to read it.
+accounts" above. Both modes run the `smtp` transport by default, so check
+`GMX_PASSWORD`/`GMAIL_PASSWORD` are set to real credentials rather than the
+placeholder defaults; with placeholders, the send fails SMTP auth and no
+email arrives. Query `main.email_verification_tokens` as shown above instead
+— the token is written regardless of whether the email send itself succeeds.
+This does **not** work for the OTP email, though — its code is only ever
+stored as a hash in the database, so a real inbox (or, in Mode B only,
+exporting the `log`-transport override before `mvn spring-boot:run` to dump
+it to `target/mails/`) is the only place to read it.
 
 **Login returns "Account is not activated"** — email verification has not been
 completed. `activated` flips at email verification, not at registration.

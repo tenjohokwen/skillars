@@ -40,16 +40,6 @@ services:
       # credentials just to run locally — a regression from AC6 flipping dev to `transport: smtp`.
       - GMAIL_PASSWORD=${GMAIL_PASSWORD:-dev_gmail_password}
       - GMX_PASSWORD=${GMX_PASSWORD:-dev_gmx_password}
-      # Overrides application-dev.yaml's `transport: smtp` for Mode A (all-Docker). SMTP needs the
-      # real GMX_PASSWORD/GMAIL_PASSWORD above; without them (the common case locally) the send
-      # fails auth server-side and nothing reaches an inbox — including the coach/parent/player OTP
-      # mail sent right after email verification (CoachRegistrationService.verifyEmail and its
-      # counterparts). `log` writes the rendered email (verification link or OTP) to target/mails/
-      # instead, mounted below so it's readable from the host. The OTP itself is stored in
-      # `phone_otp_tokens` only as a SHA-256 hash (CoachRegistrationService.hashOtp), so this is the
-      # only local way to read it short of setting real SMTP credentials. See
-      # docs/deployment/local/manual-testing.md's "Creating the accounts" section.
-      - APP_EMAIL_TRANSPORT=log
       # These restate application-dev.yaml's OWN defaults, and are required rather than tidy.
       # docker-compose.yml passes each of these variables through with a `:-` empty default so a
       # production deploy can set them. But an empty environment variable is present-and-blank,
@@ -64,9 +54,9 @@ services:
       # docker-compose.yml's APP_SES_FROM_ADDRESS carries no default at all (see the comment
       # there), so listing it in the base file makes it present-and-blank under compose —
       # overriding application-dev.yaml's ${APP_SES_FROM_ADDRESS:dev@localhost} fallback the
-      # same way the other variables in this block do. Harmless today (dev runs
-      # app.email.transport=log, which doesn't validate from-address), but restated anyway so
-      # it isn't silently dead the moment anyone runs dev locally against transport=ses.
+      # same way the other variables in this block do. Harmless today (dev runs the smtp
+      # transport, which doesn't validate from-address), but restated anyway so it isn't
+      # silently dead the moment anyone runs dev locally against the ses transport.
       - APP_SES_FROM_ADDRESS=dev@localhost
       - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=dev-webhook-signing-secret
       - APP_VIDEO_PLAYBACK_SIGNING_SECRET=dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh
@@ -80,11 +70,6 @@ services:
     ports:
       - "9990:9990"   # main app
       - "8367:8367"   # actuator/health (management port)
-    volumes:
-      # APP_EMAIL_TRANSPORT=log above dumps rendered emails to target/mails relative to the
-      # container's WORKDIR (/app per the Dockerfile) — without this mount they'd be trapped inside
-      # the container and lost on the next `up`/rebuild.
-      - ./target/mails:/app/target/mails
     depends_on:
       storage:
         condition: service_healthy
