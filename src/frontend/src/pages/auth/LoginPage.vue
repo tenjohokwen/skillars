@@ -20,6 +20,15 @@
           {{ t('session.expired') }}
         </q-banner>
 
+        <!-- Email verified banner (skillars-deferred-138 AC2) -->
+        <q-banner
+          v-if="route.query.verified === 'true'"
+          class="q-mb-md auth-banner auth-banner--success"
+          rounded
+        >
+          {{ t('auth.emailVerifiedPleaseLogin') }}
+        </q-banner>
+
         <!-- Account not verified banner -->
         <q-banner v-if="accountNotVerified" class="q-mb-md auth-banner auth-banner--error" rounded>
           {{ t('auth.accountNotVerified') }}
@@ -212,6 +221,10 @@ async function handleLogin() {
   &--error {
     background: rgba(255, 95, 122, 0.12) !important;
     color: var(--accent-danger) !important;
+  }
+  &--success {
+    background: rgba(0, 200, 83, 0.12) !important;
+    color: var(--accent-success) !important;
   }
 }
 .auth-divider {

@@ -22,6 +22,7 @@ export default {
     resetBody: 'Choose a strong new password.',
     resetKeyMissing: 'Invalid or missing reset key. Please request a new password reset.',
     verifyTokenMissing: 'No verification token found. Please check your email link.',
+    emailVerifiedPleaseLogin: 'Your email has been verified. You can now log in.',
     phoneHintFormat: 'Include your country code, e.g. +1 555 0100',
     accountNotVerified:
       'Your account is not yet verified. Please complete phone verification first.',

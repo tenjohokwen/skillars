@@ -72,12 +72,17 @@ onMounted(async () => {
   }
   try {
     const response = await playerRegistrationApi.verifyEmail(token)
-    const { verificationToken } = response.data
+    const { nextStep, verificationToken } = response.data
     isVerifying.value = false
-    // skillars-deferred-93 P12: move verification handle to sessionStorage instead of URL query
-    // to keep it out of browser history, Referer headers, and access logs.
-    sessionStorage.setItem('playerVerificationToken', verificationToken)
-    router.push({ path: '/player/verify-phone', replace: true })
+    if (nextStep === 'verify-phone') {
+      // skillars-deferred-93 P12: move verification handle to sessionStorage instead of URL query
+      // to keep it out of browser history, Referer headers, and access logs.
+      sessionStorage.setItem('playerVerificationToken', verificationToken)
+      router.push({ path: '/player/verify-phone', replace: true })
+    } else {
+      // skillars-deferred-138 AC2: phone OTP isn't required — go straight to login.
+      router.push({ path: '/login', query: { verified: 'true' } })
+    }
   } catch (err) {
     isVerifying.value = false
     canResend.value = err.response?.data?.canResend === true

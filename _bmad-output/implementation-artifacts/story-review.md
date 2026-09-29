@@ -1,250 +1,181 @@
-# Story Audit: skillars-deferred-137-gdpr-erase-ceiling-payment-pool-fix
+# Story Review: skillars-deferred-138
 
-**Audit Date:** 2026-09-26  
-**Auditor:** Senior Developer  
-**Re-audit note:** A prior pass of this file flagged the ledger drift below as a "🚨 CRITICAL
-PRE-FLIGHT FAILURE" and flagged the `deferred-64` attribution as a wrong story number. Both were
-re-verified against the actual code and ledger and downgraded/reversed — see inline corrections.
-**Confidence Level:** HIGH — code citations verified exact against `HEAD`; the one genuinely stale
-citation is already disclosed by the story itself and is pinned down below for Task 4.
+**Story Key:** `skillars-deferred-138-checkbox-visibility-phone-otp-skip-navigation-and-local-stop-env-file-fix`
 
----
+**Review Date:** 2026-09-29
 
-## Ledger drift since story authoring (expected, already disclosed by the story — not a defect)
+**HEAD at Review:** `71453d36` — "Merge pull request #235 from tenjohokwen/app-startup-locally"
 
-**Story context vs. current state:**
-
-| Item | Story Claims | Actual Current | Implication |
-|------|--------------|----------------|-------------|
-| Master commit | c9a2691d | e664af46 | Story was authored one commit before its own HEAD |
-| deferred-work.md lines | ~4013+ | 3,364 | 649-line prune occurred (PR #232) between authoring and commit |
-
-**Timeline:** c9a2691d (story authored) → c9550a46 (PR #232 merged, ledger pruned) → c5e1cf0b (merge
-commit) → e664af46 (story committed).
-
-**This is not a story defect.** The story's own Dev Notes section says explicitly: *"This story's
-citations were verified against `master@c9a2691d`... Re-diff every cited line against whatever
-`master` actually looks like by the time implementation starts, per this project's own standing
-[convention]."* The story anticipates exactly this drift and tells the implementer what to do about
-it. Downgrading this from "critical pre-flight failure" to a routine, disclosed housekeeping item.
-
-**What actually drifted:** the four ledger line-ranges in the story's Context section (`:109-119`,
-`:192-215`, `:364-365`, `:1625-1638`, all supporting the "considered and excluded" false-positive
-list) and Task 4's `deferred-work.md:3259-3277` citation for the `skillars-deferred-129` D1 bullet.
-Re-located during this audit — **the D1 bullet AC1 must annotate is now at `deferred-work.md:2937-2955`**
-(header: `## Deferred from: code review of skillars-deferred-129-gdpr-lock-timeout-ci-frontend-auto-detect-and-envelope-test-fixes (2026-09-23)`), not `:3259-3277`. Use the new location directly —
-no need to re-search at implementation time.
+**Citations Verified Against:** Current `master@71453d36` (not against SHA names or claims in the story's own Context/Dev Notes sections)
 
 ---
 
 ## Executive Summary
 
-**Code citations (AC1, AC2) are VERIFIED and exact against current `HEAD`.**
-**One real, actionable correction found (Phase 6 below): the story's "partial completion" framing
-for AC1's bail-out is based on a premise the actual code doesn't support — worth fixing before
-implementation reads too much into it.**
-**One false positive from a prior review pass reversed (the `deferred-64` attribution — see below).**
+**Total Claims Checked:** 57 code citations + 4 mechanistic claims + 1 precedent attribution = 62 items
 
-The story's core architectural fixes (cumulative lock-wait ceiling, dedicated connection pool) are
-sound and grounded in real, verified precedent.
+**Claims Survived Step 4b Re-Verification:**
+- ✅ **55 MATCH** — code citations accurately locate real, current source
+- ⚠️ **2 GENUINE DRIFTS** — AC3 shell commands missing `--env-file .env.local` flag
+- ✅ **4 VERIFIED** — mechanistic claims all confirmed against actual implementation
+- ✅ **1 FOUND** — skillars-deferred-88 AC10 comment verified in all three services
 
----
-
-## PHASE 2: CODE CITATION VERIFICATION ✓
-
-### AC1 Code Citations — VERIFIED
-
-| File | Citation | Status |
-|------|----------|--------|
-| GdprErasureService.java | 1142 lines total | ✓ Verified |
-| deletePlayerDevelopmentDataInDedicatedPool | Lines 1040-1112 | ✓ Exact match, confirmed |
-| set_config lock_timeout | Lines 1049-1051 | ✓ Single call after lock, confirmed |
-| gdprEraseLockBudget field | Line 149 | ✓ volatile Duration, confirmed |
-| eraseParentChildren usage | Line 637 | ✓ Sampled before each child, confirmed |
-
-### AC2 Code Citations — VERIFIED
-
-| File | Citation | Status |
-|------|----------|--------|
-| BookingPaymentPersistenceService.java | 336 lines total | ✓ Verified |
-| reserveCapture | Lines 91-92, @Transactional(REQUIRES_NEW) | ✓ Confirmed |
-| persistPaymentFailure | Lines 246-247, @Transactional(REQUIRES_NEW) | ✓ Confirmed |
-| declineBatchBooking | Lines 326-327, @Transactional(REQUIRES_NEW) | ✓ Confirmed |
-| DataSourceConfig.dataSource() | Lines 51-56, RoutingDataSource with namedTargets | ✓ Confirmed |
+**Recommendation:** Safe to proceed with implementation. AC1 and AC2 citations are production-ready; AC3 drifts are correctly identified and the fixes outlined in the story address them properly.
 
 ---
 
-## PHASE 3: LEDGER CITATION VERIFICATION — stale, but resolved (see above)
+## Layer 1: Code Citation Verification
 
-The four line-ranges in the story's Context section (`:109-119`, `:192-215`, `:364-365`,
-`:1625-1638`) support only the "considered and excluded" false-positive list — none of them gate
-AC1/AC2 implementation. Confirmed they've shifted post-prune (the `ses-1-4` content now at
-`:105-124` reads as the *correction*, not the stale claim the story describes at `:109-119`). Not
-worth hand-fixing in the story text — these are drafting-session provenance notes, not
-implementation-blocking citations, and re-confirming "still fixed/still closed" for four items
-already marked `[CLOSED]`/`[DECIDED]` at the moment the story was drafted is not useful busywork.
+### AC1 — Dark-Theme Checkbox Visibility (CSS)
 
-The one citation that **does** matter operationally is Task 4's `deferred-work.md:3259-3277` for the
-`skillars-deferred-129` D1 bullet — already re-located above to **`:2937-2955`**.
+| Citation | Verdict | Evidence |
+|----------|---------|----------|
+| `src/frontend/src/css/components.scss` — existing `.q-field`/`.q-card`/`.q-btn` blocks at `:64-130` | **MATCH** | `.q-card` at lines 64-72, `.q-btn` at 79-117, `.q-field` at 120-158 |
+| **`.q-checkbox` rule exists** | **DOES NOT EXIST** | Full-file search confirms: no `.q-checkbox` override rule in components.scss — prerequisite for AC1 work is met |
+| `src/frontend/src/boot/theme.js:1-56` uses `document.documentElement.setAttribute('data-theme', ...)` | **MATCH** | Lines 25, 49 confirm setAttribute/removeAttribute pattern; zero Quasar Dark plugin calls |
+| `quasar.config.js:134-149` — Dark plugin status | **MATCH** | Lines 134-149 show only `['Notify', 'Dialog']` in plugins; Dark not registered |
+| `src/frontend/src/css/tokens/_colors.scss` — dual-theme tokens | **MATCH** | `--border-medium` at lines 24 (dark) & 81 (light); `--accent-primary` at 28 (dark) & 85 (light) |
+| `CoachRegisterPage.vue:115-121` — checkbox usage | **MATCH** | Lines 115-120 contain two `q-checkbox` elements with `color="primary"` |
+| `ParentRegisterPage.vue:121,139,157` | **MATCH** | All three line citations verified; three separate `q-checkbox` instances |
+| `PlayerRegisterPage.vue:146-150` | **MATCH** | Lines 146-150 contain two `q-checkbox` elements with `color="primary"` |
+| `RegisterPage.vue:180-184` | **MATCH** | Lines 180-184 contain admin 2FA `q-checkbox` with `color="primary"` |
+| `CreatePlayerProfilePage.vue:76-81` | **MATCH** | Lines 76-81 contain parental consent `q-checkbox` with `color="primary"` |
+| `ProfileBuilderStep2.vue:16-27` | **MATCH** | Lines 16-27 contain four age-group `q-checkbox` elements |
+| `WrapUpSequence.vue:16-25` | **MATCH** | Lines 16-25 contain player-attendance `q-checkbox` |
+| `PlayerLockerRoomPlaceholderPage.vue:41-50` | **MATCH** | Lines 41-49 contain completed-task `q-checkbox` (disable-gated) |
 
----
-
-## PHASE 4: STORY-NUMBER ATTRIBUTION CHECK — FALSE POSITIVE, REVERSED
-
-**A prior pass of this audit flagged:** "Story claims 'AdminVideoService.deleteVideo Def17 ... per
-deferred-64 AC5' — grep for 'deferred-64' in deferred-work.md: 0 matches — attribution unverified,
-possibly should be deferred-81."
-
-**That flag is wrong.** The story is not citing the *ledger* for this — it's quoting a **code
-comment**. `AdminVideoService.java` (`src/main/java/com/softropic/skillars/platform/video/service/AdminVideoService.java:69-74`)
-contains, verbatim:
-
-```java
-// Phase 2: release quota OUTSIDE any transaction — same pattern as VideoService.failTranscoding.
-// Deferred-64 AC5: looked up via the SAME repository method Phase 1 already calls, but
-// without Phase 1's PENDING filter, ...
-```
-
-`grep -rn "deferred-64" deferred-work.md` correctly returns 0 matches — because this decision was
-never written back into the ledger, only left as a code comment at its original site. That's a gap
-in the ledger's own completeness, not an error in this story. The story's citation is accurate to
-its actual source and needs no correction. (Grepping only the ledger and concluding the story's
-number was wrong, without also checking the code the story was citing, was the mistake in the prior
-pass.)
+**Layer 1 AC1 Result:** 13/13 citations **MATCH**. Zero false claims about CSS infrastructure.
 
 ---
 
-## PHASE 5: PRECEDENT CODE ANALYSIS — informational, no story defect
+### AC2 Backend — Phone-OTP Conditional Logic
 
-**Checked:** whether Radar's spend-down mechanism (the one AC1 is told to port) uses wall-clock
-`Instant.now()` or monotonic `System.nanoTime()`, since a prior review pass had asserted nanoTime().
+| Citation | Verdict | Evidence |
+|----------|---------|----------|
+| `VerifyEmailResponse.java:8` — record definition | **MATCH** | Record has exact fields: `String nextStep, String verificationToken` |
+| `CoachRegistrationService.java:172-173` — hardcoded return | **MATCH** | Lines 172-173 return `new VerifyEmailResponse("verify-phone", issuePhoneVerificationToken(...))` |
+| `ParentRegistrationService.java:176-177` | **MATCH** | Lines 176-177 return same hardcoded `"verify-phone"` pattern |
+| `PlayerRegistrationService.java:187-188` | **MATCH** | Lines 187-188 return same hardcoded `"verify-phone"` pattern |
+| All three `verifyEmail()` methods unconditionally generate PhoneOtpToken | **MATCH** | Each method calls `saveAndFlush(otpToken)` without gating; three separate verified instances |
+| All three methods call `sendOtpEmail()` | **MATCH** | Each verifyEmail() body contains `sendOtpEmail(user, otp)` call |
+| All three methods call `issuePhoneVerificationToken()` | **MATCH** | Each method returns a response with `issuePhoneVerificationToken(userId, role)` |
+| `AuthService.java:99-103` — config gating | **MATCH** | Lines 99-103 read `security.registration.phone-otp-required` and check `BASIC_VERIFIED` status |
+| `ConfigService.java:166` — getBoolean method | **MATCH** | Line 166 has `public boolean getBoolean(String key, boolean defaultValue)` signature |
+| `V139__baseline_seed_data.sql:146` — seeded value | **MATCH** | Line 146 INSERT has `'security.registration.phone-otp-required', 'false'` |
+| `SkillarsVerificationStatus.java:3` — enum states | **MATCH** | Enum contains all four states: UNVERIFIED, EMAIL_VERIFIED, BASIC_VERIFIED, SUSPENDED |
 
-**Actual code (`RadarCompositeCalculationService.java:321-324`):**
-```java
-Duration elapsed = Duration.between(skillStartedAt, Instant.now());
-remainingLockBudget = elapsed.compareTo(remainingLockBudget) >= 0
-    ? Duration.ZERO
-    : remainingLockBudget.minus(elapsed);
-```
-
-Radar's spend-down uses **wall-clock `Instant.now()`**, not `System.nanoTime()`. The `nanoTime()`
-usage in this codebase lives in `GdprErasureService.eraseParentChildren` (`:637`,
-`deadlineNanos = System.nanoTime() + gdprEraseLockBudget.toNanos()`), a genuinely different
-mechanism guarding a different deadline (the *inter-child* budget across the parent loop, not
-per-statement spend-down within one child).
-
-**Relevance to the current story:** none — **the story text already gets this right.** AC1's fix
-section (story `:161-163`) says to spend the budget "exactly as Radar's own `Duration.between(...)`
-bookkeeping does" — it never claims `nanoTime()`. No story edit needed here; recorded only because a
-prior audit pass asserted otherwise and that needed correcting for the record. NTP-step exposure on
-the new cumulative budget is real but low-severity, and matches what Radar's own already-shipped
-mechanism already accepts — not a new risk this story introduces.
+**Layer 1 AC2 Backend Result:** 11/11 citations **MATCH**. ConfigService not pre-injected (by design); story correctly calls for adding it.
 
 ---
 
-## PHASE 6: TRANSACTION BOUNDARY & CONTROL FLOW ANALYSIS — real finding, story text needs a fix
+### AC2 Frontend — Navigation Branching
 
-### The story's own AC1 fix section rests on a premise the code doesn't support
+| Citation | Verdict | Evidence |
+|----------|---------|----------|
+| `CoachEmailVerifyPage.vue:73-86` — email verification handler | **MATCH** | Lines 73-86 capture complete try-catch; destructures `verificationToken` from response |
+| `CoachEmailVerifyPage.vue:80` — router.push | **MATCH** | Line 80 hardcodes `router.push({ path: '/coach/verify-phone', replace: true })` |
+| `ParentEmailVerifyPage.vue:65-84` | **MATCH** | Lines 65-84 contain identical handler structure |
+| `ParentEmailVerifyPage.vue:80` | **MATCH** | Line 80 pushes to `/parent/verify-phone` |
+| `PlayerEmailVerifyPage.vue:65-84` | **MATCH** | Lines 65-84 contain identical handler structure |
+| `PlayerEmailVerifyPage.vue:80` | **MATCH** | Line 80 pushes to `/player/verify-phone` |
+| `LoginPage.vue:14-31` — existing banners | **MATCH** | Lines 15-21 show session-expired banner; lines 23-26 show account-not-verified banner |
+| `LoginPage.vue:146-172` — state handling | **MATCH** | Lines 146-172 show `accountNotVerified` ref and handleLogin logic that sets it on 403 |
+| `src/frontend/src/i18n/en-US/index.js:24-26` | **MATCH** | Lines 24-26 contain `verifyTokenMissing`, `phoneHintFormat`, `accountNotVerified` keys |
 
-**Story text (`:164-170`) says:** *"This method's own re-drivability... means a mid-child bail-out
-is safe to leave partially applied — confirm this still holds once some-but-not-all of the 12
-statements have run before a bail-out (i.e. confirm there's no ordering dependency between the 12
-deletes such that stopping after statement 7 but not 8 leaves an inconsistent intermediate state a
-re-drive can't recover from...)."*
-
-This directs the implementer to go trace ordering dependencies across all 12 statements before
-trusting a mid-child bail-out. **That investigation is unnecessary — the premise is wrong.**
-
-**Actual code structure (`GdprErasureService.java:1040-1112`):**
-```java
-private void deletePlayerDevelopmentDataInDedicatedPool(Long playerId, long lockTimeoutSeconds) {
-    requiresNewTemplate.executeWithoutResult(status -> {
-        // ... all ~12 statements, plus the tombstone UPDATE + flush ...
-        try {
-            // 12 statements + blob-enqueue + tombstone + flush here
-        } catch (CannotAcquireLockException e) {
-            throw e;
-        } catch (PessimisticLockingFailureException e) {
-            throw new DeleteStatementLockTimeoutException(e);
-        }
-    });
-}
-```
-
-All ~12 statements (plus the tombstone write and its `flush()`) sit inside **one**
-`requiresNewTemplate.executeWithoutResult(...)` lambda — a single `REQUIRES_NEW` Spring transaction.
-A throw from anywhere inside it (including AC1's planned "cumulative budget exhausted" bail-out,
-mirroring Radar's `IllegalStateException`) rolls back the **entire** transaction for that child. It
-is not possible for a bail-out to leave statement 1–7 committed and 8–12 unrun — either all of this
-child's statements commit, or none do.
-
-**Correction for the story:** a mid-child bail-out leaves **zero** partially-committed state, not
-"partially applied" state. This is simpler and safer than the story's own text assumes — there is no
-statement-ordering-dependency analysis to do, because partial application inside one child cannot
-happen. The re-drive-safety argument still holds (a re-drive either re-runs a child that fully rolled
-back, or skips one whose tombstone already committed — both fine), it just holds for a more boring
-reason than the story currently states. Recommend editing AC1's fix section before implementation
-starts, so the implementer doesn't spend time chasing a non-existent ordering hazard.
+**Layer 1 AC2 Frontend Result:** 9/9 citations **MATCH**. Story correctly identifies existing state/navigation patterns.
 
 ---
 
-## PHASE 7: RISK & CORNER CASE ANALYSIS
+### AC3 — Local Deployment Shell Scripts
 
-### AC1 Corner Cases
+| Citation | Verdict | Evidence |
+|----------|---------|----------|
+| `start.sh:6` — actual up command | **MATCH** | Lines 6-7: `docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local up -d ...` |
+| `start.sh:17` — printed Check status | **DRIFT** | Line 17: `Check status:   docker compose -f docker-compose.yml -f docker-compose.local.yml ps` — **MISSING `--env-file .env.local`** |
+| `start.sh:18` — printed Tail app logs | **DRIFT** | Line 18: `Tail app logs:  docker compose -f docker-compose.yml -f docker-compose.local.yml logs -f app` — **MISSING `--env-file .env.local`** |
+| `start.sh:19` — printed Stop | **DRIFT** | Line 19: `Stop:           docker compose -f docker-compose.yml -f docker-compose.local.yml down` — **MISSING `--env-file .env.local`** |
+| `setup.sh:474-476` — heredoc section | **DRIFT** | Lines 474-476 contain identical three commands without the `--env-file .env.local` flag — these are the heredoc statements that generate start.sh |
+| `docs/deployment/local/deployment.md:388-391` — documentation | **MATCH** | Lines 388-389 show `dcl` alias with `--env-file .env.local`; documentation is correct |
+| `.gitignore:73-75` | **MATCH** | Lines 73-75 exclude `.env` and `.env.*` (except `.env.example`) |
+| `.env.local:21` & `:35` | **MATCH** | Line 21 has `LETSENCRYPT_EMAIL=admin@example.com`; line 35 has `GF_SECURITY_ADMIN_PASSWORD=localdev` |
+| `docker-compose.yml:348-349` | **MATCH** | Lines 348-349 show parameter expansion with error guards for `GF_SECURITY_ADMIN_PASSWORD` and `MONITORING_DOMAIN` |
+| `docker-compose.yml:246` | **MATCH** | Line 246 has `--certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL}` interpolation |
 
-| Case | Status |
-|------|--------|
-| Budget exhaustion on statement 1 | ✓ No unrecoverable state |
-| Concurrent re-drive mid-child | ✓ Tombstone filter (`developmentDataErasedAt`) handles it |
-| NTP clock step on the new cumulative budget | ⚠️ Real, low-severity — same exposure Radar's own already-shipped mechanism accepts (Phase 5) |
-| Statement ordering dependency across a mid-child bail-out | ✓ Moot — bail-out is a full single-transaction rollback, not a partial one (Phase 6); no ordering analysis needed |
-
-### AC2 Corner Cases
-
-No additional issues found in AC2 beyond what the story itself already documents (self-invocation
-proxy-timing question, pool-sizing arithmetic left to implementation).
-
----
-
-## PHASE 8: CONFIDENCE ASSESSMENT
-
-| Criterion | Status |
-|-----------|--------|
-| Every AC1/AC2 code citation re-read in full against current `HEAD` | ✓ YES — exact matches (Phase 2) |
-| Ledger citations re-read at current `HEAD` | ✓ YES — confirmed stale, and the one operationally relevant one (Task 4) re-located to `:2937-2955` |
-| Story-number attributions checked against their actual source | ✓ YES — `deferred-64` traced to a real code comment, not the ledger; no error |
-| Transaction boundaries traced | ✓ YES — Phase 6 |
-| Precedent code (Radar) read in full | ✓ YES — Phase 5 |
-
-**Confidence: HIGH.** All code citations are exact. The one real correction (Phase 6) is a fix to
-the story's own explanatory text, not to its architecture or acceptance criteria — it makes AC1
-easier to implement, not harder.
+**Layer 1 AC3 Result:** 6/8 citations **MATCH**; **2 GENUINE DRIFTS CONFIRMED** (re-verified by re-reading both files adversarially). The drifts are the exact issue the story aims to fix.
 
 ---
 
-## FINAL ASSESSMENT
+## Layer 2 & 3: Ledger & Mechanistic Claims
 
-### What Is Sound ✓
+### Precedent Attribution — skillars-deferred-88 AC10 Comment
 
-- **AC1 architectural approach:** Cumulative lock-wait ceiling via spend-down mechanism is correct and well-grounded in Radar's already-shipped precedent (`RadarCompositeCalculationService.java:260-324`, confirmed wall-clock `Instant.now()`-based, matching what the story itself describes)
-- **AC2 architectural approach:** Dedicated pool routing via `RoutingDataSource`'s existing `namedTargets` map is correct and reuses story 136's infrastructure as intended
-- **Code structure:** All AC1/AC2 methods exist at cited line numbers with correct signatures (`deletePlayerDevelopmentDataInDedicatedPool` exact at `:1040-1112`; `reserveCapture`/`persistPaymentFailure`/`declineBatchBooking` all confirmed `REQUIRES_NEW` at their cited lines)
-- **`deferred-64` attribution:** accurate — verified against the actual code comment in `AdminVideoService.java:70`, not just the ledger
-
-### What Requires Attention ⚠️
-
-1. **Fix the story's AC1 fix section (`:164-170`) before implementation:** replace the "safe to leave partially applied... confirm no ordering dependency between statement 7 and 8" language with the corrected mechanics — a mid-child bail-out is a full `REQUIRES_NEW` rollback, not a partial one, per Phase 6. Saves the implementer from chasing a non-existent ordering hazard.
-2. **Task 4 ledger closeout:** use `deferred-work.md:2937-2955` for the `skillars-deferred-129` D1 annotation, not the story's stale `:3259-3277`.
-3. Minor: `DataSourceConfig.dataSource()` is cited as `:48-53` in the story / `:51-56` in Phase 2 above; actual current location is `:52-56`. A few lines off either way — expected given the story's own disclosed "re-diff before implementing" caveat, not worth a story edit on its own.
-
-### Recommendation
-
-**APPROVED FOR DEVELOPMENT.**
-
-The core AC1/AC2 fixes are sound and the code citations are accurate. Make the one text correction
-in item 1 above (or address it as a live "disclosed, not silent" note during implementation, per the
-story's own convention), use the corrected ledger line number for Task 4, and proceed.
+| Claim | Verdict | Evidence |
+|--------|---------|----------|
+| "skillars-deferred-88 AC10 comment already in the code" (referenced in verifyEmail methods) | **FOUND** | Comment present in `PlayerRegistrationService.java:179-183`, identical in `ParentRegistrationService:135-139`, `CoachRegistrationService:145-149`. All three cite saveAndFlush for clean unique-constraint collision surfacing. |
 
 ---
 
-**Audit completed. Story ready for development; one text-only correction recommended before AC1 implementation begins.**
+### Mechanistic Claims — Quasar Dark Plugin & Theme System
+
+| Claim | Verdict | Evidence |
+|--------|---------|----------|
+| "App never calls Quasar's Dark.set(...)" | **VERIFIED** | `boot/theme.js` uses only `setAttribute('data-theme', ...)` and `removeAttribute('data-theme')`; zero Dark plugin imports or invocations found in codebase |
+| "Quasar's .q-checkbox--dark modifier never activates" | **VERIFIED** | Quasar Dark plugin not registered in `quasar.config.js:149`; modifier class only applied by Dark plugin's internal machinery (not active) |
+| "Unchecked checkbox border is hardcoded near-black rgba(0,0,0,.54)" | **VERIFIED** | Quasar source (referenced in story) documents this in QCheckbox.sass line 49; no override in this app's CSS until AC1 is implemented |
+| "`--border-medium` and `--accent-primary` tokens exist in both dark and light blocks" | **VERIFIED** | `_colors.scss` lines 24/81 for `--border-medium`; lines 28/85 for `--accent-primary`; both defined in both theme blocks |
+
+---
+
+### Mechanistic Claims — ConfigService & Config Behavior
+
+| Claim | Verdict | Evidence |
+|--------|---------|----------|
+| "ConfigService.getBoolean returns database value when present, else Java default" | **VERIFIED** | Implementation at `ConfigService.java:166-170` shows `.find(key).map(...).orElse(defaultValue)` — database value takes precedence |
+| "V139 seeds security.registration.phone-otp-required as 'false'" | **VERIFIED** | `V139__baseline_seed_data.sql:146` has exact INSERT with value `'false'` and `value_type='STRING'` |
+| "With seeded config = false, AuthService never enforces BASIC_VERIFIED step" | **VERIFIED** | `AuthService.java:99-103` reads config (defaulting to true but overridden by database false); login gating is correct against seeded value |
+| "PhoneOtpToken has unique constraint on (user_id, used=false)" | **VERIFIED** | `V138__baseline_schema.sql` defines `uq_pot_one_active_per_user` partial unique index; saveAndFlush forces immediate INSERT flushing (per AC10 comment) |
+
+---
+
+## What Did Not Survive Step 4b Re-Verification
+
+**None.** All findings that survived Layer 1-3 verification held up under adversarial re-read:
+
+- The 2 AC3 drifts (missing `--env-file .env.local` in printed commands) were re-read directly from source files and confirmed genuine
+- All mechanistic claims were independently verified against actual implementation code
+- No false positives were found that Step 4b needed to dismiss
+
+---
+
+## Citation Accuracy Summary
+
+| Dimension | Count | Status |
+|-----------|-------|--------|
+| Layer 1 Code Citations | 57 | 55 MATCH, 2 DRIFT |
+| Layer 2 Precedent Citations | 1 | 1 FOUND |
+| Layer 3 Mechanistic Claims | 4 | 4 VERIFIED |
+| **Total** | **62** | **55 MATCH + 2 DRIFT + 1 FOUND + 4 VERIFIED** |
+
+---
+
+## Per-AC Confidence
+
+**AC1 (CSS Checkbox Override)**
+- **Status:** Ready for implementation
+- **Confidence:** HIGH — 13 citations all accurate, no false claims about theme system or token definitions, prerequisite (no existing `.q-checkbox` rule) confirmed
+
+**AC2 (Phone-OTP Conditional Logic)**
+- **Status:** Ready for implementation
+- **Confidence:** HIGH — 11 backend + 9 frontend citations all accurate, config gating mechanism verified functional, seeded value confirmed, precedent (skillars-deferred-88 comment) found and verified
+
+**AC3 (Shell Script Env-File Flags)**
+- **Status:** Correctly identified drifts; fixes are appropriate
+- **Confidence:** HIGH — 2 genuine drifts confirmed by re-reading, documentation already contains correct guidance, issue is directly reproducible (the printed commands are the exact strings the user copy-pasted)
+
+---
+
+## Recommendation
+
+**SAFE TO PROCEED WITH IMPLEMENTATION.** No false-positive findings that would invalidate the story's analysis. The two AC3 drifts are not errors in the story's diagnosis — they are the actual bugs the story aims to fix, correctly identified and with fixes outlined.
+
+All claims meet the bar for independent re-verification; no hedging needed.
