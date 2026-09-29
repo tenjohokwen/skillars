@@ -5,6 +5,7 @@ import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
 import com.softropic.skillars.infrastructure.security.RateLimitingService;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.infrastructure.validation.PhoneNumber;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.api.dto.VerifyEmailResponse;
 import com.softropic.skillars.platform.security.contract.CoachRegistrationRequest;
 import com.softropic.skillars.platform.security.contract.Gender;
@@ -65,6 +66,7 @@ public class CoachRegistrationService {
     private final RateLimitingService rateLimitingService;
     private final RegistrationOtpResendSupport otpResendSupport;
     private final RegistrationVerificationTokenService verificationTokenService;
+    private final ConfigService configService;
 
     @Value("${app.frontend-url}")
     private String frontendUrl;
@@ -151,6 +153,13 @@ public class CoachRegistrationService {
             emailTokenRepository.save(evt);
         } catch (org.springframework.orm.ObjectOptimisticLockingFailureException e) {
             throw new EmailTokenException("security.emailTokenUsed", true);
+        }
+
+        // skillars-deferred-138 AC2: when phone-OTP verification isn't required, skip OTP
+        // generation/persistence/email entirely and send the user straight to login — AuthService's
+        // own login-time gating (unchanged) already treats EMAIL_VERIFIED as sufficient in that case.
+        if (!configService.getBoolean("security.registration.phone-otp-required", true)) {
+            return new VerifyEmailResponse("login", null);
         }
 
         String otp = generateOtp();

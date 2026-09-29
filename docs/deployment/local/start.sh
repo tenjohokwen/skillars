@@ -14,7 +14,7 @@ SeaweedFS's healthcheck passes, then Flyway migrations run.
   Health:   http://localhost:8367/manage/health
   Grafana:  http://localhost:3000
 
-Check status:   docker compose -f docker-compose.yml -f docker-compose.local.yml ps
-Tail app logs:  docker compose -f docker-compose.yml -f docker-compose.local.yml logs -f app
-Stop:           docker compose -f docker-compose.yml -f docker-compose.local.yml down
+Check status:   docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local ps
+Tail app logs:  docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local logs -f app
+Stop:           docs/deployment/local/stop.sh
 MSG

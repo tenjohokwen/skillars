@@ -143,9 +143,14 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
                 .isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
+    // skillars-deferred-138 AC2: the seeded platform config (V139) has
+    // security.registration.phone-otp-required = false, so with the fix in place the real
+    // end-to-end behavior is nextStep == "login" and no phone OTP is issued — this is exactly the
+    // scenario the user hit locally. See ParentRegistrationServiceTest for the phoneOtpRequired =
+    // true path (unit-tested with a mocked ConfigService; no existing test covered it before).
     @Test
     @SuppressWarnings("unchecked")
-    void verifyEmail_validToken_setsEmailVerifiedAndReturnsVerificationToken() {
+    void verifyEmail_validToken_phoneOtpNotRequired_setsEmailVerifiedAndReturnsLoginStep() {
         httpTestClient.makeHttpRequest(
             baseUrl() + REGISTER_ENDPOINT,
             HttpMethod.POST,
@@ -162,6 +167,9 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
         );
         assertThat(token).isNotNull();
 
+        Long userId = jdbcTemplate.queryForObject(
+            "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL);
+
         ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
             baseUrl() + VERIFY_EMAIL_ENDPOINT + "?token=" + token,
             HttpMethod.GET,
@@ -171,12 +179,8 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
         );
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).containsEntry("nextStep", "verify-phone");
-        assertThat(response.getBody()).containsKey("verificationToken");
-        assertThat(verificationTokenService.resolveUserId(
-            (String) response.getBody().get("verificationToken"), "PARENT"))
-            .isEqualTo(jdbcTemplate.queryForObject(
-                "SELECT id FROM main.\"user\" WHERE email = ?", Long.class, TEST_EMAIL));
+        assertThat(response.getBody()).containsEntry("nextStep", "login");
+        assertThat(response.getBody().get("verificationToken")).isNull();
 
         String status = jdbcTemplate.queryForObject(
             "SELECT verification_status FROM main.\"user\" WHERE email = ?",
@@ -184,6 +188,10 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
             TEST_EMAIL
         );
         assertThat(status).isEqualTo("EMAIL_VERIFIED");
+
+        Integer otpCount = jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM main.phone_otp_tokens WHERE user_id = ?", Integer.class, userId);
+        assertThat(otpCount).as("no phone OTP is issued when the flag is off").isZero();
     }
 
     @Test
