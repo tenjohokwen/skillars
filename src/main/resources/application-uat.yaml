@@ -29,10 +29,11 @@ app:
   payment:
     stripe:
       oauth-callback-url: "${APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL:https://uat.skillars.com/api/payment/coaches/me/stripe/callback}"
-  # MinIO stands in for the real S3 API in UAT — see docker-compose.uat.yml (the `minio`
-  # service, exposed publicly through Traefik at STORAGE_DOMAIN so presigned URLs are
-  # reachable by real browsers, not just containers on the compose network) and
-  # docs/deployment/uat-deployment.md. No defaults here on purpose: every value below
+  # This SeaweedFS-backed storage service stands in for the real S3 API in UAT — see
+  # docker-compose.uat.yml (the `storage` service, exposed publicly through Traefik at
+  # STORAGE_DOMAIN so presigned URLs are reachable by real browsers, not just containers
+  # on the compose network) and docs/deployment/uat-deployment.md. No defaults here on
+  # purpose: every value below
   # must come from .env.uat, not a baked-in fallback, since this is a publicly reachable
   # box (compare to application.yaml's localhost:9000 base default, which only makes
   # sense for a box that can't be reached from the outside).

@@ -10,7 +10,8 @@ import org.testcontainers.utility.DockerImageName;
  * <h2>Why these are not Spring beans</h2>
  *
  * They used to be. {@code TestConfig} declared the PostgreSQL and Redis containers as
- * {@code @Bean}s and {@code MinioTestConfig} did the same for MinIO. Spring Boot's
+ * {@code @Bean}s and {@code StorageTestConfig} did the same for the storage container.
+ * Spring Boot's
  * {@code TestcontainersLifecycleBeanPostProcessor} starts any {@link org.testcontainers.lifecycle.Startable}
  * bean when its context refreshes and stops it when that context closes, which binds
  * <strong>container lifetime 1:1 to the Spring {@code ApplicationContext}</strong>.
@@ -24,7 +25,7 @@ import org.testcontainers.utility.DockerImageName;
  *
  * <p>Holding the containers here, outside the Spring lifecycle, decouples the two completely.
  * {@code TestConfig} exposes them to Boot through {@code JdbcConnectionDetails} and
- * {@code RedisConnectionDetails} beans, and {@code MinioTestConfig} through a
+ * {@code RedisConnectionDetails} beans, and {@code StorageTestConfig} through a
  * {@code DynamicPropertyRegistrar}. None of those is {@code Startable}, so the lifecycle
  * post-processor never touches them.
  *
@@ -37,10 +38,10 @@ import org.testcontainers.utility.DockerImageName;
  * <h2>Why one holder class per container</h2>
  *
  * Three {@code static final} fields on a single class would share one static initializer, so
- * touching any one of them would start all three — including MinIO for every JVM, even
- * {@code -Dit.test=SomeBookingIT}. That is precisely the single-class iteration loop this design
- * exists to keep fast, and it would discard the intent {@code MinioTestConfig} documents: tests
- * that never touch blob storage should not pay for a MinIO container.
+ * touching any one of them would start all three — including the storage container for every
+ * JVM, even {@code -Dit.test=SomeBookingIT}. That is precisely the single-class iteration loop
+ * this design exists to keep fast, and it would discard the intent {@code StorageTestConfig}
+ * documents: tests that never touch blob storage should not pay for a storage container.
  *
  * <p>The initialization-on-demand holder idiom below gives each container its own class, so each
  * starts on first touch and not before. It is also thread-safe without synchronization: the JVM
@@ -75,8 +76,13 @@ public final class SharedContainers {
      * SeaweedFS instead — see {@link SeaweedFsS3Container} for why it was chosen (S3-API surface
      * this app actually needs: presigned URLs, path-style, multipart, {@code CopyObject}) and how
      * it's wired in. {@code chrislusf/seaweedfs:3.97} on Docker Hub, confirmed pullable.
+     *
+     * <p>Named {@code MINIO_IMAGE} until 2026-09-28, kept that way briefly after the SeaweedFS
+     * migration to minimize the diff. Renamed to {@code STORAGE_IMAGE} (and the nested
+     * {@code Minio} class to {@code Storage}, {@code minio()} to {@code storage()}) once it was
+     * clear "minio" would only confuse a future reader — nothing here has run MinIO for a while.
      */
-    static final String MINIO_IMAGE = "chrislusf/seaweedfs:3.97";
+    static final String STORAGE_IMAGE = "chrislusf/seaweedfs:3.97";
 
     /**
      * Database name for the shared PostgreSQL container.
@@ -141,23 +147,22 @@ public final class SharedContainers {
 
     /**
      * Lazy holder for the shared S3-compatible object-storage container (SeaweedFS — see
-     * {@link #MINIO_IMAGE}'s Javadoc for why it's no longer literally MinIO despite the field/method
-     * names in this class kept as-is to minimize the diff across call sites).
+     * {@link #STORAGE_IMAGE}'s Javadoc for why it's no longer literally MinIO).
      *
-     * <p>Only touched by {@code MinioTestConfig}, which only the storage IT family imports. A JVM
-     * that runs no storage test never starts this container.
+     * <p>Only touched by {@code StorageTestConfig}, which only the storage IT family imports. A
+     * JVM that runs no storage test never starts this container.
      */
-    public static final class Minio {
+    public static final class Storage {
 
         static final SeaweedFsS3Container INSTANCE = create();
 
         private static SeaweedFsS3Container create() {
-            SeaweedFsS3Container container = new SeaweedFsS3Container(DockerImageName.parse(MINIO_IMAGE));
+            SeaweedFsS3Container container = new SeaweedFsS3Container(DockerImageName.parse(STORAGE_IMAGE));
             container.start();
             return container;
         }
 
-        private Minio() {
+        private Storage() {
         }
     }
 
@@ -169,7 +174,7 @@ public final class SharedContainers {
         return Redis.INSTANCE;
     }
 
-    public static SeaweedFsS3Container minio() {
-        return Minio.INSTANCE;
+    public static SeaweedFsS3Container storage() {
+        return Storage.INSTANCE;
     }
 }

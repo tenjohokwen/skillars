@@ -73,9 +73,9 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `GF_SMTP_STARTTLS_POLICY` | String | `MandatoryStartTLS` for port 587 (recommended); `OpportunisticStartTLS` for flexible servers; `NoStartTLS` for unencrypted relay only — port 465 (SMTPS/implicit TLS) is not supported via this setting, use port 587 |
 | `GF_ALERT_NOTIFY_EMAIL` | Email address | Recipient for all Grafana-routed alerts |
 | `GF_SLACK_WEBHOOK_URL` | HTTPS URL | Slack → Apps → Incoming Webhooks → Add to Slack → select channel → copy URL |
-| `MINIO_ROOT_USER` | String | MinIO admin username (production and UAT). Default `minioadmin` |
-| `MINIO_ROOT_PASSWORD` | 24+ character random string | MinIO admin password (production and UAT). `openssl rand -base64 24` |
-| `STORAGE_DOMAIN` | FQDN, e.g. `storage.skillars.com` | Public hostname Traefik routes to MinIO in production (or test domains in UAT). Must be reachable **by the browser**, not just from inside the compose network — presigned upload URLs are built from it |
+| `STORAGE_ROOT_USER` | String | Local S3-compatible storage service (SeaweedFS; renamed from `MINIO_ROOT_USER` 2026-09-28) admin username (production and UAT). Default `minioadmin` |
+| `STORAGE_ROOT_PASSWORD` | 24+ character random string | Local S3-compatible storage service admin password (renamed from `MINIO_ROOT_PASSWORD` 2026-09-28; production and UAT). `openssl rand -base64 24` |
+| `STORAGE_DOMAIN` | FQDN, e.g. `storage.skillars.com` | Public hostname Traefik routes to the storage service in production (or test domains in UAT). Must be reachable **by the browser**, not just from inside the compose network — presigned upload URLs are built from it |
 | `BACKUP_STORAGE_TYPE` | String: `hetzner` or `s3-compatible` | **Production only.** Backup destination storage type. Use `hetzner` for Hetzner Object Storage, or `s3-compatible` for MinIO or other S3-compatible storage |
 | `HOS_ACCESS_KEY` | String | Hetzner Object Storage access key (if `BACKUP_STORAGE_TYPE=hetzner`). Hetzner Cloud Console → Object Storage → your bucket → Access Keys → Create access key; copy Access Key ID |
 | `HOS_SECRET_KEY` | String | Hetzner Object Storage secret key (if `BACKUP_STORAGE_TYPE=hetzner`). Same creation flow as `HOS_ACCESS_KEY`; copy Secret Access Key (shown once) |

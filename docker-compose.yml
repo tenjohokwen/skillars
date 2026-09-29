@@ -455,4 +455,4 @@ networks:
 
 # No top-level `volumes:` key: every stateful service now binds under /opt/skillars/data, which
 # provision.sh mounts from the Hetzner Volume. docker-compose.uat.yml declares its own
-# `volumes:` block (skillars-uat-minio) and still merges correctly against this file.
+# `volumes:` block (skillars-uat-storage) and still merges correctly against this file.

@@ -46,10 +46,10 @@ class S3StorageServiceIT extends BaseStorageIT {
     }
 
     @Test
-    void contextLoadsAndMinioIsReachable() {
+    void contextLoadsAndStorageIsReachable() {
         String key = "smoke-test/" + Instancio.create(String.class) + ".txt";
         keysToCleanup.add(key);
-        byte[] content = "hello minio".getBytes(StandardCharsets.UTF_8);
+        byte[] content = "hello storage".getBytes(StandardCharsets.UTF_8);
 
         storageService.put(key, new ByteArrayInputStream(content), content.length, "text/plain");
 

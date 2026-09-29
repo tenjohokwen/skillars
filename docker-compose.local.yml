@@ -40,6 +40,16 @@ services:
       # credentials just to run locally — a regression from AC6 flipping dev to `transport: smtp`.
       - GMAIL_PASSWORD=${GMAIL_PASSWORD:-dev_gmail_password}
       - GMX_PASSWORD=${GMX_PASSWORD:-dev_gmx_password}
+      # Overrides application-dev.yaml's `transport: smtp` for Mode A (all-Docker). SMTP needs the
+      # real GMX_PASSWORD/GMAIL_PASSWORD above; without them (the common case locally) the send
+      # fails auth server-side and nothing reaches an inbox — including the coach/parent/player OTP
+      # mail sent right after email verification (CoachRegistrationService.verifyEmail and its
+      # counterparts). `log` writes the rendered email (verification link or OTP) to target/mails/
+      # instead, mounted below so it's readable from the host. The OTP itself is stored in
+      # `phone_otp_tokens` only as a SHA-256 hash (CoachRegistrationService.hashOtp), so this is the
+      # only local way to read it short of setting real SMTP credentials. See
+      # docs/deployment/local/manual-testing.md's "Creating the accounts" section.
+      - APP_EMAIL_TRANSPORT=log
       # These restate application-dev.yaml's OWN defaults, and are required rather than tidy.
       # docker-compose.yml passes each of these variables through with a `:-` empty default so a
       # production deploy can set them. But an empty environment variable is present-and-blank,
@@ -47,8 +57,8 @@ services:
       # the dev profile's defaults stop applying the moment the base file passes the variable.
       # Found by running it: an empty APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET aborts startup in
       # BunnyVideoProviderAdapter ("webhookSigningSecret must not be blank"), and an empty
-      # APP_STORAGE_S3_ACCESS_KEY silently drops MinIO back to the AWS default credential chain,
-      # breaking every upload. Keep this block in step with application-dev.yaml.
+      # APP_STORAGE_S3_ACCESS_KEY silently drops storage back onto the AWS default credential
+      # chain, breaking every upload. Keep this block in step with application-dev.yaml.
       - APP_STORAGE_S3_ACCESS_KEY=minioadmin
       - APP_STORAGE_S3_SECRET_KEY=minioadmin123
       # docker-compose.yml's APP_SES_FROM_ADDRESS carries no default at all (see the comment
@@ -63,15 +73,20 @@ services:
       - PLATFORM_PIN_ENCRYPTION_SECRET=S3CR3TW0RD
       - PLATFORM_REGISTRATION_VERIFICATION_SECRET=dev-registration-verification-secret-32-bytes!
       - GEMINI_API_KEY=${GEMINI_API_KEY:-dev-key}
-      # App container talks to MinIO over the compose network by service name.
+      # App container talks to local storage over the compose network by service name.
       # The presigned upload URLs it generates also use this host — see the
-      # /etc/hosts note by the `minio` service below for why that's required.
-      - APP_STORAGE_ENDPOINT_URL=http://minio:9500
+      # /etc/hosts note by the `storage` service below for why that's required.
+      - APP_STORAGE_ENDPOINT_URL=http://storage:9500
     ports:
       - "9990:9990"   # main app
       - "8367:8367"   # actuator/health (management port)
+    volumes:
+      # APP_EMAIL_TRANSPORT=log above dumps rendered emails to target/mails relative to the
+      # container's WORKDIR (/app per the Dockerfile) — without this mount they'd be trapped inside
+      # the container and lost on the next `up`/rebuild.
+      - ./target/mails:/app/target/mails
     depends_on:
-      minio:
+      storage:
         condition: service_healthy
   postgres:
     volumes:
@@ -100,35 +115,37 @@ services:
   # Local S3-compatible storage so file uploads (e.g. coach profile photos) don't
   # need real AWS credentials in dev.
   #
-  # Deliberately NOT on MinIO's default 9000/9001 — this project's frontend dev
-  # server (Quasar) already owns 9000 by convention (matches app.frontend-url),
-  # so this listens on 9500 instead to avoid stealing that port.
+  # Runs SeaweedFS (see below for why) on 9500, not MinIO's old default 9000/9001 —
+  # this project's frontend dev server (Quasar) already owns 9000 by convention
+  # (matches app.frontend-url), so this listens on 9500 instead to avoid stealing that port.
   #
-  # The `app` container reaches this over the compose network as `minio:9500`.
+  # The `app` container reaches this over the compose network as `storage:9500`.
   # Presigned upload URLs the app hands back to the browser use that same host —
   # but your browser runs on the host machine, not inside the compose network, so
-  # it can't resolve `minio` on its own. Add this one-time entry to /etc/hosts:
-  #   127.0.0.1 minio
-  # That plus the published port below (9500:9500) makes `http://minio:9500/...`
+  # it can't resolve `storage` on its own. Add this one-time entry to /etc/hosts:
+  #   127.0.0.1 storage
+  # That plus the published port below (9500:9500) makes `http://storage:9500/...`
   # resolve to this container from both the app and your browser.
   #
-  # As of 2026-09-24 this runs SeaweedFS, not MinIO — quay.io/minio/minio (both this
-  # pinned tag and :latest) now 401s on anonymous pulls, confirmed via direct `docker pull`;
-  # a widely-reported break, not something specific to this project. Service/volume names
-  # kept as "minio" to minimize the diff; see SharedContainers.MINIO_IMAGE's javadoc
-  # (src/test/java/com/softropic/skillars/config/SharedContainers.java) for the full story
-  # and why SeaweedFS was chosen. Credentials unchanged (minioadmin/minioadmin123, now sourced
-  # from deploy/seaweedfs/s3-identity.json instead of MINIO_ROOT_USER/MINIO_ROOT_PASSWORD env
-  # vars — SeaweedFS's own env-var credential path has a live upstream reliability issue,
-  # seaweedfs/seaweedfs#7311). No web-console port: SeaweedFS has no MinIO-console equivalent
-  # at this scope (its filer UI on 8888 is the closest thing, not wired up here).
-  minio:
+  # This runs SeaweedFS, not MinIO — as of 2026-09-24, quay.io/minio/minio (both its pinned
+  # tag and :latest) 401s on anonymous pulls, a widely-reported break, not something specific
+  # to this project. See SharedContainers.STORAGE_IMAGE's javadoc
+  # (src/test/java/com/softropic/skillars/config/SharedContainers.java) for the full story and
+  # why SeaweedFS was chosen. The service/volume/hostname were briefly kept as "minio" right
+  # after that migration to minimize the diff, then renamed to "storage" on 2026-09-28 once it
+  # was clear that name would only confuse anyone who didn't live through the migration — nothing
+  # here has been MinIO for a while. Credentials unchanged (minioadmin/minioadmin123, sourced
+  # from deploy/seaweedfs/s3-identity.json rather than env vars — SeaweedFS's own env-var
+  # credential path has a live upstream reliability issue, seaweedfs/seaweedfs#7311). No
+  # web-console port: SeaweedFS has no MinIO-console equivalent at this scope (its filer UI on
+  # 8888 is the closest thing, not wired up here).
+  storage:
     image: chrislusf/seaweedfs:3.97
     command: >
       server -s3 -dir=/data -ip.bind=0.0.0.0 -s3.port=9500
       -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=1024
     volumes:
-      - skillars-local-minio:/data
+      - skillars-local-storage:/data
       - ./deploy/seaweedfs/s3-identity.json:/etc/seaweedfs/s3.json:ro
     ports:
       - "9500:9500"   # S3 API
@@ -145,13 +162,13 @@ services:
     restart: unless-stopped
 
   # One-shot: creates the dev bucket on every startup (no-op if it already exists).
-  # amazon/aws-cli replaces quay.io/minio/mc here — same reasoning as the `minio` service
+  # amazon/aws-cli replaces quay.io/minio/mc here — same reasoning as the `storage` service
   # above (mc's own image is under the same now-blocked quay.io/minio/* namespace), and aws-cli
   # is a generic S3 client so it works against SeaweedFS's S3 gateway unmodified.
-  minio-init:
+  storage-init:
     image: amazon/aws-cli:2.31.13
     depends_on:
-      minio:
+      storage:
         condition: service_healthy
     environment:
       - AWS_ACCESS_KEY_ID=minioadmin
@@ -159,7 +176,7 @@ services:
       - AWS_DEFAULT_REGION=us-east-1
     entrypoint: >
       /bin/sh -c "
-      aws --endpoint-url http://minio:9500 s3 mb s3://skillars-dev || true
+      aws --endpoint-url http://storage:9500 s3 mb s3://skillars-dev || true
       "
     networks:
       - skillars-internal
@@ -171,4 +188,4 @@ volumes:
   skillars-local-tempo:
   skillars-local-prometheus:
   skillars-local-grafana:
-  skillars-local-minio:
+  skillars-local-storage:

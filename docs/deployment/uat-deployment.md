@@ -5,10 +5,10 @@ Docker Compose stack production uses (Traefik + Let's Encrypt TLS, Postgres,
 Redis, **the full LGTM observability stack** — Loki, Grafana, Tempo,
 Prometheus, unchanged and unTrimmed from production), pointed at its own
 domain and its own database, with the `uat` Spring profile active,
-**Stripe test-mode** credentials, and **MinIO standing in for the real S3
-API** — so payment and upload flows can be exercised end-to-end over a real
-public URL without any risk of moving real money or touching production
-data/buckets.
+**Stripe test-mode** credentials, and **a SeaweedFS-backed storage service
+standing in for the real S3 API** — so payment and upload flows can be
+exercised end-to-end over a real public URL without any risk of moving real
+money or touching production data/buckets.
 
 This is a different box from production, provisioned the same way. If it
 doesn't exist yet, follow [`first-time-setup.md`](first-time-setup.md) Steps
@@ -16,7 +16,8 @@ doesn't exist yet, follow [`first-time-setup.md`](first-time-setup.md) Steps
 UAT domain (e.g. `uat.skillars.com`, the default `application-uat.yaml`
 already assumes) for `DOMAIN`. UAT needs **two additional DNS records**
 beyond what `first-time-setup.md` covers — `MONITORING_DOMAIN` (Grafana) and
-`STORAGE_DOMAIN` (MinIO, Step 3 below) — both pointed at the same Node IP,
+`STORAGE_DOMAIN` (the storage service, Step 3 below) — both pointed at the
+same Node IP,
 the same way `first-time-setup.md` Step 2 sets up `DOMAIN` and
 `MONITORING_DOMAIN`. Everything below picks up from there; only Steps 6+
 differ from a straight production deploy, and only in the ways this doc
@@ -49,7 +50,7 @@ the Stripe test-key safety check) never apply.
 
 `docker-compose.uat.yml` (checked into the repo, next to
 `docker-compose.local.yml`) fixes this for UAT: it sets
-`SPRING_PROFILES_ACTIVE=uat`, adds a `minio` service (Step 3), and passes
+`SPRING_PROFILES_ACTIVE=uat`, adds a `storage` service (Step 3), and passes
 through every secret-bearing `app.*`/`skillars.*` config value UAT needs,
 each with a comment explaining the specific startup failure it works around
 (mirroring gotchas already found and documented for `dev` in
@@ -105,7 +106,7 @@ place.
 
 ---
 
-## Step 3: MinIO (SeaweedFS) stands in for the real S3 API
+## Step 3: The storage service (SeaweedFS) stands in for the real S3 API
 
 UAT uses an S3-compatible server instead of real AWS credentials — it speaks
 the S3 API, so `BlobstoreConfig`'s `S3Client`/`S3Presigner` beans work
@@ -114,22 +115,34 @@ against it unmodified once `app.storage.s3.path-style-access` is `true`
 land in a production bucket, and there's nothing to clean up in AWS after
 tearing UAT down.
 
-As of 2026-09-24 the `minio` service in `docker-compose.uat.yml` actually runs
+As of 2026-09-24 the `storage` service in `docker-compose.uat.yml` runs
 [SeaweedFS](https://github.com/seaweedfs/seaweedfs), not [MinIO](https://min.io) —
 `quay.io/minio/minio` now 401s on anonymous pulls (a widely-reported break, not
-specific to this project). Service/env-var names below are kept as "MinIO" to
-match `.env.uat`'s existing `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` variables;
-see `SharedContainers.MINIO_IMAGE`'s javadoc
+specific to this project). Service/env-var names were briefly kept as "MinIO"
+right after that migration, matching `.env.uat`'s then-existing
+`MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` variables; both were renamed to
+`storage`/`STORAGE_ROOT_USER`/`STORAGE_ROOT_PASSWORD` on 2026-09-28 since
+nothing here runs MinIO any more and that name would only confuse a future
+reader. See `SharedContainers.STORAGE_IMAGE`'s javadoc
 (`src/test/java/com/softropic/skillars/config/SharedContainers.java`) for the
-full story.
+full SeaweedFS story.
 
-**Why this needs its own public domain, unlike local dev's MinIO:**
+**If you're updating an existing UAT deployment from before 2026-09-28:**
+rename `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` to
+`STORAGE_ROOT_USER`/`STORAGE_ROOT_PASSWORD` in `.env.uat` on the server
+**before** pulling and redeploying this change. `docker-compose.uat.yml`'s
+`${STORAGE_ROOT_USER}`/`${STORAGE_ROOT_PASSWORD}` interpolations are not
+`:?`-required, so Compose only warns ("variable not set, defaulting to blank
+string") rather than failing outright — skip this and the storage container
+comes up with empty S3 credentials instead of a loud error.
+
+**Why this needs its own public domain, unlike local dev's storage service:**
 `S3Presigner` bakes `app.storage.endpoint-url` directly into every presigned
 URL it hands back to the browser for uploads/downloads — there's no separate
 "internal" vs. "public" endpoint setting. `docker-compose.local.yml` works
-around this for a single laptop with an `/etc/hosts` entry pointing `minio`
+around this for a single laptop with an `/etc/hosts` entry pointing `storage`
 at `127.0.0.1`; that trick doesn't scale to arbitrary browsers on the public
-internet. Instead, `docker-compose.uat.yml`'s `minio` service is routed
+internet. Instead, `docker-compose.uat.yml`'s `storage` service is routed
 through Traefik on its own domain (`STORAGE_DOMAIN`) with its own Let's
 Encrypt certificate — the exact same pattern already used for
 `MONITORING_DOMAIN`/Grafana in `docker-compose.yml` — and
@@ -147,15 +160,15 @@ container and every browser resolve the identical HTTPS host.
    `dig +short <STORAGE_DOMAIN> @8.8.8.8` must return the Node IP before
    first deploy, or Traefik's Let's Encrypt challenge for this domain fails.
 2. Pick a UAT-only bucket name (`APP_STORAGE_BUCKET`, e.g. `skillars-uat`) —
-   `docker-compose.uat.yml`'s `minio-init` service creates it automatically
+   `docker-compose.uat.yml`'s `storage-init` service creates it automatically
    on every startup (no-op if it already exists), same as
    `docker-compose.local.yml` does for dev.
-3. Generate real MinIO root credentials for `.env.uat` (Step 4) —
+3. Generate real storage root credentials for `.env.uat` (Step 4) —
    **do not reuse dev's `minioadmin`/`minioadmin123`**, since this instance
    is reachable from the public internet, not just your laptop:
    ```bash
-   openssl rand -base64 24   # MINIO_ROOT_USER
-   openssl rand -base64 32   # MINIO_ROOT_PASSWORD
+   openssl rand -base64 24   # STORAGE_ROOT_USER
+   openssl rand -base64 32   # STORAGE_ROOT_PASSWORD
    ```
 
 There's no web console (bucket browser) — SeaweedFS has no drop-in
@@ -166,7 +179,7 @@ tunnelled to your laptop first):
 ssh -L 9500:localhost:9500 root@<UAT_NODE_IP>
 # then, locally:
 aws --endpoint-url http://localhost:9500 s3 ls s3://<APP_STORAGE_BUCKET> \
-  --profile <a profile with MINIO_ROOT_USER/MINIO_ROOT_PASSWORD as its keys>
+  --profile <a profile with STORAGE_ROOT_USER/STORAGE_ROOT_PASSWORD as its keys>
 ```
 
 ---
@@ -195,7 +208,7 @@ below, which is specific to UAT / not in `secrets-reference.md` yet:
 | Variable | Required? | Value |
 |---|---|---|
 | `STORAGE_DOMAIN` | Yes | The domain from Step 3 |
-| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | Yes | Generated in Step 3 — these double as `APP_STORAGE_S3_ACCESS_KEY`/`APP_STORAGE_S3_SECRET_KEY`, `docker-compose.uat.yml` maps them automatically |
+| `STORAGE_ROOT_USER` / `STORAGE_ROOT_PASSWORD` | Yes | Generated in Step 3 (renamed from `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` 2026-09-28) — these double as `APP_STORAGE_S3_ACCESS_KEY`/`APP_STORAGE_S3_SECRET_KEY`, `docker-compose.uat.yml` maps them automatically |
 | `APP_STORAGE_BUCKET` | Yes | The bucket name chosen in Step 3 |
 | `APP_PAYMENT_STRIPE_API_KEY` | Yes | The `sk_test_...` key from Step 2 |
 | `APP_PAYMENT_STRIPE_PUBLISHABLE_KEY` | Yes (for card-collection UI) | The matching `pk_test_...` key from Step 2; served to the frontend via `GET /api/payment/stripe/config` |
@@ -290,8 +303,8 @@ ssh root@<UAT_NODE_IP> "cd /opt/skillars/app && docker compose -f docker-compose
 ```
 
 `docker compose up -d` with no explicit service list brings up everything
-defined across both files — Postgres, Redis, Traefik, `app`, `minio` +
-`minio-init`, and the full LGTM stack (`loki`, `tempo`, `prometheus`,
+defined across both files — Postgres, Redis, Traefik, `app`, `storage` +
+`storage-init`, and the full LGTM stack (`loki`, `tempo`, `prometheus`,
 `grafana`) — in one command; nothing is trimmed the way
 `docker-compose.local.yml` trims it for a laptop.
 
@@ -325,7 +338,7 @@ profile photo) and confirm:
 
 - `aws --endpoint-url http://localhost:9500 s3 ls s3://<APP_STORAGE_BUCKET>`
   (with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` set to
-  `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`, run from an SSH tunnel to port
+  `STORAGE_ROOT_USER`/`STORAGE_ROOT_PASSWORD`, run from an SSH tunnel to port
   9500 as in Step 3) shows the uploaded object
 - The image actually renders in the browser — confirms `STORAGE_DOMAIN`'s
   TLS cert is valid and the presigned GET URL `S3Presigner` generated is
@@ -443,7 +456,7 @@ yet. Say so in the UAT brief.
   that's a separate, pre-existing gap tracked outside this doc, not something
   `docker-compose.uat.yml` changes. Production deploys must keep using
   `docker-compose.yml` alone (no `-f docker-compose.uat.yml`), the same as
-  today, or they'd pick up UAT's Stripe test key and MinIO storage.
+  today, or they'd pick up UAT's Stripe test key and storage service.
 - Two of the secrets in Step 4 (`PLATFORM_PIN_ENCRYPTION_SECRET`,
   `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET`) are fail-fast **everywhere**, not
   UAT-specific — production presumably has real values for these set

@@ -9,7 +9,7 @@ import java.time.Duration;
 
 /**
  * SeaweedFS running its S3 gateway, standing in for {@code org.testcontainers.containers.MinIOContainer}
- * (see {@link SharedContainers#MINIO_IMAGE}'s Javadoc for why MinIO itself is no longer usable here).
+ * (see {@link SharedContainers#STORAGE_IMAGE}'s Javadoc for why MinIO itself is no longer usable here).
  *
  * <p>Testcontainers has no dedicated SeaweedFS module, so this wraps {@link GenericContainer} directly
  * and deliberately mirrors {@code MinIOContainer}'s own public surface ({@link #getS3URL()},

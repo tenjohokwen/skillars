@@ -4,7 +4,9 @@
 
 > **Testcontainers containers are JVM-static singletons. They are never Spring beans.**
 
-One PostgreSQL, one Redis, one MinIO per test JVM, shared by every Spring context, for the whole run.
+One PostgreSQL, one Redis, one storage container (SeaweedFS — see [Image versions](#image-versions)
+for why it isn't literally MinIO despite older references to it below) per test JVM, shared by every
+Spring context, for the whole run.
 
 ## Why — the failure this prevents
 
@@ -21,7 +23,8 @@ GenericContainer<?> redisContainer() { ... }
 PostgreSQLContainer<?> postgresContainer(@Value("${spring.application.name}") String dbName) { ... }
 ```
 
-`MinioTestConfig.java:26` has the same shape for MinIO.
+`MinioTestConfig.java:26` (renamed `StorageTestConfig.java` on 2026-09-28) had the same shape for
+what was, at commit `21ef489`, still literally MinIO.
 
 Spring Boot's `TestcontainersLifecycleBeanPostProcessor` starts a `Startable` bean when its context
 refreshes and stops it when that context closes. **Container lifetime is therefore bound 1:1 to the
@@ -42,8 +45,8 @@ beans.
 public final class SharedContainers {
     static final PostgreSQLContainer<?> POSTGRES = ...;
     static final GenericContainer<?>    REDIS    = ...;
-    static final MinIOContainer         MINIO    = ...;
-    static { POSTGRES.start(); REDIS.start(); MINIO.start(); }   // started once, never stopped
+    static final SeaweedFsS3Container   STORAGE  = ...;
+    static { POSTGRES.start(); REDIS.start(); STORAGE.start(); }   // started once, never stopped
 }
 ```
 
@@ -72,8 +75,8 @@ JdbcConnectionDetails jdbcConnectionDetails() { /* from SharedContainers.POSTGRE
 RedisConnectionDetails redisConnectionDetails() { /* from SharedContainers.REDIS */ }
 ```
 
-For MinIO, keep the `DynamicPropertyRegistrar` idiom already in `MinioTestConfig.java` and simply point
-it at `SharedContainers.MINIO`.
+For the storage container, keep the `DynamicPropertyRegistrar` idiom already in `StorageTestConfig.java`
+and simply point it at `SharedContainers.storage()`.
 
 `TestConfig.hikariConfig(JdbcConnectionDetails)` continues to resolve against the new bean.
 
@@ -106,7 +109,7 @@ production compose file and line it must track.
 |---|---|---|
 | PostgreSQL | `postgres:17-alpine` | `postgres:17-alpine` (`:64`) — **now matched** |
 | Redis | `redis:7-alpine` | `redis:7-alpine` (`:89`) |
-| MinIO (SeaweedFS) | `chrislusf/seaweedfs:3.97` | same, via `docker-compose.uat.yml` — `quay.io/minio/minio` (both this constant's old pinned tag and `:latest`) now 401s on anonymous pulls (2026-09-24), so this moved from MinIO to SeaweedFS; see `SharedContainers.MINIO_IMAGE`'s javadoc |
+| Storage (SeaweedFS) | `chrislusf/seaweedfs:3.97` | same, via `docker-compose.uat.yml`'s `storage` service — `quay.io/minio/minio` (both this constant's old pinned tag and `:latest`) now 401s on anonymous pulls (2026-09-24), so this moved from MinIO to SeaweedFS; see `SharedContainers.STORAGE_IMAGE`'s javadoc |
 
 **The PostgreSQL gap is a real risk, not a cosmetic one:** every integration test currently validates
 against a database three major versions behind the one the product runs on. Deferred-19 bumps it to

@@ -175,7 +175,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
         byte[] content = "concurrent race".getBytes();
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
         // confirmUpload itself enqueues a REPLICATE-type job (replication is enabled by
-        // MinioTestConfig) — that job is not this test's concern, only the DELETE-type job(s) the
+        // StorageTestConfig) — that job is not this test's concern, only the DELETE-type job(s) the
         // racing processDeletions() calls below may or may not duplicate.
         confirmUpload(signResponse, content, "application/pdf");
 

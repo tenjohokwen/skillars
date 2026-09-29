@@ -75,6 +75,9 @@ container + Flyway + Spring startup **twice** in a single run.
 Now the punchline. Group those same 37 contexts by `@Import` set alone — that is, pretend properties,
 profiles and mocks were all unified — and you get **seven**:
 
+(`MinioTestConfig` below is this snapshot's real class name at `21ef489`; it was renamed
+`StorageTestConfig` on 2026-09-28 — see `container-architecture.md`.)
+
 ```
  117 classes -> @Import(TestConfig.class)
    7 classes -> @Import({TestConfig.class, MinioTestConfig.class})

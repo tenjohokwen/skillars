@@ -70,12 +70,12 @@ services:
       # Same single-endpoint constraint as docker-compose.uat.yml (S3Presigner bakes
       # app.storage.endpoint-url into every presigned URL it hands back) — but there's no
       # STORAGE_DOMAIN/Traefik here, just the one real hostname this box already has, on
-      # MinIO's directly-published port. See `extra_hosts` below for why the app container
-      # can reach this same URL reliably.
+      # the storage service's directly-published port. See `extra_hosts` below for why the
+      # app container can reach this same URL reliably.
       - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET}
       - APP_STORAGE_ENDPOINT_URL=http://${DOMAIN}:9500
-      - APP_STORAGE_S3_ACCESS_KEY=${MINIO_ROOT_USER}
-      - APP_STORAGE_S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - APP_STORAGE_S3_ACCESS_KEY=${STORAGE_ROOT_USER}
+      - APP_STORAGE_S3_SECRET_KEY=${STORAGE_ROOT_PASSWORD}
       # ses-1.2 D9: SPRING_MAIL_PASSWORD removed — it backed Boot's own autoconfigured
       # JavaMailSenderImpl, which nothing in this codebase ever injected.
       # code review 2026-09-11: this knob is now DEAD — see docker-compose.uat.yml's full
@@ -100,12 +100,12 @@ services:
       - "127.0.0.1:9990:9990"
       - "127.0.0.1:8367:8367"
     depends_on:
-      minio:
+      storage:
         condition: service_healthy
 
   # No Traefik, no LGTM stack (Loki/Tempo/Prometheus/Grafana) in this file at all — this
   # override is meant to be used with an explicit service list
-  # (`up -d app postgres redis minio minio-init`, see uat-hostwinds-deployment.md), not
+  # (`up -d app postgres redis storage storage-init`, see uat-hostwinds-deployment.md), not
   # `up -d` with no arguments, so those services from the base docker-compose.yml are never
   # started. LOKI_ENABLED is turned off above; MANAGEMENT_OTLP_TRACING_ENDPOINT (tempo) is
   # left as-is — the OTLP exporter fails silently/async on an unreachable collector, unlike
@@ -142,33 +142,45 @@ services:
 
   # Stands in for the real S3 API. Unlike docker-compose.uat.yml, there's no
   # STORAGE_DOMAIN/Traefik here — this box only has the one real hostname (DOMAIN), so
-  # MinIO's S3 API port is published directly instead of routed through a reverse proxy.
-  # (A path-based nginx location block was considered and rejected: S3 SigV4 signatures
-  # cover the exact host/path used, so inserting an nginx path prefix breaks presigned URL
-  # validation unless carefully rewritten — directly publishing the port avoids that whole
-  # class of problem.)
+  # the storage service's S3 API port is published directly instead of routed through a
+  # reverse proxy. (A path-based nginx location block was considered and rejected: S3 SigV4
+  # signatures cover the exact host/path used, so inserting an nginx path prefix breaks
+  # presigned URL validation unless carefully rewritten — directly publishing the port
+  # avoids that whole class of problem.)
   #
-  # As of 2026-09-24 this runs SeaweedFS, not MinIO — quay.io/minio/minio (both this pinned
-  # tag and :latest) now 401s on anonymous pulls, confirmed via direct `docker pull`; a
-  # widely-reported break, not something specific to this project. Service/volume names
-  # kept as "minio" to minimize the diff; see SharedContainers.MINIO_IMAGE's javadoc
+  # Runs SeaweedFS, not MinIO — as of 2026-09-24, quay.io/minio/minio (both this pinned tag
+  # and :latest) 401s on anonymous pulls, confirmed via direct `docker pull`; a
+  # widely-reported break, not something specific to this project. See
+  # SharedContainers.STORAGE_IMAGE's javadoc
   # (src/test/java/com/softropic/skillars/config/SharedContainers.java) for the full story.
+  # Service/volume/env-var names were briefly kept as "minio" right after that migration to
+  # minimize the diff, then renamed to "storage" on 2026-09-28 — nothing here has been MinIO
+  # for a while, and that name would only confuse a future reader.
+  #
+  # IMPORTANT — this rename touches real secrets on this box: its `.env` MUST have
+  # MINIO_ROOT_USER/MINIO_ROOT_PASSWORD renamed to STORAGE_ROOT_USER/STORAGE_ROOT_PASSWORD
+  # (same values, just the key names) BEFORE the next deploy of this file, or the two
+  # `${STORAGE_ROOT_USER}`/`${STORAGE_ROOT_PASSWORD}` interpolations below resolve blank —
+  # Compose only warns ("variable not set, defaulting to blank string"), it does not fail —
+  # and the storage container starts with empty S3 credentials. See
+  # uat-hostwinds-deployment.md.
+  #
   # SeaweedFS has no env-var-driven credential path worth trusting (seaweedfs/seaweedfs#7311,
-  # a live upstream reliability issue), so the entrypoint below writes MINIO_ROOT_USER/
-  # MINIO_ROOT_PASSWORD into an S3 identity config file at container start instead — keeps
+  # a live upstream reliability issue), so the entrypoint below writes STORAGE_ROOT_USER/
+  # STORAGE_ROOT_PASSWORD into an S3 identity config file at container start instead — keeps
   # this file's existing "credentials come from .env" contract intact. Measured idle memory
   # for SeaweedFS's combined master+volume+filer+s3 process: ~17MB, well under the 140m limit
   # below (kept unchanged — it was already sized for MinIO's own similar footprint).
-  minio:
+  storage:
     image: chrislusf/seaweedfs:3.97
     entrypoint: >
       /bin/sh -c "
       mkdir -p /etc/seaweedfs &&
-      printf '{\"identities\":[{\"name\":\"uat\",\"credentials\":[{\"accessKey\":\"%s\",\"secretKey\":\"%s\"}],\"actions\":[\"Admin\",\"Read\",\"Write\",\"List\",\"Tagging\"]}]}' \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" > /etc/seaweedfs/s3.json &&
+      printf '{\"identities\":[{\"name\":\"uat\",\"credentials\":[{\"accessKey\":\"%s\",\"secretKey\":\"%s\"}],\"actions\":[\"Admin\",\"Read\",\"Write\",\"List\",\"Tagging\"]}]}' \"$$STORAGE_ROOT_USER\" \"$$STORAGE_ROOT_PASSWORD\" > /etc/seaweedfs/s3.json &&
       exec weed server -s3 -dir=/data -ip.bind=0.0.0.0 -s3.port=9500 -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=1024
       "
     # No limit at all otherwise — this is new to this stripped-down file (unlike
-    # postgres/redis, minio isn't in the base docker-compose.yml with its own defaults to
+    # postgres/redis, storage isn't in the base docker-compose.yml with its own defaults to
     # cap down), so it would run under Docker's unbounded default without this.
     deploy:
       resources:
@@ -176,10 +188,10 @@ services:
           cpus: "0.25"
           memory: 140m
     environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - STORAGE_ROOT_USER=${STORAGE_ROOT_USER}
+      - STORAGE_ROOT_PASSWORD=${STORAGE_ROOT_PASSWORD}
     volumes:
-      - skillars-uat-hostwinds-minio:/data
+      - skillars-uat-hostwinds-storage:/data
     ports:
       # Publicly reachable on purpose — real browsers need to reach presigned URLs built
       # from APP_STORAGE_ENDPOINT_URL above. Needs `ufw allow 9500/tcp` (not needed for
@@ -196,7 +208,7 @@ services:
     networks:
       - skillars-internal
     restart: unless-stopped
-    # Neither `minio` nor `minio-init` exist in the base docker-compose.yml, so unlike
+    # Neither `storage` nor `storage-init` exist in the base docker-compose.yml, so unlike
     # `app`/`postgres`/`redis` (which inherit `logging: *default-logging` from there),
     # these would otherwise use Docker's unbounded default log driver — fine short-term,
     # but a real disk-fill risk left running for a while on a small VPS (see
@@ -205,27 +217,27 @@ services:
     logging: *default-logging
 
   # One-shot: creates the bucket on every startup (no-op if it already exists).
-  # amazon/aws-cli replaces quay.io/minio/mc here — same reasoning as the `minio` service
+  # amazon/aws-cli replaces quay.io/minio/mc here — same reasoning as the `storage` service
   # above (mc's own image is under the same now-blocked quay.io/minio/* namespace), and aws-cli
   # is a generic S3 client so it works against SeaweedFS's S3 gateway unmodified.
-  minio-init:
+  storage-init:
     image: amazon/aws-cli:2.31.13
     depends_on:
-      minio:
+      storage:
         condition: service_healthy
     environment:
-      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+      - AWS_ACCESS_KEY_ID=${STORAGE_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${STORAGE_ROOT_PASSWORD}
       - AWS_DEFAULT_REGION=us-east-1
       - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET}
     entrypoint: >
       /bin/sh -c "
-      aws --endpoint-url http://minio:9500 s3 mb s3://$$APP_STORAGE_BUCKET || true
+      aws --endpoint-url http://storage:9500 s3 mb s3://$$APP_STORAGE_BUCKET || true
       "
     networks:
       - skillars-internal
     logging: *default-logging
 
 volumes:
-  skillars-uat-hostwinds-minio:
+  skillars-uat-hostwinds-storage:
   skillars-uat-hostwinds-redis:

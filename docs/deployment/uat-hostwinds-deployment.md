@@ -10,8 +10,8 @@ all of that: no Traefik, no HTTPS, no Loki/Tempo/Prometheus/Grafana. The
 only two things kept from the full UAT design are the `uat` Spring profile
 (so `PaymentConfig`'s live-key guard is still active — a stripped-down
 environment is exactly where a stray live key would be easiest to miss) and
-MinIO for storage (already built for `uat-deployment.md`, and the fastest
-way to a working upload flow without real AWS credentials).
+the SeaweedFS-backed storage service (already built for `uat-deployment.md`,
+and the fastest way to a working upload flow without real AWS credentials).
 
 **This box can only run one of gulliver or Skillars at a time** — both
 default to port `9990`, and this guide reuses that port rather than
@@ -30,8 +30,8 @@ Image tag: **`skillars:uat`**.
 
 ```
 Browser ──80──> nginx (existing, unchanged) ──> 127.0.0.1:9990 ──> app container
-Browser ──9500─────────────────────────────────────────────────> minio container
-app container ──skillars-internal network──> postgres, redis, minio containers
+Browser ──9500─────────────────────────────────────────────────> storage container
+app container ──skillars-internal network──> postgres, redis, storage containers
 ```
 
 - **nginx**: already installed and configured for gulliver
@@ -40,7 +40,7 @@ app container ──skillars-internal network──> postgres, redis, minio cont
   `127.0.0.1`, this config transparently starts serving Skillars instead —
   **zero nginx changes needed**. The site file is still literally named
   `gulliver`; see [Notes](#notes) if you want to rename it for clarity.
-- **MinIO**: no domain-based routing available here (unlike
+- **storage** (SeaweedFS): no domain-based routing available here (unlike
   `uat-deployment.md`'s `STORAGE_DOMAIN` + Traefik), so its S3 API port is
   published directly on the host instead — `http://hwsrv-1301707.hostwindsdns.com:9500`.
 - **Postgres/Redis**: run in Docker, internal-only (not published to the
@@ -68,7 +68,7 @@ arbitrary:
 | OS + Docker daemon + nginx | ~150–200MB (not enforced, just budgeted) | Baseline for Ubuntu 24.04 + `dockerd` + a lightweight reverse proxy |
 | `postgres` (Docker) | 220MB | Down from the base file's 1536MB. `shared_buffers` defaults to 128MB in the `postgres:17-alpine` image; 220MB leaves headroom above that without the multi-GB assumption the base file makes |
 | `redis` (Docker) | 48MB | Down from 256MB — see below, actual usage is near-zero |
-| `minio` | 140MB | Not capped at all before this guide (new service, no base-file default to inherit) |
+| `storage` | 140MB | Not capped at all before this guide (new service, no base-file default to inherit) |
 | `app` | 460MB | Down from 2GB. See the `JAVA_TOOL_OPTIONS` comment in `docker-compose.uat-hostwinds.yml` for the heap/metaspace/code-cache breakdown that fits inside it |
 
 That's 868MB committed across the four containers, leaving roughly
@@ -247,7 +247,7 @@ ssh root@hwsrv-1301707.hostwindsdns.com "chmod 600 /server/skillars/.env.uat"
 `.env.uat` already has real values for this box, this is the only new file
 to bring over — everything else came from `git clone`.)
 
-## Step 6: Open the firewall for MinIO
+## Step 6: Open the firewall for the storage service
 
 ```bash
 ufw allow 9500/tcp
@@ -265,7 +265,7 @@ benefit.
 ```bash
 cd /server/skillars
 docker compose -f docker-compose.yml -f docker-compose.uat-hostwinds.yml \
-  --env-file .env.uat up -d app postgres redis minio minio-init
+  --env-file .env.uat up -d app postgres redis storage storage-init
 ```
 
 **Explicit service list, not a bare `up -d`** — the base `docker-compose.yml`
@@ -327,7 +327,7 @@ etc.), and specifically exercise:
   (`4242 4242 4242 4242`) — confirm it shows up in the Stripe Dashboard
   under **Test mode**, never live.
 - **A file upload** (e.g. a coach profile photo) — confirm the image
-  actually renders afterward. This is the real test of the MinIO/
+  actually renders afterward. This is the real test of the storage/
   `extra_hosts` setup in `docker-compose.uat-hostwinds.yml`: if the upload
   succeeds but the image never loads, the presigned URL's host
   (`http://hwsrv-1301707.hostwindsdns.com:9500`) likely isn't resolving the
@@ -393,8 +393,8 @@ docker compose -f docker-compose.yml -f docker-compose.uat-hostwinds.yml --env-f
 ```
 
 (`-f` follows in real time, like `tail -f`. Swap `app` for `postgres`,
-`redis`, or `minio` to watch a different container — or `skillars-app-1` for
-`skillars-postgres-1`/`skillars-minio-1` with the plain `docker logs` form.
+`redis`, or `storage` to watch a different container — or `skillars-app-1` for
+`skillars-postgres-1`/`skillars-storage-1` with the plain `docker logs` form.
 Container names follow `<compose-project>-<service>-<index>`; the project
 name defaults to the directory Compose is run from, `skillars` per Step 4,
 so these names are exactly what you'll see without needing `-p`.)
@@ -454,9 +454,9 @@ less /var/log/nginx/error.log
 
 ### Log rotation / disk space
 
-`app`, `postgres`, `redis`, `minio`, and `minio-init` all cap their Docker
+`app`, `postgres`, `redis`, `storage`, and `storage-init` all cap their Docker
 logs at 10MB × 3 files (`x-logging` in `docker-compose.yml`, mirrored for
-`minio`/`minio-init` in `docker-compose.uat-hostwinds.yml` since those two
+`storage`/`storage-init` in `docker-compose.uat-hostwinds.yml` since those two
 containers don't exist in the base file and would otherwise get Docker's
 unbounded default driver). If disk usage still looks off after running for a
 while, `docker system df` and `df -h` are the first things to check — the
@@ -472,7 +472,7 @@ filling Docker's build cache, not just log growth).
 docker compose -f docker-compose.yml -f docker-compose.uat-hostwinds.yml --env-file .env.uat down
 ```
 
-Add `-v` to also wipe the Postgres and MinIO volumes and start fully fresh
+Add `-v` to also wipe the Postgres and storage volumes and start fully fresh
 next time.
 
 To go back to gulliver: `cd /server/gulliver && nohup java -jar -Dspring.profiles.active=local gulliver-0.0.1-SNAPSHOT.jar &`

@@ -1,9 +1,19 @@
 # Local Deployment Guide
 
+**Prefer an automated walkthrough?** Run
+[`./setup.sh`](./setup.sh) from this folder — it hand-holds through every step
+below (Docker, `.env.local`, the compose override, storage, `/etc/hosts`,
+building the image), creating or fixing what it can and telling you exactly
+what to do by hand otherwise. Re-run it any time; once everything checks out
+it just prints the one command that starts the app. The rest of this document
+is the detailed reference behind what that script automates.
+
 Run Skillars on your own machine using Docker — no domain or TLS required. This
 trims the production [`docker-compose.yml`](../../docker-compose.yml) down to
-the services the app needs to run (`app`, `postgres`, `redis`, with `loki` and
-`tempo` coming along automatically — see [Notes](#notes) below), plus
+the services the app needs to run (`app`, `postgres`, `redis`, `storage` — a
+local S3-compatible store for file uploads, running SeaweedFS as of
+2026-09-24, see [Step 3](#step-3-the-local-compose-override) — with `loki`
+and `tempo` coming along automatically too — see [Notes](#notes) below), plus
 `prometheus` and `grafana` so you can browse metrics, traces and logs locally
 instead of relying solely on `docker logs` (see
 [Step 6.1](#step-61-browse-grafana-optional) and the [Logs](#logs) section).
@@ -29,13 +39,14 @@ from GHCR) — there's no `build:` section, so build the image yourself first:
 docker build -t skillars:local .
 ```
 
-`docker-compose.local.yml` also carries a `build:` block, so once you have
-created your override file (Step 4) you can rebuild with
-`docker compose -f docker-compose.yml -f docker-compose.local.yml build app`
-instead. Note that **`docker compose build app` without the local override
-silently does nothing and exits 0** — the base file has no `build:` key — so
-if a change you just made appears to have no effect, check which command you
-rebuilt with before debugging the code.
+`docker-compose.local.yml` — checked into this repo already (see
+[Step 3](#step-3-the-local-compose-override), it's not a file you create
+yourself) — also carries a `build:` block, so once you're using it you can
+rebuild with `docker compose -f docker-compose.yml -f docker-compose.local.yml
+build app` instead. Note that **`docker compose build app` without the local
+override silently does nothing and exits 0** — the base file has no `build:`
+key — so if a change you just made appears to have no effect, check which
+command you rebuilt with before debugging the code.
 
 ---
 
@@ -109,34 +120,62 @@ Step 3's `APP_VIDEO_BUNNY_LIBRARY_ID`).
 
 ---
 
-## Step 3: Add a local compose override
+## Step 3: The local compose override
+
+**`docker-compose.local.yml` is already checked into this repo at the repo
+root** — it's a real, git-tracked file the team maintains, not a personal
+override you create or a `.gitignore`d scratch file (only `.env.local` is
+that). If you cloned the repo, you already have it; there's nothing to do in
+this step beyond understanding what it contains and why, which the rest of
+this section walks through. (If it's ever missing —a shallow/partial
+checkout, or you deleted it by hand— restore it with `git checkout --
+docker-compose.local.yml` rather than retyping it from this doc.)
 
 `docker-compose.yml` doesn't publish the app's ports to your host (only
 Traefik does that in production) and doesn't set `SPRING_PROFILES_ACTIVE`.
-Create `docker-compose.local.yml` next to it:
-
-It also mounts data directories from fixed host paths that `provision.sh`
+`docker-compose.local.yml` fixes both. It also mounts data directories from fixed host paths that `provision.sh`
 creates on the production Node — `postgres` (`/opt/skillars/data/postgres`),
 `redis` (`/opt/skillars/data/redis`, since UAT.2 moved it off a named volume),
 `loki` and `tempo` (`/opt/skillars/data/{loki,tempo}`, pulled in as
 dependencies of `app` — see [Notes](#notes)), and `prometheus`/`grafana`
 (`/opt/skillars/data/{prometheus,grafana}`, pulled in as a dependency of
 `grafana`). None of those paths exist on your machine, and Docker Desktop
-refuses to bind-mount a host directory it hasn't been granted access to.
-Replace all six with plain named volumes, and publish Grafana's port so you
-can reach its UI from the host:
+refuses to bind-mount a host directory it hasn't been granted access to. So
+the checked-in file replaces all of them with plain named volumes, publishes
+Grafana's port so you can reach its UI from the host, and adds a local
+S3-compatible store (the `storage` service, `app`'s newest hard dependency —
+see below) plus a one-shot bucket creator. In full:
 
 ```yaml
 services:
   app:
+    # Without this, `docker compose build app` exits 0 having done nothing —
+    # the base docker-compose.yml only carries `image: ${APP_IMAGE}`.
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       - SPRING_PROFILES_ACTIVE=dev
       - APP_VIDEO_BUNNY_LIBRARY_ID=123456
       - MANAGEMENT_HEALTH_MAIL_ENABLED=false
       - APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder
+      - GMAIL_PASSWORD=${GMAIL_PASSWORD:-dev_gmail_password}
+      - GMX_PASSWORD=${GMX_PASSWORD:-dev_gmx_password}
+      - APP_STORAGE_S3_ACCESS_KEY=minioadmin
+      - APP_STORAGE_S3_SECRET_KEY=minioadmin123
+      - APP_STORAGE_ENDPOINT_URL=http://storage:9500
+      - APP_SES_FROM_ADDRESS=dev@localhost
+      - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=dev-webhook-signing-secret
+      - APP_VIDEO_PLAYBACK_SIGNING_SECRET=dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh
+      - PLATFORM_PIN_ENCRYPTION_SECRET=S3CR3TW0RD
+      - PLATFORM_REGISTRATION_VERIFICATION_SECRET=dev-registration-verification-secret-32-bytes!
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-dev-key}
     ports:
       - "9990:9990"   # main app
       - "8367:8367"   # actuator/health (management port)
+    depends_on:
+      storage:
+        condition: service_healthy
   postgres:
     volumes:
       - skillars-local-postgres:/var/lib/postgresql/data
@@ -158,6 +197,41 @@ services:
     volumes:
       - skillars-local-grafana:/var/lib/grafana
 
+  # Local S3-compatible storage so uploads (coach profile photos, drill videos)
+  # don't need real AWS credentials in dev. Runs on 9500, not MinIO's old
+  # default 9000/9001, since this project's Quasar dev server already owns 9000.
+  storage:
+    image: chrislusf/seaweedfs:3.97
+    command: >
+      server -s3 -dir=/data -ip.bind=0.0.0.0 -s3.port=9500
+      -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=1024
+    volumes:
+      - skillars-local-storage:/data
+      - ./deploy/seaweedfs/s3-identity.json:/etc/seaweedfs/s3.json:ro
+    ports:
+      - "9500:9500"   # S3 API
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9500"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # One-shot: creates the dev bucket on every startup (no-op if it already exists).
+  storage-init:
+    image: amazon/aws-cli:2.31.13
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin123
+      - AWS_DEFAULT_REGION=us-east-1
+    entrypoint: >
+      /bin/sh -c "
+      aws --endpoint-url http://storage:9500 s3 mb s3://skillars-dev || true
+      "
+
 volumes:
   skillars-local-postgres:
   skillars-local-redis:
@@ -165,6 +239,7 @@ volumes:
   skillars-local-tempo:
   skillars-local-prometheus:
   skillars-local-grafana:
+  skillars-local-storage:
 ```
 
 Compose merges `volumes:` entries by matching container target path, so each
@@ -172,15 +247,67 @@ of these overrides only replaces the matching production bind mount — the
 other mounts on `loki`/`tempo`/`prometheus`/`grafana` (their read-only
 `./deploy/lgtm/*.yml` config files, relative paths, not a problem) are
 untouched. The top-level `volumes:` block declares all the named volumes this
-stack needs; `docker-compose.yml` itself declares none since UAT.2 moved redis
-onto the Hetzner Volume bind mount, which is why `redis` needs an override here
-too — without one, the local stack would create `/opt/skillars/data/redis` on
-the developer's own machine. `traefik` has the same kind of fixed host-path/config
-dependency, but since it never starts in this trimmed stack, it's never
-evaluated and doesn't need an override.
+stack needs; `docker-compose.yml` itself declares none for `redis` since
+UAT.2 moved it onto the Hetzner Volume bind mount, and declares no `storage`
+service at all (it's UAT/local-only — production talks to real AWS S3), which
+is why both need an override here. `traefik` has the same kind of fixed
+host-path/config dependency, but since it never starts in this trimmed stack,
+it's never evaluated and doesn't need an override.
 
-The three extra `app.environment` entries fix real startup failures found by
-actually running this stack, not hypothetical ones:
+**Why `storage` runs SeaweedFS, not MinIO.** As of 2026-09-24 (`8b5a5fb3`, #229),
+`quay.io/minio/minio` — both this pinned tag and `:latest` — returns 401 on
+anonymous pulls, a widely-reported break affecting every project that used it,
+not something specific to this repo. `chrislusf/seaweedfs:3.97` (Docker Hub,
+confirmed pullable) replaced it here, in the UAT compose files, and in the
+integration-test Testcontainers setup alike. The service and volume were
+briefly kept named `minio` right after that migration to minimize the diff,
+then renamed to `storage` on 2026-09-28 once it was clear that name would
+only confuse a future reader — nothing here has run MinIO for a while.
+Credentials (`minioadmin`/`minioadmin123`) are unchanged, but come from the
+mounted `deploy/seaweedfs/s3-identity.json` (already checked into the repo —
+nothing to create yourself) rather than `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`-style
+env vars, because SeaweedFS's own env-var credential path has a live upstream
+reliability issue ([seaweedfs/seaweedfs#7311](https://github.com/seaweedfs/seaweedfs/issues/7311)).
+`amazon/aws-cli` stands in for `quay.io/minio/mc` in `storage-init` for the same
+pull-blocking reason — it's a generic S3 client, so it works against
+SeaweedFS's S3 gateway unmodified.
+
+**Browser-side uploads need one `/etc/hosts` entry.** The app container reaches
+this service over the compose network as `storage:9500`, and the presigned
+upload URLs it hands back to the browser use that same host — but your
+browser runs on the host machine, not inside the compose network, so it can't
+resolve `storage` on its own. Add this once:
+
+```
+127.0.0.1 storage
+```
+
+That, plus the published `9500:9500` port above, makes `http://storage:9500/...`
+resolve to this container from both the app and your browser.
+
+**Upgrading from before 2026-09-28?** Your `/etc/hosts` still has the old
+`127.0.0.1 minio` line — add the `storage` line above alongside it (the old
+one is now unused and can be removed whenever convenient).
+
+The additional `app.environment` entries beyond the storage/video ones above
+(`GMAIL_PASSWORD`/`GMX_PASSWORD`, `APP_SES_FROM_ADDRESS`,
+`APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET`, `APP_VIDEO_PLAYBACK_SIGNING_SECRET`,
+`PLATFORM_PIN_ENCRYPTION_SECRET`, `PLATFORM_REGISTRATION_VERIFICATION_SECRET`)
+all restate `application-dev.yaml`'s own defaults, and — like the storage keys
+above — are required rather than tidy: `docker-compose.yml` passes each
+through with a `${VAR:-}` empty default so a production deploy can set it, but
+an empty environment variable is present-and-blank, not absent, so it
+*overrides* `application-dev.yaml`'s own `${VAR:dev-default}` fallback the
+moment the base file lists it. Found by running it: an empty
+`APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` aborts startup in
+`BunnyVideoProviderAdapter` ("webhookSigningSecret must not be blank"), and an
+empty `APP_STORAGE_S3_ACCESS_KEY` silently drops storage back onto the AWS
+default credential chain, breaking every upload. Keep this block in step with
+`application-dev.yaml`.
+
+The three startup-blocking `app.environment` entries below (Stripe, video
+library ID, mail health) fix real crash loops found by actually running this
+stack, not hypothetical ones:
 
 - **`APP_VIDEO_BUNNY_LIBRARY_ID=123456`** — `VideoProviderConfig`'s
   `videoProviderAdapter` bean eagerly validates `app.video.bunny.library-id`
@@ -247,11 +374,11 @@ Also fixed: access logging is now emitted through SLF4J and reaches Loki, so
 **you should no longer see that error**. If you do, you are running an image
 built before 2026-09-01. See the [Logs](#logs) section.
 
-Keep this as a separate file passed explicitly with `-f` (rather than naming
-it `docker-compose.override.yml`, which Compose auto-loads). The deploy
-scripts in `first-time-setup.md` run `docker compose up -d` with no `-f` flags
-on the production Node — an auto-loaded override sitting in the repo would
-silently leak `dev` profile and exposed ports into that deploy.
+It's deliberately named `docker-compose.local.yml` and passed explicitly with
+`-f`, rather than `docker-compose.override.yml`, which Compose auto-loads. The
+deploy scripts in `first-time-setup.md` run `docker compose up -d` with no
+`-f` flags on the production Node — an auto-loaded override sitting in the
+repo would silently leak `dev` profile and exposed ports into that deploy.
 
 ---
 
@@ -267,15 +394,20 @@ alias dcl='docker compose -f docker-compose.yml -f docker-compose.local.yml --en
 This is the single command that brings everything up:
 
 ```bash
-dcl up -d app postgres redis grafana
+dcl up -d app postgres redis storage-init grafana
 ```
 
-Compose will also start `loki` and `tempo` automatically — `app` declares a
-hard `depends_on` on both (`condition: service_started`), so they come up even
-though they weren't named explicitly. Naming `grafana` similarly pulls in
-`prometheus`, since `grafana` depends on it (`condition: service_started`).
-`traefik` and `node_exporter` are not dependencies of anything named here and
-stay stopped.
+Compose will also start `loki`, `tempo`, and `storage` automatically — `app`
+declares a hard `depends_on` on all three (`loki`/`tempo` just *started*,
+`storage` actually *healthy*), so they come up even though only `storage-init`
+was named explicitly. Naming `grafana` similarly pulls in `prometheus`, since
+`grafana` depends on it (`condition: service_started`). `traefik` and
+`node_exporter` are not dependencies of anything named here and stay stopped.
+
+`storage-init` has to be named explicitly — unlike `storage` itself, nothing
+declares a hard dependency on it, so leaving it off the command means the
+`skillars-dev` bucket is never created and every upload fails with a
+"no such bucket" error the first time you try one.
 
 Give it a minute, then confirm everything is healthy:
 
@@ -314,16 +446,25 @@ dcl exec -T postgres psql -U postgres -d skillars < src/test/resources/sql/secDa
 
 (Substitute `-U`/`-d` if you changed `POSTGRES_USER`/`POSTGRES_DB` in `.env.local`.)
 
-### Optional: sample login users — no longer reliable
+### Optional: sample login users — still not reliable, for a different reason now
 
 `src/test/resources/sql/initTestData.sql` seeds the same JWT secret row
 **plus** roles and test accounts (including an admin), and this guide used to
-offer it as a shortcut past registration. **It now partially fails**: its
-`main.authority` inserts carry no `ON CONFLICT` clause, while migrations `V21`
-and `V92` seed those same role names (`ROLE_COACH`, `ROLE_PARENT`,
-`ROLE_ADMIN`, `ROLE_LTD_ADMIN`) with `ON CONFLICT (name) DO NOTHING`. By the
-time Flyway has run, those rows exist, and the fixture's inserts hit the unique
-constraint on `authority.name`.
+offer it as a shortcut past registration. **It still fails under `dev`**, but
+not for the reason previously written here: its `main.authority` insert was
+patched to add `ON CONFLICT (name) DO NOTHING`, so it no longer collides with
+the role rows Flyway seeds (previously cited as migrations `V21`/`V92`; the
+whole migration history was squashed on 2026-09-24 by `skillars-deferred-112`
+into `V138__baseline_schema.sql` + `V139__baseline_seed_data.sql`, which now
+seed those same role names).
+
+What still fails is the very first statement in the file — an `INSERT INTO
+main.sec` with no `ON CONFLICT` at all
+(`src/test/resources/sql/initTestData.sql:11`). Under `dev`,
+`JwtSecretBootstrapRunner` has already written the active JWT signing row by
+the time you'd run this, so this insert hits the same `sec_version_bus_id_key`
+unique-constraint error `secData.sql` warns about above, just from a different
+file.
 
 Stick with `secData.sql` above and register accounts through the app. Every
 role the registration flows need is already seeded by Flyway, so no user
@@ -395,7 +536,7 @@ Add `-v` to also delete the Postgres data volume and start fresh next time
 
 ## Troubleshooting
 
-**`no space left on device` in container logs (Postgres/Loki/Tempo/Prometheus/Redis
+**`no space left on device` in container logs (Postgres/Loki/Tempo/Prometheus/Redis/storage
 crash-looping, `node_exporter` permission errors)** — this is Docker
 Desktop's own virtual disk, not your Mac's disk; check both:
 
@@ -423,8 +564,8 @@ volumes, even while stopped. Skip `--all` unless you specifically mean to
 remove named-but-unattached volumes too, since those could belong to other
 projects.
 
-After freeing space, `dcl down` then `dcl up -d app postgres redis grafana`
-again — Postgres/Loki/Tempo/Prometheus/Redis all recover cleanly from a
+After freeing space, `dcl down` then `dcl up -d app postgres redis storage-init grafana`
+again — Postgres/Loki/Tempo/Prometheus/Redis/storage all recover cleanly from a
 disk-full crash on restart (WAL/AOF replay), no need to wipe volumes with `-v`
 unless something still looks broken afterward.
 
@@ -440,11 +581,15 @@ unless something still looks broken afterward.
   string.` — harmless. Unlike the two Grafana variables above, `DOMAIN` isn't
   declared required (no `:?`), so it just warns and interpolates to an empty
   string in the (unused) `traefik` labels.
-- `loki` and `tempo` start regardless of the service list you pass to `up`,
-  because `app`'s `depends_on` requires them to be *started* (not
-  necessarily healthy) before it boots; `prometheus` similarly starts because
-  `grafana` depends on it. This is harmless locally — all are lightweight —
-  but explains why you'll see extra containers you didn't ask for by name.
+- `loki`, `tempo`, and `storage` start regardless of the service list you pass
+  to `up`, because `app`'s `depends_on` requires them (`loki`/`tempo` just
+  *started*, `storage` actually *healthy* — see
+  [Step 3](#step-3-the-local-compose-override)); `prometheus` similarly
+  starts because `grafana` depends on it. This is harmless locally — all are
+  lightweight — but explains why you'll see extra containers you didn't ask
+  for by name, and why `app` won't report `running` until SeaweedFS's
+  healthcheck passes (up to ~60s on a cold start: 10s `start_period` plus up
+  to 5×10s retries).
 - If you'd rather run the app outside Docker for a tighter debug loop (e.g.
   attaching a remote debugger), see the commented steps at the top of
   `src/test/resources/sql/initTestData.sql`, which assume `postgres` and
@@ -597,15 +742,20 @@ still slip through.
 * Spring boot will usually do the flyway migration once app is run, however it can be run manually
 
 ```shell
-  docker exec -i skillars-postgres-1 psql -U postgres -d skillars < src/main/resources/db/migration/V85__phone_otp_required_toggle.sql
+  docker exec -i skillars-postgres-1 psql -U postgres -d skillars < src/main/resources/db/migration/V154__gdpr_requests_retry_tracking.sql
 ```
 
+  (Substitute whatever the latest migration file actually is — `ls src/main/resources/db/migration | sort -V | tail -1`.
+  Numbering restarted at `V138` on 2026-09-24 when `skillars-deferred-112` squashed the
+  entire prior history into `V138__baseline_schema.sql` + `V139__baseline_seed_data.sql`;
+  any file below `V138` no longer exists.)
+
 ## Data persistence
-* MinIO's data lives in a named Docker volume (skillars-local-minio, shown as skillars_skillars-local-minio in docker volume ls), which is independent of the container lifecycle. 
-* Recreating, restarting, or rebuilding the app or minio containers doesn't touch that volume — same as how your Postgres data survives app redeploys via skillars-local-postgres.
+* The `storage` service's data (SeaweedFS since 2026-09-24, renamed from `minio` on 2026-09-28 — see [Step 3](#step-3-the-local-compose-override)) lives in a named Docker volume (skillars-local-storage, shown as skillars_skillars-local-storage in docker volume ls), which is independent of the container lifecycle.
+* Recreating, restarting, or rebuilding the app or storage containers doesn't touch that volume — same as how your Postgres data survives app redeploys via skillars-local-postgres.
 * What would wipe it:
     - docker compose down -v (or --volumes) — explicitly removes named volumes.
-    - docker volume rm skillars_skillars-local-minio directly.
+    - docker volume rm skillars_skillars-local-storage directly.
     - Deleting/pruning the volume manually.
 
 * Plain docker compose down / up, container recreates, and image rebuilds are all safe — the bucket and its objects stay put, and since Postgres (which stores the FileStorageObject metadata row pointing at that key) persists the same way, the two stay in sync.

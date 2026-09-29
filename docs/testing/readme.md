@@ -7,7 +7,7 @@ How the integration-test suite is wired, why it is wired that way, and what you 
 | Document | What it answers |
 |---|---|
 | [Why inheritance, not `@Import(TestConfig.class)`](why-inheritance-over-import.md) | Why ~130 test classes moved from copy-pasted annotation headers to a shared base class, what it cost us not to, and the honest case against the choice. **Start here.** |
-| [Container architecture](container-architecture.md) | Why PostgreSQL/Redis/MinIO are JVM-static and deliberately *not* Spring beans. Read before touching `TestConfig`. |
+| [Container architecture](container-architecture.md) | Why PostgreSQL/Redis/storage (SeaweedFS) are JVM-static and deliberately *not* Spring beans. Read before touching `TestConfig`. |
 | [Test data isolation](test-data-isolation.md) | How each test gets a clean database, which tables must never be truncated and why, and the fixture-id registry. |
 | [Pessimistic lock retry](../persistence/pessimistic-lock-retry.md) | Staging a concurrency test against a `NO_WAIT`-locked repository — including why polling `pg_locks` for a "blocked" session no longer works as a staging technique now that contention fails fast instead of blocking. |
 | [Frontend unit tests](frontend-unit-tests.md) | Vitest + Vue Test Utils for `src/frontend`. How to run it, where specs live, the Quasar-AE config model — and why it is deliberately **not** part of `mvn verify` (opt-in: `npm run test:unit` locally, or the `frontend-tests` PR label in CI). |
@@ -97,7 +97,7 @@ All figures from CI (`ubuntu-latest`, 4 vCPU) unless marked local. Story `deferr
 
 | | Before (`21ef489`) | After |
 |---|---|---|
-| Docker containers | ~74 (one postgres + one redis per context) | **3** (1 postgres, 1 redis, 1 minio per JVM) |
+| Docker containers | ~74 (one postgres + one redis per context) | **3** (1 postgres, 1 redis, 1 storage per JVM) |
 | Distinct context cache keys (offline analysis) | 39 | **20** |
 | Contexts actually built (`missCount`) | not instrumented | **34** |
 | Contexts serving exactly one class | 24 | 12 |
@@ -174,7 +174,7 @@ The 20 configurations, each deliberate:
 |---|---|---|
 | `AbstractIntegrationTest` | 81 | The default. Anything that needs no special collaborator. |
 | `BaseVideoIT` / `BaseSessionIT` (+ `VideoProviderAdapter`) | 16 | Video/session families mock the outbound video adapter. |
-| `BaseStorageIT` (+ `MinioTestConfig`) | 7 | The only family that starts MinIO. |
+| `BaseStorageIT` (+ `StorageTestConfig`) | 7 | The only family that starts the storage container. |
 | `FileStorageService` mocked | 4 | Classes that must *not* hit real blob storage. |
 | `+ QuotaService` | 3 | Quota-mocking video classes. |
 | `E2ESecurityConfig` | 2 | `ConfigResourceIT`, `StorageResourceIT`. |
