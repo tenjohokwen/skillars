@@ -45,10 +45,10 @@ class StorageMigrationServiceIT extends BaseStorageIT {
 
     static final String DEST_BUCKET = "test-dest";
 
-    // quay.io/minio/minio now 401s for anonymous pulls (see SharedContainers.MINIO_IMAGE's
+    // quay.io/minio/minio now 401s for anonymous pulls (see SharedContainers.STORAGE_IMAGE's
     // javadoc); this second, independent "destination" store -- used to prove cross-store
     // migration, not just single-store CRUD -- moved to SeaweedFS alongside the shared one.
-    static final SeaweedFsS3Container destinationMinio =
+    static final SeaweedFsS3Container destinationStorage =
         new SeaweedFsS3Container(DockerImageName.parse("chrislusf/seaweedfs:3.97"));
 
     static StorageService destinationService;
@@ -70,12 +70,12 @@ class StorageMigrationServiceIT extends BaseStorageIT {
 
     @BeforeAll
     static void setUpDestination() {
-        destinationMinio.start();
+        destinationStorage.start();
 
         S3Client destS3Client = S3Client.builder()
-            .endpointOverride(URI.create(destinationMinio.getS3URL()))
+            .endpointOverride(URI.create(destinationStorage.getS3URL()))
             .credentialsProvider(StaticCredentialsProvider.create(
-                AwsBasicCredentials.create(destinationMinio.getUserName(), destinationMinio.getPassword())))
+                AwsBasicCredentials.create(destinationStorage.getUserName(), destinationStorage.getPassword())))
             .region(Region.of("us-east-1"))
             .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build())
             .build();
@@ -87,9 +87,9 @@ class StorageMigrationServiceIT extends BaseStorageIT {
         }
 
         S3AsyncClient destAsyncClient = S3AsyncClient.builder()
-            .endpointOverride(URI.create(destinationMinio.getS3URL()))
+            .endpointOverride(URI.create(destinationStorage.getS3URL()))
             .credentialsProvider(StaticCredentialsProvider.create(
-                AwsBasicCredentials.create(destinationMinio.getUserName(), destinationMinio.getPassword())))
+                AwsBasicCredentials.create(destinationStorage.getUserName(), destinationStorage.getPassword())))
             .region(Region.of("us-east-1"))
             .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build())
             .build();
@@ -97,11 +97,11 @@ class StorageMigrationServiceIT extends BaseStorageIT {
 
         BlobstoreProperties destProperties = new BlobstoreProperties();
         destProperties.setBucket(DEST_BUCKET);
-        destProperties.setEndpointUrl(destinationMinio.getS3URL());
+        destProperties.setEndpointUrl(destinationStorage.getS3URL());
         BlobstoreProperties.S3 s3Props = new BlobstoreProperties.S3();
         s3Props.setPathStyleAccess(true);
-        s3Props.setAccessKey(destinationMinio.getUserName());
-        s3Props.setSecretKey(destinationMinio.getPassword());
+        s3Props.setAccessKey(destinationStorage.getUserName());
+        s3Props.setSecretKey(destinationStorage.getPassword());
         destProperties.setS3(s3Props);
 
         destinationService = new S3StorageService(destS3Client, destTransferManager,
@@ -110,7 +110,7 @@ class StorageMigrationServiceIT extends BaseStorageIT {
 
     @AfterAll
     static void tearDownDestination() {
-        destinationMinio.stop();
+        destinationStorage.stop();
     }
 
     @BeforeEach

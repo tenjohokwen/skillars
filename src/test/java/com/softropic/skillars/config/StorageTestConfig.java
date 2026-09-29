@@ -11,13 +11,15 @@ import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
 
 /**
  * S3-compatible object-storage container (SeaweedFS — see {@link SeaweedFsS3Container} and
- * {@link SharedContainers#MINIO_IMAGE}) for the storage IT family only — deliberately kept out of
- * {@link TestConfig} so tests that never touch blob storage don't pay for a container and
- * bucket-creation on every context startup. Class/bean names kept as "Minio" to minimize the diff
- * from when this genuinely was MinIO; see the Javadoc referenced above for why it no longer is.
+ * {@link SharedContainers#STORAGE_IMAGE}) for the storage IT family only — deliberately kept out
+ * of {@link TestConfig} so tests that never touch blob storage don't pay for a container and
+ * bucket-creation on every context startup. Named {@code MinioTestConfig} until 2026-09-28, kept
+ * that way briefly after the SeaweedFS migration to minimize the diff, then renamed once it was
+ * clear "Minio" would only confuse a future reader — see {@link SharedContainers#STORAGE_IMAGE}'s
+ * Javadoc for why it no longer is.
  */
 @TestConfiguration(proxyBeanMethods = false)
-public class MinioTestConfig {
+public class StorageTestConfig {
 
     static final String TEST_BUCKET = "test-storage";
 
@@ -27,18 +29,18 @@ public class MinioTestConfig {
      * closed. The container now lives in SharedContainers for the life of the JVM; only this
      * registrar (which is not Startable) remains in the context.
      *
-     * SharedContainers.Minio is a lazy holder, so importing this class is still what decides
+     * SharedContainers.Storage is a lazy holder, so importing this class is still what decides
      * whether a JVM pays for this container at all -- the property this class's javadoc describes
      * is preserved.
      */
     @Bean
-    DynamicPropertyRegistrar minioPropertyRegistrar() {
-        final SeaweedFsS3Container minio = SharedContainers.minio();
+    DynamicPropertyRegistrar storagePropertyRegistrar() {
+        final SeaweedFsS3Container storage = SharedContainers.storage();
         return registry -> {
-            registry.add("app.storage.endpoint-url", minio::getS3URL);
+            registry.add("app.storage.endpoint-url", storage::getS3URL);
             registry.add("app.storage.bucket", () -> TEST_BUCKET);
-            registry.add("app.storage.s3.access-key", minio::getUserName);
-            registry.add("app.storage.s3.secret-key", minio::getPassword);
+            registry.add("app.storage.s3.access-key", storage::getUserName);
+            registry.add("app.storage.s3.secret-key", storage::getPassword);
             registry.add("app.storage.s3.path-style-access", () -> "true");
         };
     }

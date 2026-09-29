@@ -2,7 +2,7 @@
 # Samples running container images while the test suite runs, then asserts the peak
 # concurrent count per image never exceeded a ceiling.
 #
-# Story deferred-19, AC1: "at most one postgres, one redis and one minio container is
+# Story deferred-19, AC1: "at most one postgres, one redis and one storage container is
 # present (plus Testcontainers' own ryuk reaper), for the entire run". That criterion is
 # not something a human should be watching a terminal for -- this is the automated form,
 # and it runs in CI as easily as locally.
@@ -14,10 +14,21 @@
 # exits non-zero if any watched image exceeded its ceiling.
 #
 # Ceilings are PER IMAGE, because one image legitimately needs two containers:
-# StorageMigrationServiceIT declares its own `destinationMinio` MinIOContainer alongside the
-# shared one, since a storage-MIGRATION test needs a source and a destination. That is not the
-# defect AC1 is about -- AC1 exists to stop container count scaling with the number of Spring
-# contexts, and a second container owned by exactly one test class does not do that.
+# StorageMigrationServiceIT declares its own `destinationStorage` SeaweedFsS3Container
+# alongside the shared one, since a storage-MIGRATION test needs a source and a
+# destination. That is not the defect AC1 is about -- AC1 exists to stop container count
+# scaling with the number of Spring contexts, and a second container owned by exactly one
+# test class does not do that.
+#
+# 2026-09-28: this matches by IMAGE, and the storage image changed from
+# quay.io/minio/minio to chrislusf/seaweedfs (2026-09-24, quay.io/minio pull-blocking
+# break) -- the old `minio` pattern below no longer matches "chrislusf/seaweedfs:3.97" at
+# all, so this guard had been silently watching zero storage containers since that
+# migration. Renaming the compose SERVICE from "minio" to "storage" the same day
+# (unrelated identifier, doesn't change the image string) made that pre-existing gap
+# obvious while auditing every "minio" reference in the repo. Matching on "seaweedfs"
+# below fixes it; matching on "storage" would NOT have, since that word never appears in
+# the image name.
 
 set -uo pipefail
 
@@ -27,7 +38,7 @@ CEILING="${3:-1}"
 
 # Images this story constrains. ryuk is Testcontainers' own reaper and is explicitly
 # excluded by AC1; it is not a per-context container.
-WATCHED_RE='postgres|redis|minio'
+WATCHED_RE='postgres|redis|seaweedfs'
 
 case "$MODE" in
   start)
@@ -59,7 +70,7 @@ case "$MODE" in
       exit 1
     fi
 
-    echo "=== peak concurrent containers by image (default ceiling: $CEILING, minio: 2) ==="
+    echo "=== peak concurrent containers by image (default ceiling: $CEILING, seaweedfs: 2) ==="
     # For each image, the maximum count observed at any single sample point.
     peaks=$(grep -v '^---$' "$SAMPLES" \
       | awk '{ if ($2 > max[$1]) max[$1] = $2 } END { for (i in max) print i, max[i] }' \
@@ -76,22 +87,22 @@ case "$MODE" in
     breached=$(echo "$peaks" | awk -v c="$CEILING" '
       {
         limit = c
-        if ($1 ~ /minio/) limit = 2   # + StorageMigrationServiceIT.destinationMinio
+        if ($1 ~ /seaweedfs/) limit = 2   # + StorageMigrationServiceIT.destinationStorage
         if ($2 > limit) print $0 "   (ceiling " limit ")"
       }')
     if [ -n "$breached" ]; then
       echo
       echo "FAIL: peak concurrent container count exceeded its per-image ceiling:" >&2
       echo "$breached" | sed 's/^/  /' >&2
-      echo "AC1 requires one postgres and one redis per test JVM (minio allows 2: the shared" >&2
-      echo "instance plus StorageMigrationServiceIT's destination). A breach means container" >&2
-      echo "lifetime has been re-bound to the Spring context -- check SharedContainers and that" >&2
-      echo "no @Bean returns a Startable." >&2
+      echo "AC1 requires one postgres and one redis per test JVM (the storage image allows 2:" >&2
+      echo "the shared instance plus StorageMigrationServiceIT's destination). A breach means" >&2
+      echo "container lifetime has been re-bound to the Spring context -- check SharedContainers" >&2
+      echo "and that no @Bean returns a Startable." >&2
       exit 1
     fi
 
     echo
-    echo "OK: every watched image is within its ceiling (default $CEILING, minio 2)."
+    echo "OK: every watched image is within its ceiling (default $CEILING, seaweedfs 2)."
     ;;
 
   *)

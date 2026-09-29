@@ -135,8 +135,10 @@ ON CONFLICT (coach_id) DO UPDATE
 -- The chk_ledger_amount_sign CHECK only permits a positive amount for
 -- BOOKING_REFUND / BOOKING_DEDUCTION_REVERSAL / CASH_OUT_REVERSAL, hence the type.
 --
--- IDEMPOTENCY WARNING: The table is append-only (V79 triggers reject UPDATE
--- and DELETE), so there is NO ON CONFLICT form here and NO way to correct a row.
+-- IDEMPOTENCY WARNING: The table is append-only (trg_ledger_no_update /
+-- trg_ledger_no_delete in V138__baseline_schema.sql reject UPDATE and DELETE;
+-- these were previously in migration V79 before the 2026-09-24 migration
+-- squash), so there is NO ON CONFLICT form here and NO way to correct a row.
 -- Re-running this file ADDS another credit row rather than replacing the previous
 -- one. If you mis-seed, you can only add more credit to offset the mistake, never
 -- delete or correct it. Be careful with email addresses.

@@ -7,7 +7,8 @@ zero calls to Stripe.
 This is the *manual testing* companion to
 [`deployment.md`](./deployment.md),
 which covers bringing the Docker stack up. Read that one for the infrastructure
-detail (volumes, MinIO, Grafana, log tailing, teardown); this one covers
+detail (volumes, the SeaweedFS-backed `storage` service, Grafana, log
+tailing, teardown); this one covers
 choosing a run mode, getting accounts through registration without a working
 mailbox, and seeding the payment state that would normally come from Stripe.
 
@@ -18,6 +19,7 @@ mailbox, and seeding the payment state that would normally come from Stripe.
 - [What you can and cannot exercise](#what-you-can-and-cannot-exercise)
 - [Stripe actually does work locally](#stripe-actually-does-work-locally)
 - [Troubleshooting](#troubleshooting)
+- [Tips](#tips)
 
 ---
 
@@ -48,7 +50,7 @@ and production actually run.
 alias dcl='docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local'
 
 docker build -t skillars:local .
-dcl up -d app postgres redis minio minio-init grafana
+dcl up -d app postgres redis storage storage-init grafana
 ```
 
 App at **http://localhost:9990**, health at **http://localhost:8367/manage/health**.
@@ -65,7 +67,7 @@ Cost: a full rebuild (Maven + npm + `quasar build`) for every source change.
 ### Mode B — infra in Docker, app and UI on the host (recommended when changing code)
 
 ```bash
-dcl up -d postgres redis minio minio-init          # + grafana if you want it
+dcl up -d postgres redis storage storage-init          # + grafana if you want it
 mvn spring-boot:run -Dspring-boot.run.profiles=dev -DskipFrontend
 cd src/frontend && npx quasar dev                  # serves :9000
 ```
@@ -87,26 +89,32 @@ These are all the variables you may need to set depending on your mode. Defaults
 | Variable | Used in | Required? | Mode A | Mode B | Purpose |
 |----------|---------|-----------|--------|--------|---------|
 | `APP_PAYMENT_STRIPE_API_KEY` | Both | Yes | Already in compose | Export before `mvn` | Placeholder to satisfy PaymentConfig validation |
-| `GMX_PASSWORD` | Both | No (with defaults) | Optional in `.env.local` | Export if real mail needed | GMX SMTP credentials for registration email |
-| `GMAIL_PASSWORD` | Both | No (with defaults) | Optional in `.env.local` | Export if real mail needed | Gmail SMTP credentials for registration email |
+| `APP_EMAIL_TRANSPORT` | Mode B only | No (with defaults) | Not settable — never allowed in a committed compose file (`NoHardcodedSenderTest`) | Not set — defaults to `smtp` (`application-dev.yaml`); export it yourself for `log` | Switch mail to file-dump (`log`, writes to `target/mails/`) instead of SMTP |
+| `GMX_PASSWORD` | Both | No (with defaults) | Defaults to a placeholder that fails SMTP auth (mail never sent) | Export if real mail needed | GMX SMTP credentials for registration email |
+| `GMAIL_PASSWORD` | Both | No (with defaults) | Defaults to a placeholder that fails SMTP auth (mail never sent) | Export if real mail needed | Gmail SMTP credentials for registration email |
 | `APP_VIDEO_BUNNY_LIBRARY_ID` | Both | Yes | Already in compose (123456) | Already in dev profile | Bunny CDN library ID |
 | `MANAGEMENT_HEALTH_MAIL_ENABLED` | Both | Yes | Already in compose | Already in dev profile | Disable Mail health check |
-| `APP_STORAGE_ENDPOINT_URL` | Mode A | Yes | Already in compose | N/A | MinIO endpoint for file uploads |
-| `APP_STORAGE_S3_ACCESS_KEY` | Both | Yes | Already in compose | Already in dev profile | MinIO access key |
-| `APP_STORAGE_S3_SECRET_KEY` | Both | Yes | Already in compose | Already in dev profile | MinIO secret key |
+| `APP_STORAGE_ENDPOINT_URL` | Mode A | Yes | Already in compose | N/A | SeaweedFS (S3-compatible) endpoint for file uploads |
+| `APP_STORAGE_S3_ACCESS_KEY` | Both | Yes | Already in compose | Already in dev profile | SeaweedFS access key |
+| `APP_STORAGE_S3_SECRET_KEY` | Both | Yes | Already in compose | Already in dev profile | SeaweedFS secret key |
+| `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | Both | Yes | Already in compose | Already in dev profile | Placeholder so `BunnyVideoProviderAdapter` doesn't abort on a blank secret |
+| `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | Both | Yes | Already in compose | Already in dev profile | Placeholder for signed video playback URLs |
+| `PLATFORM_PIN_ENCRYPTION_SECRET` | Both | Yes | Already in compose | Already in dev profile | Encrypts stored PINs |
+| `PLATFORM_REGISTRATION_VERIFICATION_SECRET` | Both | Yes | Already in compose | Already in dev profile | Signs registration verification tokens |
+| `APP_SES_FROM_ADDRESS` | Both | No (with default) | Already in compose | Already in dev profile | From-address; unused while `app.email.transport=smtp`/`log` |
 | `GEMINI_API_KEY` | Both | No | Already in compose (dev-key) | Already in dev profile | For AI features |
-| `127.0.0.1 minio` | Both | Yes | Add to `/etc/hosts` | Add to `/etc/hosts` | Required for browser to reach MinIO presigned URLs |
+| `127.0.0.1 storage` | Both | Yes | Add to `/etc/hosts` | Add to `/etc/hosts` | Required for browser to reach SeaweedFS presigned URLs (see `deployment.md`) |
 
 **Mode A quick setup:**
 ```bash
-echo "127.0.0.1 minio" | sudo tee -a /etc/hosts
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d app postgres redis minio minio-init
+echo "127.0.0.1 storage" | sudo tee -a /etc/hosts
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d app postgres redis storage storage-init
 ```
 
 **Mode B quick setup:**
 ```bash
-echo "127.0.0.1 minio" | sudo tee -a /etc/hosts
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres redis minio minio-init
+echo "127.0.0.1 storage" | sudo tee -a /etc/hosts
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres redis storage storage-init
 export APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder
 mvn spring-boot:run -Dspring-boot.run.profiles=dev -DskipFrontend
 cd src/frontend && npx quasar dev
@@ -116,12 +124,15 @@ cd src/frontend && npx quasar dev
 
 ## Startup blockers not covered by the deployment guide
 
-[`deployment.md`](./deployment.md) was last updated 2026-09-14. Several
-things have changed since. Running it surfaced three separate hard crash loops,
-which surfaced one at a time in the order below. Two of them were real bugs
-affecting production as much as local, and have been fixed in the code; only the
-first still needs an environment variable, and `docker-compose.local.yml` already
-carries it. If you are running Mode B, export it yourself.
+[`deployment.md`](./deployment.md) was last updated 2026-09-28. Running the
+stack from scratch previously surfaced three separate hard crash loops, listed
+below in the order they appeared historically. Two were real bugs affecting
+production as much as local, and have been fixed in the code. The first
+(Stripe) is no longer something you need to add yourself — the checked-in
+`docker-compose.local.yml` already carries the placeholder, and
+`deployment.md`'s Step 3 now shows it — but the underlying validation is worth
+understanding if you ever see the error below in Mode B or after editing the
+override.
 
 ### 1. The app will not start without a Stripe API key
 
@@ -132,18 +143,22 @@ carries it. If you are running Mode B, export it yourself.
 app.payment.stripe.api-key is missing or empty. Stripe integration requires a valid API key.
 ```
 
-It defaults to `""` in `application.yaml`, `application-dev.yaml` does not
-override it, and neither `docker-compose.yml` nor `docker-compose.local.yml`
-passes it. This fail-fast landed in `82a89a9` (2026-08-27), *after* the
-deployment guide was last touched, so the guide's startup steps are incomplete.
+It defaults to `""` in `application.yaml` and `application-dev.yaml` does not
+override it. `docker-compose.yml` has passed `APP_PAYMENT_STRIPE_API_KEY`
+through (with an empty default) since 2026-09-02, but that alone doesn't help
+locally — nothing sets the variable in your shell — so `docker-compose.local.yml`
+supplies a literal placeholder value directly. This fail-fast landed in
+`82a89a9` (2026-08-27).
 
-Add a placeholder to `docker-compose.local.yml` under `app.environment`:
+If you're following `deployment.md`'s Step 3 override as shown, this is
+already handled:
 
 ```yaml
       - APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder
 ```
 
-or, in Mode B, export `APP_PAYMENT_STRIPE_API_KEY` before `mvn spring-boot:run`.
+In Mode B, export `APP_PAYMENT_STRIPE_API_KEY` yourself before `mvn spring-boot:run`,
+since that mode never reads `docker-compose.local.yml`.
 
 The value is never used by anything in this guide. The adjacent guard in the
 same method only rejects keys matching `^(sk|rk)_live_`, so any test-shaped
@@ -211,8 +226,14 @@ runtime in every environment, with all tests still passing. Both are fixed:
 
 - `APP_VIDEO_BUNNY_LIBRARY_ID=123456` and `MANAGEMENT_HEALTH_MAIL_ENABLED=false`
   in `app.environment` — both fix real startup/health failures.
-- `127.0.0.1 minio` in `/etc/hosts`, or browser-side presigned uploads (coach
-  profile photos, drill videos) cannot resolve the upload host.
+- `127.0.0.1 storage` in `/etc/hosts`, or browser-side presigned uploads (coach
+  profile photos, drill videos) cannot resolve the upload host — see
+  `deployment.md`'s [Step 3](./deployment.md#step-3-the-local-compose-override)
+  for why.
+- The full current list of `app.environment` entries (storage keys, video
+  signing secrets, PIN/registration secrets) lives in `deployment.md`'s Step 3
+  and in the checked-in `docker-compose.local.yml` itself — this list only
+  covers the ones with a distinct startup-failure story worth telling.
 
 ### 5. Do NOT seed the JWT secret under the `dev` profile
 
@@ -228,11 +249,17 @@ ERROR: duplicate key value violates unique constraint "sec_version_bus_id_key"
 (`JWT secret bootstrap created a new active JWT signing secret`). Only seed it by
 hand on a profile that does not have that runner enabled.
 
-Skip `initTestData.sql` too — its `main.authority` inserts carry no `ON CONFLICT`
-clause, while migrations `V21` and `V92` seed those same role names with
-`ON CONFLICT (name) DO NOTHING`, so the fixture hits the unique constraint on
-`authority.name`. Every role the registration flows need is already seeded by
-Flyway.
+Skip `initTestData.sql` too. Its `main.authority` insert was since patched
+with `ON CONFLICT (name) DO NOTHING`, so it no longer collides with the role
+rows Flyway seeds (previously cited as migrations `V21`/`V92`; the whole
+migration history was squashed on 2026-09-24 by `skillars-deferred-112` into
+`V138__baseline_schema.sql` + `V139__baseline_seed_data.sql`, which now seed
+those roles). It still fails under `dev`, though — its very first statement,
+`INSERT INTO main.sec` (`src/test/resources/sql/initTestData.sql:11`), has no
+`ON CONFLICT` at all, and `JwtSecretBootstrapRunner` has already written that
+row by the time you'd run this, so it hits the same `sec_version_bus_id_key`
+unique-constraint error described above for `secData.sql`. Every role the
+registration flows need is already seeded by Flyway.
 
 ### 6. Fixed: access logs, previously broken everywhere
 
@@ -271,28 +298,36 @@ Register through the UI like a real user. Two things worth understanding as
 you do — neither is really a difference from production any more, just a
 local wrinkle:
 
-**Real email delivery depends on real SMTP credentials.** Since `ses-1.2`,
+**No real mail arrives locally by default, in either mode.**
 `application-dev.yaml` sets `app.email.transport: smtp` — the same kind of
-real delivery path production uses (production instead runs `ses`; both have
-delivered real mail since their respective stories, neither is suppressed).
-Registration/verification/OTP mail is included since `ses-1.4`, which routed
-those templates through this same switch. But `application-dev.yaml` also
-defaults `GMX_PASSWORD`/`GMAIL_PASSWORD` to literal placeholder strings
-(`dev_gmx_password`/`dev_gmail_password`) whenever the real env vars aren't
-set, and `docker-compose.local.yml` restates the same placeholder defaults —
-with those in place, the send fails SMTP authentication server-side (the
-envelope is recorded `FAILED`, then retried and eventually exhausted; nothing
-reaches an inbox). Set real `GMX_PASSWORD`/`GMAIL_PASSWORD` values — in
-`.env.local` for Mode A, or exported in your shell before `mvn spring-boot:run`
-for Mode B — to actually receive mail.
+real delivery path production uses (production instead runs `ses`) — and this
+applies to Mode A and Mode B alike: the env var that switches transport to
+`log` (file-dump) is deliberately never allowed to appear in a committed
+compose file (`NoHardcodedSenderTest` enforces this — see
+`requirements/ses-email-consolidation.md#4.5`), so Mode A cannot override it
+that way. `application-dev.yaml` also defaults `GMX_PASSWORD`/`GMAIL_PASSWORD`
+to literal placeholder strings (`dev_gmx_password`/`dev_gmail_password`)
+whenever the real env vars aren't set, and with those in place the send fails
+SMTP authentication server-side (the envelope is recorded `FAILED`, then
+retried and eventually exhausted; nothing reaches an inbox). In Mode B you can
+still get the file-dump behavior for yourself, uncommitted, by exporting that
+transport override before `mvn spring-boot:run` (it lands in your own
+`target/mails/`) — or set real `GMX_PASSWORD`/`GMAIL_PASSWORD` in either mode
+to actually receive mail.
 
 The verification token is always written to the database regardless of
 whether the email send itself succeeds, so pulling it from there (see "Fetch
 the token" below) remains a valid — often faster — alternative that works
-either way.
+either way. **The OTP is different: it is not recoverable from the database at
+all.** `phone_otp_tokens.otp_hash` stores `SHA-256(otp + userId)`
+(`CoachRegistrationService.hashOtp` and its parent/player counterparts), a
+one-way hash, so `target/mails/` (or a real inbox) is the only way to read an
+OTP short of brute-forcing the hash. In practice you can usually skip this —
+see "Phone OTP is already disabled" below.
 
-**Phone OTP is already disabled.** Migration `V85` seeds
-`security.registration.phone-otp-required=false`. `AuthService.login` only
+**Phone OTP is already disabled.** `V139__baseline_seed_data.sql:146` seeds
+`security.registration.phone-otp-required=false` (previously cited as
+migration `V85`, before the 2026-09-24 migration squash). `AuthService.login` only
 demands `BASIC_VERIFIED` when that flag is true, and `activated = true` is set at
 *email* verification (`ParentRegistrationService:141` and its coach/player
 counterparts). Email verification alone is enough to log in — you can ignore the
@@ -409,10 +444,12 @@ lifecycle run end-to-end, locally, with Stripe uninvolved.
 
 Two constraints shape how the seed is written. `chk_ledger_amount_sign` permits a
 positive amount only for `BOOKING_REFUND`, `BOOKING_DEDUCTION_REVERSAL` and
-`CASH_OUT_REVERSAL`, so the seed uses `BOOKING_REFUND`. And `V79` installed
-triggers that reject `UPDATE` and `DELETE` on the table — it is append-only, so
-re-running the seed **adds** credit rather than resetting it, and a mistake can
-only be offset by another row, never corrected.
+`CASH_OUT_REVERSAL`, so the seed uses `BOOKING_REFUND`. And triggers
+`trg_ledger_no_update`/`trg_ledger_no_delete` (`V138__baseline_schema.sql`,
+previously cited as migration `V79` before the 2026-09-24 migration squash)
+reject `UPDATE` and `DELETE` on the table — it is append-only, so re-running
+the seed **adds** credit rather than resetting it, and a mistake can only be
+offset by another row, never corrected.
 
 ### Coach feature tier
 
@@ -455,7 +492,7 @@ coach profile builder and publishing, marketplace search and public profiles,
 availability management, booking request → accept/decline → payment settlement →
 session completion, cancellation and reschedule, credit wallet and statements,
 reviews, messaging, homework, drill library and session builder, video upload
-(MinIO), skills radar and development portal, performance reports, parent and
+(SeaweedFS, via the `storage` service), skills radar and development portal, performance reports, parent and
 player dashboards, admin health dashboard.
 
 **Cannot be exercised without Stripe:** card entry and `SetupIntent`, Connect
@@ -503,7 +540,7 @@ Run through this to confirm your local environment is ready:
 - [ ] **Infrastructure up:**
   ```bash
   docker compose -f docker-compose.yml -f docker-compose.local.yml ps
-  # Should show postgres, redis, minio, and (Mode A) app all with status "running"
+  # Should show postgres, redis, storage, and (Mode A) app all with status "running"
   ```
 
 - [ ] **App health:**
@@ -590,12 +627,38 @@ existing row cannot be repaired, since payment already recorded a failure).
 there is no `marketplace.coach_profiles` row in a usable state. Finish the
 profile builder first.
 
-**Registration succeeds but no verification link** — dev delivers real SMTP
-mail (see "Creating the accounts" above), so first check `GMX_PASSWORD`/
-`GMAIL_PASSWORD` are set to real credentials rather than the placeholder
-defaults; with placeholders, the send fails SMTP auth and no email arrives.
-Either way, query `main.email_verification_tokens` as shown above — the token
-is written regardless of whether the email send itself succeeds.
+**Registration succeeds but no verification link** — see "Creating the
+accounts" above. Both modes run the `smtp` transport by default, so check
+`GMX_PASSWORD`/`GMAIL_PASSWORD` are set to real credentials rather than the
+placeholder defaults; with placeholders, the send fails SMTP auth and no
+email arrives. Query `main.email_verification_tokens` as shown above instead
+— the token is written regardless of whether the email send itself succeeds.
+This does **not** work for the OTP email, though — its code is only ever
+stored as a hash in the database, so a real inbox (or, in Mode B only,
+exporting the `log`-transport override before `mvn spring-boot:run` to dump
+it to `target/mails/`) is the only place to read it.
 
 **Login returns "Account is not activated"** — email verification has not been
 completed. `activated` flips at email verification, not at registration.
+
+---
+
+## Tips
+
+**Database data survives container restarts.** `docker-compose.local.yml`
+overrides the base file's production bind-mount
+(`/opt/skillars/data/postgres`) with a named Docker volume —
+`skillars-local-postgres:/var/lib/postgresql/data` — declared under that
+file's own `volumes:` section. Named volumes are independent of container
+lifecycle:
+
+- `docker compose stop`/`restart`, or even `docker compose down` (without
+  `-v`) — data survives.
+- `docker compose down -v` (or `docker volume rm skillars-local-postgres`) —
+  data is wiped.
+- A full rebuild (`docker compose build` / `up --build`) — data survives,
+  since the volume isn't part of the image.
+
+The same pattern applies to redis, loki, tempo, prometheus, grafana, and the
+SeaweedFS `storage` service in that file — each has its own
+`skillars-local-*` named volume.

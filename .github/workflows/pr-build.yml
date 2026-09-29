@@ -40,9 +40,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-      # AC1: assert at most one postgres, one redis and one minio container is alive at any
-      # instant. The containers are JVM-static (SharedContainers), so any breach means
-      # something has re-bound their lifetime to the Spring context.
+      # AC1: assert at most one postgres, one redis and one storage (SeaweedFS) container is
+      # alive at any instant. The containers are JVM-static (SharedContainers), so any breach
+      # means something has re-bound their lifetime to the Spring context.
       - name: Start container sampler
         run: .github/scripts/container-sampler.sh start /tmp/container-samples.txt
 

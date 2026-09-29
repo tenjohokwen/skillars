@@ -35,15 +35,16 @@ services:
       # gap not fixed here).
       - PLATFORM_PIN_ENCRYPTION_SECRET=${PLATFORM_PIN_ENCRYPTION_SECRET}
       - PLATFORM_REGISTRATION_VERIFICATION_SECRET=${PLATFORM_REGISTRATION_VERIFICATION_SECRET}
-      # MinIO stands in for the real S3 API — see the `minio` service below. Both the app
-      # container and real browsers (for presigned upload/download URLs) need to resolve
-      # the *same* host, since S3Presigner bakes app.storage.endpoint-url straight into
-      # every presigned URL — so this points at the public STORAGE_DOMAIN (routed to the
-      # minio service via Traefik below), not the internal `minio:9500` compose DNS name.
+      # This SeaweedFS-backed storage service stands in for the real S3 API — see the
+      # `storage` service below. Both the app container and real browsers (for presigned
+      # upload/download URLs) need to resolve the *same* host, since S3Presigner bakes
+      # app.storage.endpoint-url straight into every presigned URL — so this points at the
+      # public STORAGE_DOMAIN (routed to the storage service via Traefik below), not the
+      # internal `storage:9500` compose DNS name.
       - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET}
       - APP_STORAGE_ENDPOINT_URL=https://${STORAGE_DOMAIN}
-      - APP_STORAGE_S3_ACCESS_KEY=${MINIO_ROOT_USER}
-      - APP_STORAGE_S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - APP_STORAGE_S3_ACCESS_KEY=${STORAGE_ROOT_USER}
+      - APP_STORAGE_S3_SECRET_KEY=${STORAGE_ROOT_PASSWORD}
       # First-admin bootstrap (AdminBootstrapRunner). No migration seeds an admin USER and there
       # is no admin registration endpoint, so without this the admin account type simply cannot
       # exist — see uat-deployment.md Step 8.
@@ -76,7 +77,7 @@ services:
       - GMAIL_PASSWORD=${GMAIL_PASSWORD:-}
       - GMX_PASSWORD=${GMX_PASSWORD:-}
     depends_on:
-      minio:
+      storage:
         condition: service_healthy
 
   # LGTM (Loki/Grafana/Tempo/Prometheus) is NOT trimmed for UAT, unlike
@@ -86,42 +87,53 @@ services:
   # stack the same way a plain production deploy does. Nothing to configure here.
 
   # Stands in for the real S3 API so UAT doesn't need AWS credentials. Publicly reachable
-  # (unlike local dev's MinIO, which only needs to work for your own machine) because
-  # S3Presigner bakes app.storage.endpoint-url directly into every presigned URL it
+  # (unlike local dev's storage service, which only needs to work for your own machine)
+  # because S3Presigner bakes app.storage.endpoint-url directly into every presigned URL it
   # generates — a browser anywhere on the internet needs to be able to resolve and reach
   # whatever host that is, the same way it would need to reach real S3. Routed through
   # Traefik on its own domain (STORAGE_DOMAIN) with its own Let's Encrypt certificate, the
   # same pattern already used for MONITORING_DOMAIN/grafana below.
   #
-  # As of 2026-09-24 this runs SeaweedFS, not MinIO — quay.io/minio/minio (both this pinned
-  # tag and :latest) now 401s on anonymous pulls, confirmed via direct `docker pull`; a
-  # widely-reported break, not something specific to this project. Service/volume/label names
-  # kept as "minio" to minimize the diff; see SharedContainers.MINIO_IMAGE's javadoc
+  # Runs SeaweedFS, not MinIO — as of 2026-09-24, quay.io/minio/minio (both this pinned tag
+  # and :latest) 401s on anonymous pulls, confirmed via direct `docker pull`; a
+  # widely-reported break, not something specific to this project. See
+  # SharedContainers.STORAGE_IMAGE's javadoc
   # (src/test/java/com/softropic/skillars/config/SharedContainers.java) for the full story.
+  # Service/volume/label/env-var names were briefly kept as "minio" right after that
+  # migration to minimize the diff, then renamed to "storage" on 2026-09-28 — nothing here
+  # has been MinIO for a while, and that name would only confuse a future reader.
+  #
+  # IMPORTANT — this rename touches real UAT secrets: `.env.uat` on the server MUST have
+  # MINIO_ROOT_USER/MINIO_ROOT_PASSWORD renamed to STORAGE_ROOT_USER/STORAGE_ROOT_PASSWORD
+  # (same values, just the key names) BEFORE the next deploy of this file, or the two
+  # `${STORAGE_ROOT_USER}`/`${STORAGE_ROOT_PASSWORD}` interpolations below resolve blank —
+  # Compose only warns ("variable not set, defaulting to blank string"), it does not fail —
+  # and the storage container starts with empty S3 credentials. See uat-deployment.md.
+  #
   # SeaweedFS has no env-var-driven credential path worth trusting (seaweedfs/seaweedfs#7311,
-  # a live upstream reliability issue), so the entrypoint below writes MINIO_ROOT_USER/
-  # MINIO_ROOT_PASSWORD into an S3 identity config file at container start instead — keeps
+  # a live upstream reliability issue), so the entrypoint below writes STORAGE_ROOT_USER/
+  # STORAGE_ROOT_PASSWORD into an S3 identity config file at container start instead — keeps
   # this file's existing "credentials come from .env.uat" contract intact.
-  minio:
+  storage:
     image: chrislusf/seaweedfs:3.97
     entrypoint: >
       /bin/sh -c "
       mkdir -p /etc/seaweedfs &&
-      printf '{\"identities\":[{\"name\":\"uat\",\"credentials\":[{\"accessKey\":\"%s\",\"secretKey\":\"%s\"}],\"actions\":[\"Admin\",\"Read\",\"Write\",\"List\",\"Tagging\"]}]}' \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" > /etc/seaweedfs/s3.json &&
+      printf '{\"identities\":[{\"name\":\"uat\",\"credentials\":[{\"accessKey\":\"%s\",\"secretKey\":\"%s\"}],\"actions\":[\"Admin\",\"Read\",\"Write\",\"List\",\"Tagging\"]}]}' \"$$STORAGE_ROOT_USER\" \"$$STORAGE_ROOT_PASSWORD\" > /etc/seaweedfs/s3.json &&
       exec weed server -s3 -dir=/data -ip.bind=0.0.0.0 -s3.port=9500 -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=1024
       "
     environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - STORAGE_ROOT_USER=${STORAGE_ROOT_USER}
+      - STORAGE_ROOT_PASSWORD=${STORAGE_ROOT_PASSWORD}
     volumes:
-      - skillars-uat-minio:/data
+      - skillars-uat-storage:/data
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.minio.rule=Host(`${STORAGE_DOMAIN}`)"
-      - "traefik.http.routers.minio.entrypoints=websecure"
-      - "traefik.http.routers.minio.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.minio.service=minio-svc"
-      - "traefik.http.services.minio-svc.loadbalancer.server.port=9500"
+      - "traefik.http.routers.storage.rule=Host(`${STORAGE_DOMAIN}`)"
+      - "traefik.http.routers.storage.entrypoints=websecure"
+      - "traefik.http.routers.storage.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.storage.service=storage-svc"
+      - "traefik.http.services.storage-svc.loadbalancer.server.port=9500"
     healthcheck:
       # No `mc`-equivalent ships in this image; a plain TCP probe on the S3 port is enough
       # to gate `depends_on: condition: service_healthy` below.
@@ -135,25 +147,25 @@ services:
     restart: unless-stopped
 
   # One-shot: creates the UAT bucket on every startup (no-op if it already exists).
-  # amazon/aws-cli replaces quay.io/minio/mc here — same reasoning as the `minio` service
+  # amazon/aws-cli replaces quay.io/minio/mc here — same reasoning as the `storage` service
   # above (mc's own image is under the same now-blocked quay.io/minio/* namespace), and aws-cli
   # is a generic S3 client so it works against SeaweedFS's S3 gateway unmodified.
-  minio-init:
+  storage-init:
     image: amazon/aws-cli:2.31.13
     depends_on:
-      minio:
+      storage:
         condition: service_healthy
     environment:
-      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+      - AWS_ACCESS_KEY_ID=${STORAGE_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${STORAGE_ROOT_PASSWORD}
       - AWS_DEFAULT_REGION=us-east-1
       - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET}
     entrypoint: >
       /bin/sh -c "
-      aws --endpoint-url http://minio:9500 s3 mb s3://$$APP_STORAGE_BUCKET || true
+      aws --endpoint-url http://storage:9500 s3 mb s3://$$APP_STORAGE_BUCKET || true
       "
     networks:
       - skillars-internal
 
 volumes:
-  skillars-uat-minio:
+  skillars-uat-storage:
