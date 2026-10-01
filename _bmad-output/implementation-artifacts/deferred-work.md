@@ -3407,3 +3407,67 @@ does — silently discarding `application-test.yaml`'s own already-tuned `maximu
 `@ConfigurationProperties`, `TestConfig.gdprErasureHikariConfig()` reads `minimumIdle=0` plus
 `auto-commit`/`connection-init-sql`/`idle-timeout` from the same yaml keys. Verified:
 `GdprErasureDataSourceRoutingIT` 2/2 passing, PR #231's `build` check passed on the next run.]**
+
+## Deferred from: manual testing of coach profile-builder (2026-10-01)
+
+**[TOP PRIORITY — explicit user instruction (2026-10-01): give this item top priority over other
+open work in this file when next picking a story.]**
+
+- **D1 — "My Profile" has no editable surface for any profile-builder field; a coach who skips a
+  step (e.g. the photo) during onboarding has no way back in.** Found manually testing: a coach
+  completed profile-builder without uploading a photo, then had no route to add one afterward.
+  `ProfilePage.vue` (`src/frontend/src/pages/ProfilePage.vue`) — the only page routed as "My
+  Profile" for every role — is strictly role-agnostic account settings: email, password, 2FA,
+  name/nationalId/gender/langKey, phone, address (via `UpdateEmailDialog`/`UpdatePasswordDialog`/
+  `UpdatePhoneDialog`/`UpdateAddressDialog`/`UpdateInfoDialog`/`Toggle2faDialog`,
+  `src/frontend/src/components/profile/`). None of the fields collected by either profile-builder
+  flow are exposed here, in either direction (view or edit) — confirmed by reading the full file,
+  not inferred.
+  - **Coach fields with no post-onboarding edit path at all** (collected across
+    `ProfileBuilderStep1-5.vue`, orchestrated by `CoachProfileBuilderPlaceholderPage.vue`):
+    display name, bio, city, district, languages, timezone (Step1); specialties, age groups
+    (Step2); per-session price, session duration, session packs — sessions/price/label, add/remove
+    (Step3); availability windows — day/start/end, add/remove, timezone (Step4); profile photo —
+    upload only, no replace/delete anywhere (Step5, `signUpload`/`confirmUpload` via
+    `src/frontend/src/api/marketplace.api.js`, backend `CoachProfileService`/`StorageResource`).
+  - **Player fields with no post-onboarding edit path:** position (single select,
+    `PlayerProfileBuilderPage.vue` — a much smaller gap than coach's, by field count).
+  - **Parent:** profile-builder-equivalent (`CreatePlayerProfilePage.vue`,
+    `parent/create-player`) creates a CHILD player's profile, not the parent's own — out of scope
+    for "parent's own profile" by construction; no separate parent-specific field set was found.
+  - **Ask (user's own words):** "My Profile" should let a user upload, edit, or delete any field
+    from their profile-completion flow, with the field set depending on role — i.e. role-gated
+    sections added to (or a role-aware extension of) `ProfilePage.vue`.
+  - **Backend verified (reading, not assumed) — the news is good: this is mostly a FRONTEND gap.**
+    `ProfileBuilderResource`'s five `@PutMapping("/steps/{n}")` endpoints
+    (`/api/marketplace/coaches/me/profile/steps/1-5`, backed by `CoachProfileService.saveStep1-5`)
+    are idempotent update endpoints, not one-time create calls, and none of them re-gate on the
+    profile's `CoachProfileStatus` — `requireDraftStatus` is only ever called from
+    `publishProfile`. Calling any `saveStepN` again post-publish (`ACTIVE` status) does NOT revert
+    the profile to `DRAFT` (verified: `saveStep1`'s `status=DRAFT` write only happens in the
+    `orElseGet` branch, i.e. only when no profile row exists yet at all) and does NOT get rejected
+    by the `stepOutOfOrder` guards on steps 2-5 (each checks "does the PRIOR step's data already
+    exist", which is trivially true for an already-published coach). Concretely, this means:
+    - Step1 (name/bio/city/district/languages/timezone), Step2 (specialties/age groups — full
+      replace via `deleteByCoachId` + re-insert), Step3 (price/duration/session packs — same
+      replace-all pattern, so removing ONE pack is just resubmitting the list without it) and Step4
+      (availability windows — same replace-all pattern) can almost certainly be wired into "My
+      Profile" AS-IS, re-using the exact request/response contracts `ProfileBuilderStep1-4.vue`
+      already build, with no new backend work. Not actually tried end-to-end — confirm with a real
+      request before committing to zero backend work — but nothing in the code says otherwise.
+    - **Step5 (photo) is the one genuine gap, and it's exactly the reported bug:** `saveStep5` only
+      ever SETS `photoUrl` when `req.photoUrl() != null` (line ~290) — there is no code path that
+      clears it, so "upload a photo later" (the reported case) reuses the existing endpoint fine,
+      but "delete my photo" has no server-side support at all today and needs a real backend change
+      (either accept an explicit null/clear signal `saveStep5` currently can't distinguish from
+      "field omitted", or a dedicated delete endpoint alongside it). Replacing an existing photo is
+      presumably fine (same upload-then-`saveStep5` call), not separately verified.
+  - **Player (position) and parent:** not inventoried to the same depth — whatever endpoint
+    `PlayerProfileBuilderPage.vue`'s step submission uses should get the same idempotency check
+    before assuming it's reusable as-is.
+  - **Explicitly out of scope per the exploratory discussion that produced this entry:** no
+    implementation was attempted beyond this investigation; this is scoping only. The next story
+    should (1) confirm the above by actually calling `saveStep1-4` against an already-ACTIVE test
+    coach rather than trusting the static-read analysis, (2) design the photo-delete path, (3)
+    design the role-gated "My Profile" UI itself (new sections vs. a separate tab/page — not
+    decided here), (4) do the equivalent endpoint-reuse check for player/parent fields.

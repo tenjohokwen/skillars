@@ -56,7 +56,13 @@ export const useAuthStore = defineStore('auth', () => {
 
   /**
    * Hydrate from the skp cookie (non-HttpOnly, set server-side on login/refresh).
-   * The skp cookie holds URL-encoded JSON: {"id":<Long>,"role":"COACH"}.
+   * The skp cookie holds URL-encoded JSON: {"id":"<Long>","role":"COACH"} — `id` is a QUOTED
+   * string, not a bare number. Bug found manually testing (2026-10-01): AuthService.java used to
+   * emit `id` unquoted, and a Tsid-sized id (every id in this system) silently lost precision the
+   * moment JSON.parse below touched it — authStore.userId then held a DIFFERENT number than the
+   * backend's own JWT business ID, surfacing as a 403 wherever that value was later sent back (e.g.
+   * CoachProfileBuilderPlaceholderPage.vue's photo-upload entityId). This parses fine as long as
+   * the backend keeps quoting it.
    * NOTE: the user= cookie contains only the display name (plain string) — do NOT parse it as JSON.
    */
   function dismissTimezoneNotice() {

@@ -146,7 +146,14 @@ services:
       - skillars-internal
     restart: unless-stopped
 
-  # One-shot: creates the UAT bucket on every startup (no-op if it already exists).
+  # One-shot: creates the UAT bucket on every startup (no-op if it already exists), and puts a
+  # permissive CORS policy on it. Without the CORS step, the browser's own presigned-upload flow
+  # (CoachProfileBuilder's photo upload, etc. — the browser PUTs straight to the storage domain
+  # with a presigned URL, bypassing the app entirely) 403s at the OPTIONS preflight:
+  # S3-compatible APIs (SeaweedFS included) refuse cross-origin preflights by default until a
+  # bucket CORS policy says otherwise, same as real AWS S3 — found manually testing the coach
+  # profile-builder photo upload locally (2026-10-01), then confirmed UAT's storage-init had the
+  # identical gap (no CORS step here either — presumably broken here too, not just locally).
   # amazon/aws-cli replaces quay.io/minio/mc here — same reasoning as the `storage` service
   # above (mc's own image is under the same now-blocked quay.io/minio/* namespace), and aws-cli
   # is a generic S3 client so it works against SeaweedFS's S3 gateway unmodified.
@@ -160,9 +167,15 @@ services:
       - AWS_SECRET_ACCESS_KEY=${STORAGE_ROOT_PASSWORD}
       - AWS_DEFAULT_REGION=us-east-1
       - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET}
+      # The browser's Origin header on the presigned-upload preflight is the public app domain
+      # (Traefik's app-main router, docker-compose.yml) — not STORAGE_DOMAIN, which only routes
+      # the storage service itself.
+      - DOMAIN=${DOMAIN}
     entrypoint: >
       /bin/sh -c "
-      aws --endpoint-url http://storage:9500 s3 mb s3://$$APP_STORAGE_BUCKET || true
+      aws --endpoint-url http://storage:9500 s3 mb s3://$$APP_STORAGE_BUCKET || true &&
+      printf '{\"CORSRules\":[{\"AllowedOrigins\":[\"https://%s\"],\"AllowedMethods\":[\"GET\",\"PUT\",\"POST\",\"HEAD\"],\"AllowedHeaders\":[\"*\"],\"ExposeHeaders\":[\"ETag\"],\"MaxAgeSeconds\":3000}]}' \"$$DOMAIN\" > /tmp/s3-cors.json &&
+      aws --endpoint-url http://storage:9500 s3api put-bucket-cors --bucket $$APP_STORAGE_BUCKET --cors-configuration file:///tmp/s3-cors.json
       "
     networks:
       - skillars-internal

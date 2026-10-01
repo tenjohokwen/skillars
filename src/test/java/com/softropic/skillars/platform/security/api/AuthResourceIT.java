@@ -152,6 +152,20 @@ class AuthResourceIT extends AbstractIntegrationTest {
         assertThat(setCookies).anyMatch(c -> c.startsWith("rtkn=") && c.contains("HttpOnly"));
         assertThat(setCookies).anyMatch(c -> c.startsWith("skp="));
         assertThat(setCookies).anyMatch(c -> c.startsWith("potc=") && c.contains("HttpOnly"));
+
+        // Bug found manually testing a coach photo upload (2026-10-01): `id` here used to be a bare
+        // JSON number. CommonConfig.longToStringModule() quotes every OTHER Jackson-serialized Long
+        // in this app specifically because JS cannot represent a Tsid-sized long losslessly — this
+        // cookie is hand-built JSON (AuthService.login/refresh), so it bypassed that protection.
+        // auth.store.js's hydrateFromCookie() (called on every page load) then silently corrupted
+        // authStore.userId via IEEE-754 double rounding, which 403'd wherever that value was later
+        // sent back as an owner-bound entityId (CoachProfileBuilderPlaceholderPage.vue's upload
+        // step). Asserting the literal quoted shape, not just "parses as JSON", is deliberate: a
+        // bare-number regression still parses fine, it just silently corrupts large ids.
+        String skpCookie = setCookies.stream().filter(c -> c.startsWith("skp=")).findFirst().orElseThrow();
+        String skpValue = java.net.URLDecoder.decode(
+            skpCookie.substring("skp=".length()).split(";")[0], StandardCharsets.UTF_8);
+        assertThat(skpValue).contains("\"id\":\"" + COACH_USER_ID + "\"");
     }
 
     @Test
@@ -270,6 +284,13 @@ class AuthResourceIT extends AbstractIntegrationTest {
 
         List<String> setCookies = refreshResponse.getHeaders().get("Set-Cookie");
         assertThat(setCookies).anyMatch(c -> c.startsWith("rtkn=") && c.contains("HttpOnly"));
+
+        // Same hand-built skp cookie as login (AuthService.refresh mirrors AuthService.login here)
+        // — see login_validCoachCredentials_returns200WithRoleAndSetsTokenCookies for the full bug.
+        String skpCookie = setCookies.stream().filter(c -> c.startsWith("skp=")).findFirst().orElseThrow();
+        String skpValue = java.net.URLDecoder.decode(
+            skpCookie.substring("skp=".length()).split(";")[0], StandardCharsets.UTF_8);
+        assertThat(skpValue).contains("\"id\":\"" + COACH_USER_ID + "\"");
 
         long usedCount = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM main.refresh_tokens WHERE used = true", Long.class);

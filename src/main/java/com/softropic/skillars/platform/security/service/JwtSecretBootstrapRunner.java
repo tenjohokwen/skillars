@@ -40,12 +40,14 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
  *       database can boot at all.</li>
  *   <li><strong>Enforced local-only guard (skillars-deferred-91 AC18).</strong> "MUST stay unset"
  *       used to be a javadoc promise only. Now, when the flag is {@code true}, the runner also
- *       requires {@code spring.datasource.url} to target {@code localhost} / {@code 127.0.0.1} /
- *       {@code [::1]} and throws (failing the boot) otherwise. Signal chosen: the datasource host,
- *       not a second co-located "i-understand" flag — a flag pair travels together when settings are
- *       copied between environments, a datasource pointed at a real DB does not. A misconfigured
- *       non-dev deploy that sets the flag {@code true} now fails to start instead of silently
- *       seeding a well-known signing secret.</li>
+ *       requires {@code spring.datasource.url}'s host to resolve to a loopback, link-local, or
+ *       private (RFC 1918) address and throws (failing the boot) otherwise — see
+ *       {@link #targetsLoopback(String)} for why this resolves the host rather than
+ *       string-matching it, and for the tradeoff that widening deliberately accepts. Signal
+ *       chosen: the datasource host, not a second co-located "i-understand" flag — a flag pair
+ *       travels together when settings are copied between environments, a datasource pointed at
+ *       a real DB does not. A misconfigured non-dev deploy that sets the flag {@code true} now
+ *       fails to start instead of silently seeding a well-known signing secret.</li>
  *   <li><strong>Not {@code @Profile}-gated</strong>, for the same reason as {@code AdminBootstrapRunner}
  *       — production boots with no {@code SPRING_PROFILES_ACTIVE} set at all, so a profile guard
  *       would fail-close in precisely the environments that must never enable this. The property
@@ -69,35 +71,88 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
 @Component
 public class JwtSecretBootstrapRunner implements ApplicationRunner {
 
-    /**
-     * Matches a JDBC URL whose <em>entire</em> host authority is loopback. Covers
-     * {@code jdbc:postgresql://localhost/db}, {@code //127.0.0.1:5432/db}, {@code //[::1]:5432/db}
-     * and a {@code user:pass@host} authority. Anything else — a hostname, a private IP, an RDS
-     * endpoint — is treated as non-local.
-     *
-     * <p>skillars-deferred-91 code review: this is matched with {@code matches()} against the
-     * extracted authority, not {@code find()} over the whole URL. Scanning the whole string let a
-     * pgjdbc multi-host failover URL through —
-     * {@code jdbc:postgresql://localhost:5432,prod-db.internal:5432/skillars} contains
-     * {@code //localhost:} and passed the guard while the driver could connect to production — as
-     * would any URL carrying {@code //localhost} inside a query parameter. A comma-separated host
-     * list now fails the guard because every host must be loopback for the authority to match.
-     */
-    private static final java.util.regex.Pattern LOCAL_AUTHORITY = java.util.regex.Pattern.compile(
-        "(?:[^@/]*@)?(?:localhost|127\\.0\\.0\\.1|\\[::1\\]|\\[0:0:0:0:0:0:0:1\\])(?::\\d+)?",
-        java.util.regex.Pattern.CASE_INSENSITIVE);
-
     /** Pulls the authority out of {@code …://<authority>/db?params} (everything between // and / or ?). */
     private static final java.util.regex.Pattern JDBC_AUTHORITY = java.util.regex.Pattern.compile(
         "^[^/]*//([^/?#]*)");
 
-    /** True only when the URL has an authority and that whole authority is a loopback host. */
+    /**
+     * True when the JDBC URL has a single-host authority and that host <em>resolves</em> to an
+     * address that cannot be a real, internet-routable database endpoint — loopback
+     * ({@code 127.0.0.0/8}, {@code ::1}), link-local ({@code 169.254.0.0/16}), or private RFC
+     * 1918 ({@code 10/8}, {@code 172.16/12}, {@code 192.168/16}).
+     *
+     * <p>The original implementation only string-matched the authority against the literal hosts
+     * {@code localhost}/{@code 127.0.0.1}/{@code [::1]}. That is too narrow for this project's own
+     * all-Docker local setup: {@code docker-compose.yml} always points {@code spring.datasource.url}
+     * at the literal hostname {@code postgres} (the Compose service name, identical in the local
+     * override and the base file), which never matches those literals even though it resolves to
+     * an address on the project's own private bridge network. Resolving the host and classifying
+     * the resulting address, instead of string-matching the hostname, recognizes that topology
+     * without hardcoding this project's own service names.
+     *
+     * <p><strong>Known limitation, accepted deliberately:</strong> a real production database that
+     * happens to sit on a private VPC subnet (a common, legitimate cloud topology) also resolves to
+     * an RFC 1918 address and would pass this check. This guard's primary defense is still the
+     * {@code enabled} property gate (constructor-injected, default {@code false}, {@code true} only
+     * under the {@code dev} profile) — this address check is defense-in-depth for "the flag got
+     * enabled somewhere it shouldn't have," not a guarantee against every possible
+     * misconfiguration.
+     *
+     * <p>DNS resolution failure is treated as NOT local — a guard whose entire purpose is refusing
+     * to act unless it can prove locality must not fail open just because it could not resolve the
+     * host at all.
+     *
+     * <p>skillars-deferred-91 code review: a multi-host (comma-separated, pgjdbc failover syntax)
+     * authority is still rejected outright, unchanged from the original implementation — resolving
+     * only the first host would let a real second host ride along, the exact bypass that guard
+     * closed.
+     */
     static boolean targetsLoopback(String jdbcUrl) {
-        final java.util.regex.Matcher authority = JDBC_AUTHORITY.matcher(jdbcUrl);
-        if (!authority.find()) {
+        final java.util.regex.Matcher authorityMatcher = JDBC_AUTHORITY.matcher(jdbcUrl);
+        if (!authorityMatcher.find()) {
             return false;
         }
-        return LOCAL_AUTHORITY.matcher(authority.group(1)).matches();
+        String authority = authorityMatcher.group(1);
+        int at = authority.lastIndexOf('@');
+        String hostsPart = at >= 0 ? authority.substring(at + 1) : authority;
+        if (hostsPart.isBlank() || hostsPart.contains(",")) {
+            return false;
+        }
+
+        String host = extractHost(hostsPart);
+        if (host.isBlank()) {
+            return false;
+        }
+
+        try {
+            java.net.InetAddress[] addresses = java.net.InetAddress.getAllByName(host);
+            if (addresses.length == 0) {
+                return false;
+            }
+            for (java.net.InetAddress address : addresses) {
+                if (!isNonRoutable(address)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (java.net.UnknownHostException e) {
+            return false;
+        }
+    }
+
+    /** Strips a trailing {@code :port} and, for a bracketed IPv6 literal, the brackets themselves. */
+    private static String extractHost(String hostAndMaybePort) {
+        String h = hostAndMaybePort.trim();
+        if (h.startsWith("[")) {
+            int close = h.indexOf(']');
+            return close >= 0 ? h.substring(1, close) : h;
+        }
+        int colon = h.indexOf(':');
+        return colon >= 0 ? h.substring(0, colon) : h;
+    }
+
+    private static boolean isNonRoutable(java.net.InetAddress address) {
+        return address.isLoopbackAddress() || address.isLinkLocalAddress() || address.isSiteLocalAddress();
     }
 
     private final SecretService secretService;

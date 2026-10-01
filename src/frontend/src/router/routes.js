@@ -66,7 +66,12 @@ const routes = [
       {
         path: 'coach/profile-builder',
         component: () => import('pages/auth/CoachProfileBuilderPlaceholderPage.vue'),
-        meta: { requiresAuth: true },
+        // requiresCoach added 2026-10-01: this page calls coach-only APIs, but the route itself
+        // only required login, not the COACH role. A stale/forged redirect (or a bookmark, or the
+        // browser back button) landing a non-coach account here produced a raw 401
+        // ("security.unauthorized") instead of the router guard bouncing them to their own
+        // role's home page the way every sibling coach-only route already does.
+        meta: { requiresAuth: true, requiresCoach: true },
       },
       {
         path: 'coach/command-center',

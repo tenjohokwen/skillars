@@ -182,6 +182,56 @@ describe('sessionManager — deferred-90 "torn down" branch (deferred-108 AC5)',
 
     expect(expiredDispatched(dispatchSpy)).toBe(false)
   })
+
+  // Found manually testing a coach logout (2026-10-01), reproduced end-to-end with a real browser
+  // against the running stack: clicking Logout in MainLayout.vue always landed on /login with the
+  // FALSE "Your session has expired" banner. AuthService.logout()'s own response carries Set-Cookie
+  // headers that expire 'user' and 'rint' (JwtManagerImpl.deleteLoginToken) — applied by the
+  // browser before axios's response interceptor calls refreshExpiryState() on that SAME response,
+  // via tick(), NOT via a fresh startSessionMonitoring() call like the sibling tests above. If
+  // monitoring is still armed at that instant (MainLayout.vue used to call destroySession() only
+  // AFTER awaiting the backend call), this branch — meant to catch a SIBLING tab's logout — fires
+  // on the current tab's own deliberate, successful one. The fix (MainLayout.vue) stops monitoring
+  // BEFORE the backend call; these two tests pin the sessionManager-level mechanism the fix relies
+  // on, independent of the Vue component wiring (covered separately in MainLayoutSpec.js).
+  it('deliberate logout: a response arriving WHILE monitoring is still armed false-positives as expired', async () => {
+    setCookie(RINT_COOKIE_NAME, String(Date.now() + 10 * 60 * 1000))
+    sm.startSessionMonitoring() // arms the 30s interval, markRintSeen() runs
+    hasUserSession.mockReturnValue(true) // 'user' cookie still present going into the logout call
+
+    // The logout response lands: its Set-Cookie headers clear 'rint' and 'user' client-side, then
+    // axios's response interceptor calls refreshExpiryState() (tick()) on that same response —
+    // BEFORE anything has stopped the still-armed monitor.
+    clearCookie(RINT_COOKIE_NAME)
+    hasUserSession.mockReturnValue(false)
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+
+    const expired = sm.refreshExpiryState()
+
+    expect(expired).toBe(true)
+    expect(expiredDispatched(dispatchSpy)).toBe(true)
+  })
+
+  it('deliberate logout: stopping monitoring BEFORE the response arrives avoids the false positive', async () => {
+    setCookie(RINT_COOKIE_NAME, String(Date.now() + 10 * 60 * 1000))
+    sm.startSessionMonitoring()
+    hasUserSession.mockReturnValue(true)
+
+    // The fix: monitoring stops first, so by the time the logout response's cookie-clearing is
+    // observed, checkIntervalId is already null and the "shared session torn down" branch's first
+    // condition fails — this falls through to the (still healthy, recently-recorded) local
+    // estimate instead.
+    sm.stopSessionMonitoring()
+
+    clearCookie(RINT_COOKIE_NAME)
+    hasUserSession.mockReturnValue(false)
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+
+    const expired = sm.refreshExpiryState()
+
+    expect(expired).toBe(false)
+    expect(expiredDispatched(dispatchSpy)).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------

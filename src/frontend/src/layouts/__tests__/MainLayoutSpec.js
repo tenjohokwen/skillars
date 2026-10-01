@@ -27,12 +27,23 @@ vi.mock('src/boot/theme', () => ({
   isDarkMode: vi.fn(() => false),
 }))
 
-const { destroySessionSpy } = vi.hoisted(() => ({ destroySessionSpy: vi.fn() }))
+const { destroySessionSpy, stopSessionMonitoringSpy } = vi.hoisted(() => ({
+  destroySessionSpy: vi.fn(),
+  stopSessionMonitoringSpy: vi.fn(),
+}))
 // Keep the real module's exports (notably LOGOUT_BACKEND_WAIT_MS, which MainLayout now imports for
 // its bounded logout race — skillars-deferred-109 AC3.1) and override only useSession().
 vi.mock('src/composables/useSession', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, useSession: () => ({ destroySession: destroySessionSpy }) }
+})
+// Bug found manually testing a coach logout (2026-10-01): MainLayout.vue now calls
+// stopSessionMonitoring() directly (not just via destroySession()) as the FIRST step of
+// handleLogout() — see that function's own comment for the false "session has expired" race this
+// closes. Mocked the same way as useSession() above so the ordering assertion below can see it.
+vi.mock('src/plugins/sessionManager', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, stopSessionMonitoring: stopSessionMonitoringSpy }
 })
 
 import MainLayout from 'src/layouts/MainLayout.vue'
@@ -94,7 +105,7 @@ afterEach(() => {
 })
 
 describe('MainLayout.vue — handleLogout order (deferred-108 AC4)', () => {
-  it('runs authStore.logout → resetSelfPlayerId → destroySession → router.push(/login), in order', async () => {
+  it('runs stopSessionMonitoring → authStore.logout → resetSelfPlayerId → destroySession → router.push(/login), in order', async () => {
     const { wrapper, router, pinia } = await mountLayout()
     const { useAuthStore } = await import('src/stores/auth.store')
     const { usePlayerStore } = await import('src/stores/playerStore')
@@ -104,26 +115,37 @@ describe('MainLayout.vue — handleLogout order (deferred-108 AC4)', () => {
 
     await wrapper.vm.handleLogout()
 
+    expect(stopSessionMonitoringSpy).toHaveBeenCalledTimes(1)
     expect(authStore.logout).toHaveBeenCalledTimes(1)
     expect(playerStore.resetSelfPlayerId).toHaveBeenCalledTimes(1)
     expect(destroySessionSpy).toHaveBeenCalledTimes(1)
     // skillars-deferred-125 AC3: handleLogout's final push now goes through the shared
-    // pushLoginOrHardNavigate helper, which pushes an object (path + redirect query) rather than the
-    // bare '/login' string this call site used before. /bmad-code-review fix (2026-09-21): a
-    // DELIBERATE logout must not carry expired:'true' — handleLogout calls pushLoginOrHardNavigate
-    // with no options, so the query must NOT contain 'expired' at all.
+    // pushLoginOrHardNavigate helper, which pushes an object (path + query) rather than the bare
+    // '/login' string this call site used before. /bmad-code-review fix (2026-09-21): a DELIBERATE
+    // logout must not carry expired:'true'. Bug found manually testing (2026-10-01): it must not
+    // carry 'redirect' either — signing out, then signing back in as a DIFFERENT account (a real
+    // scenario on a shared browser) landed the new account straight back on the old one's
+    // role-specific page, 401ing. handleLogout() calls pushLoginOrHardNavigate with no options, so
+    // the query must be empty — see sessionRedirect.js's buildRedirectQuery.
     expect(pushSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         path: '/login',
-        query: { redirect: '/' },
+        query: {},
       }),
     )
 
+    const stopMonitoringOrder = stopSessionMonitoringSpy.mock.invocationCallOrder[0]
     const logoutOrder = authStore.logout.mock.invocationCallOrder[0]
     const resetOrder = playerStore.resetSelfPlayerId.mock.invocationCallOrder[0]
     const teardownOrder = destroySessionSpy.mock.invocationCallOrder[0]
     const pushOrder = pushSpy.mock.invocationCallOrder[0]
 
+    // Bug found manually testing a coach logout (2026-10-01): stopSessionMonitoring() MUST run
+    // before authStore.logout()'s backend call, not after it — see handleLogout()'s own comment.
+    // Calling it any later lets AuthService.logout()'s own Set-Cookie response (which clears
+    // 'rint'/'user') reach sessionManager's still-armed monitor and false-positive as a session
+    // expiry, overriding this deliberate logout's redirect with the "session expired" banner.
+    expect(stopMonitoringOrder).toBeLessThan(logoutOrder)
     expect(logoutOrder).toBeLessThan(resetOrder)
     expect(resetOrder).toBeLessThan(teardownOrder)
     expect(teardownOrder).toBeLessThan(pushOrder)
@@ -202,14 +224,15 @@ describe('MainLayout.vue — handleLogout parity (deferred-109 AC3.1)', () => {
       vi.useRealTimers()
     }
     // skillars-deferred-125 AC3: handleLogout's final push now goes through the shared
-    // pushLoginOrHardNavigate helper, which pushes an object (path + redirect query) rather than the
-    // bare '/login' string this call site used before. /bmad-code-review fix (2026-09-21): a
-    // DELIBERATE logout must not carry expired:'true' — handleLogout calls pushLoginOrHardNavigate
-    // with no options, so the query must NOT contain 'expired' at all.
+    // pushLoginOrHardNavigate helper, which pushes an object (path + query) rather than the bare
+    // '/login' string this call site used before. /bmad-code-review fix (2026-09-21): a DELIBERATE
+    // logout must not carry expired:'true'. Bug found manually testing (2026-10-01): it must not
+    // carry 'redirect' either — see the handleLogout-order test above for the full scenario.
+    // handleLogout() calls pushLoginOrHardNavigate with no options, so the query must be empty.
     expect(pushSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         path: '/login',
-        query: { redirect: '/' },
+        query: {},
       }),
     )
     // Mutation: revert the Promise.race bound to a bare `await authStore.logout()` → handleLogout

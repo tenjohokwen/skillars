@@ -12,6 +12,12 @@ services:
       dockerfile: Dockerfile
     environment:
       - SPRING_PROFILES_ACTIVE=dev
+      # docker-compose.yml (base file, always loaded alongside this override) sets
+      # APP_FRONTEND_URL=https://skillars.com as its default. Spring environment variables rank
+      # above application-dev.yaml in the property source order regardless of whether the YAML
+      # value is a placeholder or a literal, so without this override every verification email
+      # sent by Mode A links to production, not this machine.
+      - APP_FRONTEND_URL=http://localhost:9990
       - APP_VIDEO_BUNNY_LIBRARY_ID=123456
       # ses-1.2 D9 + code review 2026-09-11: this knob is now DEAD — see docker-compose.uat.yml's
       # full explanation. Boot's own mail health contributor is @ConditionalOnBean(JavaMailSenderImpl),
@@ -146,10 +152,15 @@ services:
       - skillars-internal
     restart: unless-stopped
 
-  # One-shot: creates the dev bucket on every startup (no-op if it already exists).
-  # amazon/aws-cli replaces quay.io/minio/mc here — same reasoning as the `storage` service
-  # above (mc's own image is under the same now-blocked quay.io/minio/* namespace), and aws-cli
-  # is a generic S3 client so it works against SeaweedFS's S3 gateway unmodified.
+  # One-shot: creates the dev bucket on every startup (no-op if it already exists), and puts a
+  # permissive CORS policy on it. Without the CORS step, the browser's own presigned-upload flow
+  # (CoachProfileBuilder's photo upload, etc. — the browser PUTs straight to `storage:9500` with a
+  # presigned URL, bypassing the app entirely) 403s at the OPTIONS preflight: S3-compatible APIs
+  # (SeaweedFS included) refuse cross-origin preflights by default until a bucket CORS policy says
+  # otherwise, same as real AWS S3 — found manually testing the coach profile-builder photo upload
+  # (2026-10-01). amazon/aws-cli replaces quay.io/minio/mc here — same reasoning as the `storage`
+  # service above (mc's own image is under the same now-blocked quay.io/minio/* namespace), and
+  # aws-cli is a generic S3 client so it works against SeaweedFS's S3 gateway unmodified.
   storage-init:
     image: amazon/aws-cli:2.31.13
     depends_on:
@@ -159,9 +170,12 @@ services:
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin123
       - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - ./deploy/seaweedfs/s3-cors.json:/etc/seaweedfs/s3-cors.json:ro
     entrypoint: >
       /bin/sh -c "
-      aws --endpoint-url http://storage:9500 s3 mb s3://skillars-dev || true
+      aws --endpoint-url http://storage:9500 s3 mb s3://skillars-dev || true &&
+      aws --endpoint-url http://storage:9500 s3api put-bucket-cors --bucket skillars-dev --cors-configuration file:///etc/seaweedfs/s3-cors.json
       "
     networks:
       - skillars-internal
