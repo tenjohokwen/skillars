@@ -119,7 +119,16 @@ public class AuthService {
             true, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
 
         String role = user.getSkillarsRole() != null ? user.getSkillarsRole().name() : "ADMIN";
-        String json = "{\"id\":" + user.getId() + ",\"role\":\"" + role + "\"}";
+        // `id` is quoted deliberately — CommonConfig.longToStringModule() applies this same
+        // string-encoding to every Jackson-serialized Long response body for exactly this reason
+        // (JS cannot represent a Tsid-sized long losslessly), but this cookie is hand-built JSON,
+        // outside that pipeline. Found manually testing (2026-10-01): with `id` bare, the frontend's
+        // own hydrateFromCookie() (auth.store.js) — which every page load/refresh calls — silently
+        // corrupted authStore.userId via IEEE-754 double rounding, long before any upload was
+        // attempted. CoachProfileBuilderPlaceholderPage.vue's photo-upload step sends that value
+        // straight back as signUpload's entityId, which StorageResource rejects with a 403 the
+        // instant it no longer matches the JWT's own (uncorrupted) business ID.
+        String json = "{\"id\":\"" + user.getId() + "\",\"role\":\"" + role + "\"}";
         String skpValue = URLEncoder.encode(json, StandardCharsets.UTF_8);
         CookieUtil.addCookie(res, SKILLARS_PROFILE_COOKIE, skpValue,
             false, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
@@ -196,7 +205,16 @@ public class AuthService {
             true, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
 
         String role = user.getSkillarsRole() != null ? user.getSkillarsRole().name() : "ADMIN";
-        String json = "{\"id\":" + user.getId() + ",\"role\":\"" + role + "\"}";
+        // `id` is quoted deliberately — CommonConfig.longToStringModule() applies this same
+        // string-encoding to every Jackson-serialized Long response body for exactly this reason
+        // (JS cannot represent a Tsid-sized long losslessly), but this cookie is hand-built JSON,
+        // outside that pipeline. Found manually testing (2026-10-01): with `id` bare, the frontend's
+        // own hydrateFromCookie() (auth.store.js) — which every page load/refresh calls — silently
+        // corrupted authStore.userId via IEEE-754 double rounding, long before any upload was
+        // attempted. CoachProfileBuilderPlaceholderPage.vue's photo-upload step sends that value
+        // straight back as signUpload's entityId, which StorageResource rejects with a 403 the
+        // instant it no longer matches the JWT's own (uncorrupted) business ID.
+        String json = "{\"id\":\"" + user.getId() + "\",\"role\":\"" + role + "\"}";
         String skpValue = URLEncoder.encode(json, StandardCharsets.UTF_8);
         CookieUtil.addCookie(res, SKILLARS_PROFILE_COOKIE, skpValue,
             false, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");

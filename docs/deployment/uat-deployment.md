@@ -344,6 +344,15 @@ profile photo) and confirm:
   TLS cert is valid and the presigned GET URL `S3Presigner` generated is
   reachable from outside the compose network, not just from the `app`
   container
+- The upload itself didn't fail with a CORS preflight `403` in the browser's
+  network tab. `storage-init` (2026-10-01) now also runs
+  `s3api put-bucket-cors` against `DOMAIN` after creating the bucket —
+  S3-compatible APIs (SeaweedFS included) reject the browser's cross-origin
+  `OPTIONS` preflight by default, same as real AWS S3, until a bucket CORS
+  policy says otherwise. If this upload step does 403 at the preflight, it
+  means `storage-init` ran before `DOMAIN` had its real value (re-run it:
+  `docker compose --env-file /opt/skillars/.env -f ... -f ... up storage-init`)
+  or the deployed image predates this fix.
 
 And confirm Grafana/observability is live: `https://<MONITORING_DOMAIN>`
 loads and the Prometheus/Tempo datasources return data for the traffic you

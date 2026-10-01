@@ -55,12 +55,13 @@ dcl up -d app postgres redis storage storage-init grafana
 
 App at **http://localhost:9990**, health at **http://localhost:8367/manage/health**.
 
-One catch: the `dev` profile hardcodes `app.frontend-url: "http://localhost:9000"`
-in `application-dev.yaml` — no `${...}` placeholder, so **it cannot be overridden
-by an environment variable**. Verification links generated during registration
-will point at port 9000, which nothing is serving in this mode. Swap the host to
-`localhost:9990` by hand when you paste the link (see
-[Creating the accounts](#creating-the-accounts)).
+`docker-compose.local.yml` sets `APP_FRONTEND_URL=http://localhost:9990` for the
+`app` service, so verification links generated during registration already point
+here — no manual edit needed. (Without that override, the base `docker-compose.yml`'s
+own default of `https://skillars.com` wins: Spring environment variables rank above
+`application-dev.yaml` regardless of whether its `app.frontend-url` value is a
+placeholder or a literal, so an unset override silently sends every local
+verification link to production.)
 
 Cost: a full rebuild (Maven + npm + `quasar build`) for every source change.
 
@@ -662,3 +663,87 @@ lifecycle:
 The same pattern applies to redis, loki, tempo, prometheus, grafana, and the
 SeaweedFS `storage` service in that file — each has its own
 `skillars-local-*` named volume.
+
+**`docker compose ps` / `docker ps` shows the app container `(unhealthy)` even
+though `curl http://localhost:8367/manage/health` returns `UP`.** These are two
+different endpoints. Docker's own `HEALTHCHECK` (`docker-compose.yml`, `app`
+service) does not poll the default `/manage/health` group — it polls
+`/manage/health/smoke` instead (`db`, `diskSpace`, `ping` only), on purpose:
+the default group is *every* registered Actuator health contributor
+(including mail-transport/SES indicators), so a sandboxed SES account or a
+missing IAM grant would otherwise mark the container unhealthy while the app
+itself is working fine. `/manage/health` being green tells you nothing about
+what Docker is actually checking — query the smoke group directly:
+
+```bash
+# same mapped port, different path:
+curl -s http://localhost:8367/manage/health/smoke | jq
+
+# or exactly as Docker's HEALTHCHECK runs it, from inside the container:
+docker exec skillars-app-1 wget -qO- http://localhost:8367/manage/health/smoke
+```
+
+That narrows it down to which of `db`/`diskSpace`/`ping` is actually failing.
+Also check whether your image is stale before chasing this further — an old
+image predating a recent fix, or a long-running container that never picked
+up a rebuild, is a common enough cause on its own. Compare build ages with
+`docker images | grep skillars` against `git log -1 --oneline`; if the image
+predates your latest merged commit, rebuild and restart:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local build app
+docs/deployment/local/stop.sh
+docs/deployment/local/start.sh
+```
+
+(See the `docker-compose.local.yml` comment on `app`'s own `build:` key —
+Compose silently no-ops a build for a service with no `build:` key, which has
+cost real debugging time before: a shipped fix looked broken because the
+running jar predated it.)
+
+**Testing code changes made while the stack was already running (Mode A).**
+Neither `start.sh` nor plain `up -d` ever rebuilds the image — they only
+(re)create containers from whatever image already exists. Editing source
+while `app` is running has no effect on it until you rebuild and recreate
+that one container:
+
+```bash
+# 1. Rebuild the image from your changed source
+docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local build app
+
+# 2. Recreate just the app container from the new image
+docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local up -d app
+```
+
+Or combine both in one command: `... up -d --build app`.
+
+No need to run `stop.sh` first — Compose diffs the image and recreates only
+`app`; Postgres, Redis, Grafana, etc. keep running unchanged, so whatever test
+data you already created survives. Watch it come back healthy with
+`docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file
+.env.local logs -f app`, or poll `docker inspect --format='{{.State.Health.Status}}'
+skillars-app-1` until it reports `healthy` (first boot after a rebuild takes
+~15-90s for Flyway + health checks).
+
+One caveat: this only picks up **backend** (Java) changes on its own.
+`Dockerfile` bundles the built frontend into the jar at image-build time, so a
+rebuild does also pick up frontend changes — just via the slower full
+`npm`/`quasar build` step baked into the image build. If you're only iterating
+on frontend code, Mode B (`quasar dev` on the host) avoids that rebuild cost
+entirely.
+
+**Testing code changes made while the stack was stopped.** `start.sh` has the
+same limitation as above — it never builds, it only starts containers from
+whatever image already exists. Running it straight after `git pull` or local
+edits just relaunches the stale image you had before (or, on a from-scratch
+checkout with no image built yet, fails outright). Build before you start,
+not after:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local build app
+docs/deployment/local/start.sh
+```
+
+This is the same two steps as the already-running case above — the only
+difference is there's no running container yet to recreate in place, so
+`start.sh`'s own `up -d` creates it fresh instead.

@@ -89,15 +89,17 @@ describe('useSession — handleLogout (deferred-108 AC6)', () => {
     expect(playerStore.resetSelfPlayerId).toHaveBeenCalledTimes(1)
     expect(sm.cleanup).toHaveBeenCalled()
     // skillars-deferred-125 AC3: handleLogout's final push now goes through the shared
-    // pushLoginOrHardNavigate helper, which pushes an object (path + redirect query) rather than the
-    // bare '/login' string this call site used before. /bmad-code-review fix (2026-09-21): a
-    // DELIBERATE logout must not carry expired:'true' (that banner is for App.vue's genuine
-    // session-expiry teardown only) — handleLogout calls pushLoginOrHardNavigate with no options, so
-    // the query must NOT contain 'expired' at all.
+    // pushLoginOrHardNavigate helper, which pushes an object (path + query) rather than the bare
+    // '/login' string this call site used before. /bmad-code-review fix (2026-09-21): a DELIBERATE
+    // logout must not carry expired:'true' (that banner is for App.vue's genuine session-expiry
+    // teardown only). Bug found manually testing (2026-10-01): it must not carry 'redirect' either —
+    // signing out, then signing back in as a DIFFERENT account, must not land the new account back
+    // on the old one's role-specific page. handleLogout() calls pushLoginOrHardNavigate with no
+    // options, so the query must be empty.
     expect(pushSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         path: '/login',
-        query: { redirect: '/' },
+        query: {},
       }),
     )
 
@@ -136,15 +138,17 @@ describe('useSession — handleLogout (deferred-108 AC6)', () => {
 
     expect(sm.cleanup).toHaveBeenCalled()
     // skillars-deferred-125 AC3: handleLogout's final push now goes through the shared
-    // pushLoginOrHardNavigate helper, which pushes an object (path + redirect query) rather than the
-    // bare '/login' string this call site used before. /bmad-code-review fix (2026-09-21): a
-    // DELIBERATE logout must not carry expired:'true' (that banner is for App.vue's genuine
-    // session-expiry teardown only) — handleLogout calls pushLoginOrHardNavigate with no options, so
-    // the query must NOT contain 'expired' at all.
+    // pushLoginOrHardNavigate helper, which pushes an object (path + query) rather than the bare
+    // '/login' string this call site used before. /bmad-code-review fix (2026-09-21): a DELIBERATE
+    // logout must not carry expired:'true' (that banner is for App.vue's genuine session-expiry
+    // teardown only). Bug found manually testing (2026-10-01): it must not carry 'redirect' either —
+    // signing out, then signing back in as a DIFFERENT account, must not land the new account back
+    // on the old one's role-specific page. handleLogout() calls pushLoginOrHardNavigate with no
+    // options, so the query must be empty.
     expect(pushSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         path: '/login',
-        query: { redirect: '/' },
+        query: {},
       }),
     )
   })

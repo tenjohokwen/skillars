@@ -151,6 +151,45 @@ class JwtSecretBootstrapRunnerTest {
     }
 
     /**
+     * The actual fix this test class exists to cover: {@code docker-compose.yml} always points
+     * {@code spring.datasource.url} at the literal hostname {@code postgres} (the Compose service
+     * name, identical in the local override and the base file, never {@code localhost}) — an IP
+     * literal in each of the three RFC 1918 private ranges stands in for what that hostname
+     * resolves to on the project's own bridge network, without a live DNS lookup in the test.
+     */
+    @Test
+    @DisplayName("RFC 1918 private-range host literals are accepted (the Docker Compose bridge-network case)")
+    void privateRangeIpHostsAreLocal() {
+        when(secretService.fetchSecret(JWT_VERSION, JWT_BUS_NAME))
+            .thenThrow(new SecException("not found", SecError.KEY_NOT_FOUND));
+
+        assertThatCode(() -> new JwtSecretBootstrapRunner(
+            secretService, true, "jdbc:postgresql://172.19.0.3:5432/skillars").run(null))
+            .as("172.16.0.0/12 — Docker's default bridge network range")
+            .doesNotThrowAnyException();
+        assertThatCode(() -> new JwtSecretBootstrapRunner(
+            secretService, true, "jdbc:postgresql://10.0.0.5:5432/skillars").run(null))
+            .as("10.0.0.0/8")
+            .doesNotThrowAnyException();
+        assertThatCode(() -> new JwtSecretBootstrapRunner(
+            secretService, true, "jdbc:postgresql://192.168.1.50:5432/skillars").run(null))
+            .as("192.168.0.0/16")
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("a public, internet-routable IP literal is NOT treated as local")
+    void publicIpHostIsNotLocal() {
+        JwtSecretBootstrapRunner runner = new JwtSecretBootstrapRunner(
+            secretService, true, "jdbc:postgresql://8.8.8.8:5432/skillars");
+
+        assertThatThrownBy(() -> runner.run(null))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("LOCAL-DEVELOPMENT-ONLY");
+        verifyNoInteractions(secretService);
+    }
+
+    /**
      * skillars-deferred-91 code review: the guard used {@code find()} over the WHOLE JDBC URL, so any
      * string containing {@code //localhost} passed — including a pgjdbc multi-host failover URL whose
      * driver may connect to the production host, and a URL carrying {@code //localhost} in a query

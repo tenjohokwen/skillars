@@ -268,6 +268,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSession, LOGOUT_BACKEND_WAIT_MS } from 'src/composables/useSession'
+import { stopSessionMonitoring } from 'src/plugins/sessionManager'
 import { toggleTheme as bootToggleTheme, isDarkMode } from 'src/boot/theme'
 import ParentChildSwitcher from 'src/components/ParentChildSwitcher.vue'
 import { useAuthStore } from 'src/stores/auth.store'
@@ -348,12 +349,33 @@ function deleteUserCookie() {
 }
 
 async function handleLogout() {
+  // Bug found manually testing a coach logout (2026-10-01): clicking Logout always redirected to
+  // /login with the FALSE "Your session has expired" banner, even on a clean, successful logout.
+  // Root cause: AuthService.logout()'s response carries Set-Cookie headers that expire 'user' and
+  // 'rint' (JwtManagerImpl.deleteLoginToken) — applied by the browser before axios's response
+  // interceptor runs refreshExpiryState() on that SAME response. With monitoring still armed at
+  // that point (destroySession() below hadn't run yet), sessionManager.computeTimeUntilExpiry's
+  // skillars-deferred-90 AC3 "shared session torn down" branch now sees every one of its three
+  // conditions satisfied (monitoring active, 'rint' gone, 'user' gone) and reports the session
+  // expired — a branch meant to detect a SIBLING tab's logout, fooled by this tab's own. That
+  // dispatches a genuine-looking 'session:expired', which App.vue's handler reacts to (firing a
+  // second, redundant POST /logout — visible in a network trace as two logout calls per click) and
+  // sends through sessionRedirect.js with expired:true. sessionRedirect's own pendingExpired latch
+  // (skillars-deferred-126 AC4) only ever upgrades false -> true and never back, so by the time
+  // THIS function's own pushLoginOrHardNavigate(router) call below runs, it coalesces onto that
+  // already-in-flight navigation and inherits expired:true regardless of its own intent.
+  //
+  // Fix: stop monitoring FIRST, before anything the backend call's response could affect — matches
+  // useSession.js's own handleLogout(), which was never vulnerable to this for the same reason.
+  // Once checkIntervalId is null, the AC3 branch's first condition fails and
+  // computeTimeUntilExpiry() falls through to the (still healthy, recently-recorded) local
+  // estimate instead of reporting expired. destroySession() below still runs in its original
+  // position — by then stopSessionMonitoring() is just a harmless repeat — preserving the
+  // skillars-deferred-108 AC4 call order the tests assert on.
+  stopSessionMonitoring()
   // skillars-deferred-109 AC3.1: carry useSession.handleLogout's deferred-91 AC14 guarantees so the
   // two logout sequences stop diverging on what matters for sibling-tab teardown — a BOUNDED wait
-  // on the backend call, and BOTH 'rint' clears (pre- and post-race). Deliberately NOT unified:
-  // useSession stops monitoring first; MainLayout keeps its
-  // logout → resetSelfPlayerId → destroySession → deleteUserCookie → pushLoginOrHardNavigate order
-  // (destroySession() below owns the monitoring teardown here).
+  // on the backend call, and BOTH 'rint' clears (pre- and post-race).
   //
   // Pre-race clear: sibling tabs enter computeTimeUntilExpiry's fast-teardown branch immediately
   // rather than after the up-to-LOGOUT_BACKEND_WAIT_MS window (useSession.js:82).

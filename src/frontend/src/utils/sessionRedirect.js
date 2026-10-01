@@ -92,8 +92,18 @@ const LOGIN_PATH = '/login'
 const DID_NOT_LAND = NavigationFailureType.aborted | NavigationFailureType.cancelled
 
 function buildRedirectQuery(router, expired) {
-  const query = { redirect: router.currentRoute.value.fullPath }
+  // Bug found manually testing (2026-10-01): a DELIBERATE logout always carried `redirect` back to
+  // whatever page the user chose to leave. Sign in as a different account afterwards — a real
+  // scenario on a shared browser, not a corner case — and a stale role-specific redirect (e.g.
+  // `/coach/profile-builder`) sent the newly-authenticated user straight to a page their new
+  // account has no business on, surfacing as a raw 401 ("security.unauthorized") rather than
+  // anything the router's own role guards could catch (and some of those guards are themselves
+  // incomplete — see routes.js). A genuine session EXPIRY (expired: true) keeps `redirect`: that is
+  // the SAME account being bounced back to where it involuntarily left off, which carries none of
+  // this risk.
+  const query = {}
   if (expired) {
+    query.redirect = router.currentRoute.value.fullPath
     query.expired = 'true'
   }
   return query
