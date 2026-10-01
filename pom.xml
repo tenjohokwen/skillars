@@ -78,12 +78,18 @@
 			             smallest bump off the parent's own line). Overriding jackson-bom.version
 			             (Boot's own property for this import) rather than pinning jackson-databind
 			             alone keeps core/annotations/datatype modules on one consistent release.
+			             Bumped again to 2.21.7 (2026-10-01) for CVE-2026-89407/CVE-2026-89425
+			             (jackson-core: regex-backtracking DoS / unbounded StringBuilder growth on
+			             malformed tokens) and CVE-2026-91776/CVE-2026-91777 (jackson-databind:
+			             unbounded type-id cache growth / forward-reference completion for
+			             @JsonIdentityInfo) — same "smallest bump off the parent's own line" rule;
+			             2.18.11 and 2.22.3 also fix all four.
 			-->
 			<thymeleaf.version>3.1.5.RELEASE</thymeleaf.version>
 			<netty.version>4.1.137.Final</netty.version>
 			<postgresql.version>42.7.12</postgresql.version>
 			<httpcore5.version>5.4.3</httpcore5.version>
-			<jackson-bom.version>2.21.6</jackson-bom.version>
+			<jackson-bom.version>2.21.7</jackson-bom.version>
 		</properties>
 	
 		<dependencyManagement>
@@ -159,16 +165,23 @@
 				  Jackson 3 (tools.jackson.*) — jackson-core/jackson-databind here exist solely as
 				  logstash-logback-encoder's own transitive dependency, unrelated to this project's
 				  primary com.fasterxml.jackson 2.x stack.
+
+				  Both bumped again to 3.2.3 (2026-10-01), same CVEs and same rationale as the
+				  jackson-bom.version override's own 2.21.7 bump above (Jackson 3 is a rebrand of
+				  the same codebase and inherited the same four bugs): CVE-2026-89425 (jackson-core)
+				  and CVE-2026-91776/CVE-2026-91777 (jackson-databind). 3.1.7 also fixes all three on
+				  the older line; 3.2.3 was chosen to keep core/databind on the same release the
+				  existing pin already used, per this comment's own stated policy.
 				-->
 				<dependency>
 					<groupId>tools.jackson.core</groupId>
 					<artifactId>jackson-core</artifactId>
-					<version>3.2.2</version>
+					<version>3.2.3</version>
 				</dependency>
 				<dependency>
 					<groupId>tools.jackson.core</groupId>
 					<artifactId>jackson-databind</artifactId>
-					<version>3.2.2</version>
+					<version>3.2.3</version>
 				</dependency>
 			</dependencies>
 		</dependencyManagement>
