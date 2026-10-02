@@ -6,7 +6,7 @@
 ## RULES
 
 - YOU MUST ALWAYS SPEAK OUTPUT in your Agent communication style with the config `{communication_language}`
-- Be precise. When uncertain between categories, prefer the more conservative classification.
+- Be precise. When uncertain between categories, prefer the classification that puts the finding in front of a human rather than the one that drops it — `decision_needed` over `dismiss`, `patch` over `defer`. "Conservative" means surfaced, not suppressed: silently dropping a finding is never the conservative choice, because triage cannot recover a finding that was never reported.
 
 ## INSTRUCTIONS
 
@@ -41,7 +41,9 @@
 
 5. If `{failed_layers}` is non-empty, report which layers failed before announcing results. If zero findings remain after dropping dismissed AND `{failed_layers}` is non-empty, warn the user that the review may be incomplete rather than announcing a clean review.
 
-6. If zero findings remain after triage (all rejected or none raised): state "✅ Clean review — all layers passed." (Step 3 already warned if any review layers failed via `{failed_layers}`.)
+6. **Ambiguity sweep.** Before finalizing, grep the spec/story file (if `{spec_file}` is set) and the diff for self-flagged ambiguity markers: "implementer decides", "TBD", "open question", "deferred", "revisit", or a reference to another story's open item (e.g. "deferred-17 D8"). For each hit, confirm a corresponding finding exists in your collected list (as `decision_needed` or `patch`) or that the diff itself documents the resolution — a hit with neither must be added back as a new `decision_needed` finding rather than silently passed over.
+
+7. If zero findings remain after triage (all rejected or none raised): state "✅ Clean review — all layers passed." (Step 3 already warned if any review layers failed via `{failed_layers}`.)
 
 
 ## NEXT
