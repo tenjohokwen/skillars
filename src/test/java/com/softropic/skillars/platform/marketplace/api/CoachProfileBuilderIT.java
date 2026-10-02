@@ -22,9 +22,15 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 
 import java.sql.Timestamp;
+import java.time.DayOfWeek;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.temporal.TemporalAdjusters;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -676,6 +682,329 @@ class CoachProfileBuilderIT extends AbstractIntegrationTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody().get("stepSaved")).isEqualTo(4);
+    }
+
+    // ----- skillars-deferred-140 AC1.1: saveStep4 overwrites any per-window zone with the profile's -----
+
+    @Test
+    void saveStep4_perWindowTimezoneDiffersFromProfile_overwrittenWithProfileZone() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies); // profile zone = Europe/Berlin
+        saveStep2(cookies);
+        saveStep3(cookies);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/4",
+            HttpMethod.PUT,
+            Map.of("windows", List.of(Map.of("dayOfWeek", 1, "startTime", "09:00:00", "endTime", "11:00:00",
+                "canonicalTimezone", "America/New_York"))),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        List<String> zones = jdbcTemplate.queryForList(
+            "SELECT w.canonical_timezone FROM marketplace.coach_availability_windows w "
+                + "JOIN marketplace.coach_profiles p ON p.id = w.coach_id WHERE p.user_id = ?",
+            String.class, COACH_ID);
+        assertThat(zones).containsExactly("Europe/Berlin");
+    }
+
+    // ----- skillars-deferred-140 AC1.2: saveStep1 re-stamps existing windows on zone change -----
+
+    @Test
+    void saveStep1_timezoneChange_propagatesToAllExistingWindows() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies); // Europe/Berlin
+        saveStep2(cookies);
+        saveStep3(cookies);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/4",
+            HttpMethod.PUT,
+            Map.of("windows", List.of(
+                Map.of("dayOfWeek", 1, "startTime", "09:00:00", "endTime", "11:00:00", "canonicalTimezone", "Europe/Berlin"),
+                Map.of("dayOfWeek", 2, "startTime", "09:00:00", "endTime", "11:00:00", "canonicalTimezone", "Europe/Berlin"),
+                Map.of("dayOfWeek", 3, "startTime", "09:00:00", "endTime", "11:00:00", "canonicalTimezone", "Europe/Berlin"))),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/1",
+            HttpMethod.PUT,
+            step1Payload("Coach Name", "Bio text", "Madrid", "Centro", List.of("English", "Spanish"), "Europe/Madrid"),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        List<String> zones = jdbcTemplate.queryForList(
+            "SELECT w.canonical_timezone FROM marketplace.coach_availability_windows w "
+                + "JOIN marketplace.coach_profiles p ON p.id = w.coach_id WHERE p.user_id = ? ORDER BY day_of_week",
+            String.class, COACH_ID);
+        assertThat(zones).containsExactly("Europe/Madrid", "Europe/Madrid", "Europe/Madrid");
+    }
+
+    /**
+     * mto-story-review 2026-10-02, Corner Case A: a relocation must not misjudge conflict detection
+     * against a booking placed under the coach's OLD zone.
+     *
+     * <p>skillars-deferred-140 code review (D2): this test previously relocated Europe/Berlin ->
+     * Europe/Madrid, which proved nothing — those two zones have an IDENTICAL UTC offset at every
+     * instant (same CET/CEST rules), so the booking's local reading is byte-identical whichever zone
+     * the check consults, and the assertion passed with the production change reverted. It now
+     * relocates to Asia/Tokyo, whose offset genuinely differs, so the two candidate zone sources give
+     * OPPOSITE answers and the assertion actually discriminates.
+     *
+     * <p>Direction under test: the window keeps its wall-clock 09:00-11:00 but those numbers now mean
+     * Tokyo time, so the window's absolute span moved. A booking at Monday 10:00 Berlin (17:00-18:00
+     * Tokyo) is no longer inside it, and the correct answer is NO conflict. Reading the booking's own
+     * frozen Berlin zone instead would place it at 10:00 local and wrongly report a conflict.
+     */
+    @Test
+    void saveStep1_relocation_bookingNowOutsideWindowSpan_reportsNoConflict() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies); // Europe/Berlin
+        saveStep2(cookies);
+        saveStep3(cookies);
+        saveStep4(cookies); // one window: Monday 09:00-11:00
+
+        UUID coachId = jdbcTemplate.queryForObject(
+            "SELECT id FROM marketplace.coach_profiles WHERE user_id = ?", UUID.class, COACH_ID);
+        UUID windowId = jdbcTemplate.queryForObject(
+            "SELECT id FROM marketplace.coach_availability_windows WHERE coach_id = ?", UUID.class, coachId);
+
+        // Monday 10:00 Europe/Berlin — inside the window as it stood at booking time. Frozen with the
+        // coach's zone AT BOOKING TIME (mirrors BookingService.resolveCoachTimezone; direct SQL
+        // insert since the full booking-creation flow needs a player/payment setup this IT does not
+        // otherwise exercise). In Tokyo this is 17:00 or 18:00 depending on Berlin's DST — outside
+        // 09:00-11:00 either way, so the assertion is stable year-round.
+        insertConfirmedBooking(coachId, ZoneId.of("Europe/Berlin"), java.time.LocalTime.of(10, 0),
+            "Europe/Berlin");
+
+        relocateTo(cookies, "Tokyo", "Shibuya", "Asia/Tokyo");
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/coaches/me/availability/windows/" + windowId,
+            HttpMethod.PUT,
+            Map.of("dayOfWeek", 1, "startTime", "09:00:00", "endTime", "11:00:00"),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("hasConflict"))
+            .as("the window's 09:00-11:00 now means Tokyo time; a 17:00-Tokyo booking is outside it")
+            .isEqualTo(false);
+    }
+
+    /**
+     * The opposite direction of the test above, so neither zone source can satisfy both. A booking at
+     * Monday 10:00 TOKYO (02:00-03:00 Berlin depending on DST) was outside the window while the coach
+     * was in Berlin, but after relocating it sits squarely inside the window's new Tokyo-time span —
+     * so the correct answer is a conflict. Reading the booking's frozen Berlin zone would place it at
+     * ~02:00 local and miss it: the false negative that lets a coach edit a window that really does
+     * contain a confirmed booking.
+     */
+    @Test
+    void saveStep1_relocation_bookingNowInsideWindowSpan_reportsConflict() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies); // Europe/Berlin
+        saveStep2(cookies);
+        saveStep3(cookies);
+        saveStep4(cookies); // one window: Monday 09:00-11:00
+
+        UUID coachId = jdbcTemplate.queryForObject(
+            "SELECT id FROM marketplace.coach_profiles WHERE user_id = ?", UUID.class, COACH_ID);
+        UUID windowId = jdbcTemplate.queryForObject(
+            "SELECT id FROM marketplace.coach_availability_windows WHERE coach_id = ?", UUID.class, coachId);
+
+        insertConfirmedBooking(coachId, ZoneId.of("Asia/Tokyo"), java.time.LocalTime.of(10, 0),
+            "Europe/Berlin");
+
+        relocateTo(cookies, "Tokyo", "Shibuya", "Asia/Tokyo");
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/coaches/me/availability/windows/" + windowId,
+            HttpMethod.PUT,
+            Map.of("dayOfWeek", 1, "startTime", "09:00:00", "endTime", "11:00:00"),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("hasConflict"))
+            .as("10:00 Tokyo is inside the window's relocated 09:00-11:00 Tokyo span")
+            .isEqualTo(true);
+    }
+
+    /**
+     * skillars-deferred-140 code review: closes the unimplemented half of AC4.2's first bullet —
+     * "relocate to Madrid in Step 1 -> verify all 3 windows are now Madrid time <b>and slots are
+     * materialized correctly</b>". The shipped relocation IT asserted only the three stored
+     * {@code canonical_timezone} column values, never that the published calendar actually moved. That
+     * gap is why the AC1.3/BookingService zone-reader split went unnoticed: nothing exercised the
+     * loop simplification against a real relocated row end-to-end.
+     */
+    @Test
+    void saveStep1_relocation_publishedSlotsShiftToTheNewZone() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies); // Europe/Berlin
+        saveStep2(cookies);
+        saveStep3(cookies);
+        saveStep4(cookies); // one window: Monday 09:00-11:00
+
+        UUID coachId = jdbcTemplate.queryForObject(
+            "SELECT id FROM marketplace.coach_profiles WHERE user_id = ?", UUID.class, COACH_ID);
+
+        // 2026-06-15 is a Monday, so the window's dayOfWeek=1 materializes on it.
+        String calendarUrl = baseUrl() + "/api/bookings/coaches/" + coachId + "/availability?weekStart=2026-06-15";
+
+        Instant berlinFirstSlot = firstComputedSlotStart(calendarUrl, cookies);
+        assertThat(berlinFirstSlot)
+            .as("09:00 Europe/Berlin on 2026-06-15 (CEST, +02:00)")
+            .isEqualTo(Instant.parse("2026-06-15T07:00:00Z"));
+
+        relocateTo(cookies, "Tokyo", "Shibuya", "Asia/Tokyo");
+
+        Instant tokyoFirstSlot = firstComputedSlotStart(calendarUrl, cookies);
+        assertThat(tokyoFirstSlot)
+            .as("the same 09:00 wall clock now means Asia/Tokyo (+09:00) — the slot's absolute time moved")
+            .isEqualTo(Instant.parse("2026-06-15T00:00:00Z"));
+    }
+
+    private void relocateTo(String cookies, String city, String district, String zone) {
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/1",
+            HttpMethod.PUT,
+            step1Payload("Coach Name", "Bio text", city, district, List.of("English"), zone),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    /**
+     * Inserts a CONFIRMED booking on the next Monday at {@code localTime} as read in
+     * {@code interpretIn}, stamped with {@code frozenZone} — which is what the coach's profile zone
+     * was at booking time, per {@code BookingService.resolveCoachTimezone}.
+     */
+    private void insertConfirmedBooking(UUID coachId, ZoneId interpretIn, java.time.LocalTime localTime,
+                                        String frozenZone) {
+        LocalDate nextMonday = LocalDate.now().with(TemporalAdjusters.next(DayOfWeek.MONDAY));
+        Instant start = ZonedDateTime.of(nextMonday, localTime, interpretIn).toInstant();
+        Instant end = start.plusSeconds(3600);
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "INSERT INTO booking.bookings (id, parent_id, player_id, coach_id, requested_start_time, "
+                + "requested_end_time, status, canonical_timezone, version, created_at, updated_at) "
+                + "VALUES (gen_random_uuid(), ?, ?, ?, ?, ?, 'CONFIRMED', ?, 0, now(), now())",
+            PARENT_ID, 1L, coachId, Timestamp.from(start), Timestamp.from(end), frozenZone));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Instant firstComputedSlotStart(String calendarUrl, String cookies) {
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            calendarUrl, HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<String, Object>> slots = (List<Map<String, Object>>) response.getBody().get("computedSlots");
+        assertThat(slots).as("the Monday window must materialize at least one slot").isNotEmpty();
+        return Instant.parse((String) slots.get(0).get("startDatetime"));
+    }
+
+    // ----- skillars-deferred-140 AC2: city/timezone plausibility validation -----
+
+    @Test
+    void saveStep1_cityTimezoneCrossRegionMismatch_returns422() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/1",
+            HttpMethod.PUT,
+            step1Payload("John Coach", "Bio", "Paris", "Centre", List.of("French"), "America/New_York"),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                assertThat(ex.getResponseBodyAsString()).contains("marketplace.cityTimezoneMismatch");
+            });
+    }
+
+    @Test
+    void saveStep1_cityTimezoneExactMatch_succeeds() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/1",
+            HttpMethod.PUT,
+            step1Payload("John Coach", "Bio", "Paris", "Centre", List.of("French"), "Europe/Paris"),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void saveStep1_cityTimezoneSameRegion_succeeds() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/1",
+            HttpMethod.PUT,
+            step1Payload("John Coach", "Bio", "Paris", "Centre", List.of("French"), "Europe/London"),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void saveStep1_unknownCity_failsOpenAndSucceeds() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/1",
+            HttpMethod.PUT,
+            step1Payload("John Coach", "Bio", "Unknown_Place", "Centre", List.of("English"), "America/New_York"),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void saveStep1_utcTimezone_alwaysCompatibleRegardlessOfCity() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/1",
+            HttpMethod.PUT,
+            step1Payload("John Coach", "Bio", "Paris", "Centre", List.of("French"), "Etc/UTC"),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void saveStep1_blankCity_failsOpenAndSucceeds() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/1",
+            HttpMethod.PUT,
+            step1Payload("John Coach", "Bio", null, null, List.of("English"), "America/New_York"),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 
     @Test

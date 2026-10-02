@@ -160,7 +160,8 @@ public class BookingBatchService {
             if (!slot.requestedEndTime().isAfter(slot.requestedStartTime())) {
                 throw new OperationNotAllowedException("Requested end time must be after start time", BookingError.INVALID_TIME_RANGE);
             }
-            validateSlotDurationAndAvailability(slot, requiredDuration, windows, req.coachId());
+            validateSlotDurationAndAvailability(slot, requiredDuration, windows, req.coachId(),
+                coach.getCanonicalTimezone());
         }
 
         long distinctStartTimes = req.slots().stream()
@@ -219,7 +220,8 @@ public class BookingBatchService {
         List<CoachAvailabilityWindow> freshWindows =
             coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(req.coachId());
         for (BatchSlot slot : req.slots()) {
-            validateSlotDurationAndAvailability(slot, freshRequiredDuration, freshWindows, req.coachId());
+            validateSlotDurationAndAvailability(slot, freshRequiredDuration, freshWindows, req.coachId(),
+                lockedCoach.getCanonicalTimezone());
         }
 
         BookingBatch batch = new BookingBatch();
@@ -269,7 +271,8 @@ public class BookingBatchService {
      * would drift from its cross-midnight anchoring and invalid-timezone handling.
      */
     private void validateSlotDurationAndAvailability(BatchSlot slot, Duration requiredDuration,
-                                                       List<CoachAvailabilityWindow> windows, UUID coachId) {
+                                                       List<CoachAvailabilityWindow> windows, UUID coachId,
+                                                       String coachTimezone) {
         Duration slotDuration =
             Duration.between(slot.requestedStartTime(), slot.requestedEndTime());
         if (!slotDuration.equals(requiredDuration)) {
@@ -280,7 +283,7 @@ public class BookingBatchService {
                 BookingError.INVALID_SESSION_DURATION);
         }
         if (!bookingService.isSlotWithinAvailabilityWindow(
-                slot.requestedStartTime(), slot.requestedEndTime(), windows, coachId)) {
+                slot.requestedStartTime(), slot.requestedEndTime(), windows, coachId, coachTimezone)) {
             throw new OperationNotAllowedException(
                 "Requested slot is not within coach availability",
                 Map.of("requested start time", slot.requestedStartTime(),

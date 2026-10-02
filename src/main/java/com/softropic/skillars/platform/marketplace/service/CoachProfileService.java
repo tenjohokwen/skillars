@@ -161,6 +161,10 @@ public class CoachProfileService {
 
     @Transactional
     public ProfileBuilderStepResponse saveStep1(Long userId, ProfileBuilderStep1Request req) {
+        // AC2 (skillars-deferred-140): checked before any mutation — a rejected request must leave
+        // nothing half-applied.
+        CityTimezoneValidator.validate(req.city(), req.canonicalTimezone());
+
         CoachProfile profile = coachProfileRepository.findByUserId(userId).orElseGet(() -> {
             CoachProfile p = new CoachProfile();
             p.setUserId(userId);
@@ -168,12 +172,62 @@ public class CoachProfileService {
             return p;
         });
 
+        // A brand-new profile has both id and canonicalTimezone null, so timezoneChanged is
+        // correctly false for it and no lock is taken (refresh on a transient entity would throw).
+        boolean isExistingProfile = profile.getId() != null;
+        String previousTimezone = null;
+
+        if (isExistingProfile) {
+            // mto-story-review 2026-10-02, Corner Case D: mirrors saveStep4's own lock-then-refresh
+            // pattern, taken BEFORE any field is set below (entityManager.refresh reloads the
+            // entity's state from the DB, which would otherwise wipe out in-memory changes applied
+            // before it). Without this lock, a concurrent addWindow can read the pre-relocation zone
+            // under its own lock while this bulk re-stamp is in flight, and insert a new window
+            // stamped with the now-stale zone that survives commit. Mutation-checked: removing this
+            // block fails concurrentAddWindowDuringRelocation_newWindowIsNotMissedByTheReStamp
+            // (CoachProfileServiceConcurrencyIT) — no lock contention is detected and the race
+            // reopens.
+            //
+            // skillars-deferred-140 code review: the lock is taken UNCONDITIONALLY for an existing
+            // profile, and previousTimezone is read AFTER the refresh, not before. Gating the lock on
+            // a comparison against an UNLOCKED read re-opened the race from the other side: two
+            // concurrent saveStep1 calls where the second reads the pre-relocation zone and submits
+            // that same value compute timezoneChanged=false, take no lock, and write the stale zone
+            // after the first transaction re-stamped every window — leaving profile and windows
+            // divergent, exactly the invariant AC1 exists to guarantee. CoachProfile carries no
+            // @Version, so nothing else catches it. This also matches the four sibling lock sites in
+            // this class (saveStep4, deletePhoto, publishProfile) and AvailabilityService.lockProfile,
+            // all of which lock unconditionally; saveStep1 was the only conditional one.
+            lockRetryer.withBoundedRetry("CoachProfileService.saveStep1", () -> {
+                coachProfileRepository.findByIdForUpdate(profile.getId())
+                    .orElseThrow(() -> new MarketplaceException("marketplace.profileNotFound",
+                        "Coach profile not found for userId=" + userId));
+                entityManager.refresh(profile, LockModeType.PESSIMISTIC_WRITE);
+                return null;
+            });
+            previousTimezone = profile.getCanonicalTimezone();
+        }
+
+        boolean timezoneChanged = previousTimezone != null
+            && !previousTimezone.equals(req.canonicalTimezone());
+
         profile.setDisplayName(req.displayName());
         profile.setBio(req.bio() != null ? contactDetailSanitizer.sanitize(req.bio()).sanitized() : null);
         profile.setCity(req.city());
         profile.setDistrict(req.district());
         profile.setLanguages(req.languages());
         profile.setCanonicalTimezone(req.canonicalTimezone());
+
+        if (timezoneChanged) {
+            // AC1.2: re-stamp every existing window to the new profile zone — do NOT revert the
+            // profile to DRAFT. The window's own LocalTime values are left untouched; only the zone
+            // they are interpreted in changes, matching a coach who physically relocated but keeps
+            // the same "9am-5pm, my local time" schedule.
+            List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository
+                .findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(profile.getId());
+            windows.forEach(w -> w.setCanonicalTimezone(req.canonicalTimezone()));
+            coachAvailabilityWindowRepository.saveAll(windows);
+        }
 
         CoachProfile saved = coachProfileRepository.save(profile);
         return new ProfileBuilderStepResponse(saved.getId(), 1, 2);
@@ -286,13 +340,18 @@ public class CoachProfileService {
         }
 
         coachAvailabilityWindowRepository.deleteByCoachId(profile.getId());
+        // AC1.1 (skillars-deferred-140, Option B): the coach's profile zone is now authoritative —
+        // every window is stamped with it regardless of what the request sends. ProfileBuilderStep4
+        // still requires a (validated) per-window value because the request schema has not changed,
+        // but it is discarded here rather than trusted, so the frontend can no longer create a
+        // window whose stored zone diverges from the profile's.
         List<CoachAvailabilityWindow> windows = req.windows().stream().map(w -> {
             CoachAvailabilityWindow win = new CoachAvailabilityWindow();
             win.setCoachId(profile.getId());
             win.setDayOfWeek(w.dayOfWeek());
             win.setStartTime(w.startTime());
             win.setEndTime(w.endTime());
-            win.setCanonicalTimezone(w.canonicalTimezone());
+            win.setCanonicalTimezone(profile.getCanonicalTimezone());
             return win;
         }).toList();
         coachAvailabilityWindowRepository.saveAll(windows);

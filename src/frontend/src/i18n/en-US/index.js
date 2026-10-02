@@ -137,6 +137,16 @@ export default {
       step1SectionTimezone: 'Timezone',
       step4SectionTimezone: 'Timezone',
       step4TimezoneHelper: 'Windows above are interpreted in this timezone.',
+      // skillars-deferred-140 code review: the read-only display replaced an editable picker, so it
+      // needs to say where the value comes from — mirroring profile.availabilityTimezoneReadonlyHint,
+      // which the My Profile dialog already pairs with its own read-only value.
+      step4TimezoneReadonlyHint:
+        'Taken from Step 1. Change it there to move all your availability.',
+      // Recovery affordance: shown when the profile timezone could not be fetched, or is a legacy
+      // value this server no longer accepts. Without a picker here the coach sat at a permanently
+      // disabled Next button with no explanation.
+      step4TimezoneUnavailable:
+        'We could not confirm your profile timezone, or it is no longer supported. Please choose one to continue.',
       timezoneLabel: 'Timezone',
       timezoneHint: 'Type to search, e.g. Europe/Berlin',
       timezoneNoMatch: 'No matching timezone',
@@ -276,6 +286,22 @@ export default {
     // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
     duplicateSessionPackCount:
       'That pack size is listed twice. Each session pack must have a different number of sessions.',
+    // skillars-deferred-140 AC3: full sweep of every marketplace.* error key the backend throws
+    // (MarketplaceException errorCode -> ErrorDto.errorMsg.errorKey -> here, via useErrorHandler's
+    // te(key) ? t(key) : rawMessage). One generic translated phrase per key, same tradeoff this
+    // codebase already accepts elsewhere (e.g. duplicateSessionPackCount above,
+    // booking.slotUnavailable): once translated, the backend's more specific per-call English
+    // message is not shown, in exchange for a correctly localized one.
+    stepOutOfOrder: 'Please complete the previous step first.',
+    profileNotFound: 'Coach profile not found.',
+    alreadyPublished: 'Your profile is already published.',
+    profileNotEligibleToPublish: 'Your profile cannot be published in its current status.',
+    incompleteProfile: 'Please complete all required profile steps first.',
+    invalidPhotoUrl: 'This photo could not be used. Please try uploading it again.',
+    invalidTimeRange: 'The end time must be after the start time.',
+    overlappingAvailability: 'These availability windows overlap. Please adjust the times.',
+    cityTimezoneMismatch:
+      'Your city and timezone appear to be in different regions. Please check both fields.',
     title: 'Find a Coach',
     searchByCity: 'Search by city',
     searchByCityPlaceholder: 'e.g. Frankfurt, Berlin, Munich',

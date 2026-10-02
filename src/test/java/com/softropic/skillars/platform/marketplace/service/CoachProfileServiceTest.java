@@ -8,7 +8,11 @@ import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileSelfResponse;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
+import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
+import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep1Request;
+import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep4Request;
 import com.softropic.skillars.platform.marketplace.repo.CoachAgeGroupRepository;
+import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachMediaItemRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricing;
@@ -21,22 +25,29 @@ import com.softropic.skillars.platform.marketplace.repo.CoachSpecialtyRepository
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
 import com.softropic.skillars.platform.marketplace.repo.SessionPackRepository;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -79,6 +90,9 @@ class CoachProfileServiceTest {
     void stubLockRetryer() {
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((Supplier<?>) inv.getArgument(1)).get());
+        lenient().when(contactDetailSanitizer.sanitize(anyString()))
+            .thenAnswer(inv -> new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.SanitizerResult(
+                inv.getArgument(0), false));
     }
 
     @Test
@@ -221,6 +235,170 @@ class CoachProfileServiceTest {
 
         verify(coachProfileRepository).save(profile);
         assertThat(profile.getPhotoUrl()).isNull();
+    }
+
+    // ---- skillars-deferred-140 AC1.1: saveStep4 stamps the profile zone onto every window ----
+
+    @Test
+    void saveStep4_whenWindowHasPerWindowTimezone_overwritesWithProfileTimezone() {
+        CoachProfile profile = draftProfile(); // canonicalTimezone = "Europe/Berlin"
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(profile));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(new CoachPricing()));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(profile));
+        when(coachAvailabilityWindowRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProfileBuilderStep4Request req = new ProfileBuilderStep4Request(List.of(
+            new ProfileBuilderStep4Request.AvailabilityWindowRequest(
+                (short) 1, LocalTime.of(9, 0), LocalTime.of(17, 0), "America/New_York")));
+
+        service.saveStep4(USER_ID, req);
+
+        ArgumentCaptor<List<CoachAvailabilityWindow>> captor = ArgumentCaptor.forClass(List.class);
+        verify(coachAvailabilityWindowRepository).saveAll(captor.capture());
+        assertThat(captor.getValue()).extracting(CoachAvailabilityWindow::getCanonicalTimezone)
+            .containsExactly("Europe/Berlin");
+    }
+
+    // ---- skillars-deferred-140 AC1.2: saveStep1 re-stamps existing windows on zone change ----
+
+    @Test
+    void saveStep1_whenTimezoneChanges_updatesExistingWindowsCanonicalTimezone() {
+        CoachProfile profile = draftProfile(); // id=COACH_ID, canonicalTimezone = "Europe/Berlin"
+        CoachAvailabilityWindow window1 = new CoachAvailabilityWindow();
+        window1.setId(UUID.randomUUID());
+        window1.setCoachId(COACH_ID);
+        window1.setCanonicalTimezone("Europe/Berlin");
+        CoachAvailabilityWindow window2 = new CoachAvailabilityWindow();
+        window2.setId(UUID.randomUUID());
+        window2.setCoachId(COACH_ID);
+        window2.setCanonicalTimezone("Europe/Berlin");
+
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(profile));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID))
+            .thenReturn(List.of(window1, window2));
+        when(coachAvailabilityWindowRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(coachProfileRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProfileBuilderStep1Request req = new ProfileBuilderStep1Request(
+            "Coach Name", "Bio text", "Madrid", "Centro", List.of("English", "Spanish"), "Europe/Madrid");
+
+        service.saveStep1(USER_ID, req);
+
+        assertThat(window1.getCanonicalTimezone()).isEqualTo("Europe/Madrid");
+        assertThat(window2.getCanonicalTimezone()).isEqualTo("Europe/Madrid");
+        verify(coachAvailabilityWindowRepository).saveAll(List.of(window1, window2));
+    }
+
+    /**
+     * skillars-deferred-140 code review: this previously asserted {@code findByIdForUpdate} was
+     * NEVER called on the unchanged-timezone path. That gating was the defect — the "did the zone
+     * change?" decision was made from an UNLOCKED read, so two concurrent saveStep1 calls could
+     * leave the profile zone and the window zones divergent (the second reads the pre-relocation
+     * value, submits that same value, computes no-change, takes no lock, and writes it after the
+     * first has re-stamped every window; CoachProfile has no {@code @Version} to catch it). The lock
+     * is now unconditional for an existing profile, so what this test pins is narrower but still the
+     * point of the AC: an unchanged zone must not TOUCH the windows.
+     */
+    @Test
+    void saveStep1_whenTimezoneUnchanged_locksButDoesNotTouchWindows() {
+        CoachProfile profile = draftProfile(); // canonicalTimezone = "Europe/Berlin"
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.findByIdForUpdate(profile.getId())).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProfileBuilderStep1Request req = new ProfileBuilderStep1Request(
+            "Coach Name", "Bio text", "Berlin", "Mitte", List.of("English"), "Europe/Berlin");
+
+        service.saveStep1(USER_ID, req);
+
+        verify(coachAvailabilityWindowRepository, never())
+            .findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(any());
+        verify(coachAvailabilityWindowRepository, never()).saveAll(any());
+        // The lock itself is taken regardless, so the change-detection read happens under it.
+        verify(coachProfileRepository).findByIdForUpdate(profile.getId());
+    }
+
+    /**
+     * skillars-deferred-140 code review: the decision to re-stamp must be made from the value read
+     * AFTER {@code entityManager.refresh} under the lock, not from the earlier unlocked
+     * {@code findByUserId} snapshot. Simulated here by having refresh mutate the entity the way a
+     * concurrently-committed relocation would, then asserting the re-stamp fires off the refreshed
+     * value: the unlocked snapshot says "Europe/Berlin -> Europe/Berlin, nothing changed", while the
+     * refreshed truth is "Asia/Tokyo -> Europe/Berlin, changed".
+     */
+    @Test
+    void saveStep1_whenConcurrentWriteChangedZoneBeforeLock_reStampsFromRefreshedValue() {
+        CoachProfile profile = draftProfile(); // canonicalTimezone = "Europe/Berlin"
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.findByIdForUpdate(profile.getId())).thenReturn(Optional.of(profile));
+        when(coachProfileRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        doAnswer(inv -> {
+            profile.setCanonicalTimezone("Asia/Tokyo");
+            return null;
+        }).when(entityManager).refresh(eq(profile), any(LockModeType.class));
+
+        CoachAvailabilityWindow window = new CoachAvailabilityWindow();
+        window.setCoachId(profile.getId());
+        window.setCanonicalTimezone("Asia/Tokyo");
+        when(coachAvailabilityWindowRepository
+            .findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(profile.getId()))
+            .thenReturn(List.of(window));
+
+        ProfileBuilderStep1Request req = new ProfileBuilderStep1Request(
+            "Coach Name", "Bio text", "Berlin", "Mitte", List.of("English"), "Europe/Berlin");
+
+        service.saveStep1(USER_ID, req);
+
+        verify(coachAvailabilityWindowRepository).saveAll(any());
+        assertThat(window.getCanonicalTimezone())
+            .as("re-stamp must key off the post-refresh zone, not the stale unlocked read")
+            .isEqualTo("Europe/Berlin");
+    }
+
+    @Test
+    void saveStep1_newProfile_doesNotAttemptWindowReStampOrLock() {
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
+        when(coachProfileRepository.save(any())).thenAnswer(inv -> {
+            CoachProfile p = inv.getArgument(0);
+            p.setId(COACH_ID);
+            return p;
+        });
+
+        ProfileBuilderStep1Request req = new ProfileBuilderStep1Request(
+            "Coach Name", "Bio text", "Berlin", "Mitte", List.of("English"), "Europe/Berlin");
+
+        service.saveStep1(USER_ID, req);
+
+        verify(coachProfileRepository, never()).findByIdForUpdate(any());
+        verify(coachAvailabilityWindowRepository, never()).saveAll(any());
+    }
+
+    // ---- skillars-deferred-140 AC2: city/timezone plausibility validation ----
+
+    @Test
+    void saveStep1_whenCityAndTimezoneContradict_rejectsWithValidationError() {
+        ProfileBuilderStep1Request req = new ProfileBuilderStep1Request(
+            "Coach Name", "Bio text", "Paris", "Centre", List.of("French"), "America/New_York");
+
+        assertThatThrownBy(() -> service.saveStep1(USER_ID, req))
+            .isInstanceOf(MarketplaceException.class)
+            .satisfies(e -> assertThat(((MarketplaceException) e).getErrorCode())
+                .isEqualTo("marketplace.cityTimezoneMismatch"));
+
+        verify(coachProfileRepository, never()).findByUserId(any());
+        verify(coachProfileRepository, never()).save(any());
+    }
+
+    @Test
+    void saveStep1_whenCityAndTimezoneSameRegion_succeeds() {
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
+        when(coachProfileRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProfileBuilderStep1Request req = new ProfileBuilderStep1Request(
+            "Coach Name", "Bio text", "Paris", "Centre", List.of("French"), "Europe/London");
+
+        assertThatCode(() -> service.saveStep1(USER_ID, req)).doesNotThrowAnyException();
     }
 
     @Test

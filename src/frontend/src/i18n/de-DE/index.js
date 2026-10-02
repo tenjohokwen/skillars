@@ -127,6 +127,10 @@ export default {
       step1SectionTimezone: 'Zeitzone',
       step4SectionTimezone: 'Zeitzone',
       step4TimezoneHelper: 'Die Zeitfenster oben werden in dieser Zeitzone interpretiert.',
+      step4TimezoneReadonlyHint:
+        'Aus Schritt 1 übernommen. Ändern Sie sie dort, um alle Ihre Verfügbarkeiten zu verschieben.',
+      step4TimezoneUnavailable:
+        'Die Zeitzone Ihres Profils konnte nicht bestätigt werden oder wird nicht mehr unterstützt. Bitte wählen Sie eine aus, um fortzufahren.',
       timezoneLabel: 'Zeitzone',
       timezoneHint: 'Zum Suchen tippen, z. B. Europe/Berlin',
       timezoneNoMatch: 'Keine passende Zeitzone',
@@ -620,6 +624,18 @@ export default {
     // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
     duplicateSessionPackCount:
       'Diese Paketgröße ist doppelt vorhanden. Jedes Sitzungspaket muss eine unterschiedliche Anzahl an Sitzungen haben.',
+    // skillars-deferred-140 AC3: full sweep of every marketplace.* error key the backend throws.
+    stepOutOfOrder: 'Bitte schließen Sie zuerst den vorherigen Schritt ab.',
+    profileNotFound: 'Coach-Profil nicht gefunden.',
+    alreadyPublished: 'Ihr Profil ist bereits veröffentlicht.',
+    profileNotEligibleToPublish: 'Ihr Profil kann im aktuellen Status nicht veröffentlicht werden.',
+    incompleteProfile: 'Bitte vervollständigen Sie zuerst alle erforderlichen Profilschritte.',
+    invalidPhotoUrl: 'Dieses Foto konnte nicht verwendet werden. Bitte laden Sie es erneut hoch.',
+    invalidTimeRange: 'Die Endzeit muss nach der Startzeit liegen.',
+    overlappingAvailability:
+      'Diese Verfügbarkeitszeiträume überschneiden sich. Bitte passen Sie die Zeiten an.',
+    cityTimezoneMismatch:
+      'Ihre Stadt und Ihre Zeitzone scheinen sich in unterschiedlichen Regionen zu befinden. Bitte überprüfen Sie beide Felder.',
     title: 'Trainer finden',
     searchByCity: 'Nach Stadt suchen',
     searchByCityPlaceholder: 'z.B. Frankfurt, Berlin, München',
