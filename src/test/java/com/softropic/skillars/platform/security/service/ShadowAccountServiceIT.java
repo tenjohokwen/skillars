@@ -5,9 +5,12 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.contract.AgeTier;
 import com.softropic.skillars.platform.security.contract.CreatePlayerProfileRequest;
+import com.softropic.skillars.platform.security.contract.CreateSelfPlayerProfileRequest;
 import com.softropic.skillars.platform.security.contract.PlayerPosition;
 import com.softropic.skillars.platform.security.contract.PlayerProfileResponse;
+import com.softropic.skillars.platform.security.contract.exception.PlayerProfileNotFoundException;
 import com.softropic.skillars.platform.security.contract.exception.ShadowAccountException;
+import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +32,7 @@ class ShadowAccountServiceIT extends AbstractIntegrationTest {
 
     private static final long PARENT_A_ID = 555000000000000001L;
     private static final long PARENT_B_ID = 555000000000000002L;
+    private static final long SELF_PLAYER_ID = 555000000000000003L;
 
     @Autowired
     private ShadowAccountService shadowAccountService;
@@ -50,6 +54,7 @@ class ShadowAccountServiceIT extends AbstractIntegrationTest {
             );
             insertParentUser(PARENT_A_ID, "parent.a@test.com", "6571111001");
             insertParentUser(PARENT_B_ID, "parent.b@test.com", "6571111002");
+            insertPlayerUser(SELF_PLAYER_ID, "self.player@test.com", "6571111003");
             return null;
         });
     }
@@ -169,6 +174,88 @@ class ShadowAccountServiceIT extends AbstractIntegrationTest {
             .isInstanceOf(ShadowAccountException.class)
             .satisfies(e -> assertThat(((ShadowAccountException) e).getErrorCode())
                 .isEqualTo("security.playerAlreadyHasParent"));
+    }
+
+    // ---- AC4: updateOwnPosition ----
+
+    @Test
+    void updateOwnPosition_existingProfile_updatesAndReturnsResponse() {
+        shadowAccountService.createSelfOwnedPlayerProfile(SELF_PLAYER_ID,
+            new CreateSelfPlayerProfileRequest(PlayerPosition.GOALKEEPER));
+
+        PlayerProfileResponse response = shadowAccountService.updateOwnPosition(SELF_PLAYER_ID, PlayerPosition.FORWARD);
+
+        assertThat(response.position()).isEqualTo(PlayerPosition.FORWARD);
+        assertThat(shadowAccountService.getSelfOwnedPlayerProfile(SELF_PLAYER_ID).position())
+            .isEqualTo(PlayerPosition.FORWARD);
+    }
+
+    @Test
+    void updateOwnPosition_noProfile_throws() {
+        // skillars-deferred-139 review D3: a distinct, player-profile-specific 404 — the user account
+        // exists, only the profile row does not — rather than the generic UserNotFoundException.
+        assertThatThrownBy(() -> shadowAccountService.updateOwnPosition(SELF_PLAYER_ID, PlayerPosition.FORWARD))
+            .isInstanceOf(PlayerProfileNotFoundException.class);
+    }
+
+    @Test
+    void getSelfOwnedPlayerProfile_noProfile_throwsPlayerProfileNotFound() {
+        // Review audit item 3: the READ path must report the missing-profile state the same way the
+        // write path does. "My Profile" uses exactly this call to decide between the position row and
+        // the complete-your-profile CTA, so a UserNotFoundException here contradicted
+        // updateOwnPosition for the identical underlying state.
+        assertThatThrownBy(() -> shadowAccountService.getSelfOwnedPlayerProfile(SELF_PLAYER_ID))
+            .isInstanceOf(PlayerProfileNotFoundException.class);
+    }
+
+    // ---- AC5: updateChildPosition ----
+
+    @Test
+    void updateChildPosition_ownChild_updatesAndReturnsResponse() {
+        LocalDate adultDob = LocalDate.now().minusYears(20);
+        PlayerProfileResponse created = shadowAccountService.createPlayerProfile(PARENT_A_ID,
+            new CreatePlayerProfileRequest("Child One", adultDob, PlayerPosition.DEFENDER, null, null));
+
+        PlayerProfileResponse updated = shadowAccountService.updateChildPosition(created.id(), PARENT_A_ID, PlayerPosition.MIDFIELDER);
+
+        assertThat(updated.position()).isEqualTo(PlayerPosition.MIDFIELDER);
+    }
+
+    @Test
+    void updateChildPosition_otherParentsChild_throws() {
+        LocalDate adultDob = LocalDate.now().minusYears(20);
+        PlayerProfileResponse created = shadowAccountService.createPlayerProfile(PARENT_A_ID,
+            new CreatePlayerProfileRequest("Child Of A", adultDob, PlayerPosition.DEFENDER, null, null));
+
+        // Review audit item 3: UserNotFoundException here is DELIBERATE, not an oversight left over
+        // from the D3 change that moved updateOwnPosition/getSelfOwnedPlayerProfile to
+        // PlayerProfileNotFoundException. findByIdAndParentId returns empty for two different states
+        // — "no such profile" and "not your child" — and this is the latter. Reporting it as
+        // "player profile not found" would assert a negative about another family's child and would
+        // route this parent to the create-a-player-profile builder for a child that is not theirs.
+        // Do not "unify" this with the other two.
+        assertThatThrownBy(() -> shadowAccountService.updateChildPosition(created.id(), PARENT_B_ID, PlayerPosition.FORWARD))
+            .isInstanceOf(UserNotFoundException.class);
+    }
+
+    private void insertPlayerUser(long id, String email, String phone) {
+        jdbcTemplate.update(
+            "INSERT INTO main.\"user\" " +
+            "(id, created_by, created_date, last_modified_by, last_modified_date, request_id, session_id, " +
+            "status, dob, email, first_name, gender, lang_key, last_name, iso2_country, phone, " +
+            "activated, locked, login, login_id_type, password_hash, otp_enabled, " +
+            "skillars_role, verification_status) " +
+            "VALUES (?, 'system', ?, 'system', ?, 'test-req', NULL, " +
+            "'ACTIVE', '1995-06-01', ?, 'Self', 'OTHER', 'en', 'Player', 'CM', ?, " +
+            "true, false, ?, 'EMAIL', '$2a$10$Sdo/qTAcMcYaIAV6XXw3dejlsDwL93g6zb.uPUwFohPpC8q3bEg5i', false, " +
+            "'PLAYER', 'BASIC_VERIFIED')",
+            id,
+            Timestamp.from(Instant.now()),
+            Timestamp.from(Instant.now()),
+            email,
+            phone,
+            email
+        );
     }
 
     private void insertParentUser(long id, String email, String phone) {

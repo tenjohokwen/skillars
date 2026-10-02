@@ -117,6 +117,8 @@ export default {
       step3RemovePack: 'Paket entfernen',
       step3PackInvalid:
         'Jedes Sitzungspaket braucht eine Sitzungsanzahl und einen Preis über 0 – oder entfernen Sie die Zeile.',
+      step3PackDuplicateSessionCount:
+        'Zwei oder mehr Pakete haben dieselbe Sitzungsanzahl — jedes Paket muss eine eindeutige Sitzungsanzahl haben.',
       step4Title: 'Verfügbarkeit',
       step4Short: 'Verfügbarkeit',
       step4AvailabilityWindows: 'Verfügbarkeitsfenster',
@@ -615,6 +617,9 @@ export default {
     deletionFailed: 'Video konnte nicht gelöscht werden. Bitte erneut versuchen.',
   },
   marketplace: {
+    // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
+    duplicateSessionPackCount:
+      'Diese Paketgröße ist doppelt vorhanden. Jedes Sitzungspaket muss eine unterschiedliche Anzahl an Sitzungen haben.',
     title: 'Trainer finden',
     searchByCity: 'Nach Stadt suchen',
     searchByCityPlaceholder: 'z.B. Frankfurt, Berlin, München',
@@ -1139,6 +1144,8 @@ export default {
       'Dieser Bestätigungslink ist nicht mehr gültig. Bitte starten Sie die Registrierung über die E-Mail, die wir Ihnen gesendet haben, erneut.',
     featureGated: 'Diese Funktion erfordert ein höheres Abonnement-Tier.',
     userNotFound: 'Das angeforderte Spielerprofil konnte nicht gefunden werden.',
+    playerProfileNotFound:
+      'Ihr Spielerprofil konnte nicht gefunden werden. Bitte vervollständigen Sie Ihr Spielerprofil.',
     unauthorized: 'Sie haben nicht die erforderlichen Rechte. Sie können den Support kontaktieren',
     authError: 'Es ist ein Authentifizierungsproblem aufgetreten.',
     accountExpired: 'Ihr Konto ist abgelaufen.',
@@ -1334,6 +1341,36 @@ export default {
       'Geben Sie Ihr Passwort ein, um die Zwei-Faktor-Authentifizierung zu deaktivieren.',
     emailChangeWarning:
       'Das Ändern Ihrer E-Mail-Adresse ändert auch Ihre Anmeldedaten. Sie werden automatisch abgemeldet und müssen sich mit Ihrer neuen E-Mail-Adresse erneut anmelden.',
+    sectionCoachProfile: 'Trainerprofil',
+    sectionPlayerProfile: 'Spielerprofil',
+    sectionMyChildren: 'Profile meiner Kinder',
+    coachIdentity: 'Identität & Standort',
+    coachSpecialties: 'Spezialisierungen & Altersgruppen',
+    coachPricing: 'Preise & Sitzungspakete',
+    coachAvailability: 'Verfügbarkeit',
+    coachAvailabilityWindowCount:
+      '{count} wöchentliche Zeitfenster | 1 wöchentliches Zeitfenster | {count} wöchentliche Zeitfenster',
+    coachPhoto: 'Profilfoto',
+    noPhoto: 'Nicht festgelegt',
+    photoCurrentlySet: 'Foto derzeit festgelegt',
+    removePhoto: 'Foto entfernen',
+    confirmDeletePhoto: 'Ihr Profilfoto entfernen? Dies kann nicht rückgängig gemacht werden.',
+    noChildren: 'Noch keine Kinder hinzugefügt.',
+    updateCoachIdentity: 'Identität & Standort bearbeiten',
+    updateCoachSpecialties: 'Spezialisierungen & Altersgruppen bearbeiten',
+    updateCoachPricing: 'Preise & Sitzungspakete bearbeiten',
+    updateCoachAvailability: 'Verfügbarkeit bearbeiten',
+    updateCoachPhoto: 'Profilfoto bearbeiten',
+    updatePlayerPosition: 'Position bearbeiten',
+    coachSuspendedNote:
+      'Ihr Trainerprofil ist gesperrt. Die Bearbeitung ist deaktiviert, bis es wieder aktiviert wird.',
+    coachProfileLoadError: 'Ihr Trainerprofil konnte nicht geladen werden.',
+    noPlayerProfile: 'Sie haben Ihr Spielerprofil noch nicht vervollständigt.',
+    completePlayerProfile: 'Spielerprofil vervollständigen',
+    availabilityTimezoneReadonlyHint:
+      'Die Verfügbarkeit verwendet die Zeitzone Ihres Profils, festgelegt unter Identität & Standort.',
+    photoRejected:
+      'Diese Datei konnte nicht verwendet werden — prüfen Sie, ob es sich um ein JPG/PNG unter 5 MB handelt.',
   },
   success: {
     registered:

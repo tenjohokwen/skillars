@@ -121,6 +121,211 @@
               </q-btn>
             </div>
           </div>
+
+          <!-- AC2: Coach Profile section — role-gated, only ever shown to a coach -->
+          <div v-if="authStore.isCoach" class="glass-card profile-section">
+            <div class="text-label q-mb-lg">{{ $t('profile.sectionCoachProfile') }}</div>
+
+            <!-- skillars-deferred-139 review Patch 1: a swallowed fetch failure must not render the
+                 edit dialogs with a blank prefill (which would silently wipe untouched optional
+                 fields on save) — hide the edit affordances and show a retry-able error instead. -->
+            <div v-if="coachProfileError" class="profile-row">
+              <div class="text-meta" style="color: var(--accent-danger)">
+                {{ t('profile.coachProfileLoadError') }}
+              </div>
+              <q-btn flat dense no-caps :label="t('common.retry')" @click="loadCoachProfile" />
+            </div>
+
+            <template v-else-if="coachProfile">
+              <!-- skillars-deferred-139 review D4, corrected by the review audit: a suspended coach
+                   must not be able to rewrite their public display name/bio/specialties/pricing, but
+                   must still be able to SEE their own profile. So every row below renders read-only
+                   and only the edit buttons drop out — the earlier version replaced the whole section
+                   with a bare note, which hid the coach's own data from them. -->
+              <div v-if="isCoachSuspended" class="profile-row">
+                <div class="text-meta">{{ t('profile.coachSuspendedNote') }}</div>
+              </div>
+
+              <div class="profile-row">
+                <div>
+                  <div class="text-label">{{ t('profile.coachIdentity') }}</div>
+                  <div class="text-body q-mt-xs">
+                    {{ coachProfile?.displayName || '—' }}
+                    <span v-if="coachProfile?.city" class="text-meta">
+                      · {{ coachProfile.city
+                      }}<span v-if="coachProfile.district">, {{ coachProfile.district }}</span>
+                    </span>
+                  </div>
+                </div>
+                <q-btn
+                  v-if="!isCoachSuspended"
+                  flat
+                  dense
+                  icon="edit"
+                  round
+                  class="edit-btn"
+                  @click="showCoachIdentityDialog = true"
+                >
+                  <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
+                </q-btn>
+              </div>
+
+              <div class="profile-row">
+                <div>
+                  <div class="text-label">{{ t('profile.coachSpecialties') }}</div>
+                  <div class="text-body q-mt-xs">
+                    {{ (coachProfile?.specialties || []).join(', ') || '—' }}
+                  </div>
+                </div>
+                <q-btn
+                  v-if="!isCoachSuspended"
+                  flat
+                  dense
+                  icon="edit"
+                  round
+                  class="edit-btn"
+                  @click="showCoachSpecialtiesDialog = true"
+                >
+                  <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
+                </q-btn>
+              </div>
+
+              <div class="profile-row">
+                <div>
+                  <div class="text-label">{{ t('profile.coachPricing') }}</div>
+                  <div class="text-body q-mt-xs">
+                    {{
+                      coachProfile?.perSessionPrice != null
+                        ? `€${coachProfile.perSessionPrice}`
+                        : '—'
+                    }}
+                  </div>
+                </div>
+                <q-btn
+                  v-if="!isCoachSuspended"
+                  flat
+                  dense
+                  icon="edit"
+                  round
+                  class="edit-btn"
+                  @click="showCoachPricingDialog = true"
+                >
+                  <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
+                </q-btn>
+              </div>
+
+              <div class="profile-row">
+                <div>
+                  <div class="text-label">{{ t('profile.coachAvailability') }}</div>
+                  <div class="text-body q-mt-xs">
+                    {{
+                      t('profile.coachAvailabilityWindowCount', {
+                        count: (coachProfile?.availabilityWindows || []).length,
+                      })
+                    }}
+                  </div>
+                </div>
+                <q-btn
+                  v-if="!isCoachSuspended"
+                  flat
+                  dense
+                  icon="edit"
+                  round
+                  class="edit-btn"
+                  @click="showCoachAvailabilityDialog = true"
+                >
+                  <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
+                </q-btn>
+              </div>
+
+              <div class="profile-row">
+                <div>
+                  <div class="text-label">{{ t('profile.coachPhoto') }}</div>
+                  <div class="text-body q-mt-xs">
+                    {{
+                      coachProfile?.photoUrl ? t('profile.photoCurrentlySet') : t('profile.noPhoto')
+                    }}
+                  </div>
+                </div>
+                <q-btn
+                  v-if="!isCoachSuspended"
+                  flat
+                  dense
+                  icon="edit"
+                  round
+                  class="edit-btn"
+                  @click="showCoachPhotoDialog = true"
+                >
+                  <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
+                </q-btn>
+              </div>
+            </template>
+          </div>
+
+          <!-- AC4: Player Profile section — role-gated, only ever shown to a player -->
+          <div v-if="authStore.isPlayer" class="glass-card profile-section">
+            <div class="text-label q-mb-lg">{{ $t('profile.sectionPlayerProfile') }}</div>
+
+            <!-- skillars-deferred-139 review D3: a self-registered adult who never finished the
+                 player profile builder has no PlayerProfile row — route to the builder instead of a
+                 dead Edit button that would 404. -->
+            <div v-if="!playerProfile" class="profile-row">
+              <div>
+                <div class="text-body q-mt-xs">{{ t('profile.noPlayerProfile') }}</div>
+              </div>
+              <q-btn
+                flat
+                dense
+                no-caps
+                color="primary"
+                :label="t('profile.completePlayerProfile')"
+                to="/player/profile-builder"
+              />
+            </div>
+
+            <div v-else class="profile-row">
+              <div>
+                <div class="text-label">{{ t('auth.player.position') }}</div>
+                <div class="text-body q-mt-xs">{{ playerPositionLabel || '—' }}</div>
+              </div>
+              <q-btn
+                flat
+                dense
+                icon="edit"
+                round
+                class="edit-btn"
+                @click="showPlayerPositionDialog = true"
+              >
+                <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
+              </q-btn>
+            </div>
+          </div>
+
+          <!-- AC5: My Children's Profiles section — role-gated, only ever shown to a parent -->
+          <div v-if="authStore.isParent" class="glass-card profile-section">
+            <div class="text-label q-mb-lg">{{ $t('profile.sectionMyChildren') }}</div>
+
+            <div v-if="!playerStore.players.length" class="text-meta">
+              {{ t('profile.noChildren') }}
+            </div>
+
+            <div v-for="child in playerStore.players" :key="child.id" class="profile-row">
+              <div>
+                <div class="text-label">{{ child.name }}</div>
+                <div class="text-body q-mt-xs">{{ childPositionLabel(child.position) }}</div>
+              </div>
+              <q-btn
+                flat
+                dense
+                icon="edit"
+                round
+                class="edit-btn"
+                @click="openChildPositionDialog(child.id)"
+              >
+                <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
+              </q-btn>
+            </div>
+          </div>
         </div>
       </template>
     </div>
@@ -148,6 +353,47 @@
       :current-enabled="profile?.otpEnabled"
       @updated="loadProfile"
     />
+
+    <!-- AC2/AC3 -->
+    <EditCoachIdentityDialog
+      v-model="showCoachIdentityDialog"
+      :current="coachProfile"
+      @updated="loadProfile"
+    />
+    <EditCoachSpecialtiesDialog
+      v-model="showCoachSpecialtiesDialog"
+      :current="coachProfile"
+      @updated="loadProfile"
+    />
+    <EditCoachPricingDialog
+      v-model="showCoachPricingDialog"
+      :current="coachProfile"
+      @updated="loadProfile"
+    />
+    <EditCoachAvailabilityDialog
+      v-model="showCoachAvailabilityDialog"
+      :current="coachProfile"
+      @updated="loadProfile"
+    />
+    <EditCoachPhotoDialog
+      v-model="showCoachPhotoDialog"
+      :current="coachProfile"
+      @updated="loadProfile"
+    />
+
+    <!-- AC4/AC5: shared dialog — no playerId for the player's own position (AC4), a playerId for a
+         parent editing one specific child's position (AC5) -->
+    <EditPlayerPositionDialog
+      v-model="showPlayerPositionDialog"
+      :current-position="playerProfile?.position"
+      @updated="loadProfile"
+    />
+    <EditPlayerPositionDialog
+      v-model="showChildPositionDialog"
+      :player-id="activeChildId"
+      :current-position="activeChildPosition"
+      @updated="loadProfile"
+    />
   </q-page>
 </template>
 
@@ -155,6 +401,10 @@
 import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { profileApi } from 'src/api/profile.api'
+import { getOwnCoachProfile } from 'src/api/marketplace.api'
+import { playerRegistrationApi } from 'src/api/playerRegistration.api'
+import { useAuthStore } from 'src/stores/auth.store'
+import { usePlayerStore } from 'src/stores/playerStore'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
 import UpdateEmailDialog from 'src/components/profile/UpdateEmailDialog.vue'
 import UpdatePasswordDialog from 'src/components/profile/UpdatePasswordDialog.vue'
@@ -162,12 +412,25 @@ import UpdatePhoneDialog from 'src/components/profile/UpdatePhoneDialog.vue'
 import UpdateAddressDialog from 'src/components/profile/UpdateAddressDialog.vue'
 import UpdateInfoDialog from 'src/components/profile/UpdateInfoDialog.vue'
 import Toggle2faDialog from 'src/components/profile/Toggle2faDialog.vue'
+import EditCoachIdentityDialog from 'src/components/profile/EditCoachIdentityDialog.vue'
+import EditCoachSpecialtiesDialog from 'src/components/profile/EditCoachSpecialtiesDialog.vue'
+import EditCoachPricingDialog from 'src/components/profile/EditCoachPricingDialog.vue'
+import EditCoachAvailabilityDialog from 'src/components/profile/EditCoachAvailabilityDialog.vue'
+import EditCoachPhotoDialog from 'src/components/profile/EditCoachPhotoDialog.vue'
+import EditPlayerPositionDialog from 'src/components/profile/EditPlayerPositionDialog.vue'
 
 const { t } = useI18n()
 const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandler()
+const authStore = useAuthStore()
+const playerStore = usePlayerStore()
 
 const profile = ref(null)
+const coachProfile = ref(null)
+const coachProfileError = ref(false)
+const playerProfile = ref(null)
 const isLoading = ref(false)
+
+const isCoachSuspended = computed(() => coachProfile.value?.status === 'SUSPENDED')
 
 const showEmailDialog = ref(false)
 const showPasswordDialog = ref(false)
@@ -175,6 +438,50 @@ const showPhoneDialog = ref(false)
 const showAddressDialog = ref(false)
 const showInfoDialog = ref(false)
 const show2faDialog = ref(false)
+
+const showCoachIdentityDialog = ref(false)
+const showCoachSpecialtiesDialog = ref(false)
+const showCoachPricingDialog = ref(false)
+const showCoachAvailabilityDialog = ref(false)
+const showCoachPhotoDialog = ref(false)
+
+const showPlayerPositionDialog = ref(false)
+const showChildPositionDialog = ref(false)
+const activeChildId = ref(null)
+
+const activeChildPosition = computed(
+  () => playerStore.players.find((p) => p.id === activeChildId.value)?.position || null,
+)
+
+const playerPositionLabel = computed(() => childPositionLabel(playerProfile.value?.position))
+
+function childPositionLabel(position) {
+  const m = {
+    GOALKEEPER: t('auth.player.positionGoalkeeper'),
+    DEFENDER: t('auth.player.positionDefender'),
+    MIDFIELDER: t('auth.player.positionMidfielder'),
+    FORWARD: t('auth.player.positionForward'),
+  }
+  return position ? m[position] || position : '—'
+}
+
+function openChildPositionDialog(playerId) {
+  activeChildId.value = playerId
+  showChildPositionDialog.value = true
+}
+
+// skillars-deferred-139 review Patch 1: a separate, retry-able loader rather than an inline
+// try/catch in loadProfile — on failure, coachProfileError gates the edit buttons so a stale/blank
+// prefill in the Identity/Pricing dialogs can never be resubmitted and wipe real data.
+async function loadCoachProfile() {
+  try {
+    coachProfile.value = await getOwnCoachProfile()
+    coachProfileError.value = false
+  } catch {
+    coachProfile.value = null
+    coachProfileError.value = true
+  }
+}
 
 onMounted(async () => {
   await loadProfile()
@@ -189,6 +496,26 @@ async function loadProfile() {
     setError(err)
   } finally {
     isLoading.value = false
+  }
+
+  // Role-specific sections load independently and swallow their own failures — a problem loading
+  // one of these must never block the two role-agnostic cards above from rendering.
+  if (authStore.isCoach) {
+    await loadCoachProfile()
+  }
+  if (authStore.isPlayer) {
+    try {
+      playerProfile.value = await playerRegistrationApi.getMyProfile()
+    } catch {
+      playerProfile.value = null
+    }
+  }
+  if (authStore.isParent) {
+    try {
+      await playerStore.fetchPlayers()
+    } catch {
+      /* ignore — the section just renders empty */
+    }
   }
 }
 

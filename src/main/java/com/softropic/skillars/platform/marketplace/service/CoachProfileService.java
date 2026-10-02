@@ -1,12 +1,17 @@
 package com.softropic.skillars.platform.marketplace.service;
 
+import com.softropic.skillars.infrastructure.blobstore.contract.exception.StorageObjectNotFoundException;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
+import com.softropic.skillars.infrastructure.security.AuthorizationException;
 import com.softropic.skillars.platform.booking.contract.BookingError;
+import com.softropic.skillars.platform.filestorage.service.FileStorageService;
+import com.softropic.skillars.platform.marketplace.contract.CoachAvailabilityWindowDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachMediaItemDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileNotFoundException;
+import com.softropic.skillars.platform.marketplace.contract.CoachProfileSelfResponse;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
@@ -36,6 +41,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
 import com.softropic.skillars.platform.marketplace.repo.SessionPack;
 import com.softropic.skillars.platform.marketplace.repo.SessionPackRepository;
+import com.softropic.skillars.platform.security.contract.AgeTier;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
@@ -84,6 +90,7 @@ public class CoachProfileService {
     private final CoachReliabilityStrikeRepository coachReliabilityStrikeRepository;
     private final EntityManager entityManager;
     private final PessimisticLockRetryer lockRetryer;
+    private final FileStorageService fileStorageService;
 
     /**
      * The timezones the profile builder is allowed to offer a coach.
@@ -179,7 +186,15 @@ public class CoachProfileService {
             throw new MarketplaceException("marketplace.stepOutOfOrder", "Complete Step 1 before submitting Step 2");
         }
 
+        // Found empirically (AC2's required re-ACTIVE-coach IT, skillars-deferred-139): Hibernate's
+        // default flush action order runs entity INSERTs before DELETEs, so without an explicit flush
+        // here a resubmission that repeats an existing skill/age-tier value inserts the new row
+        // before the old one is physically removed and hits uq_coach_specialty/uq_coach_age_group —
+        // this is pre-existing (also reachable by resubmitting Step 2 twice during onboarding), not
+        // something this story introduces, but AC2's "edit and resubmit" surface makes it common
+        // rather than rare, so it is fixed here rather than deferred.
         coachSpecialtyRepository.deleteByCoachId(profile.getId());
+        entityManager.flush();
         List<CoachSpecialty> specialties = req.specialties().stream().map(skill -> {
             CoachSpecialty s = new CoachSpecialty();
             s.setCoachId(profile.getId());
@@ -189,6 +204,7 @@ public class CoachProfileService {
         coachSpecialtyRepository.saveAll(specialties);
 
         coachAgeGroupRepository.deleteByCoachId(profile.getId());
+        entityManager.flush();
         List<CoachAgeGroup> ageGroups = req.ageGroups().stream().map(tier -> {
             CoachAgeGroup ag = new CoachAgeGroup();
             ag.setCoachId(profile.getId());
@@ -222,7 +238,11 @@ public class CoachProfileService {
         coachPricingRepository.save(pricing);
 
         if (req.sessionPacks() != null) {
+            // Same flush-before-reinsert fix as saveStep2, for the same reason: uq_session_pack is
+            // (coach_id, session_count), and a resubmission that repeats a session count would
+            // otherwise insert before the stale row is deleted.
             sessionPackRepository.deleteByCoachId(profile.getId());
+            entityManager.flush();
             List<SessionPack> packs = req.sessionPacks().stream().map(sp -> {
                 SessionPack pack = new SessionPack();
                 pack.setCoachId(profile.getId());
@@ -297,6 +317,99 @@ public class CoachProfileService {
         }
 
         return new ProfileBuilderStepResponse(profile.getId(), 5, 5);
+    }
+
+    /**
+     * AC1: the coach's own full profile, for "My Profile" edit-dialog prefill. Unlike
+     * {@link #getPublicProfile}, this works for a {@code DRAFT} profile (no status filter) and reads
+     * straight from the same repositories {@code saveStep1}-{@code saveStep5} already use, rather than
+     * the public view's lossy {@code coachPublicProfileFactsRepository} path — the public DTO omits
+     * {@code canonicalTimezone}, {@code sessionDurationMinutes}, and availability windows entirely.
+     */
+    @Transactional(readOnly = true)
+    public CoachProfileSelfResponse getOwnProfile(Long userId) {
+        CoachProfile profile = requireProfile(userId);
+        CoachPricing pricing = coachPricingRepository.findByCoachId(profile.getId()).orElse(null);
+        List<String> specialties = coachSpecialtyRepository.findByCoachId(profile.getId())
+            .stream().map(CoachSpecialty::getSkill).toList();
+        List<AgeTier> ageGroups = coachAgeGroupRepository.findByCoachId(profile.getId())
+            .stream().map(CoachAgeGroup::getAgeTier).toList();
+        List<SessionPackDto> sessionPacks = sessionPackRepository.findByCoachId(profile.getId())
+            .stream().map(sp -> new SessionPackDto(sp.getSessionCount(), sp.getTotalPrice(), "EUR", sp.getLabel()))
+            .toList();
+        List<CoachAvailabilityWindowDto> windows = coachAvailabilityWindowRepository
+            .findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(profile.getId())
+            .stream().map(w -> new CoachAvailabilityWindowDto(w.getDayOfWeek(), w.getStartTime(), w.getEndTime(), w.getCanonicalTimezone()))
+            .toList();
+        return new CoachProfileSelfResponse(
+            profile.getId(), profile.getStatus(), profile.getDisplayName(), profile.getBio(),
+            profile.getCity(), profile.getDistrict(), profile.getLanguages(), profile.getCanonicalTimezone(),
+            specialties, ageGroups,
+            pricing != null ? pricing.getPerSessionPrice() : null,
+            pricing != null ? pricing.getSessionDurationMinutes() : null,
+            "EUR", sessionPacks, windows, profile.getPhotoUrl());
+    }
+
+    /**
+     * AC3: the genuine gap {@code saveStep5} leaves — it can only ever SET a non-null photoUrl, never
+     * clear one. {@code FileStorageService.softDelete} enforces the project's file-deletion ownership
+     * convention (comparing {@code fso.getCreatedBy()} against the caller's own login) — belt-and-
+     * suspenders with {@code requireProfile(userId)}'s own ownership lookup. Idempotent: a no-op when
+     * the profile has no photo. Atomic with the {@code photoUrl} clear: {@code softDelete} makes no
+     * external storage call (a pure DB soft-delete), so both writes join this method's own ambient
+     * {@code @Transactional} boundary and commit or roll back together.
+     *
+     * <p>skillars-deferred-139 review D2: tolerates both {@link StorageObjectNotFoundException} (the
+     * storage row is already gone — nothing left to delete, so clearing {@code photoUrl} is the
+     * correct idempotent outcome) and {@link AuthorizationException} (the storage row's
+     * {@code created_by} is a stale login — reachable via a mundane email change, since
+     * {@code UserProfileService.updateUserEmail} updates the user's login but not any
+     * already-created {@code file_storage_objects} row's {@code created_by}) — without either, this
+     * coach could never remove their photo, the exact capability this AC exists to provide. Warn-logs
+     * the ownership-mismatch case since it is the more surprising of the two.
+     *
+     * <p>skillars-deferred-139 review Patch 4: locks and refreshes before mutating, mirroring
+     * {@link #saveStep4}'s own lock-then-refresh pattern — without it, this method's unlocked
+     * read-then-save could silently revert a concurrent {@code suspendCoach} (or any other concurrent
+     * status write) back to this request's stale pre-lock status, since {@code CoachProfile} has no
+     * {@code @Version}/{@code @DynamicUpdate} and a plain {@code save()} rewrites every column.
+     */
+    @Transactional
+    public void deletePhoto(Long userId, String currentUserLogin) {
+        CoachProfile profile = requireProfile(userId);
+        if (profile.getPhotoUrl() == null) {
+            return;
+        }
+
+        lockRetryer.withBoundedRetry("CoachProfileService.deletePhoto", () -> {
+            coachProfileRepository.findByIdForUpdate(profile.getId())
+                .orElseThrow(() -> new MarketplaceException("marketplace.profileNotFound",
+                    "Coach profile not found for userId=" + userId));
+            entityManager.refresh(profile, LockModeType.PESSIMISTIC_WRITE);
+            return null;
+        });
+
+        // Review audit item 4: the fast-path check above ran against the PRE-lock snapshot, so a
+        // concurrent deletePhoto that committed in between leaves photoUrl null here after the
+        // refresh. Re-check post-refresh rather than calling softDelete(null) and relying on it to
+        // throw StorageObjectNotFoundException — that worked, but logged a misleading "already gone"
+        // warning for what is simply a second, correctly idempotent delete.
+        if (profile.getPhotoUrl() == null) {
+            return;
+        }
+
+        try {
+            fileStorageService.softDelete(profile.getPhotoUrl(), currentUserLogin);
+        } catch (StorageObjectNotFoundException e) {
+            log.warn("deletePhoto: storage object for coachId={} already gone, clearing photoUrl anyway",
+                profile.getId());
+        } catch (AuthorizationException e) {
+            log.warn("deletePhoto: storage object for coachId={} is foreign-owned (likely a stale "
+                + "created_by from a since-changed login), clearing photoUrl anyway", profile.getId());
+        }
+
+        profile.setPhotoUrl(null);
+        coachProfileRepository.save(profile);
     }
 
     @Transactional

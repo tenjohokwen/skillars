@@ -3471,3 +3471,83 @@ open work in this file when next picking a story.]**
     coach rather than trusting the static-read analysis, (2) design the photo-delete path, (3)
     design the role-gated "My Profile" UI itself (new sections vs. a separate tab/page — not
     decided here), (4) do the equivalent endpoint-reuse check for player/parent fields.
+
+---
+
+## Deferred from: code review of skillars-deferred-139-my-profile-role-aware-field-management-and-coach-photo-delete (2026-10-02)
+
+- **`marketplace.stepOutOfOrder` and `marketplace.profileNotFound` have no translations in any locale.**
+  Both error keys are absent from all three frontend locale bundles (`src/frontend/src/i18n/en-US/index.js`,
+  `fr-FR/index.js`, `de-DE/index.js` — verified by importing the real bundles and resolving the keys, not
+  by grep alone) and also absent from `src/main/resources/i18n/messages*.properties`. When either is thrown
+  the UI banner falls through to the raw English server sentence (e.g. "Complete Step 2 before submitting
+  Step 3"), which French and German users see untranslated.
+
+  **Why deferred, not patched:** pre-existing, not introduced by deferred-139. Both keys are thrown by
+  `CoachProfileService.saveStep3` (`:220-223`) and `saveStep5` (`:304-306`), which the existing onboarding
+  wizard already calls — so the untranslated-error path predates this story and is reachable from the
+  original builder flow. deferred-139 only widened the set of entry points that can reach it.
+
+  **Note on scope:** this does *not* contradict the story's i18n-parity claim, which was independently
+  verified and holds — all 99 `t()` keys used by the seven new/changed frontend files resolve in all three
+  locales. These two are *server-side* error keys, a different namespace from the `profile.*` keys the story
+  added.
+
+  **Fix when picked up:** add `marketplace.stepOutOfOrder` and `marketplace.profileNotFound` to all three
+  locale bundles. Worth a broader sweep at the same time: audit every `MarketplaceError` key (and ideally
+  every server error key reachable by the frontend) for locale coverage, since these two being missing
+  suggests the server-error namespace was never parity-checked the way `profile.*` was.
+
+- **Adopt "coach profile timezone is authoritative" and close the open `deferred-17 D8` reconciliation.**
+  Decided by Mbah during the deferred-139 code review (2026-10-02): *"Both player and coach will use the
+  timezone of the city in which the coach resides when it comes to setting availability."* That rule
+  resolves D8 in favour of `coach_profiles.canonical_timezone` (a Step-1 field, stored alongside
+  `city`/`district`) being the single authoritative zone, making
+  `coach_availability_windows.canonical_timezone` derived rather than independently chosen.
+
+  **Current state is genuinely split, which is why this is a story and not a patch.** Two availability
+  writers disagree:
+  - `AvailabilityService.addWindow:261` already does `window.setCanonicalTimezone(lockedProfile.getCanonicalTimezone())`
+    — i.e. already implements the rule.
+  - `CoachProfileService.saveStep4:286-295` honours a caller-supplied per-window zone
+    (`ProfileBuilderStep4Request.AvailabilityWindowRequest.canonicalTimezone`).
+
+  And `AvailabilityService:82-83` documents per-window divergence as a **deliberate feature**, citing
+  skillars-deferred-63/-64: *"Per-window timezone divergence remains a deliberate feature — this only
+  changes which value drives the outer week-scoping bounds, not per-window slot computation below."*
+  `:140-152` duly materializes each window's slots in its own zone. Adopting Mbah's rule therefore
+  **reverses** that earlier decision, which is a deliberate call to make with eyes open, not a cleanup.
+
+  **Scope when picked up:**
+  1. `saveStep4` stamps `profile.getCanonicalTimezone()` onto every window and ignores (or validates-equal)
+     the request's per-window field; consider dropping the field from the DTO in a later contract revision.
+  2. `saveStep1` re-stamps existing windows when the zone changes — otherwise a coach who relocates leaves
+     stale window zones until their next availability save. (Deliberately left open by the narrow D1 fix
+     below; this is where it gets solved.)
+  3. Simplify `AvailabilityService:140-152` once per-window zones are guaranteed uniform.
+  4. Backfill migration for already-divergent rows (D8's "does not backfill existing rows" caveat).
+  5. Revisit whether `coach_availability_windows.canonical_timezone` should be dropped entirely.
+
+  **Already done, narrowly, in deferred-139's review:** the "My Profile" availability dialog's timezone
+  picker was made read-only (displays the profile zone, stamps it onto all windows) so it can no longer
+  create divergence — it previously read the profile column but wrote only the window column, so a zone
+  change there silently reverted on reopen. That fix deliberately touches neither `saveStep4`,
+  `AvailabilityService`, nor existing rows.
+
+- **Nothing derives or validates a coach's `canonicalTimezone` against their `city`.**
+  Raised during the deferred-139 code review (2026-10-02) while confirming the rule above.
+  `ProfileBuilderStep1Request` declares `@Size(max = 100) String city` (free text) and
+  `@NotBlank @IanaTimezone String canonicalTimezone` (picked independently from
+  `CoachProfileService.getSupportedTimezones()`). No constraint, validator, or derivation connects them,
+  so `city = "Paris"` with `canonicalTimezone = "America/New_York"` saves cleanly today.
+
+  **Why it matters now:** under the newly-stated rule that availability is expressed in the coach's
+  city's timezone, these two fields contradicting each other is no longer cosmetic — the authoritative
+  zone can silently disagree with the location it is supposed to represent, and every booking, reminder
+  and calendar bound derives from the zone, not the city.
+
+  **Options when picked up:** make `city` a structured/geocoded reference and derive the zone from it
+  (strongest, biggest change); or keep both fields but validate plausibility (warn or reject when the
+  zone's region clearly disagrees with the city); or formally document that the zone is authoritative and
+  `city` is display-only, in which case the UI should stop implying the zone follows the city.
+  Pre-existing — not introduced by deferred-139.
