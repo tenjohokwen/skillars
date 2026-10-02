@@ -26,8 +26,10 @@ failed_layers: '' # set at runtime: comma-separated list of layers that failed o
      > 2. Don't assume patterns are absent without seeing the full code — gaps often exist but you can't see them in a diff
      > 3. Only flag things where you've directly verified the problem, not inferred it
      > 4. Ignore "could be more elegant" — focus on actual correctness bugs only
+     > 5. Ambiguous design intent is NOT a "hypothetical risk" to ignore — if the correct behavior depends on information you don't have (a design choice that could reasonably go either way), that is a real finding. Report it; do not discard it as noise just because it isn't a clean-cut bug.
+     > 6. "Probably handled elsewhere" is not a reason to omit a finding unless you can point to the specific line that handles it. An unverified assumption of correctness is not verification.
      >
-     > Find REAL issues (correctness, logic errors, unhandled paths). Ignore style, over-engineering suggestions, or "nice-to-haves". Output as Markdown list (descriptions only).
+     > Find REAL issues (correctness, logic errors, unhandled paths, and unresolved design ambiguity). Ignore style and over-engineering suggestions, but never ignore an ambiguity just because it isn't a clean bug. Output as Markdown list (descriptions only).
 
    - **Edge Case Hunter** — receives `{diff_output}` and read access to the project. Invoke via the `bmad-review-edge-case-hunter` skill.
 
@@ -35,13 +37,19 @@ failed_layers: '' # set at runtime: comma-separated list of layers that failed o
      > You are an Acceptance Auditor reviewing a mature, hardened codebase. Review this diff against the spec and context docs. Check for: violations of acceptance criteria, deviations from spec intent, missing implementation of specified behavior, contradictions between spec constraints and actual code.
      >
      > **Critical before flagging:**
-     > 1. If the spec explicitly says "implementer decides during implementation" for a design choice and the implementation made a deliberate, documented choice, that is NOT a violation — dismiss it.
+     > 1. If the spec explicitly says "implementer decides during implementation" for a design choice AND the implementation documents what it decided and why, that is NOT a violation — dismiss it. But if the decision point is still open (no documented resolution in the diff), that IS a finding — report it as a decision needed, don't dismiss it.
      > 2. Only report deviations where the spec is explicit and unambiguous. Ignore reasonable implementation choices that differ from spec examples.
      > 3. Check if a stated "missing behavior" is actually present but in a different form than the spec example suggests.
      > 4. Read Javadoc in the changed code — design rationale and accepted tradeoffs are documented there; use that context.
+     > 5. Scan the spec/story file itself for its own hedges — "TBD", "open question", "deferred", "revisit", a reference to another story's open item — and account for each one explicitly rather than passing over it.
      >
-     > Output findings as a Markdown list. Each finding: one-line title, which AC/constraint it violates, and evidence from the diff. Only report genuine, verified violations, not style deviations or implementation discretion.
+     > Output findings as a Markdown list. Each finding: one-line title, which AC/constraint it violates (or, for an open decision point, which AC it's ambiguous under), and evidence from the diff. Only report genuine, verified violations and genuine open decisions — not style deviations or implementation discretion that the diff already resolved and documented.
 
+3. **Subagent failure handling**: If any subagent fails, times out, or returns empty results, append the layer name to `{failed_layers}` (comma-separated) and proceed with findings from the remaining layers.
+
+4. Collect all findings from the completed layers.
+
+5. Before moving to triage, count the findings collected. If the diff touches multiple files, new endpoints, or new UI components and the collected count is zero or near-zero, re-run the Blind Hunter and Acceptance Auditor prompts once more, explicitly reminding them: ambiguous design intent and unverified "probably fine" assumptions are findings, not noise — do not finalize a clean result without this second pass.
 
 ## NEXT
 
