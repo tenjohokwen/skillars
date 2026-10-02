@@ -127,6 +127,9 @@ export default {
       step3RemovePack: 'Remove pack',
       step3PackInvalid:
         'Each session pack needs a session count and a price above 0, or remove the row.',
+      // skillars-deferred-139 review Patch 6
+      step3PackDuplicateSessionCount:
+        'Two or more packs have the same session count — each pack must have a unique session count.',
       step4Title: 'Availability',
       step4Short: 'Availability',
       step4AvailabilityWindows: 'Availability Windows',
@@ -270,6 +273,9 @@ export default {
     },
   },
   marketplace: {
+    // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
+    duplicateSessionPackCount:
+      'That pack size is listed twice. Each session pack must have a different number of sessions.',
     title: 'Find a Coach',
     searchByCity: 'Search by city',
     searchByCityPlaceholder: 'e.g. Frankfurt, Berlin, Munich',
@@ -579,6 +585,10 @@ export default {
     generic: 'Internal unknown exception. You can contact help desk with your help code',
     featureGated: 'This feature requires a higher subscription tier.',
     userNotFound: 'The requested player profile could not be found.',
+    // skillars-deferred-139 review D3: distinct from userNotFound — the account exists, only the
+    // player profile row does not.
+    playerProfileNotFound:
+      'Your player profile could not be found. Please complete your player profile.',
   },
   success: {
     registered: 'Registration successful! Please check your email to activate your account.',
@@ -666,6 +676,44 @@ export default {
     confirm2faDisable: 'Enter your password to disable two-factor authentication.',
     emailChangeWarning:
       'Changing your email address will also change your login credentials. You will be automatically signed out and will need to log in again with your new email address.',
+    // skillars-deferred-139: role-gated sections on this same page — Coach (AC2/AC3), Player (AC4),
+    // Parent's children (AC5). Reuses the profile-builder's own field labels (auth.coach.*) and the
+    // player position labels (auth.player.*) rather than duplicating them under this namespace.
+    sectionCoachProfile: 'Coach Profile',
+    sectionPlayerProfile: 'Player Profile',
+    sectionMyChildren: "My Children's Profiles",
+    coachIdentity: 'Identity & Location',
+    coachSpecialties: 'Specialties & Age Groups',
+    coachPricing: 'Pricing & Session Packs',
+    coachAvailability: 'Availability',
+    // skillars-deferred-139 review Patch 11: vue-i18n pluralization (count | singular | plural) —
+    // was a plain string concatenation that could render "1 weekly windows".
+    coachAvailabilityWindowCount:
+      '{count} weekly windows | 1 weekly window | {count} weekly windows',
+    coachPhoto: 'Profile Photo',
+    noPhoto: 'Not set',
+    photoCurrentlySet: 'Photo currently set',
+    removePhoto: 'Remove photo',
+    confirmDeletePhoto: 'Remove your profile photo? This cannot be undone.',
+    noChildren: 'No children added yet.',
+    updateCoachIdentity: 'Edit Identity & Location',
+    updateCoachSpecialties: 'Edit Specialties & Age Groups',
+    updateCoachPricing: 'Edit Pricing & Session Packs',
+    updateCoachAvailability: 'Edit Availability',
+    updateCoachPhoto: 'Edit Profile Photo',
+    updatePlayerPosition: 'Edit Position',
+    // skillars-deferred-139 review D4/D3/Patch 1
+    coachSuspendedNote:
+      'Your coach profile is suspended. Editing is disabled until it is reinstated.',
+    coachProfileLoadError: 'Your coach profile could not be loaded.',
+    noPlayerProfile: "You haven't completed your player profile yet.",
+    completePlayerProfile: 'Complete your player profile',
+    // skillars-deferred-139 review D1: availability's timezone now follows the coach's own profile
+    // zone (Identity & Location) and is shown here read-only.
+    availabilityTimezoneReadonlyHint:
+      "Availability uses your profile's timezone, set under Identity & Location.",
+    // skillars-deferred-139 review Patch 9
+    photoRejected: 'That file could not be used — check it is a JPG/PNG under 5 MB.',
   },
   development: {
     dashboardTitle: 'Player Development',

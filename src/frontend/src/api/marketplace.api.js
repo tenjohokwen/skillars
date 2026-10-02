@@ -2,8 +2,16 @@ import { api } from 'src/boot/axios'
 
 export const getProfileBuilderStatus = () => api.get('/api/marketplace/coaches/me/profile/status')
 
+// AC1: the coach's own full profile (every builder-collected field, works pre-publish) — for "My
+// Profile"'s edit dialogs. Distinct from getProfileBuilderStatus (no field values) and
+// getCoachProfile below (public view, 404s for DRAFT, omits several builder-only fields).
+export const getOwnCoachProfile = () => api.get('/api/marketplace/coaches/me/profile')
+
 export const saveProfileBuilderStep = (stepNumber, data) =>
   api.put(`/api/marketplace/coaches/me/profile/steps/${stepNumber}`, data)
+
+// AC3: clears a previously-set profile photo. saveProfileBuilderStep(5, ...) can only ever SET one.
+export const deleteCoachPhoto = () => api.delete('/api/marketplace/coaches/me/profile/photo')
 
 // The timezone options the profile builder may offer. Sourced from the SERVER's zone set, never
 // from Intl.supportedValuesOf(): the browser's tzdata is exactly what used to lock a coach out of

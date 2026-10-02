@@ -235,6 +235,8 @@ export default {
       step3RemovePack: 'Supprimer le pack',
       step3PackInvalid:
         'Chaque pack de séances doit avoir un nombre de séances et un prix supérieurs à 0, ou supprimez la ligne.',
+      step3PackDuplicateSessionCount:
+        'Deux packs ou plus ont le même nombre de séances — chaque pack doit avoir un nombre de séances unique.',
       step4Title: 'Disponibilité',
       step4Short: 'Disponibilité',
       step4AvailabilityWindows: 'Créneaux de disponibilité',
@@ -273,6 +275,9 @@ export default {
     },
   },
   marketplace: {
+    // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
+    duplicateSessionPackCount:
+      'Ce nombre de séances est indiqué deux fois. Chaque pack doit avoir un nombre de séances différent.',
     title: 'Trouver un coach',
     searchByCity: 'Rechercher par ville',
     searchByCityPlaceholder: 'ex. Francfort, Berlin, Munich',
@@ -590,6 +595,8 @@ export default {
     generic: "Exception interne inconnue. Vous pouvez contacter le support avec votre code d'aide",
     featureGated: "Cette fonctionnalité nécessite un niveau d'abonnement supérieur.",
     userNotFound: 'Le profil joueur demandé est introuvable.',
+    playerProfileNotFound:
+      'Votre profil joueur est introuvable. Veuillez compléter votre profil joueur.',
   },
   success: {
     registered: 'Inscription réussie ! Veuillez vérifier votre e-mail pour activer votre compte.',
@@ -677,6 +684,36 @@ export default {
       "Entrez votre mot de passe pour désactiver l'authentification à deux facteurs.",
     emailChangeWarning:
       'La modification de votre adresse e-mail entraînera également un changement de vos identifiants de connexion. Vous serez automatiquement déconnecté et devrez vous reconnecter avec votre nouvelle adresse e-mail.',
+    sectionCoachProfile: 'Profil Entraîneur',
+    sectionPlayerProfile: 'Profil Joueur',
+    sectionMyChildren: 'Profils de mes enfants',
+    coachIdentity: 'Identité et localisation',
+    coachSpecialties: 'Spécialités et groupes d’âge',
+    coachPricing: 'Tarifs et forfaits de séances',
+    coachAvailability: 'Disponibilité',
+    coachAvailabilityWindowCount:
+      '{count} créneaux hebdomadaires | 1 créneau hebdomadaire | {count} créneaux hebdomadaires',
+    coachPhoto: 'Photo de profil',
+    noPhoto: 'Non définie',
+    photoCurrentlySet: 'Photo actuellement définie',
+    removePhoto: 'Supprimer la photo',
+    confirmDeletePhoto: 'Supprimer votre photo de profil ? Cette action est irréversible.',
+    noChildren: 'Aucun enfant ajouté pour le moment.',
+    updateCoachIdentity: "Modifier l'identité et la localisation",
+    updateCoachSpecialties: 'Modifier les spécialités et groupes d’âge',
+    updateCoachPricing: 'Modifier les tarifs et forfaits de séances',
+    updateCoachAvailability: 'Modifier la disponibilité',
+    updateCoachPhoto: 'Modifier la photo de profil',
+    updatePlayerPosition: 'Modifier le poste',
+    coachSuspendedNote:
+      'Votre profil entraîneur est suspendu. La modification est désactivée jusqu’à sa réactivation.',
+    coachProfileLoadError: "Votre profil entraîneur n'a pas pu être chargé.",
+    noPlayerProfile: "Vous n'avez pas encore complété votre profil joueur.",
+    completePlayerProfile: 'Compléter votre profil joueur',
+    availabilityTimezoneReadonlyHint:
+      'La disponibilité utilise le fuseau horaire de votre profil, défini sous Identité et localisation.',
+    photoRejected:
+      'Ce fichier n’a pas pu être utilisé — vérifiez qu’il s’agit d’un JPG/PNG de moins de 5 Mo.',
   },
   development: {
     dashboardTitle: 'Développement du joueur',

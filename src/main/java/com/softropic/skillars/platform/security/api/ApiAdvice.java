@@ -23,6 +23,7 @@ import com.softropic.skillars.platform.marketplace.contract.MarketplaceException
 import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
 import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
+import com.softropic.skillars.platform.security.contract.exception.PlayerProfileNotFoundException;
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.security.contract.exception.SkillarsAccountNotVerifiedException;
 import com.softropic.skillars.platform.security.contract.exception.ParentRegistrationException;
@@ -145,7 +146,13 @@ public class ApiAdvice {
         "uq_pcl_booking_refund", "payment.refundAlreadyIssued",
         // skillars-deferred-103 AC1: partial unique index on session_pack_tiers — a concurrent
         // tier creation race resolved to a 409 retryable conflict, not a 500.
-        "idx_spt_one_active_per_coach", "payment.tierRaceConflict"
+        "idx_spt_one_active_per_coach", "payment.tierRaceConflict",
+        // skillars-deferred-139 review audit item 2: uq_session_pack (coach_id, session_count).
+        // EditCoachPricingDialog guards duplicate session counts client-side, but that guard is not
+        // a backstop — a direct API call, or a second tab resubmitting a stale pack list, still
+        // reaches the constraint. Unmapped it surfaced as an untranslated "Data integrity error"
+        // (generic.dataError) with no indication which pack row was at fault.
+        "uq_session_pack", "marketplace.duplicateSessionPackCount"
     );
 
     // Unique constraints that represent idempotent-retry collisions → 409 Conflict (not 400 Bad Request)
@@ -588,6 +595,17 @@ public class ApiAdvice {
     @ResponseStatus(HttpStatus.NOT_FOUND)
     public ErrorDto userNotFoundHandler(final UserNotFoundException ex) {
         return logErrorAndReturnDTO(ex, ex.getMessage(), "security.userNotFound");
+    }
+
+    /**
+     * skillars-deferred-139 review D3: a distinct 404 from {@link #userNotFoundHandler} — the user
+     * account exists, only the {@code PlayerProfile} row does not, so the frontend can tell "your
+     * account doesn't exist" apart from "you haven't finished your player profile yet".
+     */
+    @ExceptionHandler(PlayerProfileNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ErrorDto playerProfileNotFoundHandler(final PlayerProfileNotFoundException ex) {
+        return logErrorAndReturnDTO(ex, ex.getMessage(), "security.playerProfileNotFound");
     }
 
     @ExceptionHandler(ResourceNotFoundException.class)

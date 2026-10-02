@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.marketplace.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.marketplace.contract.CoachProfileSelfResponse;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStatusResponse;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep1Request;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep2Request;
@@ -16,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -39,6 +41,30 @@ public class ProfileBuilderResource {
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
     public ResponseEntity<ProfileBuilderStatusResponse> getStatus() {
         return ResponseEntity.ok(coachProfileService.getBuilderStatus(currentUserId()));
+    }
+
+    /**
+     * AC1: the coach's own full profile, for "My Profile" edit-dialog prefill — unlike
+     * {@code GET /status} (no field values) and the public {@code GET /api/marketplace/coaches/{id}}
+     * (404s for DRAFT, omits several builder-only fields), this works for a coach who hasn't
+     * published yet and carries every field the builder steps collect.
+     */
+    @GetMapping
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<CoachProfileSelfResponse> getOwnFullProfile() {
+        return ResponseEntity.ok(coachProfileService.getOwnProfile(currentUserId()));
+    }
+
+    /**
+     * AC3: clears a previously-set photo. {@code saveStep5} can only ever SET a non-null
+     * {@code photoUrl}; this is the dedicated delete path the ledger's gap analysis called for,
+     * rather than overloading {@code ProfileBuilderStep5Request} with a clear-signal field.
+     */
+    @DeleteMapping("/photo")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<Void> deletePhoto() {
+        coachProfileService.deletePhoto(currentUserId(), securityUtil.getCurrentUserName());
+        return ResponseEntity.noContent().build();
     }
 
     /**

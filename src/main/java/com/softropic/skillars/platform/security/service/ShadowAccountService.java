@@ -1,10 +1,13 @@
 package com.softropic.skillars.platform.security.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
 import com.softropic.skillars.platform.security.contract.AgeTier;
 import com.softropic.skillars.platform.security.contract.CreatePlayerProfileRequest;
 import com.softropic.skillars.platform.security.contract.CreateSelfPlayerProfileRequest;
+import com.softropic.skillars.platform.security.contract.PlayerPosition;
 import com.softropic.skillars.platform.security.contract.PlayerProfileResponse;
+import com.softropic.skillars.platform.security.contract.exception.PlayerProfileNotFoundException;
 import com.softropic.skillars.platform.security.contract.exception.ShadowAccountException;
 import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLink;
@@ -13,6 +16,8 @@ import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -32,6 +37,8 @@ public class ShadowAccountService {
     private final PlayerProfileMapper playerProfileMapper;
     private final ContactDetailSanitizer sanitizer;
     private final UserRepository userRepository;
+    private final EntityManager entityManager;
+    private final PessimisticLockRetryer lockRetryer;
 
     public PlayerProfileResponse createPlayerProfile(Long parentId, CreatePlayerProfileRequest req) {
         AgeTier ageTier = agePolicyService.getAgeTier(req.dateOfBirth());
@@ -118,11 +125,90 @@ public class ShadowAccountService {
         return playerProfileMapper.toResponse(profile);
     }
 
-    /** 404s (via UserNotFoundException) if the self-registered player hasn't completed the profile-builder step yet. */
+    /**
+     * 404s if the self-registered player hasn't completed the profile-builder step yet.
+     *
+     * <p>Review audit item 3: throws {@link PlayerProfileNotFoundException}, matching
+     * {@link #updateOwnPosition}. This is the call "My Profile" uses to decide whether to show the
+     * player's position row or the "complete your player profile" call-to-action, and the condition
+     * is identical — the user account exists, only their own profile row does not. It previously
+     * threw {@link UserNotFoundException}, which named the wrong entity for a user who is
+     * demonstrably logged in and left the read and write paths reporting the same state differently.
+     */
     @Transactional(readOnly = true)
     public PlayerProfileResponse getSelfOwnedPlayerProfile(Long userId) {
         PlayerProfile profile = playerProfileRepository.findByUserId(userId)
-            .orElseThrow(() -> new UserNotFoundException(userId));
+            .orElseThrow(() -> new PlayerProfileNotFoundException(userId));
+        return playerProfileMapper.toResponse(profile);
+    }
+
+    /**
+     * AC4: the missing update counterpart to {@link #createSelfOwnedPlayerProfile}, which is
+     * one-time-only (rejects a second call via {@code existsByUserId}). "My Profile" needs a route
+     * back to this field without going through account creation again.
+     *
+     * <p>skillars-deferred-139 review D3: throws {@link PlayerProfileNotFoundException} rather than
+     * {@link UserNotFoundException} — the user account exists, only the profile row does not, so the
+     * frontend can route to the player-profile builder instead of implying the account is missing.
+     *
+     * <p>skillars-deferred-139 review Patch 3: {@code PlayerProfile} has no {@code @Version}/
+     * {@code @DynamicUpdate} ({@link com.softropic.skillars.platform.admin.service.GdprErasureService}
+     * documents this on its own {@code entityManager.detach} call), so an unlocked read-then-save here
+     * would silently re-write every column with this request's stale pre-lock snapshot — including
+     * resurrecting a GDPR erasure tombstone ({@code developmentDataErasedAt}) that committed between
+     * this method's read and its save. Mirrors {@code CoachProfileService.saveStep4}'s own
+     * lock-then-refresh pattern for the identical reason.
+     */
+    public PlayerProfileResponse updateOwnPosition(Long userId, PlayerPosition position) {
+        PlayerProfile profile = playerProfileRepository.findByUserId(userId)
+            .orElseThrow(() -> new PlayerProfileNotFoundException(userId));
+
+        lockRetryer.withBoundedRetry("ShadowAccountService.updateOwnPosition", () -> {
+            playerProfileRepository.findByIdForUpdate(profile.getId())
+                .orElseThrow(() -> new PlayerProfileNotFoundException(userId));
+            entityManager.refresh(profile, LockModeType.PESSIMISTIC_WRITE);
+            return null;
+        });
+
+        profile.setPosition(position);
+        playerProfileRepository.save(profile);
+        return playerProfileMapper.toResponse(profile);
+    }
+
+    /**
+     * AC5: same {@code (playerId, parentId)} parameter shape as {@link #getPlayerProfile} and for the
+     * same reason — {@code findByIdAndParentId} enforces family isolation as defense-in-depth
+     * alongside the {@code @PreAuthorize} guard at the resource layer.
+     *
+     * <p>skillars-deferred-139 review Patch 3: locks and refreshes before mutating, for the same
+     * lost-update reason documented on {@link #updateOwnPosition} — a single parent editing their own
+     * child's {@code position} has no other *routine* writer to race against, but the GDPR-erasure
+     * tombstone write is exactly such a writer, and an unlocked full-row save here could silently
+     * revert it.
+     *
+     * <p>Review audit item 3 — this method deliberately keeps {@link UserNotFoundException} rather
+     * than adopting {@link PlayerProfileNotFoundException} like {@link #updateOwnPosition} and
+     * {@link #getSelfOwnedPlayerProfile} do. The lookup is {@code findByIdAndParentId}, so an empty
+     * result conflates two different states — "no such player profile" and "that player is not
+     * yours" — and must not be reported as the former. Saying "this player profile does not exist"
+     * for another family's child would both leak a negative existence claim and (via the frontend's
+     * handling of that key) wrongly offer this parent the create-a-player-profile builder for a
+     * child that is not theirs. The resource-layer {@code @PreAuthorize("@playerOwnershipGuard...")}
+     * already 403s the cross-family case; this branch is defense-in-depth behind it.
+     */
+    public PlayerProfileResponse updateChildPosition(Long playerId, Long parentId, PlayerPosition position) {
+        PlayerProfile profile = playerProfileRepository.findByIdAndParentId(playerId, parentId)
+            .orElseThrow(() -> new UserNotFoundException(playerId));
+
+        lockRetryer.withBoundedRetry("ShadowAccountService.updateChildPosition", () -> {
+            playerProfileRepository.findByIdForUpdate(profile.getId())
+                .orElseThrow(() -> new UserNotFoundException(playerId));
+            entityManager.refresh(profile, LockModeType.PESSIMISTIC_WRITE);
+            return null;
+        });
+
+        profile.setPosition(position);
+        playerProfileRepository.save(profile);
         return playerProfileMapper.toResponse(profile);
     }
 
