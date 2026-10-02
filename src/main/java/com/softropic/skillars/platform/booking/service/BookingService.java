@@ -270,7 +270,8 @@ public class BookingService {
                     Map.of("coach id", req.coachId()), BookingError.AVAILABILITY_CHANGED);
             }
         }
-        if (!isSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows, req.coachId())) {
+        if (!isSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows,
+                req.coachId(), lockedCoach.getCanonicalTimezone())) {
             throw new OperationNotAllowedException("Requested slot is not within coach availability",
                 Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()),
                 BookingError.SLOT_OUTSIDE_AVAILABILITY);
@@ -979,21 +980,35 @@ public class BookingService {
      * {@code windows.get(0)} — every current caller already has it from the query it used to fetch
      * {@code windows}, and inferring it assumed a single-coach list that nothing in the signature
      * enforced.
+     *
+     * <p>skillars-deferred-140 code review (D1): {@code coachTimezone} — the coach profile's own
+     * {@code canonicalTimezone} — is now the single zone every window is interpreted in, replacing
+     * the previous per-window {@code w.getCanonicalTimezone()} read. That read made this method
+     * disagree with {@code AvailabilityService.getAvailabilityCalendar}, which deferred-140 AC1.3
+     * moved onto the profile zone: for any row whose stored zone diverged from the profile's, the
+     * calendar advertised a slot this method then rejected (or hid one it would have accepted).
+     * Divergent rows are expected rather than hypothetical — per-window divergence was a deliberate,
+     * UI-exposed feature under deferred-63/-64, and AC1.3 deliberately shipped no backfill. The
+     * window's own column is kept but is no longer read by any computational path.
      */
     boolean isSlotWithinAvailabilityWindow(Instant startTime, Instant endTime,
-                                           List<CoachAvailabilityWindow> windows, UUID coachId) {
-        int validWindowsEvaluated = 0;
-        for (CoachAvailabilityWindow w : windows) {
-            ZoneId zoneId;
-            try {
-                zoneId = ZoneId.of(w.getCanonicalTimezone());
-            } catch (DateTimeException e) {
-                log.warn("Availability window {} has invalid timezone '{}' — skipping",
-                    w.getId(), w.getCanonicalTimezone());
-                continue;
-            }
-            validWindowsEvaluated++;
+                                           List<CoachAvailabilityWindow> windows, UUID coachId,
+                                           String coachTimezone) {
+        // Null/blank guarded explicitly before ZoneId.of, mirroring
+        // AvailabilityService.getAvailabilityCalendar's own outer zone derivation: ZoneId.of(null)
+        // throws NullPointerException, not DateTimeException, so the catch alone would propagate out
+        // of the slot check instead of falling back to UTC.
+        String resolvedTimezone = (coachTimezone == null || coachTimezone.isBlank()) ? "UTC" : coachTimezone;
+        ZoneId zoneId;
+        try {
+            zoneId = ZoneId.of(resolvedTimezone);
+        } catch (DateTimeException e) {
+            log.warn("Coach {} has an invalid canonicalTimezone '{}' — falling back to UTC for the "
+                    + "availability-window slot check", coachId, coachTimezone);
+            zoneId = ZoneId.of("UTC");
+        }
 
+        for (CoachAvailabilityWindow w : windows) {
             ZonedDateTime startZdt = startTime.atZone(zoneId);
             ZonedDateTime endZdt = endTime.atZone(zoneId);
             // Anchor window boundaries to the session's start date in the coach's timezone.
@@ -1015,11 +1030,6 @@ public class BookingService {
                     return true;
                 }
             }
-        }
-        if (!windows.isEmpty() && validWindowsEvaluated == 0) {
-            log.warn("Coach {} has {} availability window(s) but none had a valid timezone — "
-                    + "slot check cannot succeed against any window",
-                coachId, windows.size());
         }
         return false;
     }

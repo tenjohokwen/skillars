@@ -216,15 +216,6 @@ class AvailabilityServiceTest {
             });
     }
 
-    private CoachAvailabilityBlock makeBlock(UUID coachId, Instant start, Instant end) {
-        CoachAvailabilityBlock block = new CoachAvailabilityBlock();
-        block.setId(UUID.randomUUID());
-        block.setCoachId(coachId);
-        block.setStartDatetime(start);
-        block.setEndDatetime(end);
-        return block;
-    }
-
     private CoachProfile makeCoachProfile(UUID coachId, Long userId) {
         CoachProfile profile = new CoachProfile();
         profile.setId(coachId);
@@ -251,6 +242,11 @@ class AvailabilityServiceTest {
         booking.setStatus("CONFIRMED");
         booking.setRequestedStartTime(startTime);
         booking.setRequestedEndTime(startTime.plusSeconds(3600));
+        // skillars-deferred-140 AC1.2: hasBookingConflict now reads the booking's OWN frozen zone
+        // (stamped once at creation from the coach's profile zone at that moment), not the window's
+        // current zone. Europe/Berlin matches makeWindow()'s default so existing fixtures built
+        // around that zone keep their original meaning.
+        booking.setCanonicalTimezone("Europe/Berlin");
         return booking;
     }
 
@@ -374,7 +370,7 @@ class AvailabilityServiceTest {
     }
 
     @Test
-    void getAvailabilityCalendar_padsFetchBoundsByOneDayEachSide_toCoverDivergentWindowZones() {
+    void getAvailabilityCalendar_padsFetchBoundsByTwoDaysEachSide_toCoverBlocksNearWeekBoundaries() {
         UUID coachId = UUID.randomUUID();
         CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
         profile.setCanonicalTimezone("America/Los_Angeles");
@@ -394,8 +390,10 @@ class AvailabilityServiceTest {
 
         service.getAvailabilityCalendar(coachId, weekStart);
 
-        // The coach profile's own canonicalTimezone drives the OUTER fetch-window zone — only the
-        // per-window instant computation (asserted separately below) reads each window's own zone.
+        // The coach profile's own canonicalTimezone drives BOTH the outer fetch-window zone and every
+        // window's instant computation (deferred-140 AC1.3). An earlier version of this comment said
+        // the per-window computation read each window's own zone — that stopped being true when AC1.3
+        // removed the per-window read, and no window zone is consulted here at all any more.
         ZoneId outerZone = ZoneId.of("America/Los_Angeles");
         Instant expectedStart = weekStart.minusDays(2).atStartOfDay(outerZone).toInstant();
         Instant expectedEnd = weekStart.plusDays(9).atStartOfDay(outerZone).toInstant();
@@ -411,123 +409,49 @@ class AvailabilityServiceTest {
             eq(coachId), eq(expectedStart), eq(expectedEnd), eq(BookingService.ACTIVE_SLOT_STATUSES), isNull());
     }
 
+    // skillars-deferred-140 AC1.3: the two tests formerly here
+    // (getAvailabilityCalendar_windowZoneDivergesWidelyFromOuterZone_blockStillSubtractedButStaysOutOfBlockResponses
+    // and getAvailabilityCalendar_bookingOnDivergentZoneWindow_excludedEvenBeyondOneDayOfPadding)
+    // proved that two windows with GENUINELY different canonical_timezone values each materialized
+    // slots in their OWN zone. skillars-deferred-63/-64's per-window divergence is reversed by this
+    // story (AC1): every window is now stamped with the coach profile's zone on every write path, so
+    // that premise can no longer occur through any supported write. Replaced below with a test that
+    // proves the new invariant instead: even a STALE divergent value already sitting in the
+    // canonical_timezone column (e.g. a pre-this-story row nothing has backfilled) is no longer
+    // read — materialization uses the profile's zone regardless of what the column holds. The
+    // two-day fetch padding itself is still pinned by
+    // getAvailabilityCalendar_padsFetchBoundsByTwoDaysEachSide_toCoverBlocksNearWeekBoundaries below.
     @Test
-    void getAvailabilityCalendar_windowZoneDivergesWidelyFromOuterZone_blockStillSubtractedButStaysOutOfBlockResponses() {
-        // Regression guard for the fetch-window gap AC2 introduces if left under-padded: a window
-        // whose own zone diverges from the coach profile's canonicalTimezone by more than the pad
-        // has instants that fall outside the fetch range, silently dropping its overlapping
-        // blocks/bookings.
-        //
-        // Zones are chosen to exceed a ONE-day pad on purpose: Pacific/Niue is UTC-11 and
-        // Pacific/Kiritimati is UTC+14, a 25h spread. This is what the previous version of this
-        // test could not do — it stubbed the fetch with any()/any() matchers, so the block came
-        // back whatever bounds were passed and reverting the pad changed nothing it observed.
-        // stubBlockFetch applies the real query predicate, so the bounds now actually matter.
+    void getAvailabilityCalendar_windowStaleStoredZoneColumn_ignoredInFavorOfProfileZone() {
         UUID coachId = UUID.randomUUID();
         CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
-        profile.setCanonicalTimezone("Pacific/Niue"); // drives the outer zoneId
+        profile.setCanonicalTimezone("Pacific/Niue"); // UTC-11, drives the outer zoneId
         LocalDate weekStart = LocalDate.of(2026, 6, 15); // Monday
 
-        CoachAvailabilityWindow niueWindow = makeWindow(UUID.randomUUID(), coachId);
-        niueWindow.setDayOfWeek((short) 1);
-        niueWindow.setStartTime(LocalTime.of(9, 0));
-        niueWindow.setEndTime(LocalTime.of(11, 0));
-        niueWindow.setCanonicalTimezone("Pacific/Niue"); // UTC-11
-
-        CoachAvailabilityWindow kiritimatiWindow = makeWindow(UUID.randomUUID(), coachId);
-        kiritimatiWindow.setDayOfWeek((short) 1);
-        kiritimatiWindow.setStartTime(LocalTime.of(0, 0));
-        kiritimatiWindow.setEndTime(LocalTime.of(2, 0));
-        kiritimatiWindow.setCanonicalTimezone("Pacific/Kiritimati"); // UTC+14
-
-        // Kiritimati window Monday 00:00-02:00 = 2026-06-14T10:00Z..12:00Z — a full 25h ahead of
-        // the outer Niue zone. The block below sits inside that window but ENDS at exactly
-        // 2026-06-14T11:00:00Z, which is the instant a one-day pad would have used as its lower
-        // fetch bound (2026-06-14T00:00 Niue). The query predicate is endDatetime > :from, so a
-        // one-day pad drops this block and the window comes back as one undivided segment.
-        // The two-day pad (2026-06-13T11:00Z) fetches it and the window is correctly split.
-        CoachAvailabilityBlock beyondOneDayPadBlock = makeBlock(coachId,
-            Instant.parse("2026-06-14T10:30:00Z"), Instant.parse("2026-06-14T11:00:00Z"));
+        CoachAvailabilityWindow window = makeWindow(UUID.randomUUID(), coachId);
+        window.setDayOfWeek((short) 1);
+        window.setStartTime(LocalTime.of(9, 0));
+        window.setEndTime(LocalTime.of(11, 0));
+        // A stale value AC1 guarantees no live write path produces anymore — proves it is ignored,
+        // not merely incidentally correct because nothing currently sets it this way.
+        window.setCanonicalTimezone("Pacific/Kiritimati"); // UTC+14
 
         when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
-        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId)).thenReturn(List.of(niueWindow, kiritimatiWindow));
-        stubBlockFetch(coachId, List.of(beyondOneDayPadBlock));
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId)).thenReturn(List.of(window));
+        stubBlockFetch(coachId, List.of());
         stubBookingFetch(coachId, List.of());
         when(sessionDurationResolver.resolve(coachId)).thenReturn(ONE_HOUR);
 
         CoachAvailabilityResponse response = service.getAvailabilityCalendar(coachId, weekStart);
 
-        // Slot-sliced (UAT.2 AC2), but still discriminating on the pad: without the two-day pad the
-        // block is never fetched, the Kiritimati window comes back undivided as 10:00Z-12:00Z, and
-        // that yields a 10:00-11:00 slot which must NOT be present here.
-        assertThat(response.computedSlots()).containsExactlyInAnyOrder(
-            // Niue window, Monday 09:00-11:00 at UTC-11 -> two one-hour slots
-            new AvailableSlotResponse(
-                Instant.parse("2026-06-15T20:00:00Z"), Instant.parse("2026-06-15T21:00:00Z")),
-            new AvailableSlotResponse(
-                Instant.parse("2026-06-15T21:00:00Z"), Instant.parse("2026-06-15T22:00:00Z")),
-            // Kiritimati window: the pre-block 10:00-10:30 segment is too short for a session and
-            // drops out entirely; only the post-block hour survives.
-            new AvailableSlotResponse(
-                Instant.parse("2026-06-14T11:00:00Z"), Instant.parse("2026-06-14T12:00:00Z")));
-
-        // AC2: blockResponses (the API's `blocks` field) stays exactly week-scoped — the padding
-        // that made the block fetchable at all must not leak it into the response. weekStartExact
-        // is 2026-06-15T11:00Z (Niue), and the block ends well before it.
-        assertThat(response.blocks()).isEmpty();
-    }
-
-    @Test
-    void getAvailabilityCalendar_bookingOnDivergentZoneWindow_excludedEvenBeyondOneDayOfPadding() {
-        // The AC1 x AC2 combination the Dev Notes mandate ("a coach with per-window-divergent zones
-        // AND an overlapping booking on one of those windows"), which no test covered: the AC1 test
-        // used a single Europe/Berlin window, and the AC2 divergence test used a block with the
-        // booking fetch stubbed empty. This also pins the padding for the BOOKING query specifically
-        // — it shares the same bounds as the block query but is a separate call.
-        UUID coachId = UUID.randomUUID();
-        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
-        profile.setCanonicalTimezone("Pacific/Niue"); // drives the outer zoneId
-        LocalDate weekStart = LocalDate.of(2026, 6, 15); // Monday
-
-        CoachAvailabilityWindow niueWindow = makeWindow(UUID.randomUUID(), coachId);
-        niueWindow.setDayOfWeek((short) 1);
-        niueWindow.setStartTime(LocalTime.of(9, 0));
-        niueWindow.setEndTime(LocalTime.of(11, 0));
-        niueWindow.setCanonicalTimezone("Pacific/Niue"); // UTC-11
-
-        CoachAvailabilityWindow kiritimatiWindow = makeWindow(UUID.randomUUID(), coachId);
-        kiritimatiWindow.setDayOfWeek((short) 1);
-        kiritimatiWindow.setStartTime(LocalTime.of(0, 0));
-        kiritimatiWindow.setEndTime(LocalTime.of(2, 0));
-        kiritimatiWindow.setCanonicalTimezone("Pacific/Kiritimati"); // UTC+14
-
-        // 2026-06-14T10:15Z..10:45Z — inside the Kiritimati window (10:00Z-12:00Z), but the whole
-        // booking ends before a one-day pad's lower bound of 2026-06-14T11:00Z, so requestedEndTime
-        // > :startTime fails and the booking is never fetched under the old pad.
-        Booking booking = makeBooking(coachId, Instant.parse("2026-06-14T10:15:00Z"));
-        booking.setRequestedEndTime(Instant.parse("2026-06-14T10:45:00Z"));
-        booking.setStatus("REQUESTED");
-
-        when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(profile));
-        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId)).thenReturn(List.of(niueWindow, kiritimatiWindow));
-        stubBlockFetch(coachId, List.of());
-        stubBookingFetch(coachId, List.of(booking));
-        when(sessionDurationResolver.resolve(coachId)).thenReturn(ONE_HOUR);
-
-        CoachAvailabilityResponse response = service.getAvailabilityCalendar(coachId, weekStart);
-
-        // Slot-sliced (UAT.2 AC2). Still discriminating on the pad: were the booking not fetched,
-        // the Kiritimati window would slice into 10:00-11:00 and 11:00-12:00; instead the pre-
-        // booking 15-minute sliver drops out and the post-booking run is anchored to 10:45.
+        // If the stale column were still read, Monday 09:00-11:00 Kiritimati would resolve to
+        // 2026-06-14T19:00Z-21:00Z instead — a completely different day in UTC. Using the profile's
+        // Niue zone instead gives these two slots.
         assertThat(response.computedSlots()).containsExactlyInAnyOrder(
             new AvailableSlotResponse(
                 Instant.parse("2026-06-15T20:00:00Z"), Instant.parse("2026-06-15T21:00:00Z")),
             new AvailableSlotResponse(
-                Instant.parse("2026-06-15T21:00:00Z"), Instant.parse("2026-06-15T22:00:00Z")),
-            new AvailableSlotResponse(
-                Instant.parse("2026-06-14T10:45:00Z"), Instant.parse("2026-06-14T11:45:00Z")));
-
-        assertThat(response.blocks()).isEmpty();
+                Instant.parse("2026-06-15T21:00:00Z"), Instant.parse("2026-06-15T22:00:00Z")));
     }
 
     // skillars-deferred-65 AC3: proves the fix itself, not just preserved old assertions. Before

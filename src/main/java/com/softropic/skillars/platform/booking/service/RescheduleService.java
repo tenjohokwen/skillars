@@ -220,7 +220,8 @@ public class RescheduleService {
                     Map.of("coach id", lockedCoach.getId()), BookingError.AVAILABILITY_CHANGED);
             }
         }
-        if (!bookingService.isSlotWithinAvailabilityWindow(req.proposedStartTime(), req.proposedEndTime(), windows, booking.getCoachId())) {
+        if (!bookingService.isSlotWithinAvailabilityWindow(req.proposedStartTime(), req.proposedEndTime(), windows,
+                booking.getCoachId(), lockedCoach.getCanonicalTimezone())) {
             throw new OperationNotAllowedException(
                 "Proposed slot is not within coach availability",
                 Map.of("proposed start time", req.proposedStartTime(), "proposed end time", req.proposedEndTime()),
@@ -405,7 +406,8 @@ public class RescheduleService {
         // slot also happens to be free — matches this method's existing check ordering, where each
         // earlier check gates the next rather than running independently.
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coach.getId());
-        if (!bookingService.isSlotWithinAvailabilityWindow(lockedReq.getProposedStartTime(), lockedReq.getProposedEndTime(), windows, coach.getId())) {
+        if (!bookingService.isSlotWithinAvailabilityWindow(lockedReq.getProposedStartTime(), lockedReq.getProposedEndTime(),
+                windows, coach.getId(), coach.getCanonicalTimezone())) {
             throw new OperationNotAllowedException(
                 "Proposed slot is not within coach availability",
                 Map.of("submitted coach id", coach.getId(), "proposed start time", lockedReq.getProposedStartTime(),

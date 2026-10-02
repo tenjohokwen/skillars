@@ -47,7 +47,7 @@
         <div class="text-card-title q-mb-md">{{ t(currentStep.titleKey) }}</div>
 
         <q-banner v-if="store.error" class="q-mb-md auth-banner auth-banner--error" rounded>
-          {{ store.error?.response?.data?.message || t('error.generic') }}
+          {{ builderErrorMessage }}
         </q-banner>
 
         <div class="profile-builder__panel">
@@ -96,10 +96,22 @@ import ProfileBuilderStep3 from 'src/components/profileBuilder/ProfileBuilderSte
 import ProfileBuilderStep4 from 'src/components/profileBuilder/ProfileBuilderStep4.vue'
 import ProfileBuilderStep5 from 'src/components/profileBuilder/ProfileBuilderStep5.vue'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const router = useRouter()
 const store = useProfileBuilderStore()
 const authStore = useAuthStore()
+
+// skillars-deferred-140 AC3.3: the ErrorDto shape nests under errorMsg (errorMsg.message /
+// errorMsg.errorKey), not a top-level `message` field — `data?.message` was always undefined here,
+// so this banner showed the generic fallback for every error, in every locale, regardless of the
+// marketplace.* i18n keys AC3.1 adds. Mirrors useErrorHandler's te(key) ? t(key) : rawMessage
+// pattern, which every other error surface in this module already uses.
+const builderErrorMessage = computed(() => {
+  const errorMsg = store.error?.response?.data?.errorMsg
+  if (!errorMsg) return t('error.generic')
+  if (errorMsg.errorKey && te(errorMsg.errorKey)) return t(errorMsg.errorKey)
+  return errorMsg.message || t('error.generic')
+})
 
 const steps = [
   { n: 1, icon: 'person', titleKey: 'auth.coach.step1Title', shortKey: 'auth.coach.step1Short' },

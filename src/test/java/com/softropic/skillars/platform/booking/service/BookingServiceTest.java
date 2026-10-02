@@ -649,14 +649,28 @@ class BookingServiceTest {
             .isInstanceOf(OperationNotAllowedException.class);
     }
 
+    /**
+     * skillars-deferred-140 code review (D1): replaces three tests that asserted the per-window
+     * invalid-timezone skip and its all-windows-invalid summary WARN. Those behaviours are gone —
+     * the zone is now resolved ONCE from the coach's profile, not per window, so a window can no
+     * longer carry an individually-invalid zone through this path at all. What remains to pin is the
+     * coach-level fallback that replaced them.
+     */
     @Test
-    void isSlotWithinAvailabilityWindow_everyWindowHasInvalidTimezone_logsDistinctSummaryWarn() {
-        CoachAvailabilityWindow badWindow = makeCoveringWindow(COACH_ID);
-        badWindow.setCanonicalTimezone("not-a-zone");
-        List<CoachAvailabilityWindow> windows = List.of(badWindow);
+    void isSlotWithinAvailabilityWindow_coachTimezoneInvalid_fallsBackToUtcAndWarns() {
+        // A window whose own stored zone is deliberately divergent AND valid, to prove the method no
+        // longer consults it: the slot is expressed in UTC, matching the fallback, not Europe/Berlin.
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("UTC"))
+            .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
+        CoachAvailabilityWindow window = new CoachAvailabilityWindow();
+        window.setCoachId(COACH_ID);
+        window.setDayOfWeek((short) slotStart.getDayOfWeek().getValue());
+        window.setStartTime(LocalTime.of(8, 0));
+        window.setEndTime(LocalTime.of(18, 0));
+        window.setCanonicalTimezone("Europe/Berlin");
 
-        Instant start = Instant.now();
-        Instant end = start.plusSeconds(3600);
+        Instant start = slotStart.toInstant();
+        Instant end = slotStart.plusHours(1).toInstant();
 
         Logger serviceLogger = (Logger) LoggerFactory.getLogger(BookingService.class);
         ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
@@ -664,70 +678,76 @@ class BookingServiceTest {
         serviceLogger.addAppender(logCapture);
         boolean result;
         try {
-            result = bookingService.isSlotWithinAvailabilityWindow(start, end, windows, COACH_ID);
+            result = bookingService.isSlotWithinAvailabilityWindow(start, end, List.of(window), COACH_ID,
+                "not-a-zone");
         } finally {
             serviceLogger.detachAppender(logCapture);
         }
 
-        assertThat(result).isFalse();
+        assertThat(result)
+            .as("an unparseable coach zone degrades to UTC rather than propagating out of the slot check")
+            .isTrue();
         assertThat(logCapture.list)
-            .as("must emit a distinct summary WARN for the all-windows-invalid-timezone case")
+            .as("the coach-level fallback must be reported once, naming the coach and the bad value")
             .anySatisfy(event -> {
                 assertThat(event.getLevel()).isEqualTo(Level.WARN);
                 assertThat(event.getFormattedMessage())
                     .contains(COACH_ID.toString())
-                    .contains("1 availability window(s)")
-                    .contains("none had a valid timezone");
+                    .contains("not-a-zone")
+                    .contains("falling back to UTC");
             });
     }
 
     @Test
-    void isSlotWithinAvailabilityWindow_emptyWindowList_doesNotLogSummaryWarn() {
-        List<CoachAvailabilityWindow> windows = List.of();
+    void isSlotWithinAvailabilityWindow_coachTimezoneNull_fallsBackToUtcWithoutThrowing() {
+        // ZoneId.of(null) throws NullPointerException, not DateTimeException, so a catch alone would
+        // propagate out. Guarded explicitly ahead of the parse.
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("UTC"))
+            .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
+        CoachAvailabilityWindow window = new CoachAvailabilityWindow();
+        window.setCoachId(COACH_ID);
+        window.setDayOfWeek((short) slotStart.getDayOfWeek().getValue());
+        window.setStartTime(LocalTime.of(8, 0));
+        window.setEndTime(LocalTime.of(18, 0));
+        window.setCanonicalTimezone("Europe/Berlin");
 
-        Instant start = Instant.now();
-        Instant end = start.plusSeconds(3600);
+        Instant start = slotStart.toInstant();
+        Instant end = slotStart.plusHours(1).toInstant();
 
-        Logger serviceLogger = (Logger) LoggerFactory.getLogger(BookingService.class);
-        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
-        logCapture.start();
-        serviceLogger.addAppender(logCapture);
-        boolean result;
-        try {
-            result = bookingService.isSlotWithinAvailabilityWindow(start, end, windows, COACH_ID);
-        } finally {
-            serviceLogger.detachAppender(logCapture);
-        }
-
-        assertThat(result).isFalse();
-        assertThat(logCapture.list)
-            .as("an empty window list has no coach id to report and must not emit the summary WARN")
-            .noneSatisfy(event -> assertThat(event.getFormattedMessage()).contains("none had a valid timezone"));
+        assertThat(bookingService.isSlotWithinAvailabilityWindow(start, end, List.of(window), COACH_ID, null))
+            .isTrue();
+        assertThat(bookingService.isSlotWithinAvailabilityWindow(start, end, List.of(window), COACH_ID, "  "))
+            .isTrue();
     }
 
+    /**
+     * skillars-deferred-140 code review (D1): the window's own stored zone must no longer influence
+     * the slot decision. Pins the divergence directly — a stale/divergent stored value (simulating an
+     * un-backfilled pre-deferred-140 row, which V155 now reconciles but which the code must tolerate
+     * regardless) is ignored in favour of the coach's profile zone. Before the fix this method and
+     * {@code AvailabilityService.getAvailabilityCalendar} disagreed on exactly this row, so the
+     * calendar advertised slots this check then rejected.
+     */
     @Test
-    void isSlotWithinAvailabilityWindow_mixedValidAndInvalidTimezoneWindows_doesNotLogSummaryWarn() {
-        CoachAvailabilityWindow validWindow = makeCoveringWindow(COACH_ID);
-        CoachAvailabilityWindow badWindow = makeCoveringWindow(COACH_ID);
-        badWindow.setCanonicalTimezone("not-a-zone");
-        List<CoachAvailabilityWindow> windows = List.of(validWindow, badWindow);
+    void isSlotWithinAvailabilityWindow_windowStoredZoneDivergesFromProfile_ignoredInFavourOfProfileZone() {
+        // 10:00 Tokyo on the slot's own day. In Tokyo (UTC+9) that is inside an 08:00-18:00 window;
+        // read in the window's stale stored Europe/Berlin it would be ~02:00-03:00 and outside it.
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Asia/Tokyo"))
+            .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
+        CoachAvailabilityWindow window = new CoachAvailabilityWindow();
+        window.setCoachId(COACH_ID);
+        window.setDayOfWeek((short) slotStart.getDayOfWeek().getValue());
+        window.setStartTime(LocalTime.of(8, 0));
+        window.setEndTime(LocalTime.of(18, 0));
+        window.setCanonicalTimezone("Europe/Berlin");
 
-        Instant start = Instant.now();
-        Instant end = start.plusSeconds(3600);
+        Instant start = slotStart.toInstant();
+        Instant end = slotStart.plusHours(1).toInstant();
 
-        Logger serviceLogger = (Logger) LoggerFactory.getLogger(BookingService.class);
-        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
-        logCapture.start();
-        serviceLogger.addAppender(logCapture);
-        try {
-            bookingService.isSlotWithinAvailabilityWindow(start, end, windows, COACH_ID);
-        } finally {
-            serviceLogger.detachAppender(logCapture);
-        }
-
-        assertThat(logCapture.list)
-            .as("at least one valid-timezone window means this is not the all-invalid case")
-            .noneSatisfy(event -> assertThat(event.getFormattedMessage()).contains("none had a valid timezone"));
+        assertThat(bookingService.isSlotWithinAvailabilityWindow(start, end, List.of(window), COACH_ID,
+            "Asia/Tokyo"))
+            .as("the profile zone decides; the window's divergent stored column is not consulted")
+            .isTrue();
     }
 
     @Test
@@ -748,7 +768,7 @@ class BookingServiceTest {
         Instant end = slotStart.plusHours(1).toInstant();
 
         assertThatThrownBy(() ->
-            bookingService.isSlotWithinAvailabilityWindow(start, end, List.of(wideOpenWindow), COACH_ID))
+            bookingService.isSlotWithinAvailabilityWindow(start, end, List.of(wideOpenWindow), COACH_ID, "Europe/Berlin"))
             .isInstanceOf(OperationNotAllowedException.class)
             .hasMessageContaining("cannot cross midnight")
             .extracting(ex -> ((OperationNotAllowedException) ex).getErrorCode())
@@ -768,7 +788,7 @@ class BookingServiceTest {
         Instant start = slotStart.toInstant();
         Instant end = slotStart.plusHours(1).toInstant();
 
-        boolean result = bookingService.isSlotWithinAvailabilityWindow(start, end, List.of(window), COACH_ID);
+        boolean result = bookingService.isSlotWithinAvailabilityWindow(start, end, List.of(window), COACH_ID, "Europe/Berlin");
 
         assertThat(result).isTrue();
     }

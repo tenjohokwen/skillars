@@ -2,6 +2,8 @@ package com.softropic.skillars.platform.marketplace.service;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.platform.admin.service.AdminCoachEnforcementService;
+import com.softropic.skillars.platform.booking.contract.CreateWindowRequest;
+import com.softropic.skillars.platform.booking.service.AvailabilityService;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.utils.ConcurrencyLockWaitSupport;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -47,6 +49,7 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
 
     @Autowired private CoachProfileService coachProfileService;
     @Autowired private AdminCoachEnforcementService adminCoachEnforcementService;
+    @Autowired private AvailabilityService availabilityService;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private MeterRegistry meterRegistry;
@@ -240,6 +243,115 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
             assertThat(finalStatus).as("the suspension must survive, not be reverted to ACTIVE").isEqualTo("SUSPENDED");
             assertThat(subscriptionCount).as("no subscription row for a profile that never actually published")
                 .isZero();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * skillars-deferred-140 AC1.2 (mto-story-review 2026-10-02, Corner Case D). Before this story,
+     * {@code saveStep1} took no row lock before bulk-re-stamping every existing availability
+     * window's zone on a coach relocation — unlike {@code saveStep4} and every write in {@code
+     * AvailabilityService} (including {@code addWindow}), which already lock the coach row via
+     * {@code lockProfile()}. The described failure mode: a concurrent {@code addWindow} call inserts
+     * a new window stamped with the PRE-relocation zone while {@code saveStep1}'s unlocked re-stamp
+     * is in flight; because the new window didn't exist yet when {@code saveStep1}'s own {@code
+     * SELECT} of existing windows ran, it is never touched by the re-stamp and survives commit with
+     * a stale zone that disagrees with every other window and the profile itself.
+     *
+     * <p>Reproduces the race in its original direction — {@code addWindow} holds the lock first,
+     * inserting a new window, with {@code saveStep1}'s relocation forced to wait — and asserts the
+     * fix closes it: once both commit, EVERY window (the pre-existing one from {@link #setUp()} and
+     * the one {@code addWindow} inserted while the relocation was blocked on it) carries the NEW
+     * zone. Pre-fix, this would have failed with the {@code addWindow}-inserted row still showing the
+     * old zone, since the two writes were never serialized at all.
+     */
+    @Test
+    void concurrentAddWindowDuringRelocation_newWindowIsNotMissedByTheReStamp() throws Exception {
+        double lockRetryBaseline = ConcurrencyLockWaitSupport.currentLockRetryCount(
+            meterRegistry, "CoachProfileService.saveStep1");
+        CountDownLatch addWindowLockHeld = new CountDownLatch(1);
+        CountDownLatch releaseAddWindow = new CountDownLatch(1);
+        AtomicReference<Throwable> addWindowFailure = new AtomicReference<>();
+        AtomicReference<Instant> addWindowCommittedAt = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> adder = executor.submit(() -> {
+                try {
+                    transactionTemplate.execute(status -> {
+                        availabilityService.addWindow(COACH_USER_ID,
+                            new CreateWindowRequest(2, LocalTime.of(9, 0), LocalTime.of(11, 0)));
+                        addWindowLockHeld.countDown();
+                        try {
+                            boolean released = releaseAddWindow.await(30, TimeUnit.SECONDS);
+                            if (!released) {
+                                throw new AssertionError("releaseAddWindow was never signalled within 30s");
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return null;
+                    });
+                    addWindowCommittedAt.set(Instant.now());
+                } catch (Throwable t) {
+                    addWindowFailure.set(t);
+                }
+            });
+
+            AtomicReference<Throwable> relocateFailure = new AtomicReference<>();
+            AtomicReference<Instant> relocateCompletedAt = new AtomicReference<>();
+            Future<?> relocator = executor.submit(() -> {
+                try {
+                    boolean lockHeld = addWindowLockHeld.await(10, TimeUnit.SECONDS);
+                    if (!lockHeld) {
+                        throw new AssertionError("addWindowLockHeld was never signalled within 10s");
+                    }
+                    coachProfileService.saveStep1(COACH_USER_ID, new ProfileBuilderStep1Request(
+                        "Race Coach", "Bio", "Madrid", "Centro", List.of("English"), "Europe/Madrid"));
+                } catch (Throwable t) {
+                    relocateFailure.set(t);
+                } finally {
+                    relocateCompletedAt.set(Instant.now());
+                }
+            });
+
+            assertThat(addWindowLockHeld.await(10, TimeUnit.SECONDS)).isTrue();
+            // See ConcurrencyLockWaitSupport's own javadoc: both findByIdForUpdate call sites here are
+            // NOWAIT, so the contender never sits in a live Postgres wait a poll could observe.
+            ConcurrencyLockWaitSupport.awaitFirstLockAttempt();
+            releaseAddWindow.countDown();
+
+            adder.get(30, TimeUnit.SECONDS);
+            relocator.get(30, TimeUnit.SECONDS);
+
+            if (addWindowFailure.get() != null) {
+                throw new AssertionError("addWindow thread failed", addWindowFailure.get());
+            }
+            if (relocateFailure.get() != null) {
+                throw new AssertionError("saveStep1 thread failed", relocateFailure.get());
+            }
+
+            ConcurrencyLockWaitSupport.assertGenuineLockRetryOccurred(
+                meterRegistry, "CoachProfileService.saveStep1", lockRetryBaseline);
+
+            assertThat(relocateCompletedAt.get())
+                .as("saveStep1's own lock acquisition must not succeed until addWindow's transaction "
+                    + "actually commits and releases the row lock — this proves general serialization "
+                    + "on the row, not merely that saveStep1's lock-acquisition code happened to run")
+                .isAfterOrEqualTo(addWindowCommittedAt.get());
+
+            List<String> zones = jdbcTemplate.queryForList(
+                "SELECT w.canonical_timezone FROM marketplace.coach_availability_windows w "
+                    + "WHERE w.coach_id = ?",
+                String.class, profileId);
+            assertThat(zones)
+                .as("every window — including the one addWindow inserted WHILE the relocation was "
+                    + "blocked on it — must end up re-stamped to the new zone; the pre-fix race let a "
+                    + "window created during this exact race survive with the stale pre-relocation "
+                    + "zone, because it didn't exist yet when saveStep1's own SELECT ran")
+                .hasSize(2) // the Step-4 window from setUp() + the one addWindow inserts here
+                .allMatch("Europe/Madrid"::equals);
         } finally {
             executor.shutdownNow();
         }

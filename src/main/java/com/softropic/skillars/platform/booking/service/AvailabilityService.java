@@ -79,34 +79,31 @@ public class AvailabilityService {
         // windows.get(0).getCanonicalTimezone(), an arbitrary pick off an unordered list
         // (CoachAvailabilityWindowRepository.findByCoachId issues no ORDER BY): two identical
         // requests for a coach with windows in multiple timezones could return different week
-        // boundaries and a different blocks set purely from row-order luck. Per-window timezone
-        // divergence remains a deliberate feature (skillars-deferred-63/-64) — this only changes
-        // which value drives the *outer* week-scoping bounds, not per-window slot computation below.
-        String coachTimezone = profile.getCanonicalTimezone();
-        if (coachTimezone == null || coachTimezone.isBlank()) coachTimezone = "UTC";
+        // boundaries and a different blocks set purely from row-order luck. skillars-deferred-140
+        // AC1 reverses skillars-deferred-63/-64's per-window timezone divergence — every window is
+        // now stamped with this same profile zone, so this value also drives per-window slot
+        // computation below (see AC1.3's loop simplification).
+        ZoneId zoneId = resolveCoachZoneOrUtc(profile.getCanonicalTimezone(), profile.getId());
 
-        ZoneId zoneId;
-        try {
-            zoneId = ZoneId.of(coachTimezone);
-        } catch (DateTimeException e) {
-            zoneId = ZoneId.of("UTC");
-        }
-
-        // Deferred-18 AC2: each window below now materializes its instants in its OWN zone, which
-        // can diverge from `zoneId` (derived from windows.get(0) only). Padding the fetch bounds
-        // keeps every window's instants inside the range used to fetch blocks/bookings, regardless
-        // of that divergence. `weekStartExact`/`weekEndExact` preserve the unpadded bounds so
-        // `blockResponses` (the API's `blocks` field) stays exactly week-scoped — padding must
-        // widen what's fetched for filtering, not what's returned.
+        // Deferred-18 AC2 (padding retained post-skillars-deferred-140): every window is now
+        // materialized in this same `zoneId` (AC1.3), so the per-window zone divergence this padding
+        // was originally built to cover can no longer arise at all — the stored column is not read
+        // here, so a stale value on an old row cannot shift a window's instants.
         //
-        // TWO days, not one. AC2 prescribed a one-day pad, but one day is arithmetically too small
-        // for the divergence it exists to cover, and the 2026-08-07 code review found the gap:
-        // region zones alone span 25h (Pacific/Niue at UTC-11 to Pacific/Kiritimati at UTC+14), and
-        // ZoneId.of additionally accepts fixed offsets up to +/-18:00 (a case AC4 deliberately keeps
-        // valid), for a worst case of 36h. Coverage requires the pad to exceed the offset spread on
-        // each side; at 24h a window leading the outer zone by more than a day had its overlapping
-        // bookings fall outside the fetch entirely, silently reproducing the very AC1 failure mode
-        // this padding exists to prevent. 48h covers every case ZoneId.of can produce.
+        // The padding is therefore NOT load-bearing for window materialization any more. It is kept
+        // because it still bounds the *blocks* fetch: `weekBlocks` is filtered below against
+        // `weekStartExact`/`weekEndExact`, and a block stored near a week boundary must be fetched
+        // before it can be filtered. `weekStartExact`/`weekEndExact` preserve the unpadded bounds so
+        // `blockResponses` (the API's `blocks` field) stays exactly week-scoped — padding must widen
+        // what's fetched for filtering, not what's returned.
+        //
+        // (An earlier version of this comment justified the padding as protecting against un-backfilled
+        // stale window zones. That was self-refuting: a value never read cannot cause a materialization
+        // gap. V155 has since backfilled those rows regardless.)
+        //
+        // TWO days, not one: region zones alone span 25h (Pacific/Niue at UTC-11 to
+        // Pacific/Kiritimati at UTC+14), and ZoneId.of additionally accepts fixed offsets up to
+        // +/-18:00, for a worst case of 36h. 48h covers every case ZoneId.of can produce.
         Instant weekStartInstant = weekStart.minusDays(2).atStartOfDay(zoneId).toInstant();
         Instant weekEndInstant = weekStart.plusDays(9).atStartOfDay(zoneId).toInstant();
         Instant weekStartExact = weekStart.atStartOfDay(zoneId).toInstant();
@@ -138,23 +135,13 @@ public class AvailabilityService {
                 .toList();
 
             for (CoachAvailabilityWindow window : dayWindows) {
-                // Null/blank guarded explicitly, mirroring the outer zone derivation above:
-                // ZoneId.of(null) throws NullPointerException, not DateTimeException, so the catch
-                // alone would 500 the whole calendar instead of falling back to UTC. Unreachable
-                // today (canonical_timezone is NOT NULL in V26), but the asymmetry with :59-60 is
-                // exactly the kind that survives a later schema change.
-                String windowTimezone = window.getCanonicalTimezone();
-                ZoneId windowZoneId;
-                try {
-                    windowZoneId = (windowTimezone == null || windowTimezone.isBlank())
-                        ? ZoneId.of("UTC")
-                        : ZoneId.of(windowTimezone);
-                } catch (DateTimeException e) {
-                    windowZoneId = ZoneId.of("UTC");
-                }
-
-                Instant windowStart = date.atTime(window.getStartTime()).atZone(windowZoneId).toInstant();
-                Instant windowEnd = date.atTime(window.getEndTime()).atZone(windowZoneId).toInstant();
+                // skillars-deferred-140 AC1.3: every window is now guaranteed stamped with the
+                // coach profile's own zone (CoachProfileService.saveStep4/saveStep1), so the outer
+                // `zoneId` already resolved above IS each window's zone — no more per-window read.
+                // `window.getCanonicalTimezone()` is left on the entity/column (no migration) but is
+                // no longer consulted here; see its Javadoc for why.
+                Instant windowStart = date.atTime(window.getStartTime()).atZone(zoneId).toInstant();
+                Instant windowEnd = date.atTime(window.getEndTime()).atZone(zoneId).toInstant();
 
                 // A DST gap can invert these two instants even though the LOCAL times are ordered.
                 // LocalDateTime.atZone() silently shifts a nonexistent local time forward by the gap
@@ -176,7 +163,7 @@ public class AvailabilityService {
                             + "range straddles a DST gap in its own zone. coachId={} windowId={} "
                             + "day={} local={}-{} zone={} resolved={}/{}",
                         coachId, window.getId(), date, window.getStartTime(), window.getEndTime(),
-                        windowZoneId, windowStart, windowEnd);
+                        zoneId, windowStart, windowEnd);
                     continue;
                 }
 
@@ -196,7 +183,7 @@ public class AvailabilityService {
                             + "{} instead of the configured {}. coachId={} windowId={} day={} "
                             + "local={}-{} zone={}",
                         actualDuration, localDuration, coachId, window.getId(), date,
-                        window.getStartTime(), window.getEndTime(), windowZoneId);
+                        window.getStartTime(), window.getEndTime(), zoneId);
                 }
 
                 List<CoachAvailabilityBlock> occupied = new ArrayList<>(weekBlocks.stream()
@@ -234,7 +221,10 @@ public class AvailabilityService {
                 b.getId(), b.getStartDatetime(), b.getEndDatetime(), b.getReason()))
             .toList();
 
-        return new CoachAvailabilityResponse(windowResponses, blockResponses, computedSlots, coachTimezone,
+        // zoneId.getId() rather than the raw profile column: this reports the zone the slots above
+        // were actually materialized in, so an unparseable stored value surfaces as the "UTC" the
+        // calendar really used instead of echoing back a zone nothing honoured.
+        return new CoachAvailabilityResponse(windowResponses, blockResponses, computedSlots, zoneId.getId(),
             computeAvailabilitySignature(windows, slotLength));
     }
 
@@ -275,7 +265,8 @@ public class AvailabilityService {
         window.setEndTime(req.endTime());
         CoachAvailabilityWindow saved = windowRepository.save(window);
 
-        boolean hasConflict = hasBookingConflict(lockedProfile.getId(), saved);
+        boolean hasConflict = hasBookingConflict(lockedProfile.getId(), saved,
+            lockedProfile.getCanonicalTimezone());
         return toWindowResponse(saved, hasConflict);
     }
 
@@ -417,19 +408,67 @@ public class AvailabilityService {
         return new AvailabilityBlockResponse(b.getId(), b.getStartDatetime(), b.getEndDatetime(), b.getReason());
     }
 
-    private boolean hasBookingConflict(UUID coachId, CoachAvailabilityWindow window) {
-        ZoneId zoneId;
-        try {
-            zoneId = ZoneId.of(window.getCanonicalTimezone());
-        } catch (DateTimeException e) {
-            log.warn("Skipping booking-conflict check for window {} (coach {}): invalid canonicalTimezone '{}'",
-                window.getId(), coachId, window.getCanonicalTimezone());
-            return false;
+    /**
+     * skillars-deferred-140 code review (D1/D2): single zone-resolution point for every reader that
+     * interprets a coach's availability wall-clock values, extracted so
+     * {@link #getAvailabilityCalendar} and {@link #hasBookingConflict} cannot drift apart on the
+     * fallback behaviour the way the per-window and profile-level reads previously did.
+     *
+     * <p>Null/blank is guarded explicitly before {@code ZoneId.of}: {@code ZoneId.of(null)} throws
+     * {@code NullPointerException}, not {@code DateTimeException}, so a catch alone would propagate
+     * out instead of degrading to UTC. Returns UTC rather than throwing because the column is
+     * {@code NOT NULL} in schema but has never been revalidated against the tightened
+     * {@code @IanaTimezone} scope (2026-08-25), so a legacy fixed-offset value can still be stored.
+     */
+    private static ZoneId resolveCoachZoneOrUtc(String coachTimezone, UUID coachId) {
+        if (coachTimezone == null || coachTimezone.isBlank()) {
+            return ZoneId.of("UTC");
         }
+        try {
+            return ZoneId.of(coachTimezone);
+        } catch (DateTimeException e) {
+            log.warn("Coach {} has an invalid canonicalTimezone '{}' — falling back to UTC",
+                coachId, coachTimezone);
+            return ZoneId.of("UTC");
+        }
+    }
+
+    /**
+     * skillars-deferred-140 code review (D2): derives each booking's local day/time in the coach's
+     * CURRENT profile zone — the same zone {@link #getAvailabilityCalendar} interprets every window
+     * in since AC1.3.
+     *
+     * <p>AC1.2 originally resolved its flagged design call the other way, reading each booking's own
+     * frozen {@code canonicalTimezone}. That was backwards. A window's {@code startTime}/
+     * {@code endTime} are wall-clock values with no zone of their own; AC1.3 fixed their meaning to
+     * the profile's current zone. Reading the booking's wall clock in a DIFFERENT (frozen) zone and
+     * comparing the two readings directly is only valid while the two offsets agree — precisely what
+     * a relocation breaks. Worked example: coach relocates {@code Europe/Berlin} →
+     * {@code America/New_York} with a Monday 09:00-11:00 window (true span 13:00Z-15:00Z). A booking
+     * at 08:30Z frozen as Berlin reads 10:30 local and was reported as a conflict it does not have;
+     * one at 14:30Z reads 16:30 and its real overlap was missed.
+     *
+     * <p>The booking's own stored instant is never at risk — session times do not move — so there is
+     * nothing for a frozen zone to protect here. It is the WINDOW that moves on relocation, and the
+     * conflict check has to follow it.
+     *
+     * <p>Corrects a false claim this method's previous javadoc asserted: booking zone and window zone
+     * were NOT "always identical in practice" before deferred-140. Every booking path stamps the
+     * PROFILE zone ({@code BookingService.resolveCoachTimezone}, {@code BookingBatchService},
+     * {@code BookingDuplicationService}) while a window's zone came from the Step-4 request, so
+     * divergence was routine for any coach who used the editable per-window picker deferred-63/-64
+     * shipped.
+     *
+     * <p>Note this flag is advisory: {@link #updateWindow} returns it in the response without
+     * blocking the write, and {@code deleteWindow} does not consult it at all.
+     */
+    private boolean hasBookingConflict(UUID coachId, CoachAvailabilityWindow window, String coachTimezone) {
         Instant now = Instant.now();
         Instant horizon = now.plus(90, ChronoUnit.DAYS);
         List<Booking> futureBookings = bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
             coachId, List.of("CONFIRMED", "UPCOMING"), now, horizon);
+
+        ZoneId zoneId = resolveCoachZoneOrUtc(coachTimezone, coachId);
 
         return futureBookings.stream().anyMatch(b -> {
             ZonedDateTime startZdt = b.getRequestedStartTime().atZone(zoneId);

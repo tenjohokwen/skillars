@@ -59,6 +59,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * CoachProfileService.deletePhoto} -- each a {@code findByIdForUpdate}+{@code orElseThrow} plus an
  * {@code entityManager.refresh}, mirroring {@code saveStep4}'s own lock-then-refresh shape; the
  * {@code setPosition}/{@code save} and photo-clear/{@code save} writes all run after {@code
+ * withBoundedRetry} returns. Now 43 as of {@code skillars-deferred-140} AC1.2's new
+ * {@code CoachProfileService.saveStep1} lock site, taken (only when the coach's timezone actually
+ * changes) BEFORE any field is set on the profile, so the subsequent bulk availability-window
+ * re-stamp serializes against the same per-coach lock {@code saveStep4}/{@code AvailabilityService}
+ * already take -- same {@code findByIdForUpdate}+{@code orElseThrow}+{@code entityManager.refresh}
+ * read-only shape as every other site here; the profile/window writes all run after {@code
  * withBoundedRetry} returns.
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
@@ -124,11 +130,12 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * ReviewSubmissionService.updateReview}/{@code .submitCoachResponse}, and {@code
      * ReviewModerationService.handleReviewSubmitted} -- now 42 after {@code skillars-deferred-139}
      * added {@code ShadowAccountService.updateOwnPosition}/{@code .updateChildPosition} and
-     * {@code CoachProfileService.deletePhoto}). Asserted explicitly so an added or
-     * removed call site is loud (this count changes) rather than silently changing how much code this
-     * test covers.
+     * {@code CoachProfileService.deletePhoto} -- now 43 after {@code skillars-deferred-140} AC1.2
+     * added {@code CoachProfileService.saveStep1}'s zone-change lock site). Asserted explicitly so an
+     * added or removed call site is loud (this count changes) rather than silently changing how much
+     * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 42;
+    private static final int EXPECTED_CALL_SITE_COUNT = 43;
 
     private record CallSite(String file, int line, String argument) {
     }

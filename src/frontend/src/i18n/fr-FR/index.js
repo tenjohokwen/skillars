@@ -245,6 +245,10 @@ export default {
       step1SectionTimezone: 'Fuseau horaire',
       step4SectionTimezone: 'Fuseau horaire',
       step4TimezoneHelper: 'Les créneaux ci-dessus sont interprétés dans ce fuseau horaire.',
+      step4TimezoneReadonlyHint:
+        "Repris de l'étape 1. Modifiez-le là-bas pour déplacer toutes vos disponibilités.",
+      step4TimezoneUnavailable:
+        "Nous n'avons pas pu confirmer le fuseau horaire de votre profil, ou il n'est plus pris en charge. Veuillez en choisir un pour continuer.",
       timezoneLabel: 'Fuseau horaire',
       timezoneHint: 'Tapez pour rechercher, par ex. Europe/Berlin',
       timezoneNoMatch: 'Aucun fuseau horaire correspondant',
@@ -278,6 +282,18 @@ export default {
     // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
     duplicateSessionPackCount:
       'Ce nombre de séances est indiqué deux fois. Chaque pack doit avoir un nombre de séances différent.',
+    // skillars-deferred-140 AC3: full sweep of every marketplace.* error key the backend throws.
+    stepOutOfOrder: "Veuillez d'abord terminer l'étape précédente.",
+    profileNotFound: 'Profil de coach introuvable.',
+    alreadyPublished: 'Votre profil est déjà publié.',
+    profileNotEligibleToPublish: 'Votre profil ne peut pas être publié dans son état actuel.',
+    incompleteProfile: "Veuillez d'abord compléter toutes les étapes requises du profil.",
+    invalidPhotoUrl: "Cette photo n'a pas pu être utilisée. Veuillez réessayer de la télécharger.",
+    invalidTimeRange: "L'heure de fin doit être postérieure à l'heure de début.",
+    overlappingAvailability:
+      'Ces créneaux de disponibilité se chevauchent. Veuillez ajuster les horaires.',
+    cityTimezoneMismatch:
+      'Votre ville et votre fuseau horaire semblent être dans des régions différentes. Veuillez vérifier les deux champs.',
     title: 'Trouver un coach',
     searchByCity: 'Rechercher par ville',
     searchByCityPlaceholder: 'ex. Francfort, Berlin, Munich',

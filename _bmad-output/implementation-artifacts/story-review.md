@@ -1,184 +1,95 @@
-# Story Review: skillars-deferred-139
-## Role-Aware "My Profile" Field Management (Coach/Player/Parent) and Coach Photo Delete
+# Story Review: skillars-deferred-140
+## Coach Timezone Authoritative + Error Key Localization + City/Timezone Validation
 
-**Audit Date:** 2026-10-02  
-**HEAD at Review:** `24dfb5be` (Merge pull request #241 from tenjohokwen/dependabot/maven/com.googlecode.libphonenumber-libphonenumber-9.0.40)  
-**Review Method:** 4-layer parallel verification (citations, ledger/precedent, mechanistic claims, corner cases) + adversarial re-verification
+**Audit Date:** 2026-10-02
+**HEAD at Review:** `2bd9870c` ("mto-code-review: stop ambiguous design intent from being dismissed as noise (#244)")
+**Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-140-coach-timezone-authoritative-and-error-localization.md`
+**Story's own status at time of review:** `ready-for-dev`
 
----
+All citations below were checked against the real source tree at `2bd9870c`, **not** against any commit or line number the story itself claims is current. Four parallel verification layers (citation, ledger/precedent, mechanistic, corner-case) ran independently; every finding below then went through a second, adversarial re-read by the reviewer before being kept — several did not survive that pass (see "What did not survive re-verification").
 
-## Citation Verification (Layer 1)
-
-**20 citations checked.** All verified as accurate against current HEAD.
-
-| # | Citation | Status | Finding |
-|---|----------|--------|---------|
-| 1 | routes.js:321-326 | ✓ MATCH | ProfilePage.vue route with `meta: { requiresAuth: true }` only, no role gate |
-| 2 | CoachProfileService.java:156-281 | ✓ MATCH | saveStep1-4 methods found at exact lines |
-| 3 | CoachProfileService.java:373-382 | ✓ MATCH | `requireDraftStatus` method exists at exact range |
-| 4 | CoachProfileService.java:306,329 | ✓ MATCH | Both lines contain `requireDraftStatus` calls in `publishProfile` |
-| 5 | CoachProfileService.java:263-266 | ✓ MATCH | saveStep4 SUSPENDED rejection at exact lines |
-| 6 | CoachProfileService.java:283-300 | ✓ MATCH | Full saveStep5 method with no else branch for photoUrl |
-| 7-20 | All other 14 citations | ✓ MATCH | ShadowAccountResource/Service endpoints, getPublicProfile, repository fields, etc. all confirmed at exact locations |
-
-**Result:** Zero drifts, zero location errors. All code quotes precisely match stated ranges.
+Scope checked: 11 code citations, 5 ledger/precedent attributions, 7 mechanistic claims, and a full corner-case walk of all 3 ACs. Of the findings the four layers raised, 4 did not survive adversarial re-verification; the remainder below are presented with per-claim confidence, not a blanket score.
 
 ---
 
-## Ledger & Precedent Attribution (Layer 2)
+## 1. Citation Verification
 
-**5 deferred-work.md line ranges checked. All found and verified.**
-
-| Citation | Status | Finding |
-|----------|--------|---------|
-| Lines 3411-3473 | ✓ MATCH | "manual testing of coach profile-builder, 2026-10-01" top-priority item found exactly as described |
-| Lines 3452-3453 | ✓ MATCH | Replace-all semantics for session packs (`deleteByCoachId` + re-insert) confirmed |
-| Lines 605-611 | ✓ MATCH | Timezone validation gap cited, **BUT** annotation already present in source |
-| Lines 3435-3437 | ✓ MATCH | Parent profile-builder finding confirmed (child creation only) |
-| Lines 3458-3464 | ✓ MATCH | Photo-delete gap framing matches reality exactly |
-
-**Precedent stories verified:**
-- `skillars-deferred-138` (PR #236): "diff cited lines to ensure they're still accurate" convention established ✓
-- `skillars-deferred-17` (commit f2de881c): Timezone validation precedent confirmed ✓
-
-**Critical Finding — Timezone Annotation Gap Already Closed:**
-
-The story cites a timezone validation gap, correctly noting in Dev Notes (line 259) to "re-verify what `@IanaTimezone` actually validates before assuming this gap is still open." Verification confirms: **the gap HAS been closed**. Both `ProfileBuilderStep1Request.java:16` and `ProfileBuilderStep4Request.java:25` carry `@NotBlank @IanaTimezone String canonicalTimezone`. The ledger text appears to predate the annotation's implementation. **Implication for AC2:** Do not expand timezone validation beyond what Step1 already enforces — the annotation is doing its job.
+| # | Citation | Verdict | Evidence |
+|---|---|---|---|
+| 1 | `AvailabilityService:140-152` materializes slots in `window.getCanonicalTimezone()` | **MOSTLY MATCH, imprecise range** | The cited range is the timezone-*resolution* preamble (`window.getCanonicalTimezone()` is read at line 146); the actual `computeAvailableSlots(...)` call that uses the result is at line 221, ~70 lines past the cited range. The field-level claim (window, not profile) is correct. File is actually `src/main/java/com/softropic/skillars/platform/booking/service/AvailabilityService.java` — the story's own "Files to Modify" section guesses `marketplace.service.AvailabilityService`, which is the wrong package. |
+| 2 | `CoachProfileService.saveStep4` persists per-window zone from the request | **MATCH** | Lines 289–298: `win.setCanonicalTimezone(w.canonicalTimezone())` — taken verbatim from `ProfileBuilderStep4Request.AvailabilityWindowRequest`, never from `profile.getCanonicalTimezone()`. |
+| 3 | `CoachProfileService.saveStep1` never touches `coach_availability_windows` | **MATCH** | Full method body (162–180) only reads/writes `CoachProfile` fields and calls `coachProfileRepository.save(profile)`. Zero references to the window repository or entity. |
+| 4 | `marketplace.stepOutOfOrder`/`marketplace.profileNotFound` thrown by `saveStep3`/`saveStep5` | **MATCH (collectively)** | `saveStep3:224` and `saveStep5:307` each throw `marketplace.stepOutOfOrder` from their own step-order gate; both methods also call the shared `requireProfile()` helper (line 220 / 305) first, which throws `marketplace.profileNotFound` (line 643) if no profile row exists. The story doesn't assert a strict 1:1 pairing, so both exceptions genuinely are reachable from both methods — see "did not survive" for the narrower reading one layer initially flagged. |
+| 5 | `ProfileBuilderStep4Request.AvailabilityWindowRequest` has a per-window `canonicalTimezone` field | **MATCH** | `ProfileBuilderStep4Request.java:21-26`, `@NotBlank @IanaTimezone String canonicalTimezone`. |
+| 6 | `ProfileBuilderStep1Request` has no city/timezone cross-field constraint | **MATCH** | Full record body confirmed; `@IanaTimezone` validates `canonicalTimezone` in isolation (`Target({METHOD,FIELD,PARAMETER})`, single-string `ConstraintValidator`), no class-level `@AssertTrue` or custom cross-field validator anywhere in the file. |
+| 7 | No schema changes needed for AC1–AC2 | **MATCH** | `V138__baseline_schema.sql`: `marketplace.coach_profiles.city` (line 1575) and `.canonical_timezone` (1578) both exist; `marketplace.coach_availability_windows.canonical_timezone` (1534) exists as its own column. All entities map 1:1 already. |
+| 8 | Server error keys location ("if server error keys live here") | **RESOLVED, refines the story** | `src/main/resources/i18n/messages.properties` exists but holds only email templates. The actual mechanism (verified directly, see Finding F below) is: `MarketplaceException`'s message is piped through Spring's `MessageSource.getMessage(errorKey, args, defaultMessage, locale)` in `ApiAdvice.toErrorDTO` — but **zero** `marketplace.*` keys exist in any of the four backend bundles (`messages.properties`, `messages_en/fr/de.properties`), so the lookup always falls through to the hardcoded English default regardless of locale. |
+| 9 | Both keys absent from all 3 frontend i18n bundles | **MATCH** | Zero grep hits for `stepOutOfOrder`/`profileNotFound` in `src/frontend/src/i18n/{en-US,fr-FR,de-DE}/index.js`. Broader sweep (per AC3.2): **every** `MarketplaceException` errorCode thrown by `CoachProfileService` (`marketplace.incompleteProfile`, `.alreadyPublished`, `.invalidPhotoUrl`, `.overlappingAvailability`, `.profileNotEligibleToPublish`, etc.) is likewise absent from all three frontend bundles — this is a systemic gap, not limited to the two keys the story names. |
+| 10 | `src/frontend/src/pages/ProfileBuilderStep4.vue` | **DRIFTED** | Actual path: `src/frontend/src/components/profileBuilder/ProfileBuilderStep4.vue`. |
+| 11 | `AvailabilityService.addWindow` | **MATCH** | Line 253; stamps the *profile's* current zone onto new windows (`lockedProfile.getCanonicalTimezone()`, line 261) — `CreateWindowRequest` has no per-window zone field in this path. |
 
 ---
 
-## Mechanistic Claims (Layer 3)
+## 2. Ledger & Precedent Attribution
 
-**6 behavioral claims verified against complete method bodies.** All confirmed as accurate.
-
-| Claim | Evidence | Status |
-|-------|----------|--------|
-| **saveStep1-4 never call `requireDraftStatus`** | Reviewed all four saveStepN method bodies (lines 156-281); zero calls to `requireDraftStatus` found | ✓ VERIFIED |
-| **saveStep4 rejects SUSPENDED but allows ACTIVE** | Lines 263-266: `if (profile.getStatus() == CoachProfileStatus.SUSPENDED) throw ...`; ACTIVE status is unrestricted | ✓ VERIFIED |
-| **saveStep5 can only SET photoUrl, never clear** | Lines 284-300: `if (req.photoUrl() != null)` sets value; NO else branch exists; no way to distinguish null field from explicit clear | ✓ VERIFIED |
-| **Player POST endpoints are one-time-only** | `existsByUserId` check (lines 84-86) rejects re-creation; no PUT/PATCH endpoints exist anywhere in ShadowAccountResource | ✓ VERIFIED |
-| **FileStorageService.softDelete verifies ownership** | Lines 244-246: `if (!fso.getCreatedBy().equals(currentUserLogin)) throw AuthorizationException` | ✓ VERIFIED |
-| **PlayerOwnershipGuard resolves businessId as parentId** | Lines 26-27: `Long parentId = Long.parseLong(skillarsP.getBusinessId()); return playerProfileRepository.findByIdAndParentId(playerId, parentId).isPresent()` | ✓ VERIFIED |
+| # | Claim | Sources checked | Verdict |
+|---|---|---|---|
+| 1 | deferred-63/-64 established per-window divergence as deliberate; quote: *"Per-window timezone divergence remains a deliberate feature... this only changes which value drives the outer week-scoping bounds, not per-window slot computation below."* | `AvailabilityService.java:82-84` (near-verbatim code comment), `deferred-work.md:3517-3519`, deferred-63 and deferred-64 story files, `git log --grep` | **CONFIRMED** — both stories independently carry this decision (deferred-63 at `deferred-work.md:1180`, deferred-64 at its own lines 29-38), matching the code comment's dual attribution. Both merged (`bc9bb5e0`, `21b19162`). |
+| 2 | deferred-139's code review raised exactly these 3 gaps (timezone-divergence/D1, i18n, city/timezone validation) | `sprint-status.yaml:323`, `deferred-work.md:3477-3559` | **CONFIRMED**, accurate, not exaggerated. |
+| 3 | "D1 ... made read-only pending deferred-17 D8" is an accurate, still-open characterization | `sprint-status.yaml:323`, `deferred-work.md:658-660` (D8's original definition, 2026-08-06) | **CONFIRMED** — D8 was closed-as-leave-as-is 2026-08-25, reopened by Mbah's 2026-10-02 decision, and is explicitly "picked up by skillars-deferred-140." |
+| 4 | Story cites `deferred-work.md`'s "2026-10-01 manual testing" **and** "2026-10-02 code review" sections as its source for all 3 AC gaps | `deferred-work.md:3411` (2026-10-01 section), `:3477` (2026-10-02 section) | **INACCURATE, corrected** — both headings exist (not fabricated), but the 2026-10-01 section's sole content is the "My Profile has no editable surface" gap — i.e., it's deferred-139's **own** origin story, unrelated to deferred-140's three findings. Only the 2026-10-02 section actually substantiates timezone-divergence, i18n, and city/timezone-validation. Low-severity (misleading over-attribution, not fabrication) but worth a one-line correction in the story's Source line. |
+| 5 | Precedent stories (deferred-17, -63, -64, -139) genuinely exist and are merged | `git log --oneline --all --grep=...` for each | **CONFIRMED.** |
 
 ---
 
-## Corner Cases & Assumptions (Layer 4)
+## 3. Mechanistic Claims
 
-### AC1: Get Own Coach Profile Endpoint
-
-✓ **Six repositories confirmed injected** at CoachProfileService:156-173 (coachProfileRepository, coachSpecialtyRepository, coachAgeGroupRepository, coachPricingRepository, sessionPackRepository, coachAvailabilityWindowRepository).
-
-✓ **getPublicProfile uses coachPublicProfileFactsRepository** as claimed (line 431-432).
-
-✓ **No concurrency issues** in proposed getOwnProfile method — all are plain lookups with no status filters.
-
-### AC2: "My Profile" Coach Section
-
-✓ **ProfilePage.vue does NOT import useAuthStore** (verified lines 155-164 — no such import exists today).
-
-✓ **Error-swallowing pattern confirmed** (lines 183-193 wrap profile load in try/catch; errors render separately at lines 16-23).
-
-⚠️ **Empirical confirmation REQUIRED (non-skippable):** Story claims "Coach steps 1-4 are confirmed idempotent-updatable even after publish" as a static-read conclusion. **Static analysis confirms the claim is true** — saveStep1-4 never check requireDraftStatus, only saveStep4 checks SUSPENDED (and ACTIVE passes). However, AC2's own test plan explicitly requires empirical execution: `saveStep1_onActiveCoach_succeedsAndProfileStaysActive` against a real ACTIVE test coach. **This is not optional.** Before wiring these dialogs to reuse saveStep1-4, the story's own testing requirement demands actual execution, not just static-read verification.
-
-⚠️ **Concurrent suspension gap (Design choice):** saveStep1-3 do NOT check for SUSPENDED status — only saveStep4 does (line 263). A coach could be suspended after saveStep1 but before saveStep4. The story does not address whether suspended coaches should be able to edit steps 1-3. **Document this as intentional or add SUSPENDED checks to all four methods.**
-
-### AC3: Coach Photo Delete
-
-✓ **FileStorageService is in correct package** — `com.softropic.skillars.platform.filestorage.service` (verified import at FileStorageService.java line 1).
-
-✓ **softDelete method signature correct** — accepts file key and username (line 234).
-
-🔴 **RACE CONDITION — CRITICAL:** Proposed implementation (as shown in story):
-```java
-@Transactional
-public void deletePhoto(Long userId, String currentUserLogin) {
-    CoachProfile profile = requireProfile(userId);
-    if (profile.getPhotoUrl() != null) {
-        fileStorageService.softDelete(profile.getPhotoUrl(), currentUserLogin);  // External call
-        profile.setPhotoUrl(null);
-        coachProfileRepository.save(profile);
-    }
-}
-```
-
-**Risk Scenario 1:** `softDelete()` succeeds (file marked deleted in S3), but subsequent `save()` fails (e.g., database timeout). Result: file is marked deleted but profile still references photoUrl. Orphaned soft-deleted file remains in storage.
-
-**Risk Scenario 2:** `save()` succeeds (photoUrl cleared), but `softDelete()` fails (e.g., S3 authorization timeout on line 244 of FileStorageService). Result: photoUrl is cleared from profile but file remains in active storage under the original key.
-
-**Recommended Fix:** Reverse the order — save `null` FIRST (no external calls, pure database), then delete the file. If delete fails, profile is already cleared and can retry deletion on the file alone. Alternatively, wrap both in explicit transaction control with retry logic.
-
-### AC4: Player Position Update
-
-✓ **PlayerProfile entity has position field** (line 33, type `PlayerPosition`).
-
-✓ **PlayerPosition enum has exactly 4 values** — GOALKEEPER, DEFENDER, MIDFIELDER, FORWARD (lines 3-7).
-
-✓ **playerProfileRepository.findByIdForUpdate exists** with NO_WAIT pessimistic-lock pattern (lines 60-63).
-
-✓ **PlayerProfileMapper confirmed** used by both `getSelfOwnedPlayerProfile` and `createSelfOwnedPlayerProfile`.
-
-✓ **PlayerOwnershipGuard exists as @Component bean** (PlayerOwnershipGuard.java line 11).
-
-✓ No concurrency issues identified.
-
-### AC5: Parent Child Position Management
-
-✓ **playerStore.js exists** with `players` ref and `fetchPlayers()` function (lines 7, 16-22).
-
-✓ **ParentChildSwitcher.vue uses playerStore.players** (line 2, line 18).
-
-✓ **Ownership guard reuse is correct** — @playerOwnershipGuard.check pattern already used by `getPlayerProfile` (line 68-70).
-
-⚠️ **Concurrency strategy NOT YET DECIDED:** The story's own Dev Notes (line 261) correctly flag this: "decide deliberately whether a low-contention single-field position update needs [pessimistic-lock], and write down the reasoning." The codebase shows NO_WAIT is used elsewhere for PlayerProfile writes (GdprErasureService, lines 125-149), but that was a high-stakes deletion scenario. A simple position-field update may not warrant the overhead. **Document the decision in Completion Notes regardless of direction chosen.**
-
-### AC6: Admin — No-Op Scope
-
-✓ No `Admin*`-specific profile-builder components/services found.
-
-✓ Existing Account + Personal Info cards (ProfilePage.vue lines 26-124) already constitute Admin's complete editable surface.
-
-✓ Scope boundaries (AuthService, login flows, onboarding wizard pages) verified as out of scope.
-
-### Cross-Module Dependencies
-
-✓ **FileStorageService import correct** — `com.softropic.skillars.platform.filestorage.service.FileStorageService`, not `infrastructure.blobstore.*`.
-
-✓ Pattern matches project-context.md rules (lines 95-156).
+| # | Claim | Evidence | Verdict |
+|---|---|---|---|
+| 1 | Per-window `canonical_timezone` is independently writable today | `saveStep4:289-298` persists `w.canonicalTimezone()` verbatim per window | **CONFIRMED**, but narrower in practice than "independently writable" implies — see Corner Case B: the builder UI (`ProfileBuilderStep4.vue`) sends one shared zone for the whole Step-4 batch, not a true per-window picker; real divergence mostly arises from stale windows surviving a later Step-1 zone change (since saveStep1 never touches windows), or a coach deliberately picking a different zone at Step 4 than at Step 1. |
+| 2 | "Reuse existing `saveStep4` idempotency" | `saveStep4` does `deleteByCoachId` then `saveAll`, **no** `entityManager.flush()` between them, unlike `saveStep2`/`saveStep3` (which needed an explicit flush fix per deferred-139, documented in their own code comment, to avoid colliding with `uq_coach_specialty`/`uq_coach_age_group`). `coach_availability_windows` has no analogous unique constraint in `V138__baseline_schema.sql`. | **PARTIALLY TRUE** — resubmission is safe today, but only because there's no unique constraint to collide on, not because `saveStep4` already follows the fixed delete-then-flush-then-reinsert pattern its siblings needed. The story's "reuse existing idempotency" phrasing attributes the wrong mechanism; worth stating precisely in the story so a future reader doesn't assume the flush-safety pattern is already in place here. |
+| 3 | `saveStep1`'s zone re-stamp would commit atomically with the profile update, no extra round-trip | `saveStep1` is plain `@Transactional` (default `REQUIRED`), touches only `CoachProfile`; `CoachAvailabilityWindowRepository` is a bare `JpaRepository` with no `REQUIRES_NEW` override | **CONFIRMED true for atomicity** — but see Corner Case D: atomicity is not the same as concurrency-safety, and `saveStep1` is missing a lock the sibling writers already carry. |
+| 4 | `AvailabilityService`'s slot-materialization loop can be simplified to `profile.getCanonicalTimezone()` with no new parameter | `profile` is a plain local variable already in scope for the entire `getAvailabilityCalendar` method, never reassigned | **CONFIRMED mechanically** — no new dependency needed for the two cited lines. Not a defect that this contradicts the deferred-63/64 "deliberate feature" comment — reversing that is this story's explicit, owner-approved point. Residual risk: `window.getCanonicalTimezone()` is also read elsewhere in the same service (see Corner Case A, `hasBookingConflict`) — AC1.3 should audit **all** per-window-zone reads in the booking/availability path, not just the two slot-materialization lines it cites, before simplifying. |
+| 5 | `ProfileBuilderStep1Request` has no city/timezone cross-field validation | Full DTO read | **CONFIRMED** (duplicate of Citation 6). |
+| 6 | No DB migration needed for AC1-AC2 | `V138__baseline_schema.sql` columns confirmed present | **CONFIRMED** (duplicate of Citation 7). |
+| 7 | Exact throw sites/keys in `saveStep3`/`saveStep5` | Lines quoted above | **CONFIRMED** (duplicate of Citation 4). |
 
 ---
 
-## What Did NOT Survive Re-Verification
+## 4. Corner Cases, False Assumptions, and Missed Flows
 
-**None of the key findings were killed by re-verification.** The empirical-testing requirement for AC2 and the race condition in AC3 are confirmed issues, not dismissed hypotheticals. The concurrency decision gap in AC5 is a genuine deferred choice, correctly flagged by the story's own Dev Notes.
+**A. (HIGH) AC1.2's retroactive zone re-stamp can corrupt booking-conflict detection, not booking times.** `Booking` stores an absolute `Instant` plus its own `canonicalTimezone` frozen at creation (`BookingService.createBookingRequest`, stamped from the coach's zone *at that moment*) — so the story's implicit worry (already-booked session times silently shifting) is actually a non-issue; those fields never read from `coach_availability_windows` again. The real bug is in `AvailabilityService.hasBookingConflict` (lines 420-441, read in full): it re-derives a booking's local day-of-week/time from the frozen `Instant` using the **window's current** `canonicalTimezone` — not the booking's own frozen zone. After AC1.2 re-stamps a window to a new zone with a different UTC offset than it had when a booking was placed (e.g. Paris→Tokyo, not Paris→Madrid), a coach editing that window afterward gets the conflict check evaluated against the *wrong* local time — a false negative (a real conflict is missed) or false positive. Neither AC1.2 nor AC4.2's test plan touches booking-conflict detection at all.
 
----
+**B. (HIGH) `saveStep4`'s Option A (reject on zone mismatch) would break a currently-shipped, intentional frontend flow — and neither option is backend-only.** `ProfileBuilderStep4.vue:68,95-107,144` has its own independent `TimezoneSelect`, defaulted once from the Step-1 value but freely editable, submitting that single value for every window in the batch. Its own code comment is explicit: making this reactive to Step 1 "would break something real: it would silently overwrite a per-window zone the coach had deliberately chosen here." `saveStep4` persists that value verbatim today. So: Option A would 400 on day one for any coach who deliberately diverges at Step 4; Option B would silently discard a choice the frontend explicitly protects. Either way, `ProfileBuilderStep4.vue` must change — it is not in the story's "Files to Modify" list for AC1.
 
-## Recommendation
+**C. (MEDIUM) A pre-existing comment in the deferred-139 "My Profile" dialog is factually wrong about `saveStep4` and should be corrected by this story.** `EditCoachAvailabilityDialog.vue:71-77` justifies its read-only timezone picker with: "the per-window timezone this dialog used to collect was discarded on every submit anyway (saveStep4 always stamps the single profile-level canonicalTimezone onto every window)." That is false per `saveStep4:295` (it takes the per-window request value verbatim). The dialog's uniform result today is an accident of that one dialog always sending one value, not backend enforcement. Since this story is precisely about making that enforcement real, the comment should be fixed as part of this work rather than left contradicting the new backend behavior.
 
-**Status:** Ready for development with **three mandatory clarifications before wiring production code:**
+**D. (HIGH) AC1.2 as scoped would add a lock-free bulk write where every sibling writer already locks.** `saveStep1` (`CoachProfileService.java:163`) takes no row lock — plain `findByUserId` + `save`. By contrast, `saveStep4` (line 276), and `AvailabilityService.addWindow`/`updateWindow`/`deleteWindow` (lines 255, 269, 285, via the shared `lockProfile()` helper at 298-305) all take `entityManager.refresh(profile, LockModeType.PESSIMISTIC_WRITE)` specifically to serialize per-coach writes against each other (precedent: deferred-58 AC2, deferred-78's "serializes against nothing" fix). Adding AC1.2's bulk window re-stamp to `saveStep1` without adopting the same lock reopens that exact race class for a new writer pair: a concurrent `addWindow` call can read the pre-relocation zone under its own lock while `saveStep1`'s unlocked re-stamp is in flight, and insert a new window stamped with the now-stale zone that survives commit. (Note: this is a locking/concurrency gap, not a partial-commit risk — `saveStep1`'s existing `@Transactional` boundary means a flush failure rolls back the whole method cleanly.)
 
-| Finding | Severity | Impact | Action |
-|---------|----------|--------|--------|
-| **AC2: Empirical testing non-negotiable** | MEDIUM | Cannot proceed to frontend without test | Implement new IT (`CoachProfileSelfEditIT`) with real ACTIVE coach before wiring ProfilePage.vue dialogs |
-| **AC3: Race condition in softDelete→save order** | HIGH | Can create orphaned or phantom data | Reverse order (save null first, then delete file) or add explicit transaction control before merging |
-| **AC5: Concurrency strategy undecided** | MEDIUM | Technical debt if not documented | Decide NO_WAIT vs plain findById; document choice in Completion Notes with reasoning |
-| **Timezone annotation already present** | INFO | Dev Notes guidance was correct | Re-verify @IanaTimezone behavior during implementation; do not expand validation beyond existing annotation |
-| **AC2: Concurrent suspension gap** | LOW | Design choice, not a bug | Document whether SUSPENDED coaches can edit steps 1-3, or add explicit checks to all four saveStepN methods |
+**E. (MEDIUM) AC2's plausibility validator has two unaddressed edge cases.** New coach profiles default to `canonicalTimezone = "UTC"` (`CoachProfileService.getOrCreateDraft:156`), and the frontend's `TimezoneSelect` explicitly offers/preselects `"Etc/UTC"` for UTC-zoned browsers (`CoachProfileService.getSupportedTimezones():144`). A naive region-extraction splitting the zone id on `/` would produce region `"Etc"`, which can never match any city's region — so a real-city coach who ends up on UTC/Etc-UTC (a common, system-offered default) risks rejection the first time they touch Step 1 after this ships, unless the validator special-cases UTC-family zones. Separately, `city` has only `@Size(max=100)` (no `@NotBlank`) and AC2.2 doesn't specify validator behavior for null/blank city — presumably fail-open by the story's own stated design, but it's unstated and untested in the proposed IT list. (One edge case did **not** survive: fixed-offset zones like `"+01:00"` are already rejected upstream by the existing `@IanaTimezone` validator, confirmed by an existing passing IT — not a live risk.)
 
-**All 20 code citations verified as accurate.** All 6 mechanistic claims verified as accurate. All 5 ledger references verified as accurate. Story foundation is sound; implementation gaps are in concurrency handling and empirical testing, not in the underlying design.
+**F. (HIGH) AC3's fix, as scoped, does not reach the flow the story's own bug report describes.** Two independent frontend error-rendering paths exist. (1) `useErrorHandler()` (`src/frontend/src/composables/useErrorHandler.js:40-49`) — used by `ProfilePage.vue` and other post-onboarding surfaces — correctly does `te(errorKey) ? t(errorKey) : rawMessage`; for these, adding the two keys to the three frontend locale bundles is correct and sufficient. (2) The actual coach-onboarding wizard, `CoachProfileBuilderPlaceholderPage.vue:50` — the realistic place `stepOutOfOrder` fires, since it's essentially unreachable once onboarding is complete — renders `store.error?.response?.data?.message || t('error.generic')`. `ErrorDto` (`infrastructure/message/ErrorDto.java`) nests the message under `errorMsg.message`, not a top-level `message` field (confirmed by reading the DTO directly) — so `data.message` is always `undefined` on this page, and the banner renders the **generic fallback for every error, in every locale**, regardless of this story's fix; it performs no key-based lookup at all. The story's stated symptom ("French/German users see raw English text") doesn't match this page's actual current behavior — which is worse: a useless generic message for everyone, in every language. AC3 needs an added task to fix this page's error binding (read `data?.errorMsg?.message`/`errorKey`, route through the same `te()/t()` pattern) for the fix to reach onboarding users at all. Secondary finding: the backend also has its own `MessageSource`-based localization path (`ApiAdvice.toErrorDTO`, keyed off `Accept-Language`) that currently always misses for marketplace errors (zero `marketplace.*` keys in any backend bundle) — a legitimate alternate fix location the story doesn't mention, though not the module's established pattern.
+
+**G. (Confirmed, no action needed) AC4's IT test plan is sound.** `getAvailabilityCalendar` computes slots fresh from live window rows on every call — no caching/materialized-slot table exists — so the proposed Paris→Madrid relocation IT will reflect the window update automatically with no extra re-materialization step.
 
 ---
 
-## Audit Metadata
+## 5. What Did Not Survive Re-Verification
 
-- **Total claims verified:** 20 citations + 5 ledger references + 6 mechanistic claims + 12 corner-case checks = 43 claims
-- **Survived adversarial re-verification:** 40 claims (93%) — all foundational claims
-- **Flagged for implementation focus:** 3 claims (7%) — AC2 empirical test, AC3 race condition, AC5 concurrency decision
-- **False positives in verification:** 0
-- **False negatives in verification:** 0
+- **A strict 1:1 reading of Citation 4** ("stepOutOfOrder belongs to saveStep3, profileNotFound belongs to saveStep5") — one layer initially flagged `saveStep5` as "wrongly" credited with `profileNotFound`. On re-read, the story makes a collective claim ("thrown by saveStep3 and saveStep5"), not a strict pairing, and both exceptions are genuinely reachable from both methods (the step-order gate directly, `profileNotFound` via the shared `requireProfile()` helper each calls first). Not a defect.
+- **"AC1.3 conflicts with documented design intent" as an independent finding** — two layers flagged the "simplify the loop" plan as contradicting the deferred-63/64 "deliberate feature" code comment. This isn't a defect: reversing that exact decision, with an explicit owner sign-off recorded in the story's own "Decisions & Locked In" section, is the entire point of AC1. Downgraded and folded into the narrower, concrete residual risk that did survive (Corner Case A / Mechanistic claim 4: audit *other* per-window-zone reads in the same service before simplifying — which produced a real, specific finding, the booking-conflict bug).
+- **An initial claim that "the backend never does a resource-bundle lookup on these keys at all"** — did not survive as stated. Direct reading of `ApiAdvice.toErrorDTO` (lines 710-719) shows the backend does attempt a `MessageSource.getMessage(errorKey, ..., locale)` lookup on every `MarketplaceException`; it's just that no backend bundle contains any `marketplace.*` key, so the lookup always falls through to the English default. Corrected and folded into Finding F.
+- **A flagged risk that fixed-offset timezone strings (e.g. `"+01:00"`) would slip past AC2's plausibility validator** — did not survive: the existing `@IanaTimezone` validator already rejects non-IANA zone strings upstream, confirmed by a passing IT (`CoachProfileBuilderIT.java:222-236`). Non-issue.
 
-**Confidence per claim type:**
-- **Citations:** HIGH (20/20 verified exact matches)
-- **Ledger references:** HIGH (5/5 verified with one critical annotation finding)
-- **Mechanistic claims:** HIGH (6/6 verified with full method bodies)
-- **Corner cases:** MEDIUM-HIGH (real issues found in AC3 and AC5; AC2 empirical test is non-optional, not a false positive)
+---
+
+## 6. Recommendation
+
+No single blanket confidence score — per-claim confidence is above. In summary:
+
+- **High-confidence, should block or reshape implementation:** Findings A (booking-conflict re-interpretation), B (Option A/B both require a `ProfileBuilderStep4.vue` change the story doesn't scope), D (missing lock reopens a previously-fixed race class), F (AC3 as scoped doesn't fix the onboarding wizard's error banner, which has its own separate, worse pre-existing bug).
+- **Medium-confidence, worth addressing before or during implementation:** Finding C (stale/wrong comment to fix), Finding E (UTC/Etc-UTC false-positive risk, blank-city behavior unspecified).
+- **Low-severity, cosmetic correction only:** Ledger claim 4 (over-broad source citation to an unrelated deferred-work.md section), Citation 1 (line-range imprecision), Citation 10 (wrong file path), Mechanistic claim 2 (idempotency attributed to the wrong mechanism).
+- **Confirmed sound, no change needed:** the large majority of citations (schema, DTOs, throw sites, precedent chain to deferred-63/64/139/17) check out against real current source, and AC4's IT test plan has no hidden complication.
+
+What was and wasn't independently re-checked: all four layers' outputs were re-read against the cited evidence by the reviewer; the two highest-stakes corner cases (Finding A's `hasBookingConflict`, Finding B's `ProfileBuilderStep4.vue`) and the AC1.2 lock asymmetry (Finding D) were re-verified first-hand by the reviewer directly (not just taken on a layer's word), as was the full two-path frontend error-rendering mechanism behind Finding F, including reading `ErrorDto.java`'s actual shape to settle a direct conflict between two layers' partial reports.

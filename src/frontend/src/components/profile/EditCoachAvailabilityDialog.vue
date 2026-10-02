@@ -68,13 +68,15 @@
           />
 
           <div class="text-label q-mb-sm q-mt-lg">{{ t('auth.coach.step4SectionTimezone') }}</div>
-          <!-- skillars-deferred-139 review D1: read-only — the per-window timezone this dialog used
-               to collect was discarded on every submit anyway (saveStep4 always stamps the single
-               profile-level canonicalTimezone onto every window). Making the picker editable here
-               implied a per-window zone this dialog never actually wrote, and silently re-zoned any
-               window save. The zone now belongs to Identity & Location (Step 1) only; this dialog
-               displays it and keeps stamping it onto every window, matching
-               AvailabilityService.addWindow's own behavior. -->
+          <!-- skillars-deferred-139 review D1, corrected by skillars-deferred-140 AC1.1: read-only —
+               as of deferred-140, saveStep4 unconditionally overwrites every window's zone with the
+               profile's own (Option B); before deferred-140 it still accepted and persisted
+               whatever per-window value the request sent (ProfileBuilderStep4.vue's own picker was
+               the one place that could still diverge it). Making the picker editable here implied a
+               per-window zone this dialog never actually wrote, and silently re-zoned any window
+               save. The zone now belongs to Identity & Location (Step 1) only; this dialog displays
+               it and keeps stamping it onto every window, matching AvailabilityService.addWindow's
+               own behavior. -->
           <div class="text-body q-mb-xs">{{ form.canonicalTimezone || '—' }}</div>
           <div class="text-meta q-mb-sm">{{ t('profile.availabilityTimezoneReadonlyHint') }}</div>
           <div v-if="hasFieldError('windows')" class="text-negative text-caption q-mb-sm">

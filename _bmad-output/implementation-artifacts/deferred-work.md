@@ -3498,6 +3498,8 @@ open work in this file when next picking a story.]**
   every server error key reachable by the frontend) for locale coverage, since these two being missing
   suggests the server-error namespace was never parity-checked the way `profile.*` was.
 
+  **[PICKED UP by skillars-deferred-140: Error Key Localization (AC3)]**
+
 - **Adopt "coach profile timezone is authoritative" and close the open `deferred-17 D8` reconciliation.**
   Decided by Mbah during the deferred-139 code review (2026-10-02): *"Both player and coach will use the
   timezone of the city in which the coach resides when it comes to setting availability."* That rule
@@ -3534,6 +3536,8 @@ open work in this file when next picking a story.]**
   change there silently reverted on reopen. That fix deliberately touches neither `saveStep4`,
   `AvailabilityService`, nor existing rows.
 
+  **[PICKED UP by skillars-deferred-140: Coach Timezone Authoritative (AC1)]**
+
 - **Nothing derives or validates a coach's `canonicalTimezone` against their `city`.**
   Raised during the deferred-139 code review (2026-10-02) while confirming the rule above.
   `ProfileBuilderStep1Request` declares `@Size(max = 100) String city` (free text) and
@@ -3551,3 +3555,29 @@ open work in this file when next picking a story.]**
   zone's region clearly disagrees with the city); or formally document that the zone is authoritative and
   `city` is display-only, in which case the UI should stop implying the zone follows the city.
   Pre-existing — not introduced by deferred-139.
+
+  **[PICKED UP by skillars-deferred-140: City/Timezone Validation (AC2)]**
+
+---
+
+## Deferred from: code review of skillars-deferred-140 (2026-10-02)
+
+- **Native-speaker review of the fr-FR / de-DE `marketplace.*` error strings.** Story
+  skillars-deferred-140 AC3.1 added all 9 `marketplace.*` keys to `en-US`, `fr-FR` and `de-DE`
+  (`src/frontend/src/i18n/{en-US,fr-FR,de-DE}/index.js`), but the French and German strings were
+  produced by the AI dev agent, not a native speaker or qualified translator — directly against
+  AC3.1's explicit "do NOT use AI-only" instruction. The dev agent disclosed this rather than
+  silently claiming the instruction satisfied.
+
+  **Why it matters:** the keys are verified present and resolving in all three bundles (confirmed by
+  importing the real catalogs, not grep), so there is no functional defect — the risk is purely
+  translation quality on coach-facing onboarding errors. They read as plausible, grammatically formed,
+  formal-register (vous/Sie) text consistent with the codebase's existing tone.
+
+  **When picked up:** have a native fr/de speaker review the 9 strings in each bundle. Low effort,
+  no code change expected beyond string edits. Worth bundling with any future broader i18n
+  completeness sweep (see AC3.2's noted nice-to-have: auditing every server error key reachable by
+  the frontend, including the backend `messages*.properties` path, which contains zero `marketplace.*`
+  keys today and always falls through to the English default).
+
+  Deferred reason: no human translator available in the implementation session.
