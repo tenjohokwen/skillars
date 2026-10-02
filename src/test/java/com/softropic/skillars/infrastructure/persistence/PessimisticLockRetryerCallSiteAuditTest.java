@@ -53,7 +53,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code handleReviewSubmitted}, a bare {@code findByIdForUpdateNoWait} with the {@code orElseThrow}
  * moved to the caller's own {@code .ifPresentOrElse}) read only -- every write (status/body updates,
  * {@code ReviewModerationLog}/event publishes, {@code coachRatingService.recompute}) runs after
- * {@code withBoundedRetry} returns, the same read-only contract as every other site here.
+ * {@code withBoundedRetry} returns, the same read-only contract as every other site here. Now 42 as
+ * of {@code skillars-deferred-139}'s review Patches 3/4 added 3 new sites -- {@code
+ * ShadowAccountService.updateOwnPosition}/{@code .updateChildPosition} and {@code
+ * CoachProfileService.deletePhoto} -- each a {@code findByIdForUpdate}+{@code orElseThrow} plus an
+ * {@code entityManager.refresh}, mirroring {@code saveStep4}'s own lock-then-refresh shape; the
+ * {@code setPosition}/{@code save} and photo-clear/{@code save} writes all run after {@code
+ * withBoundedRetry} returns.
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
  * building this scan against the real call sites (28 at story-creation time) surfaced one genuine violation —
@@ -113,14 +119,16 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * {@code GdprErasureService.deletePlayerDevelopmentData} — 32 after {@code skillars-deferred-130}
      * added {@code CoachProfileService.publishProfile} — 33 after {@code skillars-deferred-131}
      * added {@code SubscriptionService.syncMarketplaceTier} -- 34 after {@code skillars-deferred-132}
-     * added {@code ReviewFlagService.flag} -- now 39 after {@code skillars-deferred-135} AC3
+     * added {@code ReviewFlagService.flag} -- 39 after {@code skillars-deferred-135} AC3
      * added 5 sites: {@code AdminReviewService.approveReview}/{@code .blockReview}, {@code
      * ReviewSubmissionService.updateReview}/{@code .submitCoachResponse}, and {@code
-     * ReviewModerationService.handleReviewSubmitted}). Asserted explicitly so an added or
+     * ReviewModerationService.handleReviewSubmitted} -- now 42 after {@code skillars-deferred-139}
+     * added {@code ShadowAccountService.updateOwnPosition}/{@code .updateChildPosition} and
+     * {@code CoachProfileService.deletePhoto}). Asserted explicitly so an added or
      * removed call site is loud (this count changes) rather than silently changing how much code this
      * test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 39;
+    private static final int EXPECTED_CALL_SITE_COUNT = 42;
 
     private record CallSite(String file, int line, String argument) {
     }
