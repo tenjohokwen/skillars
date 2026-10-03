@@ -28,9 +28,14 @@ public class CreditWalletResource {
     private final SecurityUtil securityUtil;
 
     @GetMapping("/balance")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<CreditBalanceResponse> getBalance() {
-        Long parentId = securityUtil.getCurrentCoachUserId();
+        // skillars-deferred-141 code review: was getCurrentCoachUserId(), which is role-agnostic
+        // despite its name (it just parses the principal's businessId) but reads as coach-specific —
+        // a latent trap now that /balance serves PARENT and PLAYER. requireCurrentUserId() is the
+        // behaviourally identical, correctly named accessor, and is what BookingResource already
+        // uses for this same self-or-parent pattern (BookingResource.currentParentId()).
+        Long parentId = securityUtil.requireCurrentUserId();
         return ResponseEntity.ok(new CreditBalanceResponse(
             creditWalletService.getBalance(parentId), "EUR"));
     }
@@ -38,7 +43,8 @@ public class CreditWalletResource {
     @PostMapping("/cashout")
     @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
     public ResponseEntity<Void> cashOut(@Valid @RequestBody CashOutRequest request) {
-        Long parentId = securityUtil.getCurrentCoachUserId();
+        // Same accessor rename as getBalance() above; this endpoint stays PARENT-only.
+        Long parentId = securityUtil.requireCurrentUserId();
         cashOutService.processCashOut(parentId, request.amount());
         return ResponseEntity.noContent().build();
     }

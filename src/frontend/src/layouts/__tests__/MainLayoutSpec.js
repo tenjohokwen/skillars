@@ -52,13 +52,38 @@ import { __resetSessionRedirectGuardForTests } from 'src/utils/sessionRedirect'
 const STUB = { template: '<div />' }
 let wrapper
 
-async function mountLayout(authState = { role: 'PARENT' }, preMount, beforeEachGuard) {
+async function mountLayout(
+  authState = { role: 'PARENT' },
+  preMount,
+  beforeEachGuard,
+  { shallow = true } = {},
+) {
   const pinia = createTestingPinia({ createSpy: vi.fn, initialState: { auth: authState } })
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/', component: STUB },
       { path: '/login', component: STUB },
+      // skillars-deferred-141 code review: the drawer's own link targets must be registered.
+      // Without them, router-link still renders a bare `href` for an unmatched location, so the
+      // deferred-141 nav-gating assertions (`[href="/dashboard"]` present/absent) happened to work
+      // while resting on behaviour nobody guarantees — a change there would turn the three negative
+      // assertions vacuously green instead of red. Registering them also silences ~40
+      // "[Vue Router warn]: No match found for location" lines per run, which this file's own
+      // afterEach comment exists to keep from masking real warnings.
+      ...[
+        '/dashboard',
+        '/profile',
+        '/admin/health-dashboard',
+        '/coach/command-center',
+        '/coach/revenue',
+        '/messaging',
+        '/parent/dashboard',
+        '/parent/credit-statement',
+        '/player/dashboard',
+        '/marketplace',
+        '/parent/bookings',
+      ].map((path) => ({ path, component: STUB })),
     ],
   })
   if (beforeEachGuard) {
@@ -72,7 +97,7 @@ async function mountLayout(authState = { role: 'PARENT' }, preMount, beforeEachG
   if (preMount) await preMount({ pinia })
 
   wrapper = mount(MainLayout, {
-    shallow: true,
+    shallow,
     global: { plugins: [pinia, router], stubs: { ParentChildSwitcher: true } },
   })
   await flushPromises()
@@ -319,6 +344,63 @@ describe('MainLayout.vue — localStorage guards (deferred-109 AC3.2)', () => {
     getItemSpy.mockRestore()
     // Mutation: remove the try/catch around `localStorage.getItem('locale')` → loadLanguagePreference
     // throws; the mountLayout() call rejects out of onMounted and the resolves assertion goes RED.
+  })
+})
+
+// ---------------------------------------------------------------------------
+// skillars-deferred-141 — role-aware dashboard navigation.
+// AC1: the generic Main "Dashboard" link is admin-only now. AC2-AC4.3: each
+// non-admin role gets its own dashboard-style link instead.
+// ---------------------------------------------------------------------------
+describe('MainLayout.vue — role-aware dashboard navigation (deferred-141)', () => {
+  it('ADMIN sees the Main "Dashboard" link (/dashboard)', async () => {
+    const { wrapper } = await mountLayout({ role: 'ADMIN', userId: 1 }, undefined, undefined, {
+      shallow: false,
+    })
+    expect(wrapper.find('[href="/dashboard"]').exists()).toBe(true)
+    // Mutation: remove `v-if="authStore.isAdmin"` from the /dashboard q-item → still true for
+    // every role below, so those three negative assertions would be the ones to go RED instead.
+  })
+
+  it('COACH does not see the Main "Dashboard" link, but does see Command Center (/coach/command-center)', async () => {
+    const { wrapper } = await mountLayout({ role: 'COACH', userId: 2 }, undefined, undefined, {
+      shallow: false,
+    })
+    expect(wrapper.find('[href="/dashboard"]').exists()).toBe(false)
+    expect(wrapper.find('[href="/coach/command-center"]').exists()).toBe(true)
+    // AC7's "absent for the other roles" half — without these, deleting a role section's
+    // `v-if="authStore.isX"` would turn no assertion red (added in code review).
+    expect(wrapper.find('[href="/parent/dashboard"]').exists()).toBe(false)
+    expect(wrapper.find('[href="/player/dashboard"]').exists()).toBe(false)
+  })
+
+  it('PARENT does not see the Main "Dashboard" link, but does see Parent Dashboard (/parent/dashboard)', async () => {
+    const { wrapper } = await mountLayout({ role: 'PARENT', userId: 3 }, undefined, undefined, {
+      shallow: false,
+    })
+    expect(wrapper.find('[href="/dashboard"]').exists()).toBe(false)
+    expect(wrapper.find('[href="/parent/dashboard"]').exists()).toBe(true)
+    expect(wrapper.find('[href="/coach/command-center"]').exists()).toBe(false)
+    expect(wrapper.find('[href="/player/dashboard"]').exists()).toBe(false)
+  })
+
+  it('PLAYER does not see the Main "Dashboard" link, but does see Player Dashboard (/player/dashboard)', async () => {
+    const { wrapper } = await mountLayout({ role: 'PLAYER', userId: 4 }, undefined, undefined, {
+      shallow: false,
+    })
+    expect(wrapper.find('[href="/dashboard"]').exists()).toBe(false)
+    expect(wrapper.find('[href="/player/dashboard"]').exists()).toBe(true)
+    expect(wrapper.find('[href="/coach/command-center"]').exists()).toBe(false)
+    expect(wrapper.find('[href="/parent/dashboard"]').exists()).toBe(false)
+  })
+
+  it('ADMIN sees only the Main "Dashboard" link, none of the three role-specific ones', async () => {
+    const { wrapper } = await mountLayout({ role: 'ADMIN', userId: 1 }, undefined, undefined, {
+      shallow: false,
+    })
+    expect(wrapper.find('[href="/coach/command-center"]').exists()).toBe(false)
+    expect(wrapper.find('[href="/parent/dashboard"]').exists()).toBe(false)
+    expect(wrapper.find('[href="/player/dashboard"]').exists()).toBe(false)
   })
 })
 

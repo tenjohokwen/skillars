@@ -311,6 +311,19 @@ export default {
       AGE_13_17: '13–17',
       ADULT: '18+',
     },
+    // skillars-deferred-141 AC4.4: new Player dashboard tiles. AI-produced, not yet reviewed by a
+    // native German speaker — same disclosure convention as skillars-deferred-139/-140.
+    dashboard: {
+      title: 'Mein Dashboard',
+      body: 'Ihre Sitzungen, Ihr Guthaben und Ihre Anfragen auf einen Blick.',
+      upcomingSessionsTitle: 'Anstehende Einheiten',
+      upcomingSessionsCount: '{count} anstehend',
+      creditWalletTitle: 'Guthaben-Konto',
+      approvalsTitle: 'Ausstehende Genehmigungen',
+      approvalsPending: '{count} warten auf die Antwort des Trainers',
+      approvalsNone: 'Alles erledigt',
+      tileUnavailable: 'Nicht verfügbar',
+    },
   },
   booking: {
     requests: {
