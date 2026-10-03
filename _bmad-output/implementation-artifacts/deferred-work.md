@@ -1177,7 +1177,7 @@ above rather than duplicated here. This section holds only what the story-creati
 ## Deferred from: story-review and implementation of skillars-deferred-63-product-directed-fairness-and-consistency-fixes (2026-08-24)
 
 - **A coach still cannot contest, rebut, or even view a dispute a parent already filed on a booking.** `skillars-deferred-63` AC5 gave a coach a symmetric first-raise right on a booking with no dispute yet, but `DisputeService.raiseDispute`'s `disputeRepository.findOpenByBookingId(bookingId)` check has no `raisedBy` filter — it 409s (`disputes.alreadyRaised`) on *any* open dispute regardless of who raised it — and `getDispute` 403s any caller who isn't the original raiser (`dispute.getRaisedBy().equals(requesterId)`). So a coach cannot respond to, or even read, a dispute a parent already filed against them through this API. Found during `skillars-deferred-63`'s own story-review (2026-08-24). A real fix is a genuine two-sided-dispute design question, not a mechanical change: does a second, opposing dispute on one booking need to be resolved jointly with the first? does the admin `AdminDisputeDetailDto`/UI support two open disputes on the same booking? [`src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java:76-79,107-120`] `[DECIDED 2026-08-25: keep first-raiser-wins as final; no two-sided contest mechanism planned]`
-- **`CoachProfileService.saveStep4` still writes each availability window's `canonicalTimezone` from the request payload rather than from the coach's own profile, so new profile/window timezone drift can still occur.** `skillars-deferred-63` AC6 backfilled *existing* diverged rows (`V103__availability_window_timezone_backfill.sql`, closing the immediate half of the `skillars-deferred-17` D8 item above) but deliberately did not change `saveStep4`'s write behavior this round: `ProfileBuilderStep4.vue` ships a real, coach-editable per-window `TimezoneSelect` with helper copy reading "Windows above are interpreted in this timezone," and forcing `saveStep4` to silently discard that value without a coordinated frontend change would make the picker and its own helper text actively lie about what the screen does. Found during `skillars-deferred-63`'s own story-review (2026-08-24). A follow-up story needs to change both sides together: drop or make the picker read-only (e.g. "change it in Step 1"), *then* make `saveStep4` stop trusting the request's `canonicalTimezone` value. [`src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java:251`, `src/frontend/src/components/profileBuilder/ProfileBuilderStep4.vue:66-68`] `[DECIDED 2026-08-25: per-window coach timezone is a deliberate feature, not a bug; saveStep4's write behavior stays as-is; no further action planned beyond skillars-deferred-63's one-time backfill]`
+- **`CoachProfileService.saveStep4` still writes each availability window's `canonicalTimezone` from the request payload rather than from the coach's own profile, so new profile/window timezone drift can still occur.** `skillars-deferred-63` AC6 backfilled *existing* diverged rows (`V103__availability_window_timezone_backfill.sql`, closing the immediate half of the `skillars-deferred-17` D8 item above) but deliberately did not change `saveStep4`'s write behavior this round: `ProfileBuilderStep4.vue` ships a real, coach-editable per-window `TimezoneSelect` with helper copy reading "Windows above are interpreted in this timezone," and forcing `saveStep4` to silently discard that value without a coordinated frontend change would make the picker and its own helper text actively lie about what the screen does. Found during `skillars-deferred-63`'s own story-review (2026-08-24). A follow-up story needs to change both sides together: drop or make the picker read-only (e.g. "change it in Step 1"), *then* make `saveStep4` stop trusting the request's `canonicalTimezone` value. [`src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java:251`, `src/frontend/src/components/profileBuilder/ProfileBuilderStep4.vue:66-68`] `[DECIDED 2026-08-25: per-window coach timezone is a deliberate feature, not a bug; saveStep4's write behavior stays as-is; no further action planned beyond skillars-deferred-63's one-time backfill]` **[AUDIT 2026-10-03: SUPERSEDED — this decision was explicitly reversed by Mbah during the skillars-deferred-139 code review (2026-10-02): "Both player and coach will use the timezone of the city in which the coach resides when it comes to setting availability." skillars-deferred-140 (merged 2026-10-02, commit f337c8f4) implemented the opposite of what this bullet describes: `saveStep4`/`saveStep1` now unconditionally stamp `profile.getCanonicalTimezone()` onto every window (re-verified directly, `CoachProfileService.java:228,354`), `ProfileBuilderStep4.vue`'s per-window picker was replaced with a read-only display, and `V155` backfilled all pre-existing divergent rows. Retained only so this reversal isn't lost; no further action needed.]**
 ## Deferred from: code review of skillars-deferred-81-parent-name-batching-cross-drill-video-lock-video-error-toast-and-self-booking-packs (2026-08-28)
 
 Four pre-existing issues identified during code review:
@@ -3411,7 +3411,7 @@ does — silently discarding `application-test.yaml`'s own already-tuned `maximu
 ## Deferred from: manual testing of coach profile-builder (2026-10-01)
 
 **[TOP PRIORITY — explicit user instruction (2026-10-01): give this item top priority over other
-open work in this file when next picking a story.]**
+open work in this file when next picking a story.]** **[CLOSED by skillars-deferred-139-my-profile-role-aware-field-management-and-coach-photo-delete, done 2026-10-02: re-verified directly against HEAD, not just the story's own claim — `ProfilePage.vue` now has three new role-gated sections (`v-if="authStore.isCoach"`/`isPlayer`/`isParent`, AC2/AC4/AC5) wiring `EditCoachIdentityDialog`/`EditCoachSpecialtiesDialog`/`EditCoachPricingDialog`/`EditCoachAvailabilityDialog`/`EditCoachPhotoDialog` to the existing `saveStep1`-`saveStep4` endpoints (AC1/AC2), and `CoachProfileService.deletePhoto` (AC3) exists and is wired to a new `DELETE /api/marketplace/coaches/me/profile/photo` — closing exactly the reported gap (coach who skipped the photo step during onboarding had no way back in). Player position (AC4) and parent child-position (AC5) edit paths also added; Admin confirmed deliberately out of scope (AC6).]**
 
 - **D1 — "My Profile" has no editable surface for any profile-builder field; a coach who skips a
   step (e.g. the photo) during onboarding has no way back in.** Found manually testing: a coach
@@ -3498,7 +3498,7 @@ open work in this file when next picking a story.]**
   every server error key reachable by the frontend) for locale coverage, since these two being missing
   suggests the server-error namespace was never parity-checked the way `profile.*` was.
 
-  **[PICKED UP by skillars-deferred-140: Error Key Localization (AC3)]**
+  **[CLOSED by skillars-deferred-140: Error Key Localization (AC3), done 2026-10-02 — re-verified directly: `marketplace.stepOutOfOrder`/`marketplace.profileNotFound` now present in all three locale bundles (`en-US`/`fr-FR`/`de-DE`).]**
 
 - **Adopt "coach profile timezone is authoritative" and close the open `deferred-17 D8` reconciliation.**
   Decided by Mbah during the deferred-139 code review (2026-10-02): *"Both player and coach will use the
@@ -3536,7 +3536,7 @@ open work in this file when next picking a story.]**
   change there silently reverted on reopen. That fix deliberately touches neither `saveStep4`,
   `AvailabilityService`, nor existing rows.
 
-  **[PICKED UP by skillars-deferred-140: Coach Timezone Authoritative (AC1)]**
+  **[CLOSED by skillars-deferred-140: Coach Timezone Authoritative (AC1), done 2026-10-02 — re-verified directly: `saveStep4`/`saveStep1` now unconditionally stamp `profile.getCanonicalTimezone()` onto every window (`CoachProfileService.java:228,354`), with `V155` backfilling pre-existing divergent rows, closing `deferred-17 D8`.]**
 
 - **Nothing derives or validates a coach's `canonicalTimezone` against their `city`.**
   Raised during the deferred-139 code review (2026-10-02) while confirming the rule above.
@@ -3556,7 +3556,7 @@ open work in this file when next picking a story.]**
   `city` is display-only, in which case the UI should stop implying the zone follows the city.
   Pre-existing — not introduced by deferred-139.
 
-  **[PICKED UP by skillars-deferred-140: City/Timezone Validation (AC2)]**
+  **[CLOSED by skillars-deferred-140: City/Timezone Validation (AC2), done 2026-10-02 — re-verified directly: new `CityTimezoneValidator.validate(city, canonicalTimezone)` now wired into `saveStep1` (`CoachProfileService.java:166`), fail-open on ambiguous/unknown cities.]**
 
 ---
 
@@ -3581,3 +3581,23 @@ open work in this file when next picking a story.]**
   keys today and always falls through to the English default).
 
   Deferred reason: no human translator available in the implementation session.
+
+- **AC4.3's manual browser walkthrough was never performed in any session.** `sprint-status.yaml`'s
+  own closeout note for `skillars-deferred-140` lists this as "STILL OPEN BEFORE MERGE (human-only, not
+  review findings)" and says it was "deferred to deferred-work.md" — but it was never actually added
+  here until now, so re-recording it explicitly rather than letting it fall through the gap between
+  the two files.
+
+  **What's untested:** the real relocation flow through the profile-builder wizard (change the coach's
+  city/timezone on an already-`ACTIVE` profile, confirm the re-stamp of existing availability windows
+  and the booking-conflict/calendar reads behave correctly end-to-end in a real browser) and real
+  `fr`/`de` `Accept-Language` negotiation for the new `marketplace.*` error strings (automated tests
+  cover key resolution against the imported bundles, not an actual browser round-trip with a
+  server-negotiated locale).
+
+  **When picked up:** a human walks the relocation flow in a real browser against a running stack, and
+  separately confirms the fr/de error banners render correctly with the browser's language set to each
+  locale. No code change expected unless the walkthrough surfaces a real defect.
+
+  Deferred reason: no browser available in the implementation session (same constraint as
+  `skillars-deferred-139`'s own AC4.3 before it).
