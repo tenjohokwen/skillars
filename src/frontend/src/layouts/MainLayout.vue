@@ -123,7 +123,7 @@
         <!-- Main navigation -->
         <div class="text-label q-px-md q-mb-sm">{{ $t('nav.sectionMain') }}</div>
 
-        <q-item clickable to="/dashboard" class="nav-item">
+        <q-item v-if="authStore.isAdmin" clickable to="/dashboard" class="nav-item">
           <q-item-section avatar>
             <q-icon name="dashboard" class="nav-icon" />
           </q-item-section>
@@ -144,6 +144,15 @@
         <!-- Coach section -->
         <template v-if="authStore.isCoach">
           <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ t('coach.nav') }}</div>
+
+          <q-item clickable to="/coach/command-center" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="dashboard" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('coach.commandCenterTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
 
           <q-item clickable to="/coach/revenue" class="nav-item">
             <q-item-section avatar>
@@ -168,6 +177,15 @@
         <template v-if="authStore.isParent">
           <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ t('parent.nav') }}</div>
 
+          <q-item clickable to="/parent/dashboard" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="dashboard" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.dashboard') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
           <q-item clickable to="/parent/credit-statement" class="nav-item">
             <q-item-section avatar>
               <q-icon name="receipt_long" class="nav-icon" />
@@ -190,6 +208,15 @@
         <!-- Player section (UAT.5: self-registered adult player) -->
         <template v-if="authStore.isPlayer">
           <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ t('player.nav') }}</div>
+
+          <q-item clickable to="/player/dashboard" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="dashboard" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.dashboard') }}</q-item-label>
+            </q-item-section>
+          </q-item>
 
           <q-item clickable to="/marketplace" class="nav-item">
             <q-item-section avatar>

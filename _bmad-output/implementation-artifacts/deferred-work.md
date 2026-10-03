@@ -3601,3 +3601,39 @@ open work in this file when next picking a story.]** **[CLOSED by skillars-defer
 
   Deferred reason: no browser available in the implementation session (same constraint as
   `skillars-deferred-139`'s own AC4.3 before it).
+
+## Deferred from: code review of skillars-deferred-141 (2026-10-03)
+
+- **`OtpPage.vue:96` hardcodes `/dashboard` as the post-OTP landing instead of `routeForRole()`.**
+  `const redirectPath = computed(() => route.query.redirect || '/dashboard')`, pushed at `:148`.
+  `LoginPage.vue:174` does this correctly with `routeForRole(response.role)`. deferred-141's AC1 made
+  `/dashboard` admin-only in the nav, so any non-admin landing there via OTP would hit a page with no
+  menu entry for their role — the exact symptom that story exists to fix.
+
+  **Latent, not live:** the `/otp` route is `meta: { requiresGuest: true }` (`routes.js:24-28`), nothing
+  in the frontend router-navigates to it, and `verifyOtp` never calls `authStore.setUser`, so
+  `/dashboard`'s `requiresAuth` would bounce to `/login` regardless.
+
+  **When picked up:** change the fallback to `routeForRole(authStore.role)` at the same time the OTP
+  login flow is actually wired into navigation. Recorded so a future reviewer does not re-file it as an
+  active regression.
+
+- **`VideoManagementPage.vue:108` bounces a 403'd PLAYER to `/dashboard`.**
+  `router.replace('/dashboard')` in the `getMyVideos()` 403 handler. That route is `role: 'PLAYER'`-gated
+  (`routes.js:255-260`), so the only role that can reach it is sent to the page deferred-141 just made
+  admin-only in the nav — a dead end for them. Impact is cosmetic today (`DashboardPage.vue` is a generic
+  placeholder with no admin data).
+
+  **When picked up:** retarget to `/player/dashboard`, which deferred-141 created for exactly this persona.
+
+- **`/dashboard` is `DEFAULT_ROUTE` for any unmapped or null role, which now has no nav link at all.**
+  `routeForRole()` (`roleRoutes.js:21-29`) falls through to `/dashboard` for a role absent from
+  `ROLE_ROUTES`, and deferred-141's AC1 made that page's only nav entry admin-only.
+
+  **Currently unreachable, by verification:** `SkillarsRole` is `{COACH, PARENT, PLAYER, ADMIN}` only,
+  `AuthService` falls back to `"ADMIN"` when role is null, and `hydrateFromCookie` requires both `id` and
+  `role`. `ROLE_LTD_ADMIN`/`ROLE_USER` exist as Spring authorities but are never emitted into the `skp`
+  cookie the frontend reads. The "Main" nav section also never goes empty — `/profile` stays ungated.
+
+  **When picked up:** if a fifth role is ever added, either give it a `ROLE_ROUTES` entry or restore a
+  role-appropriate nav entry for `DEFAULT_ROUTE`. No action needed while the enum holds at four.

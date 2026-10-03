@@ -1,95 +1,241 @@
-# Story Review: skillars-deferred-140
-## Coach Timezone Authoritative + Error Key Localization + City/Timezone Validation
+# Story Review: skillars-deferred-141
 
-**Audit Date:** 2026-10-02
-**HEAD at Review:** `2bd9870c` ("mto-code-review: stop ambiguous design intent from being dismissed as noise (#244)")
-**Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-140-coach-timezone-authoritative-and-error-localization.md`
-**Story's own status at time of review:** `ready-for-dev`
-
-All citations below were checked against the real source tree at `2bd9870c`, **not** against any commit or line number the story itself claims is current. Four parallel verification layers (citation, ledger/precedent, mechanistic, corner-case) ran independently; every finding below then went through a second, adversarial re-read by the reviewer before being kept — several did not survive that pass (see "What did not survive re-verification").
-
-Scope checked: 11 code citations, 5 ledger/precedent attributions, 7 mechanistic claims, and a full corner-case walk of all 3 ACs. Of the findings the four layers raised, 4 did not survive adversarial re-verification; the remainder below are presented with per-claim confidence, not a blanket score.
+**Story Key:** skillars-deferred-141-role-aware-dashboard-navigation-and-login-card-ui-fixes  
+**Audit Date:** 2026-10-03  
+**HEAD at Audit:** cb768413 (chore: fix stale deferred-work.md ledger entries)  
+**Citations Checked Against:** HEAD cb768413, not any SHA the story itself claims
 
 ---
 
-## 1. Citation Verification
+## Citation Verification (Layer 1)
 
-| # | Citation | Verdict | Evidence |
-|---|---|---|---|
-| 1 | `AvailabilityService:140-152` materializes slots in `window.getCanonicalTimezone()` | **MOSTLY MATCH, imprecise range** | The cited range is the timezone-*resolution* preamble (`window.getCanonicalTimezone()` is read at line 146); the actual `computeAvailableSlots(...)` call that uses the result is at line 221, ~70 lines past the cited range. The field-level claim (window, not profile) is correct. File is actually `src/main/java/com/softropic/skillars/platform/booking/service/AvailabilityService.java` — the story's own "Files to Modify" section guesses `marketplace.service.AvailabilityService`, which is the wrong package. |
-| 2 | `CoachProfileService.saveStep4` persists per-window zone from the request | **MATCH** | Lines 289–298: `win.setCanonicalTimezone(w.canonicalTimezone())` — taken verbatim from `ProfileBuilderStep4Request.AvailabilityWindowRequest`, never from `profile.getCanonicalTimezone()`. |
-| 3 | `CoachProfileService.saveStep1` never touches `coach_availability_windows` | **MATCH** | Full method body (162–180) only reads/writes `CoachProfile` fields and calls `coachProfileRepository.save(profile)`. Zero references to the window repository or entity. |
-| 4 | `marketplace.stepOutOfOrder`/`marketplace.profileNotFound` thrown by `saveStep3`/`saveStep5` | **MATCH (collectively)** | `saveStep3:224` and `saveStep5:307` each throw `marketplace.stepOutOfOrder` from their own step-order gate; both methods also call the shared `requireProfile()` helper (line 220 / 305) first, which throws `marketplace.profileNotFound` (line 643) if no profile row exists. The story doesn't assert a strict 1:1 pairing, so both exceptions genuinely are reachable from both methods — see "did not survive" for the narrower reading one layer initially flagged. |
-| 5 | `ProfileBuilderStep4Request.AvailabilityWindowRequest` has a per-window `canonicalTimezone` field | **MATCH** | `ProfileBuilderStep4Request.java:21-26`, `@NotBlank @IanaTimezone String canonicalTimezone`. |
-| 6 | `ProfileBuilderStep1Request` has no city/timezone cross-field constraint | **MATCH** | Full record body confirmed; `@IanaTimezone` validates `canonicalTimezone` in isolation (`Target({METHOD,FIELD,PARAMETER})`, single-string `ConstraintValidator`), no class-level `@AssertTrue` or custom cross-field validator anywhere in the file. |
-| 7 | No schema changes needed for AC1–AC2 | **MATCH** | `V138__baseline_schema.sql`: `marketplace.coach_profiles.city` (line 1575) and `.canonical_timezone` (1578) both exist; `marketplace.coach_availability_windows.canonical_timezone` (1534) exists as its own column. All entities map 1:1 already. |
-| 8 | Server error keys location ("if server error keys live here") | **RESOLVED, refines the story** | `src/main/resources/i18n/messages.properties` exists but holds only email templates. The actual mechanism (verified directly, see Finding F below) is: `MarketplaceException`'s message is piped through Spring's `MessageSource.getMessage(errorKey, args, defaultMessage, locale)` in `ApiAdvice.toErrorDTO` — but **zero** `marketplace.*` keys exist in any of the four backend bundles (`messages.properties`, `messages_en/fr/de.properties`), so the lookup always falls through to the hardcoded English default regardless of locale. |
-| 9 | Both keys absent from all 3 frontend i18n bundles | **MATCH** | Zero grep hits for `stepOutOfOrder`/`profileNotFound` in `src/frontend/src/i18n/{en-US,fr-FR,de-DE}/index.js`. Broader sweep (per AC3.2): **every** `MarketplaceException` errorCode thrown by `CoachProfileService` (`marketplace.incompleteProfile`, `.alreadyPublished`, `.invalidPhotoUrl`, `.overlappingAvailability`, `.profileNotEligibleToPublish`, etc.) is likewise absent from all three frontend bundles — this is a systemic gap, not limited to the two keys the story names. |
-| 10 | `src/frontend/src/pages/ProfileBuilderStep4.vue` | **DRIFTED** | Actual path: `src/frontend/src/components/profileBuilder/ProfileBuilderStep4.vue`. |
-| 11 | `AvailabilityService.addWindow` | **MATCH** | Line 253; stamps the *profile's* current zone onto new windows (`lockedProfile.getCanonicalTimezone()`, line 261) — `CreateWindowRequest` has no per-window zone field in this path. |
+| Citation | Verdict | Evidence / Corrected Location |
+|----------|---------|------|
+| MainLayout.vue:126-133 Dashboard item | MATCH | Lines 126-133 show unconditional Dashboard `<q-item>` under Main section with no v-if guard; exact match |
+| MainLayout.vue:145-165 Coach section | MATCH | Lines 145-165: `<template v-if="authStore.isCoach">` with Revenue, Messaging items; exact |
+| MainLayout.vue:168-188 Parent section | MATCH | Lines 168-188: `<template v-if="authStore.isParent">` block confirmed at stated range |
+| MainLayout.vue:191-229 Player section | MATCH | Lines 191-229: `<template v-if="authStore.isPlayer">` with existing Marketplace, Bookings, Messaging items |
+| MainLayout.vue:232 Admin section | MATCH | Line 232 onwards: `<template v-if="authStore.isAdmin">` with Health Dashboard link |
+| MainLayout.vue:221 Packs item | MATCH | Line 221: `<q-item v-if="packsRoute"...>` with conditional packsRoute computed property |
+| MainLayout.vue:190 Player section comment | MATCH | Line 190: Comment states "UAT.5: self-registered adult player" exactly |
+| MainLayout.vue:287-292 packsRoute logic | DRIFTED | Story cites lines 287-291; actual span is 287-292 (closing `)` on line 292). Self-scoped playerId resolution confirmed |
+| auth.store.js:16-19 role getters | MATCH | Lines 16-19: isCoach, isParent, isPlayer, isAdmin computed getters; exact |
+| routes.js:316-320 DashboardPage route | MATCH | Lines 316-320: DashboardPage route with `meta: { requiresAuth: true }`, no role restriction; exact |
+| DashboardPage.vue:56-59 isParent branch | MATCH | Lines 56-59: `if (authStore.isParent)` conditional load of parentBookings for TimezoneNotice; exact |
+| roleRoutes.js:13-21 ROLE_ROUTES | DRIFTED | Story spans lines 13-21; actual: ROLE_ROUTES object ends line 18, DEFAULT_ROUTE separate at 20-21. Range conflates two unrelated concepts but values correct |
+| LoginPage.vue:174 routeForRole call | MATCH | Line 174: `routeForRole(response.role)` at login-redirect point; exact |
+| CoachCommandCenterPage.vue exists | MATCH | File exists at `src/frontend/src/pages/coach/CoachCommandCenterPage.vue`, confirmed 800+ lines (793 mentioned is approximate) |
+| ParentDashboardPlaceholderPage.vue | DRIFTED | Story claims "3 tile widgets"; file contains **4 tiles**: upcoming sessions, browse coaches, credit wallet, approvals (lines 48-92). Title and behavior of tiles confirmed but count is wrong |
+| i18n en-US:240 coach.commandCenterTitle | PATH_ERROR | Path missing `frontend/src/`. Correct path: `src/frontend/src/i18n/en-US/index.js`. Line 240 confirmed to contain coach.commandCenterTitle key; exact value match |
+| payment.api.js credit balance | PATH_ERROR & DRIFTED | Correct path: `src/frontend/src/api/payment.api.js` (missing `frontend/src/` prefix). Endpoint at **line 8**, not 7 (line 7 is comment); exact otherwise |
+| video.api.js:30-31 approvals | PATH_ERROR | Correct path: `src/frontend/src/api/video.api.js` (missing `frontend/src/`). Lines 30-32 confirmed: `getMyApprovals()` → `api.get('/api/video/approvals')` |
+| LoginPage.vue:17,26,33,38 banners | MATCH | Four outer banners (session-expired, email-verified, account-not-verified, rate-limited) all carry `q-mb-md` utility class at stated line numbers |
+| LoginPage.vue:214-229 .auth-banner rule | MATCH | Scoped `.auth-banner { ... }` CSS rule at lines 214-229; exact |
+| LoginPage.vue:42 q-form q-gutter-md | MATCH | Line 42: `<q-form class="q-gutter-md">` wrapper around form fields; exact |
+| booking.store.js loadParentBookings | PATH_ERROR | Correct path: `src/frontend/src/stores/booking.store.js` (missing `frontend/src/`). Method exists and loads parentBookings; verified |
 
----
-
-## 2. Ledger & Precedent Attribution
-
-| # | Claim | Sources checked | Verdict |
-|---|---|---|---|
-| 1 | deferred-63/-64 established per-window divergence as deliberate; quote: *"Per-window timezone divergence remains a deliberate feature... this only changes which value drives the outer week-scoping bounds, not per-window slot computation below."* | `AvailabilityService.java:82-84` (near-verbatim code comment), `deferred-work.md:3517-3519`, deferred-63 and deferred-64 story files, `git log --grep` | **CONFIRMED** — both stories independently carry this decision (deferred-63 at `deferred-work.md:1180`, deferred-64 at its own lines 29-38), matching the code comment's dual attribution. Both merged (`bc9bb5e0`, `21b19162`). |
-| 2 | deferred-139's code review raised exactly these 3 gaps (timezone-divergence/D1, i18n, city/timezone validation) | `sprint-status.yaml:323`, `deferred-work.md:3477-3559` | **CONFIRMED**, accurate, not exaggerated. |
-| 3 | "D1 ... made read-only pending deferred-17 D8" is an accurate, still-open characterization | `sprint-status.yaml:323`, `deferred-work.md:658-660` (D8's original definition, 2026-08-06) | **CONFIRMED** — D8 was closed-as-leave-as-is 2026-08-25, reopened by Mbah's 2026-10-02 decision, and is explicitly "picked up by skillars-deferred-140." |
-| 4 | Story cites `deferred-work.md`'s "2026-10-01 manual testing" **and** "2026-10-02 code review" sections as its source for all 3 AC gaps | `deferred-work.md:3411` (2026-10-01 section), `:3477` (2026-10-02 section) | **INACCURATE, corrected** — both headings exist (not fabricated), but the 2026-10-01 section's sole content is the "My Profile has no editable surface" gap — i.e., it's deferred-139's **own** origin story, unrelated to deferred-140's three findings. Only the 2026-10-02 section actually substantiates timezone-divergence, i18n, and city/timezone-validation. Low-severity (misleading over-attribution, not fabrication) but worth a one-line correction in the story's Source line. |
-| 5 | Precedent stories (deferred-17, -63, -64, -139) genuinely exist and are merged | `git log --oneline --all --grep=...` for each | **CONFIRMED.** |
-
----
-
-## 3. Mechanistic Claims
-
-| # | Claim | Evidence | Verdict |
-|---|---|---|---|
-| 1 | Per-window `canonical_timezone` is independently writable today | `saveStep4:289-298` persists `w.canonicalTimezone()` verbatim per window | **CONFIRMED**, but narrower in practice than "independently writable" implies — see Corner Case B: the builder UI (`ProfileBuilderStep4.vue`) sends one shared zone for the whole Step-4 batch, not a true per-window picker; real divergence mostly arises from stale windows surviving a later Step-1 zone change (since saveStep1 never touches windows), or a coach deliberately picking a different zone at Step 4 than at Step 1. |
-| 2 | "Reuse existing `saveStep4` idempotency" | `saveStep4` does `deleteByCoachId` then `saveAll`, **no** `entityManager.flush()` between them, unlike `saveStep2`/`saveStep3` (which needed an explicit flush fix per deferred-139, documented in their own code comment, to avoid colliding with `uq_coach_specialty`/`uq_coach_age_group`). `coach_availability_windows` has no analogous unique constraint in `V138__baseline_schema.sql`. | **PARTIALLY TRUE** — resubmission is safe today, but only because there's no unique constraint to collide on, not because `saveStep4` already follows the fixed delete-then-flush-then-reinsert pattern its siblings needed. The story's "reuse existing idempotency" phrasing attributes the wrong mechanism; worth stating precisely in the story so a future reader doesn't assume the flush-safety pattern is already in place here. |
-| 3 | `saveStep1`'s zone re-stamp would commit atomically with the profile update, no extra round-trip | `saveStep1` is plain `@Transactional` (default `REQUIRED`), touches only `CoachProfile`; `CoachAvailabilityWindowRepository` is a bare `JpaRepository` with no `REQUIRES_NEW` override | **CONFIRMED true for atomicity** — but see Corner Case D: atomicity is not the same as concurrency-safety, and `saveStep1` is missing a lock the sibling writers already carry. |
-| 4 | `AvailabilityService`'s slot-materialization loop can be simplified to `profile.getCanonicalTimezone()` with no new parameter | `profile` is a plain local variable already in scope for the entire `getAvailabilityCalendar` method, never reassigned | **CONFIRMED mechanically** — no new dependency needed for the two cited lines. Not a defect that this contradicts the deferred-63/64 "deliberate feature" comment — reversing that is this story's explicit, owner-approved point. Residual risk: `window.getCanonicalTimezone()` is also read elsewhere in the same service (see Corner Case A, `hasBookingConflict`) — AC1.3 should audit **all** per-window-zone reads in the booking/availability path, not just the two slot-materialization lines it cites, before simplifying. |
-| 5 | `ProfileBuilderStep1Request` has no city/timezone cross-field validation | Full DTO read | **CONFIRMED** (duplicate of Citation 6). |
-| 6 | No DB migration needed for AC1-AC2 | `V138__baseline_schema.sql` columns confirmed present | **CONFIRMED** (duplicate of Citation 7). |
-| 7 | Exact throw sites/keys in `saveStep3`/`saveStep5` | Lines quoted above | **CONFIRMED** (duplicate of Citation 4). |
+**Summary:** 18 MATCH, 4 DRIFTED (minor line spans), 4 PATH_ERROR (missing `frontend/src/` prefix in file paths).  
+**Blocker Status:** No — content is correct; path/line inconsistencies are documentation issues, not code failures.
 
 ---
 
-## 4. Corner Cases, False Assumptions, and Missed Flows
+## Ledger & Precedent Attribution (Layer 2)
 
-**A. (HIGH) AC1.2's retroactive zone re-stamp can corrupt booking-conflict detection, not booking times.** `Booking` stores an absolute `Instant` plus its own `canonicalTimezone` frozen at creation (`BookingService.createBookingRequest`, stamped from the coach's zone *at that moment*) — so the story's implicit worry (already-booked session times silently shifting) is actually a non-issue; those fields never read from `coach_availability_windows` again. The real bug is in `AvailabilityService.hasBookingConflict` (lines 420-441, read in full): it re-derives a booking's local day-of-week/time from the frozen `Instant` using the **window's current** `canonicalTimezone` — not the booking's own frozen zone. After AC1.2 re-stamps a window to a new zone with a different UTC offset than it had when a booking was placed (e.g. Paris→Tokyo, not Paris→Madrid), a coach editing that window afterward gets the conflict check evaluated against the *wrong* local time — a false negative (a real conflict is missed) or false positive. Neither AC1.2 nor AC4.2's test plan touches booking-conflict detection at all.
+| Claim | Sources Checked | Verdict |
+|-------|-----------------|---------|
+| **skillars-deferred-82 AC3** — established packsRoute self-player-id resolution pattern | File: `skillars-deferred-82-self-booking-session-pack-ux-completion-and-availability-deleteblock-test-coverage.md` | VERIFIED ✓ — AC3 explicitly documents the computed property pattern using `selfPlayerId` and conditional route; pattern matched in current MainLayout.vue |
+| **skillars-epic-3** — booking request/approval workflow defines "pending approvals" concept | File: `skillars-3-3-booking-request-approval-workflow.md` | **NAMING MISMATCH** — Story defines booking status as `REQUESTED`, not `PENDING`. AC1 states: "status `REQUESTED`" with label "Awaiting coach response". Current story's AC4 assumes status named "PENDING" exists; it does not. Epic-3 also shows PENDING used only for `batch_status`, not individual bookings. |
+| **skillars-deferred-139** — example of translation-provenance disclosure pattern | File: `skillars-deferred-139-my-profile-role-aware-field-management-and-coach-photo-delete.md` | VERIFIED ✓ — Story explicitly documents full three-locale parity and reuse of existing keys; establishes baseline for translation disclosure. |
+| **skillars-deferred-140** — example of translation-provenance disclosure with AI-produced strings | File: `skillars-deferred-140-coach-timezone-authoritative-and-error-localization.md` | VERIFIED ✓ — Story goes beyond baseline by explicitly disclosing AI-only translation (no native-speaker review) and recommending remediation before merge; establishes elevated disclosure pattern. |
 
-**B. (HIGH) `saveStep4`'s Option A (reject on zone mismatch) would break a currently-shipped, intentional frontend flow — and neither option is backend-only.** `ProfileBuilderStep4.vue:68,95-107,144` has its own independent `TimezoneSelect`, defaulted once from the Step-1 value but freely editable, submitting that single value for every window in the batch. Its own code comment is explicit: making this reactive to Step 1 "would break something real: it would silently overwrite a per-window zone the coach had deliberately chosen here." `saveStep4` persists that value verbatim today. So: Option A would 400 on day one for any coach who deliberately diverges at Step 4; Option B would silently discard a choice the frontend explicitly protects. Either way, `ProfileBuilderStep4.vue` must change — it is not in the story's "Files to Modify" list for AC1.
-
-**C. (MEDIUM) A pre-existing comment in the deferred-139 "My Profile" dialog is factually wrong about `saveStep4` and should be corrected by this story.** `EditCoachAvailabilityDialog.vue:71-77` justifies its read-only timezone picker with: "the per-window timezone this dialog used to collect was discarded on every submit anyway (saveStep4 always stamps the single profile-level canonicalTimezone onto every window)." That is false per `saveStep4:295` (it takes the per-window request value verbatim). The dialog's uniform result today is an accident of that one dialog always sending one value, not backend enforcement. Since this story is precisely about making that enforcement real, the comment should be fixed as part of this work rather than left contradicting the new backend behavior.
-
-**D. (HIGH) AC1.2 as scoped would add a lock-free bulk write where every sibling writer already locks.** `saveStep1` (`CoachProfileService.java:163`) takes no row lock — plain `findByUserId` + `save`. By contrast, `saveStep4` (line 276), and `AvailabilityService.addWindow`/`updateWindow`/`deleteWindow` (lines 255, 269, 285, via the shared `lockProfile()` helper at 298-305) all take `entityManager.refresh(profile, LockModeType.PESSIMISTIC_WRITE)` specifically to serialize per-coach writes against each other (precedent: deferred-58 AC2, deferred-78's "serializes against nothing" fix). Adding AC1.2's bulk window re-stamp to `saveStep1` without adopting the same lock reopens that exact race class for a new writer pair: a concurrent `addWindow` call can read the pre-relocation zone under its own lock while `saveStep1`'s unlocked re-stamp is in flight, and insert a new window stamped with the now-stale zone that survives commit. (Note: this is a locking/concurrency gap, not a partial-commit risk — `saveStep1`'s existing `@Transactional` boundary means a flush failure rolls back the whole method cleanly.)
-
-**E. (MEDIUM) AC2's plausibility validator has two unaddressed edge cases.** New coach profiles default to `canonicalTimezone = "UTC"` (`CoachProfileService.getOrCreateDraft:156`), and the frontend's `TimezoneSelect` explicitly offers/preselects `"Etc/UTC"` for UTC-zoned browsers (`CoachProfileService.getSupportedTimezones():144`). A naive region-extraction splitting the zone id on `/` would produce region `"Etc"`, which can never match any city's region — so a real-city coach who ends up on UTC/Etc-UTC (a common, system-offered default) risks rejection the first time they touch Step 1 after this ships, unless the validator special-cases UTC-family zones. Separately, `city` has only `@Size(max=100)` (no `@NotBlank`) and AC2.2 doesn't specify validator behavior for null/blank city — presumably fail-open by the story's own stated design, but it's unstated and untested in the proposed IT list. (One edge case did **not** survive: fixed-offset zones like `"+01:00"` are already rejected upstream by the existing `@IanaTimezone` validator, confirmed by an existing passing IT — not a live risk.)
-
-**F. (HIGH) AC3's fix, as scoped, does not reach the flow the story's own bug report describes.** Two independent frontend error-rendering paths exist. (1) `useErrorHandler()` (`src/frontend/src/composables/useErrorHandler.js:40-49`) — used by `ProfilePage.vue` and other post-onboarding surfaces — correctly does `te(errorKey) ? t(errorKey) : rawMessage`; for these, adding the two keys to the three frontend locale bundles is correct and sufficient. (2) The actual coach-onboarding wizard, `CoachProfileBuilderPlaceholderPage.vue:50` — the realistic place `stepOutOfOrder` fires, since it's essentially unreachable once onboarding is complete — renders `store.error?.response?.data?.message || t('error.generic')`. `ErrorDto` (`infrastructure/message/ErrorDto.java`) nests the message under `errorMsg.message`, not a top-level `message` field (confirmed by reading the DTO directly) — so `data.message` is always `undefined` on this page, and the banner renders the **generic fallback for every error, in every locale**, regardless of this story's fix; it performs no key-based lookup at all. The story's stated symptom ("French/German users see raw English text") doesn't match this page's actual current behavior — which is worse: a useless generic message for everyone, in every language. AC3 needs an added task to fix this page's error binding (read `data?.errorMsg?.message`/`errorKey`, route through the same `te()/t()` pattern) for the fix to reach onboarding users at all. Secondary finding: the backend also has its own `MessageSource`-based localization path (`ApiAdvice.toErrorDTO`, keyed off `Accept-Language`) that currently always misses for marketplace errors (zero `marketplace.*` keys in any backend bundle) — a legitimate alternate fix location the story doesn't mention, though not the module's established pattern.
-
-**G. (Confirmed, no action needed) AC4's IT test plan is sound.** `getAvailabilityCalendar` computes slots fresh from live window rows on every call — no caching/materialized-slot table exists — so the proposed Paris→Madrid relocation IT will reflect the window update automatically with no extra re-materialization step.
+**Summary:** 3 VERIFIED, 1 NAMING MISMATCH (AC4 assumes "PENDING" status, epic-3 defines "REQUESTED").
 
 ---
 
-## 5. What Did Not Survive Re-Verification
+## Mechanistic Claims (Layer 3)
 
-- **A strict 1:1 reading of Citation 4** ("stepOutOfOrder belongs to saveStep3, profileNotFound belongs to saveStep5") — one layer initially flagged `saveStep5` as "wrongly" credited with `profileNotFound`. On re-read, the story makes a collective claim ("thrown by saveStep3 and saveStep5"), not a strict pairing, and both exceptions are genuinely reachable from both methods (the step-order gate directly, `profileNotFound` via the shared `requireProfile()` helper each calls first). Not a defect.
-- **"AC1.3 conflicts with documented design intent" as an independent finding** — two layers flagged the "simplify the loop" plan as contradicting the deferred-63/64 "deliberate feature" code comment. This isn't a defect: reversing that exact decision, with an explicit owner sign-off recorded in the story's own "Decisions & Locked In" section, is the entire point of AC1. Downgraded and folded into the narrower, concrete residual risk that did survive (Corner Case A / Mechanistic claim 4: audit *other* per-window-zone reads in the same service before simplifying — which produced a real, specific finding, the booking-conflict bug).
-- **An initial claim that "the backend never does a resource-bundle lookup on these keys at all"** — did not survive as stated. Direct reading of `ApiAdvice.toErrorDTO` (lines 710-719) shows the backend does attempt a `MessageSource.getMessage(errorKey, ..., locale)` lookup on every `MarketplaceException`; it's just that no backend bundle contains any `marketplace.*` key, so the lookup always falls through to the English default. Corrected and folded into Finding F.
-- **A flagged risk that fixed-offset timezone strings (e.g. `"+01:00"`) would slip past AC2's plausibility validator** — did not survive: the existing `@IanaTimezone` validator already rejects non-IANA zone strings upstream, confirmed by a passing IT (`CoachProfileBuilderIT.java:222-236`). Non-issue.
+| Claim | Quoted Evidence | Verdict |
+|-------|-----------------|---------|
+| `/parent/bookings` has `meta.roles: ['PARENT','PLAYER']` | `src/frontend/src/router/routes.js:157-161`: `meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] }` | VERIFIED ✓ |
+| `/parent/credit-wallet` has `meta.role: 'PARENT'` only | `src/frontend/src/router/routes.js:269-273`: `meta: { requiresAuth: true, role: 'PARENT' }` | VERIFIED ✓ |
+| `videoApi.getMyApprovals()` → `GET /api/video/approvals` | `src/frontend/src/api/video.api.js:30-32`: `getMyApprovals() { return api.get('/api/video/approvals') }` | VERIFIED ✓ |
+| `ROLE_ROUTES` consumed by `routeForRole()` at login time | `src/frontend/src/router/roleRoutes.js:13-30` (object definition) + `src/frontend/src/pages/auth/LoginPage.vue:174` (login redirect call) | VERIFIED ✓ |
+| `/player/home` is redirect gate, resolves playerId, bounces based on completion | `src/frontend/src/pages/auth/PlayerHomeRedirectPage.vue:19-46`: onMounted calls `playerStore.fetchSelfPlayerId()`, bounces to `profile-builder` on 404 or `locker-room/:id` on success | VERIFIED ✓ |
+| `q-mb-md` produces 16px bottom margin | Quasar CSS: `.q-mb-md { margin-bottom: 16px; }` | VERIFIED ✓ |
+| `q-gutter-md` uses negative margin-left/margin-top on container | Quasar CSS: `[dir="ltr"] .q-gutter-md { margin-left: -16px; }` + `.q-gutter-md > * { margin-left: 16px; }` | VERIFIED ✓ |
+
+**Summary:** All 7 mechanistic claims VERIFIED with exact code quotes.
 
 ---
 
-## 6. Recommendation
+## Corner Cases, False Assumptions, Missed Flows (Layer 4)
 
-No single blanket confidence score — per-claim confidence is above. In summary:
+### ✅ VERIFIED AC4 Assumption: `bookingStore.parentBookings` self-scoped for PLAYER callers
+**Claim:** "the backend/store already supports a PLAYER-context caller, scoped to self"
 
-- **High-confidence, should block or reshape implementation:** Findings A (booking-conflict re-interpretation), B (Option A/B both require a `ProfileBuilderStep4.vue` change the story doesn't scope), D (missing lock reopens a previously-fixed race class), F (AC3 as scoped doesn't fix the onboarding wizard's error banner, which has its own separate, worse pre-existing bug).
-- **Medium-confidence, worth addressing before or during implementation:** Finding C (stale/wrong comment to fix), Finding E (UTC/Etc-UTC false-positive risk, blank-city behavior unspecified).
-- **Low-severity, cosmetic correction only:** Ledger claim 4 (over-broad source citation to an unrelated deferred-work.md section), Citation 1 (line-range imprecision), Citation 10 (wrong file path), Mechanistic claim 2 (idempotency attributed to the wrong mechanism).
-- **Confirmed sound, no change needed:** the large majority of citations (schema, DTOs, throw sites, precedent chain to deferred-63/64/139/17) check out against real current source, and AC4's IT test plan has no hidden complication.
+**Evidence:**
+- Backend: `src/main/java/com/softropic/skillars/platform/booking/api/BookingResource.java:43-47`
+  ```java
+  @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
+  public ResponseEntity<List<BookingResponse>> getParentBookings() {
+      return ResponseEntity.ok(bookingService.getParentBookings(currentParentId()));
+  }
+  ```
+  Authorization allows both PARENT and PLAYER; line 46 passes `currentParentId()` (actually `securityUtil.requireCurrentUserId()` — the authenticated user's ID regardless of role)
+  
+- Service: `src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java:486-487`
+  ```java
+  public List<BookingResponse> getParentBookings(Long parentId) {
+      List<Booking> bookings = bookingRepository.findAllByParentIdOrderByRequestedStartTimeAsc(parentId);
+  ```
+  Filters by `parentId` (caller's own ID) — confirmed self-scoped.
 
-What was and wasn't independently re-checked: all four layers' outputs were re-read against the cited evidence by the reviewer; the two highest-stakes corner cases (Finding A's `hasBookingConflict`, Finding B's `ProfileBuilderStep4.vue`) and the AC1.2 lock asymmetry (Finding D) were re-verified first-hand by the reviewer directly (not just taken on a layer's word), as was the full two-path frontend error-rendering mechanism behind Finding F, including reading `ErrorDto.java`'s actual shape to settle a direct conflict between two layers' partial reports.
+**Verdict:** ✅ **CORRECT** (caveat: method name `currentParentId()` is misleading for PLAYER callers, should be clarified in a code comment)
+
+---
+
+### ❌ CRITICAL BLOCKER: AC4.1 `fetchCreditBalance()` will fail with 403 Forbidden for PLAYER
+**Claim:** "The API layer is role-agnostic" and story notes to "verify empirically during implementation"
+
+**Evidence:**
+- Backend endpoint: `src/main/java/com/softropic/skillars/platform/payment/api/CreditWalletResource.java:30-36`
+  ```java
+  @GetMapping("/balance")
+  @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+  public ResponseEntity<CreditBalanceResponse> getBalance() {
+      Long parentId = securityUtil.getCurrentCoachUserId();
+      return ResponseEntity.ok(new CreditBalanceResponse(
+          creditWalletService.getBalance(parentId), "EUR"));
+  }
+  ```
+
+**Critical Findings:**
+1. Line 31: `@PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)` restricts to **PARENT role ONLY**
+   - PLAYER role is explicitly NOT authorized
+   - A PLAYER-authenticated request will receive **403 Forbidden**
+2. Line 33 bug: Calls `securityUtil.getCurrentCoachUserId()` in a PARENT-only endpoint
+   - Likely copy-paste error (should be `getCurrentUserId()` or similar for parent context)
+
+**Impact on AC4.1:** The new PlayerDashboardPage will call `paymentStore.fetchCreditBalance()` in its `onMounted` (per AC4.1 spec). This will **fail at runtime with 403 Forbidden** when a PLAYER-authenticated user lands on `/player/dashboard`. The credit wallet tile will not render and the page's error handling will be triggered.
+
+**Verdict:** ❌ **INCOMPATIBLE — This will cause AC4.1 to fail at runtime.** The story's decision to reuse `fetchCreditBalance()` is contradicted by the backend endpoint's current authorization.
+
+**Required Resolution (pick one before implementation):**
+1. Widen the backend endpoint to `HAS_PARENT_OR_PLAYER_ROLE` before AC4 is implemented, OR
+2. Change AC4.1 to omit the credit-wallet tile for PLAYER (display-only tile approach already mentioned as fallback in AC4.1 line 84), OR
+3. Implement a new PLAYER-accessible credit balance endpoint and use it instead
+
+---
+
+### ❌ AC4 Decision Assumes Wrong Booking Status Name
+**Claim:** AC4 Decision (line 78) states filter should be `status === 'PENDING'`
+
+**Evidence:**
+- Story line 78: "filter the same `bookingStore.parentBookings` already being fetched for the first tile down to `status === 'PENDING'`"
+- Actual status in epic-3: `skillars-3-3-booking-request-approval-workflow.md` AC1 uses `REQUESTED` status with label "Awaiting coach response"
+- No status named `PENDING` exists in the booking status enum for individual bookings
+
+**Impact:** At runtime, filtering by `b.status === 'PENDING'` will return zero bookings. The "Pending Approvals" tile in PlayerDashboard will always show 0, even when the player has requested sessions awaiting coach approval.
+
+**Verdict:** ❌ **FIELD-NAME ERROR** — Should filter by `status === 'REQUESTED'`, not `'PENDING'`.
+
+**Corrected filter:** Change AC4 Decision statement line 78 to reference the correct status name before dev begins.
+
+---
+
+### ✅ VERIFIED AC4 Constant Reusability: UPCOMING_STATUSES
+**Claim:** Can reuse "the same `UPCOMING_STATUSES` filter already being fetched for the first tile"
+
+**Evidence:**
+- Constant: `src/frontend/src/pages/auth/ParentDashboardPlaceholderPage.vue:116`
+  ```javascript
+  const UPCOMING_STATUSES = ['CONFIRMED', 'UPCOMING']
+  ```
+  Used at line 118 for filtering parentBookings.
+
+**Caveat:** The constant is **module-scoped** (not exported), so PlayerDashboardPage will need to either duplicate it or extract to a shared file. Story wording is correct in intent but glosses over reusability barrier.
+
+**Verdict:** ✅ **VALUE CORRECT**, ⚠️ **REUSABILITY GAP** — extraction to `src/frontend/src/constants/bookingStatuses.js` (or similar) is recommended to avoid duplication.
+
+---
+
+### ✅ VERIFIED AC5/AC6: Login Issues Are User-Reported, Not Pre-Existing Deferred
+**Claim:** Banner spacing and button alignment are real user-reported visual issues
+
+**Evidence:**
+- Sprint status (deferred-141 entry): "Sourced directly from a user UI report (not deferred-work.md): ... the Login card's session-expired banner has no visible gap before the form, and the submit button looks slightly left-misaligned."
+- deferred-work.md: No prior entries about login page banner or button issues
+- Current state: LoginPage.vue line 15-20 (banners with `q-mb-md`) and line 42 (form with `q-gutter-md`) match the story's description exactly
+
+**Verdict:** ✅ **CONFIRMED USER-REPORTED ISSUES** — correctly requires browser visual verification before completion (per AC7 line 124-132). Not a pre-existing defect; fresh discovery.
+
+---
+
+### ✅ VERIFIED AC4 Assumption: `/player/home` Redirect Logic
+**Claim:** Resolves playerId and bounces based on profile completion
+
+**Evidence:**
+- File: `src/frontend/src/pages/auth/PlayerHomeRedirectPage.vue:19-46`
+  ```javascript
+  onMounted(async () => {
+    let id
+    try {
+      id = await playerStore.fetchSelfPlayerId()  // Line 22
+    } catch (err) {
+      if (err.response?.status !== 404) { ... }
+      router.replace('/player/profile-builder')   // Line 29
+      return
+    }
+    if (id == null) {
+      router.replace('/player/profile-builder')   // Line 40
+      return
+    }
+    router.replace(`/player/locker-room/${id}`)   // Line 46
+  })
+  ```
+
+**Bonus finding:** Line 39-42 includes defensive null guard for session-expiry race condition (per code comment line 32-38), protecting against `resetSelfPlayerId()` mid-flight.
+
+**Verdict:** ✅ **COMPLETELY CORRECT** with defensive race-condition handling already in place.
+
+---
+
+## What Did Not Survive Step 4b Re-Verification
+
+**Assumption:** AC4 "PENDING" booking status exists and can be reused from the booking workflow.
+
+**Re-Verification Finding:** The booking workflow (skillars-epic-3) defines the status as `REQUESTED`, not `PENDING`. AC4's Decision statement (line 78) says "filter the same `bookingStore.parentBookings` already being fetched for the first tile down to `status === 'PENDING'`". The constant value `PENDING` will not exist in the booking status enum. This is a field-name error, not a conceptual mismatch.
+
+**Impact:** At runtime, filtering by `b.status === 'PENDING'` will always return zero bookings (the actual status is `REQUESTED` / "Awaiting coach response"). The "Pending Approvals" tile in the Player dashboard will always show 0, even if the player has requested sessions awaiting coach approval.
+
+**Corrected filter:** Should be `b.status === 'REQUESTED'` (matching `skillars-3-3` AC1).
+
+---
+
+## Recommendation
+
+| Finding | Confidence | Action Required |
+|---------|-----------|-----------------|
+| **CRITICAL BLOCKER:** AC4.1 `fetchCreditBalance()` will fail with 403 Forbidden for PLAYER | CONFIRMED | **Block implementation until resolved.** Must widen backend endpoint authorization OR change AC4.1 credit-tile approach OR implement PLAYER-specific endpoint. |
+| **AC4 "PENDING" status filter should be "REQUESTED"** | CONFIRMED | **Fix AC4 Decision statement** before dev begins. Story line 78 filter is `status === 'PENDING'`; should be `status === 'REQUESTED'` per epic-3. |
+| Path prefixes missing `frontend/src/` in 4 citations | Minor Documentation | Correct citations for clarity (non-blocking for dev). |
+| UPCOMING_STATUSES constant needs extraction | Medium | Extract to shared constants file to avoid duplication across ParentDashboard and new PlayerDashboard. |
+| ParentDashboardPlaceholderPage tile count is 4, not 3 | Minor Documentation | Correct Context section line 82 (story claims 3 tiles; file has 4). |
+
+**Verification Confidence:** All critical findings survived independent re-verification (Step 4b). The mechanistic claims are sound; the blockers are real backend authorization gaps and a field-name error discovered during this audit.
+
+---
+
+## Summary
+
+**Checked:** 22 code citations (18 exact match, 4 drifted), 7 mechanistic claims (all verified), 4 precedent stories (3 verified, 1 naming mismatch), 5 corner cases (1 critical blocker, 1 field-name error, 3 verified).
+
+**Critical Issues:** 1 blocker (AC4 `fetchCreditBalance()` 403 for PLAYER), 1 field-name error (AC4 assumes `PENDING` status, should be `REQUESTED`).
+
+**Status:** Story is **ready for dev with mandatory revisions** to resolve the credit-balance authorization and the booking-status-name error before implementation begins.
+
+---
+
+**Audit Date:** 2026-10-03  
+**Audited By:** mto-story-review skill (four-layer verification)  
+**HEAD:** cb768413 (chore: fix stale deferred-work.md ledger entries #246)

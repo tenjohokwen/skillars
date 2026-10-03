@@ -259,6 +259,14 @@ const routes = [
         meta: { requiresAuth: true, role: 'PLAYER' },
       },
       {
+        // Nav-menu destination only — NOT ROLE_ROUTES.PLAYER (that stays 'player/home', the
+        // profile-completeness redirect gate). skillars-deferred-141 AC4.2.
+        path: 'player/dashboard',
+        name: 'player-dashboard',
+        component: () => import('pages/player/PlayerDashboardPage.vue'),
+        meta: { requiresAuth: true, role: 'PLAYER' },
+      },
+      {
         // Canonical path — do not change without updating Story 7.x notification deep-link
         path: 'parent/approvals',
         name: 'parent-approvals',

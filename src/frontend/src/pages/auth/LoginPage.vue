@@ -39,7 +39,7 @@
           {{ t('auth.accountLocked') }}
         </q-banner>
 
-        <q-form @submit.prevent="handleLogin" class="q-gutter-md">
+        <q-form @submit.prevent="handleLogin" class="q-gutter-y-md">
           <q-input
             v-model="form.email"
             type="email"
@@ -200,6 +200,23 @@ async function handleLogin() {
 }
 .auth-card {
   padding: 32px;
+}
+// skillars-deferred-141 AC5, corrected in code review: the four outer banners rendered flush
+// against the form, and `q-mb-md` was NOT being out-specified — it applies cleanly (single
+// unqualified `.q-mb-md { margin-bottom: 16px }` in quasar.css, no !important; the project's only
+// .q-banner rule touches border-radius). The real suppressor is the gutter's own negative top
+// margin: `.q-gutter-y-md, .q-gutter-md { margin-top: -16px }` applies to the <q-form> under BOTH
+// classes, and .q-form is `position: relative` only — a block box — so the banner's +16px collapses
+// against the form's -16px to a net 0px gap. Adding another 16px to the banner (the first attempt at
+// this AC) therefore changed nothing: same value, same cancellation. 32px out-runs it: 32 - 16 = 16px.
+// Measured in headless Chrome against quasar.css: 0px -> 16px, with the no-banner lead->form gap and
+// the submit button's alignment both unchanged.
+// Deliberately scoped to `> .auth-banner` (the four banners that are direct children of the card).
+// The fifth .auth-banner lives INSIDE the form (the submit error banner) and carries no `q-mb-md`
+// because the gutter already spaces it; giving it a bottom margin pushed the submit button 16px down
+// (8px -> 24px, measured — q-btn is inline-flex, so no margin collapsing rescues it).
+.auth-card > .auth-banner {
+  margin-bottom: 32px;
 }
 .auth-link {
   color: var(--accent-primary);

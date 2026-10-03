@@ -281,6 +281,18 @@ export default {
       AGE_13_17: '13–17',
       ADULT: '18+',
     },
+    // skillars-deferred-141 AC4.4: new Player dashboard tiles.
+    dashboard: {
+      title: 'My Dashboard',
+      body: 'Your sessions, credits, and requests at a glance.',
+      upcomingSessionsTitle: 'Upcoming Sessions',
+      upcomingSessionsCount: '{count} upcoming',
+      creditWalletTitle: 'Credit Wallet',
+      approvalsTitle: 'Pending Approvals',
+      approvalsPending: '{count} awaiting coach response',
+      approvalsNone: 'All caught up',
+      tileUnavailable: 'Unavailable',
+    },
   },
   marketplace: {
     // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
