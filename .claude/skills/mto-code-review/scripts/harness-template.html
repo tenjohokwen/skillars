@@ -1,0 +1,105 @@
+<!doctype html>
+<!--
+  harness-template.html — template for measuring a CSS/layout change in a real browser engine.
+  Run with: ./measure-rendered-css.sh <your-copy.html>
+
+  HOW TO USE
+  1. Copy this file into your scratchpad directory.
+  2. Copy the REAL stylesheets in beside it. For this project:
+       cp src/frontend/node_modules/quasar/dist/quasar.css <scratchpad>/
+     Never hand-write an approximation of the framework CSS — the whole point is to measure what
+     actually ships. Add the project's own global css too if the selectors under test could be
+     affected by it (src/frontend/src/css/*.scss — compile or inline the relevant rules).
+  3. Replicate the component's real DOM: the exact class lists, the exact nesting, the exact
+     sibling order. Copy them from the .vue template; do not simplify. Sibling order and
+     parent/child relationships are what decide margin collapsing.
+  4. Vue `scoped` styles compile to an attribute selector (`.foo[data-v-abc123]`). Replicate that
+     by putting `data-v-x` on the elements and writing `.foo[data-v-x]` in the <style> block, so
+     specificity matches production.
+  5. Build one variant per configuration you need to compare — ALWAYS include the pre-change
+     baseline, otherwise you cannot tell a fix from a no-op.
+  6. Measure with getBoundingClientRect(), and read getComputedStyle().display for any element
+     whose margin behaviour matters (inline-level boxes do NOT margin-collapse with siblings;
+     block-level ones do).
+
+  WHAT TO MEASURE (not just the thing the AC mentions)
+  - The gap the change is supposed to create or remove.
+  - The same gap in the variant WITHOUT the fix (the baseline).
+  - Every OTHER consumer of the selector you touched — a shared class has a blast radius.
+  - The no-op case (e.g. the banner hidden), to catch unrequested changes to the default view.
+-->
+<html>
+  <head>
+    <link rel="stylesheet" href="quasar.css" />
+    <style>
+      /* Replicate the component's scoped rules, including the [data-v-*] attribute selector. */
+      .auth-card {
+        width: 420px;
+        padding: 32px;
+        box-sizing: border-box;
+      }
+      .auth-banner[data-v-x] {
+        border-radius: 12px !important;
+        font-size: 14px;
+      }
+      /* The candidate fix under test — comment/uncomment per variant via the `fix` flag below. */
+      .auth-card[data-v-x] > .auth-banner[data-v-x] {
+        margin-bottom: 32px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="out"></div>
+    <script>
+      // One call per variant. `fix` toggles whether the candidate rule applies, so the same
+      // harness yields both the baseline and the fixed measurement in one run.
+      function build({ banner, fix }) {
+        const card = document.createElement('div')
+        card.className = 'auth-card'
+        if (fix) card.setAttribute('data-v-x', '')
+        card.innerHTML = `
+          <div class="text-meta q-mb-lg" id="lead">Welcome</div>
+          ${banner ? `<div class="q-banner q-mb-md auth-banner" data-v-x id="banner">Session expired</div>` : ''}
+          <form class="q-form q-gutter-y-md" data-v-x id="form">
+            <label class="q-field q-input" id="in1" style="display:block;height:56px">email</label>
+            <label class="q-field q-input" id="in2" style="display:block;height:56px">password</label>
+            <div class="q-banner auth-banner" data-v-x id="inbanner">Bad credentials</div>
+            <button type="submit" class="q-btn full-width q-mt-sm" id="btn" style="height:40px">
+              Login
+            </button>
+          </form>`
+        document.body.appendChild(card)
+
+        const r = (id) => document.getElementById(id).getBoundingClientRect()
+        const px = (n) => Math.round(n * 100) / 100
+        const prev = banner ? r('banner') : r('lead')
+
+        const out = {
+          variant: { banner, fix },
+          // display matters: inline-level boxes do not margin-collapse with block siblings.
+          btn_display: getComputedStyle(document.getElementById('btn')).display,
+          gap_above_form: px(r('in1').top - prev.bottom),
+          gap_between_fields: px(r('in2').top - r('in1').bottom),
+          gap_inform_banner_to_btn: px(r('btn').top - r('inbanner').bottom),
+          input_left: px(r('in1').left),
+          btn_left: px(r('btn').left),
+          btn_vs_input_offset: px(r('btn').left - r('in1').left),
+          input_width: px(r('in1').width),
+          btn_width: px(r('btn').width),
+        }
+        card.remove()
+        return out
+      }
+
+      const results = [
+        build({ banner: true, fix: false }), // baseline, banner shown
+        build({ banner: true, fix: true }), // candidate fix, banner shown
+        build({ banner: false, fix: false }), // baseline, no banner (regression check)
+        build({ banner: false, fix: true }), // candidate fix, no banner (regression check)
+      ]
+
+      // The runner greps for this exact prefix.
+      document.getElementById('out').textContent = 'RESULTS=' + JSON.stringify(results)
+    </script>
+  </body>
+</html>
