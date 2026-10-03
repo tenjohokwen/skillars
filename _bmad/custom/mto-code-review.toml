@@ -1,38 +1,43 @@
-# Team override for mto-code-review. Committed to the repo — applies to
-# everyone running the mature-codebase-calibrated review variant on this
-# project.
+# Team override for mto-code-review. Committed to the repo — applies to everyone running the
+# mature-codebase-calibrated review variant on this project.
 #
-# Added 2026-10-02 after skillars-deferred-139: running mto-code-review on
-# Haiku 4.5 surfaced zero of the 15 patches and 4 decision-needed items that
-# the same diff produced under bmad-code-review on Opus 5. Cause: this
-# skill's false-positive-reduction framing ("mature codebase, assume
-# deliberate, ignore hypothetical risk") was written for a model strong
-# enough to actually do the verification it demands (read the full Javadoc,
-# check sibling patterns, grep the test tree) before dismissing something.
-# A weaker model skips the verification step and keeps the permission to
-# dismiss, turning "don't report unverified noise" into "assume everything
-# is fine." The specific findings it lost were exactly the kind the
-# "mature codebase" framing primes a reviewer to wave off — open design
-# ambiguity (a timezone field silently discarded, suspended-coach gating
-# never checked, a edit affordance with no underlying row) that looks like
-# "the mature codebase must have considered this" right up until someone
-# reads the code. These facts exist to force the verification step to
-# actually happen, and to stop ambiguity from being misread as noise.
+# --- History ---
+#
+# Added 2026-10-02 after skillars-deferred-139, where running this skill on Haiku 4.5 surfaced 0
+# of the 19 findings the same diff produced under bmad-code-review on Opus 5. That version of
+# this file appended five exhortation facts: ambiguity is not noise, dismissals need citations,
+# "conservative" means surfaced, a mandatory hedge-marker sweep, and a low-finding-count
+# self-check.
+#
+# Rewritten 2026-10-03 after skillars-deferred-141, which proves those exhortations did not work.
+# On the same model, the same skill produced 2 findings and BOTH were false positives — one
+# prescribing a call to `getCurrentUserId()`, a method that exists nowhere in the codebase. The
+# low-finding-count self-check in particular was a no-op: 2 findings on a 623-line diff adding a
+# page, a route, an endpoint permission, three locales and two specs did not trip it, because
+# "near-zero" was undefined and self-assessed.
+#
+# The conclusion, recorded so it is not re-learned a third time: telling a reviewer to verify
+# does not make verification happen. The real fix was mechanical and now lives in the skill's own
+# step files — a verification target list derived from the diff, a blast-radius sweep for shared
+# symbols, an execution gate (run the suite, apply the mutation, measure the CSS), a fourth
+# "Claims Auditor" layer that tests the spec's own claims, and a NUMERIC coverage floor
+# (`max(1, lines/150)` plus one per endpoint/route/shared-symbol/CSS-AC) that cannot be reasoned
+# away. The over-suppressive persistent facts were rebalanced in the skill's customize.toml,
+# which the append-only override mechanism here could not have fixed.
+#
+# Most of the five original facts are now in that rebalanced base set. What remains below is only
+# what is specific to THIS project and not already covered upstream. Do not re-add general
+# "try harder" exhortations here — they have been measured twice and do not change behaviour.
 
 [workflow]
 
 persistent_facts = [
-  # --- Ambiguity is not noise ---
-  "Ambiguous design intent is not a false positive. If the correct fix depends on information only a human has — the exact situation this skill's own triage buckets as 'decision_needed' — that is precisely the finding to surface, not discard. 'This mature codebase probably intended it this way' is a hypothesis, not a verification; it does not license dropping the finding.",
-  "Dismissing a finding is reserved for things you have actively disproven, not things you merely find plausible. A dismissal or 'no issue here' conclusion must be backed by a specific citation — a quoted Javadoc sentence, a sibling file:line showing the same pattern, a grep result showing tests already exist, a confirmed library contract. If you cannot produce that citation, do not dismiss: report the finding (as patch or decision_needed) and let triage decide.",
+  # Project-specific execution commands, so no layer has to discover them under time pressure.
+  "On this project the runnable checks are: frontend unit tests `cd src/frontend && npx vitest run` (report the real `Test Files` / `Tests` counts, and read stderr for Vue/router warnings); targeted backend tests `mvn -o test -Dtest=<ClassName> -DskipFrontend=true` with results in `target/surefire-reports/<FQCN>.txt`; lint `cd src/frontend && npx eslint <paths>` and `npx prettier --check <paths>`. NEVER run a local `mvn verify` — GitHub CI is the sole full-verification gate on this project, and a local full run is both slow and not the gate.",
 
-  # --- Mandatory sweep for self-flagged ambiguity ---
-  "Before concluding a review is clean, re-scan the spec/story file and the diff for the author's own ambiguity markers: phrases like 'implementer decides', 'TBD', 'open question', 'deferred', 'revisit', a reference to another deferred-story's open item (e.g. 'deferred-17 D8'), or a Dev Notes paragraph that hedges a design choice. Every marker found must produce either a finding or a documented reason it's already resolved by this diff — never pass over it silently.",
-  "'Implementer decides during implementation' only excuses a deviation when the implementation documents *what* it decided and *why*. If the decision point is still open — no documented resolution in the diff or story — that is a decision_needed finding, not grounds for dismissal.",
+  # Project-specific precedent map for the T3 target rows, so 'mirror the precedent' is checkable.
+  "When this project's specs say to mirror an existing page or class, the named precedent is authoritative and must be opened and compared behaviourally, not structurally. Known pairs: new dashboard pages mirror `ParentDashboardPlaceholderPage.vue` (note it seeds its own `creditLoading`/`approvalsLoading` refs to `true`, which store-backed loading flags do NOT do — they initialise `false`); new resource authorization ITs mirror the `@WebMvcTest` + inline `@TestConfiguration`/`TestSecurityConfig` shape used by every `*IT` in `platform/payment/api/`, which is an established divergence from project-context.md's `@SpringBootTest` + Testcontainers rule and is NOT a violation to report.",
 
-  # --- Conservative means surfaced, not suppressed ---
-  "When the triage rule says to 'prefer the more conservative classification' under uncertainty, conservative means the classification that puts the finding in front of a human — decision_needed over dismiss, patch over defer. Silently dropping a finding is never the conservative choice; it is the one choice triage cannot later correct.",
-
-  # --- Low finding count is a signal to re-check yourself, not a result ---
-  "A near-zero finding count on a diff that touches multiple files, adds new endpoints, or adds new UI components is a signal to re-check your own work, not evidence of a clean review. Before finalizing a clean result, re-read each changed file once more looking specifically for the categories this skill's framing tells you to downplay: ambiguous design intent, missing error handling, swallowed exceptions, and untested branches.",
+  # Project-specific trap, found the hard way in deferred-141.
+  "`SecurityUtil.getCurrentCoachUserId()` is role-agnostic despite its name — it only parses the current principal's `businessId`, and is behaviourally identical to `requireCurrentUserId()`. There is no `getCurrentUserId()` on this class. Do not report it as returning a coach-specific id, and do not prescribe a method that does not exist; the correct recommendation on a multi-role path is `requireCurrentUserId()`, which is what `BookingResource.currentParentId()` already uses.",
 ]

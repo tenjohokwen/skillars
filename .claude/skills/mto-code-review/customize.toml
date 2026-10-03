@@ -1,8 +1,33 @@
-# DO NOT EDIT -- overwritten on every update.
-#
 # Workflow customization surface for mto-code-review (Mature/Tested Optimized variant).
 # Mirrors the agent customization shape under the [workflow] namespace.
-# Enhanced persistent facts to reduce false positives in hardened codebases.
+#
+# NOTE ON EDITING: this file previously carried a "DO NOT EDIT -- overwritten on every update"
+# header. It is edited deliberately and in-repo on this project (see #244, and the rebalance
+# below), because the team-override file `_bmad/custom/mto-code-review.toml` can only APPEND to
+# `persistent_facts` — it cannot remove or reword an existing fact. The over-suppressive facts
+# that caused this skill's two measured failures therefore had to be fixed here. If a skill
+# update overwrites this file, re-apply the rebalance below.
+#
+# --- Calibration history (read before "simplifying" this file) ---
+#
+# This variant exists to cut false positives on a hardened codebase. It twice did so by cutting
+# findings to ~zero instead:
+#
+#   skillars-deferred-139 (Haiku 4.5): 0 of 19 real findings.
+#   skillars-deferred-141 (Haiku 4.5): 2 findings, BOTH false positives — one prescribing a fix
+#       that called a method (`getCurrentUserId()`) which exists nowhere in the codebase. The
+#       same diff under bmad-code-review on Opus 5 produced 10 patches + 1 decision + 3 defers.
+#
+# #244 responded by APPENDING exhortations ("ambiguity is not noise", "a near-zero count is a
+# signal to re-check yourself"). deferred-141 proves exhortation does not work: a weaker model
+# skips the verification an instruction demands while keeping the permission to dismiss that the
+# framing grants. The fix is mechanical enforcement in the step files (a verification target
+# list, a blast-radius sweep, an execution gate, a numeric coverage floor) plus the rebalance
+# below. Do not re-solve this by adding more prose.
+#
+# Note the second failure's shape especially: suppression did not even buy accuracy. Both emitted
+# findings were wrong. The problem was never the reporting threshold — it was that no
+# verification happened in either direction.
 
 [workflow]
 
@@ -11,45 +36,55 @@
 #   arrays-of-tables with `code`/`id`: replace matching items, append new ones.
 
 # Steps to run before the standard activation (config load, greet).
-# Overrides append. Use for pre-flight loads, compliance checks, etc.
-
 activation_steps_prepend = []
 
 # Steps to run after greet but before the workflow begins.
-# Overrides append. Use for context-heavy setup that should happen
-# once the user has been acknowledged.
-
 activation_steps_append = []
 
-# Persistent facts the workflow keeps in mind for the whole run
-# (standards, compliance constraints, stylistic guardrails).
-# Distinct from the runtime memory sidecar — these are static context
-# loaded on activation. Overrides append.
+# Persistent facts the workflow keeps in mind for the whole run.
 #
-# Each entry is either:
-#   - a literal sentence, e.g. "All stories must include testable acceptance criteria."
-#   - a file reference prefixed with `file:`, e.g. "file:{project-root}/docs/standards.md"
-#     (glob patterns are supported; the file's contents are loaded and treated as facts).
+# REBALANCED 2026-10-03. The previous set carried 20 suppression cues against 8 encouragement
+# cues, and every documentation-trust instruction was one-directional: documentation could only
+# exonerate code, never incriminate itself. Each verification fact below is now two-sided — it
+# says what to check AND that failing to check means you may not dismiss. The blanket
+# "mature codebase, report only genuine bugs" permissions were removed; what remains are
+# specific, checkable contracts.
+#
+# Each entry is either a literal sentence, or a `file:` reference (globs supported) whose
+# contents are loaded as facts.
 
 persistent_facts = [
   "file:{project-root}/**/project-context.md",
-  "This is a mature, hardened codebase with many prior shipped stories. Review for REAL issues only, not coding-style conformance or hypothetical risks. False positives waste time.",
-  "Before flagging anything as missing or wrong: read the COMPLETE method/class Javadoc (not just the signature). This codebase documents design tradeoffs, accepted risks, and deliberate pattern choices in Javadoc. A gap that looks obvious may have an explicit documented reason.",
-  "Before flagging a catch block, retry pattern, logging gap, or null check as wrong or missing: find and read the CLOSEST RELATED implementation of the same pattern elsewhere in the module (e.g. compare a catch block against the nearest sibling handler). Verify the flagged code actually diverges from the established module shape before reporting divergence.",
-  "Before flagging nullability or defensive-check gaps as missing: verify the external API/library contract DIRECTLY (Spring Data JPA, Stripe SDK, etc.). Spring Data JPA collection-returning queries never return null; Stripe SDK resource objects always carry their own id. Check a flagged value's actual origin and real contract, not assumptions.",
-  "When tracing an exception or null-degradation path: follow it ALL THE WAY TO ITS TERMINAL HANDLING (the actual catch, guard, or no-op skip that resolves it), not just to the first check encountered. A value that looks unguarded at one line may already degrade gracefully a few lines later.",
-  "Before suggesting added logging, instrumentation, or a fix: check whether it's already centralized in a shared utility or base class. Don't recommend per-call-site duplication of what a shared component already provides.",
-  "Check test coverage for every new or changed method. But never claim coverage is 'missing' without grepping the test tree and checking the story's Test Plan section. A claim of absence requires a recorded negative search, not an impression.",
-  "Verify external API/library behavior empirically against a real database or SDK if you're uncertain. Don't rely on framework documentation alone — actual behavior under real conditions can differ from the generic contract.",
-  "Every file:line citation in a finding must come from reading the actual code, not extrapolation or memory. Stale or fabricated locations undermine the entire finding.",
-  "Before recommending a specific fix pattern, annotation, or validator: confirm it actually applies to this context and exists in the project's real dependencies. Don't invent patterns that don't exist (e.g. @PackagePrivate is not a Java annotation).",
-  "When multiple reviewers flag the same issue, deduplicate. A finding one layer dismisses as a false positive or already-handled must not also appear in another layer's final report.",
-  "If the spec explicitly says 'implementer decides during implementation' for a design choice: that is NOT a violation if the implementation made a deliberate, documented choice. Only report spec deviations where the spec is explicit and unambiguous.",
-  "This codebase is post-audit with established patterns. Report only genuine bugs and real spec violations, not style preferences, over-engineering suggestions, or pre-existing architectural choices you disagree with.",
+
+  # --- The counterweight: the spec is evidence, not ground truth ---
+  "The story/spec file is an artifact under review, not a source of truth. Where it explains WHY something is safe, HOW a mechanism works, or WHAT it tested, each of those is a claim to be tested — not context that settles the question. A confident explanation with a false premise is the most dangerous thing in a spec, because every later reviewer treats it as resolved. Identify the premise and check the premise.",
+  "Documentation cuts both ways. A Javadoc paragraph or Dev Notes entry can exonerate code that looks wrong — and it can also BE the defect, when it states something false or justifies a decision with a premise that does not hold. Reading documentation is never the end of a check; confirming what it asserts is.",
+
+  # --- Verification contracts: each one is two-sided ---
+  "Read the COMPLETE method/class Javadoc, not just the signature, before flagging something as missing or wrong — this codebase documents design tradeoffs and accepted risks there. But a documented rationale only settles the matter if its claim is actually true; if you did not verify the claim, you have not finished the check and may not dismiss the finding.",
+  "Before flagging any code as diverging from convention — a catch block, retry pattern, logging gap, null check, test annotation, loading-flag initial value, error-branch ordering, or naming choice — find and read the closest sibling implementation of the same pattern in that module, and cite it by file:line. An established, consistent module pattern is a resolved decision. No cited sibling means the check is incomplete, not that the code is fine.",
+  "Verify external API/library contracts DIRECTLY before flagging nullability or defensive-check gaps: Spring Data JPA collection-returning queries never return null; Stripe SDK resource objects always carry their own id; a JPQL SUM over an empty set returns NULL unless COALESCE'd or Optional-wrapped. Check the flagged value's real origin and real contract, not an assumption in either direction.",
+  "When tracing an exception or null-degradation path, follow it to its TERMINAL handling — the actual catch, guard, or no-op skip that resolves it — not just the first check you encounter. A value that looks unguarded at one line may degrade gracefully a few lines later. Equally, a value that looks guarded may have its guard pre-empted by an earlier branch; check the branch ORDER, not just the branch's existence.",
+  "Before suggesting added logging, instrumentation, or a fix, check whether it is already centralized in a shared utility or base class. Do not recommend per-call-site duplication of what a shared component already provides.",
+  "Never claim test coverage is missing without a recorded negative search: grep the test tree and read the spec's File List and Test Plan. And never accept a coverage CLAIM without running it — a spec asserting 'N tests green' or 'mutation-checked' is making a runnable claim, and running it is the check.",
+  "Before recommending any specific fix — a method, annotation, validator, or pattern — grep it and confirm it exists in this codebase or its real dependencies. A finding whose prescribed fix does not compile is worse than no finding: it has already happened on this project (`getCurrentUserId()`, skillars-deferred-141) and it destroys trust in the whole review.",
+  "Every file:line citation must be read directly from the current state of that exact file before being included. Never extrapolate, recall, or guess a line number.",
+
+  # --- Execution over inference (replaces the old self-gated 'if you're uncertain' fact) ---
+  "Behaviour that can be executed must be executed, not inferred — this is not conditional on feeling uncertain, because the failures this skill is calibrated against were all confident. Run the test suite and report real numbers. Apply the mutation behind any 'mutation-checked' claim and confirm it goes red. Measure a CSS/layout change in a real browser engine (see scripts/measure-rendered-css.sh), including the pre-change baseline, since margin collapsing and inline-flex vs block are not reliably derivable from stylesheet source. If a command genuinely cannot be run, label the finding 'unverified — could not execute'; never present reasoning as measurement.",
+  "A changed shared symbol — a CSS class, helper, base class, constant, or test fixture — has a blast radius that is mostly OUTSIDE the diff. Grep every consumer and account for each one individually. Reviewing only the diff hunks cannot find this class of regression: in skillars-deferred-141 a one-line shared-CSS change silently altered a fifth element whose line never appeared in the diff.",
+  "Initial state is the most commonly missed state class: the value a flag, ref, or field holds on first render before any fetch or effect has run. It exists for one frame, appears in no test fixture unless someone wrote one deliberately, and is invisible to a reviewer who only reads the fetch path.",
+
+  # --- Ambiguity is not noise ---
+  "Ambiguous design intent is not a false positive. If the correct fix depends on information only a human has — exactly what triage buckets as `decision_needed` — that is the finding to surface, not discard. 'This mature codebase probably intended it this way' is a hypothesis, not a verification.",
+  "Dismissing a finding is reserved for what you have actively DISPROVEN, not what you find plausible. A dismissal must carry a specific citation: a quoted Javadoc sentence, a sibling file:line, a grep result, a confirmed contract, or command output. No citation means no dismissal — report it and let triage decide. This rule cuts both ways: it equally forbids REPORTING a finding you have not verified.",
+  "'Implementer decides during implementation' excuses a deviation only when the implementation documents what it decided and why. An open decision point with no documented resolution is a `decision_needed` finding.",
+
+  # --- Scope: what is genuinely out of scope, stated once ---
+  "Out of scope: pure formatting preferences, 'could be more elegant' refactors, and pre-existing architectural choices consistently applied across the module. Everything else is in scope — including a misleading name on a newly multi-role code path, a dead import in a new file, a false statement in the spec, and a test whose own description overstates what it asserts. Do not stretch 'ignore style' to cover a correctness or accuracy defect.",
 ]
 
-# Scalar: executed when the workflow reaches its final step,
-# after review findings are presented and sprint status is synced. Override wins.
-# Leave empty for no custom post-completion behavior.
+# Scalar: executed when the workflow reaches its final step, after review findings are presented
+# and sprint status is synced. Override wins. Leave empty for no custom post-completion behavior.
 
 on_complete = ""

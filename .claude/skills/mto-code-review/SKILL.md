@@ -1,13 +1,32 @@
 ---
 name: mto-code-review
-description: 'Code review with reduced false positives for mature codebases. Parallel review layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor) calibrated for post-audit projects with established patterns and design decisions. Use when reviewing hardened code with extensive history.'
+description: 'Code review for mature codebases, with mechanically enforced verification. Four parallel layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor, Claims Auditor) plus a diff-derived verification target list, a blast-radius sweep for shared symbols, an execution gate that runs tests/mutations/CSS measurements, and a numeric coverage floor. Calibrated for post-audit projects with established patterns. Use when reviewing hardened code with extensive history.'
 ---
 
 # Code Review Workflow (Mature/Tested Optimized)
 
 **Goal:** Review code changes adversarially using parallel review layers, calibrated for mature codebases with established patterns and minimal noise.
 
-**Your Role:** You are an elite code reviewer. You gather context, launch parallel adversarial reviews calibrated for this codebase's maturity level, triage findings with precision, and present actionable results. No noise, no filler. This variant is optimized for codebases that have shipped many prior hardened stories and have established architectural patterns and design decisions.
+**Your Role:** You are an elite code reviewer. You gather context, run a mechanical verification pass, launch four parallel review layers, triage findings with precision, and present actionable results. No noise, no filler. This variant is optimized for codebases that have shipped many prior hardened stories and have established architectural patterns and design decisions.
+
+## Read this before running
+
+This skill's false-positive calibration twice collapsed into reporting nothing. On `skillars-deferred-139` it surfaced 0 of 19 real findings; on `skillars-deferred-141` it surfaced 2, **both false positives**, one prescribing a fix that called a nonexistent method. Suppression did not even buy accuracy — it just stopped verification from happening in either direction.
+
+The response in #244 was to append prose exhortations, and `skillars-deferred-141` proved that does not work. So the controls in this version are **mechanical**, and they are not optional:
+
+- **A verification target list** (step 2 §1) derived from the diff by seven mechanical triggers — every member read, method called, precedent named, i18n key added, enum literal used, route/permission changed, and shared symbol touched. Every row needs a resolution before triage.
+- **A blast-radius sweep** (§2) for shared symbols, whose impact is by definition mostly outside the diff.
+- **An execution gate** (§3): run the suite, apply any claimed mutation and confirm it goes red, and measure CSS/layout ACs in a real browser engine via `scripts/measure-rendered-css.sh`. Reasoning may never be presented as measurement.
+- **A fourth layer, the Claims Auditor** (§4 Layer D), which tests the spec's own factual claims. The spec is an artifact under review, not ground truth.
+- **A numeric coverage floor** (§6) that cannot be reasoned away, replacing the self-assessed "near-zero" check that failed to trip on a 623-line diff.
+
+**Do not invoke `bmad-review-edge-case-hunter` for Layer B.** That skill tells the reviewer to scan only diff hunks and ignore the rest of the codebase, which contradicts the project read access Layer B is given and structurally blinds the highest-yield layer. Step 2 carries an inlined prompt instead.
+
+## Helper scripts
+
+- `scripts/measure-rendered-css.sh <harness.html>` — renders a harness in a real browser engine (Playwright's cached Chromium, or an installed Chrome/Edge) and prints the measurements it computed. Exits non-zero rather than degrading to guesswork when no browser is available.
+- `scripts/harness-template.html` — a working template to copy. Replicate the component's real DOM and class lists, copy the real framework CSS in beside it, and always measure the pre-change baseline alongside the fix — that comparison is the only thing that distinguishes a fix from a no-op.
 
 ## Conventions
 
