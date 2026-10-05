@@ -105,7 +105,7 @@ async function fetchVideos() {
   } catch (err) {
     if (err?.response?.status === 403) {
       $q.notify({ type: 'negative', message: t('video.management.accessDenied') })
-      router.replace('/dashboard')
+      router.replace('/player/dashboard')
     } else {
       $q.notify({ type: 'negative', message: t('video.management.loadError') })
     }
