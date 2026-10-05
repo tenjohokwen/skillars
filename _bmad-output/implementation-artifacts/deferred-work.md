@@ -3665,6 +3665,12 @@ classified defer — pre-existing, out of scope, or latent. Each was traced to r
   **When picked up:** fix all three together (or extract a shared serializer) — the moment the `skp`
   payload gains a free-text field such as a display name. Fixing one site alone would create exactly the
   divergence skillars-deferred-142 AC2 set out to eliminate.
+  **[AUDIT 2026-10-05: still present and still latent, re-verified at all three writers. Two of the
+  three citations have drifted — `AuthService.java:218` is now `:270` (skillars-deferred-143 inserted
+  ~52 lines above it) and `JwtManagerImpl.java:108` is now `:119`; `AuthService.java:132` is unchanged.
+  The "extract a shared serializer" option is now written up as its own umbrella item under "Deferred
+  from: manual review during skillars-deferred-143 (2026-10-05)" — pick this up there rather than
+  alone.]**
 
 - **The open-redirect guard now exists as two independent textual copies.**
   `OtpPage.vue:151-155` and `LoginPage.vue:170-174` are byte-identical by design — skillars-deferred-142
@@ -3698,6 +3704,11 @@ classified defer — pre-existing, out of scope, or latent. Each was traced to r
   `AuthService`'s call, so this is coverage strength rather than a defect.
   **When picked up:** add `httpOnly=false` / `maxAge` / `SameSite=Lax` assertions, ideally as a shared
   helper covering all three `skp` writers at once.
+  **[AUDIT 2026-10-05: still present — the two assertions are at `JwtManagerImplTest.java:635` and
+  `:654` and check only the decoded JSON. The "shared helper covering all three writers" this asks for
+  is the umbrella item under "Deferred from: manual review during skillars-deferred-143 (2026-10-05)",
+  which proposes `SkillarsProfileCookie` as the single owner; the attribute assertions become one test
+  against that type. Pick up together.]**
 
 - **`.dockerignore` single-segment patterns match the build-context root only.**
   `.dockerignore` patterns are anchored full-path matches, so `*.jar`, `*.war`, `.DS_Store`, `*.iml`,
@@ -3729,3 +3740,191 @@ classified defer — pre-existing, out of scope, or latent. Each was traced to r
   **When picked up:** if builder-cache push is ever enabled, switch to passing the commit SHA as a build
   arg (or run the stamping plugin outside the container) instead of copying `.git/`. Until then, record
   the tradeoff in the `.dockerignore` comment rather than changing behaviour.
+
+## Deferred from: code review of skillars-deferred-143 (2026-10-05)
+
+`/bmad-code-review` (three parallel layers — Blind Hunter diff-only, Edge Case Hunter diff+project,
+Acceptance Auditor diff+spec — findings independently re-verified against HEAD, not taken on trust).
+8 items classified defer below; 2 patch items and 6 dismissed false positives are recorded in the
+story file itself (`skillars-deferred-143-account-lock-enforcement-and-forced-logout-session-termination.md`,
+Review Findings section).
+
+- **`cause instanceof AccountStatusException` in `JWTAuthorizationFilter.isGenuineDenial` is unreachable
+  in production, by the predicate's own javadoc.** `DaoAuthProvider.authorize()` (`:47-51`) always
+  rewraps a caught `AccountStatusException` as `AuthorizationException(ACCOUNT_NOT_LOGIN_ABLE)` before
+  it reaches the filter. The four pre-existing tests that mock `daoAuthProvider` to throw raw
+  `DisabledException`/`LockedException` exercise a shape production code cannot produce; the real path
+  has its own dedicated test (`testWrappedAccountNotLoginAble_terminatesSession`). Harmless, arguably
+  reasonable defense-in-depth against a future caller bypassing `DaoAuthProvider`.
+  **When picked up:** decide whether to remove the dead disjunct or leave it as documented insurance.
+
+- **`AuthService.refresh()`'s reuse-detection branch writes the refresh-token revocation twice.**
+  `refreshTokenRepository.markAllUsedByUserId(ownerId)` already revokes every token for the user,
+  including the one `securityUtil.terminateSession(req, res)`'s own `markUsedByTokenHash` call
+  redundantly re-marks a moment later via the raw cookie hash. Both idempotent (`used` is monotonic);
+  only cost is one extra `UPDATE` per reuse-detection event.
+  **When picked up:** skip `terminateSession`'s revocation when `markAllUsedByUserId` already ran, or
+  accept the extra write as immaterial.
+
+- **`AuthService.refresh()`'s optimistic-lock-loser comment doesn't name `markUsedByTokenHash` as a
+  second possible concurrent writer of the same row.** The comment reasons "unnecessary — the winning
+  request has already committed `used=true`," considering only a second concurrent *refresh* as the
+  other writer. A concurrent forced-logout's `markUsedByTokenHash` is a second writer the comment
+  doesn't name — the conclusion still holds (both only ever set `used=true`), reasoning is incomplete.
+  **When picked up:** extend the comment, no behavior change needed.
+
+- **`AuthService.logout()`'s refresh-token revocation went from conditional to unconditional,
+  undisclosed.** Pre-diff, `.filter(t -> !t.isUsed())` only wrote if the token wasn't already used;
+  `markUsedByTokenHash`'s bulk `UPDATE` now runs unconditionally on every logout. Functionally
+  equivalent end state, one extra write per logout of an already-dead token — a reasonable cost of the
+  bulk-update redesign (see the story's AC2 Dev Notes on the `REQUIRES_NEW` deadlock it avoids), but
+  never stated as a tradeoff anywhere.
+  **When picked up:** add a one-line comment acknowledging it; no behavior change expected.
+
+- **`JWTAuthorizationFilter.isGenuineDenial(Exception cause)` is typed against the generic
+  superclass rather than the caught union** (`AccountStatusException | AuthorizationException |
+  AccessDeniedException`, the only types its one call site can pass). Harmless today; a future
+  unrelated caller passing an arbitrary exception would silently get `false` rather than a compile
+  error.
+  **When picked up:** narrow the parameter type if a second call site is ever added.
+
+- **`markUsedByTokenHash`/`markAllUsedByUserId` calls are unguarded against transient DB failures.**
+  A `DataAccessException` mid-call propagates to `ApiAdvice`'s generic `Throwable` handler (500)
+  rather than the intended 401/403. Pre-existing pattern — `markAllUsedByUserId` already carried this
+  risk pre-diff, and no bespoke handling for transient DB errors exists anywhere else in this codebase
+  for this class of call. Not a new regression.
+  **When picked up:** only worth adding bespoke handling if this class of DB failure is ever observed
+  in production for an auth-adjacent write.
+
+- **`isGenuineDenial`'s `ACCOUNT_NOT_LOGIN_ABLE` branch has no per-client throttle on the
+  `REQUIRES_NEW` revocation write, unlike `maybePublishSecurityAlert`'s audit-event throttle for the
+  identical cause.** A client that ignores `Set-Cookie` and keeps replaying the same stale JWT for a
+  since-locked account triggers one `markUsedByTokenHash` write per request, indefinitely — the same
+  write-amplification class `SecurityAlertThrottle` exists to bound on the audit-log side of this
+  exact cause. `daoAuthProvider.authorize()`'s own DB read already happens unthrottled on every such
+  retry pre-diff, so this adds one write to an existing read-amplifier rather than introducing
+  amplification from zero.
+  **When picked up:** reuse `SecurityAlertThrottle`'s per-client+cause dedup pattern for the
+  revocation call too.
+
+- **`isGenuineDenial` doesn't treat `AuthorizationException(USER_NOT_FOUND)`/`(UNKNOWN)` — the other
+  two wrap codes `DaoAuthProvider.authorize()` can produce — as genuine denials.** A user whose row is
+  hard-deleted (`UserAdminService.deleteUserInformation`) while holding a valid JWT hits this path and
+  gets only cookie-clearing, not revocation, on the filter's leg. `AuthService.refresh()`'s own
+  `findById` rejection independently and fully revokes the same case, and `POST /api/auth/refresh` has
+  no caller today, so the practical gap is nil. `isGenuineDenial`'s scope was deliberately limited to
+  mirroring `maybePublishSecurityAlert`'s existing shape plus the one `ACCOUNT_NOT_LOGIN_ABLE`
+  correction the story's AC3 specified — not every `AuthorizationException` variant.
+  **When picked up:** widen `isGenuineDenial` to cover `USER_NOT_FOUND`/`UNKNOWN` too, at the same time
+  anyone revisits this predicate for another reason.
+
+## Deferred from: manual review during skillars-deferred-143 (2026-10-05)
+
+Not from the `/bmad-code-review` run above — both items were surfaced by direct questions and
+observations while implementing `skillars-deferred-143`, and verified against HEAD `3a62698c`+working
+tree at the time of writing.
+
+- **`JwtManagerImpl.deleteLoginToken()` clears six cookies but not `skp`, even though the same class
+  now writes `skp`.** `deleteLoginToken` (`JwtManagerImpl.java:183-190`) removes `potc`, `bcookie`,
+  `user`, `admin`, `ION`, `rint` — not `skp` (`SKILLARS_PROFILE_COOKIE`) and not `rtkn`. There is no
+  comment explaining the omission and it is not a design decision: `deleteLoginToken` dates from
+  `e82840ae init`, while `skp` and `rtkn` were both introduced later in `fbc5f5c4 "Authentication &
+  JWT Security"` and the method was never extended. The compensating clearing was hand-rolled in
+  `AuthService` instead — which is the duplication `skillars-deferred-143` consolidated into
+  `SecurityUtil.clearAuthCookies` (`SecurityUtil.java:189-193`).
+
+  The ownership boundary that *would* justify it ("`JwtManagerImpl` owns the JWT-session cookies;
+  `rtkn` is a DB-backed credential and `JwtManagerImpl` is deliberately DB-free; `skp` is a
+  frontend-facing hint") holds for `rtkn` but **no longer holds for `skp`**: `skillars-deferred-142`
+  (`3a62698c`) made `JwtManagerImpl` a *writer* of `skp` via `setSkillarsProfileCookie`
+  (`JwtManagerImpl.java:121`). The write/delete asymmetry is now inside one class — 3 writers
+  (`AuthService.java:134`, `AuthService.java:272`, `JwtManagerImpl.java:121`) against 1 remover
+  (`SecurityUtil.java:192`). This is the concrete form of the "`skp` duplication / three writer
+  sites" item `skillars-deferred-143` listed as explicitly out of scope in its Dev Notes.
+
+  **Observable consequence, bounded:** `deleteLoginToken` has only two callers.
+  `SecurityUtil.clearAuthCookies:190` immediately follows it with `rtkn` + `skp`, so that path is
+  covered. `JWTAuthorizationFilter.java:164` — the routine-denial branch (expired JWT, tokenless
+  request, `AuthorizationException(MISSING_RIGHTS)`) — calls it alone, so **`skp` survives a routine
+  401**. `skp` is `httpOnly=false` and `auth.store.js:74`'s `hydrateFromCookie()` reads it, so the SPA
+  can still hydrate a `userId`/`role` from a dead session after an idle-out. **Not an auth bypass** —
+  server-side authorization runs off `@PreAuthorize` + the JWT `ROLES` claim, never `skp` — so this is
+  stale UI state, not privilege. The frontend partially compensates at `auth.store.js:48` (clears
+  `skp` client-side on deliberate logout, with a comment about this exact redirect race), which does
+  not cover a server-initiated 401. **Pre-existing, not introduced by `skillars-deferred-143`:** the
+  deleted `securityUtil.logout(res)` was `clearContext` + `deleteLoginToken` for *every* caught cause,
+  so `skp` previously survived **all** filter 401s; that story narrowed it to routine causes only.
+
+  **When picked up:** adding `skp` to `deleteLoginToken` is the cheap fix — a pure
+  `Set-Cookie: Max-Age=0` header with no DB cost, which is precisely why `rtkn` must stay out of that
+  path (revoking `rtkn` on every idle-out is the write-amplification and self-defeating problem
+  `skillars-deferred-143` AC3 documents). Both callers tolerate it; `SecurityUtil.clearAuthCookies`
+  would emit a harmless duplicate removal header. Note this **is** a behaviour change on the routine
+  denial path, which `skillars-deferred-143` AC3 deliberately froze, so it needs its own AC and a test
+  asserting an expired-JWT 401 now expires `skp`. Best done together with the `skp`-consolidation
+  item (collapse the three writers onto one owner) rather than as a drive-by.
+
+- **The `skp` cookie's wire format is known by three separate writers; no type owns it.**
+  `SKILLARS_PROFILE_COOKIE`'s payload shape, its quoting invariant, its encoding and its four cookie
+  attributes are open-coded at `AuthService.java:132-135` (login), `AuthService.java:270-273`
+  (refresh) and `JwtManagerImpl.java:119-121` (`setSkillarsProfileCookie`, added by
+  `skillars-deferred-142`). The two `AuthService` blocks are **byte-for-byte identical**, all 14 lines
+  including the 9-line cautionary comment; `JwtManagerImpl` differs only in the three lines above it.
+
+  **Why this one is worth extracting even though the `sha256Hex` duplication in the same module was
+  deliberately left alone:** the distinguishing property is how the duplication fails. `sha256Hex` is a
+  universally-specified algorithm with no project-local invariant — get it wrong and it fails loudly.
+  The `skp` format carries a project-local invariant (`id` must be a **quoted** string) that fails
+  **silently**, and it has already cost a production bug: an unquoted `id` corrupted `authStore.userId`
+  via IEEE-754 rounding and surfaced much later as a 403 on coach photo upload (found by manual
+  testing 2026-10-01). That 10-line comment exists because of it, and it is now copied twice. Format
+  knowledge that has already bitten once, duplicated across three writers, with the invariant enforced
+  only by a repeated comment, is the case for a single owner.
+
+  **The seam is clean.** Only role derivation and the id source genuinely differ — `user.getSkillarsRole()`
+  with an `"ADMIN"` fallback vs. the `ROLES` claim with an `ANONYMOUS` fallback, and `user.getId()` vs.
+  `claims.get(BUS_ID)`. Those differences are load-bearing and must stay (see
+  `JwtManagerImpl.java:90-102`: collapsing the two fallbacks would surface admin-only nav to a
+  non-admin). Everything downstream of `(id, role)` is identical and extractable.
+
+  **When picked up — this is the umbrella for the other `skp` items in this file; do them together.**
+  Proposed home: `platform/security/contract/SkillarsProfileCookie.java` — `SkillarsRole` already lives
+  in that package, and both `platform.security.service.AuthService` and
+  `platform.security.infrastructure.jwt.JwtManagerImpl` are inside the security module, so neither
+  import breaks the layering rules in `project-context.md`. It cannot sit beside `CookieUtil` in
+  `infrastructure.security`, which must stay business-agnostic and this knows `SkillarsRole`. Shape:
+  a `record SkillarsProfileCookie(String id, String role)` with `writeTo(HttpServletResponse)` and
+  `removeFrom(HttpServletResponse)`. Have it own **removal** as well as writing — that is what fixes the
+  asymmetry in the item above, since `skp` is written in three places but cleared only in
+  `SecurityUtil.java:192`, which is precisely how `JwtManagerImpl` came to write `skp` without ever
+  clearing it. Rough size: one ~40-line file, three call sites collapsing to a line or two each
+  (net ≈ −35 lines), `SecurityUtil.clearAuthCookies` delegating, plus one focused unit test pinning the
+  wire format. That test is the real payoff: the quoted-id invariant is currently asserted only
+  indirectly, across three separate tests mirroring the three writers.
+
+  **Bundle with:** the `deleteLoginToken`/`skp` asymmetry item above, and both `skp` items under
+  *"Deferred from: code review of skillars-deferred-142 …"* — the `URLEncoder`-vs-`decodeURIComponent`
+  mismatch (whose own note already says "fix all three together, or extract a shared serializer") and
+  the missing cookie-attribute assertions (which already asks for "a shared helper covering all three
+  `skp` writers at once"). All four are the same refactor; done separately they are strictly more work,
+  and three of them cannot be fixed at one site without recreating the divergence
+  `skillars-deferred-142` AC2 set out to remove.
+
+- **`AuthResourceIT.refresh_expiredToken_returns401` passes for the wrong reason — it never exercises
+  the expiry branch it is named for.** The test seeds its expired `refresh_tokens` row with a bare
+  `jdbcTemplate.update` outside any transaction. Because `spring.datasource.hikari.auto-commit` is
+  `false` (`application.yaml:183`, set so Hibernate can group statements into one transaction), such a
+  write is rolled back when the connection is released and the row never exists for the server to
+  find. Measured directly during `skillars-deferred-143` with a diagnostic probe: an `UPDATE` reported
+  `rowsUpdated=1` while the next statement read the old value, and an `INSERT` followed by a `SELECT`
+  found 0 rows. The test still returns 401, but via "refresh token not found" rather than "refresh
+  token has expired" — and the raw cookie it sends (`fakeRaw`) does not hash to the seeded
+  `token_hash` either way, so the expiry branch is unreachable from it regardless of the commit issue.
+  Left unchanged deliberately: `skillars-deferred-143` AC4 required the existing `refresh_*`
+  assertions to pass **unmodified**, and fixing this changes what the test proves.
+
+  **When picked up:** route the seed through `transactionTemplate` (the `commitWrite(...)` helper
+  `skillars-deferred-143` added to `AuthResourceIT` does exactly this) **and** send a raw cookie value
+  that actually hashes to the seeded `token_hash`, so the expiry branch is genuinely covered. Worth a
+  wider grep at the same time: any other IT seeding state with a bare `jdbcTemplate` write in a test
+  method body has the same silent no-op.
