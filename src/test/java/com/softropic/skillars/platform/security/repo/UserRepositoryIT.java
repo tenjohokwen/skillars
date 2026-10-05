@@ -6,6 +6,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.infrastructure.validation.PhoneNumber;
 import com.softropic.skillars.infrastructure.validation.Provider;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.platform.security.contract.SkillarsRole;
 import com.softropic.skillars.platform.security.repo.Address;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
@@ -56,6 +57,10 @@ class UserRepositoryIT extends AbstractIntegrationTest {
         address.setName("abcdAddress");
         user.setAddresses(Set.of(address));
         user.setAuthorities(Set.of());
+        // Instancio.create picks uniformly among all SkillarsRole values, incl. the non-persistable
+        // ANONYMOUS (skillars-deferred-142) — pin to a real value so this doesn't flakily violate
+        // user_aud's skillars_role CHECK constraint on save (V145__user_aud_role_verification_status.sql).
+        user.setSkillarsRole(SkillarsRole.PLAYER);
 
         final User savedUser = userRepo.save(user);
         final Optional<User> foundUser = userRepo.findOneById(savedUser.getId());
