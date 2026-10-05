@@ -33,6 +33,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
 import java.net.HttpCookie;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -70,6 +71,7 @@ import static com.softropic.skillars.infrastructure.security.SecurityConstants.J
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.JWT_SESSION_COOKIE;
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.JWT_TTL;
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.ROLES;
+import static com.softropic.skillars.infrastructure.security.SecurityConstants.SKILLARS_PROFILE_COOKIE;
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.SESSION_ID;
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.SESSION_REFRESH_COUNTDOWN;
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.USER_COOKIE;
@@ -613,6 +615,43 @@ public class JwtManagerImplTest {
         assertThat(refreshedClaims.get(CLIENT_ID, String.class)).isEqualTo(RequestMetadataProvider.getClientInfo()
                                                                                                   .getClientIdentifier());
 
+    }
+
+    // skillars-deferred-142 AC2: refreshLoginToken (the OTP-completion path) must set 'skp' with
+    // the caller's real role, derived from the ROLES claim — not just the "ADMIN" fallback shape.
+    @Test
+    void testRefreshLoginToken_setsSkillarsProfileCookieFromRolesClaim() throws Exception {
+        initRequestMetadata();
+
+        Set<SimpleGrantedAuthority> authorities = Set.of(new SimpleGrantedAuthority("ROLE_COACH"));
+        Principal originalPrincipal = createPrincipal(authorities);
+        String initialTokenString = jwtManager.generateToken(originalPrincipal, UUID.randomUUID().toString());
+
+        HttpServletResponse mockResponse = new MockHttpServletResponse();
+        jwtManager.refreshLoginToken(mockResponse, initialTokenString);
+
+        final String skpRaw = extractCookie(mockResponse, SKILLARS_PROFILE_COOKIE);
+        final String skpJson = java.net.URLDecoder.decode(skpRaw, StandardCharsets.UTF_8);
+        assertThat(skpJson).isEqualTo("{\"id\":\"" + originalPrincipal.getBusinessId() + "\",\"role\":\"COACH\"}");
+    }
+
+    // An authority with no SkillarsRole equivalent (e.g. ROLE_LTD_ADMIN) must fall back to
+    // ANONYMOUS, never the literal "null" — and never "ADMIN": ROLE_LTD_ADMIN/ROLE_USER holders are
+    // not admins, and labeling them "ADMIN" would surface admin-only nav/UI to them on the frontend.
+    @Test
+    void testRefreshLoginToken_fallsBackToAnonymousWhenNoAuthorityMapsToSkillarsRole() throws Exception {
+        initRequestMetadata();
+
+        Set<SimpleGrantedAuthority> authorities = Set.of(new SimpleGrantedAuthority("ROLE_LTD_ADMIN"));
+        Principal originalPrincipal = createPrincipal(authorities);
+        String initialTokenString = jwtManager.generateToken(originalPrincipal, UUID.randomUUID().toString());
+
+        HttpServletResponse mockResponse = new MockHttpServletResponse();
+        jwtManager.refreshLoginToken(mockResponse, initialTokenString);
+
+        final String skpRaw = extractCookie(mockResponse, SKILLARS_PROFILE_COOKIE);
+        final String skpJson = java.net.URLDecoder.decode(skpRaw, StandardCharsets.UTF_8);
+        assertThat(skpJson).isEqualTo("{\"id\":\"" + originalPrincipal.getBusinessId() + "\",\"role\":\"ANONYMOUS\"}");
     }
 
     @Test

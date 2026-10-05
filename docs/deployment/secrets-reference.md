@@ -426,3 +426,40 @@ This is accepted, not fixed, because:
 
 **Revisit** only if the VPS ever becomes multi-tenant, or if a non-root account is granted the
 ability to run (or `ptrace`) a process that has sourced `.env` or an in-flight `docker exec` child.
+
+---
+
+## Stale `HCLOUD_TOKEN` / `HETZNER_VOLUME_ID` on nodes provisioned before `skillars-uat-6`
+
+`skillars-uat-6` AC8 (2026-08-13) removed `HCLOUD_TOKEN` and `HETZNER_VOLUME_ID` from
+`.env.example` and this document. Neither var is part of the current template. However, any node
+that was `provision.sh`'d **before** that change still has its original `/opt/skillars/.env` on
+disk, which may still carry the old values — `provision.sh` never rewrites an existing `.env`.
+
+**Why this is inert, precisely.** `deploy/provision.sh:591` does check `HETZNER_VOLUME_ID`:
+
+```bash
+if [ -n "${HETZNER_VOLUME_ID:-}" ]; then
+```
+
+and will hard-fail (`:597-600`) if that variable is set to a value that doesn't resolve to an
+attached Volume. But this is a check of the **process environment**, not a file read —
+`provision.sh` never sources `/opt/skillars/.env` wholesale, and never reads `HETZNER_VOLUME_ID`
+out of it directly either. A stale value sitting inertly inside the `.env` file's text is
+invisible to a plain `./provision.sh` re-run; it only becomes a problem if an operator
+**manually** `export`s the stale value (or does `set -a; . .env`) into their own interactive shell
+before re-running `provision.sh` in that same shell.
+
+`deploy/backup/env-guard.sh`'s `require_env_vars` also sources `.env`, but with a bare `.` and no
+`set -a` (see "Accepted credential-exposure surface" above) — it holds the stale value as an
+unexported shell variable that does not escape that script's own process, so it is **not** a
+vector for this risk. `deploy/firewall/apply-firewall.sh` also requires `HCLOUD_TOKEN`, but its own
+header scopes that check to the operator's local machine, not the server's `.env` — irrelevant here.
+
+**If you encounter this:** a stale value in a provisioned node's `/opt/skillars/.env` is harmless
+in the sense that nothing on the server reads it passively, and there is no automated remediation.
+But `HCLOUD_TOKEN` is a Hetzner Cloud API token with infrastructure-level privilege and no expiry —
+the analysis above only answers "can `provision.sh` misbehave because of this?", not "is this token
+still live and usable against the Hetzner API?". Revoke the token at the Hetzner Cloud console
+first, then delete the two lines from the file (or leave the now-dead lines in place — either is
+fine once the token itself is revoked).

@@ -3637,3 +3637,95 @@ open work in this file when next picking a story.]** **[CLOSED by skillars-defer
 
   **When picked up:** if a fifth role is ever added, either give it a `ROLE_ROUTES` entry or restore a
   role-appropriate nav entry for `DEFAULT_ROUTE`. No action needed while the enum holds at four.
+
+---
+
+## Deferred from: code review of skillars-deferred-142 (2026-10-05)
+
+`/bmad-code-review` (Opus 5, three parallel layers + orchestrator re-verification). All 5 ACs verified
+TRUE. 2 decision-needed and 8 patch items were handled in the story itself; the nine below were
+classified defer — pre-existing, out of scope, or latent. Each was traced to real source, not assumed.
+
+- **`findFirst()` picks an arbitrary role when a user holds two authorities that both map to a `SkillarsRole`.**
+  `JwtManagerImpl.setSkillarsProfileCookie` (`:105`) takes the first mapped authority. Order traces to
+  `User.authorities` = `new HashSet<>()` (`User.java:199`) with `Authority.hashCode()` = `name.hashCode()`,
+  so it is hash-derived, not business-meaningful. The module's own sibling for this exact operation,
+  `MessagingResource.resolveRole` (`:231-246`), hard-codes `COACH > PARENT > PLAYER` precedence and names
+  the dual-role case ("a caller who is both a parent and a self-registered player") in a comment.
+  **Not currently triggerable** — all four authority-assignment sites use `setAuthorities(Set.of(one))`
+  and `V139` seeds no multi-authority user.
+  **When picked up:** adopt `MessagingResource.resolveRole`'s precedence order here (or extract it), at
+  the same time any path that grants a second role-bearing authority is introduced. Harmless until then.
+
+- **`URLEncoder.encode` is form-encoding, not URI-component encoding, in all three `skp` writers.**
+  `URLEncoder` emits `+` for space; the frontend's `hydrateFromCookie` decodes with `decodeURIComponent`,
+  which leaves `+` literal — the two are not inverse functions. Latent only: today's payload is a numeric
+  id plus an enum name, neither of which can contain a space. Present identically at `AuthService.java:132`,
+  `:218` and `JwtManagerImpl.java:108`.
+  **When picked up:** fix all three together (or extract a shared serializer) — the moment the `skp`
+  payload gains a free-text field such as a display name. Fixing one site alone would create exactly the
+  divergence skillars-deferred-142 AC2 set out to eliminate.
+
+- **The open-redirect guard now exists as two independent textual copies.**
+  `OtpPage.vue:151-155` and `LoginPage.vue:170-174` are byte-identical by design — skillars-deferred-142
+  AC3 explicitly required the verbatim copy for consistency. But open-redirect guards get revised
+  (`/\` variants, percent-encoded forms, tab/newline injection), and when one copy is hardened nothing
+  signals that a second exists. Same failure shape `roleRoutes.js` was created to eliminate for the role
+  map (skillars-deferred-92 AC16).
+  **When picked up:** extract `isSafeRedirect(path)` into a shared module, test it once, and call it from
+  both pages — ideally before a third caller appears.
+
+- **A `redirect` query value that passes the guard but matches no route lands the just-authenticated user on the 404 page.**
+  The guard validates shape only (`startsWith('/') && !startsWith('//')`), never resolvability, so
+  `?redirect=/typo` ends a successful login or OTP verification on `ErrorNotFound.vue`
+  (`routes.js:352-355`) with no fallback to `routeForRole`. Confirmed it cannot leave the origin
+  (`quasar.config.js:40` sets `vueRouterMode: 'hash'`; history mode prepends the origin explicitly).
+  Affects `LoginPage.vue` and `OtpPage.vue` equally.
+  **When picked up:** fold a `router.resolve(path).matched.length > 0` check into the shared
+  `isSafeRedirect` above, falling back to `routeForRole`. Natural companion to the previous item.
+
+- **`OtpPage.vue` uses `router.push`, leaving the spent `/otp` page in history.**
+  After verification the `loginInfoId` is consumed server-side, so Back returns the authenticated user to
+  a dead OTP form; re-submitting errors against a consumed id. `VideoManagementPage.vue:108` uses
+  `replace` for its terminal redirect, as does the rest of the codebase for post-auth navigation.
+  **When picked up:** change to `router.replace` whenever `/otp` is next touched — it is a one-word fix,
+  deferred only because the OTP flow is unreachable from the live UI today.
+
+- **Neither new `skp` unit test asserts a cookie attribute.**
+  `JwtManagerImplTest:622-654` assert only the decoded JSON payload. The feature depends entirely on the
+  unnamed `false` (httpOnly) that lets JS read the cookie — flip it and both tests stay green while the
+  cookie becomes invisible to `hydrateFromCookie`. Verified correct today and byte-identical to
+  `AuthService`'s call, so this is coverage strength rather than a defect.
+  **When picked up:** add `httpOnly=false` / `maxAge` / `SameSite=Lax` assertions, ideally as a shared
+  helper covering all three `skp` writers at once.
+
+- **`.dockerignore` single-segment patterns match the build-context root only.**
+  `.dockerignore` patterns are anchored full-path matches, so `*.jar`, `*.war`, `.DS_Store`, `*.iml`,
+  `*.log`, `*.diff` apply at the root and nested copies still ship. `.DS_Store` matters most on this
+  macOS host: Finder rewrites it on directory browse, changing its mtime, which busts the
+  `COPY src/ src/` cache layer the file was written to optimise. The file already uses `**/` correctly
+  for `node_modules` and `.vite`.
+  **When picked up:** prefix the single-segment patterns with `**/`. Bundle with the `src/frontend/node/`
+  and `src/frontend/coverage/` omissions (see the `.dockerignore` decision item in the story).
+
+- **`.dockerignore` exclusions make `git.dirty=true` and a `-dirty` describe string permanent in every image.**
+  `.git/` is copied deliberately for `git-commit-id-maven-plugin` (`pom.xml:733-748`), but the exclusions
+  remove git-*tracked* paths (`docs/`, `requirements/`, `_bmad/`, `.github/`, `deploy/`,
+  `docker-compose*.yml`, `Dockerfile`, `mvnw`, `mvnw.cmd`, `.gitignore`, `.gitattributes`) from the
+  builder's working tree, so JGit reports deletions against the copied `.git/` and stamps
+  `git.dirty=true` into the packaged `git.properties` on every build of a clean commit. A grep across
+  `src/`, `deploy/` and `.github/` found **zero** consumers, so impact is limited to `/manage/info`
+  provenance — a clean release build is no longer distinguishable from a dirty one.
+  **When picked up:** either set the plugin's `<dirty>` evaluation off in the Docker build, feed the SHA
+  in as a build arg, or re-include the tracked paths. Only worth doing if build provenance starts being
+  used for anything.
+
+- **`.git/` in the build context ships the full repo history into the builder layer.**
+  Any credential ever committed and later removed is still in that history and is copied into the
+  builder image. Bounded by the multi-stage build — the runtime image does not carry it — unless builder
+  cache is ever pushed to a registry (`--cache-to type=registry`), a common CI optimisation. The
+  `.dockerignore` header justifies inclusion on size alone ("~30MB is a small part of the context") and
+  does not state the exposure tradeoff.
+  **When picked up:** if builder-cache push is ever enabled, switch to passing the commit SHA as a build
+  arg (or run the stamping plugin outside the container) instead of copying `.git/`. Until then, record
+  the tradeoff in the `.dockerignore` comment rather than changing behaviour.

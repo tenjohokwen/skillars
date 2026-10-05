@@ -79,12 +79,16 @@ import { useI18n } from 'vue-i18n'
 import { authApi } from 'src/api/auth.api'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
 import { useSession } from 'src/composables/useSession'
+import { useAuthStore } from 'src/stores/auth.store'
+import { routeForRole } from 'src/router/roleRoutes'
+import { readUserDisplayName } from 'src/utils/sessionCookies'
 
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
 const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandler()
 const { initSession } = useSession()
+const authStore = useAuthStore()
 
 const digits = ref(['', '', '', '', '', ''])
 const otpInputs = ref([])
@@ -93,7 +97,6 @@ const resendCooldown = ref(0)
 let cooldownTimer = null
 
 const loginInfoId = computed(() => route.query.id || '')
-const redirectPath = computed(() => route.query.redirect || '/dashboard')
 
 onMounted(() => {
   setTimeout(() => otpInputs.value[0]?.focus(), 100)
@@ -145,7 +148,19 @@ async function handleSubmit() {
   try {
     await authApi.verifyOtp(loginInfoId.value, otp)
     initSession()
-    router.push(redirectPath.value)
+    authStore.hydrateFromCookie()
+    // hydrateFromCookie() never sets displayName (not in the 'skp' cookie; see its own note in
+    // auth.store.js) — on the live login path it's populated from the next login response instead,
+    // but /otp returns a bare Success with no such response. Read it from the 'user' cookie here,
+    // the same source DashboardPage.vue uses, so MainLayout's account dropdown isn't label-less for
+    // the rest of this session (skillars-deferred-142 code review).
+    authStore.displayName = readUserDisplayName() ?? t('dashboard.defaultUser')
+    const redirect = route.query.redirect
+    const safePath =
+      typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
+        ? redirect
+        : routeForRole(authStore.role)
+    router.push(safePath)
   } catch (err) {
     setError(err)
     digits.value = ['', '', '', '', '', '']

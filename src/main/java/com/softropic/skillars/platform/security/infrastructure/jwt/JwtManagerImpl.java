@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
 import com.softropic.skillars.platform.security.contract.exception.InvalidJWTDataException;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
+import com.softropic.skillars.platform.security.contract.SkillarsRole;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -20,9 +21,12 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Component;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.stream.Stream;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.*;
 import static com.softropic.skillars.infrastructure.security.SecurityError.*;
@@ -77,9 +81,44 @@ public class JwtManagerImpl implements LoginTokenManager {
             claims.put(DB_REFRESH_TOKEN, dbRefreshToken);
 
             createAndSetJwt(res, claims);
+            setSkillarsProfileCookie(res, claims);
             return authentication(claims);
         }
         throw new InvalidJWTDataException("Claims not present in token or invalid token.", JWT_PARSE_ERROR);
+    }
+
+    // skillars-deferred-142 AC2: createAndSetJwt -> createLoginCookies never sets 'skp' on this path.
+    // AuthService.login()/refresh() set it themselves because they have the User entity in hand;
+    // refreshLoginToken only has the JWT's own claims, so derive the role from the existing ROLES
+    // claim instead of adding a new one (see story Dev Notes for why a new claim is unsafe here).
+    //
+    // Fallback is SkillarsRole.ANONYMOUS, not AuthService's "ADMIN" convention — despite the similar
+    // shape, these are different populations. AuthService's null -> "ADMIN" fires when
+    // user.getSkillarsRole() is unset in the DB, which is AdminBootstrapRunner's deliberate
+    // convention for real admins. This fallback instead fires when no authority in the ROLES claim
+    // maps to a SkillarsRole at all (e.g. ROLE_LTD_ADMIN/ROLE_USER) — callers who are NOT admins.
+    // Labeling them "ADMIN" would surface admin-only nav/UI to a non-admin on the frontend
+    // (authStore.isAdmin reads this value directly). ANONYMOUS has no special frontend handling —
+    // routeForRole/isAdmin/isCoach/isParent/isPlayer all safely treat it as "no known role".
+    private void setSkillarsProfileCookie(HttpServletResponse res, Map<String, Object> claims) {
+        final SkillarsRole resolvedRole = getAuthoritiesSilently(claims).stream()
+                .map(authority -> StringUtils.removeStart(authority.getAuthority(), "ROLE_"))
+                .flatMap(name -> {
+                    try {
+                        return Stream.of(SkillarsRole.valueOf(name));
+                    } catch (IllegalArgumentException e) {
+                        return Stream.empty();
+                    }
+                })
+                .findFirst()
+                .orElse(SkillarsRole.ANONYMOUS);
+        final String role = resolvedRole.name();
+        // `id` is quoted deliberately — see AuthService.login()'s identical comment (:122-130) for
+        // why: an unquoted id silently corrupts authStore.userId via IEEE-754 rounding once the
+        // frontend's hydrateFromCookie() parses it.
+        final String json = "{\"id\":\"" + claims.get(BUS_ID) + "\",\"role\":\"" + role + "\"}";
+        final String skpValue = URLEncoder.encode(json, StandardCharsets.UTF_8);
+        CookieUtil.addCookie(res, SKILLARS_PROFILE_COOKIE, skpValue, false, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
     }
 
     private Authentication authentication(Map<String, Object> claims) {

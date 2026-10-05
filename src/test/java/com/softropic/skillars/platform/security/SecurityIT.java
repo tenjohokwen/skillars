@@ -284,6 +284,13 @@ public class SecurityIT extends AbstractIntegrationTest {
         assertThat(otpResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(otpResponse.getHeaders().get(HttpHeaders.SET_COOKIE).stream()
                 .anyMatch(c -> c.contains(JWT_COOKIE_NAME))).isTrue();
+        // skillars-deferred-142 AC2: OTP completion must also set the 'skp' cookie, which it
+        // previously never did. Presence-only — getUserData() below sets no SkillarsRole, so this
+        // fixture can only prove the cookie exists (and carries the ANONYMOUS fallback), not the
+        // real role mapping; JwtManagerImplTest proves the actual ROLES -> SkillarsRole mapping
+        // instead.
+        assertThat(otpResponse.getHeaders().get(HttpHeaders.SET_COOKIE).stream()
+                .anyMatch(c -> c.contains(SecurityConstants.SKILLARS_PROFILE_COOKIE + "="))).isTrue();
     }
 
     @Test

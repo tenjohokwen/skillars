@@ -1,0 +1,75 @@
+# Build context exclusions for the root Dockerfile.
+#
+# Before this file existed, every build shipped the full ~908MB working tree as context, even
+# though the Dockerfile only consumes three paths: `pom.xml`, `src/`, and `.git/`. Worse,
+# `src/frontend/node_modules` lives INSIDE `src/`, so `COPY src/ src/` dragged 397MB of
+# host-installed dependencies into the builder image — including native modules compiled for the
+# host OS/arch, which are wrong inside a linux/amd64 container. frontend-maven-plugin installs
+# its own node and runs its own `npm ci` in the builder, so the host copy was never needed and
+# only risked shadowing the correct one. Same host/arch-shadowing class for `src/frontend/node/`
+# (frontend-maven-plugin's own locally-downloaded node distribution, incl. a host-arch `node`
+# binary) and `src/frontend/coverage/` (generated Vitest output) — neither is matched by
+# `**/node_modules/` and both were found still shipping into the context (skillars-deferred-142
+# code review, 2026-10-05).
+#
+# DO NOT add `.git` here. The Dockerfile copies it deliberately: git-commit-id-maven-plugin
+# (pom.xml) reads it during `mvn package` to stamp build/commit metadata. Excluding it breaks
+# the build. At ~30MB it is a small part of the context anyway.
+#
+# Everything below is either build output, host-only tooling, documentation, or secrets — none
+# of it is read by the Dockerfile.
+
+# ── Build output ──────────────────────────────────────────────────────────────
+target/
+src/frontend/node_modules/
+src/frontend/dist/
+src/frontend/.quasar/
+src/frontend/node/
+src/frontend/coverage/
+**/node_modules/
+**/.vite/
+*.jar
+*.war
+
+# ── Secrets. These must never enter a build context or an image layer ────────
+# .env.local carries POSTGRES_PASSWORD and local S3 credentials; the uat/prod files carry more.
+# The Dockerfile never reads them (compose supplies env at RUN time via --env-file), so shipping
+# them into the context was pure exposure.
+.env
+.env.*
+!.env.example
+
+# ── Docs, planning artifacts and agent tooling (host-only) ───────────────────
+docs/
+requirements/
+_bmad/
+_bmad-output/
+.claude/
+.agent/
+.agents/
+skills-lock.json
+
+# ── Compose / deploy / CI definitions. Read by the host, not by the image ────
+docker-compose*.yml
+deploy/
+.github/
+Dockerfile
+.dockerignore
+
+# ── Maven wrapper: the builder stage uses the maven base image's own `mvn` ───
+mvnw
+mvnw.cmd
+
+# ── Editor / OS / VCS noise ──────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+.gitignore
+.gitattributes
+
+# ── Stray local scratch files ────────────────────────────────────────────────
+*.log
+*.diff
+diff.txt
