@@ -52,6 +52,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -197,7 +198,18 @@ class JWTAuthorizationFilterTest {
 
         // Verification
         verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        verify(securityUtil).logout(response);
+        // skillars-deferred-143 AC3: routine, expected traffic on an unauthenticated path keeps
+        // exactly its previous behaviour — JWT cookies dropped, no refresh-token lookup or write.
+        verify(loginTokenManager).deleteLoginToken(response);
+        verify(securityUtil, never()).terminateSession(any(), any());
+        // Code review [Patch] 2026-10-05: same routine `else` branch, so the same invariant is
+        // asserted here as in testAuthorizationExceptionBubblesUp. Weaker on this path by nature:
+        // getAuthentication() (JWTAuthorizationFilter:191) throws before setAuthentication()
+        // (:193) runs, so nothing ever populates the context — this guards against a future
+        // reordering that populates it before the throw, rather than proving clearContext() is
+        // load-bearing today.
+        assertNull(SecurityContextHolder.getContext().getAuthentication(),
+                "routine denial must leave no authentication in the SecurityContext");
         verify(filterChain, never()).doFilter(request, response);
         // setStatus() alone only proves a setter was called on the mock; assert the ErrorDto body
         // too, so dropping the objectMapper.writeValue call cannot pass this test.
@@ -223,7 +235,18 @@ class JWTAuthorizationFilterTest {
         // Verification
         verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         verify(response).setContentType("application/json");
-        verify(securityUtil).logout(response);
+        // skillars-deferred-143 AC3: routine, expected traffic on an unauthenticated path keeps
+        // exactly its previous behaviour — JWT cookies dropped, no refresh-token lookup or write.
+        verify(loginTokenManager).deleteLoginToken(response);
+        verify(securityUtil, never()).terminateSession(any(), any());
+        // Code review [Patch] 2026-10-05: same routine `else` branch, so the same invariant is
+        // asserted here as in testAuthorizationExceptionBubblesUp. Weaker on this path by nature:
+        // getAuthentication() (JWTAuthorizationFilter:191) throws before setAuthentication()
+        // (:193) runs, so nothing ever populates the context — this guards against a future
+        // reordering that populates it before the throw, rather than proving clearContext() is
+        // load-bearing today.
+        assertNull(SecurityContextHolder.getContext().getAuthentication(),
+                "routine denial must leave no authentication in the SecurityContext");
         verify(filterChain, never()).doFilter(request, response);
         assertTrue(responseBody.toString().contains("\"errorKey\":\"security.sessionExpired\""),
                 "expired-JWT 401 body must carry errorKey=security.sessionExpired, was: " + responseBody);
@@ -241,7 +264,9 @@ class JWTAuthorizationFilterTest {
 
         // Verification
         verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        verify(securityUtil).logout(response);
+        // skillars-deferred-143 AC3: a genuine denial ends the session completely — rtkn/skp
+        // cleared and the presented refresh token revoked, not just the JWT cookies dropped.
+        verify(securityUtil).terminateSession(request, response);
         verify(filterChain, never()).doFilter(request, response);
         assertTrue(responseBody.toString().contains("\"errorKey\":\"security.unauthorized\""),
                 "non-expired 401 body must carry errorKey=security.unauthorized, was: " + responseBody);
@@ -267,7 +292,9 @@ class JWTAuthorizationFilterTest {
 
         // Verification
         verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        verify(securityUtil).logout(response);
+        // skillars-deferred-143 AC3: a genuine denial ends the session completely — rtkn/skp
+        // cleared and the presented refresh token revoked, not just the JWT cookies dropped.
+        verify(securityUtil).terminateSession(request, response);
         verify(filterChain, never()).doFilter(request, response);
         // setStatus() alone only proves a setter was called on the mock; assert the ErrorDto body
         // too, so dropping the objectMapper.writeValue call cannot pass this test.
@@ -289,7 +316,9 @@ class JWTAuthorizationFilterTest {
 
         // Verification
         verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        verify(securityUtil).logout(response);
+        // skillars-deferred-143 AC3: a genuine denial ends the session completely — rtkn/skp
+        // cleared and the presented refresh token revoked, not just the JWT cookies dropped.
+        verify(securityUtil).terminateSession(request, response);
         verify(filterChain, never()).doFilter(request, response);
         // setStatus() alone only proves a setter was called on the mock; assert the ErrorDto body
         // too, so dropping the objectMapper.writeValue call cannot pass this test.
@@ -311,7 +340,9 @@ class JWTAuthorizationFilterTest {
 
         // Verification
         verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        verify(securityUtil).logout(response);
+        // skillars-deferred-143 AC3: a genuine denial ends the session completely — rtkn/skp
+        // cleared and the presented refresh token revoked, not just the JWT cookies dropped.
+        verify(securityUtil).terminateSession(request, response);
         verify(filterChain, never()).doFilter(request, response);
         // setStatus() alone only proves a setter was called on the mock; assert the ErrorDto body
         // too, so dropping the objectMapper.writeValue call cannot pass this test.
@@ -348,7 +379,15 @@ class JWTAuthorizationFilterTest {
 
         // Verification
         verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        verify(securityUtil).logout(response);
+        // skillars-deferred-143 AC3: routine, expected traffic on an unauthenticated path keeps
+        // exactly its previous behaviour — JWT cookies dropped, no refresh-token lookup or write.
+        verify(loginTokenManager).deleteLoginToken(response);
+        verify(securityUtil, never()).terminateSession(any(), any());
+        // attemptAuthorization sets an authenticated context before the authority check fails, and
+        // the removed securityUtil.logout(res) used to clear it for every caught cause. The routine
+        // branch must keep doing so rather than writing a 401 with the context still populated.
+        assertNull(SecurityContextHolder.getContext().getAuthentication(),
+                "routine denial must still clear the SecurityContext");
         verify(filterChain, never()).doFilter(request, response);
         // setStatus() alone only proves a setter was called on the mock; assert the ErrorDto body
         // too, so dropping the objectMapper.writeValue call cannot pass this test.
@@ -362,6 +401,30 @@ class JWTAuthorizationFilterTest {
         verify(eventPublisher).publishEvent(any(PreAuthEvent.class)); // Or a more specific custom event
         verify(securedHttpEndpointGuard).isUnrestricted(request);
         verify(loginTokenManager, never()).extendTtlOfToken(any(), any());
+    }
+
+    @Test
+    @DisplayName("deferred-143 AC3: a wrapped ACCOUNT_NOT_LOGIN_ABLE denial also terminates the session")
+    void testWrappedAccountNotLoginAble_terminatesSession() throws ServletException, IOException {
+        // The four account-status tests above mock daoAuthProvider directly, so they throw Spring's
+        // raw exception types. In production DaoAuthProvider.authorize() catches AccountStatusException
+        // and rewraps it as AuthorizationException(ACCOUNT_NOT_LOGIN_ABLE) (DaoAuthProvider.java:47-51),
+        // which is the form that actually reaches the filter's catch block for a locked/deactivated
+        // account on the DB re-auth path. A naive instanceof AccountStatusException check would miss
+        // exactly those accounts, so the wrapped branch gets its own direct test rather than being
+        // covered only by inference.
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
+        when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
+        when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
+        when(daoAuthProvider.authorize(any(), any())).thenThrow(
+                new AuthorizationException("The current account status of the user does not permit access",
+                                            SecurityError.ACCOUNT_NOT_LOGIN_ABLE));
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(securityUtil).terminateSession(request, response);
+        verify(filterChain, never()).doFilter(request, response);
     }
 
     // --- skillars-deferred-90 AC5: helpCode + scoped SecurityAlertEvent -------------------------

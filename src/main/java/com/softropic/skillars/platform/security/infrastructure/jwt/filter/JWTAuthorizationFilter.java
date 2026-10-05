@@ -149,7 +149,20 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
                 }
                 catch (AccountStatusException | AuthorizationException | AccessDeniedException e) {
                     //includes AccountExpiredException, CredentialsExpiredException, LockedException, InvalidJWTDataException, JWTTheftException, JWTExpiredException, AccessDeniedException (missing token)
-                    securityUtil.logout(res);
+                    // skillars-deferred-143 AC3: only a GENUINE denial gets the full teardown
+                    // (refresh-token revocation + rtkn/skp cleared). Routine, expected traffic keeps
+                    // exactly its previous behaviour — see isGenuineDenial for why that split
+                    // matters on this path.
+                    if (isGenuineDenial(e)) {
+                        securityUtil.terminateSession(req, res);
+                    } else {
+                        // Exactly what the previous securityUtil.logout(res) did for this cause:
+                        // clear the context and drop the JWT cookies. No DB read or write, and no
+                        // rtkn/skp clearing — attemptAuthorization set an authenticated context at
+                        // the top, so it must still be cleared before the 401 is written.
+                        SecurityContextHolder.clearContext();
+                        loginTokenManager.deleteLoginToken(res);
+                    }
                     // Emit an ErrorDto body (not a bare sendError) so the SPA's axios interceptor
                     // can read errorMsg.errorKey and route to /login. Status stays 401 for every
                     // caught type; the key is 'security.sessionExpired' only for an expired JWT.
@@ -299,6 +312,45 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
         res.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
         res.setHeader(HttpHeaders.PRAGMA, "no-cache");
         objectMapper.writeValue(res.getWriter(), body);
+    }
+
+    /**
+     * skillars-deferred-143 AC3: decides whether a cause caught above warrants ending the session
+     * outright — revoking the underlying {@code refresh_tokens} row and clearing {@code rtkn} /
+     * {@code skp} — or merely dropping the JWT cookies as before.
+     *
+     * <p>The two highest-volume causes must NOT reach the teardown path.
+     * {@link JWTExpiredException} fires on every ordinary 15-minute idle-out and
+     * {@link MissingAuthenticationException} on every tokenless request to a secured URL
+     * (crawlers, stale bookmarks, pre-login SPA routes). {@code skillars-deferred-90} AC5/F22
+     * already kept both off the DB-write path deliberately — see
+     * {@link #maybePublishSecurityAlert} — because "alerting on those would turn an
+     * unauthenticated, unrate-limited path into an audit-trail flood / DB-write amplifier", and
+     * attaching a lookup-and-revoke to them would reintroduce exactly that. It would also be
+     * self-defeating: {@code rtkn} carries a deliberate 7-day TTL that outlives the 15-minute JWT
+     * precisely so {@code POST /api/auth/refresh} can trade it for a new session, so revoking it
+     * on every idle-out would leave that endpoint permanently useless. A plain
+     * {@code AuthorizationException(MISSING_RIGHTS)} from {@code daoAuthProvider.checkAuthorities}
+     * — an authenticated user hitting a page their role does not permit — is likewise routine, not
+     * a compromised session.
+     *
+     * <p>The last clause is the one place this predicate deliberately goes beyond
+     * {@link #maybePublishSecurityAlert}'s otherwise-similar {@code genuineDenial} check, and must
+     * not be "simplified" to match it: {@code DaoAuthProvider.authorize()} catches Spring's
+     * {@link AccountStatusException} and rewraps it as this project's own
+     * {@link AuthorizationException} carrying {@link SecurityError#ACCOUNT_NOT_LOGIN_ABLE}, so a
+     * locked or deactivated account arriving via the filter's own DB re-auth path never reaches
+     * the catch block as a raw {@code AccountStatusException}. A bare {@code instanceof} check
+     * would silently miss the exact accounts this story exists to protect. (The existing
+     * {@code maybePublishSecurityAlert} has that same blind spot — pre-existing and out of scope
+     * here, but not worth repeating.)
+     */
+    private boolean isGenuineDenial(final Exception cause) {
+        return cause instanceof JWTTheftException
+                || cause instanceof InvalidJWTDataException
+                || cause instanceof AccountStatusException
+                || (cause instanceof AuthorizationException ae
+                    && ae.getErrorCode() == SecurityError.ACCOUNT_NOT_LOGIN_ABLE);
     }
 
     /**

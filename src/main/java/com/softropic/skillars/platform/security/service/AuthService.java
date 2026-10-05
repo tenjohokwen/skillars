@@ -1,7 +1,6 @@
 package com.softropic.skillars.platform.security.service;
 
 import com.softropic.skillars.infrastructure.security.CookieUtil;
-import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.contract.LoginResponse;
@@ -13,15 +12,13 @@ import com.softropic.skillars.platform.security.repo.LoginAttempt;
 import com.softropic.skillars.platform.security.repo.LoginAttemptRepository;
 import com.softropic.skillars.platform.security.repo.RefreshToken;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
+import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.DisabledException;
+import org.springframework.security.authentication.LockedException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,6 +33,11 @@ import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.REFRESH_TOKEN_COOKIE;
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.REFRESH_TOKEN_TTL;
@@ -57,6 +59,7 @@ public class AuthService {
     private final LoginAttemptRepository loginAttemptRepository;
     private final ConfigService configService;
     private final LoginTokenManager loginTokenManager;
+    private final SecurityUtil securityUtil;
 
     public LoginResponse login(String email, String rawPassword, String clientIp, HttpServletResponse res) {
         int maxAttempts = configService.find("security.login.max-attempts")
@@ -92,9 +95,7 @@ public class AuthService {
             throw new BadCredentialsException("Invalid credentials");
         }
 
-        if (!user.isActivated()) {
-            throw new DisabledException("Account is not activated");
-        }
+        ensureAccountIsLive(user);
 
         boolean phoneOtpRequired = configService.getBoolean("security.registration.phone-otp-required", true);
         if (user.getSkillarsRole() != null && phoneOtpRequired &&
@@ -159,19 +160,70 @@ public class AuthService {
                             ownerId, Instant.now(ClockProvider.getClock()))
                     .orElseGet(() -> {
                         refreshTokenRepository.markAllUsedByUserId(ownerId);
-                        clearAuthCookies(res);
+                        securityUtil.terminateSession(req, res);
                         throw new BadCredentialsException("Token reuse detected — all sessions revoked");
                     });
             } else {
                 refreshTokenRepository.markAllUsedByUserId(ownerId);
-                clearAuthCookies(res);
+                securityUtil.terminateSession(req, res);
                 throw new BadCredentialsException("Token reuse detected — all sessions revoked");
             }
         }
 
         if (token.getExpiresAt().isBefore(Instant.now(ClockProvider.getClock()))) {
-            clearAuthCookies(res);
+            securityUtil.terminateSession(req, res);
             throw new BadCredentialsException("Refresh token has expired");
+        }
+
+        // skillars-deferred-143 AC2: the account is resolved and its liveness checked BEFORE the
+        // presented token is rotated below — deliberately earlier than the story sketched it.
+        //
+        // The story placed both after the saveAndFlush, which self-deadlocks: that flush issues
+        // `UPDATE refresh_tokens ... WHERE token_hash = ?` inside THIS (outermost) transaction and
+        // holds the row lock until it ends, while the rejection teardown's revocation runs in a
+        // REQUIRES_NEW transaction that must update the very same row. The inner transaction waits
+        // on a lock only the outer one can release, and the outer one is waiting on the inner —
+        // measured empirically as `ERROR: canceling statement due to lock timeout` (SQLState
+        // 55P03) surfacing as a 409 instead of the intended 401.
+        //
+        // Checking first removes the hazard at the source rather than working around it: on the
+        // rejection path this transaction has issued no write to refresh_tokens at all, so the
+        // REQUIRES_NEW revocation takes an uncontended lock and commits. It is also better
+        // behaviour independently — a locked account's refresh attempt no longer consumes and
+        // rotates a token before being turned away.
+        // Code review [Patch] 2026-10-05: revoke the token this request actually RESOLVED to, not
+        // only the raw cookie value `terminateSession` derives its target from. The grace-window
+        // branch above can have reassigned `token` to a live SUCCESSOR row (:158-165) while the
+        // cookie still carries the stale, already-used original — in that case the successor is
+        // the account's one live credential, and revoking only the cookie's row would leave it
+        // standing after the very denial meant to kill it. In the ordinary (non-reassigned) case
+        // this is the same row `terminateSession` targets, and the write is idempotent because
+        // `used` is monotonic, so the cost is one redundant UPDATE on a rejection-only path.
+        //
+        // Not needed on the expiry branch above: the successor query filters on
+        // `ExpiresAtAfter(now)`, so a reassigned `token` can never be the expired one, and an
+        // unreassigned `token` hashes to exactly the cookie value.
+        //
+        // Deadlock-safe for the same reason the liveness check moved ahead of the rotation write
+        // (see below): on every path reaching here this transaction has issued no write against
+        // refresh_tokens, so the REQUIRES_NEW revocation takes an uncontended lock.
+        final String resolvedTokenHash = token.getTokenHash();
+
+        var user = userRepository.findById(token.getUserId()).orElseThrow(() -> {
+            refreshTokenRepository.markUsedByTokenHash(resolvedTokenHash);
+            securityUtil.terminateSession(req, res);
+            return new BadCredentialsException("User not found for refresh token");
+        });
+
+        try {
+            ensureAccountIsLive(user);
+        } catch (DisabledException | LockedException e) {
+            // Rolls back this method's transaction, which is exactly why the revocation inside
+            // terminateSession (and the explicit one here) is REQUIRES_NEW — see
+            // RefreshTokenRepository.markUsedByTokenHash.
+            refreshTokenRepository.markUsedByTokenHash(resolvedTokenHash);
+            securityUtil.terminateSession(req, res);
+            throw e;
         }
 
         token.setUsed(true);
@@ -181,14 +233,15 @@ public class AuthService {
         } catch (ObjectOptimisticLockingFailureException ex) {
             // True concurrent refresh (two requests in flight simultaneously): the loser gets a
             // clean 401 rather than the default 409, so the client re-enters the login flow.
-            clearAuthCookies(res);
+            //
+            // Cookies only, deliberately: this is the one teardown that runs AFTER this
+            // transaction has already issued its UPDATE against the token row, so a REQUIRES_NEW
+            // revocation here would hit the same self-deadlock described above. It is also
+            // unnecessary — losing the optimistic-lock race means the winning request has already
+            // committed `used = true` on this exact row.
+            securityUtil.clearAuthCookies(res);
             throw new BadCredentialsException("Concurrent refresh detected — please sign in again");
         }
-
-        var user = userRepository.findById(token.getUserId()).orElseThrow(() -> {
-            clearAuthCookies(res);
-            return new BadCredentialsException("User not found for refresh token");
-        });
 
         Principal principal = Principal.instanceFrom(user);
 
@@ -223,25 +276,32 @@ public class AuthService {
     }
 
     public void logout(HttpServletRequest req, HttpServletResponse res) {
-        String rawToken = CookieUtil.getCookieValue(req, REFRESH_TOKEN_COOKIE);
-        if (rawToken != null) {
-            String hash = sha256Hex(rawToken);
-            refreshTokenRepository.findByTokenHash(hash)
-                .filter(t -> !t.isUsed())
-                .ifPresent(t -> {
-                    t.setUsed(true);
-                    refreshTokenRepository.save(t);
-                });
-        }
-        loginTokenManager.deleteLoginToken(res);
-        CookieUtil.removeCookie(REFRESH_TOKEN_COOKIE, res, true, "Lax");
-        CookieUtil.removeCookie(SKILLARS_PROFILE_COOKIE, res, false, "Lax");
+        securityUtil.terminateSession(req, res);
     }
 
-    private void clearAuthCookies(HttpServletResponse res) {
-        loginTokenManager.deleteLoginToken(res);
-        CookieUtil.removeCookie(REFRESH_TOKEN_COOKIE, res, true, "Lax");
-        CookieUtil.removeCookie(SKILLARS_PROFILE_COOKIE, res, false, "Lax");
+    /**
+     * skillars-deferred-143 AC1/AC2: the single account-liveness gate for both hand-rolled
+     * authentication entry points. {@link #login} previously checked only {@code isActivated()} and
+     * {@link #refresh} checked nothing at all, so {@code UserAdminService.lockUserAccount()} — which
+     * sets {@code locked = true} without deactivating — was a silent no-op against this login path.
+     *
+     * <p>Mirrors the existing reject-a-locked-user shape used by the registration services (e.g.
+     * {@code CoachRegistrationService}), and needs no new error-handling code: {@code ApiAdvice}
+     * already maps {@link DisabledException} to a 401 {@code security.accNotEnabled} and
+     * {@link LockedException} to a 401 {@code security.accLocked}, both already translated in all
+     * three locales.
+     *
+     * <p>Deactivation is checked first so a GDPR-erased account (which
+     * {@code GdprErasureService.eraseTransactional} leaves {@code activated = false} AND
+     * {@code locked = true}) keeps reporting the key it reports today.
+     */
+    private void ensureAccountIsLive(User user) {
+        if (!user.isActivated()) {
+            throw new DisabledException("Account is not activated");
+        }
+        if (user.isLocked()) {
+            throw new LockedException("Account is locked");
+        }
     }
 
     private void recordAttempt(String identifier) {

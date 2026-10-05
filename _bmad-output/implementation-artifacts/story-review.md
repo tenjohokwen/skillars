@@ -1,397 +1,259 @@
-# Story Review — skillars-deferred-142
+# skillars-deferred-143 — Pre-Implementation Story Review
 
-**Story:** `skillars-deferred-142-otp-skp-cookie-gap-video-redirect-and-stale-env-ops-note`
-**Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-142-otp-skp-cookie-gap-video-redirect-and-stale-env-ops-note.md`
-**Status at audit:** `ready-for-dev` (`sprint-status.yaml:325`) — not yet implemented
-**Audit date:** 2026-10-04
-**Real HEAD:** `9abe7058 mto-code-review: replace exhortation with mechanical verification (#248)`
-**Branch:** `story/deferred-142-otp-skp-cookie-and-redirect-fixes`
+**Story key:** `skillars-deferred-143-account-lock-enforcement-and-forced-logout-session-termination`
+**Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-143-account-lock-enforcement-and-forced-logout-session-termination.md`
+**Audit date:** 2026-10-05
+**Real HEAD at audit time:** `3a62698c` — *"Story Deferred-142: OTP skp-Cookie Gap, Video-Page Redirect Fix, and Stale-Env Ops Note (#249)"* (obtained via `git rev-parse --short HEAD` / `git log -1`, not read from the story).
 
-> Every citation below was verified against **HEAD `9abe7058` as it actually stands right now**, not
-> against any commit, line count, or "verified against HEAD, 2026-10-04" claim the story makes about
-> itself. The story file is **untracked** (`git log` on its path returns nothing) and
-> `sprint-status.yaml` is uncommitted — nothing in this story has been through CI or review.
+Every citation below was re-opened at this HEAD. The story's own "verified against HEAD `3a62698c`" header happens to be accurate this time — but it was not trusted; it was independently confirmed.
 
-**Verification method:** 53 checkable claims extracted into four buckets and verified by four parallel
-read-only layers, followed by a mandatory adversarial re-verification pass in which every surviving
-finding's evidence was re-read fresh with intent to refute it. That pass **killed four claims** the
-layers raised (§6) — including three citation-drift claims where two layers contradicted each other and
-the story turned out to be right.
+**Headline:** the story's *remediation design* is sound in intent and its citations are unusually accurate (19/24 exact). But three claims about how the existing system behaves are wrong, and two of them are load-bearing:
+
+- **B1 (blocker)** — AC2's core promise ("the presented refresh token is revoked") is defeated by `AuthService`'s own transaction boundary. The design cannot deliver it as written.
+- **B2 (blocker)** — AC3 attaches an aggressive teardown to a catch block that also fires on ordinary 15-minute idle-outs and tokenless requests, which the codebase explicitly classifies as expected traffic and has already engineered against.
+- **B3 (false premise)** — Finding 3's exploit chain names the wrong endpoint. `sessionManager.js:265` calls `GET /refresh`, not `POST /api/auth/refresh`, and `POST /api/auth/refresh` has **zero** frontend callers.
 
 ---
 
 ## 1. Citation verification (Layer 1)
 
-| Citation | Verdict | Evidence / corrected location |
-|---|---|---|
-| `secrets-reference.md:398-429` "Accepted credential-exposure surface" | **DRIFTED** | Heading at `:398`; section ends `:428`. **File is 428 lines — `:429` does not exist.** Corrected: `:398-428` |
-| `AuthService.authenticate()`, `:90-131` | **DRIFTED (material)** | **No `authenticate()` method exists.** Real: `public LoginResponse login(String email, String rawPassword, String clientIp, HttpServletResponse res)` at `:61-137`; skp block `:121`+`:131-134`. See §5-F9 |
-| `AuthService.refresh()`, `:133-220` | **DRIFTED** | Real `:139-223`; skp block `:207`+`:217-220`. Cited `:133` lands mid-`login()` |
-| 4-line skp snippet attributed to both paths | **MATCH (text)** | Verbatim in both; but not contiguous — a 10-line comment separates `:121` from `:131`, and `addCookie` wraps two lines |
-| `SecondFactorLoginFilter.java:67-76` → `refreshLoginToken(response, loginData.getToken())` | MATCH | Call at `:75` |
-| `JwtManagerImpl.refreshLoginToken()` `:68-83` | **MATCH (exact)** | Signature `:68`, closing brace `:83`. (A layer claimed `:67-83`; refuted — `:67` is `@Override`) |
-| `createAndSetJwt` `:203-211` | MATCH | Exact |
-| `createLoginCookies` `:213-245` | **DRIFTED** | Real `:213-249`; cited end cuts the `SESSION_REFRESH_COUNTDOWN` write (`:244-248`) |
-| `TokenCreatorImpl.toClaims(...)` `:46-66` | MATCH | Exact |
-| `Principal.java:21` carries `skillarsRole` | **DRIFTED** | `:21` is `private final String phone;`. Field is `:23`; getter `:178-180`; `instanceFrom` sets it `:157` |
-| `JwtManagerImpl.java:72` `new HashMap<>(extractedClaims)` | MATCH | Exact |
-| `SecurityConstants.java:105` `REFRESH_TOKEN_TTL = Duration.ofDays(7)` | MATCH | Exact |
-| `JwtManagerImpl.java:26` static-imports `SecurityConstants.*` | **DRIFTED** | Import is `:27` (`:26` blank). Substantive claim holds |
-| `CookieUtil.java:17-24` "4-arg overload" defaults `Lax` | **DRIFTED (label)** | Body `:17-26`; `.sameSite("Lax")` at `:23`. Signature takes **5** params, not 4; the other takes 6. Behavioral claim correct |
-| `SecurityIT.loginWith2FAWhenAccountEnabled()` `:186-286` | **DRIFTED** | `@Test` `:187`, signature `:189`, closes `:287` |
-| …asserts `JWT_COOKIE_NAME` at `:284-285` | **DRIFTED** | Real `:285-286` (`:284` is the status assert) |
-| `JwtManagerImplTest.createPrincipal(...)` `:169-182` | MATCH | Exact; no `.skillarsRole(...)` in the builder chain — story's derived claim correct |
-| `routes.js:24-28` `/otp` `requiresGuest` | **MATCH (exact)** | Route object `:24-28`, `path: 'otp'` at `:25`. (A layer claimed `:22-26`; refuted) |
-| `OtpPage.vue:96` `redirectPath` computed | **MATCH (exact)** | Verbatim; read once at `:148` |
-| `LoginPage.vue:168-174` + snippet | **DRIFTED (minor)** | Snippet verbatim but spans `:168-175` (`router.push(safePath)` at `:175`) |
-| "mirrors `LoginPage.vue:174`" | MATCH | `routeForRole(response.role)` at `:174`; import at `:133` as `'src/router/roleRoutes'` (no `.js`) |
-| `SecondFactorLoginFilter.successResponse()` `:88-96` | **DRIFTED** | Real `:96-105`; cited range is a *different block* (the `LOGIN_ID_MISMATCH` throw). Substantive claim holds (`:97`, no role) |
-| `VideoManagementPage.vue:101-115`, `router.replace('/dashboard')` `:108` | **MATCH (exact)** | `fetchVideos()` `:101-115`; 403 branch `:106`; `:108` exact |
-| `routes.js:255-259` `player/videos` `role: 'PLAYER'` | **DRIFTED (minor)** | Object `:255-260`; `path` `:256`, `meta` `:259`. The ledger's own citation says `:255-260` |
-| `routes.js:262-267` `/player/dashboard` | **DRIFTED (minor)** | Object `:261-268`; `path` `:264`. Cited range is the comment-to-`meta` interior |
-| `docs/dev-docs/notification/index.html:373-388` | MATCH | Exactly one complete `<div class="callout">` block |
-| "`loginData`, an opaque `LoginInfo` projection — see `LoginData.java`" | **MATCH (types conflated)** | In-scope type is `LoginData` (interface projection, `contract/LoginData.java`); `LoginInfo` is the separate JPA entity (`repo/LoginInfo.java`). **Neither has a role field**, so the load-bearing conclusion holds |
-| `src/frontend/src/pages/player/` has `/player/dashboard` page | MATCH | `pages/player/PlayerDashboardPage.vue` exists |
-| "no existing spec file for this page" | MATCH | No OtpPage spec anywhere; proposed path matches the repo's `<dir>/__tests__/<Name>Spec.js` convention and the configured vitest glob |
-| `SecurityIT` path | MATCH | `src/test/java/com/softropic/skillars/platform/security/SecurityIT.java` (372 lines) |
+**19 MATCH · 4 DRIFTED · 1 FALSE**
 
-**Pattern:** a consistent off-by-one-to-two cluster across six citations, plus one method that does not
-exist. None of the range drift changes behavior; the `authenticate()` error does change what a dev finds.
+| # | Story claim | Verdict | Evidence at HEAD `3a62698c` |
+|---|---|---|---|
+| 1 | `AuthService.java:95-97` checks only `user.isActivated()` | **MATCH** | Lines 95-97 are exactly `if (!user.isActivated()) { throw new DisabledException("Account is not activated"); }` |
+| 2 | `AuthService.refresh()` spans `:139-223`, loads user at `:188` | **MATCH** | Method signature line 139, closing brace 223; `var user = userRepository.findById(token.getUserId())` at 188 |
+| 3 | `User.lock()` at `User.java:382-386`, doc'd *"Locks this user account, preventing login."* | **DRIFTED** | Javadoc is 380-383 (the quoted sentence is **line 381**); `lock()` body is 384-386. Correct range: `User.java:380-386` |
+| 4 | `User.isLocked()` at `:246-248` | **MATCH** | Exact |
+| 5 | `UserAdminService.lockUserAccount()` at `:116-122`, `@PreAuthorize(HAS_ADMIN_ROLE)`, calls `u.lock()` | **MATCH** | `@PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)` at 115, method 116-122, `u.lock()` at 119. (Path is `platform/security/service/`, not `platform/admin/service/` — the story never states a path, so no error.) |
+| 6 | Repo-wide grep: `lockUserAccount` referenced only by the service + `UserServiceIT` | **MATCH** | `UserAdminService.java:116`, `UserServiceIT.java:207,209`. No controller, no frontend. |
+| 7 | `GdprErasureService` `:277-278` sets `activated=false` + `locked=true` | **MATCH** | `user.setActivated(false);` 277, `user.setLocked(true);` 278 |
+| 8 | `Principal.java:148-151` wires `.enabled(user.isActivated())` / `.accountNonLocked(!user.isLocked())` | **MATCH** | `.enabled(...)` 148, `.accountNonLocked(...)` 151 |
+| 9 | `authApi.login()` has zero callers in `src/frontend/src` | **MATCH** | Only `verifyOtp`, `skillarsLogin`, `skillarsLogout` are called. `login()` is dead. |
+| 10 | `LoginPage.vue:167` → `authApi.skillarsLogin()` | **MATCH** | Exact |
+| 11 | `JWTAuthorizationFilter.java:152` is `securityUtil.logout(res)`; catch at `:150` | **MATCH** | Catch `AccountStatusException \| AuthorizationException \| AccessDeniedException` at 150, comment at 151, call at 152 |
+| 12 | `SecurityUtil.logout()` at `:137-140` | **MATCH** | Exact |
+| 13 | `SecurityUtil` depends only on `LoginTokenManager` (`:40,43`); constructor hand-written at `:43-45` | **MATCH** | Field 40, ctor 43-45. Also confirmed: **zero** `new SecurityUtil(...)` sites anywhere in `src/`, so the signature change has no direct instantiation blast radius. |
+| 14 | `JwtManagerImpl.deleteLoginToken()` `:182-190` clears exactly `potc`, `bcookie`, `user`, `admin`, `ION`, `rint` | **MATCH** | Six `removeCookie` calls, 184-189. Neither `rtkn` nor `skp`. |
+| 15 | `AuthService.logout()` `:225-239`, marks token used `:227-234` | **MATCH** | Method 225-239; the `if (rawToken != null)` revocation block is 227-235 (the story's 234 stops one line short of the closing `}`, substantively correct) |
+| 16 | `clearAuthCookies()` at `:241-245` | **MATCH** | Exact |
+| 17 | `clearAuthCookies` called from **three** places: `:162, :166/:173, :184, :189` | **FALSE** | There are **five** call sites: **162, 167, 173, 184, 189**. Line 166 is `refreshTokenRepository.markAllUsedByUserId(ownerId);`, not a `clearAuthCookies` call. Both the count ("three") and one line number (166→167) are wrong. See F6. |
+| 18 | `sha256Hex` helper at `AuthService.java:259-267` | **MATCH** | Exact, `private static String sha256Hex(String raw)` |
+| 19 | `ApiAdvice.java:274-279` → `security.accNotEnabled`; `:281-286` → `security.accLocked` | **MATCH** | Both exact, both `@ResponseStatus(HttpStatus.UNAUTHORIZED)` |
+| 20 | i18n copy for both keys in `en-US`, `fr-FR`, `de-DE` | **MATCH** | `en-US:617-618`, `fr-FR:618-619`, `de-DE:1182-1183` |
+| 21 | `sessionManager.js:265` calls `sessionApi.refresh()` | **MATCH (line)** | Line 265 is `await sessionApi.refresh()`. **But the story's parenthetical "(→ `POST /api/auth/refresh`)" is false** — see F3. |
+| 22 | `boot/axios.js` 401 handler redirects to `/login` on `security.sessionExpired`/`security.unauthorized`, never calls refresh | **MATCH** | `axios.js:163-164`; no refresh call in the interceptor |
+| 23 | `JWTAuthorizationFilterTest`'s seven `verify(securityUtil).logout(response)` at `:200, 226, 244, 270, 292, 314, 351` | **MATCH** | All seven line numbers exact |
+| 24 | `AuthResourceIT`: `logout_marksTokenUsedAndClearsCookies` `:382-412`; `refresh_*` `:261-380`; `insertUser` `:449-465` hardcoding `locked=false` | **MATCH** | `@Test` 382 → `}` 412; `refresh_validUnusedToken` 261 → `refresh_missingCookie` ends 380; `insertUser` 449-465, SQL literal `false` for `locked` at 457 |
+| 25 | `JWTAuthorizationFilter.java:215-227` `isRefreshTokenRevoked()` | **DRIFTED (trivial)** | Method is **214-227** (signature on 214). Content as described. |
+| 26 | `JwtManagerImpl.java:90-102` comment on role derivation | **MATCH** | Comment block 90-102, exactly the cited rationale |
+| 27 | `architecture.md#Authentication & Security` | **MATCH** | `### Authentication & Security` at `architecture.md:136` |
+| 28 | `project-context.md`: business logic lives in `platform.{module}.service` | **MATCH (paraphrase)** | Rule supported by `project-context.md:108, 124, 139, 154`. Not a verbatim quote but substantively correct. `platform.security.service` is a legal home for a repository dependency (the "no repositories here" rule at `:165` applies to `infrastructure`, not `platform`). |
 
 ---
 
 ## 2. Ledger & precedent attribution (Layer 2)
 
+Checked against: the referenced story files themselves, source comments/Javadoc near the named code, and `git log`/`grep` for the story numbers.
+
 | Claim | Sources checked | Verdict |
 |---|---|---|
-| Bundle precedent `-100`/`-102`/`-124` | (a) ledger (b) story files (c) — | **CONFIRMED** — all three exist and are genuine multi-AC bundles (14/19/9 ACs) |
-| AC1/AC3/AC4 trace to real ledger bullets | (a) `:1067` (HCLOUD ops note), `:3607` (OtpPage), `:3621` (VideoManagementPage) — all untagged/open (b) source matches verbatim (c) section added by `c8588a32` | **CONFIRMED** — no AC falsely attributed; AC2's backend half correctly disclosed as newly discovered |
-| Sourcing bullet was frontend-only | (a) quoted verbatim `:3607-3619` (b) `OtpPage.vue:96` matches (c) — | **CONFIRMED** — frontend-only, and it names neither AC1 nor AC4 |
-| `skillars-uat-6` AC8 (2026-08-13) removed both vars | (a) ledger `:1067` (b) uat-6 story `:322` AC8 item 3 + Dev Record `:489` (c) `6a8a3bd4` (2026-08-13) is the sole removing commit; absent at HEAD | **CONFIRMED** (AC number, date, commit, current absence) |
-| `ses-1-7` envelope bullet "still tagged `[Rewritten, still open]`" | (a) **no `## Deferred from: … ses-1-7-documentation` section exists**; sole match is `:2079`, inside the `## Last audit: 2026-09-14 (post-merge prune after skillars-deferred-110)` narrative (b) `notification/index.html:386-388` states the section "**was pruned once closed**" (c) `git log -S` → added `1c40d6bf`, removed `6fdc6b90` (deferred-112, 2026-09-15) | **WRONG** — see §5-H4 |
-| `c7a327d2` = deferred-113, last touch, 2026-09-15 | (c) `git log -1 --` → `c7a327d2` confirmed last touch; `skillars-deferred-113` confirmed | **CONFIRMED** (hash, story, last-touch). Date is 2026-09-16 author-local / 2026-09-15 UTC — immaterial |
-| Doc names `V136` + deferred-112 fold-in; plain callout; links `../database/index.html` | (b) `notification/index.html:373-388` — all three confirmed verbatim | **CONFIRMED** — the doc side of AC5 is genuinely fully resolved, as the story says |
-| "delete-outright-on-closure convention" | (a) `## How to read this file`: "Items are deleted outright once they are implemented" (b) the notification doc cites it by name (c) `c9550a46`, `badfcb00`, `6fdc6b90` all delete outright | **CONFIRMED** — nuance: *declined* items are annotated `[DECIDED]`/`[DISMISSED]` and retained; *implemented* ones are deleted. Story's usage is correct |
-| `/dashboard` nav admin-only since deferred-141 | (b) `MainLayout.vue:126` `v-if="authStore.isAdmin"` (c) `git blame` → `c8588a32` (deferred-141) | **CONFIRMED** |
-| `/player/dashboard` created by deferred-141 **AC4.2** | (b) in-source comment `routes.js:262-263` literally says "skillars-deferred-141 AC4.2" (c) blame `:261-268` → `c8588a32` | **CONFIRMED** — note this is exactly the citation class a single ledger grep would have miscalled fabricated |
-| deferred-work.md documents a re-verify-against-HEAD house style | (a) "File paths and line numbers age fast… **Verify against the code before trusting an unannotated forward-reference**" | **CONFIRMED** |
+| Story is **not** sourced from `deferred-work.md` or a code-review run (line 8) | `deferred-work.md` grep for `deferred-143` / lock-enforcement; `sprint-status.yaml:2` | **TRUE** — no ledger entry; sprint-status confirms manual-security-analysis sourcing |
+| *"No pre-implementation `story-review.md` has been run against this story yet."* (line 8) | `sprint-status.yaml:2`; the existing `story-review.md` on disk | **FALSE** — `sprint-status.yaml:2` documents a full pre-implementation review dated 2026-10-05 against this same HEAD, whose three accepted findings are already folded into the story (GdprErasure `:277-278`, `InvalidJWTDataException` added to AC3, three AuthResourceIT ranges corrected). The prior `story-review.md` for deferred-143 was on disk when this audit started. See F9. |
+| deferred-142 **Context section**, *"three of the four paths"* discussion | `skillars-deferred-142-....md:252`, under `## Context: Current State` → `### AC2 — The skp cookie gap…` | **TRUE** — line 252: *"Three of the four paths into the shared `createLoginCookies` helper have no `skp` today."* Correct section, correct phrase. |
+| deferred-142 **Review Findings DEFER** item on `URLEncoder.encode` affecting *"all three `skp` writers"* | `skillars-deferred-142-....md:179` (`### DEFER` heading) and `:185` (the item); grep `writers` across that file | **PARTLY FALSE** — the DEFER item exists, in the right section, and is about `URLEncoder.encode`. But its text says *"Identical at **both** `AuthService` sites"*; the string `writers` appears **nowhere** in deferred-142. The quoted phrase is the story's own paraphrase presented as a quotation. The underlying *fact* is true today (three writers: `AuthService.java:133`, `:219`, `JwtManagerImpl.java:121` — the third added by deferred-142 itself). See F10. |
+| `RefreshTokenRepository.markAllUsedByUserId` carries deferred-100 AC3 / deferred-101 AC11 provenance | `RefreshTokenRepository.java:20-28` Javadoc | **TRUE** — and materially relevant to F1; see below |
+| `deleteLoginToken` never clearing `skp` is pre-existing and known | `skillars-deferred-142-....md:211` | **TRUE** — *"`skp` is never cleared by `deleteLoginToken`, but that gap is pre-existing"* |
+| `SecurityUtil` gaining `RefreshTokenRepository` carries **no circular-dependency risk** | `JwtManagerImpl.java` / `LoginTokenManager` grep for `AuthService`/`SecurityUtil` (only comment mentions); `AuthService` import list | **TRUE** — `LoginTokenManager`/`JwtManagerImpl` reference neither type in code. The story's claim is correct; this was actively tested for refutation and survived. |
 
 ---
 
 ## 3. Mechanistic claims (Layer 3)
 
-| # | Claim | Verdict |
-|---|---|---|
-| 1 | `toClaims` is the single shared claims-builder; pre-OTP token flows through it | **PARTLY WRONG** — single builder and pre-OTP flow CONFIRMED (`TwoFactorLoginService:55` → `JwtManagerImpl.generateToken:108` → `TokenCreatorImpl:31` → `toClaims`). But the caller list omits a 4th: `extendTtlOfToken` (`JwtManagerImpl:133`). "Refresh" is ambiguous — `refreshLoginToken` does **not** call `toClaims` |
-| 2 | `toClaims` omits the role; `ROLES` holds fine-grained permission names, **not** the role | **PARTLY WRONG — load-bearing.** Omission CONFIRMED (`toClaims:47-65` puts 12 claims, no role). But authorities **are** role names: `V139__baseline_seed_data.sql:51-55` seeds exactly `ROLE_COACH/PARENT/PLAYER/ADMIN/LTD_ADMIN`, and every registration service sets the matching single authority beside the enum. See §5-M5 |
-| 3 | The new claim survives unfiltered to `refreshLoginToken` | **CONFIRMED** — `ClaimsExtractorImpl:43` parses with no `.require(...)`/allow-list; `:72` copies the whole map; token is DB-persisted (`LoginInfo:36` `columnDefinition="text"`) so no truncation. **But see §5-H1** |
-| 4 | `createLoginCookies` sets `bcc`/`user`/`ION`/`admin`/`rint`, never `skp` | **CONFIRMED** — `:217,224,227,231,244-248`. `SKILLARS_PROFILE_COOKIE` appears in only `AuthService` + `SecurityConstants` repo-wide. Cosmetic: constant is `B_COOKIE = "bcookie"`, not `bcc` |
-| 5 | `createLoginToken`/`renewLoginToken` only ever invoked from `AuthService`, which already sets `skp` | **WRONG — load-bearing.** See §5-H2 |
-| 6 | `refreshLoginToken` called exclusively from `SecondFactorLoginFilter` | **CONFIRMED** — sole main-source call `SecondFactorLoginFilter:75`; two test calls; single interface impl |
-| 7 | `Principal.skillarsRole` populated via `instanceFrom` on the pre-OTP path | **CONFIRMED** — pre-OTP Principal comes from `LoadUserByUserNameService:35` → `Principal.instanceFrom(user)` → `:157`. AC2's load-bearing assumption holds. Three *other* construction sites leave it null |
-| 8 | `hydrateFromCookie` would read a stale pre-2FA `skp` | **CONFIRMED** — `auth.store.js:72-86` parses URL-encoded `{"id","role"}`, exactly AC2's proposed shape; its own docstring (`:59-65`) independently confirms the quoted-id requirement |
-| 9 | The two `addCookie` overloads are behaviorally identical here | **CONFIRMED** — attribute-by-attribute identical (`path` `/`, no domain, same `secure` expression, params passthrough); `Lax` hardcoded vs passed |
-| 10 | `REFRESH_TOKEN_TTL` shared; wildcard static import already present | **CONFIRMED** — `SecurityConstants:105`; `JwtManagerImpl:27`. `SKILLARS_PROFILE_COOKIE` (`:104`) also covered. No new import needed |
-| 11 | Filter has no `User`/role in scope | **CONFIRMED** — `SecondFactorLoginFilter:40-42` injects only `TwoFactorLoginService`, `LoginTokenManager`, `ApplicationEventPublisher`; `LoginData`'s 13 accessors carry no role |
-| 12 | `successResponse()` carries no role | **CONFIRMED** — `:97` `new Success("", "login.success", "Login was successful", Map.of())` |
-| 13 | Nothing in the frontend navigates to `/otp` | **CONFIRMED** — only non-test hits are `auth.api.js:22` (the POST) and `routes.js:25` (the path). The route has **no `name`**, so name-based navigation is impossible. The live login path (`LoginPage.vue:167` → `/api/auth/login` → `AuthService.login`) has no OTP branch at all |
-| 14 | No fixture sets `skillarsRole`; the existing test "exercises the `null → ADMIN` fallback path" | **PARTLY WRONG** — first half CONFIRMED (both Principal sites in the 940-line class omit it). Second half incoherent: that fallback **does not exist yet**. See §5-M4 |
-| 15 | Nothing on the server reads the two vars; both absent from `.env.example`/`secrets-reference.md` | **PARTLY WRONG** — absence CONFIRMED (0 hits). "Nothing reads them" is false. See §5-M2 |
+### M1. *"`AuthService.refresh()` loads the user at `:188` and checks nothing about account status"* — **TRUE**
+Full body of `refresh()` (139-223) read. Between `findById` at 188 and `createLoginToken` at 203 there is only `Principal.instanceFrom(user)` (193) and the new-token mint (195-201). No status check. The `Principal` built at 193 *carries* `accountNonLocked`/`enabled`, but nothing ever asserts on them — the principal is handed straight to `createLoginToken`.
 
-**Transaction boundaries (traced, not assumed):** no claim in this story rests on atomicity and the change
-introduces none. `SecondFactorLoginFilter` is a servlet filter outside any transaction;
-`TwoFactorLoginService` is class-level `@Transactional` (`:24`), so `fetchFor2FA`'s consume commits before
-`refreshLoginToken` runs at `:75` — the in-code comment at `:68` ("the transaction is already terminated")
-is accurate. The proposed `skp` write is pure response-header mutation with no DB participation.
+### M2. *"`isLocked()` itself is checked nowhere"* (story line 36, bolded) — **FALSE**
+`grep -rn "isLocked()" src/main/java` returns **13 call sites** outside the getter:
+`Principal.java:151`, `RegistrationOtpResendSupport.java:71`, `PlayerRegistrationService.java:144,218,245`, `ParentRegistrationService.java:133,207,234`, `CoachRegistrationService.java:129,203,230`, `UserErasedEventListener.java:25`. The field is additionally checked at `User.java:409, 426, 457` (`canInitiatePasswordReset()`, the reset-password guards). The story contradicts itself: two paragraphs earlier (line 38) it correctly states `Principal.instanceFrom` wires `.accountNonLocked(!user.isLocked())`. See F4.
 
----
+### M3. *"`/authenticate` … correctly rejects locked accounts; the live path … bypasses Spring Security's provider pipeline"* — **TRUE but materially misleading**
+Traced in full: `DaoAuthProvider.authorize()` (`DaoAuthProvider.java:28-59`) calls `retrieveUser(...)` → `LoadUserByUserNameService.loadUserByUsername` → `Principal.instanceFrom(user)` (`LoadUserByUserNameService.java:35`) → `getPreAuthenticationChecks().check(user)` at `:36`, which rejects `accountNonLocked == false`.
 
-## 4. Response-commit ordering and size budget (traced)
+**But `authorize()` is not confined to the dead `/authenticate` path.** It is called twice by the *live* `JWTAuthorizationFilter.attemptAuthorization`: at `:189` (DB-refresh-token lapsed) and `:200` (all refresh tokens revoked). `hasDbRefreshTokenExpired` gates that on `DB_REFRESH_TOKEN_INTERVAL = 5 min` (`SecurityConstants.java:120`), and the filter's own class Javadoc says so explicitly (`:80-85`: *"`daoAuthProvider.authorize(...)` re-checks the account against the DB so locked / deactivated / force-logged-out users are caught"*). See F5.
 
-Both checked because they are the classic ways a "just add a cookie" change silently fails:
+### M4. *"`AuthService.logout()` … marks the presented refresh token used"* — **TRUE**
+`:226-235`: `getCookieValue` → `sha256Hex` → `findByTokenHash` → `.filter(t -> !t.isUsed())` → `setUsed(true)` + `save`. Returns normally, so the class-level `@Transactional` commits.
 
-- **Ordering is safe.** `SecondFactorLoginFilter:75` (`refreshLoginToken`, where cookies are added) runs
-  **before** `:78` `successResponse(response)`, the only thing that touches `getWriter()`/`flush()`
-  (`:96-105`). The `Set-Cookie` header ships.
-- **Size is a non-issue.** No `max-http-header-size` anywhere in `src/main/resources`; no nginx config in
-  the repo (the proxy is Traefik, `deploy/traefik/traefik.yml`, ~1MB default). The added claim is ~30
-  bytes against an 8KB Tomcat default.
-- **`BUS_ID` really is `user.getId()`.** `Principal.java:155` `.businessId(String.valueOf(user.getId()))`
-  → `toClaims:60`. Identical decimal digits to `AuthService`'s `"{\"id\":\"" + user.getId()`. **No**
-  UUID-vs-Long or business-id-vs-DB-id mismatch — the story's assumption holds.
+### M5. *"Ordering in `refresh()`: after the reuse/expiry checks (`:145-186`), before the new row (`:195-201`) and `createLoginToken` (`:203`)"* — **TRUE as stated, but see F1**
+Ranges verified exactly. The *placement* is right; the *transactional consequence* of throwing from there is not what AC2 assumes.
+
+### M6. Transaction boundary — traced explicitly (this is the load-bearing one)
+- `AuthService` carries class-level `@Transactional` (`AuthService.java:47`, `org.springframework.transaction.annotation.Transactional`, default rollback-on-`RuntimeException`).
+- `AuthResource` is **not** `@Transactional` (full file read; `@RestController @RequestMapping @Observed @RequiredArgsConstructor` only). So `AuthService` methods are the outermost transaction boundary.
+- `spring.jpa.open-in-view: false` (`application.yaml:158`) — no view-level transaction extends it.
+- `LockedException` → `AccountStatusException` → `AuthenticationException` → `RuntimeException`. Throwing it from `refresh()` **rolls the whole transaction back.**
+- The existing code demonstrably knows this: the only DB write on a throwing branch, `markAllUsedByUserId`, is annotated `@Transactional(propagation = Propagation.REQUIRES_NEW)` (`RefreshTokenRepository.java:30-33`) precisely so the revocation survives the rollback — documented at `:20-28` citing deferred-100 AC3 / deferred-101 AC11. Every other throwing branch (`:173`, `:184`, `:189`) calls only the cookie-clearing helper, never a DB write.
+- The story's proposed `terminateSession` uses a **plain** `refreshTokenRepository.save(t)` (story line 100), which joins the caller's transaction.
+
+**Conclusion: a plain `save()` inside a branch that throws out of `AuthService` is discarded.** See F1.
 
 ---
 
-## 5. Findings that survived adversarial re-verification
+## 4. Corner cases, false assumptions and missed flows (survived adversarial re-verification)
 
-### HIGH — will produce wrong code if a dev agent implements the story as written
+### F1 — **BLOCKER.** AC2's "the presented refresh token is revoked" cannot happen: the enclosing transaction rolls it back
+*Story:* AC2 bullet 2 (line 129) — *"On that rejection, the refresh token presented in the `rtkn` cookie for this request is revoked (marked used)"*; design line 83 — *"fall through to Part B's teardown so the presented refresh token is revoked along with the denial, not left alive for a retry."*
 
-**H1 — The new claim does *not* "ride along on every token": `extendTtlOfToken` re-stamps it `"ADMIN"` for every non-admin.**
-Story line 77 asserts the claim rides on *every* token `toClaims` builds. But `toClaims` is also fed by
-Principals **reconstructed from the JWT**, and that reconstruction drops the field:
+*Reality:* by the time `ensureAccountIsLive(user)` fires (story line 83: immediately after `AuthService.java:188`), the request has already executed `token.setUsed(true); token.setRotatedAt(...); saveAndFlush(token)` at `:177-180`. Throwing `LockedException` from `:188`+ rolls back the entire `AuthService.refresh()` transaction (`AuthService.java:47`; `AuthResource` non-transactional; OSIV off), which **un-does the `used = true` flush at `:177-180` and discards `terminateSession`'s own `save(t)`**. Net DB effect: zero. The presented refresh token is left fully usable — the exact outcome AC2 exists to prevent, and the exact resurrection vector Finding 3 complains about.
 
-- `ClaimsExtractorImpl.java:76-85` — builder has `.gender(...)`, `.businessId(...)`, `.displayName(...)`,
-  `.phone(" ")` and **no `.skillarsRole(...)`** → `getSkillarsRole()` is always `null`.
-- `JwtManagerImpl.java:129-133` — `extendTtlOfToken` does
-  `final Principal principal = claimsExtractor.extractPrincipal(req); … tokenCreator.toClaims(principal, dbRefreshToken, true, null)`.
-- `JWTAuthorizationFilter.java:209` calls `extendTtlOfToken(req, res)` on the **dominant** path — every
-  authenticated request inside the `DB_REFRESH_TOKEN_INTERVAL` sliding window.
+*Proof the codebase already knows this:* `RefreshTokenRepository.java:30-33` uses `REQUIRES_NEW` for `markAllUsedByUserId` for this precise reason, documented at `:20-28`. Compare the three existing throwing branches in `refresh()` (`:172-175`, `:179-186`, `:188-191`) — all cookie-only, no DB write.
 
-**Trigger:** a COACH makes any second request inside the sliding window → the re-minted JWT carries
-`skillarsRole="ADMIN"` (via the story's own mandated `null → "ADMIN"` fallback at Task 2 bullet 2), and
-stays wrong for the rest of the session. Nothing reads the claim today, so nothing breaks *now* — but the
-story's framing invites a future reader to trust a claim that is only correct on freshly-minted tokens.
-**Fix the spec:** either populate `skillarsRole` in `ClaimsExtractorImpl.extractPrincipal` from the new
-claim, or **omit** the claim when the Principal's role is null rather than defaulting to `"ADMIN"`.
+*Same defect, second site:* AC3 bullet 2 (line 133) — *"`AuthService.logout()` and `AuthService.refresh()`'s internal failure branches produce the **exact same** cookie/DB outcome as the filter's forced-logout path"* — is unachievable as designed. From the filter (`JWTAuthorizationFilter.java:152`) there is no ambient transaction, so `SimpleJpaRepository.save` opens and commits its own; from inside a throwing `AuthService` branch it joins and rolls back. Identical code, opposite DB outcomes.
 
-**H2 — AC2's third acceptance bullet asserts a falsehood; the stated scoping rationale is broken.**
-Story line 79 / AC2 bullet 3: *"`createLoginToken`/`renewLoginToken` (and their only caller, `AuthService`)
-are untouched"*. Exhaustive caller sweep (main + test; `LoginTokenManager` has exactly one implementation,
-so no indirection escapes):
+*Note on the obvious fix:* annotating `terminateSession` `@Transactional(REQUIRES_NEW)` **will not work** — `SecurityUtil` is declared `public final class` (`SecurityUtil.java:38`) and implements no interface, so Spring cannot create a proxy for it; the context will fail to start. Workable options: (a) add a `REQUIRES_NEW` revocation query to `RefreshTokenRepository` mirroring `markAllUsedByUserId:30-33` and call that from `terminateSession`; or (b) move the account-status check *before* `:177` and revoke via `markAllUsedByUserId` (which already commits independently); or (c) perform the teardown outside the transaction (in `AuthResource` or an advice). Option (a) also needs care: after `markAllUsedByUserId`'s bulk `UPDATE … version = version + 1`, the first-level cache still holds the stale managed `RefreshToken` loaded at `:146`, so a subsequent managed `save()` on it is version-stale.
 
-```
-createLoginToken:  AuthService.java:117      (login)   → skp set at :133  ✓
-                   AuthService.java:203      (refresh) → skp set at :219  ✓
-                   JWTAuthenticationFilter.java:100    → NO skp anywhere in that class
-renewLoginToken:   JWTAuthorizationFilter.java:193     → no skp
-                   JWTAuthorizationFilter.java:202     → no skp
-```
-
-`AuthService` **never calls `renewLoginToken` at all** (zero occurrences in the file). And
-`createLoginCookies` has a 4th upstream path the story omits entirely (`extendTtlOfToken` → `createAndSetJwt`).
-So on **three of the four** `createLoginCookies` paths there is nothing to double-set — the story's reason
-for keeping the fix out of the shared helper ("those paths already set it") is factually wrong. The
-*conclusion* (minimal blast radius → patch `refreshLoginToken`) may still be right, but the rationale must
-be rewritten, and AC2 bullet 3 states a fact a dev agent will act on and that is not true.
-
-**Second missed flow of exactly the AC2 class, surfaced by the same sweep:** a login through
-`/authenticate` with `otpEnabled == false` (`JWTAuthenticationFilter:99-103`) gets **no `skp` at all**.
-The in-code comment at `:93` says *"At the moment the flow will always enter here"*, so the branch is
-currently cold — but that is the justification, and the story never makes it.
-
-**H3 — Missing-claim handling is unspecified, and the literal spec re-creates the exact dead end AC3/AC4 exist to remove.**
-Task 2 bullet 3 says build `skp` from `claims.get(BUS_ID)` + `claims.get(SKILLARS_ROLE_CLAIM)` with no
-missing-claim handling anywhere in the story. But `refreshLoginToken` reads a **DB-persisted** pre-OTP
-token (`TwoFactorLoginService:55-58`), redeemable for `OTP_TTL = Duration.ofMinutes(30)`
-(`SecurityConstants:122`) — so a token minted *before* the deploy stays redeemable for up to 30 minutes
-*after* it. The literal implementation then emits `{"id":"123","role":"null"}` (Java string concatenation
-of `null`), and:
-
-- `auth.store.js:77` `if (parsed.id && parsed.role)` — `"null"` is a **truthy** string, so it hydrates;
-- `roleRoutes.js:29` `Object.hasOwn(ROLE_ROUTES, role) ? … : DEFAULT_ROUTE` with `:21`
-  `DEFAULT_ROUTE = '/dashboard'` → the admin-only-nav page.
-
-**It also falsifies a standing ledger verification.** `deferred-work.md:3629-3639` — the *third* bullet in
-the same deferred-141 review section this story sources from — records `/dashboard`-as-`DEFAULT_ROUTE` as
-*"**Currently unreachable, by verification**"*, reasoning in part that "`hydrateFromCookie` requires both
-`id` and `role`". AC2 as specified makes it reachable. The story cites bullets 1 and 2 of that section and
-never mentions bullet 3.
-
-**H4 — AC5's delete target does not exist; executing Task 5 would destroy audit history.**
-No `## Deferred from: … ses-1-7-documentation` section exists at HEAD. `grep "Rewritten"` returns exactly
-one line — `deferred-work.md:2079` — and it sits **inside a historical audit record**
-(`## Last audit: 2026-09-14 (post-merge prune after skillars-deferred-110)`), as a category heading in that
-audit's narrative, not as a `[...]` tag on an open-work bullet:
-
-```
-2079: - **Rewritten, still open:** `ses-1-7-documentation`'s `envelope_entity` Flyway-callout-severity bullet — the
-```
-
-`git log -S "code review of ses-1-7-documentation"` shows the real open-work section was added by
-`1c40d6bf` and **removed by `6fdc6b90`** (deferred-112, 2026-09-15) — three weeks before this story was
-drafted. Decisively, the story's **own cited source** says so: `notification/index.html:386-388`, inside
-the exact `:373-388` range the story quotes, reads *"The `ses-1-7-documentation` ledger section this
-paragraph used to cross-reference **was pruned once closed**, per `deferred-work.md`'s own
-delete-outright-when-closed convention — this paragraph is now the only surviving record of that history."*
-
-**Consequence:** a dev agent either finds nothing actionable, or applies AC5's "delete outright" to a line
-of audit history — which contradicts the file's convention (audit blocks are retained history; only
-*implemented open items* are deleted). AC5 should be dropped, or rewritten as "confirm already pruned; no
-edit."
-
-### MEDIUM — real gaps in the spec
-
-**M1 — `SecurityIT`'s own fixture has `skillarsRole == null`, so AC2's headline IT assertion cannot prove what AC2 claims.**
-AC2 requires the cookie carry *"the caller's real `id`/`role`"*. But `SecurityIT:351-366` `getUserData(...)`
-sets email/login/phone/activated/langKey/gender/dob/password/otpEnabled/firstName/lastName and **never a
-role**, and the `/v1/account/register` path it uses calls none of the four `setSkillarsRole` sites
-(`PlayerRegistrationService:114`, `ParentRegistrationService:99`, `CoachRegistrationService:99`,
-`AdminBootstrapRunner:202`). So the IT observes the `"ADMIN"` fallback, not a real role — and a regression
-that drops the claim **entirely** still passes it, because `claims.get(...) == null` → `"ADMIN"` → cookie
-present. AC2 should either state the IT assertion as presence-only, or require the fixture to set a role.
-
-**M2 — AC1's note content is factually wrong, and a stale value can hard-fail a provision re-run.**
-Story line 56 (*"Nothing on the server reads those two variables anymore"*) and AC1 (*"this is harmless
-(nothing reads them)"*) are false:
-
-```
-provision.sh:591  if [ -n "${HETZNER_VOLUME_ID:-}" ]; then
-provision.sh:597    err "HETZNER_VOLUME_ID=${HETZNER_VOLUME_ID} does not resolve to an attached Volume"
-provision.sh:600    exit 1
-```
-
-(`git blame`: the hard-fail at `:597` is `skillars-deferred-88`, added *after* uat-6 removed the vars from
-the template — which is exactly why the ledger's inherited "harmless" phrasing went stale.)
-`deploy/firewall/apply-firewall.sh:18` likewise requires `HCLOUD_TOKEN`, though its header scopes it to
-the operator's local machine.
-
-The *conclusion* that a stale `.env` is inert still holds, but for a reason the story does not give:
-**nothing sources `.env` wholesale into `provision.sh`** — it reads individual keys via a targeted
-`grep` (`read_env_value`, `:940`), used only for `GF_*` values. The conditional trigger is an operator who
-exports from `.env` themselves (`deploy/backup/env-guard.sh:27` does `. "$env_file"` in its own process
-tree) before a re-run that `provision.sh:1082` itself invites. The ops note should say *why* it is inert
-rather than an unqualified "nothing reads them" that a future operator falsifies in one grep — and then
-distrusts the whole note.
-
-**M3 — The post-2FA `Authentication`'s Principal still lacks the role, one line below where AC2 adds the claim.**
-`JwtManagerImpl:87-93` `authentication(claims)` builds `new Principal.Builder()….businessId((String) claims.get(BUS_ID))…build()`
-with no `.skillarsRole(...)`, even though `claims` (`:72`) would now carry it. That Principal is what
-`SecondFactorLoginFilter:79` publishes as `new AuthEvent(auth, AuthenticationAction.SUCCESSFUL_2FA)`. No
-current listener reads the field, so this is a gap rather than a break — but it is an obvious half-fix
-immediately adjacent to the lines AC2 touches, and the story doesn't mention it.
-
-**M4 — The story describes a not-yet-existing code path as currently under test, under a "confirmed by direct reading" banner.**
-Story line 85 claims the existing `testRefreshLoginToken_success()` *"exercises the `null → \"ADMIN\"`
-fallback path."* That fallback does not exist in production code — **this story is proposing to add it.**
-The test (`:558-615`) asserts only `SUBJECT, ROLES, GENDER, DISPLAY_NAME, BUS_ID, OPF_SEED, iat, exp,
-DB_REFRESH_TOKEN, CLIENT_ID`. The paragraph is prefixed *"Confirmed via direct decompilation-equivalent
-reading, not assumed"*, which lends false weight to the incoherent half. Reword. (The useful half — no
-fixture sets `skillarsRole` — is verified true at both Principal construction sites.)
-
-**M5 — AC2's design rationale rests on a wrong premise about the `ROLES` claim.**
-Story line 77 characterizes `ROLES` as *"fine-grained permission names, **not** the single `SkillarsRole`
-enum value."* They are role names in 1:1 correspondence with the enum:
-`V139__baseline_seed_data.sql:51-55` seeds exactly `ROLE_COACH/ROLE_PARENT/ROLE_PLAYER/ROLE_ADMIN/ROLE_LTD_ADMIN`;
-`SkillarsRole` is `{COACH, PARENT, PLAYER, ADMIN}`; and each registration service sets the single matching
-authority beside the enum in the same method (e.g. `CoachRegistrationService:99,101`). `createLoginCookies`
-**already derives a role decision from this claim one screen away** (`:229-230`
-`StringUtils.containsIgnoreCase(roles, "ADMIN")`).
-
-So the role *is* recoverable inside `refreshLoginToken` with no new claim, no new constant, and no change
-to `toClaims` — which would also sidestep H1 entirely. **Calibration:** this does not automatically make
-the story's design wrong. Derivation has real fragility (`ROLE_LTD_ADMIN` contains the substring `ADMIN`
-and has no `SkillarsRole` counterpart; a legacy `/v1/account/register` user gets `ROLE_USER` with a null
-enum). The defect is that the story **forecloses the cheaper option on a false factual premise** instead of
-choosing deliberately between them. Make it an explicit, stated decision.
-
-**M6 — AC3's acceptance text is satisfiable while still landing on `/dashboard`.**
-AC3 reads *"the fallback landing page is `routeForRole(authStore.role)` … not a hardcoded `/dashboard`."*
-But `roleRoutes.js:21` `DEFAULT_ROUTE = '/dashboard'`, so `routeForRole(null)` **returns `/dashboard`** —
-the acceptance criterion passes while the user lands exactly where AC3/AC4 are trying to stop them (the
-live path to this is H3). AC3 should additionally require a spec case for `skp`-absent/unparseable, so the
-degradation is covered rather than latent.
-
-**M7 — The sourcing bullet's own stated precondition is dropped without acknowledgment.**
-`deferred-work.md:3617-3619`: *"**When picked up:** change the fallback to `routeForRole(authStore.role)`
-**at the same time the OTP login flow is actually wired into navigation.**"* Story line 89 explicitly
-scopes that wiring out while implementing the fix anyway, and separately concedes AC2/AC3 cannot be
-browser-verified. Defensible as a decision — but the story never addresses that it is departing from the
-ledger's own sequencing, which is the kind of thing this project's conventions expect to be stated.
-
-### LOW — citation hygiene (full table in §1)
-
-**L1 — `AuthService.authenticate()` does not exist** (story lines 30, 64, 124, 153). The method is
-`login()` (`:61-137`); `refresh()` is `:139-223`. Both cited ranges are wrong, and Task 2 instructs the dev
-to *"copy `AuthService`'s existing null-fallback exactly"* and replicate *"`AuthService.authenticate()`'s
-exact JSON-building"* — a dev grepping for `authenticate()` finds nothing. Rated LOW only because the
-snippet the story inlines is verbatim correct, so the intent survives; fix the name regardless.
-
-**L2 — Range/label drift, none behavior-changing:** `Principal.java:21`→`:23`; `JwtManagerImpl.java:26`→`:27`;
-`createLoginCookies :213-245`→`:213-249`; `successResponse :88-96`→`:96-105` (cited range is a different
-block); `SecurityIT :186-286`→`:187-287` and `:284-285`→`:285-286`; `secrets-reference.md :398-429`→`:398-428`
-(`:429` is past EOF); `routes.js` `player/videos :255-259`→`:255-260` (the ledger's own citation is correct);
-`routes.js` `/player/dashboard :262-267`→`:261-268`; `LoginPage.vue :168-174`→`:168-175`; `CookieUtil`
-"4-arg overload" is **5**-arg; `bcc`→`B_COOKIE = "bcookie"`; `LoginData`/`LoginInfo` conflated (both lack a
-role field, so the conclusion stands); `toClaims` caller list omits `extendTtlOfToken`.
+*Confidence: HIGH.* Every link (annotation, exception hierarchy, controller non-transactionality, OSIV flag, the contrasting `REQUIRES_NEW` precedent) was read directly.
 
 ---
 
-## 6. What did not survive re-verification
+### F2 — **BLOCKER.** AC3 attaches refresh-token revocation to a catch block that fires on ordinary 15-minute idle-outs and tokenless requests
+*Story:* AC3 bullet 1 (line 132) — the catch-all path *"clears `rtkn` and `skp` … **and marks the presented refresh token (if any) used in the DB**"*, for *everything* caught at `:150`.
 
-Four claims the layers raised were **killed or downgraded** in the adversarial pass. Recording them is the
-point of this section — a report with uniformly high confidence is a report whose re-check did not happen.
+*What is actually caught there:*
+- `JWTExpiredException extends AuthorizationException` (`JWTExpiredException.java:8`) — thrown by `ClaimsExtractorImpl.java:47` whenever the JWT is past its 15-minute TTL.
+- `MissingAuthenticationException extends AuthorizationException` (`MissingAuthenticationException.java:8`) — thrown by `JWTAuthorizationFilter.getAuthentication:233` whenever `potc` is absent. `potc`'s cookie `maxAge` **is** `JWT_TTL` (`JwtManagerImpl.java:249`; `SecurityConstants.java:102` = 15 min), so it is absent on every request after a 15-minute idle.
 
-1. **KILLED — "the router guard bounces the user to `/login` regardless, so AC3 cannot work."**
-   A layer argued that because `router/index.js:39` hydrates only once per page load (`let hydrated = false`),
-   the post-OTP `router.push` hits `:59-62` (`requiresAuth && !isAuthenticated`) and redirects to `/login`.
-   **Refuted:** `auth.store.js:15` defines `isAuthenticated = computed(() => !!userId.value)`, and
-   `hydrateFromCookie()` sets `userId.value` (`:78`). AC3 **explicitly specifies adding that call** after
-   `initSession()`, which makes `isAuthenticated` true and the guard pass. The ledger bullet at `:3613-3615`
-   describes this bounce as *today's* behavior, which is correct and is precisely what AC3 fixes.
-   **Downgraded survivor:** AC3's acceptance bullets assert only resulting paths, so a spec that stubs the
-   store could pass without `hydrateFromCookie()` ever being added — a test-design gap, folded into M6, not
-   the structural defect claimed.
+The filter's own Javadoc classifies both as routine, twice, in this exact file:
+> `:263-270` — *"A tokenless request (`MissingAuthenticationException` — crawlers, stale bookmarks, pre-login SPA routes) and an ordinary idle-out (`JWTExpiredException`) are **expected traffic** on an unauthenticated, unrate-limited path"*
+> `:304-311` — *"a `SecurityAlertEvent` writes one `AuditTrail` DB row per event, so it is fired ONLY for genuine denial signals. It is deliberately NOT fired for `MissingAuthenticationException` … nor for `JWTExpiredException` — alerting on those would turn an unauthenticated, unrate-limited path into an audit-trail flood / **DB-write amplifier**."*
 
-2. **KILLED — three citation-drift claims where the story turned out to be right.** A layer reported
-   `/otp` at `routes.js:22-26`, `player/videos` at `:256-261`, and `refreshLoginToken` at `:67-83`. All three
-   are wrong on direct read: the `/otp` route object is `:24-28` (`path: 'otp'` at `:25`, exactly as the
-   story and the ledger both say), `player/videos` is `:255-260`, and `refreshLoginToken`'s signature is
-   `:68` (`:67` is `@Override`). Two layers contradicted each other here; the conflict was resolved by
-   reading the files directly rather than by preferring either layer.
+**AC3 reintroduces precisely the DB-write amplification that deferred-90 AC5/F22 and the `SecurityAlertThrottle` (`:117, :326-350`) were built to remove** — a `findByTokenHash` lookup plus a conditional `save` on every expired-JWT and every tokenless request to a secured URL, unthrottled, on an unauthenticated path. Today that branch does zero DB work (`SecurityUtil.logout` = `clearContext()` + six `removeCookie` calls).
 
-3. **DOWNGRADED — "there is nothing at all for AC5 to delete."** Literally true of *open-work* bullets, but
-   imprecise: text matching the story's description **does** exist at `deferred-work.md:2079`. The accurate
-   and more useful finding is that it is **audit history, not an open item** — which is what makes executing
-   Task 5 actively harmful rather than merely a no-op. Restated as H4.
+**Second consequence — the change is self-defeating against the story's own goal.** `rtkn` has a 7-day TTL (`SecurityConstants.java:105`) deliberately outliving the 15-minute JWT, and `POST /api/auth/refresh` exists to trade it for a new session (`AuthResource.java:25-28`). Revoking it on every idle-out means that once anyone wires the SPA to `POST /api/auth/refresh` — which Finding 3 assumes is already the case — the endpoint is permanently unusable: the token is always already dead by the time it is needed. The *user-facing* breakage is latent today only because nothing calls that endpoint (F3); the DB-write regression is immediate.
 
-4. **DROPPED — "`V136__pin_envelope_entity_schema.sql` does not exist on disk."** True (only `V138`/`V139`
-   remain after the deferred-112 squash), but the story never claims the file is present — it accurately
-   reports that the *doc names it*, including the fold-in. Not a defect.
+**Third: AC3 is wider than the story's own stated intent.** The user story (line 16) enumerates four causes — *"stolen/fixed token, locked account, disabled account, expired credentials"*. None is "expired JWT" or "missing token". AC3 silently widens from those four to the whole catch block. This reads as an unnoticed over-reach rather than a decision.
 
-Also checked and found clean, so not reported as findings: JWT/cookie/header size budget; strict claims
-validator or allow-list (none exists); `BUS_ID` vs `user.getId()` identity; `Set-Cookie` vs response-commit
-ordering; `CookieUtil` overload equivalence; `REFRESH_TOKEN_TTL` availability and the existing wildcard
-import; `SkillarsRole`'s four values; `hydrateFromCookie` synchronicity and parse shape; `redirectPath`
-computed reactivity (read once, after the proposed hydration — safe); vitest glob coverage of the proposed
-spec path; `/player/dashboard` reachability and loop-freedom for a 403'd PLAYER; absence of sibling
-`/dashboard` dead-ends (the story fixes the only one); `VideoManagementPage`'s other error handlers;
-`skp`'s single consumer; AC1 not duplicating an existing section; uat-6 AC8's removal; both deferred-141
-cross-story claims; and "nothing navigates to `/otp`".
+*Recommended narrowing:* gate the refresh-token revocation on the genuine-denial set the file already defines — `JWTTheftException`, `InvalidJWTDataException`, `AccountStatusException`, `AuthorizationException` with `SecurityError.ACCOUNT_NOT_LOGIN_ABLE` — mirroring `maybePublishSecurityAlert`'s `genuineDenial` predicate at `:312-319`, and leave `JWTExpiredException`/`MissingAuthenticationException` on today's cookie-only teardown. (Note: locked/disabled accounts reaching the filter arrive **wrapped** as `AuthorizationException` with `SecurityError.ACCOUNT_NOT_LOGIN_ABLE`, not as raw `AccountStatusException` — `DaoAuthProvider.java:47-51` — so a naive `instanceof AccountStatusException` test would miss them. The same wrapping already makes `maybePublishSecurityAlert` miss them today; pre-existing, out of scope, but it will bite whoever writes this predicate.)
+
+*Confidence: HIGH* on the mechanism and the DB-write regression (all three Javadoc passages and both exception hierarchies read directly). *MEDIUM* on end-user impact, which is latent today — stated honestly rather than inflated.
 
 ---
 
-## 7. Recommendation
+### F3 — **FALSE PREMISE.** Finding 3's exploit chain names the wrong endpoint; `POST /api/auth/refresh` has no frontend caller at all
+*Story (line 59):* *"`src/frontend/src/plugins/sessionManager.js:265` calls `sessionApi.refresh()` (→ `POST /api/auth/refresh`) **proactively** … so a session the filter just forcibly denied … can be **fully resurrected** by the next proactive refresh."*
 
-**Per-claim confidence, not a blanket score.**
+*Reality:*
+1. `src/frontend/src/api/session.api.js:4-6` — `refresh() { return api.get('/refresh') }`. The proactive call is **`GET /refresh`**, not `POST /api/auth/refresh`.
+2. `POST /api/auth/refresh` is `authApi.skillarsRefresh()` (`auth.api.js:45-47`), and it has **zero callers** in `src/frontend/src` — the same dead-code condition the story correctly identifies for `authApi.login()`. Independently corroborated by the checked-in Istanbul report: `src/frontend/coverage/coverage-final.json` records `skillarsRefresh` (fn index 5) with hit count `0`.
+3. Three separate source Javadocs document the distinction the story collapses: `AuthResource.java:23-35`, `JWTAuthorizationFilter.java:90-97` (*"This is why `GET /refresh` keeps a session alive … For full token rotation … use `POST /api/auth/refresh` instead"*), `SessionRefreshFilter.java:31`.
+4. `GET /refresh` is a **secured** endpoint (`AppEndpoints.java:19, 67` — mapped into `SECURED_MAPPINGS`), so it passes through `JWTAuthorizationFilter.attemptAuthorization`, which performs the `daoAuthProvider.authorize` DB re-auth. A locked account calling it is **denied, not resurrected**. `/api/auth/refresh` is the one in `PUBLIC_ENDPOINTS` (`AppEndpoints.java:44`).
 
-| Finding | Confidence | Basis |
-|---|---|---|
-| H2 (caller claim false) | **Highest** | Exhaustive grep re-run by me; single interface impl; `AuthService` has zero `renewLoginToken` occurrences |
-| H4 (AC5 target absent) | **Highest** | Re-run grep; `git log -S` provenance; contradicted by the story's own cited doc line |
-| H1 (`extendTtlOfToken` clobber) | **High** | All three deciding files re-read by me (`ClaimsExtractorImpl:76-85`, `JwtManagerImpl:129-133`, `JWTAuthorizationFilter:209`) |
-| M2 (AC1 factually wrong) | **High** on the fact; **Medium** on the trigger | `provision.sh:591-600` + blame re-read by me; the stale-`.env`→provision path is conditional on operator behavior |
-| M5 (`ROLES` premise wrong) | **High** on the fact; **judgment** on the implication | Seed data + registration services verified; whether to switch design is a deliberate call, not a defect |
-| H3 (missing-claim → `/dashboard`) | **High** | Every link re-read (`OTP_TTL:122`, `auth.store.js:77`, `roleRoutes.js:21,29`); rests on the story's *literal* spec, which a careful dev might fix unprompted |
-| M1, M3, M4, M6, M7 | **High** on evidence; **Medium** on severity | All file:line evidence verified; each is a spec/coverage gap rather than a wrong-code generator |
-| L1, L2 (citation drift) | **Highest** on facts; **Low** severity | Every range re-read; three competing drift claims refuted (§6-2) |
+*What this invalidates:* Finding 3's HIGH severity and its entire stated chain; the second user-story paragraph's rationale (*"cannot be silently undone by the browser's own proactive session-refresh call"*); and part of AC3's justification.
+*What survives:* `AuthService.refresh()` genuinely performs no account-status check, and hardening it is correct defence-in-depth for whenever that endpoint is wired up. AC1 and AC2 remain worth doing — on honest grounds, not this one.
 
-**What was independently re-checked by me, not just by a layer:** the `AuthService` method inventory;
-all callers of `createLoginToken`/`renewLoginToken`/`refreshLoginToken`/`extendTtlOfToken`;
-`SKILLARS_PROFILE_COOKIE`'s full repo footprint; the `ses-1-7`/`Rewritten` ledger state and its git
-provenance; the `notification/index.html` callout and its last-touch commit; `provision.sh`'s env-var reads
-and blame; `ClaimsExtractorImpl.extractPrincipal`'s builder; `toClaims`' and `createLoginCookies`' full
-bodies; `auth.store.js` and `roleRoutes.js` in full; `SecurityIT`'s fixture; the `setSkillarsRole` call
-sites; the authority seed data; `OTP_TTL`; and all three contested citation ranges.
-**What I did not independently re-run:** the size-budget/Traefik survey, the vitest glob check, the
-`PlayerDashboardPage.vue` loop-freedom read, and the uat-6 AC8 story-text quotes — all §6 "clean" items
-where a layer's negative result changes no recommendation.
+*Confidence: HIGH.* Four independent sources (the API module, the grep, the coverage artifact, three source Javadocs).
 
-**Verdict: do not start implementation as written.** AC1 and AC5 both need rewriting before they are
-actionable (AC5 arguably deleted), and AC2 carries one false acceptance bullet (H2), one unhandled
-deploy-window case (H3), and one design rationale built on a wrong premise (M5) plus a real latent
-mis-stamp (H1). AC3 and AC4 are sound in substance — AC4 is clean and AC3's only issues are coverage gaps
-(M6) and an unacknowledged departure from its source bullet (M7).
+---
 
-**Minimum edits before `ready-for-dev` holds:**
-1. **AC2** — rewrite bullet 3 (H2); specify missing-claim behavior explicitly, and prefer *omitting* `skp`
-   over emitting `role:"null"` (H3); decide deliberately between a new claim and local `ROLES` derivation
-   and say why (M5); if the claim stays, handle `ClaimsExtractorImpl.extractPrincipal` (H1); restate the IT
-   assertion as presence-only or give the fixture a role (M1).
-2. **AC5** — drop it, or restate as "verify already pruned, no edit." Do **not** delete
-   `deferred-work.md:2079` (H4).
-3. **AC1** — replace "nothing reads them" with the accurate mechanism: `provision.sh` does read
-   `HETZNER_VOLUME_ID` and hard-fails on a bad one, but nothing sources `.env` wholesale, which is what
-   makes a leftover inert (M2).
-4. **AC3** — add a `skp`-absent/unparseable spec case (M6); note the departure from the ledger's
-   "when picked up" sequencing (M7).
-5. **Citations** — fix `AuthService.authenticate()` → `login()` and the range drift in §1/§5-L2.
+### F4 — **FALSE CLAIM.** *"`isLocked()` itself is checked nowhere"* (story line 36, bolded)
+13 call sites in `src/main/java` (full list in M2), plus three direct field checks in `User.java` (`:409, 426, 457`). The story contradicts its own line 38. The accurate statement is: *"`isLocked()` is never checked in `AuthService.login()` or `refresh()`."*
+
+Beyond accuracy, this matters for implementation: the three registration services already implement the "reject a locked user" shape (e.g. `CoachRegistrationService.java:129`), so `ensureAccountIsLive` has in-repo precedent the story does not reference. *Confidence: HIGH (mechanical grep).*
+
+---
+
+### F5 — **OVERSTATED FRAMING.** Locking is not cosmetic on the live request path; it is already enforced within ~5 minutes
+*Story (line 38):* *"The live path … hand-rolls its own password check and bypasses Spring Security's provider pipeline entirely — which is how the lock check got silently dropped from the pipeline that's actually in use."* Story (line 34): *"The moment that admin action is wired to an endpoint, locking a user will **silently do nothing** on the live login/refresh path."*
+
+`DaoAuthProvider.authorize()` — the lock-enforcing call — runs inside the **live** `JWTAuthorizationFilter` at `:189` and `:200`, not only on the dead `/authenticate` path. Because `hasDbRefreshTokenExpired` is gated on `DB_REFRESH_TOKEN_INTERVAL = 5 min` (`SecurityConstants.java:120`), **a locked account is force-denied on any secured request within ~5 minutes of being locked**, with no code change at all. The filter's Javadoc states this at `:80-85`, and the comment at `:110-116` notes a locked account *"emits one [alert] on EVERY request once its … DB refresh token lapses."*
+
+So the real, accurate gap is narrower but still worth fixing:
+- a locked user can obtain a **brand-new** session via `POST /api/auth/login` indefinitely (genuine, unbounded, and the strongest case for AC1); and
+- an existing session survives up to 5 minutes after locking (bounded, by design — the 5-minute window is the documented revocation latency of the whole scheme, not a defect of `AuthService`).
+
+*Recommendation:* reword Findings 1 and 3 and the severity labels to this. The fix itself stays exactly as designed. *Confidence: HIGH* — the `authorize()` → `LoadUserByUserNameService:35` → `Principal.instanceFrom:151` → `accountNonLocked` chain and both filter call sites were read end-to-end.
+
+---
+
+### F6 — **CITATION / SCOPE ERROR.** `clearAuthCookies` has five call sites, not three; one cited line is wrong
+Story line 116 says *"called from three places inside `refresh()` (`:162`, `:166`/`:173`, `:184`, `:189`)"* — the prose count ("three") disagrees with its own list, and `:166` is `markAllUsedByUserId`, not a call site. Actual: **162, 167, 173, 184, 189**. Task 4 instructs threading `req` through "every internal call site"; a dev working from the "three" count will leave two un-updated — a compile error, so not silently dangerous, but it will stall the task. *Confidence: HIGH (mechanical).*
+
+---
+
+### F7 — **FACTUAL ERROR in Task 6.** `insertUser` has three existing call sites, not two
+Story line 152: *"it needs a new overload (or an added `boolean locked` parameter, updating its two existing call sites)"*. `AuthResourceIT.java` calls `insertUser(...)` at **94, 95 and 96** (COACH, PARENT, UNVERIFIED). *Confidence: HIGH (mechanical).*
+
+---
+
+### F8 — **SCOPE UNDERSTATED.** Four `AuthService` methods change, not two
+Header line 6 says *"two methods changed in `AuthService`"*. Tasks 1 and 4 together change `login()`, `refresh()`, `logout()` **and** `clearAuthCookies()` (whose signature changes, forcing five call-site edits per F6), plus the constructor via a new `SecurityUtil` dependency. Minor on its own; combined with F6 it means a dev sizing the task from the header will under-plan. *Confidence: HIGH.*
+
+---
+
+### F9 — **STALE SELF-DESCRIPTION.** Line 8's *"No pre-implementation `story-review.md` has been run against this story yet"* is false
+`sprint-status.yaml:2` records a completed pre-implementation review dated 2026-10-05 against this same HEAD, and the story already contains that review's three accepted corrections (the GdprErasure `:277-278` fix, `InvalidJWTDataException` in AC3's list, and the three corrected `AuthResourceIT` ranges — all three re-verified as correct in §1 above). Leaving the line in risks a second reviewer re-deriving settled ground, or a dev discounting a review that did in fact happen. *Confidence: HIGH.*
+
+---
+
+### F10 — **MISQUOTATION (low severity).** *"all three `skp` writers"* is not deferred-142's wording
+deferred-142's DEFER item (`:185`) reads *"Identical at **both** `AuthService` sites"*; `writers` appears nowhere in that file. The surrounding attribution (Review Findings DEFER section, `URLEncoder.encode`) is correct, and the underlying fact is true today — there are three `skp` writers (`AuthService.java:133`, `:219`, `JwtManagerImpl.java:121`), the third added by deferred-142 after that DEFER item was written. Drop the quotation marks or quote accurately. *Confidence: HIGH.*
+
+---
+
+### F11 — **IMPLEMENTATION BLOCKER (latent).** `SecurityUtil` is `final`, so no Spring proxy — no `@Transactional`, and `@Cacheable`-style fixes are equally unavailable
+`public final class SecurityUtil` (`SecurityUtil.java:38`) with no implemented interface. Any attempt to resolve F1 by annotating `terminateSession` transactionally will fail at context startup. Flagged here because it is the first thing a dev will reach for. (Mockito mocking is unaffected — the inline mock-maker already mocks this final class in `JWTAuthorizationFilterTest.java:83`.) *Confidence: HIGH.*
+
+---
+
+### F12 — **DESIGN-PATTERN OBSERVATION (judgment, not a defect).** Giving `SecurityUtil` a JPA repository widens the project's most broadly-injected security helper
+`SecurityUtil` is referenced across **52** main-source files as the stateless `SecurityContext` accessor (`getCurrentUserName`, `requireCurrentUserId`, `isAdmin`, …). Its only current collaborator is `LoginTokenManager`. Adding `RefreshTokenRepository` makes every module's security helper DB-aware and transaction-sensitive, and F1 shows the transactional semantics of `terminateSession` differ by caller — a sharp edge on a class used that widely.
+
+This does **not** violate `project-context.md` (the no-repositories rule at `:165` scopes to `infrastructure`; `platform.security.service` may hold repositories), and the story's no-circular-dependency analysis is correct. But `AuthService` already owns `RefreshTokenRepository`, already contains the exact code being promoted (`:225-245`), and is already the transaction owner — so `AuthService.terminateSession(req, res)`, with `JWTAuthorizationFilter` calling `authService` instead of `securityUtil`, is the lower-blast-radius placement. (The filter would need `AuthService` injected; no cycle — `AuthService` does not reference the filter.) Note this does **not** by itself fix F1: a self-invocation from `refresh()` still joins the same transaction.
+
+*Confidence: MEDIUM — this is an architectural preference with a concrete rationale, not a correctness defect. The story's chosen placement is defensible; raised for an explicit decision rather than as a required change.*
+
+---
+
+## 5. What did NOT survive re-verification
+
+These were raised during the pass and then **killed or downgraded** on a second, skeptical read. Listing them is the point — a report with no casualties did not actually re-check itself.
+
+| Raised | Why it was dropped |
+|---|---|
+| *"`terminateSession`'s `SecurityContextHolder.clearContext()` will break `AuthService.logout()`"* | **Dropped.** Read `AuthResource.logout()` (`:68-73`) in full: it calls `authService.logout(req, res)` and immediately returns `noContent()`. Nothing downstream reads the context, and Spring Security's `SecurityContextHolderFilter` clears it at request end anyway. No impact. |
+| *"Adding `RefreshTokenRepository` to `SecurityUtil` risks a circular dependency"* | **Dropped — the story is right.** Actively tried to refute its claim: grepped `JwtManagerImpl` and `LoginTokenManager` for `AuthService`/`SecurityUtil` (only prose comments, no code references) and confirmed `RefreshTokenRepository` is a leaf. No cycle exists. Recorded as a verified-correct claim in §2. |
+| *"The lock check enables user enumeration at login"* | **Dropped.** `ensureAccountIsLive` replaces the block at `:95-97`, which sits **after** the password check at `:90-93`. A locked-account response is only reachable with correct credentials, so no enumeration oracle. The story's placement is correct; noting it here as actively verified, not assumed. |
+| *"`LockedException` → `security.accLocked` won't trigger the axios `/login` redirect (`axios.js:164` matches only `sessionExpired`/`unauthorized`)"* | **Downgraded to a note, not a finding.** True of the interceptor, but the only two routes that can emit `accLocked` are `POST /api/auth/login` (`LoginPage.vue` handles its own errors and the i18n copy exists in all three locales) and `POST /api/auth/refresh` (no caller — F3). Not a defect introduced by this story. Worth a glance if `skillarsRefresh` is ever wired up. |
+| *"`CookieUtil.removeCookie(name, res, httpOnly, sameSite)` as used in the design sketch may not exist"* | **Dropped.** `CookieUtil.java:45-46` declares exactly that 4-arg overload. `getCookieValue(req, name)` at `:28`. The design sketch compiles against real signatures. |
+| *"The pre-existing `markAllUsedByUserId` revocation in `refresh()` is also rolled back by the subsequent throw"* | **Dropped — and this is the one that nearly became a false positive.** It *looks* identical to F1. It is not: `RefreshTokenRepository.java:30-33` annotates it `@Transactional(propagation = Propagation.REQUIRES_NEW)`, so it commits in its own transaction and survives. Reading only `AuthService` would have produced a confident, wrong finding; the repository interface is what settles it. |
+| *"Revoking `rtkn` on idle-out will visibly log users out who are currently kept alive by a silent refresh"* | **Downgraded (folded into F2 with honest calibration).** Initially stated as immediate user-facing breakage. On re-check, F3 shows nothing calls `POST /api/auth/refresh`, and `axios.js:163-164` already redirects to `/login` on these 401s today — so there is no silent recovery to break *yet*. The DB-write amplification is immediate and real; the session-breakage is latent. F2 now says exactly that instead of overclaiming. |
+| *"`GET /refresh` resurrects locked sessions too"* | **Dropped.** `/refresh` is in `SECURED_MAPPINGS` (`AppEndpoints.java:67`), so it runs through `attemptAuthorization` and its `daoAuthProvider.authorize` DB re-auth. It denies locked accounts rather than resurrecting them. |
+
+---
+
+## 6. Recommendation
+
+**Per-claim confidence, not a blanket score.** Citations and precedent attributions were checked mechanically against files opened at HEAD `3a62698c` and are near-certain. The transaction and dead-endpoint findings were traced end-to-end through annotations, exception hierarchies, config flags and a coverage artifact, and are high-confidence. The two judgment calls (F12 placement, F2's end-user severity) are labelled as such. Eight candidate findings were killed or downgraded in re-verification — one of which (`markAllUsedByUserId`) would have been a textbook false positive had the repository interface not been opened.
+
+**Verdict: send back for revision before implementation.** The design is 80% right and the citation discipline is genuinely good, but two defects would survive into merged code.
+
+**Must fix before dev starts:**
+1. **F1** — redesign AC2's revocation so it survives the rollback. Preferred: a `REQUIRES_NEW` revocation query on `RefreshTokenRepository` mirroring `markAllUsedByUserId:30-33`, invoked by `terminateSession`. Note F11 (`SecurityUtil` is `final` — no `@Transactional` on it) and the stale-first-level-cache/version interaction documented at `RefreshTokenRepository.java:20-28`. Then rewrite AC3 bullet 2, which currently promises an outcome identical across transactional and non-transactional callers — not achievable with one plain `save()`.
+2. **F2** — narrow AC3's DB revocation to the genuine-denial set, excluding `JWTExpiredException` and `MissingAuthenticationException`. Mirror `maybePublishSecurityAlert`'s `genuineDenial` predicate (`JWTAuthorizationFilter.java:312-319`), and account for `DaoAuthProvider.java:47-51` wrapping `AccountStatusException` into `AuthorizationException`. Cookie-clearing for `rtkn`/`skp` on idle-out is defensible; the per-request DB write is not.
+3. **F3** — rewrite Finding 3 and the second user-story paragraph. `sessionManager.js:265` → `GET /refresh`; `POST /api/auth/refresh` has no frontend caller. Re-justify AC2 as defence-in-depth and drop the HIGH label, or re-rate it against the real chain.
+
+**Fix while editing (mechanical, each would otherwise cost dev time):**
+4. **F6** — `clearAuthCookies` call sites are **162, 167, 173, 184, 189** (five, not three; `:166` is wrong).
+5. **F7** — `insertUser` has **three** call sites (`AuthResourceIT.java:94, 95, 96`), not two.
+6. **F4** — delete or correct *"`isLocked()` itself is checked nowhere"*; 13 call sites exist, and three registration services already implement this check shape as precedent worth citing.
+7. **F5** — reword Findings 1/3: locking **is** enforced on the live request path within ~5 min via `daoAuthProvider.authorize` (`JWTAuthorizationFilter.java:189, 200`). The real gap is new logins, plus a bounded 5-minute window.
+8. **F8** — header scope: four `AuthService` methods plus the constructor, not two.
+9. **F9** — remove the stale *"no story-review has been run"* line; one has, and its corrections are already in the file.
+10. **F3 citation** — `User.lock()` is `:380-386` (doc sentence at 381), `isRefreshTokenRevoked` is `:214-227`.
+11. **F10** — drop the quotation marks around *"all three `skp` writers"*; deferred-142 says *"both `AuthService` sites"*.
+
+**Decide explicitly (not blocking):**
+12. **F12** — `SecurityUtil` (52 injection sites, currently DB-free) vs. `AuthService` (already owns `RefreshTokenRepository` and the identical code at `:225-245`) as the home for `terminateSession`. Either is legal under `project-context.md`; the story should state why it chose the wider-blast-radius one.
+
+**Unchanged and sound:** AC1's design and placement (after the password check — no enumeration); the `ensureAccountIsLive` helper shape; reuse of the existing `ApiAdvice` 401 mappings and three-locale i18n copy (all verified present); the no-circular-dependency analysis; the Dev Notes' ordering constraint within `refresh()`; AC4's test-update list (all seven `JWTAuthorizationFilterTest` line numbers and all three `AuthResourceIT` ranges verified exact); and the "don't touch `JwtManagerImpl`/the `/authenticate` pipeline/the `skp` duplication" scope fences.
