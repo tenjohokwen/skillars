@@ -1,6 +1,6 @@
 # Story 9.1: Review Submission & Eligibility
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -568,3 +568,4 @@ claude-sonnet-4-6
 | Date | Version | Description | Author |
 |------|---------|-------------|--------|
 | 2026-06-29 | 1.0 | Initial implementation — reviews module scaffold, all 13 tasks complete, 16 integration tests green | claude-sonnet-4-6 |
+| 2026-10-06 | 1.1 | Status corrected from `in-progress` to `done` — the implementation shipped in the 1.0 commit (`a5f27563`) and was subsequently hardened by skillars-deferred-88/107/131/132/135, but this file's own Status header was never synced to match `sprint-status.yaml` (`skillars-9-1-review-submission-eligibility: done`). No functional content changed. A proposed business-rule revision to the eligibility gates (maturity window, update cooldown, parent-of-minor restriction, active-dispute check) is tracked separately as `skillars-deferred-145`, since this story's own scope is complete and shipped. | claude-sonnet-5 |

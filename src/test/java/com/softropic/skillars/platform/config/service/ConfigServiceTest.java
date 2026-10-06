@@ -343,6 +343,75 @@ class ConfigServiceTest {
         assertThat(existing.getValue()).isEqualTo("anything-goes");
     }
 
+    // ── skillars-deferred-145 D3: PUT-time cross-field guard for the review eligibility window ────
+    // The guard resolves the OTHER key via readStoredBoundedInt, which reads the row directly
+    // (round-2 R2 — see that method's javadoc for why a cached read was wrong). These three tests
+    // leave the partner key's row unstubbed, so findByKey returns empty and the lookup falls back to
+    // that key's coded default (7 for minSessionAgeDays, 30 for updateCooldownDays) exactly as a real
+    // unseeded key would; each picks a value for the key it writes that violates (or satisfies) the
+    // ordering against that default. The stored-partner path is pinned separately below.
+
+    @Test
+    void updateConfig_reviewMinSessionAgeDaysNotLessThanCooldownDefault_rejectedWith400() {
+        when(configRepository.findByKey("reviews.minSessionAgeDays"))
+                .thenReturn(Optional.of(entry("reviews.minSessionAgeDays", "7", ConfigValueType.LONG)));
+
+        assertThatThrownBy(() -> configService.updateConfig("reviews.minSessionAgeDays", "30"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("reviews.minSessionAgeDays")
+                .hasMessageContaining("reviews.updateCooldownDays");
+        verify(configRepository, never()).save(any());
+    }
+
+    @Test
+    void updateConfig_reviewUpdateCooldownDaysNotGreaterThanMinAgeDefault_rejectedWith400() {
+        when(configRepository.findByKey("reviews.updateCooldownDays"))
+                .thenReturn(Optional.of(entry("reviews.updateCooldownDays", "30", ConfigValueType.LONG)));
+
+        assertThatThrownBy(() -> configService.updateConfig("reviews.updateCooldownDays", "7"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("reviews.minSessionAgeDays")
+                .hasMessageContaining("reviews.updateCooldownDays");
+        verify(configRepository, never()).save(any());
+    }
+
+    @Test
+    void updateConfig_reviewMinSessionAgeDaysValidAgainstCooldownDefault_persists() {
+        PlatformConfig existing = entry("reviews.minSessionAgeDays", "7", ConfigValueType.LONG);
+        when(configRepository.findByKey("reviews.minSessionAgeDays")).thenReturn(Optional.of(existing));
+
+        configService.updateConfig("reviews.minSessionAgeDays", "10");
+
+        verify(configRepository).save(existing);
+        assertThat(existing.getValue()).isEqualTo("10");
+    }
+
+    /**
+     * Round-2 code review (R2): pins that the guard resolves the partner key from its STORED row, not
+     * from the TTL cache. The cache is primed here with a partner value that would make the write
+     * look legal (cooldown 300), while the stored row says otherwise (cooldown 50) — a 100/50 pair
+     * must be rejected. Before R2 the guard read the cache and returned 200, committing a pair that
+     * violates the invariant and that {@code ConfigStartupAssertion} then refuses to boot on; with a
+     * cached read this test fails with "Expecting code to raise a throwable".
+     */
+    @Test
+    void updateConfig_reviewWindowOrdering_readsPartnerFromStoredRowNotStaleCache() {
+        when(configRepository.findAll()).thenReturn(List.of(
+                entry("reviews.updateCooldownDays", "300", ConfigValueType.LONG)));
+        configService.find("reviews.updateCooldownDays"); // warm the cache with the stale value
+
+        when(configRepository.findByKey("reviews.updateCooldownDays"))
+                .thenReturn(Optional.of(entry("reviews.updateCooldownDays", "50", ConfigValueType.LONG)));
+        when(configRepository.findByKey("reviews.minSessionAgeDays"))
+                .thenReturn(Optional.of(entry("reviews.minSessionAgeDays", "7", ConfigValueType.LONG)));
+
+        assertThatThrownBy(() -> configService.updateConfig("reviews.minSessionAgeDays", "100"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("reviews.minSessionAgeDays")
+                .hasMessageContaining("reviews.updateCooldownDays");
+        verify(configRepository, never()).save(any());
+    }
+
     // ── skillars-deferred-127 AC2: upsert for unseeded HAS_CODE_DEFAULT keys ──────────────────────
 
     @Test

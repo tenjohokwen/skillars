@@ -383,11 +383,13 @@ export default {
       "Votre avis est en cours de modération et n'est pas encore visible publiquement.",
     blocked: 'Votre avis a été retiré par la modération.',
     coachResponseLabel: 'Réponse du coach',
-    noRecentSession:
-      'Vous devez avoir suivi récemment une séance avec ce coach avant de pouvoir laisser un avis.',
+    noQualifyingSession:
+      'Vous devez avoir suivi avec ce coach une séance suffisamment ancienne. Pour modifier un avis existant, il vous faut également une nouvelle séance depuis votre dernier avis.',
+    activeDispute:
+      "Vous ne pouvez pas laisser d'avis tant qu'un litige avec ce coach est en cours.",
     alreadySubmitted: 'Vous avez déjà soumis un avis pour ce coach.',
     bodyTooLong: 'Votre avis est trop long — 1000 caractères maximum.',
-    updateTooSoon: "Vous ne pouvez modifier un avis qu'une fois par an.",
+    updateTooSoon: 'Vous avez modifié cet avis trop récemment — veuillez réessayer plus tard.',
     editNotPermitted: 'Cet avis ne peut pas être modifié pour le moment.',
     authorMismatch: 'Cet avis ne vous appartient pas.',
     authorRoleNotAllowed: "Les coachs ne peuvent pas soumettre d'avis.",

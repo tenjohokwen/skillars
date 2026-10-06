@@ -3,7 +3,7 @@ package com.softropic.skillars.platform.reviews.contract;
 import com.softropic.skillars.infrastructure.exception.ErrorCode;
 
 public enum ReviewErrorCode implements ErrorCode {
-    NO_RECENT_SESSION("reviews.noRecentSession"),
+    NO_QUALIFYING_SESSION("reviews.noQualifyingSession"),
     ALREADY_SUBMITTED("reviews.alreadySubmitted"),
     BODY_TOO_LONG("reviews.bodyTooLong"),
     RESPONSE_TOO_LONG("reviews.responseTooLong"),
@@ -21,7 +21,8 @@ public enum ReviewErrorCode implements ErrorCode {
     ALREADY_BLOCKED("reviews.alreadyBlocked"),
     COACH_PROFILE_MISSING("reviews.coachProfileMissing"),
     REVIEW_NOT_FOUND("reviews.reviewNotFound"),
-    INVALID_FLAGGER("reviews.invalidFlagger");
+    INVALID_FLAGGER("reviews.invalidFlagger"),
+    ACTIVE_DISPUTE("reviews.activeDispute");
 
     private final String code;
 

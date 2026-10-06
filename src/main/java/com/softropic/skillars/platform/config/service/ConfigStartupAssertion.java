@@ -165,6 +165,37 @@ public class ConfigStartupAssertion implements ApplicationListener<ApplicationRe
                 + " must not exceed " + ReliabilityStrikeConfig.SUSPENSION_THRESHOLD_KEY + " = " + suspensionThreshold);
         }
 
+        // skillars-deferred-145 code review (D3, 2026-10-06): cross-field ordering check, same shape
+        // as the reliability-strike pair above. Both reviews.minSessionAgeDays and
+        // reviews.updateCooldownDays independently declare [1, 365] (ConfigBounds), so
+        // ConfigService.rejectOutOfRange validates each in isolation and accepts a bad combination
+        // with a 200. If minSessionAgeDays >= updateCooldownDays, ReviewSubmissionService.updateReview's
+        // effective edit gate becomes max(cooldownDays, minAgeDays) — every attempt exactly at the
+        // intended cooldown boundary 403s as reviews.noQualifyingSession (the maturity floor, not the
+        // cooldown, is the real blocker), pointing the operator at sessions rather than config.
+        // failFast regardless of either individual key's own failFast=false: the degraded-anti-gaming
+        // read-time clamp each key gets on its own does not cover this combination at all.
+        long minSessionAgeDays = configService.getBoundedInt(
+            ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), 7, 1, 365);
+        long updateCooldownDays = configService.getBoundedInt(
+            ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), 30, 1, 365);
+        if (minSessionAgeDays >= updateCooldownDays) {
+            log.error("Platform config '{}' = {} is not strictly less than '{}' = {} — the update "
+                    + "cooldown would be silently superseded by the maturity floor (every edit attempt "
+                    + "at the intended cooldown boundary would 403 as reviews.noQualifyingSession "
+                    + "instead). Correct the stored values.",
+                ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), minSessionAgeDays,
+                ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), updateCooldownDays);
+            Counter.builder("config.value.misconfigured")
+                .tag("key", "reviews.eligibility_window_ordering")
+                .tag("reason", "cross_field_ordering")
+                .register(meterRegistry)
+                .increment();
+            failFastViolations.add(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key() + " = " + minSessionAgeDays
+                + " must be strictly less than " + ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()
+                + " = " + updateCooldownDays);
+        }
+
         int locksChecked = assertSchedulerLockOrdering(failFastViolations);
 
         // Logged before the fail-fast throw so a blocked boot still records what was checked.

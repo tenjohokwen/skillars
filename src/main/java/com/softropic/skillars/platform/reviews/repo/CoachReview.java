@@ -66,6 +66,17 @@ public class CoachReview {
     @Column(name = "last_modified_at", nullable = false)
     private Instant lastModifiedAt = Instant.now();
 
+    // skillars-deferred-145 code review (D1, 2026-10-06): lastModifiedAt has three non-author
+    // writers (AdminReviewService.approveReview/blockReview, ReviewFlagService's auto-hold), so
+    // ReviewSubmissionService's eligibility re-check anchors on this field instead -- written ONLY
+    // from updateReview and from submitReview (submission is itself an author write).
+    // Nullable only for rows that predate V157: the migration backfills them (created_at when
+    // moderation_epoch = 0, i.e. never author-edited; last_modified_at otherwise), so a NULL here
+    // means a row written before that migration ran. ReviewSubmissionService falls back to
+    // createdAt for those. Every row created after this story ships carries a real value.
+    @Column(name = "author_last_edited_at")
+    private Instant authorLastEditedAt;
+
     // Story skillars-deferred-88 AC1: monotonic per-review counter. submitReview leaves it at 0;
     // updateReview bumps it under the findByIdForUpdate row lock; ReviewModerationService discards a
     // verdict whose ReviewSubmittedEvent epoch != this row's current epoch. Primitive long mirrors

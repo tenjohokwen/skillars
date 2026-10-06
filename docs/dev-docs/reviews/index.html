@@ -58,15 +58,22 @@
         submit-review endpoint itself only requires "authenticated" at the security layer; the actual role
         restriction happens inside <code>ReviewSubmissionService</code> via <code>AuthorRole.valueOf(...)</code>,
         which rejects anything else with <code>AUTHOR_ROLE_NOT_ALLOWED</code>.</li>
-      <li><strong>You must have had a recent completed session with the coach.</strong>
-        <code>checkEligibility</code> calls into <code>booking</code> to confirm a completed booking exists within a
-        config-driven submission window (<code>reviews.submissionWindowDays</code>, default 14 days). No session, no
-        review.</li>
+      <li><strong>You must have a completed session with the coach that has had time to settle.</strong>
+        <code>checkEligibility</code> calls into <code>booking</code> to confirm a completed booking exists that is
+        OLDER than a config-driven maturity floor (<code>reviews.minSessionAgeDays</code>, default 7 days) &mdash; a
+        lower bound, not a window: there is no upper bound, so a session from months ago still qualifies for a first
+        review (skillars-deferred-145). The author must also be the player themselves or that player's linked parent
+        (resolved via <code>PlayerProfile.userId</code>/<code>parentId</code>, not <code>Booking.playerId</code>), and
+        no dispute the author themselves raised against the coach may currently be open
+        (<code>admin.disputes</code>, status not <code>RESOLVED</code>/<code>DISMISSED</code>) &mdash; a coach-raised
+        dispute does not block the author's own review.</li>
       <li><strong>One review per author/coach pair, ever.</strong> Enforced both in application logic
         (<code>existsByAuthorIdAndCoachId</code>) and by a DB unique constraint (caught as
-        <code>ALREADY_SUBMITTED</code>). An existing review can be <em>updated</em> instead of re-submitted, but only
-        once every 365 days (<code>UPDATE_TOO_SOON</code>) &mdash; a deliberately long cooldown meant to stop rating
-        gaming.</li>
+        <code>ALREADY_SUBMITTED</code>). An existing review can be <em>updated</em> instead of re-submitted, subject
+        to a configurable rolling cooldown since the author's own last edit
+        (<code>reviews.updateCooldownDays</code>, default 30 days, <code>UPDATE_TOO_SOON</code>) <em>and</em> a fresh
+        qualifying session completed since that last edit &mdash; re-editing isn't just time-gated, it has to be
+        backed by genuinely new training activity.</li>
       <li><strong>Rating scale is 1&ndash;5</strong>, body is optional and capped at 1000 characters
         (<code>SubmitReviewRequest</code>).</li>
       <li><strong>Nothing is public until moderated.</strong> Every new/updated review starts <code>PENDING</code>.
@@ -103,7 +110,7 @@
     <h3>Key services</h3>
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
-      <tr><td><code>ReviewSubmissionService</code></td><td>Validates coach existence and booking-eligibility, enforces one-review-per-pair and the 365-day edit cooldown, persists <code>PENDING</code> reviews/edits, publishes <code>ReviewSubmittedEvent</code>, and handles the coach's one-time response (locked via <code>findByIdForUpdate</code> pessimistic write).</td></tr>
+      <tr><td><code>ReviewSubmissionService</code></td><td>Validates coach existence and booking-eligibility (maturity floor, parent/self identity, active-dispute gate), enforces one-review-per-pair and the configurable rolling edit cooldown, persists <code>PENDING</code> reviews/edits, publishes <code>ReviewSubmittedEvent</code>, and handles the coach's one-time response (locked via <code>findByIdForUpdate</code> pessimistic write).</td></tr>
       <tr><td><code>ReviewModerationService</code></td><td>Listens for <code>ReviewSubmittedEvent</code> <em>after commit</em>, calls <code>infrastructure.gemini.GeminiClient</code> with the review body wrapped in a delimiter-fenced prompt, maps the verdict to a moderation status in a brand-new <code>REQUIRES_NEW</code> transaction, and triggers <code>CoachRatingService.recompute</code> when a review becomes <code>APPROVED</code> or <code>BLOCKED</code>. The write is guarded so a late AI verdict can never overwrite a decision already recorded — see gotchas.</td></tr>
       <tr><td><code>ReviewFlagService</code></td><td>Validates a flag isn't self-directed (by the author or by the reviewed coach), de-dupes per flagger (DB unique index as backstop), auto-escalates an <code>APPROVED</code> review to <code>UNDER_REVIEW</code> once open flags cross a config threshold, and publishes <code>ReviewFlaggedEvent</code>.</td></tr>
       <tr><td><code>ReviewQueryService</code></td><td>Read-only listings: public paginated approved reviews (sortable newest/highest/lowest), a coach's view of <em>all</em> their own reviews regardless of status, and a single author's own review for a given coach.</td></tr>
@@ -325,11 +332,16 @@ sequenceDiagram
       any 5xx.</p>
     </div>
     <div class="callout warn">
-      <p><strong>The 365-day edit cooldown reads backwards at first glance.</strong>
-      <code>updateReview</code> throws <code>UPDATE_TOO_SOON</code> when <code>lastModifiedAt.isAfter(now - 365
-      days)</code> &mdash; i.e. it blocks the edit if the review <em>was</em> modified recently, meaning a review can
-      only be edited once per year. This is intentional (anti rating-manipulation), not a bug, but it surprises new
-      readers expecting a short cooldown like other "edit window" patterns in the codebase.</p>
+      <p><strong>The update cooldown and the "new session" bound anchor on two different timestamps, on
+      purpose.</strong> <code>updateReview</code> throws <code>UPDATE_TOO_SOON</code> when
+      <code>lastModifiedAt.isAfter(now - reviews.updateCooldownDays days)</code> &mdash; and
+      <code>lastModifiedAt</code> has three non-author writers (<code>AdminReviewService.approveReview</code>/
+      <code>blockReview</code>, <code>ReviewFlagService</code>'s auto-hold), so a moderation action legitimately
+      delays the next edit too. The <em>eligibility</em> re-check's "new session since last edit" bound deliberately
+      does <strong>not</strong> share that column &mdash; it anchors on a dedicated
+      <code>author_last_edited_at</code>, written only from <code>updateReview</code> itself
+      (skillars-deferred-145 code review, D1), so a moderation action can delay your next edit without silently
+      voiding a qualifying session you already earned.</p>
     </div>
     <div class="callout">
       <p><strong>Rating math lives in exactly one place.</strong> <code>CoachRatingService.recompute</code> is the

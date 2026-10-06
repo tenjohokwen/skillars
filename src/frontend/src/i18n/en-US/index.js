@@ -388,11 +388,12 @@ export default {
     pendingModeration: "Your review is awaiting moderation and isn't publicly visible yet.",
     blocked: 'Your review was removed by moderation.',
     coachResponseLabel: "Coach's response",
-    noRecentSession:
-      'You need a recently completed session with this coach before you can leave a review.',
+    noQualifyingSession:
+      'You need a completed session with this coach that is old enough to qualify. To edit an existing review, you also need a new session since you last wrote it.',
+    activeDispute: "You can't leave a review while a dispute with this coach is open.",
     alreadySubmitted: "You've already submitted a review for this coach.",
     bodyTooLong: 'Your review is too long — 1000 characters maximum.',
-    updateTooSoon: 'You can only edit a review once per year.',
+    updateTooSoon: 'You have edited this review too recently — please try again later.',
     editNotPermitted: "This review can't be edited right now.",
     authorMismatch: "This review doesn't belong to you.",
     authorRoleNotAllowed: "Coaches can't submit reviews.",

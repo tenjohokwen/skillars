@@ -49,9 +49,20 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
     private static final long PARENT_ID     = 8000_000_001L;
     private static final long PLAYER_ID     = 8000_000_002L;
     private static final long COACH_USER_ID = 8000_000_010L;
+    private static final long SELF_USER_ID       = 8000_000_020L;
+    private static final long PLAYER_ID_SELF     = 8000_000_021L;
+    private static final long PLAYER_ID_ADULT_CHILD = 8000_000_022L;
 
     private static final String PARENT_EMAIL = "parent.rev@skillars-test.com";
     private static final String COACH_EMAIL  = "coach.rev@skillars-test.com";
+    private static final String SELF_EMAIL   = "self.rev@skillars-test.com";
+
+    // skillars-deferred-145: default booking/player fixture matured past the new 7-day floor
+    // (reviews.minSessionAgeDays) and linked player set to a MINOR tier, so a parent-authored
+    // review via PARENT_ID/PLAYER_ID passes AC2.a (matured) and AC2.b (the author is the linked
+    // player's parent). Round-2 (R16): the player's age tier is irrelevant to AC2.b as shipped —
+    // D2 removed the age check entirely, so this fixture's DOB is not load-bearing either way.
+    private static final int DEFAULT_BOOKING_AGE_DAYS = 10;
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
@@ -82,11 +93,12 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
                 "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PARENT')) ON CONFLICT DO NOTHING",
                 PARENT_ID);
 
+            // Linked MINOR player (AGE_13_17) — see DEFAULT_BOOKING_AGE_DAYS note above.
             jdbcTemplate.update(
                 "INSERT INTO main.player_profiles " +
                 "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) " +
-                "VALUES (?, 'Rev Player', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
-                PLAYER_ID, Date.valueOf(LocalDate.now().minusYears(18)),
+                "VALUES (?, 'Rev Player', ?, 'MIDFIELDER', 'AGE_13_17', ?, true, ?, 'system')",
+                PLAYER_ID, Date.valueOf(LocalDate.now().minusYears(15)),
                 PARENT_ID, Timestamp.from(Instant.now()));
 
             insertUser(COACH_USER_ID, COACH_EMAIL, passwordHash, "COACH");
@@ -102,8 +114,8 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
                 "VALUES (?, ?, 'Rev Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
                 coachProfileId, COACH_USER_ID);
 
-            // COMPLETED booking within last 3 days — eligible for review
-            insertCompletedBooking(Instant.now().minusSeconds(3 * 86400));
+            // COMPLETED booking matured past the 7-day floor — eligible for review.
+            insertCompletedBookingFor(PARENT_ID, PLAYER_ID, Instant.now().minusSeconds(DEFAULT_BOOKING_AGE_DAYS * 86400L));
 
             return null;
         });
@@ -144,13 +156,235 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
         assertThat(response.getBody()).containsKey("reviewId");
     }
 
+    /**
+     * Renamed from {@code submitReview_noRecentSession_returns403WithCode} — the new rule is a
+     * lower-bound maturity FLOOR, not an upper-bound recency window, so the failure mode this test
+     * pins is the booking being too YOUNG, not too old (the opposite of the pre-skillars-145 shape).
+     */
     @Test
-    void submitReview_noRecentSession_returns403WithCode() {
-        // Move the booking's updatedAt to 30 days ago (outside 14-day window)
+    void submitReview_sessionTooYoung_returns403WithCode() {
+        ageDefaultBooking(Instant.now());
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 4, "body", "Too fresh"),
+            authenticatedHeaders(parentCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString()).contains("reviews.noQualifyingSession");
+            });
+    }
+
+    @Test
+    void submitReview_sessionNotYetMatured_returns403() {
+        ageDefaultBooking(Instant.now().minusSeconds(2L * 86400));
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 4, "body", "Still too fresh"),
+            authenticatedHeaders(parentCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString()).contains("reviews.noQualifyingSession");
+            });
+    }
+
+    /**
+     * skillars-deferred-145 code review (Patch, 2026-10-06): brackets the 7-day maturity floor to
+     * ±1 day — the prior tests used 0/2/10/400 days, none anywhere near the floor, so the configured
+     * value could drift a long way before anything failed. These two pin it to within a day.
+     *
+     * <p><strong>Round-2 correction (R5): this does NOT kill the {@code <=} → {@code <} mutation on
+     * {@code maturedBefore}, which an earlier version of this javadoc claimed.</strong> At 6 days the
+     * predicate is false under both operators and at 8 days it is true under both, so only a fixture
+     * landing exactly on {@code maturedBefore} could tell them apart — and that needs an injectable
+     * clock, since the service recomputes {@code Instant.now()} microseconds after the fixture is
+     * written. Bracketing the value is what these tests actually buy; the operator boundary itself is
+     * unpinned and would need a clock abstraction to pin honestly.
+     */
+    @Test
+    void submitReview_sessionOneDayUnderFloor_returns403() {
+        ageDefaultBooking(Instant.now().minusSeconds(6L * 86400));
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 4, "body", "One day under the floor"),
+            authenticatedHeaders(parentCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString()).contains("reviews.noQualifyingSession");
+            });
+    }
+
+    /** Mirrors the test above from the other side of the same 7-day boundary. */
+    @Test
+    void submitReview_sessionOneDayOverFloor_returns201() {
+        ageDefaultBooking(Instant.now().minusSeconds(8L * 86400));
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 4, "body", "One day over the floor"),
+            authenticatedHeaders(parentCookies),
+            Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
+    /** Proves AC1's deliberate lack of an upper bound: a session from a year ago still qualifies. */
+    @Test
+    void submitReview_oldMaturedSession_returns201() {
+        ageDefaultBooking(Instant.now().minusSeconds(400L * 86400));
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 4, "body", "Still remember this coach"),
+            authenticatedHeaders(parentCookies),
+            Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
+    /**
+     * AC6 / F2 regression test: a self-registered adult player (no parent account,
+     * {@code parent_id IS NULL}, {@code user_id} equal to their own account) reviewing their own
+     * matured session must succeed — this is exactly the case the original (now-fixed)
+     * {@code Booking.playerId}-vs-{@code authorId} discriminator would have permanently locked out.
+     */
+    @Test
+    void submitReview_selfRegisteredAdultPlayerReviewsOwnCoach_returns201() {
+        String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
         transactionTemplate.execute(status -> {
+            insertUser(SELF_USER_ID, SELF_EMAIL, passwordHash, "PLAYER");
             jdbcTemplate.update(
-                "UPDATE booking.bookings SET updated_at = ? WHERE coach_id = ?",
-                Timestamp.from(Instant.now().minusSeconds(30L * 86400)), coachProfileId);
+                "INSERT INTO main.user_authority (user_id, authority_id) " +
+                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PLAYER')) ON CONFLICT DO NOTHING",
+                SELF_USER_ID);
+            jdbcTemplate.update(
+                "INSERT INTO main.player_profiles " +
+                "(id, name, date_of_birth, position, age_tier, user_id, independent_account_allowed, created_at, created_by) " +
+                "VALUES (?, 'Self Player', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
+                PLAYER_ID_SELF, Date.valueOf(LocalDate.now().minusYears(25)),
+                SELF_USER_ID, Timestamp.from(Instant.now()));
+            // Self-registered booking: parentId carries the acting user's own id (no family
+            // relationship), per BookingService.java:187-191's self-registered-player else-branch.
+            insertCompletedBookingFor(SELF_USER_ID, PLAYER_ID_SELF,
+                Instant.now().minusSeconds(DEFAULT_BOOKING_AGE_DAYS * 86400L));
+            return null;
+        });
+
+        String selfCookies = loginAndGetCookies(SELF_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 5, "body", "Reviewing my own session"),
+            authenticatedHeaders(selfCookies),
+            Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
+    /**
+     * skillars-deferred-145 code review (D2, 2026-10-06): inverted from
+     * {@code submitReview_parentOfAdultPlayer_returns403}. The age-tier discriminator was removed
+     * entirely — "so long as a player is under a parent account, the parent should be the
+     * reviewer," regardless of the player's age. A parent-linked player turning 18 no longer makes
+     * the session unreviewable (no flow ever transfers that profile to self-owned; see
+     * {@code checkEligibility}'s own comment for the full {@code chk_pp_owner}/
+     * {@code ShadowAccountService} reasoning), so this must now succeed.
+     */
+    @Test
+    void submitReview_parentOfAdultPlayer_returns201() {
+        transactionTemplate.execute(status -> {
+            // Remove the default fixture's qualifying MINOR booking so the adult-child booking
+            // below is the only qualifying booking for this author/coach pair.
+            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ? AND player_id = ?",
+                coachProfileId, PLAYER_ID);
+            jdbcTemplate.update(
+                "INSERT INTO main.player_profiles " +
+                "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) " +
+                "VALUES (?, 'Adult Child', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
+                PLAYER_ID_ADULT_CHILD, Date.valueOf(LocalDate.now().minusYears(20)),
+                PARENT_ID, Timestamp.from(Instant.now()));
+            insertCompletedBookingFor(PARENT_ID, PLAYER_ID_ADULT_CHILD,
+                Instant.now().minusSeconds(DEFAULT_BOOKING_AGE_DAYS * 86400L));
+            return null;
+        });
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 4, "body", "On behalf of my adult child"),
+            authenticatedHeaders(parentCookies),
+            Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
+    /**
+     * AC2.b: a parent reviewing on behalf of a linked player remains eligible. Paired with
+     * {@link #submitReview_parentOfAdultPlayer_returns201} — round-2 (R16): since D2 removed the
+     * age check, both tests drive the SAME code path on purpose. They are kept as a matched pair
+     * precisely to prove the player's age tier does not change the outcome; neither asserts a
+     * distinction, and re-introducing an age branch would break exactly one of them.
+     */
+    @Test
+    void submitReview_parentOfMinorPlayer_returns201() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 4, "body", "On behalf of my minor child"),
+            authenticatedHeaders(parentCookies),
+            Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
+    /**
+     * AC2.c: an open dispute the author themselves raised against the same coach blocks the review,
+     * even though an otherwise-qualifying booking exists. Inserts directly into {@code admin.disputes}
+     * — NOT a {@code bookings.status = 'DISPUTED'} fixture, which the pre-implementation review found
+     * manufactures a state production code never produces (see story's F1 banner).
+     */
+    @Test
+    void submitReview_activeDisputeOnOtherBooking_returns403() {
+        transactionTemplate.execute(status -> {
+            UUID otherBookingId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings " +
+                "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
+                " version, created_at, updated_at, canonical_timezone) " +
+                "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
+                otherBookingId, coachProfileId, PARENT_ID, PLAYER_ID,
+                Timestamp.from(Instant.now().minusSeconds(20L * 86400)),
+                Timestamp.from(Instant.now().minusSeconds(20L * 86400)),
+                Timestamp.from(Instant.now().minusSeconds(21L * 86400)),
+                Timestamp.from(Instant.now().minusSeconds(20L * 86400)));
+            jdbcTemplate.update(
+                "INSERT INTO admin.disputes " +
+                "(id, booking_id, raised_by, raised_by_role, reason, details, status, created_at) " +
+                "VALUES (?, ?, ?, 'PARENT', 'OTHER', 'Test dispute', 'OPEN', ?)",
+                UUID.randomUUID(), otherBookingId, PARENT_ID, Timestamp.from(Instant.now()));
             return null;
         });
 
@@ -158,15 +392,56 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             reviewsUrl("/coaches/" + coachProfileId),
             HttpMethod.POST,
-            Map.of("rating", 4, "body", "Late review"),
+            Map.of("rating", 4, "body", "Despite the dispute"),
             authenticatedHeaders(parentCookies),
             Map.class))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> {
                 HttpClientErrorException ex = (HttpClientErrorException) e;
                 assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-                assertThat(ex.getResponseBodyAsString()).contains("reviews.noRecentSession");
+                assertThat(ex.getResponseBodyAsString()).contains("reviews.activeDispute");
             });
+    }
+
+    /**
+     * skillars-deferred-145 code review (Patch, 2026-10-06): proves the {@code d.raisedBy =
+     * :authorId} narrowing in {@code DisputeRepository.existsActiveDisputeByAuthor} actually
+     * matters — the only place the shipped code departs from AC2.c's literal "any open dispute"
+     * text, per the owner decision on the story's "Not Yet Resolved" item 2. Without the clause,
+     * deleting it would leave the whole suite green; this pins the coach-raised case the clause
+     * exists to protect.
+     */
+    @Test
+    void submitReview_coachRaisedDisputeOnOtherBooking_returns201() {
+        transactionTemplate.execute(status -> {
+            UUID otherBookingId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings " +
+                "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
+                " version, created_at, updated_at, canonical_timezone) " +
+                "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
+                otherBookingId, coachProfileId, PARENT_ID, PLAYER_ID,
+                Timestamp.from(Instant.now().minusSeconds(20L * 86400)),
+                Timestamp.from(Instant.now().minusSeconds(20L * 86400)),
+                Timestamp.from(Instant.now().minusSeconds(21L * 86400)),
+                Timestamp.from(Instant.now().minusSeconds(20L * 86400)));
+            jdbcTemplate.update(
+                "INSERT INTO admin.disputes " +
+                "(id, booking_id, raised_by, raised_by_role, reason, details, status, created_at) " +
+                "VALUES (?, ?, ?, 'COACH', 'OTHER', 'Coach-raised dispute', 'OPEN', ?)",
+                UUID.randomUUID(), otherBookingId, COACH_USER_ID, Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 4, "body", "Coach opened a dispute, not me"),
+            authenticatedHeaders(parentCookies),
+            Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
     }
 
     @Test
@@ -241,12 +516,16 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
      * that release can {@code updateReview}'s locked read proceed; with the refresh it observes 99
      * and writes 100. Without the refresh it still holds the pre-lock snapshot (epoch 5) and writes
      * 6 — so the {@code isEqualTo(100)} assertion is a direct mutation check on the refresh line.
+     *
+     * <p>skillars-deferred-145: the default booking fixture is now matured past the 7-day floor (see
+     * {@code DEFAULT_BOOKING_AGE_DAYS}), so this test's {@code checkEligibility} re-check still finds
+     * a qualifying booking without any change to this method itself.
      */
     @Test
     @Timeout(30)
     void updateReview_epochBumpAppliesToFreshLockedState_notStaleInstance() throws Exception {
         UUID reviewId = UUID.randomUUID();
-        Instant oldModified = Instant.now().minusSeconds(400L * 86400); // outside the 365-day re-edit rule
+        Instant oldModified = Instant.now().minusSeconds(400L * 86400); // outside the 30-day cooldown
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
                 "INSERT INTO reviews.coach_reviews " +
@@ -296,17 +575,27 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
 
     // ── helpers ──
 
-    private void insertCompletedBooking(Instant updatedAt) {
+    private void insertCompletedBookingFor(long parentId, long playerId, Instant updatedAt) {
         jdbcTemplate.update(
             "INSERT INTO booking.bookings " +
             "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
             " version, created_at, updated_at, canonical_timezone) " +
             "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
-            UUID.randomUUID(), coachProfileId, PARENT_ID, PLAYER_ID,
+            UUID.randomUUID(), coachProfileId, parentId, playerId,
             Timestamp.from(updatedAt.minusSeconds(3600)),
             Timestamp.from(updatedAt),
             Timestamp.from(Instant.now().minusSeconds(86400 * 7)),
             Timestamp.from(updatedAt));
+    }
+
+    /** Mutates the single default booking fixture inserted by {@code setUp()} in-place. */
+    private void ageDefaultBooking(Instant updatedAt) {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "UPDATE booking.bookings SET updated_at = ? WHERE coach_id = ? AND player_id = ?",
+                Timestamp.from(updatedAt), coachProfileId, PLAYER_ID);
+            return null;
+        });
     }
 
     private String loginAndGetCookies(String email) {

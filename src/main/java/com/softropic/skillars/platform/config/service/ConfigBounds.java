@@ -182,10 +182,22 @@ public final class ConfigBounds {
         new BoundedKey("booking.batch.maxSize", 1L, 100L, true,
             "0/neg → every batch booking rejected as booking.batchSizeExceeded", 0L);
 
-    /** {@code ReviewSubmissionService} — 0/neg → no review can ever be submitted. */
-    public static final BoundedKey REVIEWS_SUBMISSION_WINDOW_DAYS =
-        new BoundedKey("reviews.submissionWindowDays", 1L, 365L, true,
-            "0/neg → no review can ever be submitted (no recent session found)", 14L);
+    /**
+     * {@code ReviewSubmissionService} — direction of harm is inverted from the key this replaces
+     * (REVIEWS_SUBMISSION_WINDOW_DAYS, an upper-bound window whose bad value made submission
+     * IMPOSSIBLE). This is a lower-bound floor: an out-of-range value (0 or neg) falls back to the
+     * coded default (7) via the 4-arg getBoundedInt — it is caught and corrected, never silently
+     * honored as zero. min=1 is deliberate so that a stored 0 IS flagged as out-of-range (see Dev
+     * Notes, F6) instead of being read as a legitimate "no cooling-off period" value.
+     */
+    public static final BoundedKey REVIEWS_MIN_SESSION_AGE_DAYS =
+        new BoundedKey("reviews.minSessionAgeDays", 1L, 365L, false,
+            "out-of-range (incl. 0) falls back to the coded default (7), never to an unbounded floor", 7L);
+
+    /** {@code ReviewSubmissionService} — same reasoning as REVIEWS_MIN_SESSION_AGE_DAYS above. */
+    public static final BoundedKey REVIEWS_UPDATE_COOLDOWN_DAYS =
+        new BoundedKey("reviews.updateCooldownDays", 1L, 365L, false,
+            "out-of-range (incl. 0) falls back to the coded default (30), never to an unbounded cooldown", 30L);
 
     /** {@code ReviewFlagService} — 0 → every review auto-held. */
     public static final BoundedKey REVIEWS_AUTO_HOLD_FLAG_THRESHOLD =
@@ -362,7 +374,8 @@ public final class ConfigBounds {
         RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS.key(),
         GDPR_EXPORT_URL_EXPIRY_HOURS.key(),
         MESSAGE_RETENTION_MONTHS.key(),
-        REVIEWS_SUBMISSION_WINDOW_DAYS.key(),
+        REVIEWS_MIN_SESSION_AGE_DAYS.key(),
+        REVIEWS_UPDATE_COOLDOWN_DAYS.key(),
         REVIEWS_AUTO_HOLD_FLAG_THRESHOLD.key(),
         TIMELINE_COACH_ACCESS_EXPIRY_DAYS.key(),
         RATE_LIMIT_BUCKET_TTL_HOURS.key(),
@@ -392,7 +405,8 @@ public final class ConfigBounds {
             GDPR_EXPORT_URL_EXPIRY_HOURS,
             MESSAGE_RETENTION_MONTHS,
             BOOKING_BATCH_MAX_SIZE,
-            REVIEWS_SUBMISSION_WINDOW_DAYS,
+            REVIEWS_MIN_SESSION_AGE_DAYS,
+            REVIEWS_UPDATE_COOLDOWN_DAYS,
             REVIEWS_AUTO_HOLD_FLAG_THRESHOLD,
             VIDEO_LIFECYCLE_BATCH_SIZE,
             MODERATION_SLA_BATCH_SIZE,
