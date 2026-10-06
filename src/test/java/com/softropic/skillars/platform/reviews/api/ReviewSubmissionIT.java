@@ -370,14 +370,20 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
     void submitReview_activeDisputeOnOtherBooking_returns403() {
         transactionTemplate.execute(status -> {
             UUID otherBookingId = UUID.randomUUID();
+            Instant otherSessionStart = Instant.now().minusSeconds(20L * 86400);
             jdbcTemplate.update(
                 "INSERT INTO booking.bookings " +
                 "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
                 " version, created_at, updated_at, canonical_timezone) " +
                 "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
                 otherBookingId, coachProfileId, PARENT_ID, PLAYER_ID,
-                Timestamp.from(Instant.now().minusSeconds(20L * 86400)),
-                Timestamp.from(Instant.now().minusSeconds(20L * 86400)),
+                // CI fix: requested_end_time MUST be strictly after requested_start_time
+                // (chk_bkg_end_after_start). Two separate Instant.now() calls landed in the
+                // same microsecond on CI, making start == end and failing the CHECK — green
+                // locally only because the two calls happened to differ there. Derive the end
+                // from the start instead of re-reading the clock.
+                Timestamp.from(otherSessionStart),
+                Timestamp.from(otherSessionStart.plusSeconds(3600)),
                 Timestamp.from(Instant.now().minusSeconds(21L * 86400)),
                 Timestamp.from(Instant.now().minusSeconds(20L * 86400)));
             jdbcTemplate.update(
@@ -415,14 +421,20 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
     void submitReview_coachRaisedDisputeOnOtherBooking_returns201() {
         transactionTemplate.execute(status -> {
             UUID otherBookingId = UUID.randomUUID();
+            Instant otherSessionStart = Instant.now().minusSeconds(20L * 86400);
             jdbcTemplate.update(
                 "INSERT INTO booking.bookings " +
                 "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
                 " version, created_at, updated_at, canonical_timezone) " +
                 "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
                 otherBookingId, coachProfileId, PARENT_ID, PLAYER_ID,
-                Timestamp.from(Instant.now().minusSeconds(20L * 86400)),
-                Timestamp.from(Instant.now().minusSeconds(20L * 86400)),
+                // CI fix: requested_end_time MUST be strictly after requested_start_time
+                // (chk_bkg_end_after_start). Two separate Instant.now() calls landed in the
+                // same microsecond on CI, making start == end and failing the CHECK — green
+                // locally only because the two calls happened to differ there. Derive the end
+                // from the start instead of re-reading the clock.
+                Timestamp.from(otherSessionStart),
+                Timestamp.from(otherSessionStart.plusSeconds(3600)),
                 Timestamp.from(Instant.now().minusSeconds(21L * 86400)),
                 Timestamp.from(Instant.now().minusSeconds(20L * 86400)));
             jdbcTemplate.update(
