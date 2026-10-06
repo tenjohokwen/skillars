@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.security.contract.Gender;
 import com.softropic.skillars.platform.security.service.LoginTokenManager;
 import com.softropic.skillars.infrastructure.security.CookieUtil;
 import com.softropic.skillars.platform.security.contract.Principal;
+import com.softropic.skillars.platform.security.contract.SkillarsProfileCookie;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
 import com.softropic.skillars.platform.security.contract.exception.InvalidJWTDataException;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
@@ -21,8 +22,6 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Component;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
@@ -113,12 +112,7 @@ public class JwtManagerImpl implements LoginTokenManager {
                 .findFirst()
                 .orElse(SkillarsRole.ANONYMOUS);
         final String role = resolvedRole.name();
-        // `id` is quoted deliberately — see AuthService.login()'s identical comment (:122-130) for
-        // why: an unquoted id silently corrupts authStore.userId via IEEE-754 rounding once the
-        // frontend's hydrateFromCookie() parses it.
-        final String json = "{\"id\":\"" + claims.get(BUS_ID) + "\",\"role\":\"" + role + "\"}";
-        final String skpValue = URLEncoder.encode(json, StandardCharsets.UTF_8);
-        CookieUtil.addCookie(res, SKILLARS_PROFILE_COOKIE, skpValue, false, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
+        new SkillarsProfileCookie(String.valueOf(claims.get(BUS_ID)), role).writeTo(res);
     }
 
     private Authentication authentication(Map<String, Object> claims) {
@@ -187,6 +181,12 @@ public class JwtManagerImpl implements LoginTokenManager {
         CookieUtil.removeCookie(ADMIN_COOKIE, response, false);
         CookieUtil.removeCookie(JWT_SESSION_COOKIE, response, true);
         CookieUtil.removeCookie(SESSION_REFRESH_COUNTDOWN, response, false);
+        // skillars-deferred-144 AC2: deleteLoginToken predates 'skp' entirely and never cleared it,
+        // which left 'skp' standing on JWTAuthorizationFilter's routine-denial branch (that branch
+        // calls deleteLoginToken alone, not SecurityUtil.clearAuthCookies). 'rtkn' is deliberately
+        // NOT added here — revoking it on every idle-out would make POST /api/auth/refresh
+        // permanently useless the moment it is wired up.
+        SkillarsProfileCookie.removeFrom(response);
     }
 
     @Override

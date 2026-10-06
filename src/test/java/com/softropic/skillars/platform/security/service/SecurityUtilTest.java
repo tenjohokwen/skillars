@@ -78,14 +78,16 @@ class SecurityUtilTest {
     }
 
     @Test
-    @DisplayName("terminateSession clears rtkn and skp on top of the six cookies deleteLoginToken handles")
+    @DisplayName("terminateSession clears rtkn and skp on top of the cookies deleteLoginToken handles")
     void terminateSession_clearsRefreshTokenAndProfileCookies() {
         request.setCookies(new Cookie(SecurityConstants.REFRESH_TOKEN_COOKIE, RAW_REFRESH_TOKEN));
 
         securityUtil.terminateSession(request, response);
 
-        // deleteLoginToken owns potc/bcookie/user/admin/ION/rint. The gap this story closes is the
-        // two cookies it does NOT clear, so those are asserted against real response headers.
+        // deleteLoginToken owns potc/bcookie/user/admin/ION/rint/skp (skillars-deferred-144 AC2
+        // added skp). loginTokenManager is mocked here, so calling the mock's deleteLoginToken
+        // emits no real header — rtkn and skp below are asserted against clearAuthCookies' own
+        // direct removal calls, not anything the mock would have produced.
         verify(loginTokenManager).deleteLoginToken(response);
 
         List<String> setCookies = response.getHeaders(SET_COOKIE);

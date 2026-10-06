@@ -490,7 +490,10 @@ public class JwtManagerImplTest {
                                                       USER_COOKIE,
                                                       ADMIN_COOKIE,
                                                       JWT_SESSION_COOKIE,
-                                                      SESSION_REFRESH_COUNTDOWN);
+                                                      SESSION_REFRESH_COUNTDOWN,
+                                                      // skillars-deferred-144 AC2: deleteLoginToken
+                                                      // now also clears 'skp'.
+                                                      SKILLARS_PROFILE_COOKIE);
         final Collection<String> headers = mockResponse.getHeaders("Set-Cookie");
         final List<String> actualCookieNames = headers.stream()
                                          .map(HttpCookie::parse)

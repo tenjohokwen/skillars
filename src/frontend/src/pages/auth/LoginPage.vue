@@ -131,6 +131,7 @@ import { useErrorHandler } from 'src/composables/useErrorHandler'
 import { useAuthStore } from 'src/stores/auth.store'
 import { useSession } from 'src/composables/useSession'
 import { routeForRole } from 'src/router/roleRoutes'
+import { isSafeRedirect } from 'src/router/safeRedirect'
 
 const router = useRouter()
 const route = useRoute()
@@ -168,10 +169,7 @@ async function handleLogin() {
     authStore.setUser(response)
     initSession()
     const redirect = route.query.redirect
-    const safePath =
-      typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
-        ? redirect
-        : routeForRole(response.role)
+    const safePath = isSafeRedirect(redirect, router) ? redirect : routeForRole(response.role)
     router.push(safePath)
   } catch (err) {
     const status = err?.response?.status

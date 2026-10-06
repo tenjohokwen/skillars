@@ -348,10 +348,13 @@ const routes = [
     ],
   },
 
-  // Catch-all 404
+  // Catch-all 404. meta.notFound lets safeRedirect.js's isSafeRedirect tell "landed on the 404
+  // page" apart from "matched a real route" — router.resolve(path).matched.length > 0 is NOT
+  // enough on its own, since this catch-all matches every `/`-prefixed path (skillars-deferred-144).
   {
     path: '/:catchAll(.*)*',
     component: () => import('pages/ErrorNotFound.vue'),
+    meta: { notFound: true },
   },
 ]
 

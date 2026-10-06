@@ -5,6 +5,7 @@ import com.softropic.skillars.infrastructure.security.CookieUtil;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
 import com.softropic.skillars.platform.security.contract.Gender;
 import com.softropic.skillars.platform.security.contract.Principal;
+import com.softropic.skillars.platform.security.contract.SkillarsProfileCookie;
 import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 
@@ -34,7 +35,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.REFRESH_TOKEN_COOKIE;
-import static com.softropic.skillars.infrastructure.security.SecurityConstants.SKILLARS_PROFILE_COOKIE;
 
 
 /**
@@ -151,11 +151,12 @@ public final class SecurityUtil {
      * {@code AuthService.refresh()}'s rejection branches.
      *
      * <p>Replaces the previous {@code logout(HttpServletResponse)}, which cleared only the six
-     * cookies {@code LoginTokenManager#deleteLoginToken} handles ({@code potc}, {@code bcookie},
-     * {@code user}, {@code admin}, {@code ION}, {@code rint}) and left both {@code rtkn} and
-     * {@code skp} standing, with the underlying {@code refresh_tokens} row still unused — so a
-     * forcibly denied session kept a live credential that {@code POST /api/auth/refresh} could
-     * trade back in for a new one.
+     * cookies {@code LoginTokenManager#deleteLoginToken} handled at the time ({@code potc},
+     * {@code bcookie}, {@code user}, {@code admin}, {@code ION}, {@code rint} — {@code skp} is a
+     * seventh, added to {@code deleteLoginToken} by skillars-deferred-144 AC2) and left both
+     * {@code rtkn} and {@code skp} standing, with the underlying {@code refresh_tokens} row still
+     * unused — so a forcibly denied session kept a live credential that {@code POST
+     * /api/auth/refresh} could trade back in for a new one.
      *
      * <p>Callable from any transactional context, including none at all (the filter has no ambient
      * transaction): {@link RefreshTokenRepository#markUsedByTokenHash(String)} commits in its own
@@ -168,26 +169,53 @@ public final class SecurityUtil {
         SecurityContextHolder.clearContext();
         final String rawToken = CookieUtil.getCookieValue(request, REFRESH_TOKEN_COOKIE);
         if (rawToken != null && !rawToken.isBlank()) {
+            // skillars-deferred-144 AC6.4: this write is now unconditional on every caller,
+            // including AuthService.logout() — pre-skillars-deferred-143, that path only revoked
+            // if the token wasn't already used. Now it always runs, but costs nothing extra on an
+            // already-used token: skillars-deferred-144 AC6.6 narrowed the underlying @Query
+            // (RefreshTokenRepository#markUsedByTokenHash) to also require r.used = false, so a
+            // repeat call against an already-revoked row matches zero rows rather than issuing a
+            // redundant UPDATE — an accepted cost of the bulk-update redesign that avoids the
+            // self-deadlock documented on AuthService.refresh(), never previously stated as a
+            // tradeoff here.
             refreshTokenRepository.markUsedByTokenHash(sha256Hex(rawToken));
         }
         clearAuthCookies(response);
     }
 
     /**
-     * The cookie half of {@link #terminateSession} on its own: drops the six cookies
-     * {@code deleteLoginToken} owns plus {@code rtkn} and {@code skp}, without touching the
-     * database.
+     * The cookie half of {@link #terminateSession} on its own: drops the seven cookies
+     * {@code deleteLoginToken} owns (including {@code skp}, as of skillars-deferred-144 AC2) plus
+     * {@code rtkn}, without touching the database. The explicit {@code skp} removal below is
+     * therefore redundant with {@code deleteLoginToken}'s own new removal on every caller of this
+     * method — harmless (a duplicate {@code Set-Cookie: skp=; Max-Age=0} header) and kept
+     * deliberately: {@code SecurityUtilTest.terminateSession_clearsRefreshTokenAndProfileCookies}
+     * mocks {@code loginTokenManager}, so it can only observe THIS method's own direct removal
+     * calls, not whatever the mocked {@code deleteLoginToken} would have done.
      *
-     * <p>Exists for the one caller that must not revoke — {@code AuthService.refresh()}'s
-     * optimistic-lock-loser branch, which runs after its own transaction has already issued an
-     * {@code UPDATE} against the token row and would therefore self-deadlock against a
-     * {@code REQUIRES_NEW} revocation. Prefer {@link #terminateSession} everywhere else; this is
-     * not a general-purpose "log out" and does not end the session's server-side credential.
+     * <p>Callers, each with its own reason to skip {@link #terminateSession}'s DB revocation:
+     * <ul>
+     *     <li>{@link #terminateSession} itself, as its own last step — it has already issued its
+     *         own {@code markUsedByTokenHash} revocation above, so this call exists purely for the
+     *         cookie-clearing side; this is the one caller skipping the revocation because it is
+     *         not this method's caller to skip at all, but the author of it.</li>
+     *     <li>{@code AuthService.refresh()}'s optimistic-lock-loser branch — runs after its own
+     *         transaction has already issued an {@code UPDATE} against the token row, so a
+     *         {@code REQUIRES_NEW} revocation here would self-deadlock against it.</li>
+     *     <li>{@code AuthService.refresh()}'s two reuse-detection branches (skillars-deferred-144
+     *         AC6.2) — {@code refreshTokenRepository.markAllUsedByUserId} has already revoked
+     *         every token for the user immediately before either call, so
+     *         {@code terminateSession}'s own per-token {@code markUsedByTokenHash} would be a
+     *         redundant extra write.</li>
+     * </ul>
+     * This is not a general-purpose "log out" and does not end the session's server-side
+     * credential by itself — it relies on the caller having already revoked (or never needing to
+     * revoke) the underlying {@code refresh_tokens} row.
      */
     public void clearAuthCookies(final HttpServletResponse response) {
         loginTokenManager.deleteLoginToken(response);
         CookieUtil.removeCookie(REFRESH_TOKEN_COOKIE, response, true, "Lax");
-        CookieUtil.removeCookie(SKILLARS_PROFILE_COOKIE, response, false, "Lax");
+        SkillarsProfileCookie.removeFrom(response);
     }
 
     /**
