@@ -81,6 +81,7 @@ import { useErrorHandler } from 'src/composables/useErrorHandler'
 import { useSession } from 'src/composables/useSession'
 import { useAuthStore } from 'src/stores/auth.store'
 import { routeForRole } from 'src/router/roleRoutes'
+import { isSafeRedirect } from 'src/router/safeRedirect'
 import { readUserDisplayName } from 'src/utils/sessionCookies'
 
 const router = useRouter()
@@ -156,11 +157,13 @@ async function handleSubmit() {
     // the rest of this session (skillars-deferred-142 code review).
     authStore.displayName = readUserDisplayName() ?? t('dashboard.defaultUser')
     const redirect = route.query.redirect
-    const safePath =
-      typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
-        ? redirect
-        : routeForRole(authStore.role)
-    router.push(safePath)
+    const safePath = isSafeRedirect(redirect, router) ? redirect : routeForRole(authStore.role)
+    // router.replace, not push (skillars-deferred-144 AC4): verifyOtp has already consumed
+    // loginInfoId server-side, so Back must not return the user to this now-dead OTP form —
+    // resubmitting would error against an already-consumed id. Precedent: PlayerHomeRedirectPage.vue's
+    // one-shot-redirect shape, not VideoManagementPage.vue's router.replace (that one is an
+    // unrelated 403-access-denied bounce, a different shape entirely).
+    router.replace(safePath)
   } catch (err) {
     setError(err)
     digits.value = ['', '', '', '', '', '']

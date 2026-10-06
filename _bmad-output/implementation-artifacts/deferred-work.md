@@ -3408,158 +3408,6 @@ does — silently discarding `application-test.yaml`'s own already-tuned `maximu
 `auto-commit`/`connection-init-sql`/`idle-timeout` from the same yaml keys. Verified:
 `GdprErasureDataSourceRoutingIT` 2/2 passing, PR #231's `build` check passed on the next run.]**
 
-## Deferred from: manual testing of coach profile-builder (2026-10-01)
-
-**[TOP PRIORITY — explicit user instruction (2026-10-01): give this item top priority over other
-open work in this file when next picking a story.]** **[CLOSED by skillars-deferred-139-my-profile-role-aware-field-management-and-coach-photo-delete, done 2026-10-02: re-verified directly against HEAD, not just the story's own claim — `ProfilePage.vue` now has three new role-gated sections (`v-if="authStore.isCoach"`/`isPlayer`/`isParent`, AC2/AC4/AC5) wiring `EditCoachIdentityDialog`/`EditCoachSpecialtiesDialog`/`EditCoachPricingDialog`/`EditCoachAvailabilityDialog`/`EditCoachPhotoDialog` to the existing `saveStep1`-`saveStep4` endpoints (AC1/AC2), and `CoachProfileService.deletePhoto` (AC3) exists and is wired to a new `DELETE /api/marketplace/coaches/me/profile/photo` — closing exactly the reported gap (coach who skipped the photo step during onboarding had no way back in). Player position (AC4) and parent child-position (AC5) edit paths also added; Admin confirmed deliberately out of scope (AC6).]**
-
-- **D1 — "My Profile" has no editable surface for any profile-builder field; a coach who skips a
-  step (e.g. the photo) during onboarding has no way back in.** Found manually testing: a coach
-  completed profile-builder without uploading a photo, then had no route to add one afterward.
-  `ProfilePage.vue` (`src/frontend/src/pages/ProfilePage.vue`) — the only page routed as "My
-  Profile" for every role — is strictly role-agnostic account settings: email, password, 2FA,
-  name/nationalId/gender/langKey, phone, address (via `UpdateEmailDialog`/`UpdatePasswordDialog`/
-  `UpdatePhoneDialog`/`UpdateAddressDialog`/`UpdateInfoDialog`/`Toggle2faDialog`,
-  `src/frontend/src/components/profile/`). None of the fields collected by either profile-builder
-  flow are exposed here, in either direction (view or edit) — confirmed by reading the full file,
-  not inferred.
-  - **Coach fields with no post-onboarding edit path at all** (collected across
-    `ProfileBuilderStep1-5.vue`, orchestrated by `CoachProfileBuilderPlaceholderPage.vue`):
-    display name, bio, city, district, languages, timezone (Step1); specialties, age groups
-    (Step2); per-session price, session duration, session packs — sessions/price/label, add/remove
-    (Step3); availability windows — day/start/end, add/remove, timezone (Step4); profile photo —
-    upload only, no replace/delete anywhere (Step5, `signUpload`/`confirmUpload` via
-    `src/frontend/src/api/marketplace.api.js`, backend `CoachProfileService`/`StorageResource`).
-  - **Player fields with no post-onboarding edit path:** position (single select,
-    `PlayerProfileBuilderPage.vue` — a much smaller gap than coach's, by field count).
-  - **Parent:** profile-builder-equivalent (`CreatePlayerProfilePage.vue`,
-    `parent/create-player`) creates a CHILD player's profile, not the parent's own — out of scope
-    for "parent's own profile" by construction; no separate parent-specific field set was found.
-  - **Ask (user's own words):** "My Profile" should let a user upload, edit, or delete any field
-    from their profile-completion flow, with the field set depending on role — i.e. role-gated
-    sections added to (or a role-aware extension of) `ProfilePage.vue`.
-  - **Backend verified (reading, not assumed) — the news is good: this is mostly a FRONTEND gap.**
-    `ProfileBuilderResource`'s five `@PutMapping("/steps/{n}")` endpoints
-    (`/api/marketplace/coaches/me/profile/steps/1-5`, backed by `CoachProfileService.saveStep1-5`)
-    are idempotent update endpoints, not one-time create calls, and none of them re-gate on the
-    profile's `CoachProfileStatus` — `requireDraftStatus` is only ever called from
-    `publishProfile`. Calling any `saveStepN` again post-publish (`ACTIVE` status) does NOT revert
-    the profile to `DRAFT` (verified: `saveStep1`'s `status=DRAFT` write only happens in the
-    `orElseGet` branch, i.e. only when no profile row exists yet at all) and does NOT get rejected
-    by the `stepOutOfOrder` guards on steps 2-5 (each checks "does the PRIOR step's data already
-    exist", which is trivially true for an already-published coach). Concretely, this means:
-    - Step1 (name/bio/city/district/languages/timezone), Step2 (specialties/age groups — full
-      replace via `deleteByCoachId` + re-insert), Step3 (price/duration/session packs — same
-      replace-all pattern, so removing ONE pack is just resubmitting the list without it) and Step4
-      (availability windows — same replace-all pattern) can almost certainly be wired into "My
-      Profile" AS-IS, re-using the exact request/response contracts `ProfileBuilderStep1-4.vue`
-      already build, with no new backend work. Not actually tried end-to-end — confirm with a real
-      request before committing to zero backend work — but nothing in the code says otherwise.
-    - **Step5 (photo) is the one genuine gap, and it's exactly the reported bug:** `saveStep5` only
-      ever SETS `photoUrl` when `req.photoUrl() != null` (line ~290) — there is no code path that
-      clears it, so "upload a photo later" (the reported case) reuses the existing endpoint fine,
-      but "delete my photo" has no server-side support at all today and needs a real backend change
-      (either accept an explicit null/clear signal `saveStep5` currently can't distinguish from
-      "field omitted", or a dedicated delete endpoint alongside it). Replacing an existing photo is
-      presumably fine (same upload-then-`saveStep5` call), not separately verified.
-  - **Player (position) and parent:** not inventoried to the same depth — whatever endpoint
-    `PlayerProfileBuilderPage.vue`'s step submission uses should get the same idempotency check
-    before assuming it's reusable as-is.
-  - **Explicitly out of scope per the exploratory discussion that produced this entry:** no
-    implementation was attempted beyond this investigation; this is scoping only. The next story
-    should (1) confirm the above by actually calling `saveStep1-4` against an already-ACTIVE test
-    coach rather than trusting the static-read analysis, (2) design the photo-delete path, (3)
-    design the role-gated "My Profile" UI itself (new sections vs. a separate tab/page — not
-    decided here), (4) do the equivalent endpoint-reuse check for player/parent fields.
-
----
-
-## Deferred from: code review of skillars-deferred-139-my-profile-role-aware-field-management-and-coach-photo-delete (2026-10-02)
-
-- **`marketplace.stepOutOfOrder` and `marketplace.profileNotFound` have no translations in any locale.**
-  Both error keys are absent from all three frontend locale bundles (`src/frontend/src/i18n/en-US/index.js`,
-  `fr-FR/index.js`, `de-DE/index.js` — verified by importing the real bundles and resolving the keys, not
-  by grep alone) and also absent from `src/main/resources/i18n/messages*.properties`. When either is thrown
-  the UI banner falls through to the raw English server sentence (e.g. "Complete Step 2 before submitting
-  Step 3"), which French and German users see untranslated.
-
-  **Why deferred, not patched:** pre-existing, not introduced by deferred-139. Both keys are thrown by
-  `CoachProfileService.saveStep3` (`:220-223`) and `saveStep5` (`:304-306`), which the existing onboarding
-  wizard already calls — so the untranslated-error path predates this story and is reachable from the
-  original builder flow. deferred-139 only widened the set of entry points that can reach it.
-
-  **Note on scope:** this does *not* contradict the story's i18n-parity claim, which was independently
-  verified and holds — all 99 `t()` keys used by the seven new/changed frontend files resolve in all three
-  locales. These two are *server-side* error keys, a different namespace from the `profile.*` keys the story
-  added.
-
-  **Fix when picked up:** add `marketplace.stepOutOfOrder` and `marketplace.profileNotFound` to all three
-  locale bundles. Worth a broader sweep at the same time: audit every `MarketplaceError` key (and ideally
-  every server error key reachable by the frontend) for locale coverage, since these two being missing
-  suggests the server-error namespace was never parity-checked the way `profile.*` was.
-
-  **[CLOSED by skillars-deferred-140: Error Key Localization (AC3), done 2026-10-02 — re-verified directly: `marketplace.stepOutOfOrder`/`marketplace.profileNotFound` now present in all three locale bundles (`en-US`/`fr-FR`/`de-DE`).]**
-
-- **Adopt "coach profile timezone is authoritative" and close the open `deferred-17 D8` reconciliation.**
-  Decided by Mbah during the deferred-139 code review (2026-10-02): *"Both player and coach will use the
-  timezone of the city in which the coach resides when it comes to setting availability."* That rule
-  resolves D8 in favour of `coach_profiles.canonical_timezone` (a Step-1 field, stored alongside
-  `city`/`district`) being the single authoritative zone, making
-  `coach_availability_windows.canonical_timezone` derived rather than independently chosen.
-
-  **Current state is genuinely split, which is why this is a story and not a patch.** Two availability
-  writers disagree:
-  - `AvailabilityService.addWindow:261` already does `window.setCanonicalTimezone(lockedProfile.getCanonicalTimezone())`
-    — i.e. already implements the rule.
-  - `CoachProfileService.saveStep4:286-295` honours a caller-supplied per-window zone
-    (`ProfileBuilderStep4Request.AvailabilityWindowRequest.canonicalTimezone`).
-
-  And `AvailabilityService:82-83` documents per-window divergence as a **deliberate feature**, citing
-  skillars-deferred-63/-64: *"Per-window timezone divergence remains a deliberate feature — this only
-  changes which value drives the outer week-scoping bounds, not per-window slot computation below."*
-  `:140-152` duly materializes each window's slots in its own zone. Adopting Mbah's rule therefore
-  **reverses** that earlier decision, which is a deliberate call to make with eyes open, not a cleanup.
-
-  **Scope when picked up:**
-  1. `saveStep4` stamps `profile.getCanonicalTimezone()` onto every window and ignores (or validates-equal)
-     the request's per-window field; consider dropping the field from the DTO in a later contract revision.
-  2. `saveStep1` re-stamps existing windows when the zone changes — otherwise a coach who relocates leaves
-     stale window zones until their next availability save. (Deliberately left open by the narrow D1 fix
-     below; this is where it gets solved.)
-  3. Simplify `AvailabilityService:140-152` once per-window zones are guaranteed uniform.
-  4. Backfill migration for already-divergent rows (D8's "does not backfill existing rows" caveat).
-  5. Revisit whether `coach_availability_windows.canonical_timezone` should be dropped entirely.
-
-  **Already done, narrowly, in deferred-139's review:** the "My Profile" availability dialog's timezone
-  picker was made read-only (displays the profile zone, stamps it onto all windows) so it can no longer
-  create divergence — it previously read the profile column but wrote only the window column, so a zone
-  change there silently reverted on reopen. That fix deliberately touches neither `saveStep4`,
-  `AvailabilityService`, nor existing rows.
-
-  **[CLOSED by skillars-deferred-140: Coach Timezone Authoritative (AC1), done 2026-10-02 — re-verified directly: `saveStep4`/`saveStep1` now unconditionally stamp `profile.getCanonicalTimezone()` onto every window (`CoachProfileService.java:228,354`), with `V155` backfilling pre-existing divergent rows, closing `deferred-17 D8`.]**
-
-- **Nothing derives or validates a coach's `canonicalTimezone` against their `city`.**
-  Raised during the deferred-139 code review (2026-10-02) while confirming the rule above.
-  `ProfileBuilderStep1Request` declares `@Size(max = 100) String city` (free text) and
-  `@NotBlank @IanaTimezone String canonicalTimezone` (picked independently from
-  `CoachProfileService.getSupportedTimezones()`). No constraint, validator, or derivation connects them,
-  so `city = "Paris"` with `canonicalTimezone = "America/New_York"` saves cleanly today.
-
-  **Why it matters now:** under the newly-stated rule that availability is expressed in the coach's
-  city's timezone, these two fields contradicting each other is no longer cosmetic — the authoritative
-  zone can silently disagree with the location it is supposed to represent, and every booking, reminder
-  and calendar bound derives from the zone, not the city.
-
-  **Options when picked up:** make `city` a structured/geocoded reference and derive the zone from it
-  (strongest, biggest change); or keep both fields but validate plausibility (warn or reject when the
-  zone's region clearly disagrees with the city); or formally document that the zone is authoritative and
-  `city` is display-only, in which case the UI should stop implying the zone follows the city.
-  Pre-existing — not introduced by deferred-139.
-
-  **[CLOSED by skillars-deferred-140: City/Timezone Validation (AC2), done 2026-10-02 — re-verified directly: new `CityTimezoneValidator.validate(city, canonicalTimezone)` now wired into `saveStep1` (`CoachProfileService.java:166`), fail-open on ambiguous/unknown cities.]**
-
----
-
 ## Deferred from: code review of skillars-deferred-140 (2026-10-02)
 
 - **Native-speaker review of the fr-FR / de-DE `marketplace.*` error strings.** Story
@@ -3604,27 +3452,7 @@ open work in this file when next picking a story.]** **[CLOSED by skillars-defer
 
 ## Deferred from: code review of skillars-deferred-141 (2026-10-03)
 
-- **`OtpPage.vue:96` hardcodes `/dashboard` as the post-OTP landing instead of `routeForRole()`.**
-  `const redirectPath = computed(() => route.query.redirect || '/dashboard')`, pushed at `:148`.
-  `LoginPage.vue:174` does this correctly with `routeForRole(response.role)`. deferred-141's AC1 made
-  `/dashboard` admin-only in the nav, so any non-admin landing there via OTP would hit a page with no
-  menu entry for their role — the exact symptom that story exists to fix.
-
-  **Latent, not live:** the `/otp` route is `meta: { requiresGuest: true }` (`routes.js:24-28`), nothing
-  in the frontend router-navigates to it, and `verifyOtp` never calls `authStore.setUser`, so
-  `/dashboard`'s `requiresAuth` would bounce to `/login` regardless.
-
-  **When picked up:** change the fallback to `routeForRole(authStore.role)` at the same time the OTP
-  login flow is actually wired into navigation. Recorded so a future reviewer does not re-file it as an
-  active regression.
-
-- **`VideoManagementPage.vue:108` bounces a 403'd PLAYER to `/dashboard`.**
-  `router.replace('/dashboard')` in the `getMyVideos()` 403 handler. That route is `role: 'PLAYER'`-gated
-  (`routes.js:255-260`), so the only role that can reach it is sent to the page deferred-141 just made
-  admin-only in the nav — a dead end for them. Impact is cosmetic today (`DashboardPage.vue` is a generic
-  placeholder with no admin data).
-
-  **When picked up:** retarget to `/player/dashboard`, which deferred-141 created for exactly this persona.
+**[CLOSED by skillars-deferred-142: `OtpPage.vue`'s post-OTP fallback now uses `routeForRole(authStore.role)` (verified at `OtpPage.vue:162`), and `VideoManagementPage.vue`'s 403 handler now retargets to `/player/dashboard` (verified at `VideoManagementPage.vue:108`) — both of the two items this section originally listed.]**
 
 - **`/dashboard` is `DEFAULT_ROUTE` for any unmapped or null role, which now has no nav link at all.**
   `routeForRole()` (`roleRoutes.js:21-29`) falls through to `/dashboard` for a role absent from
@@ -3670,7 +3498,9 @@ classified defer — pre-existing, out of scope, or latent. Each was traced to r
   ~52 lines above it) and `JwtManagerImpl.java:108` is now `:119`; `AuthService.java:132` is unchanged.
   The "extract a shared serializer" option is now written up as its own umbrella item under "Deferred
   from: manual review during skillars-deferred-143 (2026-10-05)" — pick this up there rather than
-  alone.]**
+  alone.]** **[CLOSED by skillars-deferred-144 AC1 — `SkillarsProfileCookie.writeTo` replaces
+  `URLEncoder.encode(json, ...)` with `.replace("+", "%20")` applied uniformly at the single new call
+  site, pinned by `SkillarsProfileCookieTest.writeTo_roleContainingSpace_encodesSpaceAsPercent20NotPlus`.]**
 
 - **The open-redirect guard now exists as two independent textual copies.**
   `OtpPage.vue:151-155` and `LoginPage.vue:170-174` are byte-identical by design — skillars-deferred-142
@@ -3680,6 +3510,8 @@ classified defer — pre-existing, out of scope, or latent. Each was traced to r
   map (skillars-deferred-92 AC16).
   **When picked up:** extract `isSafeRedirect(path)` into a shared module, test it once, and call it from
   both pages — ideally before a third caller appears.
+  **[CLOSED by skillars-deferred-144 AC3 — extracted into `src/frontend/src/router/safeRedirect.js`,
+  pinned by `safeRedirectSpec.js`; both pages now import and call it.]**
 
 - **A `redirect` query value that passes the guard but matches no route lands the just-authenticated user on the 404 page.**
   The guard validates shape only (`startsWith('/') && !startsWith('//')`), never resolvability, so
@@ -3689,6 +3521,10 @@ classified defer — pre-existing, out of scope, or latent. Each was traced to r
   Affects `LoginPage.vue` and `OtpPage.vue` equally.
   **When picked up:** fold a `router.resolve(path).matched.length > 0` check into the shared
   `isSafeRedirect` above, falling back to `routeForRole`. Natural companion to the previous item.
+  **[CLOSED by skillars-deferred-144 AC3 — `matched.length > 0` alone turned out to be a no-op
+  against `routes.js`'s own catch-all (verified by executing vue-router 4.6.4 against this exact
+  route shape); fixed by tagging the catch-all `meta: { notFound: true }` and excluding it in
+  `isSafeRedirect`.]**
 
 - **`OtpPage.vue` uses `router.push`, leaving the spent `/otp` page in history.**
   After verification the `loginInfoId` is consumed server-side, so Back returns the authenticated user to
@@ -3696,6 +3532,11 @@ classified defer — pre-existing, out of scope, or latent. Each was traced to r
   `replace` for its terminal redirect, as does the rest of the codebase for post-auth navigation.
   **When picked up:** change to `router.replace` whenever `/otp` is next touched — it is a one-word fix,
   deferred only because the OTP flow is unreachable from the live UI today.
+  **[CLOSED by skillars-deferred-144 AC4 — switched to `router.replace`. Correction recorded in the
+  story itself: `VideoManagementPage.vue:108` is a 403-access-denied bounce inside a `catch` block,
+  not a terminal post-auth redirect — `PlayerHomeRedirectPage.vue` is the real precedent. `LoginPage
+  .vue`'s own `router.push` is deliberately left unchanged (a user can legitimately want to return to
+  `/login`).]**
 
 - **Neither new `skp` unit test asserts a cookie attribute.**
   `JwtManagerImplTest:622-654` assert only the decoded JSON payload. The feature depends entirely on the
@@ -3708,7 +3549,10 @@ classified defer — pre-existing, out of scope, or latent. Each was traced to r
   `:654` and check only the decoded JSON. The "shared helper covering all three writers" this asks for
   is the umbrella item under "Deferred from: manual review during skillars-deferred-143 (2026-10-05)",
   which proposes `SkillarsProfileCookie` as the single owner; the attribute assertions become one test
-  against that type. Pick up together.]**
+  against that type. Pick up together.]** **[CLOSED by skillars-deferred-144 AC1/AC7 —
+  `SkillarsProfileCookieTest` is the shared helper this asked for: one test class, against the single
+  owner, asserting `httpOnly=false`/`maxAge`/`SameSite=Lax`/`path=/` once rather than per writer.
+  `JwtManagerImplTest`'s two original assertions stay as role-derivation tests, not wire-format tests.]**
 
 - **`.dockerignore` single-segment patterns match the build-context root only.**
   `.dockerignore` patterns are anchored full-path matches, so `*.jar`, `*.war`, `.DS_Store`, `*.iml`,
@@ -3757,6 +3601,8 @@ Review Findings section).
   has its own dedicated test (`testWrappedAccountNotLoginAble_terminatesSession`). Harmless, arguably
   reasonable defense-in-depth against a future caller bypassing `DaoAuthProvider`.
   **When picked up:** decide whether to remove the dead disjunct or leave it as documented insurance.
+  **[CLOSED by skillars-deferred-144 AC6.1 — decision taken: KEEP, with a one-line comment at the
+  disjunct itself stating it is unreachable today and is deliberate defense-in-depth.]**
 
 - **`AuthService.refresh()`'s reuse-detection branch writes the refresh-token revocation twice.**
   `refreshTokenRepository.markAllUsedByUserId(ownerId)` already revokes every token for the user,
@@ -3765,6 +3611,8 @@ Review Findings section).
   only cost is one extra `UPDATE` per reuse-detection event.
   **When picked up:** skip `terminateSession`'s revocation when `markAllUsedByUserId` already ran, or
   accept the extra write as immaterial.
+  **[CLOSED by skillars-deferred-144 AC6.2 — both branches now call `securityUtil.clearAuthCookies
+  (res)` instead of `terminateSession(req, res)`, pinned by the new `AuthServiceTest`.]**
 
 - **`AuthService.refresh()`'s optimistic-lock-loser comment doesn't name `markUsedByTokenHash` as a
   second possible concurrent writer of the same row.** The comment reasons "unnecessary — the winning
@@ -3772,6 +3620,9 @@ Review Findings section).
   other writer. A concurrent forced-logout's `markUsedByTokenHash` is a second writer the comment
   doesn't name — the conclusion still holds (both only ever set `used=true`), reasoning is incomplete.
   **When picked up:** extend the comment, no behavior change needed.
+  **[CLOSED by skillars-deferred-144 AC6.3 — the comment now names a concurrent forced-logout's
+  `markUsedByTokenHash` as the second possible writer, alongside the already-named concurrent
+  refresh.]**
 
 - **`AuthService.logout()`'s refresh-token revocation went from conditional to unconditional,
   undisclosed.** Pre-diff, `.filter(t -> !t.isUsed())` only wrote if the token wasn't already used;
@@ -3780,6 +3631,9 @@ Review Findings section).
   bulk-update redesign (see the story's AC2 Dev Notes on the `REQUIRES_NEW` deadlock it avoids), but
   never stated as a tradeoff anywhere.
   **When picked up:** add a one-line comment acknowledging it; no behavior change expected.
+  **[CLOSED by skillars-deferred-144 AC6.4 — one-line comment added at `SecurityUtil.terminateSession`'s
+  revocation call; corrected post-AC6.6 by that story's own code review to say the repeat write now
+  costs nothing (matches zero rows) rather than "one extra UPDATE".]**
 
 - **`JWTAuthorizationFilter.isGenuineDenial(Exception cause)` is typed against the generic
   superclass rather than the caught union** (`AccountStatusException | AuthorizationException |
@@ -3787,6 +3641,8 @@ Review Findings section).
   unrelated caller passing an arbitrary exception would silently get `false` rather than a compile
   error.
   **When picked up:** narrow the parameter type if a second call site is ever added.
+  **[CLOSED by skillars-deferred-144 AC6.5 — parameter narrowed from `Exception` to `RuntimeException`,
+  strictly narrower and still covers all three types the one call site passes.]**
 
 - **`markUsedByTokenHash`/`markAllUsedByUserId` calls are unguarded against transient DB failures.**
   A `DataAccessException` mid-call propagates to `ApiAdvice`'s generic `Throwable` handler (500)
@@ -3806,6 +3662,12 @@ Review Findings section).
   amplification from zero.
   **When picked up:** reuse `SecurityAlertThrottle`'s per-client+cause dedup pattern for the
   revocation call too.
+  **[CLOSED by skillars-deferred-144 AC6.6 — the originally-proposed `SecurityAlertThrottle` reuse
+  was tried during drafting and rejected (it is documented as volume control, not a security
+  decision, and its client-identifier key collapses to a shared IP for exactly the client this item
+  is meant to defend against). Fixed instead by narrowing `RefreshTokenRepository.markUsedByTokenHash`'s
+  `@Query` to also require `r.used = false`, so a repeat write matches zero rows rather than needing
+  to be gated — same bounded-cost outcome, no new conditional in the filter.]**
 
 - **`isGenuineDenial` doesn't treat `AuthorizationException(USER_NOT_FOUND)`/`(UNKNOWN)` — the other
   two wrap codes `DaoAuthProvider.authorize()` can produce — as genuine denials.** A user whose row is
@@ -3863,6 +3725,11 @@ tree at the time of writing.
   denial path, which `skillars-deferred-143` AC3 deliberately froze, so it needs its own AC and a test
   asserting an expired-JWT 401 now expires `skp`. Best done together with the `skp`-consolidation
   item (collapse the three writers onto one owner) rather than as a drive-by.
+  **[CLOSED by skillars-deferred-144 AC2 — `JwtManagerImpl.deleteLoginToken` now also calls
+  `SkillarsProfileCookie.removeFrom(response)`; `rtkn` deliberately left out, per this item's own
+  reasoning above. The routine-denial-branch behaviour change was disclosed explicitly (not a
+  drive-by) and proven at the filter level by `AuthResourceIT
+  .routineDenial_expiredJwt_alsoClearsSkillarsProfileCookie`.]**
 
 - **The `skp` cookie's wire format is known by three separate writers; no type owns it.**
   `SKILLARS_PROFILE_COOKIE`'s payload shape, its quoting invariant, its encoding and its four cookie
@@ -3909,6 +3776,9 @@ tree at the time of writing.
   `skp` writers at once"). All four are the same refactor; done separately they are strictly more work,
   and three of them cannot be fixed at one site without recreating the divergence
   `skillars-deferred-142` AC2 set out to remove.
+  **[CLOSED by skillars-deferred-144 AC1 — `SkillarsProfileCookie` (`platform.security.contract`) is
+  the single owner, with `writeTo`/`removeFrom` and the pinning `SkillarsProfileCookieTest`. All four
+  bundled items closed together, as this note asked.]**
 
 - **`AuthResourceIT.refresh_expiredToken_returns401` passes for the wrong reason — it never exercises
   the expiry branch it is named for.** The test seeds its expired `refresh_tokens` row with a bare
@@ -3928,3 +3798,65 @@ tree at the time of writing.
   that actually hashes to the seeded `token_hash`, so the expiry branch is genuinely covered. Worth a
   wider grep at the same time: any other IT seeding state with a bare `jdbcTemplate` write in a test
   method body has the same silent no-op.
+  **[PARTIALLY CLOSED by skillars-deferred-144 AC5 — the seed now routes through `commitWrite`, and
+  the raw token is chosen first with its hash derived via `sha256Hex` (the old hardcoded hex literal
+  had no known preimage), plus a `usedFlagOf(...)` assertion proving the expiry branch specifically
+  was reached. The companion "wider grep" ask is explicitly NOT scoped into that story — still open,
+  left for a future story or a standalone grep-only pass.]**
+
+---
+
+## Deferred from: code review of skillars-deferred-144 (2026-10-06)
+
+Three pre-existing items surfaced by `/bmad-code-review`'s four-layer run over the
+`skillars-deferred-144` implementation. None is caused by that change; each was independently
+re-verified against on-disk source (not reproduced from a layer's say-so) before being recorded.
+
+- **Non-canonical spellings of a real route bypass the coach profile-builder completeness gate.**
+  `src/frontend/src/router/index.js:89` gates on `to.path === '/coach/command-center'` — an exact
+  string compare. vue-router's matcher defaults to `strict: false, sensitive: false`, so
+  `/coach/command-center/` (trailing slash) and `/COACH/COMMAND-CENTER` both match the real route
+  (`matched.length === 2`, no `meta.notFound`) and therefore pass `isSafeRedirect`, while
+  `router.resolve()` leaves the literal spelling in `to.path`. The `loadStatus()` /
+  `if (!pbStore.isComplete) next('/coach/profile-builder')` branch never runs, so a coach with an
+  incomplete profile lands straight on `CoachCommandCenterPage`. The `requiresCoach` role gate still
+  holds (it uses `to.matched.some(...)`), so this is a flow-gate bypass, not an authorization one.
+  Not a regression — the inline shape-only guard `skillars-deferred-144` replaced accepted the same
+  strings — but that story made resolvability the authoritative "this redirect leads somewhere
+  usable" check, which makes this the natural place to close it.
+  **When picked up:** change the gate to `to.matched.some((r) => r.path === '/coach/command-center')`,
+  matching the idiom every other gate in that guard already uses (`matched[i].path` carries the full
+  resolved pattern). `createRouter({ strict: true, sensitive: true })` is the alternative; both
+  options exist in the installed vue-router 4.6.4. No spec anywhere under `src/frontend/src`
+  currently exercises a trailing-slash or case-variant path (recorded negative search:
+  `grep -rn "command-center/\|COMMAND-CENTER" src/frontend/src --include="*.js"` → no matches).
+
+- **Auth-only-but-role-unguarded routes are accepted as post-login redirect targets for any role.**
+  `src/frontend/src/router/routes.js:337-345` gives both the `/admin` parent and its
+  `health-dashboard` child only `meta: { requiresAuth: true }`, and `router/index.js:47-87` has no
+  admin gate at all. A planted `/#/login?redirect=/admin/health-dashboard` opened by a
+  PARENT/PLAYER/COACH passes `isSafeRedirect` (verified: `matched.length === 3`, no `meta.notFound`)
+  and renders the admin dashboard shell. The real boundary holds server-side — `/manage/**` is
+  ADMIN-only via `AppEndpoints.SECURED_MAPPINGS`, so every API call on the page fails — so the impact
+  is a broken-looking page, not data exposure. Same class applies to `/player/home`,
+  `/player/locker-room/:playerId`, `/player/development/:playerId`, and `/parent/dashboard`.
+  **When picked up:** give these routes the same `meta.role`/`meta.roles` treatment the guard already
+  honours for every other role-specific route, rather than special-casing them in `safeRedirect.js`.
+
+- **Theft-driven mass refresh-token revocation has never terminated a live JWT session.**
+  `AuthService.refresh()`'s two reuse-detection branches (`AuthService.java:153`, `:160`) call
+  `refreshTokenRepository.markAllUsedByUserId(ownerId)`, which touches only `refresh_tokens` and
+  never the `user` row. `DaoAuthProvider.authorize` (`DaoAuthProvider.java:28-59`) does
+  `retrieveUser` + `getPreAuthenticationChecks().check(user)` and never reads `refresh_tokens`, so
+  the victim's other open tab — holding a valid `potc` for an account that is neither locked nor
+  deactivated — keeps passing both the fast path and the 5-minute DB re-auth path, and
+  `extendTtlOfToken` re-mints a full 15-minute JWT each time. The session continues indefinitely.
+  This predates `skillars-deferred-144`: the `isRefreshTokenRevoked` check that story removed only
+  ever forced `authorize()`, which passes an unlocked account, so the theft case gained nothing from
+  it either. GDPR erasure is unaffected because it separately sets `locked=true` and renames the
+  login (`GdprErasureService.java:269-278`).
+  **When picked up:** decide whether "token reuse detected" should end live sessions at all. If yes,
+  the shape that already works in this codebase is the one `skillars-deferred-143` used for account
+  locking — flip state on the `user` row (or add a `sessions_invalid_after` column the
+  pre-authentication checks consult) so `authorize()` can actually see it. Note that fixing this
+  interacts directly with the AC8 decision recorded in `skillars-deferred-144`'s Review Findings.

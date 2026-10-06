@@ -5,6 +5,7 @@ import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.contract.LoginResponse;
 import com.softropic.skillars.platform.security.contract.Principal;
+import com.softropic.skillars.platform.security.contract.SkillarsProfileCookie;
 import com.softropic.skillars.platform.security.contract.SkillarsVerificationStatus;
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.security.contract.exception.SkillarsAccountNotVerifiedException;
@@ -23,7 +24,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -41,7 +41,6 @@ import lombok.extern.slf4j.Slf4j;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.REFRESH_TOKEN_COOKIE;
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.REFRESH_TOKEN_TTL;
-import static com.softropic.skillars.infrastructure.security.SecurityConstants.SKILLARS_PROFILE_COOKIE;
 
 @Slf4j
 @Service
@@ -120,19 +119,7 @@ public class AuthService {
             true, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
 
         String role = user.getSkillarsRole() != null ? user.getSkillarsRole().name() : "ADMIN";
-        // `id` is quoted deliberately — CommonConfig.longToStringModule() applies this same
-        // string-encoding to every Jackson-serialized Long response body for exactly this reason
-        // (JS cannot represent a Tsid-sized long losslessly), but this cookie is hand-built JSON,
-        // outside that pipeline. Found manually testing (2026-10-01): with `id` bare, the frontend's
-        // own hydrateFromCookie() (auth.store.js) — which every page load/refresh calls — silently
-        // corrupted authStore.userId via IEEE-754 double rounding, long before any upload was
-        // attempted. CoachProfileBuilderPlaceholderPage.vue's photo-upload step sends that value
-        // straight back as signUpload's entityId, which StorageResource rejects with a 403 the
-        // instant it no longer matches the JWT's own (uncorrupted) business ID.
-        String json = "{\"id\":\"" + user.getId() + "\",\"role\":\"" + role + "\"}";
-        String skpValue = URLEncoder.encode(json, StandardCharsets.UTF_8);
-        CookieUtil.addCookie(res, SKILLARS_PROFILE_COOKIE, skpValue,
-            false, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
+        new SkillarsProfileCookie(String.valueOf(user.getId()), role).writeTo(res);
 
         return new LoginResponse(user.getId(), role, principal.getDisplayName());
     }
@@ -159,13 +146,25 @@ public class AuthService {
                     .findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(
                             ownerId, Instant.now(ClockProvider.getClock()))
                     .orElseGet(() -> {
+                        // skillars-deferred-144 AC6.2: markAllUsedByUserId above has already
+                        // revoked every token for this user, so clearAuthCookies (cookies only) is
+                        // enough — securityUtil.terminateSession's own markUsedByTokenHash would
+                        // only redundantly re-mark the one token already covered by the bulk update.
+                        // This also drops terminateSession's SecurityContextHolder.clearContext()
+                        // call, unlike that method — harmless here: /api/auth/refresh is
+                        // unrestricted, nothing is written to the context after this throw, and
+                        // SecurityContextHolderFilter clears the thread-local per request anyway.
                         refreshTokenRepository.markAllUsedByUserId(ownerId);
-                        securityUtil.terminateSession(req, res);
+                        securityUtil.clearAuthCookies(res);
                         throw new BadCredentialsException("Token reuse detected — all sessions revoked");
                     });
             } else {
+                // skillars-deferred-144 AC6.2: same reasoning as the grace-window branch above —
+                // markAllUsedByUserId has already revoked every token for this user, and the
+                // dropped SecurityContextHolder.clearContext() (vs. terminateSession) is harmless
+                // for the same reason noted there.
                 refreshTokenRepository.markAllUsedByUserId(ownerId);
-                securityUtil.terminateSession(req, res);
+                securityUtil.clearAuthCookies(res);
                 throw new BadCredentialsException("Token reuse detected — all sessions revoked");
             }
         }
@@ -237,8 +236,11 @@ public class AuthService {
             // Cookies only, deliberately: this is the one teardown that runs AFTER this
             // transaction has already issued its UPDATE against the token row, so a REQUIRES_NEW
             // revocation here would hit the same self-deadlock described above. It is also
-            // unnecessary — losing the optimistic-lock race means the winning request has already
-            // committed `used = true` on this exact row.
+            // unnecessary — losing the optimistic-lock race means the row is already committed
+            // `used = true` by one of two possible writers: the winning concurrent refresh request
+            // (the case this branch exists for), or a concurrent forced-logout's
+            // markUsedByTokenHash (skillars-deferred-144 AC6.3) — either way `used` is monotonic,
+            // so the row is already in the state this branch would otherwise try to put it in.
             securityUtil.clearAuthCookies(res);
             throw new BadCredentialsException("Concurrent refresh detected — please sign in again");
         }
@@ -258,19 +260,7 @@ public class AuthService {
             true, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
 
         String role = user.getSkillarsRole() != null ? user.getSkillarsRole().name() : "ADMIN";
-        // `id` is quoted deliberately — CommonConfig.longToStringModule() applies this same
-        // string-encoding to every Jackson-serialized Long response body for exactly this reason
-        // (JS cannot represent a Tsid-sized long losslessly), but this cookie is hand-built JSON,
-        // outside that pipeline. Found manually testing (2026-10-01): with `id` bare, the frontend's
-        // own hydrateFromCookie() (auth.store.js) — which every page load/refresh calls — silently
-        // corrupted authStore.userId via IEEE-754 double rounding, long before any upload was
-        // attempted. CoachProfileBuilderPlaceholderPage.vue's photo-upload step sends that value
-        // straight back as signUpload's entityId, which StorageResource rejects with a 403 the
-        // instant it no longer matches the JWT's own (uncorrupted) business ID.
-        String json = "{\"id\":\"" + user.getId() + "\",\"role\":\"" + role + "\"}";
-        String skpValue = URLEncoder.encode(json, StandardCharsets.UTF_8);
-        CookieUtil.addCookie(res, SKILLARS_PROFILE_COOKIE, skpValue,
-            false, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
+        new SkillarsProfileCookie(String.valueOf(user.getId()), role).writeTo(res);
 
         return new LoginResponse(user.getId(), role, principal.getDisplayName());
     }

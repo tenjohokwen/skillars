@@ -6,7 +6,10 @@ import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.platform.security.contract.Gender;
+import com.softropic.skillars.platform.security.infrastructure.jwt.TokenCreator;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
+import com.softropic.skillars.infrastructure.util.TestClockProvider;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,16 +27,22 @@ import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 
+import io.jsonwebtoken.Claims;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Timestamp;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 
+import static com.softropic.skillars.infrastructure.security.SecurityConstants.JWT_TTL;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -84,6 +93,9 @@ class AuthResourceIT extends AbstractIntegrationTest {
 
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
+
+    @Autowired
+    private TokenCreator tokenCreator;
 
     private static final String PHONE_OTP_REQUIRED_KEY = "security.registration.phone-otp-required";
 
@@ -316,6 +328,96 @@ class AuthResourceIT extends AbstractIntegrationTest {
         assertThat(usedCount).isGreaterThanOrEqualTo(1);
     }
 
+    /**
+     * skillars-deferred-144 AC2: a {@code JWTExpiredException} takes
+     * {@code JWTAuthorizationFilter}'s routine-denial branch (its own {@code isGenuineDenial}
+     * deliberately excludes it — fires on every ordinary 15-minute idle-out). That branch calls
+     * {@code loginTokenManager.deleteLoginToken} alone, not {@code securityUtil.terminateSession},
+     * and {@code deleteLoginToken} now also clears {@code skp} (this story's AC2), closing the gap
+     * where a routine 401 left it standing. Drives a real request through the full filter chain
+     * with a genuinely expired JWT — unlike {@code JwtManagerImplTest#testDeleteLoginToken_success}
+     * (AC7), which proves the cookie list changed but not that the filter's own 401 response
+     * actually expires {@code skp}. Uses {@code /api/auth/login} (not the plain {@code /authenticate}
+     * form-login SecurityIT otherwise uses) specifically because only {@code AuthService.login()}
+     * (and {@code refresh()}/{@code refreshLoginToken}) set {@code skp} at all — the plain
+     * {@code /authenticate} path never does (JwtManagerImpl.createLoginToken has no skp call).
+     */
+    @Test
+    void routineDenial_expiredJwt_alsoClearsSkillarsProfileCookie() {
+        ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + LOGIN_ENDPOINT,
+            HttpMethod.POST,
+            Map.of("email", COACH_EMAIL, "password", TEST_PASSWORD),
+            clientHeaders(),
+            Map.class
+        );
+        assertThat(loginResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        List<String> loginSetCookies = loginResponse.getHeaders().get("Set-Cookie");
+        assertThat(loginSetCookies).isNotNull();
+        // Precondition for the assertion below to be meaningful — login() always sets 'skp'.
+        assertThat(loginSetCookies).anyMatch(c -> c.startsWith("skp="));
+
+        // ClockProvider is a ThreadLocal (ClockProvider.java) and the embedded server handles the
+        // login HTTP call above on its OWN worker thread, so offsetting it around that call would
+        // have no effect on the JWT the server actually mints. Instead, mint an independent,
+        // already-expired JWT directly via TokenCreator on THIS (test) thread — jjwt's parser
+        // (ClaimsExtractorImpl) checks expiry against the REAL system clock regardless of which
+        // thread minted the token, and shares this app's one JWT signing secret, so the server can
+        // verify and then reject it exactly as it would a genuinely stale real-world token. Same
+        // underlying technique as JwtManagerImplTest#testExtractPrincipal_expiredToken, adapted for
+        // the thread boundary a full HTTP IT introduces. The claims map is built by hand rather
+        // than via TokenCreator.toClaims(...), which reads RequestMetadataProvider.getClientInfo()
+        // — populated only inside a live HTTP request, which this test-thread call is not.
+        Map<String, Object> claims = new HashMap<>();
+        claims.put(Claims.SUBJECT, COACH_EMAIL);
+        claims.put(SecurityConstants.ROLES, "[{\"authority\":\"ROLE_COACH\"}]");
+        claims.put(SecurityConstants.BUS_ID, String.valueOf(COACH_USER_ID));
+        claims.put(SecurityConstants.GENDER, Gender.MALE.name());
+        claims.put(SecurityConstants.DISPLAY_NAME, "Coach");
+        claims.put(SecurityConstants.OTP_ENABLED, false);
+        claims.put(SecurityConstants.DB_REFRESH_TOKEN,
+            Instant.now().toEpochMilli() + Duration.ofDays(1).toMillis());
+        String expiredJwt;
+        TestClockProvider.setClock(Clock.offset(TestClockProvider.getClock(),
+            Duration.ofSeconds(-(JWT_TTL.toSeconds() + 60))));
+        try {
+            expiredJwt = tokenCreator.generateTokenFromClaims(claims);
+        } finally {
+            TestClockProvider.setSystemClock();
+        }
+
+        // Keep every other cookie (skp, rtkn, ...) from the real login response as-is; replace only
+        // 'potc' with the independently-minted expired JWT.
+        List<String> requestCookies = loginSetCookies.stream()
+            .map(c -> c.split(";", 2)[0])
+            .map(c -> c.startsWith("potc=") ? "potc=" + expiredJwt : c)
+            .toList();
+        // Precondition for the request below to actually exercise the expired-JWT path: if
+        // 'potc' is ever renamed, the substitution above silently no-ops, the request carries no
+        // JWT at all, and the SAME routine-denial branch is reached via AccessDeniedException
+        // instead — this test would stay green while no longer testing what its name claims.
+        assertThat(requestCookies).anyMatch(c -> c.equals("potc=" + expiredJwt));
+        String cookieHeaderValue = String.join("; ", requestCookies);
+
+        HttpHeaders authHeaders = clientHeaders();
+        authHeaders.add(HttpHeaders.COOKIE, cookieHeaderValue);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/v1/account/", HttpMethod.GET, null, authHeaders, Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                List<String> denialCookies = ex.getResponseHeaders() == null
+                    ? null : ex.getResponseHeaders().get(HttpHeaders.SET_COOKIE);
+                assertThat(denialCookies).isNotNull();
+                assertThat(denialCookies)
+                    .as("skp must be expired by the routine-denial branch's own deleteLoginToken call")
+                    .anyMatch(c -> c.startsWith("skp=") && c.contains("Max-Age=0"));
+            });
+    }
+
 
     //TODO the system should have a single JWT refresh mechanism. The new one just duplicates an already existing one
    /* @Test
@@ -364,24 +466,39 @@ class AuthResourceIT extends AbstractIntegrationTest {
 
     @Test
     void refresh_expiredToken_returns401() {
-        String expiredHash = "deadbeef01234567890123456789012345678901234567890123456789012345";
-        jdbcTemplate.update(
+        // skillars-deferred-144 AC5: the raw token is chosen FIRST, then its hash derived via this
+        // class's own sha256Hex helper — never the reverse. The seeded row and the request's
+        // cookie now genuinely refer to the same token, unlike the previous arbitrary hardcoded
+        // hex literal (no raw value hashes to it — that would be a preimage attack).
+        String rawToken = "expired-refresh-token-raw-value";
+        String expiredHash = sha256Hex(rawToken);
+        // Routed through commitWrite (not a bare jdbcTemplate.update): spring.datasource.hikari
+        // .auto-commit=false means a bare write issued outside a transaction is rolled back when
+        // the connection is released, so the row never existed for the server under test to find —
+        // which is exactly why this test previously passed for the wrong reason (see AC5).
+        commitWrite(
             "INSERT INTO main.refresh_tokens (id, user_id, token_hash, expires_at, used) " +
             "VALUES (990001, ?, ?, ?, false)",
             COACH_USER_ID, expiredHash, Timestamp.from(Instant.now().minus(1, ChronoUnit.DAYS))
         );
-        String fakeRaw = "fake-expired-raw-token-value-that-maps-to-nothing-but-hash-set";
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + REFRESH_ENDPOINT,
             HttpMethod.POST,
             null,
-            cookieHeaders(fakeRaw),
+            cookieHeaders(rawToken),
             Map.class
         ))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
                 .isEqualTo(HttpStatus.UNAUTHORIZED));
+
+        // The real proof the expiry branch (AuthService.java's token.getExpiresAt().isBefore(...))
+        // was reached, not the not-found branch: both throw BadCredentialsException with the same
+        // HTTP status, but usedFlagOf(expiredHash) is true only on the expiry branch, because its
+        // terminateSession call revokes the token in a REQUIRES_NEW transaction that commits
+        // independently of this request's own (rolled-back) transaction.
+        assertThat(usedFlagOf(expiredHash)).isTrue();
     }
 
     @Test

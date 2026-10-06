@@ -10,7 +10,6 @@ import com.softropic.skillars.platform.security.contract.exception.InvalidJWTDat
 import com.softropic.skillars.platform.security.contract.exception.JWTExpiredException;
 import com.softropic.skillars.platform.security.contract.exception.JWTTheftException;
 import com.softropic.skillars.platform.security.infrastructure.SecuredHttpEndpointGuard;
-import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.service.DaoAuthProvider;
 import com.softropic.skillars.platform.security.service.LoadUserByUserNameService;
 import com.softropic.skillars.platform.security.service.LoginTokenManager;
@@ -99,9 +98,6 @@ class JWTAuthorizationFilterTest {
     private Environment environment;
 
     @Mock
-    private RefreshTokenRepository refreshTokenRepository;
-
-    @Mock
     private MessageSource messageSource;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -127,7 +123,6 @@ class JWTAuthorizationFilterTest {
                 loginTokenManager,
                 securityUtil,
                 environment,
-                refreshTokenRepository,
                 messageSource,
                 objectMapper
         );
@@ -170,6 +165,10 @@ class JWTAuthorizationFilterTest {
         when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
         when(loadUserByUserNameService.loadUserByUsername("testuser")).thenReturn(userDetails);
         when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
+        // skillars-deferred-144 AC8, code review 2026-10-06: explicit, not Mockito's implicit
+        // `false` default — this is the one test exercising the fast path, and the AC8 regression
+        // guard depends on it actually taking this branch, not merely happening to by default.
+        when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(false);
 
         // Action
         filter.doFilterInternal(request, response, filterChain);
@@ -184,7 +183,11 @@ class JWTAuthorizationFilterTest {
         verify(eventPublisher).publishEvent(any(PreAuthEvent.class)); // Or a more specific custom event
         verify(securedHttpEndpointGuard).isUnrestricted(request);
         verify(filterChain).doFilter(request, response);
-
+        // The actual AC8 regression guard: the fast path runs unconditionally, with no
+        // RefreshTokenRepository mock wired into this test class at all (compile-time removal).
+        verify(daoAuthProvider).checkAuthorities(any(), any());
+        verify(loginTokenManager).extendTtlOfToken(request, response);
+        verify(daoAuthProvider, never()).authorize(any(), any());
     }
 
     @Test

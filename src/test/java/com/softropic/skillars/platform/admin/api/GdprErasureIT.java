@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.admin.api;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.infrastructure.config.DataSourceConfig;
 import com.softropic.skillars.infrastructure.config.RoutingDataSource;
+import com.softropic.skillars.infrastructure.security.AuthorizationException;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
@@ -14,6 +15,7 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
+import com.softropic.skillars.platform.security.service.DaoAuthProvider;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +29,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -113,6 +116,7 @@ class GdprErasureIT extends AbstractIntegrationTest {
     @Autowired private GdprEventListener gdprEventListener;
     @Autowired private ConfigService configService;
     @Autowired private DataSource dataSource;
+    @Autowired private DaoAuthProvider daoAuthProvider;
 
     @LocalServerPort private int randomServerPort;
 
@@ -360,8 +364,17 @@ class GdprErasureIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void erase_deactivatesUser_oldSessionRejected() {
-        // Obtain a valid session before erasure
+    void erase_deactivatesUser_oldSessionHonouredUntilDbRefreshIntervalThenRejected() {
+        // skillars-deferred-144 AC8 code review 2026-10-06, Decision 1 (owner: keep AC8, amend this
+        // IT to the weaker bound, accepted explicitly) — this test used to assert the erased user's
+        // live session was rejected on the VERY NEXT request. AC8 removed the per-request
+        // refresh_tokens query that used to force that immediate re-check: reproduced by execution
+        // pre-fix (`Tests run: 1, Failures: 1`, `AssertionError: Expecting code to raise a
+        // throwable.`) because the fast path's `hasDbRefreshTokenExpired` compares a
+        // DB_REFRESH_TOKEN claim minted seconds earlier against now and returns false, so no DB read
+        // happens at all. Detection now only happens once DB_REFRESH_TOKEN_INTERVAL (5 min) elapses —
+        // the same bound an admin-locked account already had, since locking never touched
+        // refresh_tokens either.
         String cookiesBeforeErasure = loginAndGetCookies(PARENT_EMAIL);
 
         // Erasure runs synchronously via AFTER_COMMIT listener — user is deactivated before 202 returns
@@ -369,13 +382,23 @@ class GdprErasureIT extends AbstractIntegrationTest {
             baseUrl() + ERASURE_URL, HttpMethod.POST, null,
             authenticatedHeaders(cookiesBeforeErasure), Map.class);
 
-        // Old session cookies must now be rejected (activated=false, locked=true)
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+        // The still-live JWT is honoured on the very next request: no HTTP round-trip reaches the DB
+        // at all on this fast-path cycle, so the erasure that just happened is not yet visible.
+        ResponseEntity<Map> stillHonoured = httpTestClient.makeHttpRequest(
             baseUrl() + ERASURE_URL, HttpMethod.POST, null,
-            authenticatedHeaders(cookiesBeforeErasure), Map.class))
-            .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
-                .isEqualTo(HttpStatus.UNAUTHORIZED));
+            authenticatedHeaders(cookiesBeforeErasure), Map.class);
+        assertThat(stillHonoured.getStatusCode().is2xxSuccessful()).isTrue();
+
+        // What the <=5 min bound actually depends on: once DB_REFRESH_TOKEN_INTERVAL elapses and the
+        // DB re-auth path runs, daoAuthProvider.authorize re-loads the account and re-runs Spring
+        // Security's pre-authentication checks — which DO reject the erased identity, because erasure
+        // also sets locked=true/activated=false (not because anything here reads refresh_tokens).
+        // Asserted in-process (no HTTP round-trip, no JWT mint, no clock manipulation needed —
+        // ClockProvider is a ThreadLocal and the server runs on its own worker thread, so a test-thread
+        // offset would be a no-op here anyway).
+        assertThatThrownBy(() -> daoAuthProvider.authorize(
+            new UsernamePasswordAuthenticationToken(PARENT_EMAIL, null), List.of()))
+            .isInstanceOf(AuthorizationException.class);
     }
 
     // skillars-deferred-127 AC1 (story-review.md B1): moved from PLAYER_ID/PLAYER_EMAIL to

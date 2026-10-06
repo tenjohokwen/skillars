@@ -5,11 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.infrastructure.message.ErrorDto;
 import com.softropic.skillars.infrastructure.message.ErrorLog;
 import com.softropic.skillars.infrastructure.message.ErrorMsg;
-import com.softropic.skillars.infrastructure.security.CookieUtil;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
 import com.softropic.skillars.infrastructure.security.event.AuthenticationAction;
 import com.softropic.skillars.infrastructure.security.event.PreAuthEvent;
-import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.service.LoginTokenManager;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
@@ -40,15 +38,12 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
-import java.time.Instant;
 import java.util.Locale;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-
-import static com.softropic.skillars.infrastructure.security.SecurityConstants.REFRESH_TOKEN_COOKIE;
 
 
 /**
@@ -72,17 +67,24 @@ import static com.softropic.skillars.infrastructure.security.SecurityConstants.R
  * On every authenticated request this filter re-issues the JWT with a <b>fresh full TTL</b>
  * ({@code SecurityConstants.JWT_TTL}, 15 min) rather than counting down from login:
  * <ul>
- *     <li><b>Fast path</b> &mdash; DB refresh token still valid and no revocation:
+ *     <li><b>Fast path</b> &mdash; DB refresh token still valid:
  *         {@code daoAuthProvider.checkAuthorities(...)} against the existing claims, then
  *         {@code loginTokenManager.extendTtlOfToken(req, res)} stamps a new expiry. This path does
- *         <i>not</i> re-load the account, but it still issues one {@code refresh_tokens} lookup
- *         ({@code isRefreshTokenRevoked}) whenever an {@code rtkn} cookie is present.</li>
+ *         <i>not</i> re-load the account and issues no DB query at all (skillars-deferred-144 AC8
+ *         removed the former per-request {@code refresh_tokens} revocation lookup that used to run
+ *         here on every request carrying an {@code rtkn} cookie &mdash; see
+ *         {@code attemptAuthorization}'s own comment for the tradeoff).</li>
  *     <li><b>DB re-auth path</b> &mdash; DB refresh token expired (checked every
- *         {@code DB_REFRESH_TOKEN_INTERVAL} = 5 min) <i>or</i> all refresh tokens for the user have
- *         been revoked: {@code daoAuthProvider.authorize(...)} re-checks the account against the DB
- *         so locked / deactivated / force-logged-out users are caught, then
- *         {@code renewLoginToken(...)} mints the fresh token. ({@code renewLoginToken} itself touches
- *         no repository &mdash; the DB hit is {@code daoAuthProvider.authorize}.)</li>
+ *         {@code DB_REFRESH_TOKEN_INTERVAL} = 5 min): {@code daoAuthProvider.authorize(...)}
+ *         re-loads the account and re-runs Spring Security's own pre-authentication checks, so a
+ *         <i>locked or deactivated</i> account is caught, then {@code renewLoginToken(...)} mints
+ *         the fresh token. ({@code renewLoginToken} itself touches no repository &mdash; the DB
+ *         hit is {@code daoAuthProvider.authorize}.) It does <i>not</i> read {@code refresh_tokens}
+ *         at all &mdash; GDPR erasure is caught on this cycle only because
+ *         {@code GdprErasureService} also sets {@code locked = true} on the account, not because
+ *         anything here checks for revoked refresh tokens; theft-driven mass-revocation (
+ *         {@code markAllUsedByUserId} with no accompanying lock) is <i>not</i> caught by this path
+ *         at all &mdash; see the deferred, pre-existing finding on that gap.</li>
  * </ul>
  * Either path also rewrites the {@code user}, {@code potc} and {@code rint} cookies (see
  * {@code JwtManagerImpl.createLoginCookies}). Because the TTL is always reset to the full 15 min,
@@ -104,7 +106,6 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
     private final LoginTokenManager loginTokenManager;
     private final SecurityUtil     securityUtil;
     private final Environment       env;
-    private final RefreshTokenRepository refreshTokenRepository;
     private final MessageSource     messageSource;
     private final ObjectMapper      objectMapper;
     /**
@@ -122,7 +123,6 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
                                   LoginTokenManager loginTokenManager,
                                   SecurityUtil securityUtil,
                                   Environment env,
-                                  RefreshTokenRepository refreshTokenRepository,
                                   MessageSource messageSource,
                                   ObjectMapper objectMapper
     ) {
@@ -133,7 +133,6 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
         this.loginTokenManager = loginTokenManager;
         this.securityUtil = securityUtil;
         this.env = env;
-        this.refreshTokenRepository = refreshTokenRepository;
         this.messageSource = messageSource;
         this.objectMapper = objectMapper;
     }
@@ -151,15 +150,20 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
                     //includes AccountExpiredException, CredentialsExpiredException, LockedException, InvalidJWTDataException, JWTTheftException, JWTExpiredException, AccessDeniedException (missing token)
                     // skillars-deferred-143 AC3: only a GENUINE denial gets the full teardown
                     // (refresh-token revocation + rtkn/skp cleared). Routine, expected traffic keeps
-                    // exactly its previous behaviour — see isGenuineDenial for why that split
-                    // matters on this path.
+                    // its previous rtkn/JWT-cookie behaviour unchanged — see isGenuineDenial for why
+                    // that split matters on this path. skillars-deferred-144 AC2: 'skp' is the one
+                    // exception — deleteLoginToken (called on the routine branch below) now clears
+                    // it too, so this is no longer "exactly the previous behaviour" for that one
+                    // cookie specifically.
                     if (isGenuineDenial(e)) {
                         securityUtil.terminateSession(req, res);
                     } else {
-                        // Exactly what the previous securityUtil.logout(res) did for this cause:
-                        // clear the context and drop the JWT cookies. No DB read or write, and no
-                        // rtkn/skp clearing — attemptAuthorization set an authenticated context at
-                        // the top, so it must still be cleared before the 401 is written.
+                        // Exactly what the previous securityUtil.logout(res) did for this cause,
+                        // MINUS 'skp': clear the context and drop the JWT cookies. No DB read or
+                        // write, and no rtkn clearing — attemptAuthorization set an authenticated
+                        // context at the top, so it must still be cleared before the 401 is
+                        // written. 'skp' IS now cleared here too (skillars-deferred-144 AC2):
+                        // deleteLoginToken gained its own skp removal, and this path calls it.
                         SecurityContextHolder.clearContext();
                         loginTokenManager.deleteLoginToken(res);
                     }
@@ -206,36 +210,26 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
             loginTokenManager.renewLoginToken(res, (Principal) auth.getDetails());
         } else {
             final Principal principal = loginTokenManager.extractPrincipal(req);
-            // If the request carries a refresh-token cookie but all tokens for this user
-            // have been revoked (e.g. GDPR erasure, force-logout), skip the TTL extension
-            // and force a DB re-auth so the locked/deactivated state is detected immediately.
-            if (isRefreshTokenRevoked(req, principal)) {
-                final Authentication auth = daoAuthProvider.authorize(authentication,
-                                                                      httpEndpointGuard.requiredAuthorities(req));
-                loginTokenManager.renewLoginToken(res, (Principal) auth.getDetails());
-            } else {
-                var authorities = CollectionUtils.emptyIfNull(principal == null ? null : principal.getAuthorities());
-                daoAuthProvider.checkAuthorities(httpEndpointGuard.requiredAuthorities(req), authorities);
-                //Emulates HttpSession ttl extension in which each request renews the ttl by X minutes
-                // Just the ttl is extended. The dbRefreshToken is not touched.
-                //Once the db refresh token expires, a call to the db is done whereas it is not done here.
-                loginTokenManager.extendTtlOfToken(req, res);
-            }
-        }
-    }
-
-    private boolean isRefreshTokenRevoked(HttpServletRequest req, Principal principal) {
-        final String rtkn = CookieUtil.getCookieValue(req, REFRESH_TOKEN_COOKIE);
-        if (rtkn == null || rtkn.isBlank() || principal == null) {
-            return false;
-        }
-        try {
-            Long userId = Long.parseLong(principal.getBusinessId());
-            return refreshTokenRepository
-                    .findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(userId, Instant.now())
-                    .isEmpty();
-        } catch (NumberFormatException e) {
-            return false;
+            // skillars-deferred-144 AC8: this used to also check isRefreshTokenRevoked(req,
+            // principal) here and force the DB re-auth path (above) early if all of the user's
+            // refresh tokens were gone — e.g. GDPR erasure or theft-driven mass-revocation. That
+            // cost one refresh_tokens query on EVERY authenticated request carrying an rtkn cookie,
+            // for a guarantee stronger than this filter gives an admin-LOCKED account: locking never
+            // touches refresh_tokens at all, so a locked account's other open sessions were already
+            // relying solely on the DB_REFRESH_TOKEN_INTERVAL (5 min) cycle below, with no
+            // early-detection shortcut. Removed so erasure rides the same bound locking already
+            // had — GDPR erasure also sets locked = true, so daoAuthProvider.authorize() on that
+            // cycle catches it independently of any refresh-token check. Theft-driven
+            // mass-revocation does NOT set locked, so it was never actually rejected by the removed
+            // check either (authorize() has nothing to say about revoked refresh tokens — it only
+            // succeeded and renewed the token); that gap is pre-existing and unaffected by this
+            // change, tracked separately rather than claimed as fixed here.
+            var authorities = CollectionUtils.emptyIfNull(principal == null ? null : principal.getAuthorities());
+            daoAuthProvider.checkAuthorities(httpEndpointGuard.requiredAuthorities(req), authorities);
+            //Emulates HttpSession ttl extension in which each request renews the ttl by X minutes
+            // Just the ttl is extended. The dbRefreshToken is not touched.
+            //Once the db refresh token expires, a call to the db is done whereas it is not done here.
+            loginTokenManager.extendTtlOfToken(req, res);
         }
     }
 
@@ -345,9 +339,18 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
      * {@code maybePublishSecurityAlert} has that same blind spot — pre-existing and out of scope
      * here, but not worth repeating.)
      */
-    private boolean isGenuineDenial(final Exception cause) {
+    private boolean isGenuineDenial(final RuntimeException cause) {
         return cause instanceof JWTTheftException
                 || cause instanceof InvalidJWTDataException
+                // skillars-deferred-144 AC6.1 (decision: keep): unreachable in production today —
+                // DaoAuthProvider.authorize() (see its own javadoc) always rewraps a caught
+                // AccountStatusException into this project's own AuthorizationException
+                // (ACCOUNT_NOT_LOGIN_ABLE) before it reaches this filter, so a raw
+                // AccountStatusException can never actually arrive here via that path. Kept
+                // deliberately as defense-in-depth against a future caller that bypasses
+                // DaoAuthProvider — the four tests exercising this disjunct mock daoAuthProvider
+                // directly to throw the raw Spring exception type, a shape production code cannot
+                // produce today.
                 || cause instanceof AccountStatusException
                 || (cause instanceof AuthorizationException ae
                     && ae.getErrorCode() == SecurityError.ACCOUNT_NOT_LOGIN_ABLE);

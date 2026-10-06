@@ -21,7 +21,6 @@ import com.softropic.skillars.platform.security.infrastructure.SecuredHttpEndpoi
 import com.softropic.skillars.platform.security.service.TwoFactorLoginService;
 import com.softropic.skillars.platform.security.infrastructure.UnanimousAuthorizationManager;
 import com.softropic.skillars.platform.security.service.DaoAuthProvider;
-import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.service.LoadUserByUserNameService;
 
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -159,7 +158,6 @@ public class SecurityConfiguration {
                                            LoginTokenManager loginTokenManager,
                                            SecurityUtil securityUtil,
                                            CorsConfiguration corsConfiguration,
-                                           RefreshTokenRepository refreshTokenRepository,
                                            org.springframework.context.MessageSource messageSource,
                                            com.fasterxml.jackson.databind.ObjectMapper objectMapper,
                                            @Qualifier("loginAttemptService") LoginDecisionManager<RequestMetadata> loginDecisionManager,
@@ -203,7 +201,6 @@ public class SecurityConfiguration {
                                                        loginTokenManager,
                                                        securityUtil,
                                                        env,
-                                                       refreshTokenRepository,
                                                        messageSource,
                                                        objectMapper),
                             BasicAuthenticationFilter.class)
