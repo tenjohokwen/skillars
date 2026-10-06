@@ -80,6 +80,13 @@ class ReviewSubmissionServiceConcurrencyIT extends AbstractIntegrationTest {
                 "VALUES (?, ?, 'Submit Race Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
                 coachProfileId, COACH_USER_ID);
 
+            // skillars-deferred-145 code review (D2, 2026-10-06): the age-restriction discriminator
+            // was removed entirely -- a parent-linked player of any age is always eligible under the
+            // revised AC2.b -- so this fixture reverts to a plain parent-linked ADULT-tier player.
+            // The earlier self-registered (user_id-only) workaround is no longer needed and was
+            // itself a state production cannot produce (chk_pp_owner's owner split is real, but
+            // ShadowAccountService.createSelfOwnedPlayerProfile is reachable only from the
+            // ROLE_PLAYER self-registration flow, never for a ROLE_PARENT caller like this fixture).
             long playerId = AUTHOR_ID + 1_000_000L;
             jdbcTemplate.update(
                 "INSERT INTO main.player_profiles " +
@@ -88,18 +95,18 @@ class ReviewSubmissionServiceConcurrencyIT extends AbstractIntegrationTest {
                 playerId, Date.valueOf(LocalDate.now().minusYears(18)),
                 AUTHOR_ID, Timestamp.from(Instant.now()));
 
-            // Eligibility for submitReview's own checkEligibility: a COMPLETED booking within the
-            // default 14-day submissionWindowDays, authored by AUTHOR_ID.
+            // Eligibility for submitReview's own checkEligibility: a COMPLETED booking matured past
+            // the 7-day reviews.minSessionAgeDays floor, authored by AUTHOR_ID.
             jdbcTemplate.update(
                 "INSERT INTO booking.bookings " +
                 "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
                 " version, created_at, updated_at, canonical_timezone) " +
                 "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
                 UUID.randomUUID(), coachProfileId, AUTHOR_ID, playerId,
-                Timestamp.from(Instant.now().minusSeconds(7200)),
-                Timestamp.from(Instant.now().minusSeconds(3600)),
-                Timestamp.from(Instant.now().minusSeconds(86400 * 3)),
-                Timestamp.from(Instant.now().minusSeconds(3600)));
+                Timestamp.from(Instant.now().minusSeconds(86400L * 10 + 3600)),
+                Timestamp.from(Instant.now().minusSeconds(86400L * 10)),
+                Timestamp.from(Instant.now().minusSeconds(86400 * 17)),
+                Timestamp.from(Instant.now().minusSeconds(86400L * 10)));
 
             return null;
         });
@@ -253,6 +260,106 @@ class ReviewSubmissionServiceConcurrencyIT extends AbstractIntegrationTest {
                 .isInstanceOf(OperationNotAllowedException.class);
             assertThat(((OperationNotAllowedException) submitFailure.get()).getErrorCode())
                 .isEqualTo(ReviewErrorCode.ALREADY_SUBMITTED);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * skillars-deferred-145 code review (Patch, 2026-10-06): proves the cooldown is re-checked on
+     * the refreshed locked instance, not only the stale unlocked pre-check. Caller A's
+     * {@code updateReview} is held open via an outer {@code transactionTemplate.execute(...)}
+     * wrapper, mirroring {@code ReviewFlagServiceConcurrencyIT}'s identical mechanism for the same
+     * method. Round-2 (R15): A's edit is <em>not</em> committed when {@code updateAHeld} fires —
+     * {@code updateReview} carries no {@code REQUIRES_NEW}, so under the class-level
+     * {@code REQUIRED} propagation it JOINS that outer transaction and its write stays uncommitted,
+     * holding the row lock, until {@code releaseA}. That is exactly why the hold-open technique
+     * still works here, unlike for {@code submitReview} — see this class's own note above on how
+     * Fix 7's {@code REQUIRES_NEW} defeated it there. B therefore blocks on the lock and observes
+     * A's freshly-bumped {@code lastModifiedAt} only once A commits and releases. Caller B's own unlocked
+     * pre-check ran against the OLD (40-days-ago) {@code lastModifiedAt} and passed the cooldown;
+     * only after B's {@code findByIdForUpdateNoWait} retries past A's released lock and refreshes
+     * does B see the fresh, just-bumped {@code lastModifiedAt}. Pre-fix, B's refreshed re-check only
+     * covered moderation status (still {@code PENDING}, not {@code BLOCKED}/{@code UNDER_REVIEW}),
+     * so B would proceed and silently overwrite A's edit, defeating the cooldown for any
+     * near-simultaneous pair. Post-fix, B's refreshed cooldown re-check rejects it as
+     * {@code UPDATE_TOO_SOON}.
+     */
+    @Test
+    void concurrentUpdateReview_secondCallerCannotBypassCooldownViaStaleRefresh() throws Exception {
+        UUID reviewId = UUID.randomUUID();
+        Instant longAgo = Instant.now().minusSeconds(86400L * 40); // outside the 30-day cooldown
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO reviews.coach_reviews " +
+                "(review_id, coach_id, author_id, author_role, rating, body, moderation_status, " +
+                " last_modified_at, author_last_edited_at, created_at, moderation_epoch) " +
+                "VALUES (?, ?, ?, 'PARENT', 3, 'original body', 'APPROVED', ?, ?, ?, 0)",
+                reviewId, coachProfileId, AUTHOR_ID,
+                Timestamp.from(longAgo), Timestamp.from(longAgo), Timestamp.from(longAgo));
+            return null;
+        });
+
+        CountDownLatch updateAHeld = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+        AtomicReference<Throwable> aFailure = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> callerA = executor.submit(() -> {
+                try {
+                    transactionTemplate.execute(status -> {
+                        reviewSubmissionService.updateReview(reviewId, AUTHOR_ID, 4, "A's edit");
+                        updateAHeld.countDown();
+                        try {
+                            boolean released = releaseA.await(30, TimeUnit.SECONDS);
+                            if (!released) {
+                                throw new AssertionError("releaseA was never signalled within 30s");
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return null;
+                    });
+                } catch (Throwable t) {
+                    aFailure.set(t);
+                }
+            });
+
+            assertThat(updateAHeld.await(10, TimeUnit.SECONDS)).isTrue();
+
+            Callable<Throwable> callerBTask = () -> {
+                try {
+                    reviewSubmissionService.updateReview(reviewId, AUTHOR_ID, 5, "B's edit");
+                    return null;
+                } catch (Throwable t) {
+                    return t;
+                }
+            };
+            Future<Throwable> callerB = executor.submit(callerBTask);
+
+            // Gives B's own pre-check + findByIdForUpdateNoWait a real chance to run (and start
+            // retrying against A's still-held lock) before A's transaction commits.
+            Thread.sleep(300);
+            releaseA.countDown();
+
+            callerA.get(30, TimeUnit.SECONDS);
+            Throwable bFailure = callerB.get(30, TimeUnit.SECONDS);
+
+            if (aFailure.get() != null) {
+                throw new AssertionError("caller A failed", aFailure.get());
+            }
+            assertThat(bFailure)
+                .as("B's stale pre-check passed cooldown against the old lastModifiedAt; after A "
+                    + "commits and bumps it to 'now', B's refreshed re-check must reject the edit as "
+                    + "UPDATE_TOO_SOON rather than silently overwriting A's just-committed edit")
+                .isInstanceOf(OperationNotAllowedException.class);
+            assertThat(((OperationNotAllowedException) bFailure).getErrorCode())
+                .isEqualTo(ReviewErrorCode.UPDATE_TOO_SOON);
+
+            String finalBody = jdbcTemplate.queryForObject(
+                "SELECT body FROM reviews.coach_reviews WHERE review_id = ?", String.class, reviewId);
+            assertThat(finalBody).as("A's edit must survive, not be overwritten by B").isEqualTo("A's edit");
         } finally {
             executor.shutdownNow();
         }

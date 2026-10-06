@@ -3860,3 +3860,94 @@ re-verified against on-disk source (not reproduced from a layer's say-so) before
   locking — flip state on the `user` row (or add a `sessions_invalid_after` column the
   pre-authentication checks consult) so `authorize()` can actually see it. Note that fixing this
   interacts directly with the AC8 decision recorded in `skillars-deferred-144`'s Review Findings.
+
+## Deferred from: code review of skillars-deferred-145 (2026-10-06)
+
+- **i18n copy hardcodes operator-tunable values ("30 days", "18").**
+  **[CLOSED by skillars-deferred-145 round-2 review (R7) — `updateTooSoon` no longer states a number
+  in any of the three bundles ("You have edited this review too recently — please try again later."
+  and its de-DE/fr-FR equivalents), and `noQualifyingSession` was reworded in the same pass to cover
+  all three of its causes rather than only the maturity one. The `parentalReviewNotApplicable` half of
+  this item is moot: round-1 decision D2 deleted that error code and its message before they ever
+  shipped, so there is no "18 or older" string anywhere to fix — the original wording of this entry
+  was written while that code still existed and is corrected here at source.]**
+  `src/frontend/src/i18n/{en-US,fr-FR,de-DE}/index.js` — `updateTooSoon` stated "once every 30 days"
+  while `reviews.updateCooldownDays` is operator-settable over `[1, 365]`. Deferred because Task 4 explicitly prescribed this wording (the
+  prior copy hardcoded "once per year"), so it is a resolved decision rather than a newly found
+  gap. Note the inconsistency inside the same change: `noQualifyingSession` was deliberately
+  written config-agnostic ("has had time to settle") for a key with the identical range.
+  **When picked up:** switch both strings to vue-i18n interpolation fed from the live config value,
+  or revert to config-agnostic phrasing. Becomes a live correctness issue the moment an operator
+  retunes `reviews.updateCooldownDays` — all three bundles would then state a false rule.
+
+- **`findQualifyingCompletedBookings` has no `LIMIT` or ordering.**
+  `BookingRepository.java:127-142` — the query returns every matching `COMPLETED` booking for the
+  author/coach pair, by design (the maturity floor deliberately has no upper bound), and
+  `ReviewSubmissionService.checkEligibility` streams it. Deferred because the real cost is small:
+  repeat `playerProfileRepository.findById` calls for the same player hit Hibernate's
+  persistence-context identity map, so query count is bounded by *distinct* players rather than
+  bookings, and `configService.find` is cache-backed. Already sized and accepted in the story's own
+  Dev Notes (F10). The `break` short-circuits only the eligible case — both rejection paths scan the
+  full set.
+  **When picked up:** add a `LIMIT`, or split into an exists-shaped query for the self case plus a
+  `DISTINCT` projection for the parent case. `AgePolicyService.findMessagingPoliciesByPlayerIds`
+  (added by skillars-deferred-90 AC13) is the batched-lookup precedent if one is ever wanted.
+
+- **Pre-existing cross-ID-space authorization confusion in `DisputeService`.**
+  `DisputeService.java:90` — `boolean ownerEligible = raisedBy.equals(booking.getParentId()) ||
+  raisedBy.equals(booking.getPlayerId());` compares a **User** id against a **PlayerProfile** primary
+  key in the second disjunct. This is the same defect class as skillars-deferred-145's F2, and the
+  file itself documents awareness of the distinction eight lines earlier (the comment at `:85-88`
+  explains that `booking.getCoachId()` is "the coach *profile* UUID, not a user id, so this needs
+  the same profile-to-user-id hop"). In principle it lets a user raise a dispute on a stranger's
+  booking whose `player_id` coincides with their own user id. Not introduced by deferred-145, and
+  negligible in practice because both ID spaces are app-side `@Tsid` values (no DB sequence or
+  identity exists for `main."user"` or `main.player_profiles`), so a collision is not realistically
+  reachable.
+  **When picked up:** resolve the `PlayerProfile` and compare against its `userId`/`parentId`, the
+  shape deferred-145 adopted in `ReviewSubmissionService.checkEligibility`. **Correction (round-2
+  review, R10):** this entry originally said deferred-145's new
+  `DisputeRepository.existsActiveDisputeByAuthor` had propagated the same `b.playerId = :authorId`
+  disjunct and that both should be fixed together. That is no longer true — the disjunct was dropped
+  from the dispute query by round-1 patch item 10, and the method now carries a comment explaining why
+  it is absent there while retained (harmlessly, behind a `PlayerProfile` post-filter) in
+  `BookingRepository.findQualifyingCompletedBookings`. Only `DisputeService.java:90` is left to fix.
+
+## Deferred from: code review of skillars-deferred-145, round 2 (2026-10-06)
+
+- **`sinceAfter` is computed from the stale pre-lock read and never re-derived after `refresh`.**
+  `ReviewSubmissionService.java:140-142` computes `sinceAfter` from the unlocked `findByReviewIdAndAuthorId`
+  load; the post-refresh block (`:164-186`) re-checks the cooldown and the moderation status but never
+  re-runs `checkEligibility`, so a winning concurrent edit's new `authorLastEditedAt` is invisible to
+  this caller. Deferred because it is latent, not reachable today: `updateReview` is the column's sole
+  writer and always writes it together with `lastModifiedAt` from the same `now` (`:191-193`), so any
+  concurrent edit that would invalidate caller B's eligibility read also trips B's refreshed cooldown
+  check (pinned by `ReviewSubmissionServiceConcurrencyIT:284`).
+  **When picked up:** re-derive `sinceAfter` from the refreshed `locked` instance and re-run
+  `checkEligibility` after `entityManager.refresh`, or document the coupling at both sites. The masking
+  is implicit and undefended — decoupling the two timestamp writes, or giving the cooldown a per-role
+  or per-review override, would make the "new qualifying session since last edit" bound bypassable by
+  any near-simultaneous pair of PATCHes.
+
+- **The review-eligibility cross-key invariant is strict ordering, not a minimum gap.**
+  `ConfigStartupAssertion.java:182` and `ConfigService.java:321` both reject only
+  `reviews.minSessionAgeDays >= reviews.updateCooldownDays`. Deferred because strict ordering is what
+  the owner specified for D3 and it is correctly implemented in both halves. But the invariant is
+  necessary, not sufficient: `minSessionAgeDays = 29` with `updateCooldownDays = 30` passes both guards
+  while leaving only a one-day-wide window in which a qualifying session must fall, so edits at the
+  cooldown boundary still 403 as `reviews.noQualifyingSession` — exactly the symptom the guard's own
+  ERROR message attributes to a config error, now undetectable by that guard.
+  **When picked up:** express the invariant as a minimum gap (`cooldownDays - minSessionAgeDays >= N`)
+  rather than strict inequality, and pick `N` from the business cadence the two keys are meant to
+  produce together.
+
+- **The locked cooldown re-check precedes the status re-check, so a concurrent block reports the less
+  actionable error.** `ReviewSubmissionService.java:175-186` evaluates the cooldown on the refreshed
+  instance before the moderation-status guard. A concurrent `AdminReviewService.blockReview` sets both
+  `moderationStatus = BLOCKED` and `lastModifiedAt = now` (`AdminReviewService.java:144-145`), so the
+  author receives `reviews.updateTooSoon` ("modified within the cooldown window") rather than the
+  actual, actionable `reviews.editNotPermitted`. Deferred because the unlocked pre-check at `:121-133`
+  already had this ordering before skillars-deferred-145 — the locked path is a faithful mirror, not a
+  regression.
+  **When picked up:** reorder the status guard ahead of the cooldown guard at **both** sites together,
+  so the two paths stay mirrored and the author always gets the error they can act on.

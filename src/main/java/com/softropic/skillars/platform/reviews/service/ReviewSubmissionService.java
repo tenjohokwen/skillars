@@ -2,6 +2,8 @@ package com.softropic.skillars.platform.reviews.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.admin.repo.DisputeRepository;
+import com.softropic.skillars.platform.booking.repo.BookingReviewEligibilityProjection;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -14,6 +16,8 @@ import com.softropic.skillars.platform.reviews.contract.SubmitReviewResponse;
 import com.softropic.skillars.platform.reviews.repo.CoachReview;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.UUID;
 
 @Slf4j
@@ -43,6 +48,8 @@ public class ReviewSubmissionService {
     // skillars-deferred-135 AC3: converts updateReview/submitCoachResponse's own findByIdForUpdate
     // calls below to NOWAIT + bounded retry, mirroring ReviewFlagService.flag()'s own shipped pattern.
     private final PessimisticLockRetryer lockRetryer;
+    private final PlayerProfileRepository playerProfileRepository;
+    private final DisputeRepository disputeRepository;
 
     /**
      * skillars-deferred-132 AC2 Fix 7: {@code @Transactional(REQUIRES_NEW)}, overriding this class's
@@ -63,7 +70,7 @@ public class ReviewSubmissionService {
         if (!coachProfileRepository.existsById(coachId)) {
             throw new ResourceNotFoundException("Coach", coachId.toString());
         }
-        checkEligibility(coachId, authorId);
+        checkEligibility(coachId, authorId, Instant.EPOCH);
         if (coachReviewRepository.existsByAuthorIdAndCoachId(authorId, coachId)) {
             throw new OperationNotAllowedException(
                 "Review already submitted for this coach",
@@ -84,7 +91,15 @@ public class ReviewSubmissionService {
         review.setRating(rating);
         review.setBody(body);
         review.setModerationStatus(ReviewModerationStatus.PENDING);
-        review.setLastModifiedAt(Instant.now());
+        // Round-2 code review (R4): set authorLastEditedAt at submission too. Submitting IS an
+        // author write, so "last author write" is well defined from creation onward; without this
+        // every freshly-created review carried NULL and relied on updateReview's createdAt
+        // fallback, which made the fallback (not the column) govern the commonest real sequence
+        // -- submit, then edit -- and left the column's own javadoc describing the wrong
+        // population as nullable. The fallback now serves only rows backfilled by V157.
+        Instant createdNow = Instant.now();
+        review.setLastModifiedAt(createdNow);
+        review.setAuthorLastEditedAt(createdNow);
         try {
             review = coachReviewRepository.saveAndFlush(review);
         } catch (DataIntegrityViolationException e) {
@@ -111,9 +126,11 @@ public class ReviewSubmissionService {
                 "Review not found or caller is not the author",
                 ReviewErrorCode.AUTHOR_MISMATCH));
 
-        if (review.getLastModifiedAt().isAfter(Instant.now().minus(365, ChronoUnit.DAYS))) {
+        int cooldownDays = configService.getBoundedInt(
+            ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), 30, 1, 365);
+        if (review.getLastModifiedAt().isAfter(Instant.now().minus(cooldownDays, ChronoUnit.DAYS))) {
             throw new OperationNotAllowedException(
-                "Review was modified within the last 365 days",
+                "Review was modified within the cooldown window",
                 ReviewErrorCode.UPDATE_TOO_SOON);
         }
         ReviewModerationStatus status = review.getModerationStatus();
@@ -122,10 +139,18 @@ public class ReviewSubmissionService {
                 "Review cannot be edited in its current moderation status",
                 ReviewErrorCode.EDIT_NOT_PERMITTED);
         }
-        checkEligibility(review.getCoachId(), authorId);
+        // skillars-deferred-145 code review (D1, 2026-10-06): sinceAfter anchors on
+        // authorLastEditedAt, not lastModifiedAt. lastModifiedAt has three non-author writers
+        // (AdminReviewService.approveReview/blockReview, ReviewFlagService's auto-hold) that would
+        // otherwise retroactively void an already-earned qualifying session every time any of them
+        // fires. authorLastEditedAt is written ONLY from this method (below), falling back to
+        // createdAt for a pre-migration row that has never been edited since.
+        Instant sinceAfter = review.getAuthorLastEditedAt() != null
+            ? review.getAuthorLastEditedAt() : review.getCreatedAt();
+        checkEligibility(review.getCoachId(), authorId, sinceAfter);
 
         // AC1 (skillars-deferred-88): serialise the moderation-epoch bump. The findByReviewIdAndAuthorId
-        // load above is unlocked and only backs the author-match / 365-day / status pre-checks, so an
+        // load above is unlocked and only backs the author-match / cooldown / status pre-checks, so an
         // unauthorised caller still gets AUTHOR_MISMATCH without ever taking a row lock (same
         // order-of-operations rationale as MessagingService.softDeleteMessage). Every mutation below
         // runs on the locked instance. Author identity is already confirmed by the pre-check, so a
@@ -146,11 +171,20 @@ public class ReviewSubmissionService {
         // contention for the row.
         entityManager.refresh(locked, LockModeType.PESSIMISTIC_WRITE);
 
-        // Re-run the moderation-status guard on the FRESH locked instance (review finding). The
-        // pre-check above ran on the stale unlocked read; a concurrent admin BLOCK, a
-        // ReviewFlagService.flag auto-hold, or a moderation-listener verdict committed between that
-        // read and this lock must not be silently reset to PENDING by the edit below. Mirrors
-        // MessagingService.softDeleteMessage re-checking getDeletedAt() after its own refresh.
+        // Re-run the cooldown AND moderation-status guards on the FRESH locked instance (code review
+        // 2026-10-06). The pre-checks above ran on the stale unlocked read; a concurrent caller that
+        // wins the race, commits its own edit (bumping lastModifiedAt to now) and releases the lock
+        // must not let THIS caller, which only re-checked moderation status after refresh, silently
+        // overwrite that fresh edit a moment later — defeating the cooldown entirely for any burst of
+        // near-simultaneous PATCHes. Mirrors MessagingService.softDeleteMessage re-checking
+        // getDeletedAt() after its own refresh.
+        int lockedCooldownDays = configService.getBoundedInt(
+            ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), 30, 1, 365);
+        if (locked.getLastModifiedAt().isAfter(Instant.now().minus(lockedCooldownDays, ChronoUnit.DAYS))) {
+            throw new OperationNotAllowedException(
+                "Review was modified within the cooldown window",
+                ReviewErrorCode.UPDATE_TOO_SOON);
+        }
         ReviewModerationStatus lockedStatus = locked.getModerationStatus();
         if (lockedStatus == ReviewModerationStatus.BLOCKED
                 || lockedStatus == ReviewModerationStatus.UNDER_REVIEW) {
@@ -162,7 +196,9 @@ public class ReviewSubmissionService {
         locked.setRating(rating);
         locked.setBody(body);
         locked.setModerationStatus(ReviewModerationStatus.PENDING);
-        locked.setLastModifiedAt(Instant.now());
+        Instant now = Instant.now();
+        locked.setLastModifiedAt(now);
+        locked.setAuthorLastEditedAt(now);
         locked.setCoachResponseBody(null);
         locked.setCoachResponseAt(null);
         locked.setModerationEpoch(locked.getModerationEpoch() + 1);
@@ -204,21 +240,43 @@ public class ReviewSubmissionService {
             && UNIQUE_AUTHOR_COACH_CONSTRAINT.equals(cve.getConstraintName());
     }
 
-    private void checkEligibility(UUID coachId, Long authorId) {
-        // skillars-deferred-107 AC2: 0/neg → no review can ever be submitted (failFast). Clamps to 14 + WARN.
-        // skillars-deferred-132 AC3 Fix 10: references the existing ConfigBounds constant's key
-        // instead of the raw string literal — see ReviewFlagService's identical fix for why (future
-        // typo-drift protection, not a fail-fast gap: ConfigStartupAssertion boot-protects by string
-        // lookup either way). Bounds (1, 365) stay re-typed as literals, per convention.
-        int windowDays = configService.getBoundedInt(
-            ConfigBounds.REVIEWS_SUBMISSION_WINDOW_DAYS.key(), 14, 1, 365);
-        Instant windowStart = Instant.now().minus(windowDays, ChronoUnit.DAYS);
-        boolean eligible = bookingRepository.existsRecentCompletedBookingByAuthor(
-            coachId, authorId, windowStart);
+    private void checkEligibility(UUID coachId, Long authorId, Instant sinceAfter) {
+        int minAgeDays = configService.getBoundedInt(
+            ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), 7, 1, 365);
+        Instant maturedBefore = Instant.now().minus(minAgeDays, ChronoUnit.DAYS);
+
+        List<BookingReviewEligibilityProjection> qualifying =
+            bookingRepository.findQualifyingCompletedBookings(coachId, authorId, maturedBefore, sinceAfter);
+
+        boolean eligible = false;
+        for (BookingReviewEligibilityProjection booking : qualifying) {
+            PlayerProfile player = playerProfileRepository.findById(booking.getPlayerId()).orElse(null);
+            if (player == null) {
+                continue; // orphaned playerId -- contributes to neither outcome, see Dev Notes F5
+            }
+            // skillars-deferred-145 code review (D2, 2026-10-06): the age-tier discriminator was
+            // removed entirely -- "so long as a player is under a parent account, the parent should
+            // be the reviewer," regardless of the player's age. No flow ever transfers an existing
+            // parent-linked PlayerProfile to self-owned (chk_pp_owner forces exactly one of
+            // parent_id/user_id for life; ShadowAccountService.createSelfOwnedPlayerProfile only ever
+            // creates a brand-new self-owned profile), so an age check here made a parent-linked
+            // player's session permanently unreviewable by anyone the moment that player turned 18.
+            if (authorId.equals(player.getUserId()) || authorId.equals(player.getParentId())) {
+                eligible = true; // the author is reviewing their own session, or their linked player's
+                break;
+            }
+        }
+
         if (!eligible) {
             throw new OperationNotAllowedException(
-                "No completed session within the submission window",
-                ReviewErrorCode.NO_RECENT_SESSION);
+                "No qualifying completed session with this coach",
+                ReviewErrorCode.NO_QUALIFYING_SESSION);
+        }
+
+        if (disputeRepository.existsActiveDisputeByAuthor(coachId, authorId)) {
+            throw new OperationNotAllowedException(
+                "An active dispute exists between this author and coach",
+                ReviewErrorCode.ACTIVE_DISPUTE);
         }
     }
 }

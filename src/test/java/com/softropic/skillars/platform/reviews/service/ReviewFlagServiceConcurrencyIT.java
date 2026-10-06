@@ -101,6 +101,9 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
                 "VALUES (?, ?, 'Race Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
                 coachProfileId, COACH_USER_ID);
 
+            // skillars-deferred-145 code review (D2, 2026-10-06): the age-restriction discriminator
+            // was removed entirely -- reverts to a plain parent-linked ADULT-tier player; see
+            // ReviewSubmissionServiceConcurrencyIT's identical comment for the full reasoning.
             long playerId = AUTHOR_ID + 1_000_000L;
             jdbcTemplate.update(
                 "INSERT INTO main.player_profiles " +
@@ -109,20 +112,20 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
                 playerId, Date.valueOf(LocalDate.now().minusYears(18)),
                 AUTHOR_ID, Timestamp.from(Instant.now()));
 
-            // Eligibility for updateReview's own checkEligibility: a COMPLETED booking within the
-            // default 14-day submissionWindowDays, authored by AUTHOR_ID.
+            // Eligibility for updateReview's own checkEligibility: a COMPLETED booking matured past
+            // the 7-day reviews.minSessionAgeDays floor, authored by AUTHOR_ID.
             jdbcTemplate.update(
                 "INSERT INTO booking.bookings " +
                 "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
                 " version, created_at, updated_at, canonical_timezone) " +
                 "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
                 UUID.randomUUID(), coachProfileId, AUTHOR_ID, playerId,
-                Timestamp.from(Instant.now().minusSeconds(7200)),
-                Timestamp.from(Instant.now().minusSeconds(3600)),
-                Timestamp.from(Instant.now().minusSeconds(86400 * 3)),
-                Timestamp.from(Instant.now().minusSeconds(3600)));
+                Timestamp.from(Instant.now().minusSeconds(86400L * 10 + 3600)),
+                Timestamp.from(Instant.now().minusSeconds(86400L * 10)),
+                Timestamp.from(Instant.now().minusSeconds(86400 * 17)),
+                Timestamp.from(Instant.now().minusSeconds(86400L * 10)));
 
-            // APPROVED, well outside updateReview's 365-day UPDATE_TOO_SOON guard.
+            // APPROVED, well outside updateReview's update-cooldown (UPDATE_TOO_SOON) guard.
             jdbcTemplate.update(
                 "INSERT INTO reviews.coach_reviews " +
                 "(review_id, coach_id, author_id, author_role, rating, body, moderation_status, " +

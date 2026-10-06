@@ -86,6 +86,9 @@ class ReviewModerationIT extends AbstractIntegrationTest {
                 "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PARENT')) ON CONFLICT DO NOTHING",
                 PARENT_ID);
 
+            // skillars-deferred-145 code review (D2, 2026-10-06): the age-restriction discriminator
+            // was removed entirely -- reverts to a plain parent-linked ADULT-tier player; see
+            // ReviewSubmissionServiceConcurrencyIT's identical comment for the full reasoning.
             jdbcTemplate.update(
                 "INSERT INTO main.player_profiles " +
                 "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) " +
@@ -105,16 +108,17 @@ class ReviewModerationIT extends AbstractIntegrationTest {
                 "VALUES (?, ?, 'Moderation Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
                 coachProfileId, COACH_USER_ID);
 
+            // Matured past the 7-day reviews.minSessionAgeDays floor.
             jdbcTemplate.update(
                 "INSERT INTO booking.bookings " +
                 "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
                 " version, created_at, updated_at, canonical_timezone) " +
                 "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
                 UUID.randomUUID(), coachProfileId, PARENT_ID, PLAYER_ID,
-                Timestamp.from(Instant.now().minusSeconds(7200)),
-                Timestamp.from(Instant.now().minusSeconds(3600)),
-                Timestamp.from(Instant.now().minusSeconds(86400 * 3)),
-                Timestamp.from(Instant.now().minusSeconds(3600)));
+                Timestamp.from(Instant.now().minusSeconds(86400L * 10 + 3600)),
+                Timestamp.from(Instant.now().minusSeconds(86400L * 10)),
+                Timestamp.from(Instant.now().minusSeconds(86400 * 17)),
+                Timestamp.from(Instant.now().minusSeconds(86400L * 10)));
 
             return null;
         });

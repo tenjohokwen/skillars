@@ -20,6 +20,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -58,6 +59,16 @@ class ConfigStartupAssertionTest {
         // Default: every bounded key holds an in-range value (100 is inside every ConfigBounds range).
         lenient().when(configService.find(anyString())).thenReturn(Optional.of("100"));
         lenient().when(env.getActiveProfiles()).thenReturn(new String[] {});
+        // skillars-deferred-145 code review (D3): default coded-default values for the review
+        // eligibility cross-field check, so an unrelated test (which never stubs getBoundedInt) does
+        // not spuriously trip minSessionAgeDays >= updateCooldownDays against two unstubbed-Mockito
+        // zeros.
+        lenient().when(configService.getBoundedInt(
+                eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
+            .thenReturn(7);
+        lenient().when(configService.getBoundedInt(
+                eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), anyInt(), anyInt(), anyInt()))
+            .thenReturn(30);
     }
 
     private BoundedKey aFailFastKey() {
@@ -268,6 +279,76 @@ class ConfigStartupAssertionTest {
 
         assertThat(meterRegistry.find("config.value.misconfigured")
             .tag("key", "reliability.strike.threshold_ordering")
+            .counter())
+            .isNull();
+    }
+
+    // ── skillars-deferred-145 D3: reviews.minSessionAgeDays < reviews.updateCooldownDays ──
+
+    @Test
+    void reviewWindowOrderingViolation_nonDev_throwsAppSetupExceptionNamingBothKeys() {
+        when(configService.getBoundedInt(
+                eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
+            .thenReturn(30);
+        when(configService.getBoundedInt(
+                eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), anyInt(), anyInt(), anyInt()))
+            .thenReturn(7);
+
+        assertThatThrownBy(() -> assertion.onApplicationEvent(EVENT))
+            .isInstanceOf(AppSetupException.class)
+            .hasMessageContaining(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key())
+            .hasMessageContaining(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key());
+    }
+
+    @Test
+    void reviewWindowOrderingViolation_devProfile_noThrowButErrorMetricStillFires() {
+        when(env.getActiveProfiles()).thenReturn(new String[] {"dev"});
+        when(configService.getBoundedInt(
+                eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
+            .thenReturn(30);
+        when(configService.getBoundedInt(
+                eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), anyInt(), anyInt(), anyInt()))
+            .thenReturn(7);
+
+        assertThatCode(() -> assertion.onApplicationEvent(EVENT)).doesNotThrowAnyException();
+
+        assertThat(meterRegistry.get("config.value.misconfigured")
+            .tag("key", "reviews.eligibility_window_ordering")
+            .tag("reason", "cross_field_ordering")
+            .counter().count())
+            .isEqualTo(1.0);
+    }
+
+    @Test
+    void reviewWindowOrderingEqualValues_flagsAsSuperseded() {
+        // Equal is still a violation here (unlike the reliability-strike pair): minSessionAgeDays
+        // must be STRICTLY less than updateCooldownDays, or the maturity floor exactly supersedes
+        // the cooldown on the boundary day.
+        when(configService.getBoundedInt(
+                eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
+            .thenReturn(30);
+        when(configService.getBoundedInt(
+                eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), anyInt(), anyInt(), anyInt()))
+            .thenReturn(30);
+
+        assertThatThrownBy(() -> assertion.onApplicationEvent(EVENT))
+            .isInstanceOf(AppSetupException.class)
+            .hasMessageContaining(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key());
+    }
+
+    @Test
+    void reviewWindowOrderingMinAgeBelowCooldown_doesNotFlag() {
+        when(configService.getBoundedInt(
+                eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
+            .thenReturn(7);
+        when(configService.getBoundedInt(
+                eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), anyInt(), anyInt(), anyInt()))
+            .thenReturn(30);
+
+        assertThatCode(() -> assertion.onApplicationEvent(EVENT)).doesNotThrowAnyException();
+
+        assertThat(meterRegistry.find("config.value.misconfigured")
+            .tag("key", "reviews.eligibility_window_ordering")
             .counter())
             .isNull();
     }

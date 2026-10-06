@@ -724,11 +724,14 @@ export default {
     pendingModeration: 'Ihre Bewertung wird geprüft und ist noch nicht öffentlich sichtbar.',
     blocked: 'Ihre Bewertung wurde durch die Moderation entfernt.',
     coachResponseLabel: 'Antwort des Trainers',
-    noRecentSession:
-      'Sie benötigen eine kürzlich abgeschlossene Einheit mit diesem Trainer, bevor Sie eine Bewertung abgeben können.',
+    noQualifyingSession:
+      'Sie benötigen eine abgeschlossene Einheit mit diesem Trainer, die lange genug zurückliegt. Um eine bestehende Bewertung zu bearbeiten, benötigen Sie zusätzlich eine neue Einheit seit Ihrer letzten Bewertung.',
+    activeDispute:
+      'Sie können keine Bewertung abgeben, solange ein Streitfall mit diesem Trainer offen ist.',
     alreadySubmitted: 'Sie haben für diesen Trainer bereits eine Bewertung abgegeben.',
     bodyTooLong: 'Ihre Bewertung ist zu lang — maximal 1000 Zeichen.',
-    updateTooSoon: 'Sie können eine Bewertung nur einmal pro Jahr bearbeiten.',
+    updateTooSoon:
+      'Sie haben diese Bewertung zu kürzlich bearbeitet — bitte versuchen Sie es später erneut.',
     editNotPermitted: 'Diese Bewertung kann derzeit nicht bearbeitet werden.',
     authorMismatch: 'Diese Bewertung gehört nicht Ihnen.',
     authorRoleNotAllowed: 'Trainer können keine Bewertungen abgeben.',

@@ -218,6 +218,7 @@ public class ConfigService {
             throw new ResourceNotFoundException("ConfigEntry", key);
         }
         rejectOutOfRange(key, newValue);
+        rejectReviewEligibilityWindowOrdering(key, newValue);
 
         if (existing.isPresent()) {
             PlatformConfig entity = existing.get();
@@ -291,6 +292,68 @@ public class ConfigService {
                             + b.min() + ", " + b.max() + "] — " + b.note());
                 }
             });
+    }
+
+    /**
+     * skillars-deferred-145 code review (D3, 2026-10-06): PUT-time half of the cross-field ordering
+     * guard — {@code ConfigStartupAssertion} only catches a bad combination at the next restart, and
+     * {@link #rejectOutOfRange} above only ever sees the single key being written, never the pair's
+     * relationship. Mirrors the boot check's own invariant exactly (reviews.minSessionAgeDays must be
+     * strictly less than reviews.updateCooldownDays, or the maturity floor silently supersedes the
+     * cooldown), reading the OTHER key's current effective value the same way every call site does.
+     */
+    private void rejectReviewEligibilityWindowOrdering(String key, String newValue) {
+        boolean isMinAge = ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key().equals(key);
+        boolean isCooldown = ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key().equals(key);
+        if (!isMinAge && !isCooldown) {
+            return;
+        }
+        long newValueParsed;
+        try {
+            newValueParsed = Long.parseLong(newValue.trim());
+        } catch (NumberFormatException e) {
+            return; // already rejected by rejectOutOfRange above
+        }
+        long minSessionAgeDays = isMinAge ? newValueParsed
+            : readStoredBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS);
+        long updateCooldownDays = isCooldown ? newValueParsed
+            : readStoredBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS);
+        if (minSessionAgeDays >= updateCooldownDays) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "reviews.minSessionAgeDays (" + minSessionAgeDays + ") must be strictly less than "
+                    + "reviews.updateCooldownDays (" + updateCooldownDays + ") — the cooldown would be "
+                    + "silently superseded by the maturity floor");
+        }
+    }
+
+    /**
+     * Round-2 code review (R2): the cross-key guard above MUST NOT read the other key through
+     * {@link #find} / {@link #getBoundedInt}. Those go via {@link #ensureFresh()}, which only
+     * refreshes after {@code app.config.cache-ttl-seconds} (300), and {@link #invalidate()} clears
+     * only the cache of the JVM that handled the write — {@code ConfigResource}'s own javadoc states
+     * this explicitly ("a load-balanced retry can land on a different node each time"). With a cached
+     * read, two sequential {@code PUT}s landing on different nodes inside the TTL each see a stale
+     * partner value and each return 200, together committing a pair that violates the invariant;
+     * nothing re-checks it at runtime and {@code ConfigStartupAssertion} then refuses to boot outside
+     * the {@code dev} profile, so an accepted admin write silently arms a startup failure. Reading the
+     * row directly closes that window. Falls back to the key's registry default exactly as the 4-arg
+     * {@code getBoundedInt} would for an absent, blank, non-numeric or out-of-range stored value, so
+     * this guard and the boot assertion still agree on every such case.
+     */
+    private long readStoredBoundedInt(ConfigBounds.BoundedKey boundedKey) {
+        return configRepository.findByKey(boundedKey.key())
+            .map(PlatformConfig::getValue)
+            .filter(v -> v != null && !v.isBlank())
+            .map(v -> {
+                try {
+                    long parsed = Long.parseLong(v.trim());
+                    return (parsed < boundedKey.min() || parsed > boundedKey.max())
+                        ? boundedKey.defaultValue() : parsed;
+                } catch (NumberFormatException e) {
+                    return boundedKey.defaultValue();
+                }
+            })
+            .orElse(boundedKey.defaultValue());
     }
 
     public void invalidate() {

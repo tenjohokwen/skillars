@@ -1,624 +1,276 @@
-# Story Review — skillars-deferred-144
+# Story Review — skillars-deferred-145
 
-**Story:** `skillars-deferred-144-skp-cookie-consolidation-open-redirect-guard-dedup-and-auth-test-cleanup.md`
-**Story status (sprint-status.yaml):** `ready-for-dev`
+**Story:** `skillars-deferred-145-review-eligibility-maturity-cooldown-and-dispute-gate-rework`
+**File:** `_bmad-output/implementation-artifacts/skillars-deferred-145-review-eligibility-maturity-cooldown-and-dispute-gate-rework.md`
+**Status in `sprint-status.yaml`:** `ready-for-dev` (line 334) — confirmed in the map, not from the `last_updated` comment prose
 **Audit date:** 2026-10-06
-**Verified against real HEAD:** `a0d39f83` — *"Story Deferred-143: Account-Lock Enforcement and Forced-Logout Session Termination (#250)"*
-(obtained from `git rev-parse --short HEAD` / `git log -1` at audit time, **not** taken from the story's own
-Source line. The story claims the same SHA, and that claim is correct — but every citation below was
-re-opened against the working tree regardless.)
+**Real HEAD at audit time:** `74d405d2` — *"Story Deferred-144: skp Cookie Consolidation, Open-Redirect Guard Dedup, and Auth Review/Test Cleanup (#251)"*
 
-**Method:** four verification passes run directly by the reviewer (citations, ledger/precedent attributions,
-mechanistic claims, corner-case/missed-flow hunt), followed by a mandatory adversarial re-check of every
-finding. Section 6 lists what the re-check killed — read it, it is the calibration for the rest.
+Every citation below was re-opened at `74d405d2`. No SHA, line number, or "current, shipped" claim written inside the story was taken on trust — including the story's own `a5f27563` attribution, which was independently re-derived from `git log`.
 
-**Scale:** ~50 code citations, 9 ledger/precedent attributions, 18 mechanistic claims, 7 ACs walked against
-live code paths. **12 findings survived re-verification; 9 candidate findings were killed by it.**
-
-One claim was verified by *running* code rather than reading it (Finding 1 — Vue Router resolution against
-the real route table). That is the highest-confidence item in this report. Several others are high-confidence
-reads of live source. Two are judgment calls and are labelled as such. Confidence is stated per finding, not
-as a blanket score.
+**Method note:** the four verification layers were run inline by the reviewing session rather than as parallel subagents (no subagent was requested for this task). Every quoted line below was read first-hand from the working tree, which is also what Step 4b (adversarial re-verification) requires. Section 6 lists what that second pass killed.
 
 ---
 
-## 1. Citation verification (Layer 1)
+## 1. Verdict summary
 
-| # | Story citation | Verdict | Evidence at HEAD `a0d39f83` |
+| Severity | Count | Headline |
+|---|---|---|
+| **Critical** | 2 | The dispute gate can never fire; the parent/self discriminator is always false and locks out self-registered adult players |
+| **High** | 2 | Test blast radius understated by ≥5 classes (incl. tests the story says to "keep unchanged"); prescribed frontend grep finds nothing |
+| **Medium** | 2 | Wrong error code on the fail-closed path; both new `BoundedKey` notes misdescribe the negative case |
+| **Low** | 5 | Stale advice description, non-existent migration precedent, unbounded query, a Dev Note describing a path no code takes, scope asymmetry |
+| **Killed by re-verification** | 9 | See §6 — including four "test will break" claims that are wrong |
+
+The story is well-written, unusually honest about its own staleness risk (Task 1 explicitly tells the dev not to trust the story's citations for migration numbering — good instinct, and correct), and its citation hygiene is strong: **27 of 29 code/precedent citations verified exact**. The two Critical findings are not citation drift. They are false assumptions about how the existing system actually behaves, and both would ship a feature that silently does nothing or silently blocks real users.
+
+---
+
+## 2. Citation verification (Layer 1)
+
+| # | Story citation | Verdict | Evidence at `74d405d2` |
 |---|---|---|---|
-| 1 | `AuthService.java:122-135` — login skp write | MATCH | `:122` role, `:123-131` the 9-line quoted-id comment, `:132` json, `:133` `URLEncoder.encode`, `:134-135` `addCookie` |
-| 2 | `AuthService.java:132-135` — the 4 lines to replace | MATCH | exactly those 4 |
-| 3 | `AuthService.java:260-273` — refresh skp write | MATCH | `:260` role, `:261-269` comment, `:270` json, `:271` encode, `:272-273` addCookie |
-| 4 | `AuthService.java:270-273` — the 4 lines to replace | MATCH | exactly those 4 |
-| 5 | "two `AuthService` sites are byte-for-byte identical, incl. 9-line comment" | MATCH | diffed `:122-135` vs `:260-273`; identical, comment is 9 lines in both |
-| 6 | `AuthService.java:148` — not-found `BadCredentialsException` | MATCH | `.orElseThrow(() -> new BadCredentialsException("Invalid refresh token"))` (story paraphrases the message as "refresh token not found"; the line is right) |
-| 7 | `AuthService.java:175` / `:173-176` — expiry branch | MATCH | `:173` `isBefore(now)`, `:174` terminateSession, `:175` `"Refresh token has expired"` |
-| 8 | `AuthService.java:161-163`, `:166-169` — reuse-detection branches | MATCH | `:162`/`:167` `markAllUsedByUserId`, `:163`/`:168` `terminateSession`, `:164`/`:169` throw |
-| 9 | `AuthService.java:239-241` — optimistic-lock comment, quoted verbatim | MATCH | the quoted sentence spans exactly `:239-241` |
-| 10 | `AuthService.java:178-209` — self-deadlock comments | MATCH | the deadlock/55P03 narrative occupies that block |
-| 11 | `AuthService.java:212-216` — `findById` rejection | MATCH | `:212` findById, `:213` markUsedByTokenHash, `:214` terminateSession, `:215` throw |
-| 12 | `JwtManagerImpl.java:103-122` — `setSkillarsProfileCookie` | MATCH | `:103` signature → `:122` close |
-| 13 | `JwtManagerImpl.java:95-102` — ANONYMOUS-vs-ADMIN load-bearing comment | MATCH | exactly that passage |
-| 14 | `JwtManagerImpl.java:119-121` — lines to replace | MATCH | json / skpValue / addCookie |
-| 15 | `JwtManagerImpl.java:182-190` — `deleteLoginToken`, six cookies | MATCH | `:182` `@Override` … `:184-189` the six named constants, in the story's order |
-| 16 | "`deleteLoginToken` has exactly two callers" | MATCH | `SecurityUtil.java:188`, `JWTAuthorizationFilter.java:164` (repo-wide grep; `LoginTokenManager.java:72` is the interface decl) |
-| 17 | `SecurityUtil.java:187-191` — `clearAuthCookies` | MATCH | `:188` deleteLoginToken, `:189` rtkn, `:190` skp |
-| 18 | `SecurityUtil.java:190` — the line to delete | MATCH | `CookieUtil.removeCookie(SKILLARS_PROFILE_COOKIE, response, false, "Lax")` |
-| 19 | `SecurityUtil.java:171` — `markUsedByTokenHash` in `terminateSession` | MATCH | guarded by the `:170` non-blank rtkn check |
-| 20 | `JWTAuthorizationFilter.java:158-165` — routine-denial branch | MATCH (one nuance) | `:163` also calls `SecurityContextHolder.clearContext()`; the story says the branch "calls `deleteLoginToken` **alone**" — true for cookies, imprecise for the branch |
-| 21 | `JWTAuthorizationFilter.java:348-354` — `isGenuineDenial`, 4 clauses | MATCH | verbatim |
-| 22 | `JWTAuthorizationFilter.java:351` — `AccountStatusException` disjunct | MATCH | that exact line |
-| 23 | `JWTAuthorizationFilter.java:340-346` — predicate javadoc on the rewrap | MATCH | the passage spans `:337-346`; cited range is inside it |
-| 24 | `JWTAuthorizationFilter.java:150` — "its one call site" | MATCH (nuance) | `:150` is the `catch (AccountStatusException \| AuthorizationException \| AccessDeniedException e)` that *establishes* the union; the invocation is `:156`. Fine for the claim being made |
-| 25 | `JWTAuthorizationFilter.java:378-403` — `SecurityAlertThrottle` | MATCH | class body exactly `:378-403` |
-| 26 | "`maybePublishSecurityAlert`'s `genuineDenial`: 3 clauses, no `ACCOUNT_NOT_LOGIN_ABLE`" | MATCH | `:365-367` |
-| 27 | `DaoAuthProvider.java:47-51` — `AccountStatusException` → `AuthorizationException(ACCOUNT_NOT_LOGIN_ABLE)` | MATCH | verbatim |
-| 28 | `OtpPage.vue:158-162` — inline guard | MATCH | exact |
-| 29 | `OtpPage.vue:163` — `router.push(safePath)` | MATCH | exact |
-| 30 | `LoginPage.vue:170-174` — inline guard | MATCH | exact |
-| 31 | `LoginPage.vue:175` — `router.push(safePath)` | MATCH | exact |
-| 32 | "the two guards are byte-identical" | MATCH as annotated | they differ in the fallback argument (`authStore.role` vs `response.role`); the story's own code block annotates this |
-| 33 | `VideoManagementPage.vue:108` — `router.replace` | MATCH (precedent mischaracterised) | line is right; it is a 403 access-denied bounce, not a post-auth redirect → **Finding 11** |
-| 34 | `routes.js` catch-all → `ErrorNotFound.vue` | MATCH | `routes.js:351-355`, `path: '/:catchAll(.*)*'` → **and this is what breaks AC3, Finding 1** |
-| 35 | `roleRoutes.js` header: "failure mode … infinite redirect loop", deferred-92 AC16 | MATCH | `roleRoutes.js:2`, `:6-7` |
-| 36 | `quasar.config.js:40` — `vueRouterMode: 'hash'` (story flags as *not* re-verified) | MATCH | `:40` exactly. The hedge was unnecessary — it is correct |
-| 37 | `auth.store.js` `hydrateFromCookie` decodes with `decodeURIComponent` | MATCH | `auth.store.js:76` |
-| 38 | `AuthResourceIT.java:365-385` — `refresh_expiredToken_returns401` | MATCH | `:365` `@Test` → `:385` close; test is **live** (the preceding block `:321-363` is commented out) |
-| 39 | `AuthResourceIT.java:368-372` — bare `jdbcTemplate.update` seed | MATCH | exact |
-| 40 | `AuthResourceIT.java:373` — `fakeRaw` | MATCH | exact literal |
-| 41 | `AuthResourceIT.java:705-707` — `commitWrite` helper | MATCH | exact |
-| 42 | `AuthResourceIT.java:739-747` — `sha256Hex` helper | MATCH | exact |
-| 43 | `application.yaml:183` — `auto-commit: false` + grouping rationale | MATCH | `:183`, comment reads "needed to be false in order to group statements in a single txn" |
-| 44 | `JwtManagerImplTest.java:483-505` — `testDeleteLoginToken_success` | MATCH | `:488-493` the 6-name list, `:500` `hasSize(loginCookieNames.size())` — so adding the constant auto-bumps to 7, as the story says |
-| 45 | `JwtManagerImplTest.java:622-636`, `:641-655` — the two skp payload assertions | MATCH | exact |
-| 46 | `SecurityConstants`: `SKILLARS_PROFILE_COOKIE`, `REFRESH_TOKEN_TTL` | MATCH | `:104`, `:105` |
-| 47 | `CookieUtil.addCookie(res,name,value,httpOnly,maxAge,sameSite)` / `removeCookie(name,res,httpOnly,sameSite)` | MATCH | `:33` and `:45`; both set `path("/")`, both emit via `res.addHeader("Set-Cookie", …)` — so AC7's attribute assertions are reachable from a plain unit test |
-| 48 | `skillars-deferred-143…md` Review Findings "lines 230-237" | MATCH | that range holds **eight** DEFER bullets: six become AC6.1-6.6, two are the story's declared exclusions. Internally consistent |
-| 49 | `deferred-work.md` three source section headings | MATCH | `:3471`, `:3572`, `:3649` |
-| 50 | `project-context.md`, "Architecture & Module Design (DDD)" | EXISTS, but does not support the use made of it | `:89`; see **Finding 5** |
-
-**No citation in the story was found fabricated, and none was found stale.** The story's drift-correction
-claims also check out independently: ledger `AuthService.java:218`→`:270`, ledger `JwtManagerImpl.java:108`→`:119`,
-ledger `OtpPage.vue:151-155`→`:158-162`, ledger `SecurityUtil.java:192`→`:190`, 143-review `AuthService.java:216-220`→`:239-241`,
-143-review `AuthService.java:194-197`→`:212-216`, 143-review `JWTAuthorizationFilter.java:312-319`→`:378-403`.
-Citation hygiene in this story is genuinely good; the defects below are **design and coverage** defects, not
-citation defects.
+| 1 | `ReviewSubmissionService.java` — `checkEligibility` (line 207) | **MATCH** | `207: private void checkEligibility(UUID coachId, Long authorId) {` |
+| 2 | `ReviewSubmissionService.java` — 365-day gate (line 114) | **MATCH** | `114: if (review.getLastModifiedAt().isAfter(Instant.now().minus(365, ChronoUnit.DAYS))) {` |
+| 3 | `ReviewSubmissionService.java` — `checkEligibility` call (line 125) | **MATCH** | `125: checkEligibility(review.getCoachId(), authorId);` |
+| 4 | `ReviewSubmissionService.java` — lock/refresh sequence (lines 135-160) | **MATCH** | 135-137 `lockRetryer.withBoundedRetry` → 147 `entityManager.refresh(locked, PESSIMISTIC_WRITE)` → 154-160 re-check. Range is exact. |
+| 5 | `BookingRepository.java:127-138` — `existsRecentCompletedBookingByAuthor` | **MATCH** | `@Query` opens at 127, method signature 135-138. Exact. |
+| 6 | `BookingRepository.java:122-138` — "current `existsRecentCompletedBooking`/`…ByAuthor`" | **MINOR DRIFT** | Both methods are there, but the first one's `@Query` block starts at **114** (122 is only its method-name line). Cosmetic. |
+| 7 | `AgePolicyService.java:48-50` — `isMinor(LocalDate)` | **MATCH** | `48-50: public boolean isMinor(LocalDate dateOfBirth) { return isMinor(getAgeTier(dateOfBirth)); }` |
+| 8 | `AgePolicyService.java:29-54` — `getAgeTier`/`isMinor` x2 | **MATCH** | `getAgeTier` 29-41, `isMinor(AgeTier)` 44-46, `isMinor(LocalDate)` 48-50, `isIndependentAccountAllowed` 52-54. |
+| 9 | `AgePolicyService.java:57-61` — `getMessagingPolicy` (throwing write-path) | **MATCH** | 56 javadoc *"Write paths only: refusing on an unresolvable player is the safe answer there."*; 57-61 `.orElseThrow(UserNotFoundException)`. |
+| 10 | `AgePolicyService.java:68-70` — `findMessagingPolicy` (degrading read-path) | **MATCH** | 68-70 `return playerProfileRepository.findById(playerId).map(this::resolvePolicy);` |
+| 11 | `ConfigBounds.java:185-188` — the key being removed | **MATCH** | 185 javadoc, 186-188 `REVIEWS_SUBMISSION_WINDOW_DAYS = new BoundedKey("reviews.submissionWindowDays", 1L, 365L, true, …, 14L)`. |
+| 12 | `ConfigBounds.java:37-46` — fail-fast principle | **MATCH** | `37: <h2>Fail-fast principle</h2>`, list 38-46. Exact. |
+| 13 | `ConfigBounds.java:48-81` — "the `BoundedKey` record and the fail-fast principle" | **DRIFTED** | 48 is `public final class ConfigBounds {`; 53-81 is the record's **javadoc**; the record itself is at **line 82**. The fail-fast principle is at 37-46 (cited correctly elsewhere). Corrected location: **`ConfigBounds.java:82`** for the record. |
+| 14 | `epics.md:149` — FR-REV-001 | **MATCH** | `149: - FR-REV-001: Review eligibility — at least one completed paid session and no active dispute.` Story's quote is verbatim-accurate. |
+| 15 | `epics.md:144` — FR-MSG-002 | **MATCH (line)** / **INFERENCE (paraphrase)** | Line 144 is FR-MSG-002. But its text reads *"13–17: … all messages mandatory-visible to parent; 18+: unrestricted within scope"* — it never says parents "lose automatic visibility". The story's reading is a sound inference from "unrestricted", not a quote. Flagging only so the dev doesn't go looking for wording that isn't there. |
+| 16 | `AgeTier.java` — `U10`, `AGE_10_12`, `AGE_13_17`, `ADULT` | **MATCH** | All four present; `ADULT.displayLabel()` returns `"18+"`, corroborating the 18+ cutoff. |
+| 17 | `Booking.java` — `parentId`/`playerId` both `Long`, `status` plain `String`, `updatedAt` `Instant` | **MATCH** | Lines 31, 34, 46, 62. All four exact. |
+| 18 | `V139__baseline_seed_data.sql` — `(key, value, value_type, description)` shape | **MATCH** | V139:140 uses exactly that 4-column shape. The story's correction away from the 5-column `(id, key, value, type, description)` shape is right. |
+| 19 | `9.1` shipped at `a5f27563`, 2026-06-29 | **MATCH** | `git log -1 a5f27563` → `a5f27563 2026-06-29 Review Submission & Eligibility`. SHA, date and subject all exact. |
+| 20 | "No `coach_reviews` table changes needed" | **MATCH** | Confirmed: nothing in AC1-AC5 requires a column; `last_modified_at` already exists `NOT NULL DEFAULT now()` (V138:1984). |
+| 21 | Next migration number is **not** `V67+N`; check disk | **MATCH (and correct)** | Highest on disk is `V155__backfill_availability_window_canonical_timezone.sql`. Next is **V156**. The story's instruction to distrust its own citations here was the right call. |
+| 22 | `ConfigService.getBoundedInt(key, default, min, max)` 4-arg exists | **MATCH** | `ConfigService.java:148`. |
+| 23 | `AgePolicyService` + `PlayerProfileRepository` "already exist in `platform.security`" | **MATCH** | `platform.security.service.AgePolicyService`, `platform.security.repo.PlayerProfileRepository`. |
+| 24 | `ReviewErrorCode.java` — `NO_RECENT_SESSION` present; enum grown since 9.1 | **MATCH** | `6: NO_RECENT_SESSION("reviews.noRecentSession")`; flagging codes at 17-24 confirm the growth claim. |
+| 25 | `lastModifiedAt` is surfaced publicly on every review row | **MATCH** | `ReviewDto.java:14`; emitted at `ReviewQueryService.java:45, 65, 85`; also the default sort (`:53, :96`). |
+| 26 | `existsRecentCompletedBookingByAuthor` has no caller besides `ReviewSubmissionService` | **MATCH** | Only `ReviewSubmissionService.java:216` + `ReviewSubmissionServiceTest.java:67`. `VideoAccessGuard.java:100` uses the *other* overload (`existsRecentCompletedBooking`), which the story correctly leaves alone. |
+| 27 | No other `platform.reviews` service reads the config key or calls `checkEligibility` | **MATCH** | Key grep clean outside `ConfigBounds`/`ReviewSubmissionService`/V139/its unit test; `checkEligibility` is `private`, so externally uncallable by construction. |
+| 28 | `DISPUTED` is a valid `bookings.status` value | **MATCH (schema)** | `chk_bkg_status` lists `'DISPUTED'` (V138:246). Legal in the schema — but unreachable in code. See **F1**. |
+| 29 | `platform_config` INSERT may omit `id` | **MATCH** | `ALTER TABLE main.platform_config ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY` (V138:869-876). |
 
 ---
 
-## 2. Ledger & precedent attribution (Layer 2)
+## 3. Ledger & precedent attribution (Layer 2)
 
-Each row was checked against **three** sources before any verdict: the ledger file, code comments/javadoc near
-the method, and `git log --grep`/surrounding history.
+The story cites **no** `deferred-work.md` entries, so there are no ledger line references to verify. It is sourced from a business review dated 2026-10-06 — consistent with the precedent set by `skillars-deferred-143`, whose own `sprint-status.yaml` note records it as *"Sourced from manual security analysis (not deferred-work.md, not a code review run)"*. Not a defect.
 
 | Claim | Sources checked | Verdict |
 |---|---|---|
-| Findings 1/3/4 come from `deferred-work.md` "code review of skillars-deferred-142 (2026-10-05)" | ledger `:3471`, items at `:3488-3495`, `:3503-3510`, `:3512-3519`, `:3521-3526`, `:3528-3539` | **TRUE** — all four items present, wording matches |
-| Findings 1(umbrella)/2/5 come from "manual review during skillars-deferred-143" | ledger `:3649`, items at `:3655-3693`, `:3695-3739`, `:3741-3758` | **TRUE** |
-| Finding 6 comes from "code review of skillars-deferred-143", 8 bullets, 6 closed + 2 excluded | ledger `:3572`; 143 story `:230-237` | **TRUE** |
-| "`skillars-deferred-142` AC3 required this exact verbatim copy" | ledger `:3504-3505`; `OtpPageSpec.js:1-2` header | **TRUE** |
-| "`roleRoutes.js` exists for precisely this failure shape (deferred-92 AC16)" | `roleRoutes.js:1-12` | **TRUE** — the header states it in those terms |
-| "`isGenuineDenial` deliberately excludes the two routine types per deferred-90 AC5/F22 and deferred-143 AC3" | `JWTAuthorizationFilter.java:152-155`, `:320-335`, `:357-362` | **TRUE** |
-| "`commitWrite` was added by deferred-143 specifically to fix this class of bug" | `AuthResourceIT.java:697-707` javadoc | **TRUE** |
-| "`project-context.md` justifies `platform.security.contract` over `infrastructure.security`" | `project-context.md:89-129`, esp. `:104` and `:115` | **HALF-TRUE** → **Finding 5**. `:104`'s business-agnostic rule does rule out `infrastructure.security`. `:115` defines `contract` as "DTO records, Events, Exceptions" — which does **not** cover a servlet-writing helper. The story cites the document as justifying the placement; it only justifies the exclusion |
-| "`VideoManagementPage.vue:108` … as does the rest of the codebase for post-auth navigation" (inherited from ledger `:3523-3524`) | repo-wide grep: 9 `router.replace` vs 105 `router.push`; `PlayerHomeRedirectPage.vue:29/40/46`; `ParentApprovalPage.vue:63` | **OVERSTATED** → **Finding 11**. The story faithfully reproduces the ledger; the ledger itself is wrong |
+| "several deferred stories (88, 107, 131, 132, 135) touched `ReviewSubmissionService.java` after 9.1 shipped" | `git log --format` on the file; in-file Javadoc/comments; `git log --grep` | **EXACT.** `git log` on that path returns precisely six commits: `595ed7c1` (135), `6af4531c` (132), `2842df52` (131), `dda13653` (107), `4f5b5cb7` (88), `a5f27563` (9.1). Exactly the five named, no omissions, no extras. Corroborated by in-file comments at lines 43-44 (135), 48 (132), 102 (88), 208-212 (107 + 132), 133-134 (135). |
+| "…hardening concurrency and lock handling, but none changed the eligibility logic itself" | Same three sources | **SUPPORTED.** 107 and 132 did edit `checkEligibility`'s *body* (introducing `getBoundedInt`, then swapping a raw string literal for `ConfigBounds…key()`), but neither altered a rule. The story cites those exact comments itself, so it is not unaware. Fair as written. |
+| "see 9.1's Change Log 1.1 entry for why it stayed `in-progress` until now" | `skillars-9-1-…md` Change Log; `sprint-status.yaml:148` | **MATCH.** Row 1.1 (2026-10-06) exists and reads *"Status corrected from `in-progress` to `done` … this file's own Status header was never synced to match `sprint-status.yaml`."* Refers to the **file header**, not the work. (This initially looked like a self-contradiction against "is `done`" — see §6.1.) |
+| "`FR-MSG-002` is the precedent `reviews.parentalReviewNotApplicable` mirrors" | `epics.md:144`, `:374`; `AgePolicyService`; `AgeTier` | **SUPPORTED, with the inference noted at §2 #15.** The story is explicit and honest that the parent-of-minor gate is *"not in the original epic text"* — it does not overclaim epic authority. |
+| "`FR-ADM-003`'s admin dispute-resolution path" | `epics.md:156`; `DisputeService`; `BookingStateMachine` | **CITATION MATCHES, MECHANISM DOES NOT EXIST.** Line 156 says what the story says. The code does not implement it. See **F1** / **F7**. |
+| "deferred-63 AC5 allows a coach to raise a dispute" (implicit in AC2.c's threat model) | `DisputeService.java:85-101` | **MATCH** — in-code comment explicitly cites "Deferred-63 AC5". Relevant to **F11**. |
 
 ---
 
-## 3. Mechanistic claims (Layer 3)
+## 4. Mechanistic claims (Layer 3)
 
-Each claim was checked by opening the **full body** of the specific method/field named, and by checking
-whether a similarly-named neighbour could be getting confused with it.
-
-| Claim | Verdict | Deciding evidence |
+| Claim (story's wording) | Quoted evidence | Verdict |
 |---|---|---|
-| `URLEncoder.encode` is form encoding; `decodeURIComponent` leaves `+` literal; today's payload can't contain a space | **TRUE** | `auth.store.js:76`; payload is `user.getId()` + `SkillarsRole.name()` |
-| `.replace("+","%20")` is a correct fix and cannot corrupt a literal `+` | **TRUE** | `URLEncoder` emits `%2B` for a literal `+`, so only space-derived `+` is rewritten. All remaining output chars are valid cookie-octets, so `ResponseCookie.from(name,value)` accepts it |
-| `skp` is `httpOnly=false`; `hydrateFromCookie()` runs on page load | **TRUE** | `AuthService.java:135`/`:273` and `JwtManagerImpl.java:121` pass `false`; `router/index.js:42-45` calls it on first navigation |
-| `skp` survives a routine 401 on the filter's else branch today | **TRUE** | `JWTAuthorizationFilter.java:164` calls `deleteLoginToken` only; `:184-189` never touches `skp` |
-| Not an auth bypass (server authz runs off `@PreAuthorize` + JWT `ROLES`) | **TRUE** | no `main` code reads `skp`; also the same branch already clears `potc`, so the session is dead server-side regardless |
-| `rtkn` must stay out of `deleteLoginToken` | **TRUE** | `JWTAuthorizationFilter.java:330-332` states the 7-day-TTL rationale directly |
-| Bare `jdbcTemplate.update` in an IT method body never commits (hikari `auto-commit=false`) | **TRUE** | `application.yaml:183`; `AuthResourceIT.java:697-707` records the measured probe |
-| `fakeRaw` does not hash to the seeded `token_hash`, so the expiry branch has never run | **TRUE** | `:367` seeds a hardcoded hex literal; `:373`'s raw value is unrelated. Request therefore dies at `AuthService.java:148` |
-| After AC5's fix the expiry branch *is* reached | **TRUE** | traced `:141→:146-148→:150 (used=false, skip)→:173 (expired) → :174-175`. No earlier branch intercepts |
-| `markAllUsedByUserId` has already revoked the token `terminateSession` would re-mark (AC6.2's premise) | **TRUE** | `ownerId = token.getUserId()` where `token = findByTokenHash(sha256(cookie))` — same row, same user. `markAllUsedByUserId` (`WHERE userId = :userId`) strictly covers `markUsedByTokenHash` |
-| AC6.2 does not lose revocation durability despite the branch throwing | **TRUE** | `RefreshTokenRepository.java:30-33` — `markAllUsedByUserId` is `@Transactional(REQUIRES_NEW)`, so it commits independently of the caller's rollback. *(This was the single most dangerous assumption in the story; it holds.)* |
-| AC6.2 introduces no self-deadlock | **TRUE** | on every path reaching `:162`/`:167` the outer transaction has issued no write against `refresh_tokens` (`:147`, `:150`, `:156-160` are all reads), so the `REQUIRES_NEW` update takes an uncontended lock |
-| `used` is monotonic, so double revocation is idempotent | **TRUE** | `RefreshTokenRepository.java:23-28` documents it; both queries only ever `SET used = true` |
-| `isGenuineDenial`'s `AccountStatusException` disjunct is unreachable in production | **TRUE** | `DaoAuthProvider.java:47-51` rewraps before the filter sees it; the four tests that hit it mock `daoAuthProvider` directly |
-| "`isGenuineDenial`'s `ACCOUNT_NOT_LOGIN_ABLE` **branch**'s revocation write" | **IMPRECISE** | `isGenuineDenial` is a pure predicate (`:348-354`) and performs no write. The write is `securityUtil.terminateSession` at `:157`, behind a single `if` covering **all four** disjuncts. AC6.6 therefore requires inventing a new cause-discriminating conditional that the story never describes → feeds **Findings 3, 4, 6** |
-| `router.resolve(path).matched.length > 0` is the Vue Router 4 idiom for "does this path match a route" | **FALSE against this route table** | see **Finding 1** — empirically disproven |
-| `JwtManagerImpl` does not use `StandardCharsets` elsewhere (drop it); `AuthService` still needs it for `sha256Hex` (keep it) | **TRUE** | `JwtManagerImpl`: only `:120`. `AuthService`: `:133`, `:271`, **and `:322`** (`sha256Hex`) |
-| `contract` test package already exists; no `__tests__` under `src/router/`; no `LoginPageSpec.js` | **TRUE** | `SecurityPropertiesValidationTest.java` is in the contract test pkg; `src/frontend/src/router/` holds only `index.js`/`roleRoutes.js`/`routes.js`; `pages/auth/__tests__/` has 5 specs, none for LoginPage |
+| "`ReviewSubmissionService.checkEligibility()` … only ever checked for a recent `COMPLETED` booking — it never checked whether an unrelated booking … is currently `DISPUTED`" | `ReviewSubmissionService.java:213-222` — one `getBoundedInt`, one `existsRecentCompletedBookingByAuthor`, one throw. | **TRUE** |
+| "`existsRecentCompletedBookingByAuthor` returns a plain `boolean` and cannot support the parent/age-tier distinction or the 'new session since last review' bound" | `BookingRepository.java:135-138` returns `boolean`; query has no projection and uses `updatedAt >= :windowStart`. | **TRUE** |
+| "the 4-arg `getBoundedInt` … 0/neg → gate easier to satisfy" | `ConfigService.java:110-118`: out-of-range → `return defaultValue` (**no clamp**). | **HALF FALSE** — see **F6**. A negative value falls back to the safe default (7/30) and does *not* weaken the gate. Only `0` does, and with `min=0L` that value is *in range*, so nothing warns. |
+| "`failFast=false` follows from `ConfigBounds`'s own fail-fast principle given that direction" | `ConfigBounds.java:37-46` — `failFast=true` is for data loss or *halting a core flow*. | **TRUE, and the reasoning is sound.** A lower-bound floor that degrades is correctly `failFast=false`. The story's warning not to copy `true` by habit is well-placed. |
+| "`AgePolicyService.isMinor(LocalDate)` … already does exactly what's needed; do not add a new age-tier method" | `AgePolicyService.java:48-50`, 29-41. | **TRUE.** Note: `PlayerProfile` also carries a denormalised `age_tier` column (`PlayerProfile.java:36-37`); computing live from DOB is the more correct choice, since the stored tier can go stale. |
+| "`isLinkedPlayerMinor` fails closed … follows `findMessagingPolicy`'s 'degrade this one row' convention, not `getMessagingPolicy`'s throwing write-path convention" | `AgePolicyService.java:56` vs `:63-67` javadoc. | **TRUE for the degrade decision.** But the *resulting error code* is wrong — see **F5**. |
+| "the pessimistic-lock/refresh sequence … none of that concurrency machinery is affected by this story" | `ReviewSubmissionService.java:135-160`; `checkEligibility` call at `:125` sits *before* it and shares no state. | **TRUE at the code level. FALSE at the test level** — the regression tests that protect that machinery break. See **F3**. |
+| "`updatedAt` remains the proxy for 'when this booking last changed state'" | `Booking.java:86-89` `@PreUpdate { updatedAt = Instant.now(); }` | **TRUE** — and stamped on *any* row write, which is what makes **F7** bite. |
+| "A booking that bounces `COMPLETED → DISPUTED → COMPLETED` via `FR-ADM-003` gets its maturity clock reset" | `BookingStateMachine.java:73-78` permits it; **no code fires it**. | **FALSE** — see **F1**/**F7**. |
+| "the author is reviewing on behalf of a linked player, never via `playerId = authorId`" | `ReviewResource.java:130-140` (authorId = User id) vs `BookingService.java:180` (`playerId` = PlayerProfile PK). | **FALSE** — see **F2**. This is the story's load-bearing assumption for AC2.b. |
+| "`b.status = 'DISPUTED'` identifies an active dispute between author and coach" | `Dispute.java:45` `private String status = "OPEN"`; `DisputeRepository.findOpenByBookingId`. | **FALSE** — see **F1**. Dispute state lives in the `disputes` table, not `bookings.status`. |
+| "the existing duplicate check (`409`) … unchanged" | `ReviewSubmissionService.java:66` then `:67` — eligibility runs **first**. | **TRUE for the code, FALSE for the test** — see **F3**. |
 
 ---
 
-## 4. Findings that survived adversarial re-verification
+## 5. Corner cases, false assumptions, missed flows (Layer 4, post-Step-4b)
 
-### Finding 1 — BLOCKER: AC3's resolvability check is a no-op in the real app, and all three prescribed tests would false-pass
-**Confidence: HIGHEST — verified by executing the installed `vue-router` (4.6.4), not by reading it.**
+### F1 — CRITICAL: the active-dispute gate can never fire. `Booking.status` never becomes `DISPUTED`.
 
-Design C and the ledger (`deferred-work.md:3518`) both specify:
+The story calls this gap *"a real gap, not a hypothetical"* and frames the whole story as finally implementing `FR-REV-001`. As specified, it implements nothing.
+
+AC2.c and Task 3 predicate the gate on `b.status = 'DISPUTED'`. **No code path in the application ever puts a booking in that status.**
+
+- `BookingEvent.DISPUTE` occurs in main source at exactly five places: `BookingService.java:106` (the `EVENT_ACTOR_ROLES` map *declaration*) and `BookingStateMachine.java:57, 64, 71, 74` (the transition *table*). **Zero invocation sites.**
+- `DISPUTED` occurs in main Java only at `BookingStatus.java:19` and in that same state-machine table.
+- In tests it appears only in `BookingStateMachineTest` — i.e. the status is exercised solely as a table entry, never as a reachable runtime state.
+- `DisputeService.raiseDispute` (`DisputeService.java:82-133`) creates a `Dispute` row (`Dispute.java:45`, default `status = "OPEN"`) and publishes `DisputeRaisedEvent`. It never calls a booking transition.
+- `resolveDispute` (`:254-270`) and `dismissDispute` (`:273-292`) set `Dispute.status` to `RESOLVED`/`DISMISSED` and touch payouts and alerts. Neither writes `Booking.status`.
+- `ELIGIBLE_STATUSES` (`DisputeService.java:57-58`) includes `"COMPLETED"`.
+
+That last point is what makes this a live correctness hole rather than merely dead code: **a disputed booking stays `COMPLETED`.** So the same booking simultaneously satisfies AC2.a (qualifying matured session) and is under an open dispute, while AC2.c never fires. The exact scenario the story exists to prevent — *"a live dispute is exactly the situation where a review is most likely to be used as leverage"* — remains wide open after the story ships.
+
+It would also ship with a **green test that proves nothing.** Task 7's `submitReview_activeDisputeOnOtherBooking_returns403()` sets a booking to `DISPUTED` by raw SQL insert, exactly as the story describes. The fixture manufactures a state production never produces, so the test passes and the gate is never exercised against reality.
+
+**Fix:** predicate on the `disputes` table — an open `Dispute` (`status = 'OPEN'`) joined to `bookings` on `booking_id`, filtered to the author/coach pair — or keep the booking-status check *and* additionally fix the dispute lifecycle. `DisputeRepository.findOpenByBookingId` is the existing shape to follow. Note the author/coach pairing must come from the joined `bookings` row, since `Dispute` stores only `bookingId` and `raisedBy`.
+
+### F2 — CRITICAL: AC2.b's `playerId = authorId` discriminator is always false; self-registered adult players are permanently locked out with a nonsensical error.
+
+AC2.b rests on treating `playerId = authorId` as "the player is reviewing for themselves" and `parentId = authorId` as "a parent is reviewing on behalf of a linked player". **These are different ID spaces.**
+
+- `authorId` is a **User** id: `ReviewResource.resolveUserId()` → `Long.parseLong(p.getBusinessId())` (`ReviewResource.java:130-140`), passed in at `:82` and `:94`.
+- `Booking.playerId` is a **PlayerProfile primary key**: `BookingService.createBookingRequest` resolves it with `playerProfileRepository.findById(req.playerId())` (`BookingService.java:180`), and `PlayerProfileRepository extends JpaRepository<PlayerProfile, Long>`.
+- `Booking.parentId` *is* a User id (the authenticated caller).
+- Both tables draw ids from `BaseEntity`'s `@Id @Tsid` (`BaseEntity.java:27`). They are separate entities; a user id equalling a profile id carries no meaning and is never true by construction.
+
+So in the Task 6 snippet, `eligibleAsSelf` is dead code. Trace a **self-registered adult player** (a supported flow: `chk_pp_owner` at V138:911 allows `user_id` set with `parent_id` null; `BookingService.java:187-191`'s else-branch validates `player.getUserId() == parentId` and stores `booking.parentId` = that same user id; `POST /api/bookings` is `@PreAuthorize(HAS_PARENT_OR_PLAYER_ROLE)`, `BookingResource.java:37`; `AuthorRole` includes `PLAYER`; `CoachPublicProfilePage.vue:420-422` has dedicated handling *"for a self-registered player caller"*):
+
+1. `eligibleAsSelf` → `authorId.equals(b.getPlayerId())` → **false** (user id vs profile id).
+2. `eligibleAsParentOfMinor` → `authorId.equals(b.getParentId())` true, `!authorId.equals(b.getPlayerId())` true, `isLinkedPlayerMinor(theirOwnProfile)` → they are an adult → **false**.
+3. Falls into the throw block; `onlyAdultParentMatches` → **true**.
+4. → `403 reviews.parentalReviewNotApplicable`, *"Linked player is 18+ — parent cannot review on their behalf."*
+
+**An adult player who trained with a coach can never review that coach, and is told they are a parent of an adult.** This is a new, permanent lockout introduced by this story — today these users pass eligibility fine, because the shipped `(parentId = :authorId OR playerId = :authorId)` only needs the `parentId` half to match.
+
+In fairness: the cross-ID-space OR is **inherited**, not invented here — it is already in `BookingRepository.java:131` and repeated at `DisputeService.java:92`, even though `DisputeService.java:85-88` explicitly documents the profile-vs-user-id distinction for `coachId`. The defect specific to this story is making that meaningless comparison **load-bearing** for branch selection and error-code choice.
+
+**Fix:** derive "is the author the player themselves" from `PlayerProfile.userId`, not from `Booking.playerId`. The projection already returns `playerId`; resolve the profile (which `isLinkedPlayerMinor` does anyway) and compare `authorId` against `profile.getUserId()` for the self case and `profile.getParentId()` for the parent case. That also removes the need for the `!authorId.equals(b.getPlayerId())` guard.
+
+### F3 — HIGH: the test blast radius is understated by at least five classes, and three tests the story says to "keep unchanged" will fail.
+
+Every affected fixture shares two properties that the new rules invalidate: the only `COMPLETED` booking is **1 hour to 3 days old** (inside the new 7-day floor), and the only player profile is **`age_tier='ADULT'`, `date_of_birth = now − 18 years`** (so `isMinor` is false). The story never instructs changing either.
+
+**Named "keep unchanged" but will fail:**
+- `ReviewSubmissionIT.submitReview_ratingOnly_returns201` — fixture booking is `now − 3d` (`ReviewSubmissionIT.java:105-106`), player ADULT (`:88-90`) → `403`.
+- `ReviewSubmissionIT.submitReview_duplicate_returns409` — cannot reach `409`: `checkEligibility` runs at `ReviewSubmissionService.java:66`, **before** the duplicate check at `:67`, so the *first* POST already 403s.
+- `ReviewUpdateIT`'s new `updateReview_afterCooldownWithNewSession_returns204` — its player is ADULT (`ReviewUpdateIT.java:90-92`); passes the cooldown, then 403s on the parental gate.
+
+**Never mentioned anywhere in the story, and will fail:**
+- `ReviewSubmissionIT.submitReview_validEligibility_returns201WithReviewId` (`:113-131`) — the module's primary happy path. Absent from Task 7 entirely.
+- `ReviewSubmissionIT.updateReview_epochBumpAppliesToFreshLockedState_notStaleInstance` (`:245-295`) — calls the service directly; `lastModifiedAt = now − 400d` clears the cooldown, but the `now − 3d` booking fails the 7-day floor → `403`.
+- `ReviewSubmissionServiceConcurrencyIT` (`:83-102`) — ADULT player, booking `updated_at = now − 3600s`; both tests call `submitReview`.
+- `ReviewFlagServiceConcurrencyIT` (`:104-124`, call at `:178`) — ADULT player, booking `now − 3600s`; calls `updateReview`.
+- `ReviewModerationIT` (`:89-117`) — ADULT player, booking `now − 3600s`; **all five** tests POST `/coaches/{coachId}` (`:130, :160, :181, :201, :253`).
+- `ReviewSubmissionServiceTest` — a **hard compile break**: `:74` references `ConfigBounds.REVIEWS_SUBMISSION_WINDOW_DAYS` and `:67` stubs `existsRecentCompletedBookingByAuthor`, both of which Tasks 2 and 3 delete. It also needs new `@Mock AgePolicyService` / `@Mock PlayerProfileRepository`, or `@InjectMocks` (`:49-50`) injects nulls and the new code NPEs. Task 2's `grep -rn REVIEWS_SUBMISSION_WINDOW_DAYS src/test/` would surface it, but it appears in neither Task 7 nor any File List.
+
+Note the irony on two of these: `ReviewSubmissionServiceConcurrencyIT` and `ReviewFlagServiceConcurrencyIT` are precisely the regression tests that deferred-132/135 built to protect the `REQUIRES_NEW` isolation and lock/refresh sequence the story says *"must survive this story untouched."* The production code does survive untouched; its guardians do not.
+
+### F4 — HIGH: the prescribed frontend grep returns zero hits, so three i18n bundles get missed and two new error codes ship with no message.
+
+Task 4 instructs: *"Grep the frontend codebase for the literal string `"reviews.noRecentSession"`."* **That string does not exist anywhere in `src/frontend`.** The bundles store it nested:
 
 ```js
-return router.resolve(path).matched.length > 0
+reviews: {
+  noRecentSession:
+    'You need a recently completed session with this coach before you can leave a review.',
 ```
+— `en-US/index.js:391`, `fr-FR/index.js:386`, `de-DE/index.js:727`.
 
-`routes.js:351-355` registers a catch-all:
+A dev following the instruction literally concludes there are no frontend references. The resolution path is `useErrorHandler.errorMessage` (`useErrorHandler.js:40-49`), which does `te(key)` / `t(key)` on the **full dotted** `errorKey` and otherwise falls back to the server's raw English `message`. Consequences:
 
-```js
-// Catch-all 404
-{ path: '/:catchAll(.*)*', component: () => import('pages/ErrorNotFound.vue') },
-```
+1. After the rename, all three locales fall through to the English service message (*"No qualifying completed session with this coach"*), leaving a dead `noRecentSession` key behind.
+2. `reviews.activeDispute` and `reviews.parentalReviewNotApplicable` have **no entry in any locale** — two new 403s whose user-facing text is untranslated English. The story only covers *renaming* references; it never says to add entries.
+3. `updateTooSoon`'s copy still says "once per year" in all three (`en-US:395`, `fr-FR:390`, `de-DE:731`). The story does flag this copy change — but not that it is three files.
 
-Every `/`-prefixed path matches it, so `matched.length` is never 0. Probe run against the real
-`src/frontend/node_modules/vue-router` (4.6.4) with the production route shape:
+There is direct precedent for treating this as a regression class: `errorHandler.js:52-57` documents `skillars-deferred-92 AC14`, created because *"an English literal here reached a French or German user verbatim."*
 
-```
-WITH catch-all     resolve(/typo          ) matched.length=1  matchedPaths=["/:catchAll(.*)*"]
-WITH catch-all     resolve(/nope/deep/path) matched.length=1  matchedPaths=["/:catchAll(.*)*"]
-WITHOUT catch-all  resolve(/typo          ) matched.length=0  matchedPaths=[]
-WITHOUT catch-all  resolve(/nope/deep/path) matched.length=0  matchedPaths=[]
-```
+### F5 — MEDIUM: the fail-closed path reports a factually wrong error code.
 
-Consequences:
-- **AC3 bullet 3 is unachievable as designed.** `isSafeRedirect('/typo', router)` returns `true`, and the
-  just-authenticated user still lands on `ErrorNotFound.vue` — the exact outcome AC3 exists to prevent.
-- **The story's own test plan cannot detect this.** AC7 prescribes `safeRedirectSpec.js` "against a small
-  `createRouter`/`createMemoryHistory` instance" and page specs using "the mock router's route list". The
-  existing mock route list (`OtpPageSpec.js:31-41`) has **no catch-all** — confirmed by reading it — so it
-  lands in the `WITHOUT catch-all` column above and the new test goes green while production is broken.
-  All of AC3, AC7's three new specs, and the ledger share one unexamined assumption.
-- The story's Source line claims citations were "re-verified directly against HEAD … not copied from the
-  ledger". This particular mechanism **was** carried over from `deferred-work.md:3518` unexamined — two lines
-  after the same ledger bullet cites `routes.js:352-355`, the catch-all that defeats it.
+`isLinkedPlayerMinor` returns `orElse(false)` for a missing `PlayerProfile`. Because the subsequent `onlyAdultParentMatches` branch uses only `parentId`/`playerId` and not the age result, an orphaned row produces `403 reviews.parentalReviewNotApplicable` — *"Linked player is 18+"* — when the real cause is a missing row. The story's Task 6 note carefully justifies the *degrade-don't-throw* decision (correct, and it genuinely matches `findMessagingPolicy`'s convention at `AgePolicyService.java:63-70`), but not the *message*. Prefer `NO_QUALIFYING_SESSION` plus a WARN log for the unresolvable-profile case, so the 403 does not assert something untrue about the player's age.
 
-**Fix.** `matched.length` cannot distinguish "real route" from "404 route". Give the catch-all an identity and
-test for it — this matches the idiom `router/index.js:47-56` already uses (`to.matched.some(r => r.meta.X)`):
+Related and benign: `PlayerProfile.dateOfBirth` is `nullable = false` (`PlayerProfile.java:28`; V138:899), so `getAgeTier`'s `Period.between(null, …)` NPE is not reachable through a normal row. Worth knowing only because the story's `.map(p -> …isMinor(p.getDateOfBirth()))` would propagate it unguarded if that ever changed.
 
-```js
-// routes.js
-{ path: '/:catchAll(.*)*', component: () => import('pages/ErrorNotFound.vue'), meta: { notFound: true } },
+### F6 — MEDIUM: both new `BoundedKey` notes misdescribe the negative case, and `0` is silently legal.
 
-// safeRedirect.js
-const resolved = router.resolve(path)
-return resolved.matched.length > 0 && !resolved.matched.some((r) => r.meta.notFound)
-```
+`getBoundedLong(key, default, min, max)` (`ConfigService.java:110-118`) **does not clamp** — an out-of-range value falls back to `defaultValue`. With `min = 0L`:
 
-`routes.js` must then be added to AC3's scope and to the story's File List (it is currently absent), and
-`safeRedirectSpec.js` must assert against the **real** `routes` array (`import routes from '../routes'`),
-not an ad-hoc list — otherwise the test still cannot catch this class of defect.
+- A stored `-5` → out of range → falls back to `7` / `30`. **Safe.** So *"0/neg → sessions count as matured instantly"* and *"0/neg → an author can edit their review with no cooldown"* are both **wrong about `neg`**.
+- A stored `0` → **in range** → honored. The floor/cooldown silently vanishes, and `ConfigStartupAssertion` (`:119-128`) never even logs it, because 0 is not a violation.
 
----
+These `note` strings are operator-facing — they are interpolated into the startup ERROR line (`ConfigBounds.java:58`, `ConfigStartupAssertion.java:120-122`). Every other day-window key in the registry uses `min = 1`: `disputes.submissionWindowDays` (`:94`), the key being replaced (`:187`), `reviews.autoHoldFlagThreshold` (`:192`). The one `min = 0` precedent — the video-quota keys at `:410-413` — words its note precisely for that choice: *"neg → … math breaks; 0 is a legitimate \"no upload\" sentinel."*
 
-### Finding 2 — AC2/Task 3 breaks a live test, and contradicts the ledger's own recommendation
-**Confidence: HIGH — read directly from the test file.**
+Pick one: `min = 1` (matching every sibling day-window key, making 0 a flagged violation), or keep `min = 0` as a deliberate "disable the gate" sentinel and reword both notes to say so.
 
-AC2 bullet 2 / Task 3 delete `SecurityUtil.java:190`
-(`CookieUtil.removeCookie(SKILLARS_PROFILE_COOKIE, response, false, "Lax")`) as "now-redundant … covered
-transitively via `deleteLoginToken`". That is true **in production** and false **under the existing unit test**:
+### F7 — LOW: the `COMPLETED → DISPUTED → COMPLETED` Dev Note describes a path no code takes.
 
-- `SecurityUtilTest.java:45-46` — `@Mock private LoginTokenManager loginTokenManager;`
-- `SecurityUtilTest.java:58` — `securityUtil = new SecurityUtil(loginTokenManager, refreshTokenRepository);`
-- `SecurityUtilTest.java:89` — `verify(loginTokenManager).deleteLoginToken(response);` (mock records, emits nothing)
-- `SecurityUtilTest.java:96-99` — asserts a **real** `Set-Cookie` header on the `MockHttpServletResponse`:
-  ```java
-  assertThat(setCookies)
-          .as("skp must be expired")
-          .anyMatch(c -> c.startsWith(SecurityConstants.SKILLARS_PROFILE_COOKIE + "=")
-                  && c.contains("Max-Age=0"));
-  ```
+Follows from **F1**. `BookingStateMachine.java:73-78` permits `COMPLETED --DISPUTE--> DISPUTED --SETTLE_COMPLETE--> COMPLETED`, but nothing fires either event, and `resolveDispute` never writes `Booking.status`. `FR-ADM-003` (`epics.md:156`) specifies *"resolves for coach (→COMPLETED) or parent (→REFUNDED)"* — unimplemented in the shipped dispute feature. The paragraph's conclusion (*"That reset is correct"*) is reasoning about a mechanism that does not run.
 
-With `:190` deleted, nothing emits that header in this test → **`terminateSession_clearsRefreshTokenAndProfileCookies` fails.**
-Also invalidated: the `@DisplayName` at `:81` and the comment at `:87-88`.
+Two related gaps in the same note's enumeration:
+- It names the DISPUTED bounce as *the* maturity-clock reset case but omits `COMPLETED_PENDING_CONFIRMATION → COMPLETED` (`BookingStateMachine.java:68-71`), where `updatedAt` is the confirmation or quick-complete-timeout moment rather than session end — up to a day of drift via `booking.quick_complete_timeout_hours`.
+- More broadly, `Booking.@PreUpdate` (`Booking.java:86-89`) stamps `updatedAt` on **any** row write (`primaryReminderSentAt`, `secondaryReminderSentAt`, `cancelReason`, `batchId`, a `@Version` bump). **The harm direction inverts with this story:** under the old upper-bound window an incidental bump *extended* eligibility; under a lower-bound floor the same bump *revokes* it for another 7 days. The note reasons about the DISPUTED case in isolation and never generalises.
 
-The story does not anticipate this: `SecurityUtilTest.java` is **absent from "Changed backend files"**
-(Project Structure Notes), Task 4 updates only `JwtManagerImplTest`, and AC7 lists `SecurityUtilTest` under
-*"Zero regressions."*
+### F8 — LOW: Task 1 defers a decision to a precedent that does not exist.
 
-The ledger explicitly recommended the opposite, twice:
-- `deferred-work.md:3689-3690` — *"Both callers tolerate it; `SecurityUtil.clearAuthCookies` **would emit a harmless duplicate removal header**."*
-- `deferred-work.md:3729` — *"`SecurityUtil.clearAuthCookies` **delegating**"* (i.e. call `SkillarsProfileCookie.removeFrom(res)`, keep the call).
+Task 1 offers `DELETE` *"or an `UPDATE`/replace if the project's migration convention prefers never deleting config rows — check recent migrations for the established pattern before choosing."* There is nothing to find: **only V138 and V139 reference `platform_config` across all 155 migrations**, and there is no `DELETE FROM … platform_config` anywhere. The dev searches, finds nothing, and the decision stays open. The story should just pick one.
 
-Either option resolves it; the story should pick one explicitly rather than inherit a test break:
-- **(a)** Keep the removal in `clearAuthCookies`, switched to `SkillarsProfileCookie.removeFrom(response)` —
-  the ledger's design. Zero test churn, and `SecurityUtil`'s own contract stays independent of which
-  `LoginTokenManager` implementation is wired in. Cost: one duplicate `Set-Cookie: skp=; Max-Age=0` on the
-  `clearAuthCookies` path, which is idempotent.
-- **(b)** Delete it as the story says, and add updating `SecurityUtilTest` (test, `@DisplayName`, comment) to
-  AC2/Task 3/the File List.
+Verified-correct in the same task: next number is **V156**; the `(key, value, value_type, description)` shape (V139:140); omitting `id` is safe (V138:869). Not stated but constrained: `value_type` must be `'LONG'`, per `chk_platform_config_type` (V138:863) — worth spelling out since the task gives no literal.
 
-I lean (a): it is what the ledger designed, it keeps `clearAuthCookies`'s documented postcondition literally
-true, and it removes a hidden dependency of a unit test on a collaborator's internals.
+### F9 — LOW: Task 5's description of `ReviewApiAdvice` is stale.
+
+The **conclusion is correct** — both new codes fall through to `else → 403 FORBIDDEN` (`ReviewApiAdvice.java:59-62`) — so the task's outcome holds. But its description of the advice is the 9.1-era shape:
+- The `409` branch holds **five** codes, not the two named: `ALREADY_FLAGGED`, `ALREADY_APPROVED`, `ALREADY_BLOCKED` were added at `:40-42`.
+- A third branch goes unmentioned: `COACH_PROFILE_MISSING → 500` (`:44-55`), whose own comment warns *"This branch must stay explicit: the else fallback is 403, so an unlisted code would silently become FORBIDDEN"* — directly relevant context for adding two new codes.
+
+### F10 — LOW: the qualifying-session query is unbounded.
+
+By design there is no upper time bound (the story is explicit that this is deliberate), and `findQualifyingCompletedBookings` has no `LIMIT` and no `ORDER BY` — it returns every matching `COMPLETED` booking the pair ever had, then streams it up to three times.
+
+Honest sizing, because my first pass overstated this: the per-row cost is small. `configService.find` is **cache-backed**, not a query per call (`ConfigService.java:190-193`, `ensureFresh()` over an in-memory `cache`), and repeated `playerProfileRepository.findById` for the same id collapses via Hibernate's persistence-context identity map — so profile lookups scale with *distinct players* (typically one or two), not bookings. It is a tidiness and worst-case concern, not a hot path. Still: a `LIMIT`, or an exists-shaped query for the self case plus a `DISTINCT` projection for the parent case, costs nothing. If a batched lookup is ever wanted, `AgePolicyService.findMessagingPoliciesByPlayerIds` (`:78-84`, added by deferred-90 AC13 for exactly this reason) is the precedent.
+
+### F11 — LOW (scope decisions worth making explicitly)
+
+Both are moot until **F1** is fixed, but should be decided now:
+
+1. **The gate is submit/update-only.** A dispute opened *after* a review is approved leaves the public review untouched. Defensible as an eligibility story, but narrower than the stated rationale (*"used as leverage by either party"*). Worth one sentence saying so deliberately.
+2. **An unconditional dispute gate hands coaches a one-sided veto.** `BookingEvent.DISPUTE` is allowed to `PARENT` **or** `COACH` (`BookingService.java:106`), and `DisputeService.java:85-101` explicitly permits coach-raised disputes per deferred-63 AC5. Dispute resolution is admin-only (`SETTLE_*` is `ActorRole.SYSTEM`) with no time bound on how long a dispute may stay open. So a coach can block an incoming review — and every future edit of an existing one — for as long as an admin leaves the dispute open. Consider scoping the gate to disputes the *author* raised, or to a bounded window.
 
 ---
 
-### Finding 3 — AC6.6's throttled path is the only route through the filter's catch block that never clears the SecurityContext
-**Confidence: HIGH on the invariant; MEDIUM on blast radius (stated below). This is the claim I most actively tried to refute.**
+## 6. What did **not** survive re-verification
 
-AC6.6: *"when throttled, call `securityUtil.clearAuthCookies(res)` instead of `securityUtil.terminateSession(req, res)` (cookies still clear every time; the DB write is what gets bounded)."*
+Listed because the calibration matters more than a clean report. Nine claims from the first pass were killed or downgraded on a second, skeptical read:
 
-`terminateSession` does **three** things (`SecurityUtil.java:167-174`), not the one the story's Finding 6.2
-describes:
+1. **"The story contradicts itself — 9.1 is both `done` and 'stayed `in-progress`'."** **Killed.** 9.1's Change Log row 1.1 (2026-10-06) says the *story file's Status header* lagged `sprint-status.yaml`, not that the work was incomplete. The story's reference is accurate; I had read "stayed in-progress" as a claim about the work.
+2. **"`submitReview_bodyTooLong_returns400` will break."** **Killed.** `@Size(max = 1000)` lives on the DTO (`SubmitReviewRequest.java:10`), so it raises `MethodArgumentNotValidException` and is handled by `ReviewApiAdvice.handleValidation` (`:66-83`) — before `ReviewSubmissionService` is entered at all. The story's "keep unchanged" is right.
+3. **"`submitReview_coachNotFound_returns404` will break."** **Killed.** `coachProfileRepository.existsById` is at `ReviewSubmissionService.java:63`, before `checkEligibility` at `:66`. Right as written.
+4. **"`updateReview_blockedStatus_returns403` and `updateReview_wrongAuthor_returns403` will break."** **Killed.** Author check (`:109`), cooldown (`:114`) and moderation status (`:119`) all precede `checkEligibility` (`:125`), and the fixture's `lastModifiedAt = now − 400d` clears the new 30-day cooldown. Both correctly listed as unchanged.
+5. **"Three config DB reads per booking inside the `anyMatch` stream."** **Killed.** `ConfigService.find` is cache-backed (`:190-193`). Folded into **F10** with the real sizing stated.
+6. **"`ReviewFlagIT` is affected."** **Killed.** It only POSTs `/{reviewId}/flag`; its reviews are raw SQL inserts and its `booking.bookings` insert (`:121`) is not on the eligibility path.
+7. **"`getAgeTier` could NPE on a null date of birth."** **Downgraded** into **F5**. `date_of_birth` is `NOT NULL` (`PlayerProfile.java:28`, V138:899), so it is not reachable through a normal row.
+8. **"`HAS_CODE_DEFAULT` is typed `Set<BoundedKey>`, so Task 2's instruction is wrong."** **Killed.** It is `Set<String>` of `.key()` values (`ConfigBounds.java:352-370`), and the story never claims otherwise — it just says "add both", which is right.
+9. **"Stories 107/132 *did* change eligibility logic, contradicting the Dev Note."** **Killed as a finding.** They changed how the window value is *read* inside `checkEligibility`, not any rule, and the story cites those very comments (`ReviewSubmissionService.java:208-212`). Fair as written.
 
-```java
-public void terminateSession(final HttpServletRequest request, final HttpServletResponse response) {
-    SecurityContextHolder.clearContext();                       // :168
-    final String rawToken = CookieUtil.getCookieValue(request, REFRESH_TOKEN_COOKIE);
-    if (rawToken != null && !rawToken.isBlank()) {
-        refreshTokenRepository.markUsedByTokenHash(sha256Hex(rawToken));   // :171
-    }
-    clearAuthCookies(response);                                 // :173
-}
-```
-
-`clearAuthCookies` does **not** clear the context. And on this path the context **is** populated — I traced
-the ordering rather than assuming it:
-
-- `JWTAuthorizationFilter.java:193` — `SecurityContextHolder.getContext().setAuthentication(authentication);`
-- `JWTAuthorizationFilter.java:202` / `:213` — `daoAuthProvider.authorize(...)`, **after** `:193`, and this is
-  the call that raises `AuthorizationException(ACCOUNT_NOT_LOGIN_ABLE)` for a locked/deactivated account
-  (`DaoAuthProvider.java:47-51`).
-
-So a real authenticated token sits in the holder when the throttled branch writes its 401. `clearContext()`
-appears exactly **once** in the whole filter — `:163`, the routine-denial branch — and its comment states the
-requirement explicitly:
-
-> `// ... attemptAuthorization set an authenticated context at the top, so it must still be cleared before the 401 is written.` (`:161-162`)
-
-The genuine-denial branch satisfies the same requirement *only* via `terminateSession`. AC6.6 removes that
-without replacing it. `writeUnauthorized` (`:289-…`) does not clear it either.
-
-**Blast radius, honestly bounded:** the filter `return`s without `chain.doFilter`, so no downstream handler
-runs in that request, and `SecurityConfiguration.java:200` registers this filter *inside* the Spring Security
-chain, so `SecurityContextHolderFilter` clears the holder in its own `finally`. I could not demonstrate a
-cross-request leak. The defect is an invariant violation on a security path — one that `skillars-deferred-143`'s
-review already litigated and added assertions for — not a proven exploit.
-
-**Fix:** add `SecurityContextHolder.clearContext();` to the throttled path, or prefer the alternative in
-Finding 4 which removes the branch entirely.
+Also checked and found clean (no finding): `CoachResponseIT` is correctly scoped out (only `/{reviewId}/response`); `AuthorSelfViewIT` and `PublicReviewListIT` are GET-only on the review-read paths; `PessimisticLockRetryerCallSiteAuditTest` references `updateReview` only in Javadoc; `VideoAccessGuard` uses the overload the story leaves alone; `submitCoachResponse` genuinely needs no change.
 
 ---
 
-### Finding 4 — AC6.6 repurposes an audit-volume control as a security control, against that class's own javadoc, with a key that collides for the exact adversary it names
-**Confidence: HIGH on the mechanism; MEDIUM on severity.**
-
-`SecurityAlertThrottle`'s own javadoc (`JWTAuthorizationFilter.java:373-376`):
-
-> *"Bounded, self-evicting, and deliberately tiny — **this is volume control, not a security decision**: every denial is still logged by `mintHelpCode`, only the audit-trail row is collapsed."*
-
-AC6.6 makes it a security decision: it gates whether a since-locked account's refresh token gets revoked.
-The key (`:387-390`) is `causeClassName + "|" + client`, where `client` resolves through
-`RequestMetadata.getClientIdentifier()` (`RequestMetadata.java:138-144`): `apiKey` → `browserCookie` (`bcookie`)
-→ `fingerprintCookie` → else `getIpAddress()` → else `"unknown"`.
-
-Two concrete collisions:
-
-1. **The named adversary defeats the key it is keyed on.** AC6.6's scenario is *"a client that ignores
-   `Set-Cookie` and keeps replaying the same stale JWT"*. Such a client has no `bcookie`/`fcookie`, so
-   `client` degrades to the IP. The project already documents this hazard in its own code —
-   `LoginAttemptsService.java:205`: *"The getClientIdentifier here may not exist e.g for a browser (or else
-   many users will share the same key)."*
-2. **Shared egress IP merges distinct users.** `AuthorizationException` is the class for *every*
-   `SecurityError`, so the key is effectively `AuthorizationException|<ip>`. Two different locked accounts
-   behind one NAT/corporate IP within a 60 s window land in one bucket: the first is revoked, the second
-   is **not**. That is a security regression relative to today's unconditional revocation.
-   (`ipAddress` is also taken from an unvalidated `Forwarded` header first — `RequestMetadataProvider.java:49-51`
-   — so the key is client-influenceable, though only in the permissive direction for the attacker's own row.)
-
-**Recommended alternative — bound the write instead of gating the teardown.** `used` is a monotonic terminal
-flag (`RefreshTokenRepository.java:23-28`), so narrowing the predicate is semantically equivalent and makes
-repeat revocations cost zero row writes with no new state, no repurposed security control, and no
-clearContext hole (Finding 3 disappears too):
-
-```java
-@Query("UPDATE RefreshToken r SET r.used = true, r.version = r.version + 1 "
-     + "WHERE r.tokenHash = :tokenHash AND r.used = false")
-```
-
-Caveat to weigh before adopting: this also skips the `version` bump on an already-revoked row, and the
-existing javadoc (`:26-28`) leans on that bump to fail concurrent stale writes touching *other* columns
-(`rotatedAt`, `expiresAt`). Since `used` can never move back to `false`, the residual risk is cosmetic — but
-it is a real delta and should be a recorded decision, not a silent one.
-
-If the throttle is kept regardless, AC6.6 must additionally specify (a) the new cause-discriminating
-conditional at `:156-157` (see §3 — `isGenuineDenial` has no "`ACCOUNT_NOT_LOGIN_ABLE` branch" to hang a
-throttle on; one has to be created), and (b) the clearContext fix from Finding 3.
-
----
-
-### Finding 5 — `platform.security.contract` contradicts the project's own definition of a `contract` package
-**Confidence: MEDIUM — this is a design judgment call, flagged as such.**
-
-`project-context.md:115` defines the layer the story is placing this type in:
-
-| **Contract** | `contract` | Public API of the module: **DTO records, Events, Exceptions.** |
-
-`SkillarsProfileCookie` is none of those. It is a cookie writer with servlet side effects — its entire
-surface is `writeTo(HttpServletResponse)` and `static removeFrom(HttpServletResponse)`, and it imports
-`jakarta.servlet.http.HttpServletResponse` plus `infrastructure.security.CookieUtil`. Verified by grep: **no
-class in the top-level `platform/security/contract/` package imports `jakarta.servlet` or
-`infrastructure.security` today** (only the `contract/exception/` subpackage does, for `SecurityError`). The
-27 files there are DTOs, enums, records, and `@ConfigurationProperties`.
-
-The story's References entry claims `project-context.md` "Architecture & Module Design (DDD)" provides "the
-layering justification for placing `SkillarsProfileCookie` in `platform.security.contract`, not
-`infrastructure.security`". What that document actually supports is only the **negative** half: `:104`'s
-business-agnostic rule correctly rules out `infrastructure.security` (the type knows `SkillarsRole`). It
-offers nothing for `contract`, and `:115` argues against it. The ledger's reasoning (`deferred-work.md:3719-3723`)
-is the same shape — "`SkillarsRole` already lives in that package" — which establishes that the *import* is
-legal, not that the *responsibility* fits.
-
-Better-fitting home that already exists and already does exactly this work:
-**`com.softropic.skillars.platform.security.infrastructure`** — the module-local infrastructure package that
-holds `SecuredHttpEndpointGuard`, `filter/`, and `jwt/JwtManagerImpl` (which is one of the three current `skp`
-writers). The module already uses the pattern "contract/interface in `service`, servlet implementation in
-`infrastructure`" (`service/LoginTokenManager` ↔ `infrastructure/jwt/JwtManagerImpl`), and
-`platform.security.service.AuthService` → `platform.security.infrastructure.*` is an existing, legal direction.
-
-Not a correctness defect — the code compiles and works either way. But the story presents the placement as
-settled *by* `project-context.md`, and it is not. Record it as a decision with its real reasoning, or move it.
-
----
-
-### Finding 6 — the only two functional changes in AC6 ship with no test, and AC6.6 ships stateful security behaviour untested
-**Confidence: HIGH — read from AC7 and the test tree.**
-
-AC6 breaks down as: 6.1 comment-only, 6.3 comment-only, 6.4 comment-only, 6.5 type-narrowing (compile-only),
-and **6.2 + 6.6 functional**. AC7's testing list covers AC1 (`SkillarsProfileCookieTest`), AC2
-(`JwtManagerImplTest.testDeleteLoginToken_success`, with a mutation check), AC3/AC4 (three frontend specs),
-AC5 (`AuthResourceIT`) — and **nothing for AC6.2 or AC6.6**. They appear only inside "re-run the suite, zero
-regressions", which by construction cannot cover behaviour that does not exist yet.
-
-AC6.6 is the one that matters: it adds a 60-second, per-client, mutable gate in front of a security-relevant
-DB write, plus (per Findings 3 and 4) a new conditional in the filter's catch block. Shipping that with no
-test of either the allowed or the throttled path is out of step with the rest of this story, which is
-otherwise careful about coverage (AC7 even demands a mutation check for AC2's one-liner).
-
-Note for whoever writes it: a two-request throttle test is viable because the filter is reconstructed per
-test (`JWTAuthorizationFilterTest.java:116-133`), so each test starts with a fresh throttle map — but that
-also means the throttled path can **only** be observed by issuing two denials inside one test method.
-Existing `verify(securityUtil).terminateSession(request, response)` assertions
-(`JWTAuthorizationFilterTest.java:269, 297, 321, 345, 426`) are unaffected, since each is the first denial in
-its own test.
-
----
-
-### Finding 7 — AC5 bullet 2 and Task 8 both state the fix backwards (hash inversion)
-**Confidence: HIGH.**
-
-> AC5: *"The raw cookie value sent (`fakeRaw`, `:373`) is replaced with a raw value whose `sha256Hex(...)` … **equals the seeded `token_hash`**"*
-> Task 8: *"compute a raw token whose hash matches the seeded `token_hash`"*
-
-`AuthResourceIT.java:367` seeds a hardcoded hex literal:
-
-```java
-String expiredHash = "deadbeef01234567890123456789012345678901234567890123456789012345";
-```
-
-That is not the SHA-256 of any known input, so finding a raw value that hashes to it is a preimage attack.
-The direction must be reversed: pick the raw value, then **derive** the seed with the class's own helper
-(`:739-747`):
-
-```java
-String rawToken = "expired-refresh-token-raw-value";
-String expiredHash = sha256Hex(rawToken);
-commitWrite("INSERT INTO main.refresh_tokens (id, user_id, token_hash, expires_at, used) "
-          + "VALUES (990001, ?, ?, ?, false)",
-            COACH_USER_ID, expiredHash, Timestamp.from(Instant.now().minus(1, ChronoUnit.DAYS)));
-// ... cookieHeaders(rawToken)
-```
-
-A competent implementer will reach this anyway; it is logged because the AC as written is literally
-impossible, and the story's text is the spec of record.
-
-Two related notes on AC5 while here:
-- AC5's third bullet correctly refuses to let the dev claim the branch distinction is tested when it isn't.
-  It *is* observably distinguishable: both branches throw `BadCredentialsException`, so the HTTP status and
-  `errorKey` are identical — but `usedFlagOf(expiredHash)` (the class's existing helper, `:710-713`) returns
-  `true` only on the expiry branch, because `:174`'s `terminateSession` revokes in `REQUIRES_NEW` and
-  therefore commits. That is a real assertion, available at no extra cost.
-- Fixing the seed to actually commit turns a never-persisted row into live shared state for the rest of the
-  class. `tearDown` (`:139-152`) does `DELETE FROM main.refresh_tokens` per test, so cross-test leakage is
-  covered — worth confirming rather than assuming, since the hardcoded `id = 990001` would otherwise collide.
-
----
-
-### Finding 8 — two explicit ledger companion-asks are dropped, contrary to the story's "re-confirmed not silently dropped" framing
-**Confidence: HIGH on (a) and (b) being absent; deliberately no claim made about whether (b) would find anything.**
-
-The story's exclusions list (Finding 6) names exactly two items, both from the deferred-143 code review. These
-two, both from the ledger items this story *is* implementing, appear nowhere — not implemented, not excluded:
-
-**(a) `deferred-work.md:3691-3692`** — *"Note this **is** a behaviour change on the routine denial path, which
-`skillars-deferred-143` AC3 deliberately froze, so it needs its own AC **and a test asserting an expired-JWT
-401 now expires `skp`**."*
-The story gives it its own AC (AC2 — good) but **not** the test. AC7's AC2 regression test is
-`JwtManagerImplTest.testDeleteLoginToken_success`, a unit test of `deleteLoginToken` in isolation; it proves
-the cookie list changed, not that the filter's expired-JWT 401 now expires `skp`. The behaviour change lands
-on a path a previous story deliberately froze, and gets no test at the level where it changes. A filter-level
-test or a `SecurityIT`/`AuthResourceIT` assertion on the 401's `Set-Cookie` headers would close it.
-
-**(b) `deferred-work.md:3757-3758`** — *"Worth a wider grep at the same time: any other IT seeding state with a
-bare `jdbcTemplate` write in a test method body has the same silent no-op."*
-Absent from every AC and task. I ran a coarse pass over ~160 IT classes and deliberately make **no claim**
-that another is broken — most bare writes sit inside a class-level or `setUp` transaction where they are
-visible to the test, and distinguishing those needs per-file reading. The point is procedural: the story
-asserts nothing was silently dropped, and this was. Either scope it (even as "grep only, report, fix nothing")
-or list it as excluded with a reason.
-
-This is a known recurring class in this repo, which is why the ledger asked.
-
----
-
-### Finding 9 — AC2 invalidates five comment/javadoc passages, none covered by any AC
-**Confidence: HIGH.**
-
-The story spends two ACs (6.3, 6.4) on comment accuracy, so the standard is explicit. AC2 then falsifies these
-and requires no update:
-
-1. `JWTAuthorizationFilter.java:159-162` — *"No DB read or write, and **no rtkn/skp clearing**"*. After AC2 this
-   branch **does** clear `skp`. Directly false, on the branch AC2 changes.
-2. `JWTAuthorizationFilter.java:152-155` — *"Routine, expected traffic keeps **exactly its previous behaviour**"*.
-   It no longer does.
-3. `SecurityUtil.java:177-179` — *"drops **the six cookies** `deleteLoginToken` owns plus `rtkn` and `skp`"*.
-   After AC2 `deleteLoginToken` owns seven, and (under the story's variant) `clearAuthCookies` no longer drops
-   `skp` itself.
-4. `SecurityUtil.java:181-185` — *"Exists for **the one caller** that must not revoke … **Prefer `terminateSession`
-   everywhere else**; this is not a general-purpose 'log out'."* AC6.2 adds two callers and AC6.6 a third, each
-   for a different reason than the documented one. This javadoc becomes actively misleading.
-5. `SecurityUtilTest.java:81` `@DisplayName` and `:87-88` comment (see Finding 2).
-
-Cheap to fix, but they are exactly the drift AC6.3/AC6.4 exist to prevent, created by this same story.
-
----
-
-### Finding 10 — AC2's required disclosure under-enumerates the affected causes
-**Confidence: HIGH on the enumeration; deliberately downgraded on impact — see below.**
-
-AC2 bullet 3 discloses the change as affecting *"`JWTExpiredException`/`MissingAuthenticationException`"*. The
-else branch at `:158-165` actually receives **everything** caught at `:150` minus the four genuine-denial
-shapes — i.e. also:
-
-- `AuthorizationException` with any error code other than `ACCOUNT_NOT_LOGIN_ABLE`: `MISSING_RIGHTS`
-  (an authenticated user hitting a route their role does not permit — the filter calls this out at `:333-335`),
-  `USER_NOT_FOUND`, `UNKNOWN`, `JWT_PARSE_ERROR` (`DaoAuthProvider.java:38-55`);
-- `AccessDeniedException`.
-
-The ledger itself named this set — `deferred-work.md:3676` lists *"(expired JWT, tokenless request,
-`AuthorizationException(MISSING_RIGHTS)`)"*. The story narrowed it.
-
-**I am explicitly not calling this a regression.** I initially flagged it as one and the re-check knocked it
-down: `MISSING_RIGHTS` reaches the same branch that already clears `potc` via `deleteLoginToken`, so the
-session is dead server-side regardless, and `isAuthenticated` is `!!userId` (`auth.store.js:15`) fed only from
-`skp` — so clearing `skp` there makes the SPA's state *more* truthful, which is AC2's whole point. The defect
-is in the disclosure AC2 itself demands ("call it out explicitly in the Dev Agent Record, don't let it read as
-a silent side effect"), being made from an incomplete list.
-
----
-
-### Finding 11 — Finding 4's precedent attribution is inaccurate (the change is still right)
-**Confidence: HIGH.**
-
-> *"Every other terminal post-auth redirect in this codebase (e.g. `VideoManagementPage.vue:108`) uses `router.replace`."*
-
-`VideoManagementPage.vue:101-111` is a **403 access-denied bounce** inside `fetchVideos()`'s catch, not a
-post-auth redirect. Repo-wide: 9 `router.replace` vs 105 `router.push`. The other `replace` sites are
-`PlayerHomeRedirectPage.vue:29/40/46` (a dedicated one-shot redirect page), `ParentApprovalPage.vue:63`
-(another error bounce), and `MarketplacePage.vue:201-217` (query-only replaces). The only two *actual*
-terminal post-auth redirects are `LoginPage.vue:175` and `OtpPage.vue:163` — **both `push`**, and the story
-deliberately leaves the first alone.
-
-The story reproduces the ledger faithfully (`deferred-work.md:3523-3524` says the same); the ledger is the one
-that overstates. AC4 is still the right change for the right reason (a consumed `loginInfoId` makes `/otp`
-genuinely non-returnable), and `PlayerHomeRedirectPage.vue` is a real precedent for exactly that shape — it
-just isn't the one cited. Fix the sentence so the next reader doesn't inherit a false "the rest of the
-codebase already does this".
-
----
-
-### Finding 12 — Finding 5's "every other write goes through `commitWrite`" is inaccurate
-**Confidence: HIGH. No impact on the fix.**
-
-> *"Every other write in this same class already goes through the file's own `commitWrite(String sql, Object... args)` helper (`:705-707`)"*
-
-`insertUser` (`AuthResourceIT.java:753-756`) uses a bare `jdbcTemplate.update`, and so do `setUp`'s authority
-and `user_authority` inserts (`:97, :102, :117, :123, :129`). They are correct because their caller wraps them
-in `transactionTemplate` (`:96-136`) — which is what `commitWrite`'s own javadoc says (`:702-703`: *"Every write
-in this class therefore goes through `transactionTemplate`, as `setUp()` already does"*). The accurate claim is
-"every write is committed, via `transactionTemplate` or `commitWrite`; this one test method is the only live
-exception" — which, having checked every live `jdbcTemplate.update` in the file, is true.
-
----
-
-## 5. What did NOT survive re-verification
-
-Listed so the findings above can be trusted. Each of these looked real on first pass; the cited evidence
-killed it.
-
-1. **"AC6.2 destroys revocation durability."** Reasoning was: the branch throws, the outer `@Transactional`
-   rolls back, and removing `terminateSession` removes the only `REQUIRES_NEW` write. **Wrong** —
-   `RefreshTokenRepository.java:30-33` shows `markAllUsedByUserId` is itself
-   `@Transactional(propagation = REQUIRES_NEW)`, so it commits independently. AC6.2 is durable. I checked the
-   annotation rather than inferring from the method name, because this is the exact shape that produced a
-   BLOCKER in the deferred-143 review.
-2. **"AC6.2 loses `SecurityContextHolder.clearContext()` and that matters."** Downgraded to the Finding 9
-   accuracy note. `/api/auth/refresh` is in `AppEndpoints.ALL_UNRESTRICTED` (`AppEndpoints.java:44`), so the
-   filter installs only an *anonymous* token (`JWTAuthorizationFilter.java:178-182`) — nothing authenticated is
-   left behind. And `AuthService.java:242`'s optimistic-lock branch already calls `clearAuthCookies` with the
-   identical delta, reviewed and accepted. **Note this is why Finding 3 is a separate finding and not the same
-   one:** on the *filter* path the context genuinely is authenticated (`:193` precedes the throwing
-   `authorize()` at `:202`/`:213`), so the same swap has a different consequence there.
-3. **"AC6.2 misses a token `markAllUsedByUserId` doesn't cover."** No — `ownerId` comes from the very row the
-   cookie hashes to, so the per-user bulk update strictly covers the per-hash one.
-4. **"AC6.2 risks the 55P03 self-deadlock."** No — traced `:141`→`:168`; every statement before the
-   `REQUIRES_NEW` write on that path is a read, so the lock is uncontended.
-5. **"`AuthResourceIT.java:343`'s bare `jdbcTemplate.update` is a second instance of the Finding 5 bug."**
-   Looked compelling (its own comment says it must exhaust the successor token). **Dead code** — `/*` opens at
-   `:321` and `*/` closes at `:363`; the whole test is commented out. Would have been a false positive.
-6. **"`String.valueOf(claims.get(BUS_ID))` turns a null `BUS_ID` into literal `"null"`."** Identical to
-   today's string concatenation at `JwtManagerImpl.java:119`, so it is not a change. Also already adjudicated
-   a false positive in the deferred-142 review (sprint-status note) — not re-litigated.
-7. **"`.replace("+", "%20")` corrupts a literal `+` in the payload."** No — `URLEncoder` emits `%2B` for a
-   literal `+`, so only space-derived `+` characters are rewritten. The fix is correct as written.
-8. **"The new encoding breaks `JwtManagerImplTest:622-636`/`:641-655` (they use `URLDecoder`)."** No — the
-   payload (`{"id":"<long>","role":"<ENUM>"}`) contains no space, so output bytes are unchanged and both still
-   pass. The story's "those stay as-is" is right. (Side note, not a defect: those tests and
-   `AuthResourceIT:185`/`:310` decode with `URLDecoder` — the *form* decoder — so none of them could ever
-   detect the mismatch AC1 fixes. AC7's new `SkillarsProfileCookieTest` is the only thing that will.)
-9. **"AC6.6's new throttle will cross-contaminate `JWTAuthorizationFilterTest`."** No — the filter is rebuilt
-   in `@BeforeEach` (`:116-133`), so every test gets a fresh throttle map. This is also how the existing
-   `alertThrottle` tests (`:478-498`) pass.
-
-Two more checked and cleared: `SkillarsProfileCookieTest` will not NPE on `RequestMetadataProvider`
-(`getClientInfo()` lazily creates, `:28-33`; `isHttps()` defaults false), and
-`JwtManagerImplTest:501-503`'s blanket per-cookie assertions (`value` blank, `maxAge` zero) are satisfied by
-the new 7th cookie, since `CookieUtil.removeCookie` builds `ResponseCookie.from(name)` with no value.
-
----
-
-## 6. Recommendation
-
-**Do not start implementation on AC3 or AC6.6 as written.** Everything else is implementable; several items
-need a sentence corrected or a decision recorded first.
-
-**Must fix before dev (design is wrong, not just imprecise):**
-- **Finding 1** — AC3's `matched.length > 0` cannot work against `routes.js:353`'s catch-all, and the three
-  prescribed tests would all false-pass. Needs a different predicate, `routes.js` added to scope/File List, and
-  `safeRedirectSpec.js` pointed at the real route table. *Highest confidence in this report — proven by execution.*
-- **Finding 2** — AC2/Task 3 breaks `SecurityUtilTest:96-99`. Pick the ledger's delegate-don't-delete option, or
-  add the test update to the AC, Task 3, and the File List.
-- **Findings 3 + 4** — AC6.6 needs either the `clearContext` fix plus the missing cause-discriminating
-  conditional, or (preferred) replacement by the `AND r.used = false` predicate, which deletes the whole
-  problem class. Record whichever as a decision.
-
-**Should fix before dev (spec says something false or impossible):**
-- **Finding 7** — AC5 bullet 2 / Task 8 state hash inversion; reverse the direction and consider the
-  `usedFlagOf(...)` assertion.
-- **Finding 6** — give AC6.2 and AC6.6 a test each.
-- **Finding 8** — implement or explicitly exclude the two dropped ledger companion-asks.
-
-**Fix while in the files (accuracy, cheap):**
-- **Finding 9** (five stale passages AC2 creates), **Finding 10** (AC2's disclosure list),
-  **Finding 11** (AC4's precedent sentence), **Finding 12** (Finding 5's "every other write").
-
-**Judgment call, record a decision either way:**
-- **Finding 5** — `platform.security.contract` vs `platform.security.infrastructure` for `SkillarsProfileCookie`.
-  Not a correctness issue; the story just shouldn't present `project-context.md` as having settled it.
-
-**What was independently re-checked, and what wasn't.** Every file:line in §1 was opened at HEAD `a0d39f83`;
-every mechanistic claim in §3 was checked against the full body of the specific method named, including
-transaction annotations and the `setAuthentication`-before-`authorize()` ordering that Findings 3 and 10 turn
-on; Finding 1 was verified by running the installed `vue-router` 4.6.4 against the production route shape.
-Ledger and precedent claims were each checked against the ledger file, nearby code comments, and the
-referencing story before a verdict. **Not** independently verified: whether any IT *other* than
-`AuthResourceIT` actually has the bare-write bug (Finding 8b is scoped as a procedural gap, deliberately
-making no such claim), and the runtime behaviour of hash-history `resolve()` (the probe ran under
-`createMemoryHistory`, since `createWebHashHistory` needs a DOM — route matching is history-independent, but
-that is reasoning, not measurement).
-
-The story's citation discipline is the best part of it: nothing fabricated, nothing stale, and its
-drift-correction claims (seven of them) all check out independently. The defects cluster in **design
-mechanisms adopted without being tested against the real system** (Finding 1), **test-double behaviour
-assumed to match production** (Finding 2), and **a teardown method characterised by one of its three effects**
-(Findings 3 and 4).
+## 7. Recommendation
+
+**Do not start implementation as written.** Per-claim confidence, not a blanket score:
+
+| Finding | Confidence | Basis |
+|---|---|---|
+| **F1** dispute gate can never fire | **Very high** | Exhaustive grep of `BookingEvent.DISPUTE` and `DISPUTED` across `src/main` and `src/test`, plus reading all three `DisputeService` lifecycle methods end to end. Zero invocation sites found; corroborated by `DISPUTED` appearing in exactly one test file, a pure state-machine unit test. |
+| **F2** `playerId = authorId` always false; adult players locked out | **Very high** | Both ID origins read first-hand (`ReviewResource.java:130-140`, `BookingService.java:180`), `@Tsid` chain traced through `BaseEntity`, `chk_pp_owner` and the else-branch at `BookingService.java:187-191` confirm the self-registered shape, and the frontend confirms the flow is live. |
+| **F3** test blast radius | **Very high** | Every fixture read line by line; each verdict traced through the actual guard ordering in `ReviewSubmissionService`. Four first-pass claims in this area were *wrong* and are retracted in §6 — the eight that remain were each re-derived. |
+| **F4** frontend grep / i18n | **High** | The literal string's absence and all three nested keys verified directly; resolution mechanism read in `useErrorHandler.js:40-49`. |
+| **F5** wrong error code on orphaned row | **High** (logic) / **judgment** (severity) | Logic follows from the Task 6 snippet as written. Whether a misleading 403 message warrants a code change is a product call. |
+| **F6** `BoundedKey` notes vs `min = 0` | **High** | `getBoundedLong`'s no-clamp behaviour and `ConfigStartupAssertion`'s range check both read directly; registry convention compared across all sibling keys. |
+| **F7, F9** stale / non-existent mechanism descriptions | **High** | Direct reads. Documentation-accuracy issues, not functional defects. |
+| **F8** no migration precedent | **High** | Exhaustive grep over all 155 migrations. |
+| **F10** unbounded query | **Medium** | Real, but materially smaller than first assessed once the config cache and Hibernate identity map were accounted for. Sizing is stated honestly above. |
+| **F11** scope decisions | **Judgment** | Not defects; decisions the story should make explicitly. |
+
+**Minimum changes before `ready-for-dev` again:**
+
+1. **Rewrite AC2.c and `existsActiveDisputeByAuthor`** against the `disputes` table (open dispute joined to `bookings`), or pair the story with a fix to the dispute→booking-status lifecycle. As written the gate is inert, and its prescribed test would certify it anyway.
+2. **Rewrite AC2.b's discriminator** to use `PlayerProfile.userId` / `PlayerProfile.parentId` rather than `Booking.playerId`, and add an explicit AC plus test for *"self-registered adult player reviews their own coach → 201"*.
+3. **Expand Task 7** to name `ReviewModerationIT`, `ReviewSubmissionServiceConcurrencyIT`, `ReviewFlagServiceConcurrencyIT`, `ReviewSubmissionServiceTest`, `ReviewSubmissionIT.submitReview_validEligibility_…`, and `ReviewSubmissionIT.updateReview_epochBumpAppliesToFreshLockedState_…`; state explicitly that each shared `@BeforeEach` fixture needs its booking aged past the floor and its player DOB set below 18. Correct the three "keep unchanged" entries that will not hold.
+4. **Replace Task 4's grep instruction** with the nested-key reality (`reviews: { noRecentSession: … }` in three bundles) and add an explicit subtask to create `activeDispute` and `parentalReviewNotApplicable` entries in all three locales plus re-word `updateTooSoon` in all three.
+5. **Decide `min`** for both new keys and make the two `note` strings accurate about the negative case.
+6. Minor: fix the `ConfigBounds.java:48-81` → `:82` citation, refresh Task 5's description of the advice's branches, decide DELETE-vs-UPDATE in Task 1 and name `value_type = 'LONG'`.
+
+**What was *not* independently re-checked:** no test was executed and no migration was run — every "will fail" verdict in **F3** is derived by reading fixtures against guard ordering, not from a red test run. Given the standing convention against local `mvn verify`, the cheapest confirmation is to let CI run the affected classes once the fixtures are updated. I also did not audit `ReviewModerationService`, `CoachRatingService`, or `ReviewQueryService` beyond confirming they neither read the config key nor can reach the private `checkEligibility`; the story's scope boundary there held up on the checks performed.
