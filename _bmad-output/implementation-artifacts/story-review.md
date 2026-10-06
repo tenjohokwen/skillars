@@ -1,276 +1,118 @@
-# Story Review — skillars-deferred-145
+# Story Review: skillars-deferred-146 — CI Build Time: Async-Quiesce Poll Delay and Parallel Docker-Image Job
 
-**Story:** `skillars-deferred-145-review-eligibility-maturity-cooldown-and-dispute-gate-rework`
-**File:** `_bmad-output/implementation-artifacts/skillars-deferred-145-review-eligibility-maturity-cooldown-and-dispute-gate-rework.md`
-**Status in `sprint-status.yaml`:** `ready-for-dev` (line 334) — confirmed in the map, not from the `last_updated` comment prose
-**Audit date:** 2026-10-06
-**Real HEAD at audit time:** `74d405d2` — *"Story Deferred-144: skp Cookie Consolidation, Open-Redirect Guard Dedup, and Auth Review/Test Cleanup (#251)"*
+**Audited:** 2026-10-07
+**Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-146-ci-build-time-async-quiesce-poll-delay-and-parallel-docker-image-job.md`
+**Status at audit time:** `ready-for-dev`
+**Real HEAD at audit time:** `70f41a1e` ("Story Deferred-146: CI build time — async-quiesce poll delay and parallel Docker-image job") — this commit only *adds the story file itself* to `sprint-status.yaml` and the artifacts directory; no implementation exists yet, so every citation below was checked against the actual pre-implementation source tree, not any SHA the story describes as its baseline (`f789ce5b`, an ancestor of HEAD).
 
-Every citation below was re-opened at `74d405d2`. No SHA, line number, or "current, shipped" claim written inside the story was taken on trust — including the story's own `a5f27563` attribution, which was independently re-derived from `git log`.
-
-**Method note:** the four verification layers were run inline by the reviewing session rather than as parallel subagents (no subagent was requested for this task). Every quoted line below was read first-hand from the working tree, which is also what Step 4b (adversarial re-verification) requires. Section 6 lists what that second pass killed.
+All citations, ledger/precedent attributions, and mechanistic claims were independently re-read against real files (and, in two cases, decompiled bytecode and a live `gh api` call) rather than trusted from the story's own framing. Four parallel verification passes ran (citation check, ledger/precedent check, mechanistic-claim check, corner-case/missed-flow hunt), followed by my own adversarial re-check of every finding against the cited evidence before anything below was kept.
 
 ---
 
-## 1. Verdict summary
+## 1. Citation verification
 
-| Severity | Count | Headline |
-|---|---|---|
-| **Critical** | 2 | The dispute gate can never fire; the parent/self discriminator is always false and locks out self-registered adult players |
-| **High** | 2 | Test blast radius understated by ≥5 classes (incl. tests the story says to "keep unchanged"); prescribed frontend grep finds nothing |
-| **Medium** | 2 | Wrong error code on the fail-closed path; both new `BoundedKey` notes misdescribe the negative case |
-| **Low** | 5 | Stale advice description, non-existent migration precedent, unbounded query, a Dev Note describing a path no code takes, scope asymmetry |
-| **Killed by re-verification** | 9 | See §6 — including four "test will break" claims that are wrong |
-
-The story is well-written, unusually honest about its own staleness risk (Task 1 explicitly tells the dev not to trust the story's citations for migration numbering — good instinct, and correct), and its citation hygiene is strong: **27 of 29 code/precedent citations verified exact**. The two Critical findings are not citation drift. They are false assumptions about how the existing system actually behaves, and both would ship a feature that silently does nothing or silently blocks real users.
-
----
-
-## 2. Citation verification (Layer 1)
-
-| # | Story citation | Verdict | Evidence at `74d405d2` |
+| # | Citation | Verdict | Evidence |
 |---|---|---|---|
-| 1 | `ReviewSubmissionService.java` — `checkEligibility` (line 207) | **MATCH** | `207: private void checkEligibility(UUID coachId, Long authorId) {` |
-| 2 | `ReviewSubmissionService.java` — 365-day gate (line 114) | **MATCH** | `114: if (review.getLastModifiedAt().isAfter(Instant.now().minus(365, ChronoUnit.DAYS))) {` |
-| 3 | `ReviewSubmissionService.java` — `checkEligibility` call (line 125) | **MATCH** | `125: checkEligibility(review.getCoachId(), authorId);` |
-| 4 | `ReviewSubmissionService.java` — lock/refresh sequence (lines 135-160) | **MATCH** | 135-137 `lockRetryer.withBoundedRetry` → 147 `entityManager.refresh(locked, PESSIMISTIC_WRITE)` → 154-160 re-check. Range is exact. |
-| 5 | `BookingRepository.java:127-138` — `existsRecentCompletedBookingByAuthor` | **MATCH** | `@Query` opens at 127, method signature 135-138. Exact. |
-| 6 | `BookingRepository.java:122-138` — "current `existsRecentCompletedBooking`/`…ByAuthor`" | **MINOR DRIFT** | Both methods are there, but the first one's `@Query` block starts at **114** (122 is only its method-name line). Cosmetic. |
-| 7 | `AgePolicyService.java:48-50` — `isMinor(LocalDate)` | **MATCH** | `48-50: public boolean isMinor(LocalDate dateOfBirth) { return isMinor(getAgeTier(dateOfBirth)); }` |
-| 8 | `AgePolicyService.java:29-54` — `getAgeTier`/`isMinor` x2 | **MATCH** | `getAgeTier` 29-41, `isMinor(AgeTier)` 44-46, `isMinor(LocalDate)` 48-50, `isIndependentAccountAllowed` 52-54. |
-| 9 | `AgePolicyService.java:57-61` — `getMessagingPolicy` (throwing write-path) | **MATCH** | 56 javadoc *"Write paths only: refusing on an unresolvable player is the safe answer there."*; 57-61 `.orElseThrow(UserNotFoundException)`. |
-| 10 | `AgePolicyService.java:68-70` — `findMessagingPolicy` (degrading read-path) | **MATCH** | 68-70 `return playerProfileRepository.findById(playerId).map(this::resolvePolicy);` |
-| 11 | `ConfigBounds.java:185-188` — the key being removed | **MATCH** | 185 javadoc, 186-188 `REVIEWS_SUBMISSION_WINDOW_DAYS = new BoundedKey("reviews.submissionWindowDays", 1L, 365L, true, …, 14L)`. |
-| 12 | `ConfigBounds.java:37-46` — fail-fast principle | **MATCH** | `37: <h2>Fail-fast principle</h2>`, list 38-46. Exact. |
-| 13 | `ConfigBounds.java:48-81` — "the `BoundedKey` record and the fail-fast principle" | **DRIFTED** | 48 is `public final class ConfigBounds {`; 53-81 is the record's **javadoc**; the record itself is at **line 82**. The fail-fast principle is at 37-46 (cited correctly elsewhere). Corrected location: **`ConfigBounds.java:82`** for the record. |
-| 14 | `epics.md:149` — FR-REV-001 | **MATCH** | `149: - FR-REV-001: Review eligibility — at least one completed paid session and no active dispute.` Story's quote is verbatim-accurate. |
-| 15 | `epics.md:144` — FR-MSG-002 | **MATCH (line)** / **INFERENCE (paraphrase)** | Line 144 is FR-MSG-002. But its text reads *"13–17: … all messages mandatory-visible to parent; 18+: unrestricted within scope"* — it never says parents "lose automatic visibility". The story's reading is a sound inference from "unrestricted", not a quote. Flagging only so the dev doesn't go looking for wording that isn't there. |
-| 16 | `AgeTier.java` — `U10`, `AGE_10_12`, `AGE_13_17`, `ADULT` | **MATCH** | All four present; `ADULT.displayLabel()` returns `"18+"`, corroborating the 18+ cutoff. |
-| 17 | `Booking.java` — `parentId`/`playerId` both `Long`, `status` plain `String`, `updatedAt` `Instant` | **MATCH** | Lines 31, 34, 46, 62. All four exact. |
-| 18 | `V139__baseline_seed_data.sql` — `(key, value, value_type, description)` shape | **MATCH** | V139:140 uses exactly that 4-column shape. The story's correction away from the 5-column `(id, key, value, type, description)` shape is right. |
-| 19 | `9.1` shipped at `a5f27563`, 2026-06-29 | **MATCH** | `git log -1 a5f27563` → `a5f27563 2026-06-29 Review Submission & Eligibility`. SHA, date and subject all exact. |
-| 20 | "No `coach_reviews` table changes needed" | **MATCH** | Confirmed: nothing in AC1-AC5 requires a column; `last_modified_at` already exists `NOT NULL DEFAULT now()` (V138:1984). |
-| 21 | Next migration number is **not** `V67+N`; check disk | **MATCH (and correct)** | Highest on disk is `V155__backfill_availability_window_canonical_timezone.sql`. Next is **V156**. The story's instruction to distrust its own citations here was the right call. |
-| 22 | `ConfigService.getBoundedInt(key, default, min, max)` 4-arg exists | **MATCH** | `ConfigService.java:148`. |
-| 23 | `AgePolicyService` + `PlayerProfileRepository` "already exist in `platform.security`" | **MATCH** | `platform.security.service.AgePolicyService`, `platform.security.repo.PlayerProfileRepository`. |
-| 24 | `ReviewErrorCode.java` — `NO_RECENT_SESSION` present; enum grown since 9.1 | **MATCH** | `6: NO_RECENT_SESSION("reviews.noRecentSession")`; flagging codes at 17-24 confirm the growth claim. |
-| 25 | `lastModifiedAt` is surfaced publicly on every review row | **MATCH** | `ReviewDto.java:14`; emitted at `ReviewQueryService.java:45, 65, 85`; also the default sort (`:53, :96`). |
-| 26 | `existsRecentCompletedBookingByAuthor` has no caller besides `ReviewSubmissionService` | **MATCH** | Only `ReviewSubmissionService.java:216` + `ReviewSubmissionServiceTest.java:67`. `VideoAccessGuard.java:100` uses the *other* overload (`existsRecentCompletedBooking`), which the story correctly leaves alone. |
-| 27 | No other `platform.reviews` service reads the config key or calls `checkEligibility` | **MATCH** | Key grep clean outside `ConfigBounds`/`ReviewSubmissionService`/V139/its unit test; `checkEligibility` is `private`, so externally uncallable by construction. |
-| 28 | `DISPUTED` is a valid `bookings.status` value | **MATCH (schema)** | `chk_bkg_status` lists `'DISPUTED'` (V138:246). Legal in the schema — but unreachable in code. See **F1**. |
-| 29 | `platform_config` INSERT may omit `id` | **MATCH** | `ALTER TABLE main.platform_config ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY` (V138:869-876). |
+| 1 | `DatabaseResetTestExecutionListener.java:249-264` (quiesce method + Awaitility shape) | **MATCH** | Lines 249-256 contain `quiesceAsyncExecutors`, exact `.atMost(30s).pollInterval(25ms).until(...)` chain as quoted in the story. |
+| 2 | `ExecutorShutdown.java:261` (claimed to list six bean names) | **DRIFTED** | Line 261 is a sentence about `GracefulShutdownTaskExecutor`'s shutdown escalation, not a name enumeration. The real budget table listing all seven pools (six `ThreadPoolTaskExecutor` + one raw `ThreadPoolExecutor`) is at lines 77-83. See Finding A below — one of the six names in the story's own text is also wrong. |
+| 3 | `DatabaseResetTestExecutionListener.java:294-299` (`RESET_COUNT`/`RESET_NANOS`) | **MATCH** | `AtomicLong RESET_COUNT`, `AtomicLong RESET_NANOS`, `AtomicBoolean HOOK_REGISTERED` declared exactly there. |
+| 4 | Same file, `:301-320` (every-25 block + shutdown hook calling `recordCost`) | **MATCH**, minor framing nuance | Lines 301-320 are `recordCost`'s body and the hook it registers. The hook doesn't literally re-invoke `recordCost` — it inlines equivalent reporting logic using the same `RESET_COUNT`/`RESET_NANOS` fields. Content and location are otherwise exactly as described. |
+| 5 | Same file, `:115-118` (reset clock starts after quiesce, documented) | **MATCH** | Quoted directly: "measured from AFTER quiescing, not before... would make the reported metric mostly measure unrelated async-pool drain time." |
+| 6 | Same file, `:113` (`quiesceAsyncExecutors(ctx)` call site) | **MATCH** | `quiesceAsyncExecutors(ctx);` is exactly there. |
+| 7 | Same file, `:252` ("between `.atMost(...)` and `.pollInterval(...)`") | **Off-by-one, non-blocking** | Line 252 is `Awaitility.await()` itself; `.atMost(...)` is 253, `.pollInterval(...)` is 254. The cited line correctly marks where the chain *starts*; the actual insertion point for `.pollDelay(Duration.ZERO)` is between 253 and 254. A developer reading the real code will find this immediately — kept as a minor citation imprecision, not a defect. |
+| 8 | `ConcurrencyLockWaitSupport.java:95` (same Awaitility shape, no pollDelay) | **MATCH** | Lines 95-98 confirmed: `.atMost(5s).pollInterval(25ms).until(...)`, no `.pollDelay(...)` anywhere in the block. |
+| 9 | `pr-build.yml:58-60` ("no `-q`" reasoning) | **DRIFTED** | Lines 58-60 are unrelated `set +e` commentary. The actual "No -q: it suppresses phase markers..." comment is at lines 49-51. Content exists, line range is wrong by ~9 lines. |
+| 10 | `pr-build.yml:102-107` (Docker build step) | **MATCH** | Exact step, `push: 'false'`, `load: 'true'`, tag templated from PR number. |
+| 11 | `pr-build.yml:109-117` (Trivy scan step) | **MATCH** | Exact action pin, `severity: CRITICAL,HIGH`, `exit-code: '1'`, `trivyignores: .trivyignore` all present verbatim. |
+| 12 | `pr-build.yml:17-22` (degraded-runner throughput note) | **MATCH** | Confirmed verbatim. |
+| 13 | `pr-build.yml:14-22` (2026-09-24 bump, 4 runs hit 25m ceiling) | **MATCH** | Confirmed verbatim, including the specific PR (#228) and run-duration figures. |
+| 14 | `ci.yml:88-93` (claimed precedent for "a new job with no `needs:`, starts at the same instant") | **Real nuance — see Finding B** | `build-and-push` at line 88 IS a separate top-level job (supporting the narrower claim "`ci.yml` already models this correctly... as a separate job"), but it carries `needs: [test, frontend-quality]` (line 93) — it is gated, not parallel-from-the-start. It is precedent for "lives in its own job," not for "no `needs:`." |
+| 15 | Context-count gate, `assert-context-count.sh build.log 45` | **MATCH** | `pr-build.yml:78`, ceiling 45, invocation shape exact; comment at :69 attributes the ceiling to skillars-deferred-128. |
+| 16 | `SharedContainers.java:31-40` (stock postgres:17-alpine, no durability tuning) | **Citation mis-ranged, substance true** | Lines 31-40 are prose about container-vs-bean lifecycle, not the `Postgres` class (actually at lines 108-129). The underlying factual claim — stock image, no `fsync=off`/`synchronous_commit=off`/`full_page_writes=off`/tmpfs — is independently confirmed true at lines 60 and 108-129. |
+| 17 | `docs/testing/readme.md` stale figure + "Why not the ≤ 10" section | **MATCH** | "99.7 ms mean over 814 invocations (~81 s total) on CI" confirmed at line 134; the ≤10 section confirmed at line 186 with the exact `QuotaService`/`VideoLifecycleService`/`ModerationOrchestrationService` reasoning. |
+| 18 | Container-sampler + container-ceiling gate steps | **MATCH** | `Start container sampler` (:46-47) and `Assert container ceiling (AC1)` (:87-89) both present in `build` job exactly as described. |
 
 ---
 
-## 3. Ledger & precedent attribution (Layer 2)
-
-The story cites **no** `deferred-work.md` entries, so there are no ledger line references to verify. It is sourced from a business review dated 2026-10-06 — consistent with the precedent set by `skillars-deferred-143`, whose own `sprint-status.yaml` note records it as *"Sourced from manual security analysis (not deferred-work.md, not a code review run)"*. Not a defect.
+## 2. Ledger & precedent attribution
 
 | Claim | Sources checked | Verdict |
 |---|---|---|
-| "several deferred stories (88, 107, 131, 132, 135) touched `ReviewSubmissionService.java` after 9.1 shipped" | `git log --format` on the file; in-file Javadoc/comments; `git log --grep` | **EXACT.** `git log` on that path returns precisely six commits: `595ed7c1` (135), `6af4531c` (132), `2842df52` (131), `dda13653` (107), `4f5b5cb7` (88), `a5f27563` (9.1). Exactly the five named, no omissions, no extras. Corroborated by in-file comments at lines 43-44 (135), 48 (132), 102 (88), 208-212 (107 + 132), 133-134 (135). |
-| "…hardening concurrency and lock handling, but none changed the eligibility logic itself" | Same three sources | **SUPPORTED.** 107 and 132 did edit `checkEligibility`'s *body* (introducing `getBoundedInt`, then swapping a raw string literal for `ConfigBounds…key()`), but neither altered a rule. The story cites those exact comments itself, so it is not unaware. Fair as written. |
-| "see 9.1's Change Log 1.1 entry for why it stayed `in-progress` until now" | `skillars-9-1-…md` Change Log; `sprint-status.yaml:148` | **MATCH.** Row 1.1 (2026-10-06) exists and reads *"Status corrected from `in-progress` to `done` … this file's own Status header was never synced to match `sprint-status.yaml`."* Refers to the **file header**, not the work. (This initially looked like a self-contradiction against "is `done`" — see §6.1.) |
-| "`FR-MSG-002` is the precedent `reviews.parentalReviewNotApplicable` mirrors" | `epics.md:144`, `:374`; `AgePolicyService`; `AgeTier` | **SUPPORTED, with the inference noted at §2 #15.** The story is explicit and honest that the parent-of-minor gate is *"not in the original epic text"* — it does not overclaim epic authority. |
-| "`FR-ADM-003`'s admin dispute-resolution path" | `epics.md:156`; `DisputeService`; `BookingStateMachine` | **CITATION MATCHES, MECHANISM DOES NOT EXIST.** Line 156 says what the story says. The code does not implement it. See **F1** / **F7**. |
-| "deferred-63 AC5 allows a coach to raise a dispute" (implicit in AC2.c's threat model) | `DisputeService.java:85-101` | **MATCH** — in-code comment explicitly cites "Deferred-63 AC5". Relevant to **F11**. |
+| `quiesceAsyncExecutors` exists per `skillars-deferred-131` AC4, to drain `@Async` tasks from a preceding test's committed transaction | Listener javadoc (lines 145-247), `skillars-deferred-131-...md` AC4 (line 511), `deferred-work.md`, `git log --grep` (commit `2842df52`) | **MATCH** — faithful paraphrase. (The javadoc's deeper reason is closing a specific deadlock with the reset transaction, not draining "for its own sake" — doesn't contradict the story's narrower use of the citation.) |
+| `[deferred-19] database reset:` tag and its "clock starts after quiesce" precedent | grep in listener (lines 308, 319), `skillars-deferred-19-...md` (AC5.6, 814 invocations/99.7ms), in-code comment :115-118 | **MATCH** — tag, story, and figure all consistent, including the same 814/99.7ms figure the deferred-146 story separately flags as stale. |
+| `sprint-status.yaml` entry and `last_updated` consistency | `sprint-status.yaml:2,337` | **MATCH** — `ready-for-dev`, consistent with story header and with being the latest entry. |
+| Five "Deferred From This Investigation" items not already in `deferred-work.md` | grep for all five topics across `deferred-work.md` | **MATCH** — zero matches for all five; genuinely new, not redundant. |
+| AC2c: master has no required status checks (404 + ruleset 20583638, no `required_status_checks` rule) | Live `gh api repos/tenjohokwen/skillars/branches/master/protection` → 404 "Branch not protected"; `gh api .../rulesets` → one ruleset, `NoDirectPush` id 20583638; `gh api .../rulesets/20583638` → rules are `deletion`/`non_fast_forward`/`pull_request` only | **MATCH** — independently reconfirmed live, same-day, exact match to the story's claim. |
+| `docs/testing/readme.md`'s "Why not the ≤ 10" section is "correct and still binding" | `docs/testing/readme.md:170-192` | **MATCH** — section exists verbatim with the stated reasoning. |
+
+All six ledger/precedent/external claims survived independent re-verification.
 
 ---
 
-## 4. Mechanistic claims (Layer 3)
+## 3. Mechanistic claims
 
-| Claim (story's wording) | Quoted evidence | Verdict |
+| Claim | Evidence | Verdict |
 |---|---|---|
-| "`ReviewSubmissionService.checkEligibility()` … only ever checked for a recent `COMPLETED` booking — it never checked whether an unrelated booking … is currently `DISPUTED`" | `ReviewSubmissionService.java:213-222` — one `getBoundedInt`, one `existsRecentCompletedBookingByAuthor`, one throw. | **TRUE** |
-| "`existsRecentCompletedBookingByAuthor` returns a plain `boolean` and cannot support the parent/age-tier distinction or the 'new session since last review' bound" | `BookingRepository.java:135-138` returns `boolean`; query has no projection and uses `updatedAt >= :windowStart`. | **TRUE** |
-| "the 4-arg `getBoundedInt` … 0/neg → gate easier to satisfy" | `ConfigService.java:110-118`: out-of-range → `return defaultValue` (**no clamp**). | **HALF FALSE** — see **F6**. A negative value falls back to the safe default (7/30) and does *not* weaken the gate. Only `0` does, and with `min=0L` that value is *in range*, so nothing warns. |
-| "`failFast=false` follows from `ConfigBounds`'s own fail-fast principle given that direction" | `ConfigBounds.java:37-46` — `failFast=true` is for data loss or *halting a core flow*. | **TRUE, and the reasoning is sound.** A lower-bound floor that degrades is correctly `failFast=false`. The story's warning not to copy `true` by habit is well-placed. |
-| "`AgePolicyService.isMinor(LocalDate)` … already does exactly what's needed; do not add a new age-tier method" | `AgePolicyService.java:48-50`, 29-41. | **TRUE.** Note: `PlayerProfile` also carries a denormalised `age_tier` column (`PlayerProfile.java:36-37`); computing live from DOB is the more correct choice, since the stored tier can go stale. |
-| "`isLinkedPlayerMinor` fails closed … follows `findMessagingPolicy`'s 'degrade this one row' convention, not `getMessagingPolicy`'s throwing write-path convention" | `AgePolicyService.java:56` vs `:63-67` javadoc. | **TRUE for the degrade decision.** But the *resulting error code* is wrong — see **F5**. |
-| "the pessimistic-lock/refresh sequence … none of that concurrency machinery is affected by this story" | `ReviewSubmissionService.java:135-160`; `checkEligibility` call at `:125` sits *before* it and shares no state. | **TRUE at the code level. FALSE at the test level** — the regression tests that protect that machinery break. See **F3**. |
-| "`updatedAt` remains the proxy for 'when this booking last changed state'" | `Booking.java:86-89` `@PreUpdate { updatedAt = Instant.now(); }` | **TRUE** — and stamped on *any* row write, which is what makes **F7** bite. |
-| "A booking that bounces `COMPLETED → DISPUTED → COMPLETED` via `FR-ADM-003` gets its maturity clock reset" | `BookingStateMachine.java:73-78` permits it; **no code fires it**. | **FALSE** — see **F1**/**F7**. |
-| "the author is reviewing on behalf of a linked player, never via `playerId = authorId`" | `ReviewResource.java:130-140` (authorId = User id) vs `BookingService.java:180` (`playerId` = PlayerProfile PK). | **FALSE** — see **F2**. This is the story's load-bearing assumption for AC2.b. |
-| "`b.status = 'DISPUTED'` identifies an active dispute between author and coach" | `Dispute.java:45` `private String status = "OPEN"`; `DisputeRepository.findOpenByBookingId`. | **FALSE** — see **F1**. Dispute state lives in the `disputes` table, not `bookings.status`. |
-| "the existing duplicate check (`409`) … unchanged" | `ReviewSubmissionService.java:66` then `:67` — eligibility runs **first**. | **TRUE for the code, FALSE for the test** — see **F3**. |
+| Awaitility resolves an unset `pollDelay` to the fixed `pollInterval` | Decompiled `awaitility-4.3.0.jar` directly (no sources jar available): `Awaitility.DEFAULT_POLL_DELAY` is `null`; `ConditionFactory.definePollDelay(null, FixedPollInterval(25ms))` → `pollInterval.next(1, ZERO)` → `FixedPollInterval.next()` ignores both args and returns the fixed duration. | **CONFIRMED**, from the actual bytecode the build resolves, not from general Awaitility knowledge. |
+| Preceding test method's `@Async` task is already enqueued/visible by the time the next method's `quiesceAsyncExecutors` runs | Listener's own javadoc + `pom.xml` (single forked JVM, no parallel JUnit config) confirm sequential test execution; `AsyncExecutionAspectSupport.doSubmit()` (from `spring-aop-6.2.6-sources.jar`) calls `executor.submit()` synchronously on the calling thread, not via a handoff thread; neither project `AsyncConfig` overrides executor resolution in a way that changes this. | **CONFIRMED** — the ordering guarantee the story leans on is real. |
+| Reset's clock starts after quiesce | `:111-119` quoted directly: `quiesceAsyncExecutors(ctx)` call precedes `long startNanos = System.nanoTime();` | **CONFIRMED.** |
+| Docker build depends on nothing `mvn verify` produces (`pom.xml`/`src/`/`.git/` only) | Full `Dockerfile` read: builder stage `COPY pom.xml .` / `COPY src/ src/` / `COPY .git/ .git/`, then its own `mvn package` — nothing from `target/` on the host is referenced. | **CONFIRMED.** |
+| `ci.yml:88` as precedent for a standalone, un-gated image job | See Finding B — it's precedent for "separate job," not "no `needs:`" | **PARTIALLY CONFIRMED, with the caveat already noted in §1 item 14.** |
+| AC4: no Spring context configuration changes, context-count gate cannot move | Proposed touch points are a private-method extraction + fluent-chain edit inside one existing class; `assert-context-count.sh` counts `missCount` from `DefaultContextCache`, driven by test-class-level annotations only. | **CONFIRMED.** |
+| Six named `ThreadPoolTaskExecutor` beans | See Finding A below | **One of six names wrong; no functional impact (resolution is by type, not name).** |
 
 ---
 
-## 5. Corner cases, false assumptions, missed flows (Layer 4, post-Step-4b)
+## 4. Corner cases, false assumptions, and missed flows (survived adversarial re-check)
 
-### F1 — CRITICAL: the active-dispute gate can never fire. `Booking.status` never becomes `DISPUTED`.
+### Finding A — One of the "six `ThreadPoolTaskExecutor` beans" named in the story is wrong
 
-The story calls this gap *"a real gap, not a hypothetical"* and frames the whole story as finally implementing `FR-REV-001`. As specified, it implements nothing.
+The story (Finding 1 narrative, line 56) names: `outboxDrainPool`, `sluRetryExecutor`, `reportExecutor`, `moderationTaskExecutor`, `threadPoolTaskExecutor`, `taskExecutor`.
 
-AC2.c and Task 3 predicate the gate on `b.status = 'DISPUTED'`. **No code path in the application ever puts a booking in that status.**
+I independently reread `ExecutorShutdown.java:77-83` (own budget table) and confirmed it lists the bean **`sendMailPool`**, not `threadPoolTaskExecutor`, as the sixth pool. Tracing the actual `@Bean` declaration: `notification/config/AsyncConfig.java` has a factory method *named* `threadPoolTaskExecutor()`, but it carries `@Bean(name = "sendMailPool")`, which overrides the registered Spring bean name. The story's list substitutes the Java method name for the real bean name.
 
-- `BookingEvent.DISPUTE` occurs in main source at exactly five places: `BookingService.java:106` (the `EVENT_ACTOR_ROLES` map *declaration*) and `BookingStateMachine.java:57, 64, 71, 74` (the transition *table*). **Zero invocation sites.**
-- `DISPUTED` occurs in main Java only at `BookingStatus.java:19` and in that same state-machine table.
-- In tests it appears only in `BookingStateMachineTest` — i.e. the status is exercised solely as a table entry, never as a reachable runtime state.
-- `DisputeService.raiseDispute` (`DisputeService.java:82-133`) creates a `Dispute` row (`Dispute.java:45`, default `status = "OPEN"`) and publishes `DisputeRaisedEvent`. It never calls a booking transition.
-- `resolveDispute` (`:254-270`) and `dismissDispute` (`:273-292`) set `Dispute.status` to `RESOLVED`/`DISMISSED` and touch payouts and alerts. Neither writes `Booking.status`.
-- `ELIGIBLE_STATUSES` (`DisputeService.java:57-58`) includes `"COMPLETED"`.
+**Impact:** None on the implementation — `quiesceAsyncExecutors` enumerates `ctx.getBeansOfType(ThreadPoolTaskExecutor.class).values()`, which resolves by runtime type, and `GracefulShutdownTaskExecutor extends ThreadPoolTaskExecutor`, so `sendMailPool` is found and quiesced regardless of what the story calls it. Task 3's unit test doesn't depend on bean names either. This is a narrative/documentation inaccuracy in the story, not a defect a developer implementing the tasks would propagate into code — but it would mislead anyone using the story's bean list to cross-check `ExecutorShutdown`'s own table later.
 
-That last point is what makes this a live correctness hole rather than merely dead code: **a disputed booking stays `COMPLETED`.** So the same booking simultaneously satisfies AC2.a (qualifying matured session) and is under an open dispute, while AC2.c never fires. The exact scenario the story exists to prevent — *"a live dispute is exactly the situation where a review is most likely to be used as leverage"* — remains wide open after the story ships.
+### Finding B — AC2/Task 4's `ci.yml` precedent is narrower than the surrounding text implies
 
-It would also ship with a **green test that proves nothing.** Task 7's `submitReview_activeDisputeOnOtherBooking_returns403()` sets a booking to `DISPUTED` by raw SQL insert, exactly as the story describes. The fixture manufactures a state production never produces, so the test passes and the gate is never exercised against reality.
+AC2's task instructions say to point the new job's comment "at `ci.yml:88` as the existing precedent for a standalone image job." `ci.yml`'s `build-and-push` job is indeed structurally separate (a real precedent for "Docker build lives in its own top-level job") — but it carries `needs: [test, frontend-quality]` (confirmed live at `ci.yml:93`), deliberately gating image publish on tests passing, because publishing to `:latest`/master is a real release. The new `pr-build.yml` job the story proposes deliberately has **no** `needs:`, trading wasted runner-minutes on a red PR for wall-clock savings on green ones (a tradeoff Task 4 itself discloses explicitly). The precedent is valid for "separate job is an established pattern in this codebase," but a developer citing `ci.yml:88` as prior art for "runs ungated in parallel" would be citing it for something it doesn't actually do. Low risk in practice since Task 4's own text separately states the "no needs" rationale directly rather than relying on the precedent to carry it — but the comment Task 4 asks the dev to write should not conflate the two job's gating semantics.
 
-**Fix:** predicate on the `disputes` table — an open `Dispute` (`status = 'OPEN'`) joined to `bookings` on `booking_id`, filtered to the author/coach pair — or keep the booking-status check *and* additionally fix the dispute lifecycle. `DisputeRepository.findOpenByBookingId` is the existing shape to follow. Note the author/coach pairing must come from the joined `bookings` row, since `Dispute` stores only `bookingId` and `raisedBy`.
+### Finding C — AC1d's stated justification for leaving `ConcurrencyLockWaitSupport.java:95` untouched is backwards
 
-### F2 — CRITICAL: AC2.b's `playerId = authorId` discriminator is always false; self-registered adult players are permanently locked out with a nonsensical error.
+AC1d says that call site is left alone because, among other reasons, "its condition is genuinely expected to be false at first call." I reread `ConcurrencyLockWaitSupport.java:81-99` directly: `assertGenuineLockRetryOccurred`'s own javadoc states explicitly, **"Call this AFTER both the holder and the contender threads have been joined"** (line 92), and its one caller pattern across all 6 real call sites (`ReviewFlagServiceConcurrencyIT`, `SubscriptionServiceConcurrencyIT`, `CoachProfileServiceConcurrencyIT` ×2, `AdminReviewQueueIT`, `ReviewModerationServiceConcurrencyIT`) is to call it only after `Future.get(...)` has already returned for the thread that performs the retry. `PessimisticLockRetryer.withBoundedRetry` records the retry counter synchronously on the retrying thread before that thread's task completes, and `Future.get()` establishes happens-before with task completion — so in the normal passing case, the counter has *already* incremented and the condition is **already true on the first Awaitility evaluation**, the same already-true-condition situation AC1/Task 1 fixes everywhere else in this story, not a "genuinely false at first call" case.
 
-AC2.b rests on treating `playerId = authorId` as "the player is reviewing for themselves" and `parentId = authorId` as "a parent is reviewing on behalf of a linked player". **These are different ID spaces.**
+**Impact:** The "leave it alone" *decision* is still almost certainly fine — 6 call sites × ~25ms ≈ 150ms total, versus the ~230s this story is otherwise chasing, so there's no practical reason to touch it. But the *reason* AC1d records for the next reader is factually backwards, and AC1d exists specifically so a future reader doesn't have to re-derive this. The correct reason is closer to "negligible volume (6 sites, not 1213×6), not an already-true-condition case" — this should be corrected in the AC text before implementation, or at minimum the dev should not copy the current wording into the method's extended javadoc per Task 1's own instruction to explain "why the poll delay is explicitly zero."
 
-- `authorId` is a **User** id: `ReviewResource.resolveUserId()` → `Long.parseLong(p.getBusinessId())` (`ReviewResource.java:130-140`), passed in at `:82` and `:94`.
-- `Booking.playerId` is a **PlayerProfile primary key**: `BookingService.createBookingRequest` resolves it with `playerProfileRepository.findById(req.playerId())` (`BookingService.java:180`), and `PlayerProfileRepository extends JpaRepository<PlayerProfile, Long>`.
-- `Booking.parentId` *is* a User id (the authenticated caller).
-- Both tables draw ids from `BaseEntity`'s `@Id @Tsid` (`BaseEntity.java:27`). They are separate entities; a user id equalling a profile id carries no meaning and is never true by construction.
+### Finding D — AC5 cites a nonexistent "AC1.6"
 
-So in the Task 6 snippet, `eligibleAsSelf` is dead code. Trace a **self-registered adult player** (a supported flow: `chk_pp_owner` at V138:911 allows `user_id` set with `parent_id` null; `BookingService.java:187-191`'s else-branch validates `player.getUserId() == parentId` and stores `booking.parentId` = that same user id; `POST /api/bookings` is `@PreAuthorize(HAS_PARENT_OR_PLAYER_ROLE)`, `BookingResource.java:37`; `AuthorRole` includes `PLAYER`; `CoachPublicProfilePage.vue:420-422` has dedicated handling *"for a self-registered player caller"*):
+AC5 (line 128) reads: "...the only other changes are `.github/workflows/pr-build.yml` and two documentation files (AC1.6, AC6)." I reread the story's own "## Acceptance Criteria" section top to bottom: the enumerated criteria are exactly AC1, AC1b, AC1c, AC1d, AC2, AC2b, AC2c, AC3, AC4, AC5, AC6 — there is no "AC1.6" anywhere. The only other occurrence of the string is in the Finding-1 narrative (line 40: "AC1.6 fixes the document"), which is the same dangling reference, not a definition of it. Every other mention of documentation work in the story — the Finding 1 note, AC6's full text, Task 6, and the File List — names exactly one file, `docs/testing/readme.md`.
 
-1. `eligibleAsSelf` → `authorId.equals(b.getPlayerId())` → **false** (user id vs profile id).
-2. `eligibleAsParentOfMinor` → `authorId.equals(b.getParentId())` true, `!authorId.equals(b.getPlayerId())` true, `isLinkedPlayerMinor(theirOwnProfile)` → they are an adult → **false**.
-3. Falls into the throw block; `onlyAdultParentMatches` → **true**.
-4. → `403 reviews.parentalReviewNotApplicable`, *"Linked player is 18+ — parent cannot review on their behalf."*
+**Impact:** As written, AC5's "two documentation files" claim cannot be satisfied or verified, because no second document is ever named anywhere in the story. This reads as a numbering artifact left over from an earlier draft. A developer treating AC5 literally as a completion gate could reasonably believe a file was dropped from scope. Should be corrected to name `docs/testing/readme.md` once (via AC6) before implementation starts.
 
-**An adult player who trained with a coach can never review that coach, and is told they are a parent of an adult.** This is a new, permanent lockout introduced by this story — today these users pass eligibility fine, because the shipped `(parentId = :authorId OR playerId = :authorId)` only needs the `parentId` half to match.
+### Finding E (minor, non-blocking) — Task 1's helper-extraction rationale is only half-wired
 
-In fairness: the cross-ID-space OR is **inherited**, not invented here — it is already in `BookingRepository.java:131` and repeated at `DisputeService.java:92`, even though `DisputeService.java:85-88` explicitly documents the profile-vs-user-id distinction for `coachId`. The defect specific to this story is making that meaningless comparison **load-bearing** for branch selection and error-code choice.
-
-**Fix:** derive "is the author the player themselves" from `PlayerProfile.userId`, not from `Booking.playerId`. The projection already returns `playerId`; resolve the profile (which `isLinkedPlayerMinor` does anyway) and compare `authorId` against `profile.getUserId()` for the self case and `profile.getParentId()` for the parent case. That also removes the need for the `!authorId.equals(b.getPlayerId())` guard.
-
-### F3 — HIGH: the test blast radius is understated by at least five classes, and three tests the story says to "keep unchanged" will fail.
-
-Every affected fixture shares two properties that the new rules invalidate: the only `COMPLETED` booking is **1 hour to 3 days old** (inside the new 7-day floor), and the only player profile is **`age_tier='ADULT'`, `date_of_birth = now − 18 years`** (so `isMinor` is false). The story never instructs changing either.
-
-**Named "keep unchanged" but will fail:**
-- `ReviewSubmissionIT.submitReview_ratingOnly_returns201` — fixture booking is `now − 3d` (`ReviewSubmissionIT.java:105-106`), player ADULT (`:88-90`) → `403`.
-- `ReviewSubmissionIT.submitReview_duplicate_returns409` — cannot reach `409`: `checkEligibility` runs at `ReviewSubmissionService.java:66`, **before** the duplicate check at `:67`, so the *first* POST already 403s.
-- `ReviewUpdateIT`'s new `updateReview_afterCooldownWithNewSession_returns204` — its player is ADULT (`ReviewUpdateIT.java:90-92`); passes the cooldown, then 403s on the parental gate.
-
-**Never mentioned anywhere in the story, and will fail:**
-- `ReviewSubmissionIT.submitReview_validEligibility_returns201WithReviewId` (`:113-131`) — the module's primary happy path. Absent from Task 7 entirely.
-- `ReviewSubmissionIT.updateReview_epochBumpAppliesToFreshLockedState_notStaleInstance` (`:245-295`) — calls the service directly; `lastModifiedAt = now − 400d` clears the cooldown, but the `now − 3d` booking fails the 7-day floor → `403`.
-- `ReviewSubmissionServiceConcurrencyIT` (`:83-102`) — ADULT player, booking `updated_at = now − 3600s`; both tests call `submitReview`.
-- `ReviewFlagServiceConcurrencyIT` (`:104-124`, call at `:178`) — ADULT player, booking `now − 3600s`; calls `updateReview`.
-- `ReviewModerationIT` (`:89-117`) — ADULT player, booking `now − 3600s`; **all five** tests POST `/coaches/{coachId}` (`:130, :160, :181, :201, :253`).
-- `ReviewSubmissionServiceTest` — a **hard compile break**: `:74` references `ConfigBounds.REVIEWS_SUBMISSION_WINDOW_DAYS` and `:67` stubs `existsRecentCompletedBookingByAuthor`, both of which Tasks 2 and 3 delete. It also needs new `@Mock AgePolicyService` / `@Mock PlayerProfileRepository`, or `@InjectMocks` (`:49-50`) injects nulls and the new code NPEs. Task 2's `grep -rn REVIEWS_SUBMISSION_WINDOW_DAYS src/test/` would surface it, but it appears in neither Task 7 nor any File List.
-
-Note the irony on two of these: `ReviewSubmissionServiceConcurrencyIT` and `ReviewFlagServiceConcurrencyIT` are precisely the regression tests that deferred-132/135 built to protect the `REQUIRES_NEW` isolation and lock/refresh sequence the story says *"must survive this story untouched."* The production code does survive untouched; its guardians do not.
-
-### F4 — HIGH: the prescribed frontend grep returns zero hits, so three i18n bundles get missed and two new error codes ship with no message.
-
-Task 4 instructs: *"Grep the frontend codebase for the literal string `"reviews.noRecentSession"`."* **That string does not exist anywhere in `src/frontend`.** The bundles store it nested:
-
-```js
-reviews: {
-  noRecentSession:
-    'You need a recently completed session with this coach before you can leave a review.',
-```
-— `en-US/index.js:391`, `fr-FR/index.js:386`, `de-DE/index.js:727`.
-
-A dev following the instruction literally concludes there are no frontend references. The resolution path is `useErrorHandler.errorMessage` (`useErrorHandler.js:40-49`), which does `te(key)` / `t(key)` on the **full dotted** `errorKey` and otherwise falls back to the server's raw English `message`. Consequences:
-
-1. After the rename, all three locales fall through to the English service message (*"No qualifying completed session with this coach"*), leaving a dead `noRecentSession` key behind.
-2. `reviews.activeDispute` and `reviews.parentalReviewNotApplicable` have **no entry in any locale** — two new 403s whose user-facing text is untranslated English. The story only covers *renaming* references; it never says to add entries.
-3. `updateTooSoon`'s copy still says "once per year" in all three (`en-US:395`, `fr-FR:390`, `de-DE:731`). The story does flag this copy change — but not that it is three files.
-
-There is direct precedent for treating this as a regression class: `errorHandler.js:52-57` documents `skillars-deferred-92 AC14`, created because *"an English literal here reached a French or German user verbatim."*
-
-### F5 — MEDIUM: the fail-closed path reports a factually wrong error code.
-
-`isLinkedPlayerMinor` returns `orElse(false)` for a missing `PlayerProfile`. Because the subsequent `onlyAdultParentMatches` branch uses only `parentId`/`playerId` and not the age result, an orphaned row produces `403 reviews.parentalReviewNotApplicable` — *"Linked player is 18+"* — when the real cause is a missing row. The story's Task 6 note carefully justifies the *degrade-don't-throw* decision (correct, and it genuinely matches `findMessagingPolicy`'s convention at `AgePolicyService.java:63-70`), but not the *message*. Prefer `NO_QUALIFYING_SESSION` plus a WARN log for the unresolvable-profile case, so the 403 does not assert something untrue about the player's age.
-
-Related and benign: `PlayerProfile.dateOfBirth` is `nullable = false` (`PlayerProfile.java:28`; V138:899), so `getAgeTier`'s `Period.between(null, …)` NPE is not reachable through a normal row. Worth knowing only because the story's `.map(p -> …isMinor(p.getDateOfBirth()))` would propagate it unguarded if that ever changed.
-
-### F6 — MEDIUM: both new `BoundedKey` notes misdescribe the negative case, and `0` is silently legal.
-
-`getBoundedLong(key, default, min, max)` (`ConfigService.java:110-118`) **does not clamp** — an out-of-range value falls back to `defaultValue`. With `min = 0L`:
-
-- A stored `-5` → out of range → falls back to `7` / `30`. **Safe.** So *"0/neg → sessions count as matured instantly"* and *"0/neg → an author can edit their review with no cooldown"* are both **wrong about `neg`**.
-- A stored `0` → **in range** → honored. The floor/cooldown silently vanishes, and `ConfigStartupAssertion` (`:119-128`) never even logs it, because 0 is not a violation.
-
-These `note` strings are operator-facing — they are interpolated into the startup ERROR line (`ConfigBounds.java:58`, `ConfigStartupAssertion.java:120-122`). Every other day-window key in the registry uses `min = 1`: `disputes.submissionWindowDays` (`:94`), the key being replaced (`:187`), `reviews.autoHoldFlagThreshold` (`:192`). The one `min = 0` precedent — the video-quota keys at `:410-413` — words its note precisely for that choice: *"neg → … math breaks; 0 is a legitimate \"no upload\" sentinel."*
-
-Pick one: `min = 1` (matching every sibling day-window key, making 0 a flagged violation), or keep `min = 0` as a deliberate "disable the gate" sentinel and reword both notes to say so.
-
-### F7 — LOW: the `COMPLETED → DISPUTED → COMPLETED` Dev Note describes a path no code takes.
-
-Follows from **F1**. `BookingStateMachine.java:73-78` permits `COMPLETED --DISPUTE--> DISPUTED --SETTLE_COMPLETE--> COMPLETED`, but nothing fires either event, and `resolveDispute` never writes `Booking.status`. `FR-ADM-003` (`epics.md:156`) specifies *"resolves for coach (→COMPLETED) or parent (→REFUNDED)"* — unimplemented in the shipped dispute feature. The paragraph's conclusion (*"That reset is correct"*) is reasoning about a mechanism that does not run.
-
-Two related gaps in the same note's enumeration:
-- It names the DISPUTED bounce as *the* maturity-clock reset case but omits `COMPLETED_PENDING_CONFIRMATION → COMPLETED` (`BookingStateMachine.java:68-71`), where `updatedAt` is the confirmation or quick-complete-timeout moment rather than session end — up to a day of drift via `booking.quick_complete_timeout_hours`.
-- More broadly, `Booking.@PreUpdate` (`Booking.java:86-89`) stamps `updatedAt` on **any** row write (`primaryReminderSentAt`, `secondaryReminderSentAt`, `cancelReason`, `batchId`, a `@Version` bump). **The harm direction inverts with this story:** under the old upper-bound window an incidental bump *extended* eligibility; under a lower-bound floor the same bump *revokes* it for another 7 days. The note reasons about the DISPUTED case in isolation and never generalises.
-
-### F8 — LOW: Task 1 defers a decision to a precedent that does not exist.
-
-Task 1 offers `DELETE` *"or an `UPDATE`/replace if the project's migration convention prefers never deleting config rows — check recent migrations for the established pattern before choosing."* There is nothing to find: **only V138 and V139 reference `platform_config` across all 155 migrations**, and there is no `DELETE FROM … platform_config` anywhere. The dev searches, finds nothing, and the decision stays open. The story should just pick one.
-
-Verified-correct in the same task: next number is **V156**; the `(key, value, value_type, description)` shape (V139:140); omitting `id` is safe (V138:869). Not stated but constrained: `value_type` must be `'LONG'`, per `chk_platform_config_type` (V138:863) — worth spelling out since the task gives no literal.
-
-### F9 — LOW: Task 5's description of `ReviewApiAdvice` is stale.
-
-The **conclusion is correct** — both new codes fall through to `else → 403 FORBIDDEN` (`ReviewApiAdvice.java:59-62`) — so the task's outcome holds. But its description of the advice is the 9.1-era shape:
-- The `409` branch holds **five** codes, not the two named: `ALREADY_FLAGGED`, `ALREADY_APPROVED`, `ALREADY_BLOCKED` were added at `:40-42`.
-- A third branch goes unmentioned: `COACH_PROFILE_MISSING → 500` (`:44-55`), whose own comment warns *"This branch must stay explicit: the else fallback is 403, so an unlisted code would silently become FORBIDDEN"* — directly relevant context for adding two new codes.
-
-### F10 — LOW: the qualifying-session query is unbounded.
-
-By design there is no upper time bound (the story is explicit that this is deliberate), and `findQualifyingCompletedBookings` has no `LIMIT` and no `ORDER BY` — it returns every matching `COMPLETED` booking the pair ever had, then streams it up to three times.
-
-Honest sizing, because my first pass overstated this: the per-row cost is small. `configService.find` is **cache-backed**, not a query per call (`ConfigService.java:190-193`, `ensureFresh()` over an in-memory `cache`), and repeated `playerProfileRepository.findById` for the same id collapses via Hibernate's persistence-context identity map — so profile lookups scale with *distinct players* (typically one or two), not bookings. It is a tidiness and worst-case concern, not a hot path. Still: a `LIMIT`, or an exists-shaped query for the self case plus a `DISTINCT` projection for the parent case, costs nothing. If a batched lookup is ever wanted, `AgePolicyService.findMessagingPoliciesByPlayerIds` (`:78-84`, added by deferred-90 AC13 for exactly this reason) is the precedent.
-
-### F11 — LOW (scope decisions worth making explicitly)
-
-Both are moot until **F1** is fixed, but should be decided now:
-
-1. **The gate is submit/update-only.** A dispute opened *after* a review is approved leaves the public review untouched. Defensible as an eligibility story, but narrower than the stated rationale (*"used as leverage by either party"*). Worth one sentence saying so deliberately.
-2. **An unconditional dispute gate hands coaches a one-sided veto.** `BookingEvent.DISPUTE` is allowed to `PARENT` **or** `COACH` (`BookingService.java:106`), and `DisputeService.java:85-101` explicitly permits coach-raised disputes per deferred-63 AC5. Dispute resolution is admin-only (`SETTLE_*` is `ActorRole.SYSTEM`) with no time bound on how long a dispute may stay open. So a coach can block an incoming review — and every future edit of an existing one — for as long as an admin leaves the dispute open. Consider scoping the gate to disputes the *author* raised, or to a bounded window.
+Task 1 extracts `isQuiesced(ThreadPoolTaskExecutor)` explicitly "so the short-circuit and the Awaitility predicate cannot drift apart," then instructs `if (isQuiesced(executor)) { continue; }` before the Awaitility call — but does not explicitly instruct the surviving `.until(() -> executor.getActiveCount() == 0 && ...)` predicate to also call through the same `isQuiesced()` helper. Followed literally, the condition would exist in two places (the helper, and the inlined `.until()` lambda), which is exactly the drift risk the extraction was supposed to close. Worth a one-line addition to Task 1 (`.until(() -> isQuiesced(executor))`) before implementation, though a competent developer would likely notice and do this anyway given the stated rationale.
 
 ---
 
-## 6. What did **not** survive re-verification
+## 5. What did not survive adversarial re-verification
 
-Listed because the calibration matters more than a clean report. Nine claims from the first pass were killed or downgraded on a second, skeptical read:
-
-1. **"The story contradicts itself — 9.1 is both `done` and 'stayed `in-progress`'."** **Killed.** 9.1's Change Log row 1.1 (2026-10-06) says the *story file's Status header* lagged `sprint-status.yaml`, not that the work was incomplete. The story's reference is accurate; I had read "stayed in-progress" as a claim about the work.
-2. **"`submitReview_bodyTooLong_returns400` will break."** **Killed.** `@Size(max = 1000)` lives on the DTO (`SubmitReviewRequest.java:10`), so it raises `MethodArgumentNotValidException` and is handled by `ReviewApiAdvice.handleValidation` (`:66-83`) — before `ReviewSubmissionService` is entered at all. The story's "keep unchanged" is right.
-3. **"`submitReview_coachNotFound_returns404` will break."** **Killed.** `coachProfileRepository.existsById` is at `ReviewSubmissionService.java:63`, before `checkEligibility` at `:66`. Right as written.
-4. **"`updateReview_blockedStatus_returns403` and `updateReview_wrongAuthor_returns403` will break."** **Killed.** Author check (`:109`), cooldown (`:114`) and moderation status (`:119`) all precede `checkEligibility` (`:125`), and the fixture's `lastModifiedAt = now − 400d` clears the new 30-day cooldown. Both correctly listed as unchanged.
-5. **"Three config DB reads per booking inside the `anyMatch` stream."** **Killed.** `ConfigService.find` is cache-backed (`:190-193`). Folded into **F10** with the real sizing stated.
-6. **"`ReviewFlagIT` is affected."** **Killed.** It only POSTs `/{reviewId}/flag`; its reviews are raw SQL inserts and its `booking.bookings` insert (`:121`) is not on the eligibility path.
-7. **"`getAgeTier` could NPE on a null date of birth."** **Downgraded** into **F5**. `date_of_birth` is `NOT NULL` (`PlayerProfile.java:28`, V138:899), so it is not reachable through a normal row.
-8. **"`HAS_CODE_DEFAULT` is typed `Set<BoundedKey>`, so Task 2's instruction is wrong."** **Killed.** It is `Set<String>` of `.key()` values (`ConfigBounds.java:352-370`), and the story never claims otherwise — it just says "add both", which is right.
-9. **"Stories 107/132 *did* change eligibility logic, contradicting the Dev Note."** **Killed as a finding.** They changed how the window value is *read* inside `checkEligibility`, not any rule, and the story cites those very comments (`ReviewSubmissionService.java:208-212`). Fair as written.
-
-Also checked and found clean (no finding): `CoachResponseIT` is correctly scoped out (only `/{reviewId}/response`); `AuthorSelfViewIT` and `PublicReviewListIT` are GET-only on the review-read paths; `PessimisticLockRetryerCallSiteAuditTest` references `updateReview` only in Javadoc; `VideoAccessGuard` uses the overload the story leaves alone; `submitCoachResponse` genuinely needs no change.
+- **Item 14 / Finding B initially read as a flat contradiction** ("the story claims `ci.yml` has no `needs:`, but it does") — on rereading the story's exact wording, the claim is narrower than that: it only asserts `ci.yml` already uses "a separate job," which is true. Downgraded from "contradicted citation" to "precedent is narrower than a developer might assume from the surrounding AC2/Task 4 framing" (kept as Finding B, not as a hard defect).
+- **Item 7 (line 252 vs. 253/254)** — initially looked like a wrong insertion-point instruction. On rereading, `:252` correctly identifies the start of the `Awaitility.await()` chain, which is what the task text is actually citing; the fluent-chain insertion point is self-evident from the quoted code immediately above it in the story. Kept as a one-line note in §1, not promoted to a Finding — no developer following the task would be misled.
+- **Items 9 and 16 (mis-ranged line citations for the `-q` comment and `SharedContainers.Postgres`)** — both are genuine citation drift, but in both cases the substance of the claim being cited is independently true elsewhere in the same file. Kept as citation notes in §1; not promoted to Findings, since nothing about the engineering decision depends on the exact line range being right.
+- **AC3's "investigated and written up" closure criterion** — flagged by the corner-case pass as potentially under-specified, but on review this is a normal, acceptable level of looseness for a measurement-based AC in this project's stories; not a defect.
+- **Thread-safety of the new QUIESCE_COUNT/QUIESCE_NANOS counters** — checked and confirmed no race exists (single forked JVM, no parallel JUnit execution, existing counters already `AtomicLong`); nothing to report here.
+- **Docker-job hidden coupling, new-job permissions, and timeout math (AC2/2b/Task 4)** — all checked in detail (composite action, Trivy action, Buildx cache backend) and found sound; no findings survived.
 
 ---
 
-## 7. Recommendation
+## 6. Recommendation
 
-**Do not start implementation as written.** Per-claim confidence, not a blanket score:
+Per-claim confidence, not a blanket score:
 
-| Finding | Confidence | Basis |
-|---|---|---|
-| **F1** dispute gate can never fire | **Very high** | Exhaustive grep of `BookingEvent.DISPUTE` and `DISPUTED` across `src/main` and `src/test`, plus reading all three `DisputeService` lifecycle methods end to end. Zero invocation sites found; corroborated by `DISPUTED` appearing in exactly one test file, a pure state-machine unit test. |
-| **F2** `playerId = authorId` always false; adult players locked out | **Very high** | Both ID origins read first-hand (`ReviewResource.java:130-140`, `BookingService.java:180`), `@Tsid` chain traced through `BaseEntity`, `chk_pp_owner` and the else-branch at `BookingService.java:187-191` confirm the self-registered shape, and the frontend confirms the flow is live. |
-| **F3** test blast radius | **Very high** | Every fixture read line by line; each verdict traced through the actual guard ordering in `ReviewSubmissionService`. Four first-pass claims in this area were *wrong* and are retracted in §6 — the eight that remain were each re-derived. |
-| **F4** frontend grep / i18n | **High** | The literal string's absence and all three nested keys verified directly; resolution mechanism read in `useErrorHandler.js:40-49`. |
-| **F5** wrong error code on orphaned row | **High** (logic) / **judgment** (severity) | Logic follows from the Task 6 snippet as written. Whether a misleading 403 message warrants a code change is a product call. |
-| **F6** `BoundedKey` notes vs `min = 0` | **High** | `getBoundedLong`'s no-clamp behaviour and `ConfigStartupAssertion`'s range check both read directly; registry convention compared across all sibling keys. |
-| **F7, F9** stale / non-existent mechanism descriptions | **High** | Direct reads. Documentation-accuracy issues, not functional defects. |
-| **F8** no migration precedent | **High** | Exhaustive grep over all 155 migrations. |
-| **F10** unbounded query | **Medium** | Real, but materially smaller than first assessed once the config cache and Hibernate identity map were accounted for. Sizing is stated honestly above. |
-| **F11** scope decisions | **Judgment** | Not defects; decisions the story should make explicitly. |
+- **High confidence, no changes needed:** the core technical thesis (Awaitility pollDelay resolution, confirmed via decompiled bytecode; the async-task-visibility ordering argument; the reset/quiesce transaction-boundary claims; the Docker-build input-independence claim; the branch-protection claim, independently reconfirmed live). These are the load-bearing claims for AC1 and AC2, and all of them hold up under direct, adversarial re-verification against real artifacts, not just plausible-sounding prose.
+- **Needs a pre-implementation fix, low engineering risk:** Finding D (phantom "AC1.6" in AC5) and Finding C (AC1d's backwards rationale) should both be corrected in the story text before a developer starts — not because either changes what gets built, but because both are exactly the kind of "documented reasoning that saves the next reader from re-deriving it" the story is otherwise careful about, and right now that reasoning is wrong or undefined in two places.
+- **Cosmetic, optional:** Finding A (bean name), Finding B (precedent framing), Finding E (helper-extraction completeness), and the three mis-ranged line citations (items 7, 9, 16 in §1). None of these would cause an implementer to build the wrong thing, but Finding A and the citation drifts would cost a future reader time if they tried to verify the story's claims directly (as this review did).
+- **Not independently re-executable by this review:** the measured timing figures themselves (230s awaitility estimate, 4m03s docker/trivy baseline, 18m39s run total) — these come from a specific GitHub Actions run (`37530194292`) this review did not re-pull via `gh api`/`gh run view`. The reasoning connecting them (six pools × ~190ms × 1213 methods ≈ 230s) is internally consistent and was not challenged by anything found in source, but the raw run-log numbers themselves were taken on trust, not re-fetched.
 
-**Minimum changes before `ready-for-dev` again:**
-
-1. **Rewrite AC2.c and `existsActiveDisputeByAuthor`** against the `disputes` table (open dispute joined to `bookings`), or pair the story with a fix to the dispute→booking-status lifecycle. As written the gate is inert, and its prescribed test would certify it anyway.
-2. **Rewrite AC2.b's discriminator** to use `PlayerProfile.userId` / `PlayerProfile.parentId` rather than `Booking.playerId`, and add an explicit AC plus test for *"self-registered adult player reviews their own coach → 201"*.
-3. **Expand Task 7** to name `ReviewModerationIT`, `ReviewSubmissionServiceConcurrencyIT`, `ReviewFlagServiceConcurrencyIT`, `ReviewSubmissionServiceTest`, `ReviewSubmissionIT.submitReview_validEligibility_…`, and `ReviewSubmissionIT.updateReview_epochBumpAppliesToFreshLockedState_…`; state explicitly that each shared `@BeforeEach` fixture needs its booking aged past the floor and its player DOB set below 18. Correct the three "keep unchanged" entries that will not hold.
-4. **Replace Task 4's grep instruction** with the nested-key reality (`reviews: { noRecentSession: … }` in three bundles) and add an explicit subtask to create `activeDispute` and `parentalReviewNotApplicable` entries in all three locales plus re-word `updateTooSoon` in all three.
-5. **Decide `min`** for both new keys and make the two `note` strings accurate about the negative case.
-6. Minor: fix the `ConfigBounds.java:48-81` → `:82` citation, refresh Task 5's description of the advice's branches, decide DELETE-vs-UPDATE in Task 1 and name `value_type = 'LONG'`.
-
-**What was *not* independently re-checked:** no test was executed and no migration was run — every "will fail" verdict in **F3** is derived by reading fixtures against guard ordering, not from a red test run. Given the standing convention against local `mvn verify`, the cheapest confirmation is to let CI run the affected classes once the fixtures are updated. I also did not audit `ReviewModerationService`, `CoachRatingService`, or `ReviewQueryService` beyond confirming they neither read the config key nor can reach the private `checkEligibility`; the story's scope boundary there held up on the checks performed.
+No finding in this report rises to "this story should not proceed as ready-for-dev" — the two pre-implementation fixes (C, D) are both narrow text corrections, not redesigns.
