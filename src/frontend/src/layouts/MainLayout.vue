@@ -253,6 +253,15 @@
               <q-item-label class="nav-label">{{ t('booking.packs.dashboardTitle') }}</q-item-label>
             </q-item-section>
           </q-item>
+
+          <q-item v-if="developmentRoute" clickable :to="developmentRoute" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="insights" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('development.dashboardTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
         </template>
 
         <!-- Admin section -->
@@ -316,6 +325,9 @@ const darkMode = ref(isDarkMode())
 const selfPlayerId = ref(null)
 const packsRoute = computed(() =>
   selfPlayerId.value ? `/parent/players/${selfPlayerId.value}/packs` : null,
+)
+const developmentRoute = computed(() =>
+  selfPlayerId.value ? `/player/development/${selfPlayerId.value}` : null,
 )
 
 const languages = [
