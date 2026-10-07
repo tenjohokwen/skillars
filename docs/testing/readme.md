@@ -131,9 +131,29 @@ Two caveats on the numbers above, so they are not over-read:
    and the story's original 8–15 min projection should still not be treated as verified — it was
    built on a macOS/Docker-Desktop baseline that was never representative.
 
-The per-test database reset costs **99.7 ms mean over 814 invocations (~81 s total) on CI**, and
-roughly 10× that on macOS/Docker Desktop, where the VM boundary makes each round trip far dearer.
-That per-method cost is real and was not modelled by the original projection.
+> **The figures in this paragraph are from a different, later run than the table above.** The
+> table is the `deferred-19` measurement (905 integration tests); the per-method counters below
+> are from run `37530194292` (1334 tests, 1199 reset invocations). The suite grew between the
+> two, so a per-method invocation count larger than the table's test count is expected, not a
+> contradiction.
+
+The per-test database reset costs **14.0 ms mean over 1199 invocations (16.8 s total) on CI**
+(run `37530194292`). The **99.7 ms / 814-invocation** figure previously quoted here predates
+later optimisation and is **7.1× higher than the current one** — do not cite it. The macOS /
+Docker Desktop penalty that used to be quoted alongside it ("roughly 10×", i.e. ~1 s per reset)
+was measured against that old figure and has **not** been re-measured since; do not re-derive it
+from the 14.0 ms number, because nobody has checked whether the multiplier still holds at this
+scale.
+
+The reset was never the dominant per-test-method cost. The async-executor quiesce that runs
+immediately before it (`skillars-deferred-146`) cost **~131 ms per method** across up to six
+thread pools — roughly 1.3× the old reset figure and 9× the current one — because Awaitility
+resolves an unset `pollDelay` to the fixed `pollInterval`, so each pool slept 25 ms before
+evaluating a condition that was already true. Removing that took it to **0.07 ms mean
+(84 ms total over 1199 invocations)**, measured on run `37574001244`, and took 2m37s off the
+failsafe phase. Both counters print at the end of every run; grep
+`[deferred-19] database reset:` and `[deferred-146] async quiesce:` in the build log for the
+current numbers (the quiesce counter reports microseconds, the reset counter milliseconds).
 
 What did improve, and was the actual point: **the container count is now bounded and cannot grow
 with the test suite**, the context count is bounded and enforced, and the suite is meaningfully

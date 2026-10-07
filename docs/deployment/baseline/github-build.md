@@ -63,14 +63,32 @@ version in a trailing comment. Keep it that way — a mutable tag like `@v4` is 
 Answers the question "would merging this break things?" It produces no lasting artifact — everything
 it builds is discarded when the runner is destroyed.
 
-Steps:
+**Three jobs, all starting at once** (none declares `needs:`), so the PR's wall clock is the
+slowest of them, not their sum. Split out in `skillars-deferred-146` (2026-10-07): the Docker
+build and scan used to be the last two steps of `build`, running serially after `mvn verify`
+finished, which added ~4 minutes to every green PR for no reason — the Dockerfile's builder stage
+consumes only `pom.xml`, `src/` and `.git/`, all straight from `actions/checkout`, and nothing
+`mvn verify` produces.
+
+`build`:
 
 1. Checkout, set up JDK 17 (Temurin), restore the Maven cache keyed on `hashFiles('**/pom.xml')`
-2. `mvn -B verify -q` — full compile and test, including Testcontainers integration tests
-3. Build the Docker image with `push: 'false'`, `load: 'true'`, tagged `skillars-app:pr-<number>`
-4. Scan that image with Trivy at `severity: CRITICAL,HIGH` and `exit-code: '1'`
+2. Start the container sampler (AC1 ceiling gate)
+3. `mvn -B verify` — full compile and test, including Testcontainers integration tests — then
+   assert the Spring context count in the same shell (`assert-context-count.sh build.log 45`)
+4. Assert the container ceiling, upload surefire/failsafe reports
 
-A CRITICAL or HIGH CVE fails the PR. The `concurrency` block cancels an in-flight run when new
+`docker-image`:
+
+1. Checkout
+2. Build the Docker image with `push: 'false'`, `load: 'true'`, tagged `skillars-app:pr-<number>`
+3. Scan that image with Trivy at `severity: CRITICAL,HIGH` and `exit-code: '1'`
+
+`frontend-quality`: Prettier and ESLint via `./.github/actions/frontend-quality`.
+
+A CRITICAL or HIGH CVE fails the PR — but note it now fails the **`docker-image`** check, not
+`build`. `master` has no required status checks configured, so all three job results have to be
+read by whoever merges. The `concurrency` block cancels an in-flight run when new
 commits are pushed to the same PR, since only the latest commit matters.
 
 **Secrets required: none.** This is the only workflow of the three that has never been blocked on

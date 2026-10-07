@@ -20,6 +20,12 @@ jobs:
     # (25m18s-25m22s) while a local mvn verify of the identical commit finished in 15:18 --
     # degraded shared-runner throughput, not a suite regression. Bumped to 35 for headroom;
     # revisit downward if runner performance normalizes.
+    # 2026-10-07 (skillars-deferred-146 AC2b): DELIBERATELY LEFT AT 35, not retuned, even though
+    # this job's measured duration dropped from 18m39s to 11m36s on run 37574001244 once the
+    # Docker build moved to its own job and the async-quiesce poll delay was removed. The 2026-09-24
+    # note above records a bump made precisely because four consecutive runs hit a 25m ceiling on
+    # degraded runners; lowering this on the strength of one fast run would re-create exactly that
+    # failure. Revisit only after several post-change runs have established a steady state.
     timeout-minutes: 35
     permissions:
       contents: read
@@ -98,6 +104,27 @@ jobs:
             target/failsafe-reports/
           retention-days: 14
           if-no-files-found: warn
+
+  # skillars-deferred-146 AC2/AC2b: split out of `build` into its own job so it starts at the
+  # same instant as `build` and `frontend-quality` instead of running serially after `build`'s
+  # `mvn -B verify` finishes. No `needs:` deliberately: the Dockerfile's builder stage only
+  # consumes pom.xml/src/.git, all of which come straight from actions/checkout, and nothing
+  # `mvn verify` produces -- the build job's own 12-minute head start buys this job nothing.
+  # ci.yml:88's `build-and-push` is precedent for the JOB SPLIT only, not for running ungated --
+  # that job carries `needs: [test, frontend-quality]` on purpose (ci.yml:89-93), because it
+  # publishes an image other systems pull. This job's image is built to be scanned and thrown
+  # away, never published, so gating it on `build`/`test` buys nothing and would cost ~4 minutes
+  # on every green PR; the trade is a few wasted runner-minutes on a red one.
+  docker-image:
+    runs-on: ubuntu-latest
+    # AC2b: step pair measured at 4m03s on run 37530194292 (build 3m28s + scan 0m35s). 20
+    # leaves ~5x headroom for the degraded shared-runner throughput `build`'s own
+    # timeout-minutes comment above already documents.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Build Docker image (no push)
         uses: ./.github/actions/docker-build

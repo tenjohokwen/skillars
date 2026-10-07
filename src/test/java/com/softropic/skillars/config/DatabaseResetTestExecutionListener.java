@@ -17,6 +17,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Duration;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -110,7 +111,9 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
 
         // skillars-deferred-131 AC4: quiesce BEFORE the reset transaction opens below. See
         // quiesceAsyncExecutors's own javadoc for the deadlock this closes.
+        long quiesceStartNanos = System.nanoTime();
         quiesceAsyncExecutors(ctx);
+        recordQuiesceCost(System.nanoTime() - quiesceStartNanos);
 
         // Code review 2026-09-23: measured from AFTER quiescing, not before. Quiescing can legitimately
         // wait up to its own 10s bound; folding that into "database reset" cost (AC5.6, baselined at a
@@ -245,22 +248,108 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
      * chance of tripping this timeout and falling back to the accepted residual race, while still
      * bounded (this runs once per test method, so an actually-wedged executor still fails fast enough
      * not to stall a whole CI run).
+     *
+     * <h2>skillars-deferred-146: idle short-circuit, zeroed poll delay, and the re-sweep</h2>
+     *
+     * <p>Awaitility resolves an unset {@code pollDelay} to the fixed {@code pollInterval} rather
+     * than zero, so every call below used to sleep 25ms before evaluating the condition for the
+     * first time — even when the pool was already idle, which is the overwhelmingly common case
+     * (this runs once per test method, across six pools, on every full-context IT). Removing that
+     * sleep took the measured cost from ~131ms per method to ~0.07ms. The idle case is now
+     * detected directly via {@link #isQuiesced}, and the surviving Awaitility path — for the rare
+     * pool that is genuinely still draining — sets {@code .pollDelay(Duration.ZERO)} so its first
+     * re-check is immediate too. The bounded 30s wait, the 25ms interval between subsequent polls
+     * and the accepted {@link ConditionTimeoutException} residual below are all unchanged.
+     *
+     * <h3>What the removed delay was actually covering, and why there is now a re-sweep</h3>
+     *
+     * <p>skillars-deferred-146's own code review corrected this story's original claim that the
+     * 25ms delay "was never load-bearing". That claim rested on async tasks being enqueued
+     * synchronously at {@code submit()} time and therefore already visible to the first check.
+     * <strong>On the hot path they are not.</strong> {@code ThreadPoolExecutor.execute()} takes
+     * the {@code addWorker(command, true)} branch whenever {@code workerCount < corePoolSize} —
+     * the normal case on these mostly-idle pools, since core threads are never prestarted. On
+     * that branch the task becomes the new {@code Worker}'s {@code firstTask} and
+     * <strong>never enters {@code workQueue}</strong>, so {@code getQueue().isEmpty()} is true;
+     * and {@code getActiveCount()} counts only workers whose AQS lock is held, which
+     * {@code runWorker} takes <em>after</em> {@code Thread.start()} returns. Both halves of
+     * {@link #isQuiesced} therefore report idle for the whole thread-start latency. The 25ms
+     * delay was incidental cover for that window.
+     *
+     * <p>The loop below re-sweeps: it keeps making passes until one complete pass finds every
+     * pool already quiesced. That costs nothing in the common case — the first pass finds
+     * everything idle, {@code waited} stays false, and it returns after one cheap probe per pool
+     * — and it closes the genuine cross-pool ordering gap the same review found, where pool B is
+     * cleared early, pool A is then waited on, and A's draining task submits fresh work onto the
+     * already-cleared B.
+     *
+     * <p><strong>This narrows the thread-start window; it does not close it.</strong> A re-sweep
+     * pass can still observe a pool inside the same {@code addWorker} blind spot. Closing it
+     * properly needs a settle (a short sleep, or a signal from the submitting side), which was
+     * considered and rejected here because it reintroduces a per-method cost on the path this
+     * story exists to make free. The residual is the same class as the pre-existing accepted one
+     * documented above — stated plainly rather than argued away, because the first version of
+     * this javadoc argued it away and was wrong.
      */
-    private void quiesceAsyncExecutors(ApplicationContext ctx) {
-        for (ThreadPoolTaskExecutor executor : ctx.getBeansOfType(ThreadPoolTaskExecutor.class).values()) {
-            try {
-                Awaitility.await()
-                    .atMost(Duration.ofSeconds(30))
-                    .pollInterval(Duration.ofMillis(25))
-                    .until(() -> executor.getActiveCount() == 0
-                        && executor.getThreadPoolExecutor().getQueue().isEmpty());
-            } catch (ConditionTimeoutException e) {
-                System.err.printf(
-                    "[deferred-131] async executor did not quiesce within 30s (activeCount=%d, "
-                        + "queueSize=%d) — proceeding with the reset anyway%n",
-                    executor.getActiveCount(), executor.getThreadPoolExecutor().getQueue().size());
+    void quiesceAsyncExecutors(ApplicationContext ctx) {
+        Collection<ThreadPoolTaskExecutor> executors =
+            ctx.getBeansOfType(ThreadPoolTaskExecutor.class).values();
+
+        // Bounded so a genuinely wedged executor cannot spin here forever: each pass that waits
+        // on it burns a full 30s timeout, and after MAX_QUIESCE_PASSES we fall through to the
+        // same "proceed with the reset anyway" residual the catch below already accepts.
+        for (int pass = 0; pass < MAX_QUIESCE_PASSES; pass++) {
+            boolean waited = false;
+            boolean timedOut = false;
+            for (ThreadPoolTaskExecutor executor : executors) {
+                if (isQuiesced(executor)) {
+                    continue;
+                }
+                waited = true;
+                try {
+                    Awaitility.await()
+                        .atMost(Duration.ofSeconds(30))
+                        .pollDelay(Duration.ZERO)
+                        .pollInterval(Duration.ofMillis(25))
+                        .until(() -> isQuiesced(executor));
+                } catch (ConditionTimeoutException e) {
+                    // Log and move on to the NEXT EXECUTOR, exactly as before skillars-deferred-146.
+                    // Do not return from here: a first cut of the re-sweep did, which abandoned every
+                    // pool not yet reached in this pass and let the reset open against them unchecked
+                    // -- the opposite of what this method exists to do, and a silent breach of AC1's
+                    // "the accepted ConditionTimeoutException residual is unchanged".
+                    System.err.printf(
+                        "[deferred-131] async executor did not quiesce within 30s (activeCount=%d, "
+                            + "queueSize=%d) — proceeding with the reset anyway%n",
+                        executor.getActiveCount(), executor.getThreadPoolExecutor().getQueue().size());
+                    timedOut = true;
+                }
+            }
+            // A pass that never had to wait is a clean sweep of every pool: nothing was draining
+            // when we looked, so no pool can have been re-dirtied by another pool we waited on.
+            //
+            // A pass in which anything timed out does not get a successor. Every executor in THIS
+            // pass was still visited (see the catch above), so behaviour within a pass is identical
+            // to the pre-story code; what is suppressed is only the re-sweep. That caps the
+            // worst case at one pass -- six pools x 30s, the same ceiling this method always had --
+            // instead of letting MAX_QUIESCE_PASSES multiply a wedged pool's timeout by three.
+            if (!waited || timedOut) {
+                return;
             }
         }
+    }
+
+    /**
+     * Pass ceiling for {@link #quiesceAsyncExecutors}'s re-sweep. Three is deliberate rather than
+     * tuned: a second pass exists to catch one pool re-dirtying another, a third to catch that
+     * happening once more, and beyond that the pools are feeding each other faster than the reset
+     * can ever win, which is a broken test rather than a race worth waiting out.
+     */
+    private static final int MAX_QUIESCE_PASSES = 3;
+
+    /** True once an executor has no task running and nothing queued behind it. */
+    private static boolean isQuiesced(ThreadPoolTaskExecutor executor) {
+        return executor.getActiveCount() == 0 && executor.getThreadPoolExecutor().getQueue().isEmpty();
     }
 
     /**
@@ -295,6 +384,22 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
         new java.util.concurrent.atomic.AtomicLong();
     private static final java.util.concurrent.atomic.AtomicLong RESET_NANOS =
         new java.util.concurrent.atomic.AtomicLong();
+
+    // skillars-deferred-146 AC1b: the quiesce was invisible in the cost model this counter
+    // deliberately excludes (see the comment above startNanos in beforeTestMethod). Measured
+    // around the whole quiesceAsyncExecutors(ctx) call, including the short-circuit path, so a
+    // future regression shows up as a number in the build log instead of needing rediscovery.
+    //
+    // Reported in MICROSECONDS, unlike the reset counter above. Code review 2026-10-07: the
+    // post-fix cost is ~0.07ms per call, which the reset counter's "%.1f ms" shape floors to
+    // "0.1 ms mean" -- enough to spot the 131ms regression this story removed, but blind to
+    // anything smaller. Microseconds keep the counter able to resolve the quantity it now
+    // tracks. The two counters therefore use different units on purpose; do not "unify" them.
+    private static final java.util.concurrent.atomic.AtomicLong QUIESCE_COUNT =
+        new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong QUIESCE_NANOS =
+        new java.util.concurrent.atomic.AtomicLong();
+
     private static final java.util.concurrent.atomic.AtomicBoolean HOOK_REGISTERED =
         new java.util.concurrent.atomic.AtomicBoolean();
 
@@ -308,17 +413,43 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
             System.out.printf("[deferred-19] database reset: %d invocations, %d ms total, "
                 + "%.1f ms mean%n", count, ms, (double) ms / count);
         }
+        registerCostReportingHookOnce();
+    }
+
+    private static void recordQuiesceCost(long nanos) {
+        long count = QUIESCE_COUNT.incrementAndGet();
+        long total = QUIESCE_NANOS.addAndGet(nanos);
+        if (count % 25 == 0) {
+            long micros = total / 1_000;
+            System.out.printf("[deferred-146] async quiesce: %d invocations, %d us total, "
+                + "%.1f us mean%n", count, micros, (double) micros / count);
+        }
+        registerCostReportingHookOnce();
+    }
+
+    /** Reused by both counters above, per skillars-deferred-146 AC1b — one shutdown hook, not two. */
+    private static void registerCostReportingHookOnce() {
         if (HOOK_REGISTERED.compareAndSet(false, true)) {
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                long n = RESET_COUNT.get();
-                if (n == 0) {
-                    return;
-                }
-                long totalMs = RESET_NANOS.get() / 1_000_000;
-                System.out.printf(
-                    "[deferred-19] database reset: %d invocations, %d ms total, %.1f ms mean%n",
-                    n, totalMs, (double) totalMs / n);
-            }, "db-reset-cost-reporter"));
+            Runtime.getRuntime().addShutdownHook(
+                new Thread(DatabaseResetTestExecutionListener::printFinalCostReport,
+                    "db-reset-cost-reporter"));
+        }
+    }
+
+    private static void printFinalCostReport() {
+        long resetCount = RESET_COUNT.get();
+        if (resetCount > 0) {
+            long totalMs = RESET_NANOS.get() / 1_000_000;
+            System.out.printf(
+                "[deferred-19] database reset: %d invocations, %d ms total, %.1f ms mean%n",
+                resetCount, totalMs, (double) totalMs / resetCount);
+        }
+        long quiesceCount = QUIESCE_COUNT.get();
+        if (quiesceCount > 0) {
+            long totalMicros = QUIESCE_NANOS.get() / 1_000;
+            System.out.printf(
+                "[deferred-146] async quiesce: %d invocations, %d us total, %.1f us mean%n",
+                quiesceCount, totalMicros, (double) totalMicros / quiesceCount);
         }
     }
 
