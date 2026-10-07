@@ -469,4 +469,30 @@ describe('MainLayout.vue — player nav: Development Dashboard link', () => {
     )
     expect(wrapper.find('[href="/player/development/42"]').exists()).toBe(false)
   })
+
+  it('resolves selfPlayerId and shows the link when role flips to PLAYER post-mount — the real login path, since routes.js wraps every route (incl. /login) in one MainLayout instance that never remounts on a client-side router.push', async () => {
+    const { wrapper, pinia } = await mountLayout(
+      { role: null, userId: null },
+      async ({ pinia }) => {
+        const { usePlayerStore } = await import('src/stores/playerStore')
+        const playerStore = usePlayerStore(pinia)
+        playerStore.fetchSelfPlayerId.mockResolvedValue(77)
+      },
+      undefined,
+      { shallow: false },
+    )
+    // Not authenticated yet: the whole drawer (and the link) is absent.
+    expect(wrapper.find('[href="/player/development/77"]').exists()).toBe(false)
+
+    const { useAuthStore } = await import('src/stores/auth.store')
+    const authStore = useAuthStore(pinia)
+    authStore.userId = 9
+    authStore.role = 'PLAYER'
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+
+    expect(wrapper.find('[href="/player/development/77"]').exists()).toBe(true)
+    // Mutation: revert the onMounted-only check (drop the `watch`) → this assertion goes RED,
+    // since fetchSelfPlayerId would only ever have been attempted once, before role flipped.
+  })
 })

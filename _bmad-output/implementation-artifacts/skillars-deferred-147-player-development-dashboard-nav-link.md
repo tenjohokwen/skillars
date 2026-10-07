@@ -2,6 +2,8 @@
 
 Status: done
 
+> **MANUAL TEST FINDING 2026-10-07:** after deploying the AC1 fix to the local container, the owner logged in as a player through the real UI and saw neither Session Packs nor the new Development Dashboard link. Investigated rather than assumed: the backend returned 200 with a real `player_profiles` row (confirmed via direct Postgres query), so `selfPlayerId` should have resolved — the bug was not in the new code's condition logic. Root cause: `routes.js` wraps **every** route, including `/login`, in one `MainLayout` instance, which Vue Router mounts exactly once per SPA session; `LoginPage.vue`'s post-login navigation is a client-side `router.push`, not a reload, so `MainLayout` never remounts. The original `onMounted(() => { if (authStore.isPlayer) { ...fetchSelfPlayerId... } })` check therefore only ever ran once, at initial (pre-login, unauthenticated) mount — permanently skipping the fetch for every real login. This is a **pre-existing bug**, not introduced by this story: it silently broke the Session Packs link identically and had no test coverage (Session Packs' own `packsRoute` had zero prior spec cases). Fixed by replacing the one-shot check with `watch(() => authStore.isPlayer, ..., { immediate: true })`, which both covers the already-authenticated-on-load case (`immediate: true`) and re-fires the moment `authStore.login()` flips `role` to `PLAYER` post-login. Added a red/green-verified regression test that mounts unauthenticated, flips the role after mount (no remount), and asserts the link appears — this failed as expected against the unpatched `onMounted`-only code (`expected false to be true`) and passes against the fix. AC1/AC4 below updated to require the link survive a real post-mount login, not just a fresh authenticated mount.
+
 ## Story
 
 As a self-registered player,
@@ -30,6 +32,7 @@ Confirmed accurate; implemented the obvious, narrow fix rather than re-deriving 
 1. **Given** a self-registered PLAYER whose `selfPlayerId` has resolved
    **When** they open the nav drawer
    **Then** a "Player Development" link appears, after Session Packs, pointing at `/player/development/{selfPlayerId}`
+   **And** this holds for a real post-login session too — `role` flipping to `PLAYER` after `MainLayout` is already mounted (the real path, since `MainLayout` mounts once for the whole SPA session and never remounts on a client-side login navigation) must trigger the fetch, not just an already-authenticated fresh page load
 
 2. **Given** `selfPlayerId` has not yet resolved (still `null` — pending fetch, or a swallowed 404 for an unfinished profile)
    **Then** the link is absent, exactly like Session Packs' own `packsRoute` guard
@@ -49,6 +52,8 @@ Confirmed accurate; implemented the obvious, narrow fix rather than re-deriving 
   - link present at `/player/development/{id}` once `fetchSelfPlayerId` resolves
   - link absent for a non-PLAYER role even when `selfPlayerId` would resolve
   - register `/player/development/:playerId` and `/parent/players/:playerId/packs` in the spec's test router (neither was there before; Session Packs' own link had no prior test coverage and had never needed them — exposed by mounting with a resolved `selfPlayerId` for the first time)
+- [x] **(Found during manual testing, AC1's post-login clause)** Replace the one-shot `onMounted(() => { if (authStore.isPlayer) {...} })` check with `watch(() => authStore.isPlayer, async (isPlayer) => {...}, { immediate: true })` in `MainLayout.vue`, so the fetch re-fires when `role` flips post-mount instead of only running once at initial (usually pre-login) mount
+- [x] Add the post-mount-login regression case to `MainLayoutSpec.js`: mount unauthenticated, flip `authStore.role` to `PLAYER` on the live pinia instance without remounting, assert the link appears. Verified red against the unpatched `onMounted`-only code (`expected false to be true`) before confirming green against the fix
 
 ## File List
 
@@ -61,7 +66,9 @@ No backend or schema changes. No new i18n copy. No local `mvn verify` run — no
 
 ## Completion Notes
 
-- `npx vitest run src/layouts/__tests__/MainLayoutSpec.js`: 19/19 green (was 16/16 before the 3 new cases), no router warnings once the two test-router routes were added.
+- `npx vitest run src/layouts/__tests__/MainLayoutSpec.js`: 19/19 green (was 16/16 before the first 3 new cases), no router warnings once the two test-router routes were added.
 - `npx vitest run` (full frontend suite): 227/227 green.
-- `npx eslint src/layouts/MainLayout.vue src/layouts/__tests__/MainLayoutSpec.js`: clean.
-- Implemented and verified directly in this session; no separate `/bmad-code-review` pass run — single-file-plus-tests change, mechanical in nature, same shape as the existing `packsRoute` pattern it mirrors.
+- **Manual test on the local container surfaced a real pre-existing bug** (see the box above AC1): neither Session Packs nor the new Development link appeared after a real login, despite the backend genuinely returning the player's profile (verified via `docker exec skillars-postgres-1 psql ... select * from main.player_profiles where user_id=...` — a real row existed). Root-caused to `MainLayout`'s one-shot `onMounted` check racing the SPA's client-side post-login navigation. Fixed with a `watch(..., { immediate: true })`; added a red/green-verified regression test (`MainLayoutSpec.js`, "resolves selfPlayerId and shows the link when role flips to PLAYER post-mount").
+- Final: `npx vitest run src/layouts/__tests__/MainLayoutSpec.js` 20/20 green; `npx vitest run` (full suite) 228/228 green; `npx eslint src/layouts/MainLayout.vue src/layouts/__tests__/MainLayoutSpec.js` clean.
+- Rebuilt the local Docker image (`docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local build app`) and recreated `skillars_app_1`/`skillars-app-1` with the fix for a second round of manual testing.
+- Implemented and verified directly in this session; no separate `/bmad-code-review` pass run.
