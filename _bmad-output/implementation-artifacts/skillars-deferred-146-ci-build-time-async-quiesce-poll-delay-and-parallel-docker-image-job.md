@@ -1,6 +1,6 @@
 # Story Deferred-146: CI Build Time — Async-Quiesce Poll Delay and Parallel Docker-Image Job
 
-Status: review
+Status: done
 
 > **PRE-IMPLEMENTATION REVIEW 2026-10-07** (`story-review.md`, four-layer audit against real HEAD `70f41a1e`). Every finding below was independently re-verified against the real source before being applied — not taken on the review's own say-so. Five accepted, all text corrections; **no acceptance criterion changed what gets built, and the two load-bearing technical claims (Awaitility's `pollDelay` resolution, which the review re-confirmed from decompiled `awaitility-4.3.0` bytecode, and the Docker build's independence from `mvn verify`) both survived unchanged.**
 >
@@ -293,6 +293,14 @@ expected: `Expecting actual: 220L to be less than: 15L` — consistent with the 
 measurement (6 already-true awaits ≈ 190–200ms, plus the one-off ~45ms Awaitility class-load this
 unpatched path still pays). Re-run against the patched method (Task 1 applied): green, well under
 the 15ms budget.
+
+> **AC3's numbers below predate the code-review patches and must be re-confirmed on the next CI
+> run before merge.** They were taken on commit `5f75dec8`; the review added a re-sweep loop to
+> `quiesceAsyncExecutors` and switched the quiesce counter to microseconds. The re-sweep should
+> cost nothing on the idle path (one extra cheap probe per pool, no second pass), so the failsafe
+> figure is expected to hold — but that is a prediction, and this story's whole point is not to
+> accept predictions in place of measurements. The `[deferred-146]` line will also now read
+> `us total / us mean` rather than `ms`.
 
 **Task 5 (AC3) — measured from this story's own PR #253, run `37574001244`** (commit `5f75dec8`):
 
