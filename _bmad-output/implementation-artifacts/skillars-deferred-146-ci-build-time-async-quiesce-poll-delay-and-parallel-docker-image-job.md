@@ -1,6 +1,6 @@
 # Story Deferred-146: CI Build Time — Async-Quiesce Poll Delay and Parallel Docker-Image Job
 
-Status: ready-for-dev
+Status: review
 
 > **PRE-IMPLEMENTATION REVIEW 2026-10-07** (`story-review.md`, four-layer audit against real HEAD `70f41a1e`). Every finding below was independently re-verified against the real source before being applied — not taken on the review's own say-so. Five accepted, all text corrections; **no acceptance criterion changed what gets built, and the two load-bearing technical claims (Awaitility's `pollDelay` resolution, which the review re-confirmed from decompiled `awaitility-4.3.0` bytecode, and the Docker build's independence from `mvn verify`) both survived unchanged.**
 >
@@ -174,9 +174,9 @@ The Docker build depends on nothing `mvn verify` produces — the `Dockerfile` c
   - [x] Add a comment on the new job recording why it has no `needs:` (the Dockerfile's inputs are `pom.xml`/`src/`/`.git/`, all from checkout — nothing `mvn verify` produces), and pointing at `ci.yml:88` as the existing precedent for *the job split only*. The comment must **not** present `ci.yml` as precedent for running ungated — that job is gated by `needs: [test, frontend-quality]` on purpose (`ci.yml:89-93`), because it publishes. Say instead that a PR image is built to be scanned and thrown away, never published, so gating it on tests buys nothing and costs ~4 minutes on every green PR; the trade is a few wasted runner-minutes on a red one.
   - [x] Leave `ci.yml` alone entirely — it already has the right shape.
 
-- [ ] **Task 5 — Measure and record** (AC: 3)
-  - [ ] After CI runs on this story's PR, pull the job timings and the Maven phase markers and fill in every number AC3 lists, as measured values beside their baselines.
-  - [ ] If the failsafe phase drops by less than 2m30s, investigate before closing the story.
+- [x] **Task 5 — Measure and record** (AC: 3)
+  - [x] After CI runs on this story's PR, pull the job timings and the Maven phase markers and fill in every number AC3 lists, as measured values beside their baselines.
+  - [x] If the failsafe phase drops by less than 2m30s, investigate before closing the story.
 
 - [x] **Task 6 — Documentation** (AC: 6)
   - [x] `docs/testing/readme.md`: correct the stale 99.7ms reset figure and add the quiesce cost beside it.
@@ -261,5 +261,39 @@ measurement (6 already-true awaits ≈ 190–200ms, plus the one-off ~45ms Await
 unpatched path still pays). Re-run against the patched method (Task 1 applied): green, well under
 the 15ms budget.
 
-**Task 5 (AC3) — pending this story's own CI run.** The measured-vs-baseline table below will be
-filled in from this PR's own `pr-build.yml` run once it completes; not fabricated ahead of time.
+**Task 5 (AC3) — measured from this story's own PR #253, run `37574001244`** (commit `5f75dec8`):
+
+| | Baseline (run `37530194292`) | Measured (run `37574001244`) |
+|---|---|---|
+| failsafe phase duration (`integration-test` marker → `verify` marker) | 11m38s (698s) | **9m01s (541.2s)** |
+| `build` job wall clock | 18m39s (old combined job) | **11m36s** |
+| new `docker-image` job wall clock | 4m03s (two steps inside `build`) | **3m17s** total (checkout+build+scan); build+scan steps alone: 2m52s |
+| overall workflow wall clock (slowest job) | 18m39s | **11m36s** (`build`) |
+| `[deferred-19] database reset:` (final) | 14.0 ms mean, 1199 invocations, 16.8s total (prior run) | **1199 invocations, 18898 ms total, 15.8 ms mean** |
+| `[deferred-146] async quiesce:` (final, new) | — (not instrumented before this story) | **1199 invocations, 84 ms total, 0.1 ms mean** |
+
+Failsafe dropped by **2m37s** (156.8s), clearing AC3's 2m30s (150s) floor — no investigation
+required. The quiesce counter confirms the fix directly: **0.1ms mean per test method**, down
+from the ~190ms/method the pre-change Awaitility path paid (the counter did not exist before this
+story, so there is no prior-run figure to diff against; the before/after comparison for the
+quiesce itself is Finding 1's own off-CI jar measurement, not a counter).
+
+AC4's two gates, unaffected by this story's changes, both still passed on this run: Spring
+context count `missCount = 44` (ceiling 45, unchanged) and the container-ceiling sampler (peak 1
+postgres/redis, 2 seaweedfs — within its documented ceiling). 1334 failsafe tests, 0 failures, 0
+errors, 4 skipped — no test assertions changed, consistent with AC5.
+
+Docker-image job genuinely ran in parallel with `build`/`frontend-quality` (all three started at
+`04:58:12Z` per the jobs API), confirming AC2's "starts at the same instant" requirement — not
+just a job-definition claim.
+
+**AC2c.** `master` has **no required status checks configured**, re-verified 2026-10-07 at the
+time of this PR: `GET /repos/tenjohokwen/skillars/branches/master/protection` returns `404
+"Branch not protected"`; the only ruleset, `NoDirectPush` (id `20583638`), enforces only
+`deletion`, `non_fast_forward` and `pull_request` rule types — no `required_status_checks` type
+is present. Splitting the Docker/Trivy steps into their own `docker-image` job therefore cannot
+silently un-gate anything at the merge-API level — there was no API-level gate on them to begin
+with. What changes is the human merge step: PR #253 now shows **three** job results
+(`build`, `docker-image`, `frontend-quality`) instead of two, and a red Trivy scan is no longer
+visually attached to `build`. Called out in the PR body (#253) so the next merge decision is
+made against all three, not two.
