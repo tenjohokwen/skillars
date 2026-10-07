@@ -131,9 +131,16 @@ Two caveats on the numbers above, so they are not over-read:
    and the story's original 8–15 min projection should still not be treated as verified — it was
    built on a macOS/Docker-Desktop baseline that was never representative.
 
-The per-test database reset costs **99.7 ms mean over 814 invocations (~81 s total) on CI**, and
-roughly 10× that on macOS/Docker Desktop, where the VM boundary makes each round trip far dearer.
-That per-method cost is real and was not modelled by the original projection.
+The per-test database reset costs **14.0 ms mean over 1199 invocations (16.8 s total) on CI**
+(run `37530194292`), and roughly 10× that on macOS/Docker Desktop, where the VM boundary makes
+each round trip far dearer. The **99.7 ms / 814-invocation** figure previously quoted here
+predates later optimisation and is stale by an order of magnitude — do not cite it.
+
+The reset is no longer the dominant per-test-method cost, and was not even at the old figure: the
+async-executor quiesce that runs immediately before it (`skillars-deferred-146`) cost ~190 ms per
+method across six thread pools, an order of magnitude more than the reset itself, until that story
+removed an unconditional Awaitility poll delay on the already-idle common case. See
+`[deferred-146] async quiesce:` in the build log for the current measured cost.
 
 What did improve, and was the actual point: **the container count is now bounded and cannot grow
 with the test suite**, the context count is bounded and enforced, and the suite is meaningfully

@@ -99,6 +99,27 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  # skillars-deferred-146 AC2/AC2b: split out of `build` into its own job so it starts at the
+  # same instant as `build` and `frontend-quality` instead of running serially after `build`'s
+  # `mvn -B verify` finishes. No `needs:` deliberately: the Dockerfile's builder stage only
+  # consumes pom.xml/src/.git, all of which come straight from actions/checkout, and nothing
+  # `mvn verify` produces -- the build job's own 12-minute head start buys this job nothing.
+  # ci.yml:88's `build-and-push` is precedent for the JOB SPLIT only, not for running ungated --
+  # that job carries `needs: [test, frontend-quality]` on purpose (ci.yml:89-93), because it
+  # publishes an image other systems pull. This job's image is built to be scanned and thrown
+  # away, never published, so gating it on `build`/`test` buys nothing and would cost ~4 minutes
+  # on every green PR; the trade is a few wasted runner-minutes on a red one.
+  docker-image:
+    runs-on: ubuntu-latest
+    # AC2b: step pair measured at 4m03s on run 37530194292 (build 3m28s + scan 0m35s). 20
+    # leaves ~5x headroom for the degraded shared-runner throughput `build`'s own
+    # timeout-minutes comment above already documents.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
       - name: Build Docker image (no push)
         uses: ./.github/actions/docker-build
         with:

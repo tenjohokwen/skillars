@@ -110,7 +110,9 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
 
         // skillars-deferred-131 AC4: quiesce BEFORE the reset transaction opens below. See
         // quiesceAsyncExecutors's own javadoc for the deadlock this closes.
+        long quiesceStartNanos = System.nanoTime();
         quiesceAsyncExecutors(ctx);
+        recordQuiesceCost(System.nanoTime() - quiesceStartNanos);
 
         // Code review 2026-09-23: measured from AFTER quiescing, not before. Quiescing can legitimately
         // wait up to its own 10s bound; folding that into "database reset" cost (AC5.6, baselined at a
@@ -245,15 +247,31 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
      * chance of tripping this timeout and falling back to the accepted residual race, while still
      * bounded (this runs once per test method, so an actually-wedged executor still fails fast enough
      * not to stall a whole CI run).
+     *
+     * <h2>skillars-deferred-146: idle short-circuit and zeroed poll delay</h2>
+     *
+     * <p>Awaitility resolves an unset {@code pollDelay} to the fixed {@code pollInterval} rather
+     * than zero, so every call below used to sleep 25ms before evaluating the condition for the
+     * first time — even when the pool was already idle, which is the overwhelmingly common case
+     * (this runs once per test method, across six pools, on every full-context IT). That cost
+     * ~190ms per method and was never load-bearing: nothing this method relies on requires a head
+     * start before the first check. The idle case is now detected directly via
+     * {@link #isQuiesced}, and the surviving Awaitility path — for the rare pool that is genuinely
+     * still draining — now sets {@code .pollDelay(Duration.ZERO)} so its first re-check is
+     * immediate too. The bounded 30s wait, the 25ms interval between subsequent polls and the
+     * accepted {@link ConditionTimeoutException} residual below are all unchanged.
      */
-    private void quiesceAsyncExecutors(ApplicationContext ctx) {
+    void quiesceAsyncExecutors(ApplicationContext ctx) {
         for (ThreadPoolTaskExecutor executor : ctx.getBeansOfType(ThreadPoolTaskExecutor.class).values()) {
+            if (isQuiesced(executor)) {
+                continue;
+            }
             try {
                 Awaitility.await()
                     .atMost(Duration.ofSeconds(30))
+                    .pollDelay(Duration.ZERO)
                     .pollInterval(Duration.ofMillis(25))
-                    .until(() -> executor.getActiveCount() == 0
-                        && executor.getThreadPoolExecutor().getQueue().isEmpty());
+                    .until(() -> isQuiesced(executor));
             } catch (ConditionTimeoutException e) {
                 System.err.printf(
                     "[deferred-131] async executor did not quiesce within 30s (activeCount=%d, "
@@ -261,6 +279,11 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
                     executor.getActiveCount(), executor.getThreadPoolExecutor().getQueue().size());
             }
         }
+    }
+
+    /** True once an executor has no task running and nothing queued behind it. */
+    private static boolean isQuiesced(ThreadPoolTaskExecutor executor) {
+        return executor.getActiveCount() == 0 && executor.getThreadPoolExecutor().getQueue().isEmpty();
     }
 
     /**
@@ -295,6 +318,16 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
         new java.util.concurrent.atomic.AtomicLong();
     private static final java.util.concurrent.atomic.AtomicLong RESET_NANOS =
         new java.util.concurrent.atomic.AtomicLong();
+
+    // skillars-deferred-146 AC1b: the quiesce was invisible in the cost model this counter
+    // deliberately excludes (see the comment above startNanos in beforeTestMethod). Measured
+    // around the whole quiesceAsyncExecutors(ctx) call, including the short-circuit path, so a
+    // future regression shows up as a number in the build log instead of needing rediscovery.
+    private static final java.util.concurrent.atomic.AtomicLong QUIESCE_COUNT =
+        new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong QUIESCE_NANOS =
+        new java.util.concurrent.atomic.AtomicLong();
+
     private static final java.util.concurrent.atomic.AtomicBoolean HOOK_REGISTERED =
         new java.util.concurrent.atomic.AtomicBoolean();
 
@@ -308,17 +341,43 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
             System.out.printf("[deferred-19] database reset: %d invocations, %d ms total, "
                 + "%.1f ms mean%n", count, ms, (double) ms / count);
         }
+        registerCostReportingHookOnce();
+    }
+
+    private static void recordQuiesceCost(long nanos) {
+        long count = QUIESCE_COUNT.incrementAndGet();
+        long total = QUIESCE_NANOS.addAndGet(nanos);
+        if (count % 25 == 0) {
+            long ms = total / 1_000_000;
+            System.out.printf("[deferred-146] async quiesce: %d invocations, %d ms total, "
+                + "%.1f ms mean%n", count, ms, (double) ms / count);
+        }
+        registerCostReportingHookOnce();
+    }
+
+    /** Reused by both counters above, per skillars-deferred-146 AC1b — one shutdown hook, not two. */
+    private static void registerCostReportingHookOnce() {
         if (HOOK_REGISTERED.compareAndSet(false, true)) {
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                long n = RESET_COUNT.get();
-                if (n == 0) {
-                    return;
-                }
-                long totalMs = RESET_NANOS.get() / 1_000_000;
-                System.out.printf(
-                    "[deferred-19] database reset: %d invocations, %d ms total, %.1f ms mean%n",
-                    n, totalMs, (double) totalMs / n);
-            }, "db-reset-cost-reporter"));
+            Runtime.getRuntime().addShutdownHook(
+                new Thread(DatabaseResetTestExecutionListener::printFinalCostReport,
+                    "db-reset-cost-reporter"));
+        }
+    }
+
+    private static void printFinalCostReport() {
+        long resetCount = RESET_COUNT.get();
+        if (resetCount > 0) {
+            long totalMs = RESET_NANOS.get() / 1_000_000;
+            System.out.printf(
+                "[deferred-19] database reset: %d invocations, %d ms total, %.1f ms mean%n",
+                resetCount, totalMs, (double) totalMs / resetCount);
+        }
+        long quiesceCount = QUIESCE_COUNT.get();
+        if (quiesceCount > 0) {
+            long totalMs = QUIESCE_NANOS.get() / 1_000_000;
+            System.out.printf(
+                "[deferred-146] async quiesce: %d invocations, %d ms total, %.1f ms mean%n",
+                quiesceCount, totalMs, (double) totalMs / quiesceCount);
         }
     }
 

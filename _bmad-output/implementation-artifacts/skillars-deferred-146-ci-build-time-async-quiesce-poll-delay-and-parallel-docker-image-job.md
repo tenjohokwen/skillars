@@ -149,38 +149,38 @@ The Docker build depends on nothing `mvn verify` produces — the `Dockerfile` c
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Short-circuit the idle case and zero the poll delay** (AC: 1, 1d)
-  - [ ] In `DatabaseResetTestExecutionListener.quiesceAsyncExecutors` (`:249`), extract the idle condition into a private `isQuiesced(ThreadPoolTaskExecutor)` helper so the short-circuit and the Awaitility predicate cannot drift apart.
-  - [ ] `if (isQuiesced(executor)) { continue; }` before touching Awaitility.
-  - [ ] Add `.pollDelay(Duration.ZERO)` to the surviving `Awaitility.await()` chain (`:252` starts the chain; `.atMost(...)` is `:253` and `.pollInterval(...)` is `:254` — insert between them).
-  - [ ] Point the surviving predicate at the same helper: `.until(() -> isQuiesced(executor))`. Leaving the condition inlined in the lambda would recreate the exact drift the extraction above exists to prevent.
-  - [ ] Extend the method's javadoc with a short "why the poll delay is explicitly zero" paragraph — Awaitility resolves an unset `pollDelay` to the fixed `pollInterval`, which cost ~190ms per test method across six pools; the bounded wait and the accepted residual are unchanged. Keep it to a few sentences; the existing javadoc is already long and the reasoning belongs in this story file.
-  - [ ] Do **not** touch `ConcurrencyLockWaitSupport.java:95` (AC1d).
+- [x] **Task 1 — Short-circuit the idle case and zero the poll delay** (AC: 1, 1d)
+  - [x] In `DatabaseResetTestExecutionListener.quiesceAsyncExecutors` (`:249`), extract the idle condition into a private `isQuiesced(ThreadPoolTaskExecutor)` helper so the short-circuit and the Awaitility predicate cannot drift apart.
+  - [x] `if (isQuiesced(executor)) { continue; }` before touching Awaitility.
+  - [x] Add `.pollDelay(Duration.ZERO)` to the surviving `Awaitility.await()` chain (`:252` starts the chain; `.atMost(...)` is `:253` and `.pollInterval(...)` is `:254` — insert between them).
+  - [x] Point the surviving predicate at the same helper: `.until(() -> isQuiesced(executor))`. Leaving the condition inlined in the lambda would recreate the exact drift the extraction above exists to prevent.
+  - [x] Extend the method's javadoc with a short "why the poll delay is explicitly zero" paragraph — Awaitility resolves an unset `pollDelay` to the fixed `pollInterval`, which cost ~190ms per test method across six pools; the bounded wait and the accepted residual are unchanged. Keep it to a few sentences; the existing javadoc is already long and the reasoning belongs in this story file.
+  - [x] Do **not** touch `ConcurrencyLockWaitSupport.java:95` (AC1d).
 
-- [ ] **Task 2 — Instrument the quiesce** (AC: 1b)
-  - [ ] Add `QUIESCE_COUNT`/`QUIESCE_NANOS` beside `RESET_COUNT`/`RESET_NANOS` (`:294-299`).
-  - [ ] Measure around the whole `quiesceAsyncExecutors(ctx)` call at `:113`, i.e. the short-circuit path is included in the measurement.
-  - [ ] Report it from the same every-25 block and the same shutdown hook as `recordCost` (`:301-320`), tagged `[deferred-146] async quiesce:`. Reuse the existing `HOOK_REGISTERED` hook rather than registering a second one.
+- [x] **Task 2 — Instrument the quiesce** (AC: 1b)
+  - [x] Add `QUIESCE_COUNT`/`QUIESCE_NANOS` beside `RESET_COUNT`/`RESET_NANOS` (`:294-299`).
+  - [x] Measure around the whole `quiesceAsyncExecutors(ctx)` call at `:113`, i.e. the short-circuit path is included in the measurement.
+  - [x] Report it from the same every-25 block and the same shutdown hook as `recordCost` (`:301-320`), tagged `[deferred-146] async quiesce:`. Reuse the existing `HOOK_REGISTERED` hook rather than registering a second one.
 
-- [ ] **Task 3 — Unit test for the idle fast path** (AC: 1c)
-  - [ ] New test alongside the listener. Build six `ThreadPoolTaskExecutor` instances, `initialize()` them, register them in a stub `ApplicationContext` (or call the extracted helper directly if the method's visibility makes that cleaner — package-private is acceptable here, the listener is test infrastructure).
-  - [ ] Assert the quiesce of six idle executors completes in `< 15ms`.
-  - [ ] **Run it against the unpatched method first**, record the observed failure duration in Completion Notes, then apply Task 1 and re-run. Do not skip the red half.
+- [x] **Task 3 — Unit test for the idle fast path** (AC: 1c)
+  - [x] New test alongside the listener. Build six `ThreadPoolTaskExecutor` instances, `initialize()` them, register them in a stub `ApplicationContext` (or call the extracted helper directly if the method's visibility makes that cleaner — package-private is acceptable here, the listener is test infrastructure).
+  - [x] Assert the quiesce of six idle executors completes in `< 15ms`.
+  - [x] **Run it against the unpatched method first**, record the observed failure duration in Completion Notes, then apply Task 1 and re-run. Do not skip the red half.
 
-- [ ] **Task 4 — Split the Docker image build into its own job** (AC: 2, 2b, 2c, 4)
-  - [ ] Cut the `Build Docker image (no push)` (`:102-107`) and `Scan image for vulnerabilities` (`:109-117`) steps out of the `build` job.
-  - [ ] Add a new top-level job (suggested key `docker-image`) with no `needs:`, `runs-on: ubuntu-latest`, `timeout-minutes: 20`, `permissions: contents: read`, the same pinned `actions/checkout`, then the two relocated steps verbatim.
-  - [ ] Leave `build`'s remaining steps, its `timeout-minutes: 35`, the container sampler pair and the in-step context-count gate exactly as they are.
-  - [ ] Add a comment on the new job recording why it has no `needs:` (the Dockerfile's inputs are `pom.xml`/`src/`/`.git/`, all from checkout — nothing `mvn verify` produces), and pointing at `ci.yml:88` as the existing precedent for *the job split only*. The comment must **not** present `ci.yml` as precedent for running ungated — that job is gated by `needs: [test, frontend-quality]` on purpose (`ci.yml:89-93`), because it publishes. Say instead that a PR image is built to be scanned and thrown away, never published, so gating it on tests buys nothing and costs ~4 minutes on every green PR; the trade is a few wasted runner-minutes on a red one.
-  - [ ] Leave `ci.yml` alone entirely — it already has the right shape.
+- [x] **Task 4 — Split the Docker image build into its own job** (AC: 2, 2b, 2c, 4)
+  - [x] Cut the `Build Docker image (no push)` (`:102-107`) and `Scan image for vulnerabilities` (`:109-117`) steps out of the `build` job.
+  - [x] Add a new top-level job (suggested key `docker-image`) with no `needs:`, `runs-on: ubuntu-latest`, `timeout-minutes: 20`, `permissions: contents: read`, the same pinned `actions/checkout`, then the two relocated steps verbatim.
+  - [x] Leave `build`'s remaining steps, its `timeout-minutes: 35`, the container sampler pair and the in-step context-count gate exactly as they are.
+  - [x] Add a comment on the new job recording why it has no `needs:` (the Dockerfile's inputs are `pom.xml`/`src/`/`.git/`, all from checkout — nothing `mvn verify` produces), and pointing at `ci.yml:88` as the existing precedent for *the job split only*. The comment must **not** present `ci.yml` as precedent for running ungated — that job is gated by `needs: [test, frontend-quality]` on purpose (`ci.yml:89-93`), because it publishes. Say instead that a PR image is built to be scanned and thrown away, never published, so gating it on tests buys nothing and costs ~4 minutes on every green PR; the trade is a few wasted runner-minutes on a red one.
+  - [x] Leave `ci.yml` alone entirely — it already has the right shape.
 
 - [ ] **Task 5 — Measure and record** (AC: 3)
   - [ ] After CI runs on this story's PR, pull the job timings and the Maven phase markers and fill in every number AC3 lists, as measured values beside their baselines.
   - [ ] If the failsafe phase drops by less than 2m30s, investigate before closing the story.
 
-- [ ] **Task 6 — Documentation** (AC: 6)
-  - [ ] `docs/testing/readme.md`: correct the stale 99.7ms reset figure and add the quiesce cost beside it.
-  - [ ] Same file: the "Known gaps" / cost-model prose should no longer imply the per-test reset is the dominant per-method cost, because it is not and was not.
+- [x] **Task 6 — Documentation** (AC: 6)
+  - [x] `docs/testing/readme.md`: correct the stale 99.7ms reset figure and add the quiesce cost beside it.
+  - [x] Same file: the "Known gaps" / cost-model prose should no longer imply the per-test reset is the dominant per-method cost, because it is not and was not.
 
 ## Dev Notes
 
@@ -247,14 +247,19 @@ Projection, to be replaced by AC3's measured numbers:
 
 ## File List
 
-_To be completed by the dev._
-
-Expected scope:
-- `src/test/java/com/softropic/skillars/config/DatabaseResetTestExecutionListener.java` (modified)
-- a new unit test for the idle fast path (added)
-- `.github/workflows/pr-build.yml` (modified)
-- `docs/testing/readme.md` (modified)
+- `src/test/java/com/softropic/skillars/config/DatabaseResetTestExecutionListener.java` (modified) — Task 1 + Task 2
+- `src/test/java/com/softropic/skillars/config/DatabaseResetTestExecutionListenerQuiesceTest.java` (added) — Task 3
+- `.github/workflows/pr-build.yml` (modified) — Task 4
+- `docs/testing/readme.md` (modified) — Task 6
 
 ## Completion Notes
 
-_To be completed by the dev._
+**Task 3 red/green (AC1c):** `DatabaseResetTestExecutionListenerQuiesceTest` run against the
+unpatched method (Awaitility-only path, no short-circuit, no `pollDelay(ZERO)`) failed as
+expected: `Expecting actual: 220L to be less than: 15L` — consistent with the story's own
+measurement (6 already-true awaits ≈ 190–200ms, plus the one-off ~45ms Awaitility class-load this
+unpatched path still pays). Re-run against the patched method (Task 1 applied): green, well under
+the 15ms budget.
+
+**Task 5 (AC3) — pending this story's own CI run.** The measured-vs-baseline table below will be
+filled in from this PR's own `pr-build.yml` run once it completes; not fabricated ahead of time.
