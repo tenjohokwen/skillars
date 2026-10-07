@@ -28,8 +28,8 @@ src/frontend/node/
 src/frontend/coverage/
 **/node_modules/
 **/.vite/
-*.jar
-*.war
+**/*.jar
+**/*.war
 
 # ── Secrets. These must never enter a build context or an image layer ────────
 # .env.local carries POSTGRES_PASSWORD and local S3 credentials; the uat/prod files carry more.
@@ -63,13 +63,13 @@ mvnw.cmd
 # ── Editor / OS / VCS noise ──────────────────────────────────────────────────
 .idea/
 .vscode/
-*.iml
-.DS_Store
-Thumbs.db
+**/*.iml
+**/.DS_Store
+**/Thumbs.db
 .gitignore
 .gitattributes
 
 # ── Stray local scratch files ────────────────────────────────────────────────
-*.log
-*.diff
+**/*.log
+**/*.diff
 diff.txt

@@ -112,8 +112,11 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
         // skillars-deferred-131 AC4: quiesce BEFORE the reset transaction opens below. See
         // quiesceAsyncExecutors's own javadoc for the deadlock this closes.
         long quiesceStartNanos = System.nanoTime();
-        quiesceAsyncExecutors(ctx);
-        recordQuiesceCost(System.nanoTime() - quiesceStartNanos);
+        try {
+            quiesceAsyncExecutors(ctx);
+        } finally {
+            recordQuiesceCost(System.nanoTime() - quiesceStartNanos);
+        }
 
         // Code review 2026-09-23: measured from AFTER quiescing, not before. Quiescing can legitimately
         // wait up to its own 10s bound; folding that into "database reset" cost (AC5.6, baselined at a
@@ -347,9 +350,27 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
      */
     private static final int MAX_QUIESCE_PASSES = 3;
 
-    /** True once an executor has no task running and nothing queued behind it. */
-    private static boolean isQuiesced(ThreadPoolTaskExecutor executor) {
-        return executor.getActiveCount() == 0 && executor.getThreadPoolExecutor().getQueue().isEmpty();
+    /**
+     * True once an executor has no task running and nothing queued behind it.
+     *
+     * <p>skillars-deferred-148 Finding 6: {@code getActiveCount() == 0} does not short-circuit
+     * {@code getThreadPoolExecutor()} — the delegate check is the SECOND operand of {@code &&}, so
+     * both still run. {@code getThreadPoolExecutor()} throws {@code IllegalStateException} if the
+     * bean has not yet been initialized ({@code afterPropertiesSet()}/{@code initialize()} not yet
+     * called), unlike {@code getActiveCount()} itself, which returns {@code 0} for a
+     * not-yet-initialized delegate. Unreachable today: {@link #quiesceAsyncExecutors} enumerates via
+     * {@code ctx.getBeansOfType(ThreadPoolTaskExecutor.class)}, which eagerly initializes any bean it
+     * returns. Guarded defensively rather than left to throw on a hypothetical future caller.
+     */
+    static boolean isQuiesced(ThreadPoolTaskExecutor executor) {
+        if (executor.getActiveCount() != 0) {
+            return false;
+        }
+        try {
+            return executor.getThreadPoolExecutor().getQueue().isEmpty();
+        } catch (IllegalStateException notInitializedYet) {
+            return true;
+        }
     }
 
     /**

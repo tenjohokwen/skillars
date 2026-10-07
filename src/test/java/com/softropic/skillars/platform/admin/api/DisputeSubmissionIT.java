@@ -21,8 +21,10 @@ import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 
+import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -43,6 +45,13 @@ class DisputeSubmissionIT extends AbstractIntegrationTest {
     private static final long PLAYER_ID       = 9100_000_002L;
     private static final long COACH_USER_ID   = 9100_000_010L;
     private static final long OTHER_PARENT_ID = 9100_000_003L;
+    // skillars-deferred-148 AC2: booking.player_id is a PlayerProfile PRIMARY KEY, not a User id.
+    // This fixture used to set it to the bare PLAYER_ID (a User id) directly, which only ever
+    // worked because the pre-fix raiseDispute compared raisedBy against booking.getPlayerId()
+    // directly too — the exact cross-ID-space bug AC2 fixes. A real self-registered PlayerProfile
+    // (userId = PLAYER_ID, parentId = null) is required so the fixed ownership check has a real
+    // row to resolve.
+    private static final long PLAYER_PROFILE_ID = 9100_000_902L;
 
     private static final String ADMIN_EMAIL        = "admin.disp9100@skillars-test.com";
     private static final String PARENT_EMAIL       = "parent.disp9100@skillars-test.com";
@@ -92,6 +101,13 @@ class DisputeSubmissionIT extends AbstractIntegrationTest {
                 "VALUES (?, ?, 'Disp Coach', 'Bio', 'London', ARRAY['English']::varchar[], 'Europe/London', 'ACTIVE')",
                 coachProfileId, COACH_USER_ID);
 
+            jdbcTemplate.update(
+                "INSERT INTO main.player_profiles " +
+                "(id, name, date_of_birth, position, age_tier, user_id, independent_account_allowed, created_at, created_by) " +
+                "VALUES (?, 'Disp Player', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
+                PLAYER_PROFILE_ID, Date.valueOf(LocalDate.now().minusYears(18)),
+                PLAYER_ID, Timestamp.from(Instant.now()));
+
             // COMPLETED booking within submission window (2 days ago)
             insertBooking(bookingId, "COMPLETED", Instant.now().minusSeconds(2 * 86400));
 
@@ -106,6 +122,7 @@ class DisputeSubmissionIT extends AbstractIntegrationTest {
             jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE reference_id = ?", bookingId.toString());
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
+            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", PLAYER_PROFILE_ID);
             jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
             jdbcTemplate.execute("DELETE FROM main.login_attempts");
             jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id IN (?, ?, ?, ?, ?)",
@@ -383,7 +400,7 @@ class DisputeSubmissionIT extends AbstractIntegrationTest {
             "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
             "version, created_at, updated_at, canonical_timezone) " +
             "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'Europe/London')",
-            id, coachProfileId, PARENT_ID, PLAYER_ID, status,
+            id, coachProfileId, PARENT_ID, PLAYER_PROFILE_ID, status,
             Timestamp.from(updatedAt.minusSeconds(3600)),
             Timestamp.from(updatedAt),
             Timestamp.from(updatedAt.minusSeconds(7200)),

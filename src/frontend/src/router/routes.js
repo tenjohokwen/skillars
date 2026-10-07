@@ -114,7 +114,7 @@ const routes = [
       {
         path: 'parent/dashboard',
         component: () => import('pages/auth/ParentDashboardPlaceholderPage.vue'),
-        meta: { requiresAuth: true },
+        meta: { requiresAuth: true, role: 'PARENT' },
       },
       {
         // Dual-role (Deferred-81 AC4): a self-registered PLAYER can now purchase their own
@@ -205,7 +205,7 @@ const routes = [
         path: 'parent/player/:playerId/subscription',
         name: 'player-subscription',
         component: () => import('pages/parent/PlayerSubscriptionPage.vue'),
-        meta: { requiresAuth: true, requiresParent: true },
+        meta: { requiresAuth: true, role: 'PARENT' },
       },
       // Player registration flow (guest only) — adult (18+) self-registration
       {
@@ -238,19 +238,22 @@ const routes = [
         // since /player/locker-room/:playerId can't be a login redirect target on its own.
         path: 'player/home',
         component: () => import('pages/auth/PlayerHomeRedirectPage.vue'),
-        meta: { requiresAuth: true },
+        meta: { requiresAuth: true, role: 'PLAYER' },
       },
       {
+        // Dual-role (skillars-deferred-148 Finding 4 correction): PlayerOwnershipGuard authorizes
+        // both a self-registered PLAYER and a PARENT on their own/their child's player profile —
+        // ParentPlayerPortalPage.vue's "View Locker Room" button depends on the PARENT half.
         path: 'player/locker-room/:playerId',
         name: 'player-locker-room',
         component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),
-        meta: { requiresAuth: true },
+        meta: { requiresAuth: true, roles: ['PLAYER', 'PARENT'] },
       },
       {
         path: 'player/development/:playerId',
         name: 'player-development',
         component: () => import('pages/player/PlayerDevelopmentDashboardPage.vue'),
-        meta: { requiresAuth: true },
+        meta: { requiresAuth: true, role: 'PLAYER' },
       },
       {
         path: 'player/videos',
@@ -336,12 +339,12 @@ const routes = [
       // Admin pages (auth required)
       {
         path: 'admin',
-        meta: { requiresAuth: true },
+        meta: { requiresAuth: true, roles: ['ADMIN'] },
         children: [
           {
             path: 'health-dashboard',
             component: () => import('pages/admin/HealthDashboardPage.vue'),
-            meta: { requiresAuth: true },
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
           },
         ],
       },

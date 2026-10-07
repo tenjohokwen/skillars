@@ -244,8 +244,8 @@ const coachId = route.params.coachId
 const selfPlayerId = ref(null)
 const playerId = computed(() => {
   if (route.query.playerId && !authStore.isPlayer) {
-    const parsed = Number(route.query.playerId)
-    if (Number.isFinite(parsed) && parsed > 0) return parsed
+    const raw = String(route.query.playerId)
+    if (/^[1-9]\d*$/.test(raw)) return raw
   }
   if (authStore.isPlayer) return selfPlayerId.value
   return playerStore.activePlayerId

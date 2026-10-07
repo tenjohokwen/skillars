@@ -6,6 +6,8 @@ import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.reviews.contract.ReviewErrorCode;
+import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
 import com.softropic.skillars.platform.reviews.repo.CoachReview;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
@@ -28,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -112,5 +115,39 @@ class ReviewSubmissionServiceTest {
 
         verify(configService).getBoundedInt(
             eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), eq(30), eq(1), eq(365));
+    }
+
+    /**
+     * skillars-deferred-148 AC5: status is now checked before cooldown, so a review that is BOTH
+     * blocked AND inside its cooldown window must report the more actionable
+     * {@code EDIT_NOT_PERMITTED}, not {@code UPDATE_TOO_SOON}.
+     *
+     * <p>Code review 2026-10-07 (confirmed by execution — reverting the production reorder and
+     * re-running this test still went green): without stubbing {@code configService.getBoundedInt}
+     * explicitly, Mockito's unstubbed-primitive default ({@code 0}) makes
+     * {@code lastModifiedAt.isAfter(now.minus(0, DAYS))} evaluate to {@code false} regardless of
+     * guard order, so the cooldown guard never throws either way and this test could not actually
+     * distinguish the fix from the bug. The explicit {@code lenient()} stub below pins a real
+     * cooldown value so the cooldown guard WOULD throw if it ran first — {@code lenient()} because
+     * post-fix the status guard throws before this config read is ever reached, which strict
+     * stubbing would otherwise flag as unnecessary.
+     */
+    @Test
+    void updateReview_blockedAndWithinCooldown_throwsEditNotPermittedNotUpdateTooSoon() {
+        CoachReview review = new CoachReview();
+        review.setReviewId(REVIEW_ID);
+        review.setCoachId(COACH_ID);
+        review.setAuthorId(AUTHOR_ID);
+        review.setLastModifiedAt(Instant.now().minus(1, ChronoUnit.DAYS));
+        review.setModerationStatus(ReviewModerationStatus.BLOCKED);
+        when(coachReviewRepository.findByReviewIdAndAuthorId(REVIEW_ID, AUTHOR_ID))
+            .thenReturn(Optional.of(review));
+        lenient().when(configService.getBoundedInt(
+            anyString(), any(Integer.class), any(Integer.class), any(Integer.class))).thenReturn(30);
+
+        assertThatThrownBy(() -> service.updateReview(REVIEW_ID, AUTHOR_ID, 5, "Updated"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(ReviewErrorCode.EDIT_NOT_PERMITTED);
     }
 }

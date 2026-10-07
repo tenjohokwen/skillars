@@ -73,7 +73,7 @@ const bookingStore = useBookingStore()
 const authStore = useAuthStore()
 const playerStore = usePlayerStore()
 
-const playerId = Number(route.params.playerId)
+const playerId = route.params.playerId
 
 async function loadForPlayer(id) {
   await bookingStore.loadParentSchedule(id)

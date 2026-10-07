@@ -126,18 +126,21 @@ public class ReviewSubmissionService {
                 "Review not found or caller is not the author",
                 ReviewErrorCode.AUTHOR_MISMATCH));
 
+        // skillars-deferred-148 Finding 5: status checked before cooldown so a concurrent
+        // moderation block always reports the more actionable EDIT_NOT_PERMITTED, not
+        // UPDATE_TOO_SOON, when both conditions are independently true.
+        ReviewModerationStatus status = review.getModerationStatus();
+        if (status == ReviewModerationStatus.BLOCKED || status == ReviewModerationStatus.UNDER_REVIEW) {
+            throw new OperationNotAllowedException(
+                "Review cannot be edited in its current moderation status",
+                ReviewErrorCode.EDIT_NOT_PERMITTED);
+        }
         int cooldownDays = configService.getBoundedInt(
             ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), 30, 1, 365);
         if (review.getLastModifiedAt().isAfter(Instant.now().minus(cooldownDays, ChronoUnit.DAYS))) {
             throw new OperationNotAllowedException(
                 "Review was modified within the cooldown window",
                 ReviewErrorCode.UPDATE_TOO_SOON);
-        }
-        ReviewModerationStatus status = review.getModerationStatus();
-        if (status == ReviewModerationStatus.BLOCKED || status == ReviewModerationStatus.UNDER_REVIEW) {
-            throw new OperationNotAllowedException(
-                "Review cannot be edited in its current moderation status",
-                ReviewErrorCode.EDIT_NOT_PERMITTED);
         }
         // skillars-deferred-145 code review (D1, 2026-10-06): sinceAfter anchors on
         // authorLastEditedAt, not lastModifiedAt. lastModifiedAt has three non-author writers
@@ -178,19 +181,19 @@ public class ReviewSubmissionService {
         // overwrite that fresh edit a moment later — defeating the cooldown entirely for any burst of
         // near-simultaneous PATCHes. Mirrors MessagingService.softDeleteMessage re-checking
         // getDeletedAt() after its own refresh.
-        int lockedCooldownDays = configService.getBoundedInt(
-            ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), 30, 1, 365);
-        if (locked.getLastModifiedAt().isAfter(Instant.now().minus(lockedCooldownDays, ChronoUnit.DAYS))) {
-            throw new OperationNotAllowedException(
-                "Review was modified within the cooldown window",
-                ReviewErrorCode.UPDATE_TOO_SOON);
-        }
         ReviewModerationStatus lockedStatus = locked.getModerationStatus();
         if (lockedStatus == ReviewModerationStatus.BLOCKED
                 || lockedStatus == ReviewModerationStatus.UNDER_REVIEW) {
             throw new OperationNotAllowedException(
                 "Review cannot be edited in its current moderation status",
                 ReviewErrorCode.EDIT_NOT_PERMITTED);
+        }
+        int lockedCooldownDays = configService.getBoundedInt(
+            ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), 30, 1, 365);
+        if (locked.getLastModifiedAt().isAfter(Instant.now().minus(lockedCooldownDays, ChronoUnit.DAYS))) {
+            throw new OperationNotAllowedException(
+                "Review was modified within the cooldown window",
+                ReviewErrorCode.UPDATE_TOO_SOON);
         }
 
         locked.setRating(rating);

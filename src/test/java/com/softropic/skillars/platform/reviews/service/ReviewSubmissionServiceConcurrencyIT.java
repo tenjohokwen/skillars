@@ -60,6 +60,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ReviewSubmissionServiceConcurrencyIT extends AbstractIntegrationTest {
 
     @Autowired private ReviewSubmissionService reviewSubmissionService;
+    @Autowired private com.softropic.skillars.platform.admin.service.AdminReviewService adminReviewService;
 
     private static final long AUTHOR_ID = 8090_000_001L;
     private static final long COACH_USER_ID = 8090_000_010L;
@@ -360,6 +361,104 @@ class ReviewSubmissionServiceConcurrencyIT extends AbstractIntegrationTest {
             String finalBody = jdbcTemplate.queryForObject(
                 "SELECT body FROM reviews.coach_reviews WHERE review_id = ?", String.class, reviewId);
             assertThat(finalBody).as("A's edit must survive, not be overwritten by B").isEqualTo("A's edit");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * skillars-deferred-148 AC5: the two guards in {@code updateReview} were reordered (status
+     * before cooldown) so a concurrent moderation block always reports the more actionable
+     * {@code EDIT_NOT_PERMITTED}. {@code AdminReviewService.blockReview} is plain
+     * {@code @Transactional} (REQUIRED propagation, no {@code REQUIRES_NEW}), so wrapping caller
+     * A's {@code blockReview} call in an outer {@code transactionTemplate.execute(...)} — the same
+     * hold-open mechanism {@link #concurrentUpdateReview_secondCallerCannotBypassCooldownViaStaleRefresh}
+     * uses for {@code updateReview} itself — makes A's write join that outer transaction, holding
+     * the row lock until the wrapper's lambda returns. Caller B's {@code updateReview} blocks on
+     * {@code findByIdForUpdateNoWait}'s bounded retry until A releases and commits; B's refreshed
+     * re-check must then see the just-bumped {@code moderationStatus = BLOCKED} and reject with
+     * {@code EDIT_NOT_PERMITTED}, not {@code UPDATE_TOO_SOON} — B's unlocked pre-check ran against
+     * the fixture's still-{@code APPROVED} status and the still-old {@code lastModifiedAt}, so
+     * pre-fix (cooldown checked first) it would have reported the less actionable cooldown error
+     * instead, even though the review is actually blocked by the time B's write would land.
+     */
+    @Test
+    void concurrentUpdateReview_racingBlockReview_reportsEditNotPermittedNotUpdateTooSoon() throws Exception {
+        UUID reviewId = UUID.randomUUID();
+        Instant longAgo = Instant.now().minusSeconds(86400L * 40); // outside the 30-day cooldown
+        long adminId = AUTHOR_ID + 2_000_000L;
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO reviews.coach_reviews " +
+                "(review_id, coach_id, author_id, author_role, rating, body, moderation_status, " +
+                " last_modified_at, author_last_edited_at, created_at, moderation_epoch) " +
+                "VALUES (?, ?, ?, 'PARENT', 3, 'original body', 'APPROVED', ?, ?, ?, 0)",
+                reviewId, coachProfileId, AUTHOR_ID,
+                Timestamp.from(longAgo), Timestamp.from(longAgo), Timestamp.from(longAgo));
+            return null;
+        });
+
+        CountDownLatch blockAHeld = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+        AtomicReference<Throwable> aFailure = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> callerA = executor.submit(() -> {
+                try {
+                    transactionTemplate.execute(status -> {
+                        adminReviewService.blockReview(reviewId, "policy violation", adminId);
+                        blockAHeld.countDown();
+                        try {
+                            boolean released = releaseA.await(30, TimeUnit.SECONDS);
+                            if (!released) {
+                                throw new AssertionError("releaseA was never signalled within 30s");
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return null;
+                    });
+                } catch (Throwable t) {
+                    aFailure.set(t);
+                }
+            });
+
+            assertThat(blockAHeld.await(10, TimeUnit.SECONDS)).isTrue();
+
+            Callable<Throwable> callerBTask = () -> {
+                try {
+                    reviewSubmissionService.updateReview(reviewId, AUTHOR_ID, 5, "B's edit");
+                    return null;
+                } catch (Throwable t) {
+                    return t;
+                }
+            };
+            Future<Throwable> callerB = executor.submit(callerBTask);
+
+            // Gives B's own pre-check + findByIdForUpdateNoWait a real chance to run (and start
+            // retrying against A's still-held lock) before A's transaction commits.
+            Thread.sleep(300);
+            releaseA.countDown();
+
+            callerA.get(30, TimeUnit.SECONDS);
+            Throwable bFailure = callerB.get(30, TimeUnit.SECONDS);
+
+            if (aFailure.get() != null) {
+                throw new AssertionError("caller A (blockReview) failed", aFailure.get());
+            }
+            assertThat(bFailure)
+                .as("B's unlocked pre-check saw APPROVED/old lastModifiedAt and would pass both "
+                    + "guards; after A commits and blocks the review, B's refreshed re-check must "
+                    + "reject with the more actionable EDIT_NOT_PERMITTED, not UPDATE_TOO_SOON")
+                .isInstanceOf(OperationNotAllowedException.class);
+            assertThat(((OperationNotAllowedException) bFailure).getErrorCode())
+                .isEqualTo(ReviewErrorCode.EDIT_NOT_PERMITTED);
+
+            String finalBody = jdbcTemplate.queryForObject(
+                "SELECT body FROM reviews.coach_reviews WHERE review_id = ?", String.class, reviewId);
+            assertThat(finalBody).as("B's edit must not overwrite the now-blocked review")
+                .isEqualTo("original body");
         } finally {
             executor.shutdownNow();
         }

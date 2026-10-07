@@ -5,6 +5,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.softropic.skillars.platform.admin.contract.AdminDisputeDetailDto;
+import com.softropic.skillars.platform.admin.contract.DisputeError;
 import com.softropic.skillars.platform.admin.repo.AdminActionLogRepository;
 import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.admin.repo.Dispute;
@@ -20,6 +21,8 @@ import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
 import com.softropic.skillars.platform.payment.service.CreditWalletService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -59,6 +62,7 @@ class DisputeServiceTest {
     @Mock private com.softropic.skillars.platform.payment.repo.CoachPayoutRepository coachPayoutRepository;
     @Mock private com.softropic.skillars.platform.payment.service.CoachPayoutOutboxSupport coachPayoutOutboxSupport;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private PlayerProfileRepository playerProfileRepository;
 
     private DisputeService service;
 
@@ -70,7 +74,8 @@ class DisputeServiceTest {
         service = new DisputeService(
             disputeRepository, bookingRepository, bookingPaymentRepository, coachProfileRepository,
             coachCancellationHistoryRepository, adminAlertRepository, adminActionLogRepository,
-            configService, creditWalletService, coachPayoutRepository, coachPayoutOutboxSupport, eventPublisher
+            configService, creditWalletService, coachPayoutRepository, coachPayoutOutboxSupport, eventPublisher,
+            playerProfileRepository
         );
     }
 
@@ -170,6 +175,90 @@ class DisputeServiceTest {
             .isInstanceOf(OperationNotAllowedException.class);
 
         verify(disputeRepository, never()).save(any(Dispute.class));
+    }
+
+    // ── raiseDispute (skillars-deferred-148 Finding 2: player-ownership ID-space fix) ──
+
+    @Test
+    void raiseDispute_selfRegisteredPlayerOwnsBooking_isEligible() {
+        Booking booking = buildBooking();
+        booking.setUpdatedAt(Instant.now());
+        Long playerUserId = 777L;
+        PlayerProfile playerProfile = new PlayerProfile();
+        playerProfile.setId(booking.getPlayerId());
+        playerProfile.setUserId(playerUserId);
+        playerProfile.setParentId(null);
+
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(playerProfileRepository.findById(booking.getPlayerId())).thenReturn(Optional.of(playerProfile));
+        when(configService.getBoundedLong("disputes.submissionWindowDays", 14L, 1L, 365L)).thenReturn(14L);
+        when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(disputeRepository.save(any(Dispute.class))).thenAnswer(inv -> {
+            Dispute d = inv.getArgument(0);
+            d.setId(UUID.randomUUID());
+            return d;
+        });
+
+        UUID disputeId = service.raiseDispute(bookingId, "OTHER", "details", playerUserId, "PLAYER");
+
+        assertThat(disputeId).isNotNull();
+        verify(disputeRepository).save(any(Dispute.class));
+    }
+
+    @Test
+    void raiseDispute_callerIsADifferentSelfRegisteredPlayer_throwsNotEligible() {
+        // Proves the fix resolves ownership against the booking's ACTUAL player, not any player —
+        // a different self-registered player's id (not the coach, not the resolved player) must
+        // still be rejected.
+        Booking booking = buildBooking();
+        PlayerProfile playerProfile = new PlayerProfile();
+        playerProfile.setId(booking.getPlayerId());
+        playerProfile.setUserId(777L);
+        playerProfile.setParentId(null);
+        Long someOtherPlayerUserId = 888L;
+
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(playerProfileRepository.findById(booking.getPlayerId())).thenReturn(Optional.of(playerProfile));
+
+        assertThatThrownBy(() -> service.raiseDispute(bookingId, "OTHER", "details", someOtherPlayerUserId, "PLAYER"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(DisputeError.NOT_ELIGIBLE);
+
+        verify(disputeRepository, never()).save(any(Dispute.class));
+    }
+
+    /**
+     * Code review 2026-10-07: Design B's {@code .orElse(false)} correctly lets a booking whose
+     * {@code player_id} has no backing {@code player_profiles} row (no FK enforces one) fall
+     * through to the coach-eligibility disjunct, but nothing pinned that fall-through directly.
+     * Here the coach IS the rightful owner — proving the orphaned lookup doesn't itself block
+     * eligibility, it just contributes nothing, leaving the coach disjunct to decide.
+     */
+    @Test
+    void raiseDispute_bookingPlayerIdHasNoPlayerProfile_coachDisjunctStillDecidesEligibility() {
+        Booking booking = buildBooking();
+        booking.setUpdatedAt(Instant.now());
+        Long coachUserId = 500L;
+        CoachProfile coachProfile = new CoachProfile();
+        coachProfile.setId(booking.getCoachId());
+        coachProfile.setUserId(coachUserId);
+
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(playerProfileRepository.findById(booking.getPlayerId())).thenReturn(Optional.empty());
+        when(coachProfileRepository.findById(booking.getCoachId())).thenReturn(Optional.of(coachProfile));
+        when(configService.getBoundedLong("disputes.submissionWindowDays", 14L, 1L, 365L)).thenReturn(14L);
+        when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(disputeRepository.save(any(Dispute.class))).thenAnswer(inv -> {
+            Dispute d = inv.getArgument(0);
+            d.setId(UUID.randomUUID());
+            return d;
+        });
+
+        UUID disputeId = service.raiseDispute(bookingId, "OTHER", "details", coachUserId, "COACH");
+
+        assertThat(disputeId).isNotNull();
+        verify(disputeRepository).save(any(Dispute.class));
     }
 
     // ── getAdminDisputeDetail ────────────────────────────────────

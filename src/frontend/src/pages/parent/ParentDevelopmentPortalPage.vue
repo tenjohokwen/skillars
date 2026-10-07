@@ -120,10 +120,7 @@ const playerStore = usePlayerStore()
 const bookingStore = useBookingStore()
 const store = useDevelopmentStore()
 
-const playerId = computed(() => {
-  const id = Number(route.params.playerId)
-  return isNaN(id) ? null : id
-})
+const playerId = computed(() => route.params.playerId)
 const loading = ref(false)
 
 // True only when at least one pack is ACTIVE — exhausted/expired packs still appear in
