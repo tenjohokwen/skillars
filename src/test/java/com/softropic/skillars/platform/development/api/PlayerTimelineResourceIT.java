@@ -201,6 +201,53 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         assertThat((List<?>) response.getBody().get("events")).isNotEmpty();
     }
 
+    // skillars-deferred-147: PlayerOwnershipGuard.check previously only ever checked parent
+    // ownership (existsByIdAndParentId), so a self-registered adult player — parent_id NULL,
+    // chk_pp_owner — was unconditionally denied this endpoint about their OWN profile. Found via
+    // manual testing of the new Player Development Dashboard nav link, not inferred: the real
+    // response was 403 security.unauthorized despite a real player_profiles row existing.
+    @Test
+    @SuppressWarnings("unchecked")
+    void getTimeline_asSelfRegisteredPlayer_returns200WithFullTimeline() {
+        long selfPlayerUserId = 9600000030L;
+        long selfPlayerProfileId = 9600000031L;
+        String selfPlayerEmail = "self.player.timeline@skillars-test.com";
+        transactionTemplate.execute(status -> {
+            insertUser(selfPlayerUserId, selfPlayerEmail,
+                passwordEncoder.encode(TEST_PASSWORD), "PLAYER");
+            grantRole(selfPlayerUserId, "ROLE_PLAYER");
+            jdbcTemplate.update(
+                "INSERT INTO main.player_profiles " +
+                "(id, name, date_of_birth, position, age_tier, user_id, independent_account_allowed, created_at, created_by) " +
+                "VALUES (?, 'Self Player', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
+                selfPlayerProfileId, Date.valueOf(LocalDate.now().minusYears(25)),
+                selfPlayerUserId, Timestamp.from(Instant.now())
+            );
+            insertTimelineEvent(selfPlayerProfileId, "SESSION_COMPLETED", "booking");
+            return null;
+        });
+        try {
+            String cookies = loginAndGetCookies(selfPlayerEmail);
+            String selfPlayerUrl = baseUrl() + "/api/development/players/" + selfPlayerProfileId + "/timeline";
+            ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+                selfPlayerUrl, HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat((Boolean) response.getBody().get("accessExpired")).isFalse();
+            assertThat((List<?>) response.getBody().get("events")).isNotEmpty();
+            // Mutation: drop PlayerOwnershipGuard's `|| existsByIdAndUserId(...)` disjunct → this
+            // reproduces the exact 403 security.unauthorized the manual test hit.
+        } finally {
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.update("DELETE FROM development.player_timeline_events WHERE player_id = ?", selfPlayerProfileId);
+                jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", selfPlayerProfileId);
+                jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id = ?", selfPlayerUserId);
+                jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", selfPlayerUserId);
+                return null;
+            });
+        }
+    }
+
     @Test
     void getTimeline_asParentForUnlinkedPlayer_returns403() {
         // Insert a different parent's player

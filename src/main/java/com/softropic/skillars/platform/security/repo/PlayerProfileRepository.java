@@ -36,6 +36,15 @@ public interface PlayerProfileRepository extends JpaRepository<PlayerProfile, Lo
 
     boolean existsByIdAndParentId(Long id, Long parentId);
 
+    /**
+     * Self-registered adult player's own-profile isolation — the {@code existsByIdAndParentId}
+     * counterpart for a profile whose {@code parentId} is null (chk_pp_owner). skillars-deferred-147:
+     * added for {@link com.softropic.skillars.platform.security.service.PlayerOwnershipGuard}, which
+     * previously only checked parent ownership and unconditionally denied a self-registered player
+     * access to their own development/session/payment resources.
+     */
+    boolean existsByIdAndUserId(Long id, Long userId);
+
     /** For self-registered adult players — userId is their own account, no parent involved. */
     Optional<PlayerProfile> findByUserId(Long userId);
 
