@@ -55,12 +55,13 @@ const STUB = { template: '<div />' }
 
 const mounted = []
 
-async function mountPage(bookingState) {
+async function mountPage(bookingState, queryPlayerId = '5', playerState) {
   const pinia = createTestingPinia({
     createSpy: vi.fn,
     initialState: {
       booking: { batchBasket: [], availabilitySignature: 'sig-1', ...bookingState },
       auth: { role: 'PARENT' },
+      ...(playerState ? { player: playerState } : {}),
     },
   })
   const router = createRouter({
@@ -71,7 +72,7 @@ async function mountPage(bookingState) {
       { path: '/marketplace', name: 'mkt', component: STUB },
     ],
   })
-  router.push('/parent/coaches/77?playerId=5')
+  router.push(`/parent/coaches/77?playerId=${queryPlayerId}`)
   await router.isReady()
 
   const wrapper = mount(BookingRequestPage, {
@@ -83,7 +84,7 @@ async function mountPage(bookingState) {
   })
   mounted.push(wrapper)
   await flushPromises()
-  return { wrapper, bookingStore: useBookingStore(pinia), router }
+  return { wrapper, bookingStore: useBookingStore(pinia), router, pinia }
 }
 
 const SLOT = { startDatetime: '2026-03-10T15:00:00Z', endDatetime: '2026-03-10T16:00:00Z' }
@@ -137,7 +138,10 @@ describe('BookingRequestPage.vue — slot/timezone regression (deferred-108 AC2)
     const payload = bookingStore.submitBookingRequest.mock.calls[0][0]
     expect(payload.requestedStartTime).toBe('2026-03-10T15:00:00Z')
     expect(payload.requestedEndTime).toBe('2026-03-10T16:00:00Z')
-    expect(payload.playerId).toBe(5)
+    // skillars-deferred-148 AC1: playerId is now the raw string from route.query, not a
+    // Number-parsed value — '5' here, not 5. See the deferred-148 describe block below for the
+    // dedicated Tsid-precision regression coverage on a value too large to round-trip as a Number.
+    expect(payload.playerId).toBe('5')
   })
 
   it('an own booking for the routed coach becomes a non-selectable "own" row that does not count toward the batch', async () => {
@@ -212,5 +216,51 @@ describe('BookingRequestPage.vue — slot/timezone regression (deferred-108 AC2)
       parentBookings: [edgeBooking],
     })
     expect(utc.wrapper.vm.slotRows.filter((r) => r.type === 'own')).toHaveLength(1)
+  })
+
+  // skillars-deferred-148 AC1 (fourth Tsid-corruption site, found on this story's second pass):
+  // route.query.playerId was parsed via Number(...)/Number.isFinite(...) — a real backend Tsid
+  // (18-19 digits, past Number.MAX_SAFE_INTEGER, quoted as a JSON string by the backend's own
+  // CommonConfig.longToStringModule specifically so JS never represents it as a Number) silently
+  // rounds and still passes the finite/positive check, so the corrupted value reached the
+  // booking-submit write path undetected.
+  describe('playerId precision from route.query (deferred-148 AC1)', () => {
+    const LARGE_PLAYER_ID = '893573203704173564'
+    const CORRUPTED_PLAYER_ID = '893573203704173600'
+
+    it('submits with the exact large Tsid string from route.query, not a Number-corrupted one', async () => {
+      const { wrapper, bookingStore } = await mountPage(
+        { computedSlots: [SLOT], coachTimezone: 'America/New_York' },
+        LARGE_PLAYER_ID,
+      )
+
+      wrapper.vm.selectSlot(wrapper.vm.slotRows[0].slot)
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.canSubmit).toBe(true)
+
+      await wrapper.vm.submit()
+
+      expect(bookingStore.submitBookingRequest).toHaveBeenCalledTimes(1)
+      const payload = bookingStore.submitBookingRequest.mock.calls[0][0]
+      expect(typeof payload.playerId).toBe('string')
+      expect(payload.playerId).toBe(LARGE_PLAYER_ID)
+      expect(payload.playerId).not.toBe(CORRUPTED_PLAYER_ID)
+    })
+
+    it('falls back to playerStore.activePlayerId when route.query.playerId is a garbage value, not corrupted into it', async () => {
+      const FALLBACK_ID = '893573203704173999'
+      const { wrapper } = await mountPage(
+        { computedSlots: [SLOT], coachTimezone: 'America/New_York' },
+        'abc',
+        { activePlayerId: FALLBACK_ID },
+      )
+
+      // This is the regression guard for Design A's validation gate: dropping the shape check
+      // entirely (rather than replacing the Number-based one with an equivalent regex) would let
+      // 'abc' flow straight through as playerId, which the page's own canSubmit comment names as
+      // a case that must not be able to submit with an undefined/garbage playerId.
+      expect(wrapper.vm.playerId).toBe(FALLBACK_ID)
+      expect(wrapper.vm.playerId).not.toBe('abc')
+    })
   })
 })

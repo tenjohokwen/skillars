@@ -186,7 +186,7 @@ const $q = useQuasar()
 const route = useRoute()
 const paymentStore = usePaymentStore()
 
-const playerId = computed(() => Number(route.params.playerId))
+const playerId = computed(() => route.params.playerId)
 
 const loading = ref(false)
 const actionLoading = ref(false)

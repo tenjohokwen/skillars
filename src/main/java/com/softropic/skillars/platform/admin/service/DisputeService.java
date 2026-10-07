@@ -33,6 +33,8 @@ import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
 import com.softropic.skillars.platform.payment.service.CoachPayoutOutboxSupport;
 import com.softropic.skillars.platform.payment.service.CreditWalletService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -72,6 +74,7 @@ public class DisputeService {
     private final CoachPayoutRepository coachPayoutRepository;
     private final CoachPayoutOutboxSupport coachPayoutOutboxSupport;
     private final ApplicationEventPublisher eventPublisher;
+    private final PlayerProfileRepository playerProfileRepository;
 
     @Transactional
     public UUID raiseDispute(UUID bookingId, String reason, String details, Long raisedBy, String raisedByRole) {
@@ -82,18 +85,32 @@ public class DisputeService {
         Booking booking = bookingRepository.findById(bookingId)
             .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "Booking"));
 
+        // skillars-deferred-148 Finding 2: booking.getPlayerId() is a PlayerProfile primary key,
+        // not a User id (same cross-ID-space defect class already fixed in
+        // ReviewSubmissionService.checkEligibility) — resolve it through PlayerProfile.getUserId()
+        // rather than comparing raisedBy against it directly. booking.getParentId() is already
+        // correctly a User id, so that disjunct is left untouched.
+        boolean ownerEligible = raisedBy.equals(booking.getParentId());
+        if (!ownerEligible) {
+            ownerEligible = playerProfileRepository.findById(booking.getPlayerId())
+                .map(PlayerProfile::getUserId)
+                .map(raisedBy::equals)
+                .orElse(false);
+        }
         // Deferred-63 AC5: a coach may raise their own dispute on a booking (e.g. contesting a
         // NO_SHOW_COACH claim), not only the parent/player. booking.getCoachId() is the coach
         // *profile* UUID, not a user id, so this needs the same profile-to-user-id hop
         // getAdminDisputeDetail already does. Symmetric first-raise right only: the existing
         // findOpenByBookingId check below still blocks a second dispute on the same booking
         // regardless of who raises it first.
-        boolean ownerEligible = raisedBy.equals(booking.getParentId()) || raisedBy.equals(booking.getPlayerId());
         if (!ownerEligible) {
             // Code review (2026-08-25): a suspended coach must not be able to raise a dispute either —
             // mirrors BookingDuplicationService.duplicateNextWeek's identical SUSPENDED guard (AC2).
             // Looked up lazily, only when the caller isn't already the parent/player, to avoid an
-            // unconditional DB round-trip on the common (non-coach) path.
+            // unconditional DB round-trip on the common (parent/player) path. Since
+            // skillars-deferred-148's playerProfileRepository lookup above also runs on every
+            // non-parent path, a coach-raised dispute now pays two profile lookups (player, then
+            // coach), not one — negligible cost, but no longer a single round-trip.
             ownerEligible = coachProfileRepository.findById(booking.getCoachId())
                 .filter(cp -> cp.getStatus() != CoachProfileStatus.SUSPENDED)
                 .map(CoachProfile::getUserId)

@@ -123,6 +123,20 @@ class DatabaseResetTestExecutionListenerQuiesceTest {
     }
 
     /**
+     * skillars-deferred-148 Finding 6: {@code isQuiesced}'s second {@code &&} operand,
+     * {@code getThreadPoolExecutor()}, throws {@code IllegalStateException} if called before the
+     * executor's delegate has been initialized — unreachable through
+     * {@code quiesceAsyncExecutors} today (it only ever sees eagerly-initialized Spring beans), but
+     * now directly testable since this method was widened to package-private for exactly this.
+     */
+    @Test
+    void isQuiesced_neverInitializedExecutor_returnsTrueWithoutThrowing() {
+        ThreadPoolTaskExecutor neverInitialized = new ThreadPoolTaskExecutor();
+
+        assertThat(DatabaseResetTestExecutionListener.isQuiesced(neverInitialized)).isTrue();
+    }
+
+    /**
      * Appends to the caller's list as each executor is created, so a failure part-way through
      * still leaves every already-started executor visible to the caller's {@code finally} block.
      * Building the list locally and returning it would leak those threads into the shared

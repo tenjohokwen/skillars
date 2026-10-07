@@ -86,7 +86,7 @@ export default defineRouter(function (/* { store, ssrContext } */) {
       return
     }
 
-    if (to.path === '/coach/command-center' && authStore.isCoach) {
+    if (to.matched.some((r) => r.path === '/coach/command-center') && authStore.isCoach) {
       const pbStore = useProfileBuilderStore()
       await pbStore.loadStatus()
       if (!pbStore.isComplete) {
