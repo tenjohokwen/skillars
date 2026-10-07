@@ -48,10 +48,15 @@ simply unknown.
 ### 3. Same action, different inputs
 
 The subtle one. Both workflows call the repo's own `./.github/actions/docker-build`, but not the
-same way:
+same way.
+
+> Line numbers below were re-anchored on 2026-10-07 (`skillars-deferred-146`, which moved the
+> pr-build step into its own `docker-image` job). They had already drifted before that — the
+> previous `pr-build.yml:89-93` citation pointed at 102-107 on master — so treat them as a
+> pointer, not a guarantee, and grep for the step name if they look wrong.
 
 ```yaml
-# pr-build.yml:89-93   "Build Docker image (no push)"
+# pr-build.yml:130-133  "Build Docker image (no push)" (in the docker-image job)
   uses: ./.github/actions/docker-build
   with:
     push: 'false'

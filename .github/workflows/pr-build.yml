@@ -20,6 +20,12 @@ jobs:
     # (25m18s-25m22s) while a local mvn verify of the identical commit finished in 15:18 --
     # degraded shared-runner throughput, not a suite regression. Bumped to 35 for headroom;
     # revisit downward if runner performance normalizes.
+    # 2026-10-07 (skillars-deferred-146 AC2b): DELIBERATELY LEFT AT 35, not retuned, even though
+    # this job's measured duration dropped from 18m39s to 11m36s on run 37574001244 once the
+    # Docker build moved to its own job and the async-quiesce poll delay was removed. The 2026-09-24
+    # note above records a bump made precisely because four consecutive runs hit a 25m ceiling on
+    # degraded runners; lowering this on the strength of one fast run would re-create exactly that
+    # failure. Revisit only after several post-change runs have established a steady state.
     timeout-minutes: 35
     permissions:
       contents: read
