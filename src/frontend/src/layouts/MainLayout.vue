@@ -253,6 +253,15 @@
               <q-item-label class="nav-label">{{ t('booking.packs.dashboardTitle') }}</q-item-label>
             </q-item-section>
           </q-item>
+
+          <q-item v-if="developmentRoute" clickable :to="developmentRoute" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="insights" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('development.dashboardTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
         </template>
 
         <!-- Admin section -->
@@ -291,7 +300,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSession, LOGOUT_BACKEND_WAIT_MS } from 'src/composables/useSession'
@@ -316,6 +325,9 @@ const darkMode = ref(isDarkMode())
 const selfPlayerId = ref(null)
 const packsRoute = computed(() =>
   selfPlayerId.value ? `/parent/players/${selfPlayerId.value}/packs` : null,
+)
+const developmentRoute = computed(() =>
+  selfPlayerId.value ? `/player/development/${selfPlayerId.value}` : null,
 )
 
 const languages = [
@@ -431,13 +443,25 @@ function toggleLeftDrawer() {
   leftDrawerOpen.value = !leftDrawerOpen.value
 }
 
-onMounted(async () => {
+onMounted(() => {
   loadLanguagePreference()
   // Automatic session-expiry handling (cookie/state clearing + redirect) is owned
   // by App.vue, which is always mounted — avoids a race between two listeners.
   window.addEventListener('storage', onStorageThemeChange)
+})
 
-  if (authStore.isPlayer) {
+// routes.js wraps every route — including /login — in this one MainLayout instance, which Vue
+// Router mounts exactly once per SPA session (LoginPage.vue's post-login router.push is a
+// client-side navigation, not a reload, so this component never remounts). A one-shot
+// onMounted check of authStore.isPlayer therefore only ever ran at initial load, almost always
+// while still unauthenticated — permanently skipping this fetch for every real login and
+// leaving the Session Packs / Development Dashboard nav links dark for the rest of the session.
+// Watching isPlayer (immediate: true covers the already-authenticated-on-load case too) fires
+// again the moment authStore.login() flips role to PLAYER.
+watch(
+  () => authStore.isPlayer,
+  async (isPlayer) => {
+    if (!isPlayer) return
     try {
       selfPlayerId.value = await playerStore.fetchSelfPlayerId()
     } catch (err) {
@@ -447,8 +471,9 @@ onMounted(async () => {
         console.error('Failed to resolve self player id for nav', err)
       }
     }
-  }
-})
+  },
+  { immediate: true },
+)
 
 onUnmounted(() => {
   window.removeEventListener('storage', onStorageThemeChange)

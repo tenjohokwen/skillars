@@ -84,6 +84,8 @@ async function mountLayout(
         '/marketplace',
         '/parent/bookings',
       ].map((path) => ({ path, component: STUB })),
+      { path: '/player/development/:playerId', component: STUB },
+      { path: '/parent/players/:playerId/packs', component: STUB },
     ],
   })
   if (beforeEachGuard) {
@@ -426,5 +428,71 @@ describe('MainLayout.vue — silent-404 on self player id (deferred-109 AC3.3)',
     expect(errSpy).toHaveBeenCalled()
     // Mutation: change `if (err.response?.status !== 404)` to a bare `if (err)` → the 404 case now
     // logs and the "swallowed silently" assertion goes RED.
+  })
+})
+
+describe('MainLayout.vue — player nav: Development Dashboard link', () => {
+  it('is absent before selfPlayerId resolves (fetchSelfPlayerId still pending/undefined)', async () => {
+    const { wrapper } = await mountLayout({ role: 'PLAYER', userId: 9 }, undefined, undefined, {
+      shallow: false,
+    })
+    expect(wrapper.find('[href="/player/development/9"]').exists()).toBe(false)
+  })
+
+  it('links to /player/development/:selfPlayerId once resolved', async () => {
+    const { wrapper } = await mountLayout(
+      { role: 'PLAYER', userId: 9 },
+      async ({ pinia }) => {
+        const { usePlayerStore } = await import('src/stores/playerStore')
+        const playerStore = usePlayerStore(pinia)
+        playerStore.fetchSelfPlayerId.mockResolvedValue(42)
+      },
+      undefined,
+      { shallow: false },
+    )
+    expect(wrapper.find('[href="/player/development/42"]').exists()).toBe(true)
+    // Mutation: hardcode developmentRoute to a fixed path (not templated on selfPlayerId) → this
+    // assertion still passes by luck unless the id above is distinctive — 42 here is chosen to
+    // not collide with the mountLayout userId.
+  })
+
+  it('does not show the Development Dashboard link for a non-PLAYER role', async () => {
+    const { wrapper } = await mountLayout(
+      { role: 'PARENT', userId: 3 },
+      async ({ pinia }) => {
+        const { usePlayerStore } = await import('src/stores/playerStore')
+        const playerStore = usePlayerStore(pinia)
+        playerStore.fetchSelfPlayerId.mockResolvedValue(42)
+      },
+      undefined,
+      { shallow: false },
+    )
+    expect(wrapper.find('[href="/player/development/42"]').exists()).toBe(false)
+  })
+
+  it('resolves selfPlayerId and shows the link when role flips to PLAYER post-mount — the real login path, since routes.js wraps every route (incl. /login) in one MainLayout instance that never remounts on a client-side router.push', async () => {
+    const { wrapper, pinia } = await mountLayout(
+      { role: null, userId: null },
+      async ({ pinia }) => {
+        const { usePlayerStore } = await import('src/stores/playerStore')
+        const playerStore = usePlayerStore(pinia)
+        playerStore.fetchSelfPlayerId.mockResolvedValue(77)
+      },
+      undefined,
+      { shallow: false },
+    )
+    // Not authenticated yet: the whole drawer (and the link) is absent.
+    expect(wrapper.find('[href="/player/development/77"]').exists()).toBe(false)
+
+    const { useAuthStore } = await import('src/stores/auth.store')
+    const authStore = useAuthStore(pinia)
+    authStore.userId = 9
+    authStore.role = 'PLAYER'
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+
+    expect(wrapper.find('[href="/player/development/77"]').exists()).toBe(true)
+    // Mutation: revert the onMounted-only check (drop the `watch`) → this assertion goes RED,
+    // since fetchSelfPlayerId would only ever have been attempted once, before role flipped.
   })
 })

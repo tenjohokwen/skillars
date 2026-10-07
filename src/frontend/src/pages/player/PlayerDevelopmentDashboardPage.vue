@@ -180,7 +180,12 @@ const route = useRoute()
 const authStore = useAuthStore()
 const store = useDevelopmentStore()
 
-const playerId = computed(() => Number(route.params.playerId))
+// Kept as the raw route-param STRING, not Number(...): player ids are backend Tsids (18-19
+// digits), well past Number.MAX_SAFE_INTEGER, and the backend quotes Long as a JSON string
+// specifically so JS never has to represent one as a number (CommonConfig.longToStringModule) —
+// converting it back to a Number here silently corrupts it (e.g. …173564 becomes …173600),
+// so every API call below was hitting a player id that does not exist. skillars-deferred-147.
+const playerId = computed(() => route.params.playerId)
 const playerName = computed(() => route.query.playerName ?? '')
 const isCoach = computed(() => authStore.isCoach)
 const isParent = computed(() => authStore.isParent)
@@ -269,13 +274,12 @@ onMounted(async () => {
 watch(
   () => route.params.playerId,
   async (newPlayerId) => {
-    const id = Number(newPlayerId)
-    if (!Number.isFinite(id)) return
+    if (!newPlayerId) return
     // Persist any pending selection against the player it was made for, before switching away.
     debouncedSaveRadarPreferences.flush()
     // Clear stale state before loading new player
     clearDevelopmentState()
-    await loadPlayerData(id)
+    await loadPlayerData(newPlayerId)
   },
   { immediate: false },
 )

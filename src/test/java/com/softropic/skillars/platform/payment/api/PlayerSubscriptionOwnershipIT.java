@@ -5,7 +5,6 @@ import com.softropic.skillars.platform.payment.contract.PlayerSubscriptionRespon
 import com.softropic.skillars.platform.payment.service.SubscriptionService;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.infrastructure.jwt.JwtSecretService;
-import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.PlayerOwnershipGuard;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
@@ -30,7 +29,6 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.Mockito.mock;
@@ -60,6 +58,8 @@ class PlayerSubscriptionOwnershipIT {
     private static final long PARENT_ID  = 5001L;
     private static final long OWN_PLAYER = 123L;
     private static final long OTHER_PLAYER = 999L;
+    private static final long SELF_PLAYER_USER_ID = 7001L;
+    private static final long SELF_PLAYER_PROFILE_ID = 456L;
 
     private static final PlayerSubscriptionResponse STUB_RESPONSE = new PlayerSubscriptionResponse(
         UUID.randomUUID(), OWN_PLAYER, "SEMI_PRO", "YEARLY", "ACTIVE",
@@ -98,6 +98,37 @@ class PlayerSubscriptionOwnershipIT {
                 .param("playerId", String.valueOf(OWN_PLAYER))
                 .with(authentication(auth)))
             .andExpect(status().isOk());
+    }
+
+    // ─── 200: self-registered adult player accesses their own subscription ────
+    // skillars-deferred-147: PlayerOwnershipGuard previously only checked parent ownership
+    // (existsByIdAndParentId), so a self-registered player — parent_id NULL — was unconditionally
+    // denied this endpoint about their own subscription. This pins the fixed self-owned branch.
+
+    @Test
+    void getPlayerSubscription_selfRegisteredPlayer_returns200() throws Exception {
+        com.softropic.skillars.platform.security.contract.Principal principal = mock(com.softropic.skillars.platform.security.contract.Principal.class);
+        when(principal.getBusinessId()).thenReturn(String.valueOf(SELF_PLAYER_USER_ID));
+        when(securityUtil.getCurrentUser()).thenReturn(principal);
+        when(securityUtil.requireCurrentUserId()).thenReturn(SELF_PLAYER_USER_ID);
+
+        Authentication auth = new UsernamePasswordAuthenticationToken(
+            principal, null, List.of(new SimpleGrantedAuthority("ROLE_PLAYER"))
+        );
+
+        when(playerProfileRepository.existsByIdAndParentId(SELF_PLAYER_PROFILE_ID, SELF_PLAYER_USER_ID))
+            .thenReturn(false);
+        when(playerProfileRepository.existsByIdAndUserId(SELF_PLAYER_PROFILE_ID, SELF_PLAYER_USER_ID))
+            .thenReturn(true);
+        when(subscriptionService.getPlayerSubscription(SELF_PLAYER_USER_ID, SELF_PLAYER_PROFILE_ID))
+            .thenReturn(STUB_RESPONSE);
+
+        mockMvc.perform(get("/api/payment/subscriptions/player/me")
+                .param("playerId", String.valueOf(SELF_PLAYER_PROFILE_ID))
+                .with(authentication(auth)))
+            .andExpect(status().isOk());
+        // Mutation: drop PlayerOwnershipGuard's `|| existsByIdAndUserId(...)` disjunct → this goes
+        // RED (403), reproducing the real failure skillars-deferred-147's manual test hit.
     }
 
     // ─── 403: parent tries to access another parent's player ──────────────────
@@ -145,14 +176,9 @@ class PlayerSubscriptionOwnershipIT {
     }
 
     private void stubPlayerOwnedBy(long playerId, long parentId, boolean owned) {
-        if (owned) {
-            PlayerProfile profile = new PlayerProfile();
-            profile.setId(playerId);
-            when(playerProfileRepository.findByIdAndParentId(playerId, parentId))
-                .thenReturn(Optional.of(profile));
-        } else {
-            when(playerProfileRepository.findByIdAndParentId(playerId, parentId))
-                .thenReturn(Optional.empty());
-        }
+        // skillars-deferred-147: PlayerOwnershipGuard now calls existsByIdAndParentId (and, for a
+        // self-registered player, existsByIdAndUserId) rather than findByIdAndParentId — stub the
+        // methods it actually calls, not the ones it used to.
+        when(playerProfileRepository.existsByIdAndParentId(playerId, parentId)).thenReturn(owned);
     }
 }
