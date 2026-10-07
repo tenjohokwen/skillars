@@ -300,6 +300,7 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
         // same "proceed with the reset anyway" residual the catch below already accepts.
         for (int pass = 0; pass < MAX_QUIESCE_PASSES; pass++) {
             boolean waited = false;
+            boolean timedOut = false;
             for (ThreadPoolTaskExecutor executor : executors) {
                 if (isQuiesced(executor)) {
                     continue;
@@ -312,16 +313,27 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
                         .pollInterval(Duration.ofMillis(25))
                         .until(() -> isQuiesced(executor));
                 } catch (ConditionTimeoutException e) {
+                    // Log and move on to the NEXT EXECUTOR, exactly as before skillars-deferred-146.
+                    // Do not return from here: a first cut of the re-sweep did, which abandoned every
+                    // pool not yet reached in this pass and let the reset open against them unchecked
+                    // -- the opposite of what this method exists to do, and a silent breach of AC1's
+                    // "the accepted ConditionTimeoutException residual is unchanged".
                     System.err.printf(
                         "[deferred-131] async executor did not quiesce within 30s (activeCount=%d, "
                             + "queueSize=%d) — proceeding with the reset anyway%n",
                         executor.getActiveCount(), executor.getThreadPoolExecutor().getQueue().size());
-                    return;
+                    timedOut = true;
                 }
             }
             // A pass that never had to wait is a clean sweep of every pool: nothing was draining
             // when we looked, so no pool can have been re-dirtied by another pool we waited on.
-            if (!waited) {
+            //
+            // A pass in which anything timed out does not get a successor. Every executor in THIS
+            // pass was still visited (see the catch above), so behaviour within a pass is identical
+            // to the pre-story code; what is suppressed is only the re-sweep. That caps the
+            // worst case at one pass -- six pools x 30s, the same ceiling this method always had --
+            // instead of letting MAX_QUIESCE_PASSES multiply a wedged pool's timeout by three.
+            if (!waited || timedOut) {
                 return;
             }
         }
