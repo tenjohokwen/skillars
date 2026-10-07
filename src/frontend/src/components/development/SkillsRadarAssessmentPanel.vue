@@ -93,7 +93,7 @@ import { useDevelopmentStore } from 'src/stores/development.store'
 
 const props = defineProps({
   modelValue: Boolean,
-  playerId: { type: Number, required: true },
+  playerId: { type: [Number, String], required: true },
   skillDefinitions: { type: Array, default: () => [] },
 })
 
