@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.reviews.contract.AuthorReviewDto;
 import com.softropic.skillars.platform.reviews.contract.CoachOwnReviewListResponse;
 import com.softropic.skillars.platform.reviews.contract.CoachResponseRequest;
+import com.softropic.skillars.platform.reviews.contract.ReviewEligibilityDto;
 import com.softropic.skillars.platform.reviews.contract.ReviewFlagRequest;
 import com.softropic.skillars.platform.reviews.contract.ReviewFlagResponse;
 import com.softropic.skillars.platform.reviews.contract.ReviewListResponse;
@@ -69,8 +70,27 @@ public class ReviewResource {
         return ResponseEntity.ok(reviewQueryService.listApprovedReviews(coachId, page, sort));
     }
 
+    /**
+     * Pre-check for the frontend's "Write a Review" button (bug report, 2026-10-08: the button was
+     * shown active to any parent/player regardless of whether they had a qualifying session,
+     * surfacing the real rejection only after the user filled out and submitted the form). Mirrors
+     * {@code DrillLibraryResource}'s existing {@code GET .../eligible} pattern for the same reason.
+     */
+    @GetMapping("/coaches/{coachId}/eligibility")
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
+    @Observed(name = "reviews.eligibility")
+    public ResponseEntity<ReviewEligibilityDto> checkEligibility(@PathVariable UUID coachId) {
+        Long userId = resolveUserId();
+        return ResponseEntity.ok(reviewSubmissionService.checkWriteEligibility(coachId, userId));
+    }
+
+    // Bug report (2026-10-08): a coach account submitting a review was previously only blocked by
+    // ReviewSubmissionService.submitReview's own AuthorRole.valueOf(...) check, run AFTER the
+    // eligibility/duplicate checks -- defense-in-depth, not a first line of defense. Gating the role
+    // here too, at the API boundary, matches the frontend's own v-if="isParent || isPlayer" gate and
+    // means a COACH caller is rejected before the service is even entered.
     @PostMapping("/coaches/{coachId}")
-    @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     @Observed(name = "reviews.submit")
     public ResponseEntity<SubmitReviewResponse> submitReview(
             @PathVariable UUID coachId,

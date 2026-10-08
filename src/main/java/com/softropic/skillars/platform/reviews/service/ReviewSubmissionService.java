@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.reviews.contract.AuthorRole;
+import com.softropic.skillars.platform.reviews.contract.ReviewEligibilityDto;
 import com.softropic.skillars.platform.reviews.contract.ReviewErrorCode;
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
 import com.softropic.skillars.platform.reviews.contract.ReviewSubmittedEvent;
@@ -243,7 +244,38 @@ public class ReviewSubmissionService {
             && UNIQUE_AUTHOR_COACH_CONSTRAINT.equals(cve.getConstraintName());
     }
 
+    /**
+     * Read-only "can I write a new review for this coach" pre-check, consumed by {@code
+     * GET /api/reviews/coaches/{coachId}/eligibility} so the frontend can disable/explain the
+     * "Write a Review" button before the user fills out the form, instead of only discovering
+     * ineligibility from a submit-time 403 (bug report, 2026-10-08: the button was unconditionally
+     * active for any parent/player, regardless of whether they had a qualifying session). Mirrors
+     * {@code submitReview}'s own {@code checkEligibility(coachId, authorId, Instant.EPOCH)} call
+     * exactly — same sinceAfter, since this answers the "write", not "edit", question.
+     */
+    public ReviewEligibilityDto checkWriteEligibility(UUID coachId, Long authorId) {
+        if (!coachProfileRepository.existsById(coachId)) {
+            throw new ResourceNotFoundException("Coach", coachId.toString());
+        }
+        return evaluateEligibility(coachId, authorId, Instant.EPOCH);
+    }
+
     private void checkEligibility(UUID coachId, Long authorId, Instant sinceAfter) {
+        ReviewEligibilityDto result = evaluateEligibility(coachId, authorId, sinceAfter);
+        if (result.eligible()) {
+            return;
+        }
+        if (ReviewErrorCode.ACTIVE_DISPUTE.getErrorCode().equals(result.reasonCode())) {
+            throw new OperationNotAllowedException(
+                "An active dispute exists between this author and coach",
+                ReviewErrorCode.ACTIVE_DISPUTE);
+        }
+        throw new OperationNotAllowedException(
+            "No qualifying completed session with this coach",
+            ReviewErrorCode.NO_QUALIFYING_SESSION);
+    }
+
+    private ReviewEligibilityDto evaluateEligibility(UUID coachId, Long authorId, Instant sinceAfter) {
         int minAgeDays = configService.getBoundedInt(
             ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), 7, 1, 365);
         Instant maturedBefore = Instant.now().minus(minAgeDays, ChronoUnit.DAYS);
@@ -271,15 +303,13 @@ public class ReviewSubmissionService {
         }
 
         if (!eligible) {
-            throw new OperationNotAllowedException(
-                "No qualifying completed session with this coach",
-                ReviewErrorCode.NO_QUALIFYING_SESSION);
+            return new ReviewEligibilityDto(false, ReviewErrorCode.NO_QUALIFYING_SESSION.getErrorCode());
         }
 
         if (disputeRepository.existsActiveDisputeByAuthor(coachId, authorId)) {
-            throw new OperationNotAllowedException(
-                "An active dispute exists between this author and coach",
-                ReviewErrorCode.ACTIVE_DISPUTE);
+            return new ReviewEligibilityDto(false, ReviewErrorCode.ACTIVE_DISPUTE.getErrorCode());
         }
+
+        return new ReviewEligibilityDto(true, null);
     }
 }

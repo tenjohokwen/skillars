@@ -162,11 +162,19 @@
           </template>
           <template v-else-if="showWriteReviewButton">
             <q-btn
+              v-if="reviewEligibility?.eligible"
               unelevated
               color="primary"
               :label="t('reviews.writeReview')"
               @click="openWriteReview"
             />
+            <div
+              v-else-if="reviewEligibility"
+              class="text-caption"
+              style="color: var(--text-secondary)"
+            >
+              {{ t(reviewEligibility.reasonCode) }}
+            </div>
           </template>
         </div>
 
@@ -367,6 +375,7 @@ import { getCoachProfile } from 'src/api/marketplace.api'
 import {
   listCoachReviews,
   getMyReviewForCoach,
+  checkReviewEligibility,
   submitReview,
   updateReview,
 } from 'src/api/reviews.api'
@@ -403,6 +412,10 @@ const reviewsLoadingMore = ref(false)
 
 const myReview = ref(null)
 const showWriteReviewButton = ref(false)
+// Bug report (2026-10-08): null while unknown/loading -- the write-review button must not render
+// as active until this resolves, otherwise it's clickable before we know whether the user has a
+// qualifying session with this coach, and the real rejection only surfaces after they submit.
+const reviewEligibility = ref(null)
 
 const reviewDialogOpen = ref(false)
 const reviewDialogMode = ref('write')
@@ -586,10 +599,21 @@ async function fetchMyReview() {
     if (parseApiError(err).errorKey === 'reviews.reviewNotFound') {
       myReview.value = null
       showWriteReviewButton.value = true
+      await fetchReviewEligibility()
     } else {
       console.error('Failed to load your review', err)
       $q.notify({ type: 'negative', message: t('common.errorGeneric') })
     }
+  }
+}
+
+async function fetchReviewEligibility() {
+  try {
+    reviewEligibility.value = await checkReviewEligibility(coachId)
+  } catch (err) {
+    // Fail closed: no button rather than a button that will 403 on submit.
+    console.error('Failed to load review eligibility', err)
+    reviewEligibility.value = null
   }
 }
 

@@ -4,6 +4,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
@@ -28,6 +30,9 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
 class CoachMarketplaceResourceIT extends AbstractIntegrationTest {
@@ -54,6 +59,11 @@ class CoachMarketplaceResourceIT extends AbstractIntegrationTest {
     @LocalServerPort
     private int randomServerPort;
 
+    // Bug report (2026-10-08): CoachSearchService.searchCoaches now resolves photoUrl through
+    // FileStorageService.signedDownloadUrl — mocked here rather than exercised against the real
+    // S3Presigner, mirroring PlayerTimelineResourceIT's own identical precedent for this bean.
+    @MockitoBean private FileStorageService fileStorageService;
+
     // UUID storage so we can reference them in assertions
     private UUID coachProfileId1;
     private UUID coachProfileId2;
@@ -61,6 +71,8 @@ class CoachMarketplaceResourceIT extends AbstractIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        when(fileStorageService.signedDownloadUrl(anyString())).thenReturn("https://s3.test/signed-url");
+
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
                 "INSERT INTO main.authority (id, name, status, created_by, created_date) " +
@@ -319,6 +331,45 @@ class CoachMarketplaceResourceIT extends AbstractIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat((Integer) response.getBody().get("totalElements")).isEqualTo(0);
         assertThat((List<?>) response.getBody().get("coaches")).isEmpty();
+    }
+
+    /**
+     * Bug report (2026-10-08): the coach's photo did not render in search results. Root cause —
+     * {@code CoachProfile.photoUrl} is a bare private-bucket S3 object key, not a browser-loadable
+     * URL, and {@code CoachSearchService} was handing it to the frontend unresolved. Pins the fix:
+     * the card's {@code photoUrl} must be the SIGNED url, and the raw key is what gets signed.
+     */
+    @Test
+    void searchCoaches_coachHasPhoto_returnsSignedUrlNotRawKey() {
+        String rawKey = "coach_profile/" + COACH_ID_1 + "/2026/01/photo.jpg";
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "UPDATE marketplace.coach_profiles SET photo_url = ? WHERE id = ?", rawKey, coachProfileId1);
+            return null;
+        });
+
+        ResponseEntity<Map> response = searchCoaches("Frankfurt", null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<String, Object>> coaches = (List<Map<String, Object>>) response.getBody().get("coaches");
+        Map<String, Object> alice = coaches.stream()
+            .filter(c -> coachProfileId1.toString().equals(c.get("id")))
+            .findFirst().orElseThrow();
+        assertThat(alice.get("photoUrl")).isEqualTo("https://s3.test/signed-url");
+        verify(fileStorageService).signedDownloadUrl(rawKey);
+    }
+
+    @Test
+    void searchCoaches_coachHasNoPhoto_photoUrlNullAndNeverSigned() {
+        ResponseEntity<Map> response = searchCoaches("Frankfurt", null);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<String, Object>> coaches = (List<Map<String, Object>>) response.getBody().get("coaches");
+        Map<String, Object> alice = coaches.stream()
+            .filter(c -> coachProfileId1.toString().equals(c.get("id")))
+            .findFirst().orElseThrow();
+        assertThat(alice.get("photoUrl")).isNull();
+        verify(fileStorageService, org.mockito.Mockito.never()).signedDownloadUrl(anyString());
     }
 
     // ======================== HELPERS ========================

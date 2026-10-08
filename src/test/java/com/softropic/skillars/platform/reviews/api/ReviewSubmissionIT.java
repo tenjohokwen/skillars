@@ -52,10 +52,15 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
     private static final long SELF_USER_ID       = 8000_000_020L;
     private static final long PLAYER_ID_SELF     = 8000_000_021L;
     private static final long PLAYER_ID_ADULT_CHILD = 8000_000_022L;
+    // Bug report (2026-10-08): a second, unrelated coach account/profile -- neither PARENT_ID nor
+    // COACH_USER_ID has ever had a booking with this coach -- used both as the "no qualifying
+    // session" eligibility case and as the target of the coach-reviewing-a-coach regression test.
+    private static final long OTHER_COACH_USER_ID = 8000_000_030L;
 
     private static final String PARENT_EMAIL = "parent.rev@skillars-test.com";
     private static final String COACH_EMAIL  = "coach.rev@skillars-test.com";
     private static final String SELF_EMAIL   = "self.rev@skillars-test.com";
+    private static final String OTHER_COACH_EMAIL = "other.coach.rev@skillars-test.com";
 
     // skillars-deferred-145: default booking/player fixture matured past the new 7-day floor
     // (reviews.minSessionAgeDays) and linked player set to a MINOR tier, so a parent-authored
@@ -73,6 +78,7 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
     @LocalServerPort private int randomServerPort;
 
     private UUID coachProfileId;
+    private UUID otherCoachProfileId;
 
     @BeforeEach
     void setUp() {
@@ -116,6 +122,20 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
 
             // COMPLETED booking matured past the 7-day floor — eligible for review.
             insertCompletedBookingFor(PARENT_ID, PLAYER_ID, Instant.now().minusSeconds(DEFAULT_BOOKING_AGE_DAYS * 86400L));
+
+            // Bug report (2026-10-08): a second coach neither PARENT_ID nor COACH_USER_ID has ever
+            // booked — see OTHER_COACH_USER_ID's own comment above.
+            insertUser(OTHER_COACH_USER_ID, OTHER_COACH_EMAIL, passwordHash, "COACH");
+            jdbcTemplate.update(
+                "INSERT INTO main.user_authority (user_id, authority_id) " +
+                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_COACH')) ON CONFLICT DO NOTHING",
+                OTHER_COACH_USER_ID);
+            otherCoachProfileId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_profiles " +
+                "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) " +
+                "VALUES (?, ?, 'Other Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
+                otherCoachProfileId, OTHER_COACH_USER_ID);
 
             return null;
         });
@@ -512,6 +532,137 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
                 .isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    /**
+     * Bug report (2026-10-08): the frontend's "Write a Review" button was shown active to any
+     * parent/player regardless of whether they had a qualifying session, surfacing the real
+     * rejection only after the user filled out and submitted the form. This proves the new
+     * {@code GET .../eligibility} pre-check the frontend now calls before showing that button.
+     */
+    @Test
+    void checkEligibility_qualifyingSession_returnsEligibleTrue() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId + "/eligibility"),
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(parentCookies),
+            Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("eligible")).isEqualTo(true);
+        assertThat(response.getBody().get("reasonCode")).isNull();
+    }
+
+    @Test
+    void checkEligibility_noQualifyingSession_returnsEligibleFalseWithReasonCode() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + otherCoachProfileId + "/eligibility"),
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(parentCookies),
+            Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("eligible")).isEqualTo(false);
+        assertThat(response.getBody().get("reasonCode")).isEqualTo("reviews.noQualifyingSession");
+    }
+
+    /** Mirrors {@code submitReview_activeDisputeOnOtherBooking_returns403}'s own fixture exactly. */
+    @Test
+    void checkEligibility_activeDispute_returnsEligibleFalseWithActiveDisputeReason() {
+        transactionTemplate.execute(status -> {
+            UUID otherBookingId = UUID.randomUUID();
+            Instant otherSessionStart = Instant.now().minusSeconds(20L * 86400);
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings " +
+                "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
+                " version, created_at, updated_at, canonical_timezone) " +
+                "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
+                otherBookingId, coachProfileId, PARENT_ID, PLAYER_ID,
+                Timestamp.from(otherSessionStart),
+                Timestamp.from(otherSessionStart.plusSeconds(3600)),
+                Timestamp.from(Instant.now().minusSeconds(21L * 86400)),
+                Timestamp.from(Instant.now().minusSeconds(20L * 86400)));
+            jdbcTemplate.update(
+                "INSERT INTO admin.disputes " +
+                "(id, booking_id, raised_by, raised_by_role, reason, details, status, created_at) " +
+                "VALUES (?, ?, ?, 'PARENT', 'OTHER', 'Test dispute', 'OPEN', ?)",
+                UUID.randomUUID(), otherBookingId, PARENT_ID, Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId + "/eligibility"),
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(parentCookies),
+            Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("eligible")).isEqualTo(false);
+        assertThat(response.getBody().get("reasonCode")).isEqualTo("reviews.activeDispute");
+    }
+
+    @Test
+    void checkEligibility_coachNotFound_returns404() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        UUID unknownCoach = UUID.randomUUID();
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + unknownCoach + "/eligibility"),
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(parentCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    /**
+     * Role-gate hardening half of the second bug report ("a coach should not review another
+     * coach"): {@code GET .../eligibility} carries the same {@code HAS_PARENT_OR_PLAYER_ROLE}
+     * pre-authorization as {@code POST .../coaches/{coachId}} below, so a coach caller is rejected
+     * at the API boundary before the frontend could ever show it a usable button.
+     */
+    @Test
+    void checkEligibility_coachCaller_returns403() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + otherCoachProfileId + "/eligibility"),
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(coachCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    /**
+     * Second bug report (2026-10-08): "a coach should not review another coach." Independently
+     * confirmed already blocked two layers deep (no {@code PlayerProfile} row for a coach account
+     * ever matches {@code checkEligibility}'s author-identity check, and {@code AuthorRole} has no
+     * {@code COACH} value) — but that role gate previously ran LAST, inside the service, after
+     * eligibility and duplicate checks: defense-in-depth, not a first line of defense. This pins
+     * the hardened {@code @PreAuthorize(HAS_PARENT_OR_PLAYER_ROLE)} now on the controller itself,
+     * so a coach caller is rejected before {@code ReviewSubmissionService} is even entered.
+     */
+    @Test
+    void submitReview_asCoachAuthor_returns403() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + otherCoachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 5, "body", "One coach reviewing another"),
+            authenticatedHeaders(coachCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.FORBIDDEN));
     }
 
     /**

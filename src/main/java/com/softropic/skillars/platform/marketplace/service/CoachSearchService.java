@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.marketplace.service;
 
+import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.marketplace.contract.CoachCardDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachSearchParams;
 import com.softropic.skillars.platform.marketplace.contract.CoachSearchResponse;
@@ -39,6 +40,7 @@ public class CoachSearchService {
     private final CoachPricingRepository coachPricingRepository;
     private final CoachReliabilityStrikeRepository strikeRepository;
     private final CoachCapabilityService coachCapabilityService;
+    private final FileStorageService fileStorageService;
 
     public CoachSearchResponse searchCoaches(CoachSearchParams params, int page, int size) {
         // 1. Build DB-level specification — status=ACTIVE and city filter always applied
@@ -71,7 +73,7 @@ public class CoachSearchService {
             p.getDisplayName(),
             p.getCity(),
             p.getDistrict(),
-            p.getPhotoUrl(),
+            resolvePhotoUrl(p.getPhotoUrl()),
             p.getVerificationTier(),
             specialtiesByCoach.getOrDefault(p.getId(), List.of()).stream().limit(2).toList(),
             priceByCoach.getOrDefault(p.getId(), BigDecimal.ZERO),
@@ -107,6 +109,15 @@ public class CoachSearchService {
             totalPages,
             hasNext
         );
+    }
+
+    /**
+     * Bug report (2026-10-08): {@code CoachProfile.photoUrl} is stored as the bare S3 object key
+     * (private bucket), not a browser-loadable URL — mirrors {@code CoachProfileService}'s own
+     * identical fix for the single-profile page, which hit the exact same symptom.
+     */
+    private String resolvePhotoUrl(String storageKey) {
+        return StringUtils.hasText(storageKey) ? fileStorageService.signedDownloadUrl(storageKey) : null;
     }
 
     private Sort buildSort(String sortBy) {
