@@ -40,6 +40,8 @@ import org.springframework.context.MessageSource;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 
 import jakarta.servlet.FilterChain;
@@ -427,6 +429,112 @@ class JWTAuthorizationFilterTest {
 
         verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         verify(securityUtil).terminateSession(request, response);
+        verify(filterChain, never()).doFilter(request, response);
+    }
+
+    @Test
+    @DisplayName("skillars-deferred-149 AC3 code review (2026-10-08): a JWT whose SESSION_ISSUED_AT "
+        + "claim predates the account's securitySessionInvalidatedAt also terminates the session")
+    void testTheftRevokedSession_terminatesSession() throws ServletException, IOException {
+        // The real mechanism (moved here from DaoAuthProvider/Principal after the code review found
+        // that binding it to credentialsNonExpired re-armed on the victim's own next login and
+        // separately locked /authenticate out of a flagged account): authorize() SUCCEEDS here --
+        // it no longer has anything to say about this -- and assertSessionNotRevoked does the real
+        // check, comparing the incoming JWT's own claim against the just-authorized Principal's
+        // current securitySessionInvalidatedAt.
+        Instant invalidatedAt = Instant.now().minusSeconds(60);
+        Principal authorizedPrincipal = new Principal.Builder()
+            .username("testuser").password("N/A").enabled(true)
+            .otpEnabled(false)
+            .authorities(List.of())
+            .businessId("1")
+            .securitySessionInvalidatedAt(invalidatedAt)
+            .build();
+        Authentication authorized = new UsernamePasswordAuthenticationToken(
+            authorizedPrincipal, null, authorizedPrincipal.getAuthorities());
+        ((UsernamePasswordAuthenticationToken) authorized).setDetails(authorizedPrincipal);
+
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
+        when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
+        when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
+        when(daoAuthProvider.authorize(any(), any())).thenReturn(authorized);
+        // The JWT's own claim is from BEFORE the account's revocation -- stale, must be denied.
+        when(loginTokenManager.extractSessionIssuedAt(request))
+            .thenReturn(invalidatedAt.minusSeconds(120).toEpochMilli());
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(securityUtil).terminateSession(request, response);
+        verify(filterChain, never()).doFilter(request, response);
+        verify(loginTokenManager, never()).renewLoginToken(any(), any());
+    }
+
+    @Test
+    @DisplayName("skillars-deferred-149 AC3 code review (2026-10-08): a JWT whose SESSION_ISSUED_AT "
+        + "claim is AFTER the account's securitySessionInvalidatedAt proceeds normally")
+    void testFreshSessionAfterRevocation_proceedsNormally() throws ServletException, IOException {
+        // Proves a legitimate re-login's own fresh JWT is not collaterally denied just because the
+        // account has a revocation history from an unrelated earlier theft event.
+        Instant invalidatedAt = Instant.now().minusSeconds(60);
+        Principal authorizedPrincipal = new Principal.Builder()
+            .username("testuser").password("N/A").enabled(true)
+            .otpEnabled(false)
+            .authorities(List.of())
+            .businessId("1")
+            .securitySessionInvalidatedAt(invalidatedAt)
+            .build();
+        Authentication authorized = new UsernamePasswordAuthenticationToken(
+            authorizedPrincipal, null, authorizedPrincipal.getAuthorities());
+        ((UsernamePasswordAuthenticationToken) authorized).setDetails(authorizedPrincipal);
+
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
+        when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
+        when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
+        when(daoAuthProvider.authorize(any(), any())).thenReturn(authorized);
+        // Minted AFTER the revocation -- a legitimate session, must be allowed through.
+        when(loginTokenManager.extractSessionIssuedAt(request))
+            .thenReturn(invalidatedAt.plusSeconds(10).toEpochMilli());
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(securityUtil, never()).terminateSession(any(), any());
+        verify(loginTokenManager).renewLoginToken(response, authorizedPrincipal);
+        verify(filterChain).doFilter(request, response);
+    }
+
+    @Test
+    @DisplayName("skillars-deferred-149 AC4: USER_NOT_FOUND is now a genuine denial — terminates session")
+    void testUserNotFound_terminatesSession() throws ServletException, IOException {
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
+        when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
+        when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
+        when(daoAuthProvider.authorize(any(), any())).thenThrow(
+                new AuthorizationException("The given username was not found",
+                                            SecurityError.USER_NOT_FOUND));
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(securityUtil).terminateSession(request, response);
+        verify(filterChain, never()).doFilter(request, response);
+    }
+
+    @Test
+    @DisplayName("skillars-deferred-149 AC4: UNKNOWN stays routine — deliberate exclusion, not an "
+        + "oversight. A transient DB/infra failure must not revoke a real user's refresh token.")
+    void testUnknown_staysRoutine_doesNotTerminateSession() throws ServletException, IOException {
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
+        when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
+        when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
+        when(daoAuthProvider.authorize(any(), any())).thenThrow(
+                new AuthorizationException("Unknown authorization failure", SecurityError.UNKNOWN));
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(securityUtil, never()).terminateSession(any(), any());
+        verify(loginTokenManager).deleteLoginToken(response);
         verify(filterChain, never()).doFilter(request, response);
     }
 

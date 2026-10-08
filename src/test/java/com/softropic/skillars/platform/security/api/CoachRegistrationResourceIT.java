@@ -218,7 +218,7 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
         );
 
         UUID expiredToken = UUID.randomUUID();
-        jdbcTemplate.update(
+        commitWrite(
             "INSERT INTO main.email_verification_tokens (id, user_id, token, expires_at, used) " +
             "VALUES (999999999999995, ?, ?, ?, false)",
             userId, expiredToken, Timestamp.from(Instant.now().minus(2, ChronoUnit.HOURS))) ;
@@ -236,6 +236,12 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
                 assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
                 assertThat(ex.getResponseBodyAsString()).contains("canResend");
                 assertThat(ex.getResponseBodyAsString()).contains("true");
+                // Code review (2026-10-08): canResend=true is ALSO true for the "not found"
+                // branch (CoachRegistrationService.verifyEmail's first orElseThrow), so the two
+                // assertions above cannot distinguish "expired" from "invisible seed row" either
+                // — the exact vacuous-pass shape this file's own commitWrite fix exists to close.
+                // This is the assertion that actually proves the expiry branch, specifically, ran.
+                assertThat(ex.getResponseBodyAsString()).contains("security.emailTokenExpired");
             });
     }
 
@@ -256,7 +262,7 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
         );
 
         UUID usedToken = UUID.randomUUID();
-        jdbcTemplate.update(
+        commitWrite(
             "INSERT INTO main.email_verification_tokens (id, user_id, token, expires_at, used) " +
             "VALUES (999999999999994, ?, ?, ?, true)",
             userId, usedToken, Timestamp.from(Instant.now().plus(24, ChronoUnit.HOURS))
@@ -270,8 +276,11 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
             Map.class
         ))
             .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
-                .isEqualTo(HttpStatus.BAD_REQUEST));
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("security.emailTokenUsed");
+            });
     }
 
     @Test
@@ -818,6 +827,17 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
                 assertThat(httpException.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
                 assertThat(httpException.getResponseBodyAsString()).contains("security.verificationLinkInvalid");
             });
+    }
+
+    /**
+     * Applies a write and COMMITS it. Required, not stylistic: {@code spring.datasource.hikari
+     * .auto-commit} is {@code false} (application.yaml:183), so a bare {@code jdbcTemplate} write
+     * issued outside a transaction is rolled back when the connection is released back to the pool
+     * — invisible to the real HTTP round trip this test then makes. Mirrors {@code
+     * AuthResourceIT.commitWrite} exactly (skillars-deferred-144 AC5 fixed the identical bug there).
+     */
+    private void commitWrite(String sql, Object... args) {
+        transactionTemplate.execute(status -> jdbcTemplate.update(sql, args));
     }
 
     private String hashOtp(String otp, Long userId) {

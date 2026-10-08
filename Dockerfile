@@ -8,8 +8,43 @@ RUN mvn dependency:go-offline -B -q || true
 
 # Layer: Full source (Java + frontend — node binary downloaded here by frontend-maven-plugin)
 COPY src/ src/
-COPY .git/ .git/
-RUN mvn package -Dmaven.test.skip=true -B
+
+# skillars-deferred-149 AC7: git-commit-id-maven-plugin's own git-based generation is skipped
+# here (-Dmaven.gitcommitid.skip=true) because .git/ is no longer COPYed into the builder at all
+# — the Dockerfile's own COPY instructions previously brought in only three paths (pom.xml, src/,
+# .git/), and JGit's dirty-check compared that necessarily-partial working directory against the
+# full tree it expected, found every OTHER tracked path "deleted", and stamped git.dirty=true
+# into every build regardless of how clean the real commit was. This RUN instruction references
+# no ARG, so it stays cacheable across builds whose SHA differs but whose src/ is byte-identical
+# — see the GIT_COMMIT_SHA step below for why that matters.
+RUN mvn package -Dmaven.test.skip=true -Dmaven.gitcommitid.skip=true -B
+
+# Code review (2026-10-08): deliberately placed AFTER the expensive mvn package above, not
+# before it. BuildKit folds an ARG's current value into the cache key of every instruction that
+# references it, so if this ARG were declared/used ahead of `mvn package`, a GIT_COMMIT_SHA that
+# changes between builds (e.g. a PR's merge-commit SHA shifts whenever its base branch advances,
+# even with no new commits on the PR itself) would bust that layer's cache and every layer after
+# it — including the full Maven + Quasar build this story's immediate predecessor
+# (skillars-deferred-146) split into its own job specifically to stop re-paying. Patching the
+# already-built jar in place here, using the full JDK's own `jar` tool (this stage is the
+# `-eclipse-temurin` JDK image, not the slim JRE runtime stage), keeps the SHA-dependent step
+# cheap and isolated to one small layer regardless of how the Maven build was cached.
+#
+# git.dirty is derived, not hardcoded: a real CI build always supplies a genuine SHA (both
+# ci.yml and pr-build.yml pass github.sha explicitly), so it reports dirty=false. A bare local
+# `docker build .` with no --build-arg falls back to GIT_COMMIT_SHA=local (this ARG's own
+# default, matching docker-build/action.yml's `commit-sha` input default) and must NOT also claim
+# dirty=false — that would assert a clean, attributable build of a commit that does not exist,
+# regardless of whether the local working tree is actually clean.
+ARG GIT_COMMIT_SHA=local
+RUN JAR_DIRTY=false; \
+    if [ "${GIT_COMMIT_SHA}" = "local" ]; then JAR_DIRTY=true; fi; \
+    mkdir -p /tmp/gitprops/BOOT-INF/classes && \
+    printf '#Generated at Docker build time (skillars-deferred-149 AC7)\ngit.commit.id.full=%s\ngit.commit.id.abbrev=%s\ngit.dirty=%s\n' \
+      "${GIT_COMMIT_SHA}" "$(echo "${GIT_COMMIT_SHA}" | cut -c1-7)" "${JAR_DIRTY}" \
+      > /tmp/gitprops/BOOT-INF/classes/git.properties && \
+    JAR_FILE=$(ls target/skillars-*.jar) && \
+    jar uf "${JAR_FILE}" -C /tmp/gitprops BOOT-INF/classes/git.properties
 
 # Stage 2: Runtime (minimal JRE image)
 FROM eclipse-temurin:17-jre-alpine

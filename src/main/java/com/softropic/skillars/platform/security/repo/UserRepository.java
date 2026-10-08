@@ -11,6 +11,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -119,4 +120,20 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Transactional
     void recordCleanupAttemptFailure(@Param("login") String login, @Param("attempts") int attempts,
         @Param("attemptedAt") Instant attemptedAt, @Param("errorMessage") String errorMessage);
+
+    /**
+     * skillars-deferred-149 AC3: flips {@code securitySessionInvalidatedAt} on a refresh-token-reuse
+     * ("theft") detection. {@code REQUIRES_NEW}, mirroring {@code
+     * RefreshTokenRepository.markAllUsedByUserId}/{@code markUsedByTokenHash} — NOT {@link
+     * #changeAccountLockStatus}/{@link #markCleanupFailed}, which are the wrong precedent for this
+     * call site. Both call sites ({@code AuthService.refresh()}'s two theft branches) call this and
+     * then throw immediately; {@code AuthService} is its own outermost transaction boundary
+     * ({@code @Transactional} class-level, {@code AuthResource} not transactional, {@code
+     * spring.jpa.open-in-view=false}), so an ambient write here would be silently rolled back by the
+     * very throw that follows it, and this AC would ship as a complete no-op.
+     */
+    @Query("update User set securitySessionInvalidatedAt = :invalidatedAt where id = :userId")
+    @Modifying
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void invalidateSessionsForUser(@Param("userId") Long userId, @Param("invalidatedAt") Instant invalidatedAt);
 }

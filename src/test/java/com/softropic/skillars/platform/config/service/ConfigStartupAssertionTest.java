@@ -283,7 +283,7 @@ class ConfigStartupAssertionTest {
             .isNull();
     }
 
-    // ── skillars-deferred-145 D3: reviews.minSessionAgeDays < reviews.updateCooldownDays ──
+    // ── skillars-deferred-149 AC5: reviews.updateCooldownDays - reviews.minSessionAgeDays >= 7 ──
 
     @Test
     void reviewWindowOrderingViolation_nonDev_throwsAppSetupExceptionNamingBothKeys() {
@@ -320,10 +320,10 @@ class ConfigStartupAssertionTest {
     }
 
     @Test
-    void reviewWindowOrderingEqualValues_flagsAsSuperseded() {
-        // Equal is still a violation here (unlike the reliability-strike pair): minSessionAgeDays
-        // must be STRICTLY less than updateCooldownDays, or the maturity floor exactly supersedes
-        // the cooldown on the boundary day.
+    void reviewWindowGapEqualValues_flagsAsSuperseded() {
+        // Equal values (gap=0) are a violation under both the old strict-ordering rule and the new
+        // minimum-7-day-gap rule (skillars-deferred-149 AC5) — a non-positive gap is a strict subset
+        // of a gap-under-7, so this case covers both without change.
         when(configService.getBoundedInt(
                 eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
             .thenReturn(30);
@@ -337,7 +337,25 @@ class ConfigStartupAssertionTest {
     }
 
     @Test
-    void reviewWindowOrderingMinAgeBelowCooldown_doesNotFlag() {
+    void reviewWindowGapOneDay_nowFlagsAsSuperseded() {
+        // skillars-deferred-149 AC5: minSessionAgeDays=29, updateCooldownDays=30 (gap=1) passed the
+        // OLD strict-ordering rule (29 < 30) but leaves a one-day-wide qualifying window — this must
+        // now fail fast under the new minimum-7-day-gap rule.
+        when(configService.getBoundedInt(
+                eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
+            .thenReturn(29);
+        when(configService.getBoundedInt(
+                eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), anyInt(), anyInt(), anyInt()))
+            .thenReturn(30);
+
+        assertThatThrownBy(() -> assertion.onApplicationEvent(EVENT))
+            .isInstanceOf(AppSetupException.class)
+            .hasMessageContaining(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key());
+    }
+
+    @Test
+    void reviewWindowGapOfSevenOrMoreDays_doesNotFlag() {
+        // Coded defaults (7/30, gap=23) must continue to pass unchanged under the new rule.
         when(configService.getBoundedInt(
                 eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
             .thenReturn(7);

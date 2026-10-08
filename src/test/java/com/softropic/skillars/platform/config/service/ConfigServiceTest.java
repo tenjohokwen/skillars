@@ -386,6 +386,22 @@ class ConfigServiceTest {
         assertThat(existing.getValue()).isEqualTo("10");
     }
 
+    @Test
+    void updateConfig_reviewWindowGapOneDay_nowRejectedWith400() {
+        // skillars-deferred-149 AC5: 29/30 (gap=1) passed the OLD strict-ordering rule (29 < 30) but
+        // must now fail under the new minimum-7-day-gap rule.
+        when(configRepository.findByKey("reviews.minSessionAgeDays"))
+                .thenReturn(Optional.of(entry("reviews.minSessionAgeDays", "29", ConfigValueType.LONG)));
+        when(configRepository.findByKey("reviews.updateCooldownDays"))
+                .thenReturn(Optional.of(entry("reviews.updateCooldownDays", "30", ConfigValueType.LONG)));
+
+        assertThatThrownBy(() -> configService.updateConfig("reviews.minSessionAgeDays", "29"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("reviews.minSessionAgeDays")
+                .hasMessageContaining("reviews.updateCooldownDays");
+        verify(configRepository, never()).save(any());
+    }
+
     /**
      * Round-2 code review (R2): pins that the guard resolves the partner key from its STORED row, not
      * from the TTL cache. The cache is primed here with a partner value that would make the write

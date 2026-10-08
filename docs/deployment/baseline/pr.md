@@ -62,7 +62,7 @@ same way.
     push: 'false'
     load: 'true'
 
-# ci.yml:71-74         "Build and push Docker image"
+# ci.yml:238-239       "Build and push Docker image"
   uses: ./.github/actions/docker-build
   with:
     push: 'true'

@@ -149,9 +149,12 @@ The reset was never the dominant per-test-method cost. The async-executor quiesc
 immediately before it (`skillars-deferred-146`) cost **~131 ms per method** across up to six
 thread pools — roughly 1.3× the old reset figure and 9× the current one — because Awaitility
 resolves an unset `pollDelay` to the fixed `pollInterval`, so each pool slept 25 ms before
-evaluating a condition that was already true. Removing that took it to **0.07 ms mean
-(84 ms total over 1199 invocations)**, measured on run `37574001244`, and took 2m37s off the
-failsafe phase. Both counters print at the end of every run; grep
+evaluating a condition that was already true. Removing that took it to **44.9 µs mean
+(53.8 ms total over 1199 invocations)**, measured on the merged head's own run `37584051185`
+(the quiesce counter was switched from milliseconds to microseconds in this story's own code
+review, after the run originally cited here — `37574001244` — predates that patch and its
+"0.07 ms" figure is now stale), and took 2m37s off the failsafe phase. Both counters print at
+the end of every run; grep
 `[deferred-19] database reset:` and `[deferred-146] async quiesce:` in the build log for the
 current numbers (the quiesce counter reports microseconds, the reset counter milliseconds).
 

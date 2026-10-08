@@ -21,6 +21,24 @@ inputs:
     description: 'Image labels (newline-separated)'
     required: false
     default: ''
+  commit-sha:
+    description: >-
+      Full commit SHA to stamp into the image's git.properties as build provenance (skillars-
+      deferred-149 AC7). The Dockerfile no longer COPYs .git/ (the Dockerfile's own COPY
+      instructions only ever brought in three paths -- pom.xml, src/, .git/ -- so JGit's
+      dirty-check, run against that necessarily-partial working directory, always reported every
+      OTHER tracked path as deleted and stamped git.dirty=true regardless of the real commit's
+      cleanliness), so the runner's own github.sha is fed in explicitly instead.
+    required: false
+    # Code review (2026-10-08): this default MUST match the Dockerfile's own `ARG
+    # GIT_COMMIT_SHA=local` default, not diverge from it. build-args passes
+    # GIT_COMMIT_SHA=${{ inputs.commit-sha }} UNCONDITIONALLY below -- a caller that omits this
+    # input still emits --build-arg GIT_COMMIT_SHA=<default>, and Docker's --build-arg X=<value>
+    # OVERRIDES the Dockerfile's ARG default with that exact value, even an empty string (distinct
+    # from not passing --build-arg X at all). A default of '' here previously shipped blank
+    # provenance alongside a hardcoded git.dirty=false for any future caller that forgets this
+    # input -- not currently triggered (both call sites below pass it explicitly) but latent.
+    default: 'local'
 
 outputs:
   imageid:
@@ -54,5 +72,6 @@ runs:
         # caches normally; only the fast trailing runtime-stage layers rebuild.
         build-args: |
           APK_UPGRADE_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+          GIT_COMMIT_SHA=${{ inputs.commit-sha }}
         cache-from: type=gha
         cache-to: type=gha,mode=max

@@ -133,6 +133,32 @@ public class User extends Customer implements Serializable {
     @Column(name = "cleanup_last_error", columnDefinition = "text")
     private String cleanupLastError;
 
+    /**
+     * skillars-deferred-149 AC3: a monotonic, account-wide "last refresh-token-theft revocation"
+     * epoch — set ONLY by {@code UserRepository.invalidateSessionsForUser}'s bulk
+     * {@code @Modifying @Query} (called from {@code AuthService.refresh()}'s two theft-detection
+     * branches). Compared by {@code JWTAuthorizationFilter}'s DB-reauth branch against the
+     * specific JWT's own {@code SecurityConstants.SESSION_ISSUED_AT} claim — a JWT whose claim
+     * predates this value is denied, bounding a stolen JWT's survival to the filter's existing
+     * {@code DB_REFRESH_TOKEN_INTERVAL} (5 minutes), permanently, regardless of any later unrelated
+     * login. {@code @NotAudited}: session-security operational state, not user-facing history —
+     * same classification as {@link #cleanupFailedAt} above ({@code main.user_aud} has no matching
+     * column; V145's gap is the mistake not to repeat here).
+     *
+     * <p>{@code insertable = false, updatable = false} (code review 2026-10-08): {@code User} has
+     * no {@code @Version} and no {@code @DynamicUpdate}, so a plain managed-entity
+     * {@code userRepository.save(user)} — of which there are many call sites, and any one of them
+     * racing a theft-detection event — flushes a STATIC {@code UPDATE} naming every mapped column,
+     * writing back whatever stale in-memory value this field held when THAT entity was loaded,
+     * silently undoing the bulk query's write. These two attributes make Hibernate omit this
+     * column from every INSERT/UPDATE it generates for a managed entity, no matter which field
+     * changed or which code path triggered the flush — the bulk {@code @Modifying @Query} above
+     * remains the only writer, by construction, not by convention.
+     */
+    @NotAudited
+    @Column(name = "security_session_invalidated_at", insertable = false, updatable = false)
+    private Instant securitySessionInvalidatedAt;
+
     private boolean otpEnabled;
 
     /**
@@ -333,6 +359,14 @@ public class User extends Customer implements Serializable {
 
     public void setCleanupLastError(final String cleanupLastError) {
         this.cleanupLastError = cleanupLastError;
+    }
+
+    public Instant getSecuritySessionInvalidatedAt() {
+        return securitySessionInvalidatedAt;
+    }
+
+    public void setSecuritySessionInvalidatedAt(final Instant securitySessionInvalidatedAt) {
+        this.securitySessionInvalidatedAt = securitySessionInvalidatedAt;
     }
 
     public boolean isOtpEnabled() {

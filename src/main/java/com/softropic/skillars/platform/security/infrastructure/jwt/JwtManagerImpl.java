@@ -55,6 +55,10 @@ public class JwtManagerImpl implements LoginTokenManager {
                 .plus(DB_REFRESH_TOKEN_INTERVAL.toMillis(), ChronoUnit.MILLIS)
                 .toEpochMilli();
         final Map<String, Object> claims = tokenCreator.toClaims(principal, dbRefreshToken, false, null);
+        // skillars-deferred-149 AC3 code review (2026-10-08): a fresh login always carries a fresh
+        // session-issued-at epoch — it is by definition authenticated as of now, so it cannot
+        // predate any prior revocation. See SecurityConstants.SESSION_ISSUED_AT's own javadoc.
+        claims.put(SESSION_ISSUED_AT, Instant.now(ClockProvider.getClock()).toEpochMilli());
         createAndSetJwt(res, claims);
     }
 
@@ -64,6 +68,10 @@ public class JwtManagerImpl implements LoginTokenManager {
                 .plus(DB_REFRESH_TOKEN_INTERVAL.toMillis(), ChronoUnit.MILLIS)
                 .toEpochMilli();
         final Map<String, Object> claims = tokenCreator.toClaims(principal, dbRefreshToken, true, null);
+        // skillars-deferred-149 AC3 code review (2026-10-08): called both by JWTAuthenticationFilter
+        // (a fresh login) and by JWTAuthorizationFilter's DB-reauth success path -- both are a
+        // verified-as-of-now re-authentication, so the epoch resets here too, same as dbRefreshToken.
+        claims.put(SESSION_ISSUED_AT, Instant.now(ClockProvider.getClock()).toEpochMilli());
         createAndSetJwt(res, claims);
     }
 
@@ -78,6 +86,9 @@ public class JwtManagerImpl implements LoginTokenManager {
                     .plus(DB_REFRESH_TOKEN_INTERVAL.toMillis(), ChronoUnit.MILLIS)
                     .toEpochMilli();
             claims.put(DB_REFRESH_TOKEN, dbRefreshToken);
+            // skillars-deferred-149 AC3 code review (2026-10-08): this completes 2FA -- a fresh
+            // authentication event, exactly like the ISSUED_AT/DB_REFRESH_TOKEN resets above.
+            claims.put(SESSION_ISSUED_AT, Instant.now(ClockProvider.getClock()).toEpochMilli());
 
             createAndSetJwt(res, claims);
             setSkillarsProfileCookie(res, claims);
@@ -164,6 +175,17 @@ public class JwtManagerImpl implements LoginTokenManager {
             final Long dbRefreshToken = claimsExtractor.extractDbRefreshToken(req);
             if (dbRefreshToken != null) {
                 final Map<String, Object> claims = tokenCreator.toClaims(principal, dbRefreshToken, true, null);
+                // skillars-deferred-149 AC3 code review (2026-10-08): carried forward UNCHANGED,
+                // never reset, on the fast path -- this is what lets the DB-reauth path's epoch
+                // comparison catch a stolen JWT regardless of how many times it has been
+                // fast-path-extended since theft. A token minted before this claim existed has no
+                // value to carry forward; leaving it absent (rather than inventing one) means the
+                // DB-reauth comparison below treats it as predating any revocation, the safe
+                // (fail-closed) reading for a claim this story did not ship with.
+                final Long sessionIssuedAt = claimsExtractor.extractSessionIssuedAt(req);
+                if (sessionIssuedAt != null) {
+                    claims.put(SESSION_ISSUED_AT, sessionIssuedAt);
+                }
                 createAndSetJwt(res, claims);
             } else {
                 throw new InvalidJWTDataException("Cannot find dbRefreshToken in JWT.", MISSING_JWT_DB_REFRESH_TOKEN);
@@ -207,6 +229,11 @@ public class JwtManagerImpl implements LoginTokenManager {
     @Override
     public String extractUserNameSilently(HttpServletRequest request) {
         return claimsExtractor.extractUserNameSilently(request);
+    }
+
+    @Override
+    public Long extractSessionIssuedAt(HttpServletRequest request) {
+        return claimsExtractor.extractSessionIssuedAt(request);
     }
 
     @Override

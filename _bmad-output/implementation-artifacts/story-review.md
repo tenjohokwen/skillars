@@ -1,494 +1,734 @@
-# Story Review — skillars-deferred-148
+# Pre-implementation story review — `skillars-deferred-149`
 
-**Story:** `_bmad-output/implementation-artifacts/skillars-deferred-148-player-id-corruption-dispute-id-space-and-router-role-gate-fixes.md`
-**Title:** Player-ID Corruption Fixes, Dispute Cross-ID-Space Bug, and Router Role-Gate Hardening
-**Story status:** ready-for-dev
-**Audit date:** 2026-10-07
-**Verified against real HEAD:** `ef2daac9` — *Story Deferred-147: Player Development Dashboard — Missing Nav Link (#254)*
-
-HEAD was obtained with `git rev-parse --short HEAD` / `git log -1` **before** the story was opened. The story's own Context header asserts HEAD `ef2daac9`; that assertion happens to be correct, but every citation below was still re-derived from the current on-disk file contents rather than trusted. Working tree is clean apart from files under `_bmad-output/implementation-artifacts/`, so no source file differs from HEAD.
-
-**Method:** four parallel read-only verification layers (citations / ledger & precedent / mechanistic claims / corner cases), followed by a mandatory adversarial re-verification pass in which every candidate finding was re-read against the source with the explicit goal of refuting it. Section 6 lists what that pass killed — it removed more candidate findings than it kept.
-
----
-
-## 1. Headline findings
-
-| # | Severity | Finding |
-|---|---|---|
-| **C2** | **High** | A fourth `Number(...)`-corrupts-a-Tsid site exists and is missed: `BookingRequestPage.vue:247`. It corrupts an id used to **write** bookings, and is reachable from a live, linked parent CTA. |
-| **C1** | **Medium** | AC4's `role: 'PLAYER'` on `player/locker-room/:playerId` contradicts the backend's own authorization model — `PlayerOwnershipGuard` explicitly authorizes a PARENT for a managed child's player resources — and breaks a live parent-only button. Downgraded from High because the button's host route turns out to be unlinked. |
-| **C3** | **Medium** | AC6's third bullet is not implementable as written: `isQuiesced` is `private`, not package-private. Finding 6 attributes a visibility change to the wrong method. |
-| **C4** | **Medium** | Finding 4's "six routes ... confirmed by direct read of the full route table" is not exhaustive — there are 11, and a 4th inert role-gate spelling exists on a route this story edits. |
-| **C5** | Med-Low | Finding 5's "no existing test depends on the current ordering" was established from 2 test files; a third (`ReviewUpdateIT`) asserts on both error codes and is absent from AC8's suite list. |
-| C6–C12 | Low | See §5. |
-
----
-
-## 2. Citation verification
-
-Every `file:NN` reference in the story was opened at HEAD. **Of 39 checked citations, 30 are exact matches.** `.dockerignore`'s nine line numbers are all exactly right, as are all of `DisputeService.java`, `Booking.java`, `ReviewSubmissionService.java`, `DatabaseResetTestExecutionListener.java`, and 11 of 12 `routes.js` ranges.
-
-### Matches (spot-verified, representative)
-
-| Citation | Evidence |
+| | |
 |---|---|
-| `ParentDevelopmentPortalPage.vue:123-126` | L123 `const playerId = computed(() => {`, L124 `const id = Number(route.params.playerId)`, L125 `return isNaN(id) ? null : id` |
-| `ParentPlayerPortalPage.vue:76` | `const playerId = Number(route.params.playerId)` |
-| `ParentPlayerPortalPage.vue:88` | `if (newId && newId !== playerId) {` |
-| `PlayerSubscriptionPage.vue:189` | `const playerId = computed(() => Number(route.params.playerId))` |
-| `PlayerSubscriptionPage.vue:215,257,260,280` | all four reads confirmed; grep shows **exactly** four `.value` reads — the enumeration is complete |
-| `router/index.js:89` | `if (to.path === '/coach/command-center' && authStore.isCoach) {` |
-| `routes.js:115-117 / 239-241 / 244-247 / 250-253 / 338-341 / 342-344` | all confirmed `meta: { requiresAuth: true }` |
-| `routes.js:124,132,151,160` | all `meta: { requiresAuth: true, roles: ['PARENT','PLAYER'] }` |
-| `routes.js:256-259, 264-267, 295-298, 307-310` | sibling `role:'PLAYER'` / `role:'COACH'` gates confirmed |
-| `DisputeService.java:91` | exact text match |
-| `DisputeService.java:74` | `private final ApplicationEventPublisher eventPublisher;` — **is** the last field; all 12 fields are `final` |
-| `Booking.java:31,34` | `@Column(..., nullable = false, updatable = false) private Long parentId/playerId;` |
-| `ReviewSubmissionService.java:253-264` | inside `checkEligibility` (starts L243); L253 `playerProfileRepository.findById(booking.getPlayerId())` |
-| `ReviewSubmissionService.java:129-141 / 181-194` | both guard pairs exactly as described, cooldown-before-status at both |
-| `DatabaseResetTestExecutionListener.java:114-116` | the `quiesceStartNanos` / `quiesceAsyncExecutors` / `recordQuiesceCost` triple |
-| `DatabaseResetTestExecutionListener.java:351-353` | `isQuiesced` signature, body, close brace |
-| `.dockerignore:29,30,31,32,66,67,68,73,74` | `**/node_modules/`, `**/.vite/`, `*.jar`, `*.war`, `*.iml`, `.DS_Store`, `Thumbs.db`, `*.log`, `*.diff` — **all nine exact** |
-| `AppEndpoints.java` | `ACTUATOR = "/manage/**"` mapped to `AuthoritiesConstants.ADMIN` — `/manage/**` is ADMIN-only, as claimed |
-| `axiosSpec.js:16-20` | the `defineBoot`-is-an-identity-wrapper note, verbatim |
-| `pages/parent/__tests__/` | contains only `BookingRequestPageSpec.js`, `ParentBookingsPageSpec.js` — no spec for the three pages, as claimed |
+| **Story** | `skillars-deferred-149-subscription-ownership-session-revocation-review-eligibility-gap-and-ci-build-hardening.md` |
+| **Status in `sprint-status.yaml`** | `ready-for-dev` (line 347) |
+| **Audit date** | 2026-10-08 |
+| **Real HEAD verified against** | `df07a842` — *"Story Deferred-148: Player-ID Corruption Fixes, Dispute Cross-ID-Space Bug, and Router Role-Gate Hardening (#255)"* |
+| **Working tree at audit time** | `deferred-work.md` + `sprint-status.yaml` modified; the story file itself untracked |
 
-### Drifted
+Every citation below was re-opened at this HEAD. The story's own header claims **"All citations below
+were independently re-verified directly against HEAD `df07a842` … not copied from the ledger."** That
+claim is mostly borne out — several ledger line numbers were correctly re-anchored (e.g. the ledger's
+`AuthService.java:153,:160` → the story's correct `:157,:166`) — but it fails in at least two places
+where a ledger range was reproduced verbatim and is stale at HEAD (see **C-14**, **F15**).
 
-| Citation | Real location | Note |
-|---|---|---|
-| `router/index.js:48-49` — "`rolesMeta`/`requiresOneOfRoles`" | **L55-56** | L48-49 are `requiresGuest`/`requiresCoach`. The cited lines point at *neighbouring gates*, which is the dangerous kind of drift — a dev agent editing by line number lands on working code. |
-| `router/index.js:80-83` — the `requiresOneOfRoles` redirect branch | **L84-87** | L80-83 are the `requiresPlayer` branch. |
-| `router/index.js:44-50` — the `beforeEach` derivations | **L47-56** | `requiresPlayer` (L51) and `rolesMeta`/`requiresOneOfRoles` (L55-56) fall outside the cited range. |
-| `router/index.js:28-35` — the `createRouter` call | **L29-37** | The `history:` line (L36) and closing `})` (L37) are outside the range. Content claim ("passes neither `strict` nor `sensitive`") is correct — `grep -n "strict\|sensitive"` returns zero hits in the file. |
-| `roleRoutes.js:14 / :15 / :16` = PARENT / PLAYER / ADMIN | **:15 / :16 / :17** | Systematic off-by-one; L14 is `COACH`. |
-| `AdminReviewService.java:144-145` sets **both** status and `lastModifiedAt` | `setModerationStatus(BLOCKED)` at **L143**; L144 is `setHeldReason(null)`; `setLastModifiedAt` at L145 | The cited 2-line range contains only one of the two claimed assignments. |
-| `ReviewSubmissionServiceConcurrencyIT:288` | **L289** | L288 is the `@Test` annotation; the method name is on L289. |
-| References: `DisputeService.java:90` | **:91** | The body and Design B correctly say `:91`; the References section copied the ledger's stale `:90`. Internal inconsistency within the story. |
-| `ParentDevelopmentPortalPage.vue:185-192` — includes the "Kept narrow" comment | comment is at **L184** | The watcher block itself is exactly L185-192; only the quoted comment sits one line above. |
-
-None of the drifts invalidates a conclusion, and the story's own Dev Notes do instruct re-verification. The `index.js` cluster is worth correcting in place because it is the largest drift and lands on plausible-looking wrong code.
+Headline: **two blocking defects in AC3** (the revocation write would be silently rolled back; the new
+`User` column breaks Envers auditing), **one CI-failing migration**, and **one AC8 item silently
+dropped** while AC8 claims to close "all ~9 items".
 
 ---
 
-## 3. Ledger & precedent attribution
+## 1. Citation verification (Layer 1)
 
-Checked against all three required sources for each claim: the ledger file (working tree **and** `git show HEAD:...` — the local diff is additive only and touches none of the five cited sections), source comments/Javadoc near the code, and `git log --grep` / `git blame` / `git show` for each story number.
+### 1.1 Matches — verified exactly as written
 
-| Claim | Sources checked | Verdict |
-|---|---|---|
-| Sourced from the 5 named `deferred-work.md` sections | ledger headings + item counts | **CONFIRMED.** Item counts match exactly: deferred-145 §=3 items (1 taken), §round 2=3 (1 taken), deferred-144 §=3 (2 taken), deferred-146 §=4 (2 taken). |
-| deferred-147 "explicitly recommended a small dedicated follow-up ... to all three" | ledger §; deferred-147 story file; commit message | **CONFIRMED.** The quoted sentence is not in the ledger but is verbatim in deferred-147's own story file (`:7`) — and the story attributes it to "that story's own manual-testing notes," not the ledger. Correctly attributed. The commit message at `ef2daac9` independently names the same three files. |
-| Finding 4's ledger item names exactly `/player/home`, `/player/locker-room/:playerId`, `/player/development/:playerId`, `/parent/dashboard` | ledger text | **CONFIRMED verbatim**, with the admin pair as the item's lead example. |
-| Ledger names `createRouter({ strict: true, sensitive: true })` as the alternative for Finding 3 | ledger text | **CONFIRMED verbatim.** |
-| Finding 5's ledger item requires reordering **both** sites together | ledger text | **CONFIRMED** — "reorder the status guard ahead of the cooldown guard at **both** sites together, so the two paths stay mirrored". |
-| `checkEligibility:253-264` was shipped by deferred-145 | `git blame` | **CONFIRMED** — every line blames to `f789ce5b` (Deferred-145). |
-| deferred-143 implemented forced-logout/session-termination | commit `a0d39f83` | **CONFIRMED** — its own title, AC3 introduces `SecurityUtil.terminateSession`. |
-| `chk_pp_owner` guarantees **exactly one** of `parent_id`/`user_id` | `V138__baseline_schema.sql:911`; `PlayerProfile.java:42` Javadoc | **CONFIRMED, and precisely "exactly one"** — a true XOR: `CHECK ((parent_id IS NOT NULL AND user_id IS NULL) OR (parent_id IS NULL AND user_id IS NOT NULL))`. |
-| `defineRouter`/`defineBoot` are identity wrappers | installed `@quasar/app-vite/exports/wrappers/wrappers.js` | **CONFIRMED** — `const wrapper = callback => callback; export const defineBoot = wrapper; export const defineRouter = wrapper`. Resolved version 2.4.1 (`package.json` says `^2.1.0`, a caret range — "pinned" is loose wording, behavior confirmed regardless). |
-| "No local `mvn verify`" is a standing convention | `docs/validation-strategy.md` | **CONFIRMED as documented repo policy**, not merely habit. |
-| `DatabaseResetTestExecutionListenerQuiesceTest` exists, added by deferred-146 | file + `git show b27ce6f1` | **CONFIRMED.** |
-| `MAX_QUIESCE_PASSES` and `ConditionTimeoutException` handling exist | source | **CONFIRMED** (L348 and L229-335). |
-| deferred-144's "predecessor inline guard accepted the same strings" | `git show 74d405d2 --stat`; `git blame index.js:89` | **FAITHFUL BUT AMBIGUOUS.** deferred-144 touched `safeRedirect.js`, `routes.js`, `LoginPageSpec.js`, `OtpPageSpec.js` — **never `router/index.js`**; `index.js:89` blames to `4dd4b013` (2026-06-12), untouched since. The sentence is about `isSafeRedirect`'s predecessor, not the command-center check, and mirrors the ledger's own equally loose phrasing. Not a fabrication; a reader could misread it as claiming deferred-144 edited `index.js`. |
-| `isQuiesced` was widened from private → package-private by deferred-146 | `git show b27ce6f1`; current source; the test class | **WRONG — see C3.** |
-| `project-context.md`'s module-layering rules bless the cross-module repo dependency | `project-context.md`; `PlayerProfileRepository` package; `ReviewSubmissionService` fields | **PARTIALLY OVERSTATED.** (b) and (c) confirmed: the repo is in `platform.security.repo` and `ReviewSubmissionService` does inject it. But `project-context.md`'s only cross-*module* statement is "Prefer Domain Events for cross-module communication to maintain loose coupling" — which, read literally, argues *against* direct cross-module repository injection. Nothing is violated, but the precedent is established by existing code, not by the document. |
-| Finding 7's ledger source | ledger | **REAL BUT UNCITED.** Finding 7's item lives in "code review of skillars-deferred-142" — correctly identified in the body/Dev Notes, but that section is never listed in the story's References (see C11). |
-
----
-
-## 4. Mechanistic claims
-
-### Confirmed
-
-| Claim | Evidence |
+| Citation | Evidence at `df07a842` |
 |---|---|
-| `893573203704173564` → `893573203704173600` | `node -e "console.log(String(Number('893573203704173564')))"` → `893573203704173600`. Reproduced. |
-| vue-router 4.6.4 defaults `strict: false, sensitive: false` | installed `vue-router/dist/vue-router.mjs:407,582` — `sensitive: false` in both defaults objects. |
-| `/COACH/COMMAND-CENTER` resolves (case-insensitive) | `vue-router.mjs:486` — `const re = new RegExp(pattern, options.sensitive ? "" : "i")`. The `i` flag is applied whenever `sensitive` is falsy. |
-| **Design C is sound** — a matched record's `.path` is the full absolute path | `vue-router.mjs:645-646` — `normalizedRecord.path = parent.record.path + (path && connectingSlash + path)`. `routes.js:77` declares `path: 'coach/command-center'` as a relative child of the `path: '/'` parent (`:4`), so the normalized record path is `/coach/command-center`. `to.matched.some(r => r.path === '/coach/command-center')` therefore matches, and `to.matched.length === 2` as claimed. **This was the single highest-stakes claim in the story and it holds.** |
-| `requiresAuth`/`requiresGuest`/`requiresCoach`/`requiresParent`/`requiresPlayer` are all `to.matched.some(...)` | `index.js:47-51` — all five confirmed. |
-| No `meta.role === 'ADMIN'` and no `meta.role === 'COACH'` check in the guard | full read of `index.js` (102 lines); only `'PARENT'` (L50) and `'PLAYER'` (L51) are compared. |
-| `rolesMeta = to.matched.flatMap((r) => r.meta.roles \|\| [])` | `index.js:55`, quoted exactly right. `r.meta` is always normalized to an object by vue-router, so no guard is needed. |
-| **Setting `roles: ['ADMIN']` on the parent `admin` route alone is sufficient** | `flatMap` over `to.matched` collects from every matched ancestor; the consuming branch is `index.js:84` `if (requiresOneOfRoles && isAuthenticated && !rolesMeta.includes(authStore.role))`. |
-| **`roles: ['ADMIN']` will actually fire** (no `ROLE_` prefix mismatch) | `auth.store.js:16-19` — `isAdmin = computed(() => role.value === 'ADMIN')`; `role.value` is set from the `skp` cookie's bare `"role":"COACH"`-style value. The existing working `['PARENT','PLAYER']` precedent uses the same bare form. |
-| No admin redirect loop | `roleRoutes.js:17` `ADMIN: '/admin/health-dashboard'`; an ADMIN passes the new gate, a non-ADMIN is sent to their own landing route. `routeForRole` falls back to `DEFAULT_ROUTE = '/dashboard'`, which is deliberately role-agnostic. |
-| Finding 4's planted-`?redirect=` premise | `safeRedirect.js:32-37` — checks shape and resolvability only, **no role check at all**; consumed at `LoginPage.vue:172` and `OtpPage.vue:160`. A PARENT/PLAYER/COACH really can be landed on `/admin/health-dashboard` today. |
-| `Booking.playerId` is **not** nullable | `Booking.java:33-34` — `@Column(name = "player_id", nullable = false, updatable = false)`. So `playerProfileRepository.findById(booking.getPlayerId())` can never be called with `null`. |
-| `raisedByRole` does **not** gate the `ownerEligible` branch | full read of `raiseDispute`: `raisedByRole` is only stored (`dispute.setRaisedByRole(...)`). AC2's `raisedByRole = "PLAYER"` test does reach the disjunct. |
-| `eventPublisher` is the last field and all 12 fields are `final` | `DisputeService.java:63-74`. No `@AllArgsConstructor`, no explicit constructor. Design B's "add it last" advice is correct — the new parameter appends as the 13th. |
-| `isQuiesced` cited code matches reality | `L351-353`: `return executor.getActiveCount() == 0 && executor.getThreadPoolExecutor().getQueue().isEmpty();` |
-| Nested `.DS_Store` files really exist under `src/` | `find src -name .DS_Store` → `src/.DS_Store`, `src/main/.DS_Store`, `src/main/resources/.DS_Store`, `src/main/java/.DS_Store`, `src/main/java/com/.DS_Store`. Finding 7's practical motivation is real, not theoretical. |
-| `**/` prefixes are safe for the deliberately-included `.git/` | `find .git -name "*.log" -o -name "*.diff" -o -name "*.jar" -o -name "*.iml"` → **zero matches**. AC7 cannot break `git-commit-id-maven-plugin`. |
-| The AC3 test vehicle resolves | `vitest.config.mjs` carries a hand-maintained `{ find: '#q-app/wrappers', replacement: '@quasar/app-vite/wrappers' }` alias, and that target exports **both** `defineBoot` and `defineRouter` as identity wrappers. `index.js:22`'s factory destructures nothing, so `createRouterFactory({})` is fine. The Dev Notes' claim holds statically. |
-| **Finding 6's two Spring behavior claims** — `getActiveCount()` returns 0 on a null delegate; `getThreadPoolExecutor()` `Assert.state`-throws | Verified against the real `spring-context-6.2.19-sources.jar`, not from memory: `getActiveCount()` is `if (this.threadPoolExecutor == null) { // Not initialized yet: assume no active threads. return 0; }` and `getThreadPoolExecutor()` is `Assert.state(this.threadPoolExecutor != null, "ThreadPoolTaskExecutor not initialized")`. **Both halves exact, including the comment wording the story quotes.** The `&&` short-circuit genuinely does not protect the second operand. |
-| `CommonConfig.longToStringModule` quotes `Long` as a JSON string | `CommonConfig.java:41-51` — `module.addSerializer(Long.class, ToStringSerializer.instance)` plus a matching `LongFromStringDeserializer`. Scoped to boxed `Long.class` (not primitive `long`), which is immaterial to the story's point. |
-| `raisedBy` is a User id | `DisputeResource.java:38-41` — `Long userId = resolveCurrentUserId(); ... disputeService.raiseDispute(..., userId, role)`, reading the authenticated `Principal`. No `@PreAuthorize` blocks a PLAYER caller (`IS_AUTHENTICATED` only), so Finding 2's premise is reachable at the API boundary too. |
-| `ReviewErrorCode` / `ConfigBounds` literals | `ReviewErrorCode.java:10-11` — `UPDATE_TOO_SOON("reviews.updateTooSoon")`, `EDIT_NOT_PERMITTED("reviews.editNotPermitted")`. `ConfigBounds.java:197-199` — `REVIEWS_UPDATE_COOLDOWN_DAYS` with bounds `1L, 365L` and default `30L`, matching both guard sites' literal `30, 1, 365`. |
-| `updateReview`'s transaction and lock boundary | Class-level `@Transactional` (`:39`, REQUIRED); the method itself carries no annotation and `ReviewResource` opens no transaction, so that is the outermost boundary. The lock is a real Postgres row lock — `findByIdForUpdateNoWait` under `lockRetryer.withBoundedRetry`, then `entityManager.refresh(locked, LockModeType.PESSIMISTIC_WRITE)` (`:160-172`) — held until the transaction commits. |
+| `SubscriptionResource.java:91-92` | `:92` = `@PreAuthorize("@playerOwnershipGuard.check(authentication, #playerId)")`, `:93` = `getMyPlayerSubscription` ✔ |
+| `SubscriptionResource.java:134-136` | `:134` `private Long currentParentId()`, `:135` `return securityUtil.requireCurrentUserId();` ✔ |
+| `SubscriptionService.java:899-904` | `assertPlayerOwnership` body, exactly 899→904 ✔ |
+| `SubscriptionService` `:113, :319, :382, :457` | all four `assertPlayerOwnership(parentUserId, playerId);` call sites ✔ |
+| `routes.js:205-209`, `:208` | subscription route block; `:208` = `meta: { requiresAuth: true, role: 'PARENT' }` ✔ |
+| `routes.js:124,132,151,160` | all four = `roles: ['PARENT', 'PLAYER']` ✔ |
+| `CoachRegistrationResourceIT:205-238` seed `:221`; `:243-273` seed `:259` | tests at 205 / 243; bare `jdbcTemplate.update(` at 221 / 259 ✔ (closing braces land at 239 / 274 — one line past the quoted ranges, immaterial) |
+| `ParentRegistrationResourceIT:198-236` seed `:214`; `:237-271` seed `:253` | same shape ✔ |
+| `application.yaml:183` | `auto-commit: false` ✔ |
+| `AuthResourceIT.java:822-824` | `private void commitWrite(...) { transactionTemplate.execute(...) }` — byte-for-byte the snippet in Design B ✔ |
+| `CoachRegistrationService.java:112-121` | `verifyEmail`: `findByToken…orElseThrow` → `isUsed()` → expiry, all three `EmailTokenException` ✔ |
+| `ApiAdvice.java:555-562` | `emailTokenExceptionHandler`, `@ResponseStatus(BAD_REQUEST)`, `canResend` passed through ✔ |
+| `AuthService.java:157`, `:166` | both `refreshTokenRepository.markAllUsedByUserId(ownerId);` ✔ (ledger said `:153/:160` — story correctly re-anchored) |
+| `AuthService.java:97` | `ensureAccountIsLive(user);` ✔ |
+| `AuthService.java:87` | `userRepository.findOneByLogin(email.toLowerCase())` ✔ |
+| `JWTAuthorizationFilter.java:342-357` | `isGenuineDenial` method, exactly 342→357 ✔ |
+| `JWTAuthorizationFilter.java:354` | the `ACCOUNT_NOT_LOGIN_ABLE` disjunct ✔ |
+| `JWTAuthorizationFilter.java:206-207` | `daoAuthProvider.authorize(authentication, httpEndpointGuard.requiredAuthorities(req))` ✔ |
+| `JWTAuthorizationFilter.java:69-88` / `:69-91` | the fast-path / DB-reauth `<ul>` javadoc; it even states the gap AC3 exists to close ✔ |
+| `TokenCreatorImpl.java:50` | `claims.put(Claims.ISSUED_AT, …Instant.now…)` ✔ |
+| `JwtManagerImpl.java:166` | inside `extendTtlOfToken`: `tokenCreator.toClaims(principal, dbRefreshToken, true, null)` ✔ |
+| `DaoAuthProvider.java:36` | `getPreAuthenticationChecks().check(user);` ✔ |
+| `DaoAuthProvider.java:47-51` | `catch (AccountStatusException ase)` → `ACCOUNT_NOT_LOGIN_ABLE` ✔ |
+| `Principal.java:140-160`, `:150` | `instanceFrom` 140→160; `.credentialsNonExpired(true)` at `:150` ✔ |
+| `SecurityConstants.java:102,105,120` | `JWT_TTL` 15 min / `REFRESH_TOKEN_TTL` 7 days / `DB_REFRESH_TOKEN_INTERVAL` 5 min ✔ (all three exact) |
+| `ConfigStartupAssertion.java:182` | `if (minSessionAgeDays >= updateCooldownDays) {` ✔ |
+| `ConfigStartupAssertion.java:178-181` | `getBoundedInt(…, 7, 1, 365)` / `(…, 30, 1, 365)` ✔ |
+| `ConfigService.java:321` | `if (minSessionAgeDays >= updateCooldownDays) {` in `rejectReviewEligibilityWindowOrdering` ✔ |
+| `pr-build.yml:12`, `:118` | `build:` and `docker-image:` job ids, no `name:` override → check-run contexts are exactly those strings ✔ |
+| `pr-build.yml:55-57` | the `# No -q:` comment ✔ (AC8 item 2) |
+| `ci.yml:238-239` | `- name: Build and push Docker image` / `uses: ./.github/actions/docker-build` ✔ |
+| `ci.yml:71-74` | mid-comment in the `frontend-quality` rationale, as the story says ✔ |
+| `docs/deployment/baseline/pr.md:65` | `# ci.yml:71-74   "Build and push Docker image"` ✔ |
+| `docs/testing/readme.md:152-156` | the `0.07 ms mean (84 ms total over 1199 invocations)` / run `37574001244` text ✔ — and the same paragraph contradicts itself at `:156-157` ("the quiesce counter reports microseconds") ✔ |
+| `.dockerignore:43-70` | exactly `docs/` (43) → `.gitattributes` (70) ✔ |
+| `pom.xml:733-748` | `git-commit-id-maven-plugin` `10.0.0`, `<phase>initialize</phase>` at `:743`, `generateGitPropertiesFilename = ${project.build.outputDirectory}/git.properties` at `:748` ✔ |
+| deferred-146 story file `:112` | the "6 call sites across 5 concurrency IT classes" text ✔ (line correct, **section label wrong** — see F14) |
+| deferred-146 story file `:228` | the Dev Notes runnable-command `pr-build.yml:49-51` citation ✔ |
+| deferred-146 story file `~:82` | `**The 25ms delay was never load-bearing.**` is exactly `:82` ✔ |
+| `DatabaseResetTestExecutionListener.java:266-277` | the "On the hot path they are not… never enters `workQueue`" javadoc ✔ (block runs ~268-278; immaterial) |
+| AC8 item 1's 7 call sites | `SubscriptionServiceConcurrencyIT:172`, `CoachProfileServiceConcurrencyIT:219,335`, `AdminReviewQueueIT:635`, `ReviewFlagServiceConcurrencyIT:236,353`, `ReviewModerationServiceConcurrencyIT:170` — **exactly 7 sites / 6 classes**, and `AdminReviewQueueIT` is indeed not a concurrency IT ✔ |
+| AC8 item 1's 4 extra sites | `PlayerRegistrationResourceIT:425-430` + `CoachRegistrationResourceIT:732-737` (both `pollInterval(100ms)`, no `pollDelay`), `RefundOutboxIT:126` + `SluSnapshotOutboxIT:222` (bare `.atMost(20s)`, default 100 ms) ✔ |
+| AC8 item 8's comment | `:336-338` "That caps the worst case at one pass -- six pools x 30s…" + `if (!waited \|\| timedOut) { return; }` at `:339`; `MAX_QUIESCE_PASSES = 3` at `:351`; `atMost(30s)` at `:314`. The story's 3 × 6 × ~30 s ≈ 540 s reasoning is correct ✔ |
+| `V158` is the next free version | highest existing is `V157__coach_reviews_author_last_edited_at.sql` ✔ |
+| `routerGuardSpec.js` still exists | `src/frontend/src/router/__tests__/routerGuardSpec.js`, already structured around role gates ✔ |
+| `transactionTemplate` already autowired in both IT files | `CoachRegistrationResourceIT:60`, `ParentRegistrationResourceIT:53`; neither has a `commitWrite` helper ✔ |
+| `existsByIdAndUserId` exists | `PlayerProfileRepository:46`, added by deferred-147 for exactly this purpose ✔ |
+| `PlayerOwnershipGuard.check` dual disjunct | `:33-34` `existsByIdAndParentId(...) \|\| existsByIdAndUserId(...)` ✔ |
 
-### Wrong or imprecise
+### 1.2 Drifted
 
-**M1 — `isQuiesced` was never widened; the widened method was `quiesceAsyncExecutors`.** *(basis of C3)*
-Finding 6 says "`skillars-deferred-146` widened this method from `private` to package-private for its own new unit test ... new exposure on a method that can now be called directly."
-Reality:
-- `DatabaseResetTestExecutionListener.java:351` — `private static boolean isQuiesced(ThreadPoolTaskExecutor executor) {` — still `private`.
-- `git show b27ce6f1` shows `isQuiesced` was **introduced by that commit** as `private static`. There is no prior state to have been widened from.
-- What that commit did widen is a **different method**: `- private void quiesceAsyncExecutors(ApplicationContext ctx)` → package-private, live now at `:294` as `void quiesceAsyncExecutors(ApplicationContext ctx)`.
-- `DatabaseResetTestExecutionListenerQuiesceTest` confirms it independently: its only two tests are `quiesceAsyncExecutors_sixAlreadyIdleExecutors_completesInUnder15Millis` (`:52`) and `quiesceAsyncExecutors_busyExecutor_blocksUntilItDrains` (`:76`). **It never calls `isQuiesced`.**
-- The story's own Design F code block writes `private static boolean isQuiesced(...)` — i.e. the Design is correct and silently contradicts its own Finding two sections earlier.
-- The ledger contains the same error, so the story propagated it rather than catching it.
-
-**M2 — "None of the three passes `playerId` as a prop to a child component ... no matches" is false.**
-`ParentDevelopmentPortalPage.vue:87` — `<PerformanceReportsPanel :player-id="playerId" :is-coach="false" />` and `:97` — `<PlayerTimelinePanel :player-id="playerId" />`. The story's own next sentence confirms those two components declare a `playerId` prop, so the claim contradicts itself. The giveaway is the phrase "in both files" in a finding about three files.
-**The conclusion is nevertheless correct:** every `playerId` prop in the codebase is already `[Number, String]` — `PerformanceReportsPanel.vue:74`, `PlayerTimelinePanel.vue:61`, `GenerateReportDialog.vue:47` (the grandchild reached via `PerformanceReportsPanel.vue:59`), `SkillsRadarAssessmentPanel.vue:96`, `WrapUpSequence.vue:243`, `EditPlayerPositionDialog.vue:63`. Both panels also guard with `if (!props.playerId) return` before using it, and only pass it through to store fetches. No prop-type change is needed. Correct conclusion, false premise — fix the premise so the dev agent doesn't skip the check.
-
-**M3 — Design B is not "the exact shape" of the `ReviewSubmissionService` precedent.**
-`ReviewSubmissionService.java:264` — `if (authorId.equals(player.getUserId()) || authorId.equals(player.getParentId()))`. It checks **both** `userId` and `parentId`. Design B maps only `getUserId()`. In `DisputeService` the parent case is nominally covered by `booking.getParentId()`, but that is the *booking's* parent, not the *profile's* parent — they can differ. The narrowing is defensible; calling it "exact" is not, and the story should state the deviation deliberately.
-
-**M4 — "exactly as `skillars-deferred-147` did" overstates the match.**
-`git show ef2daac9` shows the real fix was `const playerId = computed(() => route.params.playerId)` — bare, with no `?? null`. Design A adds `?? null` for `ParentDevelopmentPortalPage.vue`. That is a reasonable adaptation of that file's different pre-fix null handling (`isNaN(id) ? null : id`), but it is a deviation, and it has a behavioral consequence (see C7).
-
-**M5 — "a *third*, currently-inert spelling" undercounts; there is a fourth.** *(see C4)*
-
-**M6 — "the existing coach lookup three lines below it."** The coach lookup is at `DisputeService.java:97`, inside the `if (!ownerEligible)` block that opens at `:92` after a four-line comment — roughly six lines below, not three. Cosmetic; the substance (a lazy lookup on the non-parent path) is right.
-
----
-
-## 5. Corner cases, false assumptions, missed flows
-
-### C1 — MEDIUM: AC4's `role: 'PLAYER'` on `player/locker-room/:playerId` contradicts the backend's authorization model and breaks a parent-only button
-
-`src/frontend/src/pages/parent/ParentPlayerPortalPage.vue:10-15` renders, with **no `v-if` role guard**:
-
-```html
-<q-btn
-  flat
-  icon="sports_soccer"
-  :to="{ name: 'player-locker-room', params: { playerId: route.params.playerId } }"
-  :label="t('player.viewLockerRoom')"
-/>
-```
-
-That page's own route is `parent/players/:playerId/sessions` with `meta: { requiresAuth: true, role: 'PARENT' }` (`routes.js:136-139`) — so **only a PARENT can ever see this button.** The button is live, not dead code: `player.viewLockerRoom` exists in all three locales (`en-US:257`, `fr-FR:21`, `de-DE:287`).
-
-AC4 adds `role: 'PLAYER'` to `routes.js:247`. Then `index.js:51` sets `requiresPlayer = true`, and `index.js:79-82` fires:
-
-```js
-if (requiresPlayer && isAuthenticated && !authStore.isPlayer) {
-  next(routeForRole(authStore.role))   // → '/parent/dashboard' for a PARENT
-  return
-}
-```
-
-**Failure scenario:** a parent opens their child's session portal and clicks "Locker Room". Instead of the locker room they are bounced to `/parent/dashboard`. Silent, no error.
-
-**The decisive evidence is at the authorization layer, not the UI.** `PlayerOwnershipGuard.check` — the guard that gates every player-scoped resource, including `HomeworkResource`, which is what the locker-room page reads — is:
-
-```java
-Long callerId = Long.parseLong(skillarsP.getBusinessId());
-return playerProfileRepository.existsByIdAndParentId(playerId, callerId)
-    || playerProfileRepository.existsByIdAndUserId(playerId, callerId);
-```
-
-The backend deliberately authorizes **both** a parent on a parent-owned profile **and** a self-registered player on their own — the `existsByIdAndUserId` half was added by deferred-147 precisely because it was missing. So `player/locker-room/:playerId` is a dual-persona route by design, and Finding 4's persona table ("PLAYER") is wrong for this row. A singular `role: 'PLAYER'` gate puts the router in direct conflict with the authorization model the previous story just finished fixing.
-
-The story reached "persona: PLAYER" from `ROLE_ROUTES.PLAYER`'s redirect chain alone (`roleRoutes.js:10-11`, `/player/home` → `/player/locker-room/:playerId`) and never grepped for inbound navigation. A full sweep of `player-locker-room` references finds four callers: `PlayerHomeRedirectPage.vue:46` (player), `PlayerProfileBuilderPage.vue:66` (player), `roleRoutes.js:11` (comment), and **`ParentPlayerPortalPage.vue:13` (parent)**.
-
-**Why this is Medium and not High.** I initially rated it High, then found that the button's host route is itself unlinked: `parent/players/:playerId/sessions` (`routes.js:135-138`) has **no `name`**, and no `router.push` / `:to` / `<router-link>` anywhere in the frontend navigates to that path. The parent dashboard's player cards are plain `<div>`s, not links (`ParentDashboardPlaceholderPage.vue:19-31`), and the only `/parent/players/` navigation in the app is `MainLayout.vue:327` → `.../packs`, a different route. So today the button is reachable only by direct URL or a bookmark. The regression is real and the code is live (the `player.viewLockerRoom` key exists in all three locales), but the blast radius is small.
-
-**Resolution options:** gate the route `roles: ['PLAYER', 'PARENT']` (the existing dual-role mechanism, already proven on four routes, and the option that matches `PlayerOwnershipGuard`); or drop `locker-room` from AC4 and defer it. Adding `v-if="authStore.isPlayer"` to the button would also stop the bounce but removes a parent affordance the backend supports — a product decision, not a mechanical fix.
-
-`player/development/:playerId` and `parent/dashboard` were checked the same way and are **safe** — see §6.
-
-### C2 — HIGH: a fourth Tsid-corruption site is missed, and it corrupts a write path
-
-`src/frontend/src/pages/parent/BookingRequestPage.vue:245-251`:
-
-```js
-const playerId = computed(() => {
-  if (route.query.playerId && !authStore.isPlayer) {
-    const parsed = Number(route.query.playerId)
-    if (Number.isFinite(parsed) && parsed > 0) return parsed
-  }
-  ...
-})
-```
-
-Same defect, on `route.query` rather than `route.params` — which is why the story's grep (and deferred-147's) missed it. The `Number.isFinite(parsed) && parsed > 0` guard does **not** catch a rounded Tsid: `893573203704173600` is finite and positive.
-
-**Reachable from a live parent CTA.** `CoachPublicProfilePage.vue:516-522` (the `authStore.isParent` branch of `handleCta`):
-
-```js
-const playerId = playerStore.activePlayerId
-const params = new URLSearchParams()
-if (playerId) params.set('playerId', playerId)
-...
-router.push(`/parent/coaches/${coachId}/request-booking${qs ? `?${qs}` : ''}`)
-```
-
-`playerStore.activePlayerId` is the real Tsid string; the query param carries it intact; `BookingRequestPage` then rounds it. Unlike C1, this entry point is fully linked and live: `CoachPublicProfilePage` is the public marketplace route `coaches/:coachId` (`routes.js:319-321`), and `handleCta` is its primary call-to-action.
-
-**Consequences are worse than the three sites in scope**, because this id is written, not just read:
-- `:491` — `playerId: playerId.value` in the single booking-request submit
-- `:558` — `bookingStore.submitBatch(coachId, playerId.value, 0)`
-- `:481` — propagates the corrupted id onward: `router.push(\`/parent/coaches/${coachId}/purchase-sessions?playerId=${playerId.value}\`)`
-- `:652` — `bookingStore.loadPlayerPacks(playerId.value)`
-
-AC1's stated goal is "**every** parent-facing page targets the real player id instead of a silently-rounded one." That is not achieved while `BookingRequestPage.vue` remains. Either add it to AC1 (it is a one-line fix of the same shape) or state explicitly that it is deferred and why — but the story should not assert the enumeration is complete.
-
-Note `BookingRequestPage.vue` already has a spec (`pages/parent/__tests__/BookingRequestPageSpec.js`), so this one needs an added case, not a new file.
-
-### C3 — MEDIUM: AC6's third bullet is not implementable as specified
-
-AC6: *"New test in `DatabaseResetTestExecutionListenerQuiesceTest`: a `ThreadPoolTaskExecutor` that has never had `initialize()` called is passed to `isQuiesced` (via whatever access the existing test class already uses for this package-private method)."*
-
-Per M1 there is no such access. `isQuiesced` is `private static` (`:351`) and the existing test class never touches it — it only calls `listener.quiesceAsyncExecutors(ctx)`. A dev agent following this bullet will go looking for a pattern that does not exist. The three real options are: widen `isQuiesced` to package-private (a source change **no AC authorizes**, and AC6's fourth bullet explicitly says "confirm the diff touches only the two spots named above"); use reflection; or test through `quiesceAsyncExecutors` with an uninitialized executor in the context.
-
-The last option is probably what is wanted, but it changes the test's shape and is worth deciding before implementation rather than during. Finding 6's rationale sentence ("new exposure on a method that can now be called directly") should also be struck — `isQuiesced` has no new exposure.
-
-### C4 — MEDIUM: Finding 4's route enumeration is presented as exhaustive and is not
-
-Finding 4 opens: *"six routes with `meta: { requiresAuth: true }` and no role gate ... confirmed by direct read of the full route table."* There are **eleven**:
-
-| Line | Route | In AC4? |
+| Citation | Verdict | Corrected location |
 |---|---|---|
-| 112 | `parent/create-player` | **No — same defect class, unmentioned** |
-| 117 | `parent/dashboard` | Yes |
-| 234 | `player/profile-builder` | **No — same defect class, unmentioned** |
-| 241 | `player/home` | Yes |
-| 247 | `player/locker-room/:playerId` | Yes (but see C1) |
-| 253 | `player/development/:playerId` | Yes |
-| 304 | `messaging` | No — legitimately shared |
-| 327 | `dashboard` | No — legitimately shared, and is `DEFAULT_ROUTE` |
-| 333 | `profile` | No — legitimately shared |
-| 339 | `admin` | Yes |
-| 344 | `admin/health-dashboard` | Yes |
+| `UserRepository.java:71-74` (`changeAccountLockStatus`) | **DRIFTED** | `:73-75` (`:71-72` are blank). The method also has **zero callers** in `src/main` or `src/test`. |
+| `UserRepository.java:104-106` (`markCleanupFailed`) | **DRIFTED (minor)** | `:103-106` — `:103` is the `@Query` the story's "`@Modifying @Query` precedent" framing depends on. |
+| `DaoAuthProvider.java:42-56` ("`authorize()`") | **DRIFTED** | `authorize()` is `:28-59`. `:42-56` covers only three of its four catch blocks and omits the `InternalAuthenticationServiceException → UNKNOWN` wrap at `:37-41` — which matters for F4. |
+| `DatabaseResetTestExecutionListener.java:118-121` (AC8 item 7) | **DRIFTED** | The "10s bound" text is at `:121-124`. `:118-119` is `recordQuiesceCost(...)` and its closing brace. This range is reproduced verbatim from `deferred-work.md:3920`. |
+| References: `platform/security/repo/PlayerOwnershipGuard.java` | **DRIFTED (path)** | Actual: `src/main/java/com/softropic/skillars/platform/security/service/PlayerOwnershipGuard.java`. |
 
-Scoping AC4 to the ledger's named routes is a defensible decision. Asserting the set is complete after a "direct read of the full route table" is not, and `parent/create-player` / `player/profile-builder` are persona-specific — they belong either in AC4 or in the "out of scope, deliberately" note, not unmentioned.
+### 1.3 Cannot verify from this repository
 
-**And a fourth inert spelling exists, on a route this story edits.** `routes.js:204-209`:
-
-```js
-{
-  path: 'parent/player/:playerId/subscription',
-  name: 'player-subscription',
-  component: () => import('pages/parent/PlayerSubscriptionPage.vue'),
-  meta: { requiresAuth: true, requiresParent: true },
-}
-```
-
-The guard derives `requiresParent` from `meta.role === 'PARENT'` (`index.js:50`) and never reads `meta.requiresParent`. So this gate is **inert** and `PlayerSubscriptionPage` — one of the three pages AC1 is fixing — is reachable by any authenticated role today. Finding 4's "Out of scope" note counts only `role: 'COACH'` as the third spelling and misses this one. Worth at least naming; arguably worth fixing in AC4 since the story is already in this file for AC1.
-
-### C5 — MED-LOW: Finding 5's regression-surface claim is narrower than stated, and AC8's suite list is short one IT
-
-Finding 5: *"Confirmed no existing test depends on the current ordering"* — established from `ReviewSubmissionServiceTest` and `ReviewSubmissionServiceConcurrencyIT` only. A third file asserts on both error codes: `src/test/java/com/softropic/skillars/platform/reviews/api/ReviewUpdateIT.java` — `reviews.updateTooSoon` at `:156` and `:270`, `reviews.editNotPermitted` at `:436`.
-
-**I verified the claim still holds**, which is why this is not rated higher:
-- `updateReview_blockedStatus_returns403` (`:417`) only runs `UPDATE ... SET moderation_status = 'BLOCKED'`; `last_modified_at` stays at the fixture's 400-days-ago value (`:119-131`), far outside the 30-day cooldown. The cooldown guard never trips, so the reorder does not change the outcome.
-- Both `updateTooSoon` cases leave `moderation_status = 'APPROVED'`, so the status guard never trips.
-
-But AC8's targeted backend list is `DisputeServiceTest, ReviewSubmissionServiceTest, ReviewSubmissionServiceConcurrencyIT, DatabaseResetTestExecutionListenerQuiesceTest` — **`ReviewUpdateIT` is absent**, and it is the only API-level coverage of both error codes for `updateReview`. Add it to AC8.
-
-### C6 — LOW: Design B's new block lands immediately before an existing `if (!ownerEligible)`
-
-The real code at `DisputeService.java:91-102` is already:
-
-```java
-boolean ownerEligible = raisedBy.equals(booking.getParentId()) || raisedBy.equals(booking.getPlayerId());
-if (!ownerEligible) {
-    // Code review (2026-08-25): a suspended coach must not be able to raise a dispute either ...
-    ownerEligible = coachProfileRepository.findById(booking.getCoachId())
-        .filter(cp -> cp.getStatus() != CoachProfileStatus.SUSPENDED)
-        ...
-}
-```
-
-Inserting Design B verbatim produces two consecutive `if (!ownerEligible)` blocks. That is **correct** — the second only runs when the first left it false, so there is no overwrite — but the Design never shows the interaction, and it does not say to preserve the four-line Deferred-63 comment attached to the existing block. Worth one sentence so the dev agent doesn't "tidy" them into one block or drop the comment.
-
-Minor side effect worth noting in the Design: every **coach**-raised dispute now pays one extra `playerProfileRepository.findById` before reaching the coach lookup. Negligible, but it makes "only on the non-parent path" slightly rosier than reality.
-
-### C7 — LOW: `?? null` changes the garbage-param path, not just the Tsid path
-
-Old: `isNaN(Number('abc'))` → `null` → `loadPortal`'s `if (!id) return` (`ParentDevelopmentPortalPage.vue:152`) short-circuits, page renders empty.
-New: `'abc' ?? null` → `'abc'` → truthy → six API calls fire (`fetchSkillDefinitions`, `fetchRadarDisplay`, `fetchExposure`, `fetchNarrative`, `fetchCoachContributions`, `loadPlayerPacks`) and 400/403.
-
-Low severity: the param comes from the router and is normally a Tsid, and deferred-147 accepted the same trade. But it is a real behavior change the story describes as "for free," and worth one line in Design A.
-
-### C8 — LOW: `ParentPlayerPortalPage.vue`'s non-reactive `playerId` leaves component reuse unhandled
-
-`:76` is a plain `const`, and that file has **no** `watch(() => route.params.playerId, ...)` — unlike the other two pages (`ParentDevelopmentPortalPage.vue:174-177` has one; the subscription page's `playerId` is a `computed`). Design A keeps it a plain `const`, so param-only navigation between two children still won't reload.
-
-Currently dormant for the same reason that downgraded C1: the route is unlinked, so every arrival is a full page load that re-mounts cleanly. (The same is true of `PlayerSubscriptionPage`'s route, `parent/player/:playerId/subscription` — also unreferenced by any in-app navigation.) Pre-existing and genuinely out of scope, but AC1's framing ("every parent-facing page targets the real player id") reads as if this file ends up fully correct. One sentence acknowledging it avoids a false sense of completeness.
-
-### C9 — LOW: the frontend half of AC8 is verified by a non-gating job
-
-AC8 leans on "GitHub CI is the sole full-verification gate." `.github/workflows/frontend-unit-tests.yml`'s own header states it is "NOT referenced by ci.yml or pr-build.yml", "NOT a required status check", and "a red frontend suite still does not block a merge." It **does** auto-trigger on a PR touching `src/frontend/**` (deferred-129 AC2), so it will run for this story — but its result is advisory. Four of this story's new test files are frontend. AC8 should say explicitly that the dev agent must read that job's result rather than relying on merge-blocking.
-
-### C10 — LOW: AC5's new IT is achievable, but only via a mechanism AC5 doesn't state
-
-The choreography works (see §6 — I initially believed it did not), and it works for a specific reason worth writing into the AC, because a dev agent is unlikely to get it right from AC5's current wording alone.
-
-- **The hold-open wrapper is mandatory, not incidental.** `AdminReviewService.blockReview` is plain `@Transactional` (`:129`) with default REQUIRED propagation and no `REQUIRES_NEW`, so when the test wraps the call in `transactionTemplate.execute(...)` it **joins** that outer physical transaction and its row lock stays held until the outer lambda returns. That is exactly how the existing IT holds caller A open. A naive "two independent concurrent service calls" race does **not** work: whichever caller arrives second exhausts its own NOWAIT bounded retry and throws a lock-conflict error instead of ever reaching the re-check. AC5 should say "mirror the existing test's `transactionTemplate.execute` + `CountDownLatch` hold-open wrapper, substituting `blockReview` for `updateReview` as caller A."
-- **Retry budget.** B reaches `coachReviewRepository.findByIdForUpdateNoWait` while A holds the lock, so B depends on `lockRetryer.withBoundedRetry` outlasting A's hold. The existing IT manages this by releasing A after `Thread.sleep(300)`. Hold A longer and B fails with a lock conflict rather than `EDIT_NOT_PERMITTED` — a flaky third outcome AC5 doesn't anticipate. Mirror the 300ms release.
-- **`blockReview` does far more than bump two fields.** Inside A's held transaction it also calls `reviewFlagRepository.resolveAllOpenFlags`, `coachRatingService.recompute(...)` (whenever `previousStatus == APPROVED` — which the existing fixture seeds), writes a `ReviewModerationLog`, and publishes an event. It also throws `ALREADY_BLOCKED` if the row is already `BLOCKED`, so the fixture must seed `APPROVED`/`PENDING`. Finding 5's "sets both ... in the same write" is true but incomplete.
-
-The project's known `REQUIRES_NEW` row-lock self-deadlock hazard does **not** apply here — neither method uses `REQUIRES_NEW` on this row.
-
-### C11 — LOW: Finding 7 has no entry in the References section
-
-References lists sources for Findings 1, 2, 5, 3/4 and 6. Finding 7's source ("code review of skillars-deferred-142") is correctly identified in the body and Dev Notes but never added to References — the one finding with no reference line. Also fix the References entry for Finding 2, which says `DisputeService.java:90` while the body correctly says `:91`.
-
-### C12 — LOW: Design B uses `findById` against the repository's own written guidance
-
-`PlayerProfileRepository.java:35` carries an explicit instruction: `/** Always use this instead of findById — parentId enforces family isolation. */` above `findByIdAndParentId(Long id, Long parentId)`. Design B uses plain `findById`.
-
-This is **not** a new violation — the precedent the story cites does the same thing (`ReviewSubmissionService.java:253`), and the usage is legitimate: both are resolving an id the caller already supplied via a trusted booking row in order to *decide* ownership, not fetching a profile to expose its data. `findByIdAndParentId` cannot express the question Design B is asking (it needs `userId`, not `parentId`). Worth one sentence in Design B acknowledging the deviation so a reviewer doesn't flag it later, since the comment reads as absolute.
+- **AC8 items 4, 5, 9's CI figures** (`44.9 µs mean`, `53776 µs`, run `37584051185`, `132.2s`, `12m06s`, `3m21s`). These come from GitHub Actions logs, not the tree. I confirmed only that the *stale* side is present as cited, and that the arithmetic the story states internally is self-consistent (150 − 132.2 = 17.8 ✔). The new numbers are reproduced faithfully from `deferred-work.md:3893-3895`, where they are recorded as log-verified.
+- **AC6's live GitHub state** (404 branch protection, ruleset `20583638` carrying only `deletion`/`non_fast_forward`/`pull_request`, PR #255 head `0592d33b` check-run names). Not checkable offline. The repo-side half *is* confirmed: `build` and `docker-image` are the literal job ids with no `name:` override, so the check-run contexts will be exactly those strings.
 
 ---
 
-## 6. What did not survive re-verification
+## 2. Ledger & precedent attribution (Layer 2)
 
-These were raised by a layer or by my own first pass and were **killed or downgraded** in the adversarial re-check. Listing them is the point of that pass.
+All eight cited `deferred-work.md` section headers exist with the exact titles and dates the References
+section gives:
 
-| Candidate finding | Why it died |
-|---|---|
-| **"AC5's concurrency IT is impossible — B holds a `PESSIMISTIC_WRITE` lock, so A's `blockReview` can never commit while B waits."** I believed this for a while: `blockReview` (`AdminReviewService:129-135`) is `@Transactional` and its first read is `findByIdForUpdateNoWait` on the same row. | **Refuted by reading the existing IT in full.** `ReviewSubmissionServiceConcurrencyIT:289-375` runs the race the other way: **A** holds its transaction open via `transactionTemplate` + latch, **B** starts and its `findByIdForUpdateNoWait` retries against A's held lock via `lockRetryer`, then A commits and B's retry succeeds — at which point `entityManager.refresh(locked, PESSIMISTIC_WRITE)` sees A's fresh state. Substituting `blockReview` for A works identically: B's refresh sees `BLOCKED` **and** a bumped `lastModifiedAt`, so both guards trip and the reorder decides the error. The test is well-formed and red/green-able. Downgraded to the two practical hazards in C10. |
-| "Design B will throw `InvalidDataAccessApiUsageException` on `findById(null)`." | **Refuted.** `Booking.java:33-34` — `@Column(name = "player_id", nullable = false, updatable = false)`. Not nullable. |
-| "AC4's `role: 'PLAYER'` on `player/development/:playerId` breaks the nav link deferred-147 just shipped." | **Refuted.** `MainLayout.vue:330`'s `developmentRoute` is driven by `selfPlayerId`, which is fetched only under `watch(() => authStore.isPlayer, ...)`, and `MainLayoutSpec.js` has an explicit case: *"does not show the Development Dashboard link for a non-PLAYER role"*. The link is PLAYER-only. A full sweep finds `MainLayout.vue:330` is the **only** inbound navigation to that route. Safe. (The parent equivalent is a separate route, `parent/players/:playerId/development`, already `role: 'PARENT'`.) |
-| "AC4's `role: 'PARENT'` on `parent/dashboard` breaks the MainLayout nav item." | **Refuted.** `MainLayout.vue:180`'s `<q-item clickable to="/parent/dashboard">` sits inside `<template v-if="authStore.isParent">` (`:177`). The other two callers (`CreatePlayerProfilePage.vue:202`, `ParentApprovalPage.vue:63`) are parent-only flows, and it is `ROLE_ROUTES.PARENT`, so `routeForRole` is self-consistent. |
-| "Design C may be a no-op (or may break the gate) if `matched[i].path` is the relative child segment `command-center`." | **Refuted at the source.** `vue-router.mjs:645-646` mutates the normalized record's `path` to the full absolute path. With parent `'/'` and child `'coach/command-center'`, the record path is `/coach/command-center`. Design C is correct as written. |
-| "`roles: ['ADMIN']` will silently no-op because the store holds `ROLE_ADMIN`." | **Refuted.** `auth.store.js:16-19` compares bare strings, and the cookie carries `"role":"COACH"`-style bare values. |
-| "`**/*.jar` will exclude `.mvn/wrapper/maven-wrapper.jar` and break the Docker build." | **Refuted three ways.** `.mvn/wrapper/` does not exist in this repo; `mvnw`/`mvnw.cmd` are already excluded at `.dockerignore:60-61` with the comment "the builder stage uses the maven base image's own `mvn`"; `Dockerfile:2` is `FROM maven:3.9-eclipse-temurin-17`. A repo-wide `find` turns up no `.jar` outside `target/` and `node_modules/`. The runtime stage's `COPY --from=builder /app/target/skillars-*.jar` reads from the builder image, not the build context, so `.dockerignore` does not apply. |
-| "`**/*.log` / `**/*.diff` could exclude something inside the deliberately-included `.git/`." | **Refuted.** `find .git -name "*.log" -o -name "*.diff" -o -name "*.jar" -o -name "*.iml"` → zero matches. (`.git/logs/HEAD` has no extension, so `*.log` does not match it.) |
-| "Finding 1's claim that the watcher guard 'is unconditionally true whenever `newId` is truthy' is imprecise." | **Refuted — the story is exactly right.** `ParentDevelopmentPortalPage.vue:188` is `if (newId && newId !== playerId.value) {`. With a `string` left side and a `number` right side, `!==` never coerces, so the condition reduces to `newId` being truthy. Same at `ParentPlayerPortalPage.vue:88`. |
-| "`PlayerSubscriptionPage.vue` has more than the four cited `playerId` reads." | **Refuted.** Grep confirms exactly four `.value` reads (`:215`, `:257`, `:260`, `:280`) and no template or numeric use. The enumeration is complete. |
-| "Prop types need widening somewhere, as in deferred-147's `SkillsRadarAssessmentPanel`." | **Refuted.** Every `playerId` prop in `src/frontend/src/components/` is already `[Number, String]`, including the grandchild `GenerateReportDialog.vue:47`. The story's conclusion is right even though its supporting premise (M2) is false. |
-| "Design C will newly fire the profile-builder gate for child routes of `/coach/command-center`." | **Refuted as moot.** `routes.js:77` declares it as a flat child of `'/'` with no `children`, so `to.matched.some(...)` matches exactly the same navigations `to.path ===` did, plus the two non-canonical spellings this story is closing. |
-| "The frontend Vitest suite never runs in CI, so AC1/AC3/AC4's tests are unverified." | **Refuted, downgraded to C9.** The workflow auto-triggers on any PR touching `src/frontend/**` (deferred-129 AC2). What survives is only that the job is non-gating. |
-| "AC2's new test will fail on unlisted preconditions (`VALID_REASONS`, `ELIGIBLE_STATUSES`, the dispute window's `configService.getBoundedLong` stub, `findOpenByBookingId`)." | **Downgraded to a non-finding.** All of these are real preconditions, but AC2 says to mirror `raiseDispute_coachOwnsBooking_isEligible`, which already satisfies every one of them. The instruction is adequate. |
-| "`ReviewUpdateIT` will break on the reorder." | **Refuted** by reading each of the three cases' fixture state — see C5. The claim survives only as an incomplete-verification and missing-from-AC8 note. |
-| "`DisputeServiceTest.setUp()`'s constructor-arg math is wrong." | **Refuted.** 12 `final` fields, 12 mocks, constructor call in matching order; appending the field last appends the 13th parameter. Design B and the Dev Notes are correct. |
-| "The `.DS_Store` cache-bust mechanism is wrong because BuildKit keys on content, not mtime." | **Downgraded to not worth reporting.** The story says "changing its mtime," which is imprecise under BuildKit, but Finder rewrites `.DS_Store`'s *contents* too, so the cache does bust and the conclusion holds. Five nested `.DS_Store` files were confirmed present under `src/`. |
-| **C1 rated High.** | **Downgraded to Medium.** The button's host route `parent/players/:playerId/sessions` (`routes.js:135-138`) has no `name` and no inbound navigation anywhere in the frontend; the parent dashboard's player cards are plain `<div>`s, not links. Reachable only by direct URL/bookmark. The defect in Finding 4's persona premise is unchanged; only the blast radius shrank. |
-| "Reordering the guards changes NPE exposure on a null `lastModifiedAt`." | **Refuted.** `CoachReview.lastModifiedAt` is `@Column(nullable = false)` with a field initialiser, and legacy NULLs were backfilled by migration V157. No NPE exists to change. |
-| "`quiesceAsyncExecutors` might enumerate a lazily-created executor bean that is genuinely uninitialized, making AC6's `isQuiesced` guard reachable after all." | **Refuted.** It enumerates via `ctx.getBeansOfType(ThreadPoolTaskExecutor.class)` (`:295-296`), and `getBeansOfType` eagerly initializes any matching bean before returning it — so anything it yields has already run `afterPropertiesSet()`. All six production pools are `@Bean`-declared `GracefulShutdownTaskExecutor`s (`OutboxConfig:39`, `DevelopmentConfig:66,105`, `notification/AsyncConfig:38,54`, `infrastructure/AsyncConfig:34`). The story's "unreachable today" is correct, and AC6's guard is genuinely defensive. |
-| "The reorder changes behavior for `UNDER_REVIEW` in a way nothing covers, or some frontend code branches on which error code comes back." | **Refuted on the second half, immaterial on the first.** `UNDER_REVIEW` is reachable in production (`ReviewFlagService.java:161`), but no frontend code branches on `UPDATE_TOO_SOON` vs `EDIT_NOT_PERMITTED` — both are flat i18n lookups (`en-US:396-397` and the two sibling locales). No consumer can regress on the swap. |
-| "There is a second `booking.getPlayerId()`-compared-to-a-User-id site the story missed." | **Refuted.** A backend-wide sweep of `getPlayerId()` comparison sites returns only `DisputeService.java:91` plus `MessagingService.java:299,378` and `MessagingReportService.java:142` — and all three messaging sites compare a PlayerProfile PK to a PlayerProfile PK, the same ID space. Finding 2 is the only instance. |
-| "Finding 3's `to.matched.length === 2` is misleading because there is no `/coach` parent route." | **Not a finding.** True that `coach/command-center` is a flat relative child of the single `path: '/'` wrapper (`routes.js:4,77`) rather than a child of a `/coach` parent — but the story never claims otherwise, and the number it states is correct. |
-
----
-
-## 7. Recommendation
-
-**Fix before implementation (blocking):**
-- **C1** — decide the `player/locker-room/:playerId` gate. `roles: ['PLAYER','PARENT']` is the lowest-risk option, uses the already-proven mechanism, and is the only one that matches `PlayerOwnershipGuard`. Shipping singular `role: 'PLAYER'` puts the router in conflict with the authorization model deferred-147 just fixed.
-- **C3** — rewrite AC6's third bullet and strike M1's false rationale from Finding 6. As written the bullet cannot be satisfied without a source change no AC authorizes — and AC6's own fourth bullet forbids one.
-
-**Fix before implementation (cheap, prevents wrong work):**
-- **C2** — either fold `BookingRequestPage.vue:247` into AC1 or state explicitly that it is deferred; stop claiming the sweep found all sites. This is the highest-impact defect in the set: it corrupts an id on a write path reachable from a linked, primary CTA.
-- **C4** — correct "six" and add the `routes.js:208` inert `requiresParent` to the out-of-scope note (or to AC4).
-- **C5** — add `ReviewUpdateIT` to AC8's targeted list.
-- **C10** — write the `transactionTemplate` hold-open mechanism into AC5's IT bullet; the current wording does not describe a test that works.
-- The `router/index.js:48-49` / `:80-83` drift (§2) — these land on neighbouring working code.
-- **M2**, **M3**, **M4** — correct the three overstated claims. Each has the right conclusion but a wrong premise, which is exactly the shape that makes a dev agent skip a real check.
-
-**Worth a sentence each, not blocking:** C6, C7, C8, C9, C11, C12, M6.
-
-**Confidence, per claim rather than overall.** Highest confidence on the verdicts I re-derived from primary sources myself: the `isQuiesced` visibility (read the signature, the introducing commit's diff, and the test class — three independent confirmations), Design C's correctness (read vue-router 4.6.4's own matcher at `vue-router.mjs:645-646` and `:486`), C2's end-to-end reachability (read both ends of the navigation and the query-string construction), C1's authorization-model conflict (read `PlayerOwnershipGuard.check` in full), the 11-route enumeration in C4, and the `.dockerignore` safety analysis (inventoried what the build context actually contains rather than reasoning from the patterns alone).
-
-Lower confidence, flagged as such: **C5**'s "still harmless" rests on reading all three `ReviewUpdateIT` cases' fixture state — solid — but its DoD-gap framing is a judgment call. **C10**'s retry-budget hazard is inferred from the existing IT's own 300ms comment rather than from a failing run. **C1**'s severity downgrade rests on a negative result (no inbound navigation found); negative greps are the weakest evidence in this report, so if any navigation into `parent/players/:playerId/sessions` is added later, C1 returns to High.
-
-What was **not** independently executed: no tests were run, no `docker build` was performed (AC7 itself permits reasoning from documented semantics), and AC3's router-factory test vehicle was verified only statically. For that last one the three things that could have broken it all check out — the hand-maintained `#q-app/wrappers` alias in `vitest.config.mjs`, that target exporting `defineRouter` as well as `defineBoot`, and `index.js:22`'s factory taking no destructured parameters, so `createRouterFactory({})` is fine — and under Vitest `process.env.VUE_ROUTER_MODE` is unset so the factory falls to `createWebHashHistory`, which coincidentally matches `quasar.config.js:40`'s real `vueRouterMode: 'hash'`. But nobody has booted it under happy-dom, so treat Task 7 as the one task with unverified feasibility.
-
-The story is well above average for this repo: citation accuracy is high (30 of 39 exact, including all nine `.dockerignore` line numbers), its highest-stakes technical claim — Design C's `to.matched.some(...)` rewrite — is correct for the right reason, its scoping discipline is genuine, and its most load-bearing mechanistic claims about Spring and vue-router internals hold up against the actual installed sources. The defects cluster in two specific habits: asserting an enumeration is complete after a grep narrower than the claim (C2, C4, C5, M2), and carrying a ledger assertion forward without re-deriving it (M1, and the `:90` References drift) — the latter being the exact failure mode this review process exists to catch, and in M1's case the story's own Design section already contradicted the error it inherited.
-
-What I did **not** independently execute: no tests were run, and AC3's router-factory test vehicle was verified only statically (the `#q-app/wrappers` alias, the `defineRouter` export, and `quasar.config.js:40`'s `vueRouterMode: 'hash'` all check out, but nobody has actually booted the factory under happy-dom). AC7's Docker behavior was reasoned from pattern semantics plus a full inventory of what the context contains, not from a `docker build` size comparison — which is what AC7 itself permits.
-
-The story is well above average for this repo: its citation accuracy is high, its highest-stakes technical claim (Design C) is correct for the right reason, and its scoping discipline is genuine. The defects cluster in two specific habits — asserting an enumeration is complete after a grep that was narrower than the claim (C2, C4, C5, M2), and carrying a ledger assertion forward without re-deriving it (M1, and the `:90` References drift).
-
----
-
-# Round 2 — re-review of the updated story
-
-**Date:** 2026-10-07 · **HEAD:** still `ef2daac9` · **Scope:** verification that the 12 findings above were applied correctly, plus a fresh check of the *new* text for defects the fixes themselves introduced.
-
-All 12 were applied, and three deserve credit for being handled better than the finding asked:
-
-- **C3** — resolved by explicitly authorizing the `isQuiesced` visibility bump, *and* AC6's fourth bullet was reworded to reconcile with it ("confirm the diff touches only `beforeTestMethod`'s `try`/`finally` wrap and `isQuiesced`'s signature/body (the one-line visibility change is part of this AC, not scope creep beyond it)"). That contradiction was my main concern with this resolution and it is closed.
-- **C1** — fixed to `roles: ['PLAYER', 'PARENT']`, with a new AC4 bullet that tests the regression directly ("a PARENT navigating to `/player/locker-room/:playerId` is **not** redirected") and a new Dev Note naming `PlayerOwnershipGuard` as the source of truth for this route. The fix is load-bearing and is now documented as such.
-- **C7** — the `?? null` deviation was dropped entirely in favour of deferred-147's verbatim bare form, with the garbage-param trade-off disclosed rather than silently accepted.
-
-## R2-1 — HIGH: the C2 fix drops a validation gate that was load-bearing, on the story's own false premise
-
-**This is a new defect, introduced by the fix for C2 — not a pre-existing one.**
-
-Design A's `BookingRequestPage.vue` rewrite drops the `Number`/`isFinite`/`> 0` check and justifies it:
-
-> "Drops the `Number`/`isFinite`/`> 0` validation entirely — it only ever existed to sanity-check a parsed number, which no longer exists once the value stays a string, and **it never actually excluded a non-numeric garbage value any more strictly than a bare truthy check does** (`Number('abc')` is already `NaN`, already fails `isFinite`, same outcome either way)."
-
-The claim in bold is **false**. The `return` sits *inside* the inner `if`, so a value that fails validation does not return — it **falls through to the safe fallback**:
-
-```js
-const playerId = computed(() => {
-  if (route.query.playerId && !authStore.isPlayer) {
-    const parsed = Number(route.query.playerId)
-    if (Number.isFinite(parsed) && parsed > 0) return parsed   // ← only valid input returns here
-  }
-  if (authStore.isPlayer) return selfPlayerId.value
-  return playerStore.activePlayerId                            // ← garbage lands HERE today
-})
-```
-
-Traced against the real logic (`BookingRequestPage.vue:245-252`):
-
-| `?playerId=` | Today | After Design A as written |
+| Cited section | Line | Verdict |
 |---|---|---|
-| `abc` | falls through → `playerStore.activePlayerId` | returns `'abc'` |
-| `0` | falls through → `activePlayerId` | returns `'0'` |
-| `-5` | falls through → `activePlayerId` | returns `'-5'` |
-| `1&playerId=2` | falls through → `activePlayerId` | returns the **array** `['1','2']` |
+| code review of skillars-deferred-142 (2026-10-05) | 3471 | ✔ |
+| code review of skillars-deferred-143 (2026-10-05) | 3579 | ✔ |
+| manual review during skillars-deferred-143 (2026-10-05) | 3674 | ✔ — the "wider grep" companion ask is real and explicitly still open (`:3791-3796`) |
+| code review of skillars-deferred-144 (2026-10-06) | 3800 | ✔ — and its "When picked up" literally proposes *"add a `sessions_invalid_after` column the pre-authentication checks consult"*, which is Design C |
+| code review of skillars-deferred-145, round 2 (2026-10-06) | 3856 | ✔ — the 29/30 example, `:182`, `:321` all match |
+| code review of skillars-deferred-146 (2026-10-07) | 3884 | ✔ — the `docker-image`/ruleset item |
+| post-implementation story audit of skillars-deferred-146 (2026-10-07) | 3891 | ✔ — **9 bullets**, see F5 |
+| code review of skillars-deferred-148 (2026-10-07) | 3922 | ✔ — Finding 1 reproduces it accurately and refines it correctly |
 
-So the outcomes are not "the same either way" — they are opposite. The dropped check was a *gate* whose failure path was the fallback, not a redundant assertion.
+Sources checked for each precedent claim: the ledger file, the source-code comments/javadoc beside the
+method under discussion, and `grep` across `src/main` + `src/test`.
 
-**Why it matters here specifically**, and more than at the three `route.params` sites: this value is user-controllable via a query string rather than router-validated, there is a meaningful fallback branch to fall through to, and it feeds a **write** path. The page's own comment at `:295-296` names exactly this threat:
+| Precedent claim | Sources checked | Verdict |
+|---|---|---|
+| "the same dual-check shape `skillars-deferred-147` already added to `PlayerOwnershipGuard`" | `PlayerOwnershipGuard.java:26-34`, `PlayerProfileRepository.java:39-46` | **TRUE** — the javadoc names deferred-147 and `PlayerOwnershipGuard` by hand |
+| "the bug class `skillars-deferred-144` already fixed once in `AuthResourceIT`" | `AuthResourceIT:475-482`, `:813-824` | **TRUE** — the comment states the auto-commit mechanism verbatim |
+| "mirroring the existing `changeAccountLockStatus` / `markCleanupFailed` `@Modifying @Query` precedent" | `UserRepository.java:73-75`, `:103-106` | **TRUE as to shape**, but see **F1** — `changeAccountLockStatus` is dead code (0 callers) and is the *wrong* precedent for a revoke-then-throw site |
+| "the same shape `skillars-deferred-143` already established for account locking" | `AuthService.ensureAccountIsLive:288-295`, `Principal.instanceFrom:151`, `JWTAuthorizationFilter:342-357`, `deferred-work.md:3579-3600` | **TRUE in spirit** (enforcement via a `User` boolean read on the pre-auth check), but deferred-143 did not use `changeAccountLockStatus`; its mechanism is `accountNonLocked` + the filter's teardown |
+| "follow `skillars-deferred-122`'s `cleanupFailedAt`/`cleanupLastAttemptedAt` precedent" | `V143__user_cleanup_failed_at.sql`, `User.java:100-133` | **TRUE and load-bearing — and AC3 contradicts it on three counts.** See **F2** and **F3** |
+| "`skillars-deferred-148`'s own stated rationale for the identical `DisputeService` change" (field appended last) | `DisputeServiceTest.java` exists; `grep "new SubscriptionService("` → 0 hits | **FALSE as applied** — see **F6** |
+| "the `.dockerignore` `DO NOT add .git here` comment block" | `.dockerignore:15-18` | **TRUE** — it exists and says exactly that |
+| "`skillars-deferred-136` AC4 raised the quiesce bound 10s → 30s" | `DatabaseResetTestExecutionListener:244` (`<h2>… atMost raised 10s -> 30s`), `:314` (live `30`) | **TRUE** |
+| "`POST /api/auth/refresh` has no caller yet" | `grep skillarsRefresh` → defined at `auth.api.js:45`, **zero** call sites; live keep-alive is `sessionApi.refresh()` → `GET /refresh` (`session.api.js:5`, `sessionManager.js:265`) | **TRUE** (see §5 K1 — I nearly flagged this and it does not hold up as a finding) |
+| "`SecurityError.ACCOUNT_NOT_LOGIN_ABLE`'s enum comment already reads 'Maybe credentials/account expired, account locked or so'" | `DaoAuthProvider.java:48` message + the `isGenuineDenial` javadoc at `:309-340` | **TRUE in substance** — the generic framing is real and documented |
 
-> "playerId IS gated: without it, single-booking submit had no safety net ... a self-booking player whose profile hasn't resolved yet (**or a malformed query string**) must not be able to submit with an undefined playerId."
+---
 
-And `canSubmit` (`:297`) is `!!playerId.value` — a truthy `'abc'` or `['1','2']` sails through it, so the guard that comment describes no longer fires. `playerId: 'abc'` then reaches `submitBookingRequest`'s payload (`:491`).
+## 3. Mechanistic claims (Layer 3)
 
-**Failure scenario:** a parent opens `/parent/coaches/<id>/request-booking?playerId=abc` (hand-edited, stale bookmark, or a truncated share link). Today the page quietly books for their active player. After this fix, `canSubmit` lets the submit through with `playerId: 'abc'` and the backend 400s — a working flow becomes a broken one. The array case is worse: `?playerId=1&playerId=2` posts a JSON array where a `Long` is expected.
+Claims confirmed by reading the full named method and its enclosing transaction boundary:
 
-**Fix — keep the string, keep the gate.** Replace the numeric parse with a shape check instead of deleting it:
+1. **"`currentParentId()` is actually `securityUtil.requireCurrentUserId()`, i.e. 'the caller's own id'"** — `SubscriptionResource.java:134-136`. **CONFIRMED.**
+2. **"only `getPlayerSubscription`'s controller method uses the dual-check `@PreAuthorize`; the other three are `HAS_PARENT_ROLE`"** — `SubscriptionResource.java:101,111,118`. **CONFIRMED.**
+3. **"every `verifyEmail` branch throws `EmailTokenException`, and `ApiAdvice` maps every one to 400 uniformly"** — `CoachRegistrationService:112-121`, `ApiAdvice:555-562`. **CONFIRMED**, and `ParentRegistrationService:116-128` is byte-identical.
+4. **"`extendTtlOfToken` resets `iat` on every fast-path request, so `iat` cannot carry an original-issuance signal"** — `JwtManagerImpl:161-174` → `TokenCreatorImpl:50` sets `Claims.ISSUED_AT = now()` unconditionally; `extendTtlOfToken` re-passes the *incoming* `dbRefreshToken` (`:164,:166`) rather than regenerating it. **CONFIRMED on both halves**, including the subtle "`dbRefreshToken` is the one claim that survives" point. Checked that no sibling method in `JwtManagerImpl` was confused for `extendTtlOfToken`.
+5. **"the DB re-auth path never reads `refresh_tokens`"** — `JWTAuthorizationFilter:205-212` plus the filter's own javadoc at `:78-88` and its inline comment at `:212-227`, both of which state the theft-revocation gap explicitly. **CONFIRMED** — Finding 3's diagnosis is correct and corroborated by two existing comments.
+6. **"`Principal extends` Spring's `UserDetails` base, so `credentialsNonExpired=false` makes `AccountStatusUserDetailsChecker` throw `CredentialsExpiredException`, which `DaoAuthProvider:47-51` rewraps as `ACCOUNT_NOT_LOGIN_ABLE`, already an `isGenuineDenial` trigger"** — `DaoAuthProvider:36,47-51`, `JWTAuthorizationFilter:354`, `:158-160` (`terminateSession`). **CONFIRMED.** The enforcement chain really does already exist end-to-end; Design C's "zero changes needed to `DaoAuthProvider.java` or `JWTAuthorizationFilter.java`" is right.
+7. **"`login()`'s `user` is a managed entity, so a plain setter flushes on commit"** — `AuthService` is `@Transactional` (`:48`), `findOneByLogin` at `:87`, no throw on the success path. **CONFIRMED.** Also checked the inverse risk: `login()` does **not** run Spring's pre-authentication checks (`ensureAccountIsLive:288-295` only tests `activated`/`locked`), so a flagged user can still log in and clear the flag. Design C's clear-on-login is reachable.
+8. **"the new disjunct subsumes the old strict-ordering check"** — mathematically, `{gap ≤ 0} ⊂ {gap < 7}`. **CONFIRMED** (the parenthetical justifying it is garbled — F18).
+9. **"`git-commit-id-maven-plugin` writes `target/classes/git.properties`"** — `pom.xml:748`. **CONFIRMED**, so Design G's write target is right.
+10. **"`management.info.git.mode: full` is not configured anywhere, so the dirty flag is not surfaced today"** — no `info.git` key in any `application*.yaml`; `management.endpoints.web.exposure.include: health,info,env,metrics,prometheus` (`:477`). **CONFIRMED** (Boot's default `simple` mode exposes branch/commit.id/commit.time only).
 
-```js
-if (route.query.playerId && !authStore.isPlayer) {
-  const raw = String(route.query.playerId)
-  if (/^[1-9]\d*$/.test(raw)) return raw
-}
+Claims that did **not** survive:
+
+11. **"both call sites already run inside `AuthService`'s class-level `@Transactional`, so the `@Modifying` query joins the ambient transaction"** → **F1, backwards.**
+12. **"the other two wrap codes `DaoAuthProvider.authorize()` can produce"** → **F4, there are four.**
+13. **"appended last … before the separate `@Autowired @Lazy stripeWebhookService` field"** → **F6, misreads the field block.**
+14. **"`.dockerignore`'s exclusions make `git.dirty=true` permanent"** → **F10, wrong cause.**
+15. **"`.github/actions/docker-build/action.yml`'s existing `build-args` input"** → **F19, not an input.**
+
+---
+
+## 4. Findings that survived adversarial re-verification
+
+### F1 — BLOCKING. AC3's revocation write would be silently rolled back; Design C's transaction claim is backwards
+
+**Design C, line 162:** *"No explicit `@Transactional` needed (unlike `markCleanupFailed`) — both call sites (`AuthService.refresh()`'s two theft branches) already run inside `AuthService`'s class-level `@Transactional`, so the `@Modifying` query joins the ambient transaction, exactly like `changeAccountLockStatus` does."*
+
+Both theft branches **throw immediately after the revocation**:
+
+- `AuthService.java:157-158` → `markAllUsedByUserId(ownerId); securityUtil.clearAuthCookies(res); throw new BadCredentialsException(...)`
+- `AuthService.java:166-168` → identical shape
+
+`BadCredentialsException` is a `RuntimeException`, `AuthService` carries a bare class-level
+`@Transactional` (`:48`) with default rollback rules, and there is **no `noRollbackFor` anywhere in
+`src/main`**. So the ambient transaction rolls back — which is precisely why the sibling write is
+*not* ambient:
+
+> `RefreshTokenRepository.java:79-82` — `@Modifying` **`@Transactional(propagation = Propagation.REQUIRES_NEW)`** on `markAllUsedByUserId`
+> `RefreshTokenRepository.java:86-96` — *"a caller that revokes-then-throws must not have the revocation undone by its own rollback. The concrete case: `AuthService.refresh()` is its own outermost transaction boundary (`AuthService` is `@Transactional`, `AuthResource` is not, and `spring.jpa.open-in-view` is `false`) … A plain managed `save()` … would therefore be silently discarded."*
+> `AuthService.java:216-218` — *"Rolls back this method's transaction, which is exactly why the revocation inside `terminateSession` (and the explicit one here) is `REQUIRES_NEW`."*
+
+Independently confirmed: `AuthResource.java:62-65` has no `@Transactional`; `application.yaml:158` has
+`open-in-view: false`. Every premise the existing javadoc rests on still holds at this HEAD.
+
+**Consequence if built as written:** `invalidateSessionsForUser` executes, the transaction rolls back,
+`security_session_invalidated_at` stays `NULL`, and **AC3 ships as a complete no-op** — the one
+behaviour the story calls "the largest, highest-risk item" would never fire. Worse, the AC3 unit test
+as specified ("a theft-detection branch firing sets the flag") would pass, because a mocked
+`UserRepository` cannot observe a rollback.
+
+**Fix:** give `invalidateSessionsForUser` `@Modifying @Transactional(propagation = REQUIRES_NEW)`,
+following `markAllUsedByUserId`/`markUsedByTokenHash` — not `changeAccountLockStatus` (which, checked
+separately, has **zero callers** in `src/main` or `src/test`, so it is not a live precedent for
+anything). The self-deadlock hazard that normally accompanies `REQUIRES_NEW` here does **not** apply:
+neither theft branch writes the `user` row before this point, so the inner transaction takes an
+uncontended lock — the same argument `AuthService.java:205-208` already makes for `refresh_tokens`.
+Say so in the code comment, because it is the non-obvious half.
+
+Also correct AC3's integration bullet to assert durability (flag still set **after** the 401 returns),
+since that is the assertion that distinguishes a working fix from this bug.
+
+---
+
+### F2 — BLOCKING. AC3 adds a column to an Envers-audited entity with no `user_aud` column and no `@NotAudited`
+
+`User` is `@Audited` (`User.java:45`), `hibernate-envers` is a real dependency (`pom.xml:410`), and
+`main.user_aud` is a real table (`V138__baseline_schema.sql:…`) that carries **no** `cleanup_*` columns
+and gained `skillars_role`/`verification_status` only retroactively.
+
+This repo has exactly two sanctioned ways to add a `User` column, and has already been burned once:
+
+- **V143** (the precedent AC3's Dev Notes tells the dev to follow) marks the new fields `@NotAudited`
+  and documents it: *"User is Envers-@Audited with a real main.user_aud table, but all four new/existing columns here are annotated `@NotAudited` on the entity … so no matching user_aud column is needed."* (`User.java:103,118,123,132`)
+- **V146:25** takes the other path: *"main.user_aud gets the column too: User is @Audited and the embedded field carries no @NotAudited"* → `ALTER TABLE main.user_aud ADD COLUMN …` (`:37`)
+- **V145** exists *only* because `skillars_role`/`verification_status` were added to the audited entity without a matching `user_aud` column — i.e. this exact mistake, already paid for once.
+
+AC3 does **neither**. Bullet 1 adds the column to `main."user"` only; bullet 2 adds the entity field
+with "getter/setter, per Design C"; Design C says place it *"near the existing `locked` field"* — which
+is `User.java:71-72`, squarely inside the audited region, nowhere near the `@NotAudited` cluster at
+`:100-133`.
+
+**Consequence:** with Envers active and no `user_aud.security_session_invalidated_at`, the first
+audited write to a `user` row fails on the revision insert. `AuthService.login()`'s own
+`setSecuritySessionInvalidatedAt(null)` is such a write — so **AC3 would break login**, not just the
+theft path. And `hibernate.ddl-auto: none` (`application.yaml:157`) means nothing catches it at boot;
+it surfaces as a runtime failure.
+
+**Fix:** decide and state which path AC3 takes — `@NotAudited` (this is operational session state, so
+V143's reasoning applies cleanly and is the cheaper option) or a matching `user_aud` ADD COLUMN in
+V158. Add it as an explicit AC3 bullet; do not leave it to be discovered.
+
+---
+
+### F3 — HIGH. V158 as specified fails `MigrationConventionLintTest` in CI
+
+AC3 bullet 1 specifies, verbatim:
+
+```sql
+ALTER TABLE main."user" ADD COLUMN security_session_invalidated_at TIMESTAMPTZ;
 ```
 
-`String(...)` collapses the duplicate-param array to `'1,2'`, which fails the test and falls through correctly. `^[1-9]\d*$` preserves the original `> 0` semantics exactly (use `^\d+$` if rejecting `'0'` is not wanted). Either way the fall-through to `playerStore.activePlayerId` is retained, which is the whole point.
+`MigrationConventionLintTest.realMigrations_aboveBaseline_areClean` (`:86-97`) asserts **zero**
+violations for every migration above `GRANDFATHER_BASELINE = 139` (`MigrationLint.java:112`). V158
+is above both relevant baselines, so two rules bite:
 
-AC1's `BookingRequestPage` bullet should also gain a negative case — `?playerId=abc` falls back to `playerStore.activePlayerId` and does **not** submit a garbage id — since the existing `BookingRequestPageSpec.js` case being added only covers the happy path.
+- **`MISSING_LOCK_TIMEOUT`** (`MigrationLint.java:203`, `:1107`) — lock-taking DDL with no
+  `SET lock_timeout` in effect. The statement above has none.
+- **`SESSION_SCOPED_LOCK_TIMEOUT`** (`:225`, baseline `150` at `:149`) — above V150 a *plain*
+  `SET lock_timeout` is itself a violation; it must be `SET LOCAL`.
 
-## R2-2 — note: the four AC1 sites are no longer one uniform shape
+`docs/deployment/migration-conventions.md:45` states the rule directly: *"Every lock-taking DDL has
+`SET LOCAL lock_timeout` in effect at that point in the file."* The story cites that very document to
+call the migration "trivially safe" — the *classification* is right (additive nullable, expand/contract
+rule 1), but the specified SQL omits a mandatory element of the same document.
 
-The updated story describes C2 as folded in "since it is the same one-line shape" (header note) and Task 1 treats all four files as one edit. Three of them genuinely are a one-line `Number(...)` → bare-param swap. `BookingRequestPage.vue` is not: it is a three-branch computed with a validation gate and a fallback (see R2-1). Worth one sentence in Task 1 so the dev agent does not apply the uniform transformation mechanically — that is precisely how R2-1 would ship.
+Two further deviations from house shape, not lint-enforced but uniform across every recent migration
+(`V157`, `V151`, `V143`, `V146`, `V140`):
 
-## Round 2 — what did not survive re-verification
+- **`TIMESTAMPTZ` is the wrong type for this table.** `V143`'s header says it in as many words:
+  *"timestamp without time zone, not timestamptz: matches every other nullable timestamp column already on this table (activation_date, reset_expiration, account_expiration, created_date, last_modified_date), consistent with hibernate.jdbc.time_zone: UTC and this codebase's Instant-typed fields throughout."* Every existing `main."user"` timestamp is `timestamp without time zone`.
+- **No `ADD COLUMN IF NOT EXISTS`** and no rationale header.
 
-| Candidate | Why it died |
+Note the trap: following `V143` *literally* also fails, because V143 is below baseline 150 and uses a
+plain `SET lock_timeout`. The correct model is **V157** (`SET LOCAL lock_timeout = '5s';` + rationale
+header + `ADD COLUMN IF NOT EXISTS`).
+
+---
+
+### F4 — HIGH. AC4 is not "zero-risk": widening to `UNKNOWN` makes a transient DB fault revoke refresh tokens
+
+Finding 4 calls this *"a one-line, zero-risk completeness fix"* and says `USER_NOT_FOUND`/`UNKNOWN` are
+*"the other two wrap codes `DaoAuthProvider.authorize()` can produce."*
+
+Reading the full method (`DaoAuthProvider.java:28-59`), `authorize()` can produce **four** other codes:
+
+| Code | Site |
 |---|---|
-| "AC6's new visibility bump contradicts AC6's own 'diff touches only the two spots' bullet." | **Refuted** — the updated bullet explicitly reconciles it (quoted above). |
-| "Widening `isQuiesced` to package-private won't let the test call it, since the test is in a different package." | **Refuted.** `DatabaseResetTestExecutionListenerQuiesceTest` is in `com.softropic.skillars.config`, the same package as `DatabaseResetTestExecutionListener`. A package-private static method is directly callable. |
-| "`roles: ['PLAYER','PARENT']` might double-gate against the singular `requiresPlayer` derivation and bounce a PARENT anyway." | **Refuted.** `requiresPlayer` derives from `meta.role === 'PLAYER'` (`index.js:51`); the corrected meta sets `roles` only, with no `role` key, so only the `rolesMeta.includes(authStore.role)` branch (`:84`) applies — and it accepts both. |
-| "Replacing the inert `requiresParent: true` on `parent/player/:playerId/subscription` newly gates a route that was open, which could break an inbound link." | **Refuted as moot** — that route has no in-app navigation either (same orphan check as C1/C8), so there is no link to break. Gating it is a strict improvement. |
+| `UNKNOWN` | `:37-41`, `catch (InternalAuthenticationServiceException)` |
+| `USER_NOT_FOUND` | `:42-46` |
+| `UNKNOWN` | `:52-56`, `catch (Exception exception)` — the catch-all |
+| `MISSING_RIGHTS` | `:72-74`, via `checkAuthorities(...)`, called from `authorize()` at `:57` |
+| `MISSING_USERNAME` | `:79-81`, via `determineUsername(...)`, called at `:30` |
 
-## Round 2 recommendation
+`UNKNOWN` is the **generic infrastructure-failure code**: `catch (Exception)` at `:52-56` absorbs
+anything thrown while loading the account, and `InternalAuthenticationServiceException` at `:37` is
+exactly how Spring's `DaoAuthenticationProvider` wraps a repository/DataSource failure. Making it a
+genuine denial routes it to the full teardown — `securityUtil.terminateSession(req, res)`
+(`JWTAuthorizationFilter:158-160`), i.e. **refresh-token revocation plus `rtkn`/`skp` clearing**.
 
-One blocking item: **R2-1**. The C2 fix is correct in intent and the site genuinely belonged in AC1, but as written it trades a read-path id corruption for a write-path validation hole, on a stated premise that the code contradicts. The corrected form is three lines and keeps everything the finding wanted.
+So a connection-pool exhaustion, lock timeout, or query timeout at the 5-minute DB-reauth boundary
+would no longer produce a recoverable 401 — it would revoke the user's 7-day refresh token and force a
+full re-login, for every user who happens to cross the boundary during the blip. That is a materially
+different risk profile from the story's "zero-risk" framing, and it cuts against the design intent the
+`isGenuineDenial` javadoc states at `:309-340` (routine causes must not reach the DB-write path).
 
-R2-2 is a one-sentence clarification.
+The `MISSING_RIGHTS` omission is also already known inside this project: `sprint-status.yaml`'s
+deferred-144 note records *"the review also omitted a real member of the same list, MISSING_USERNAME
+(DaoAuthProvider.determineUsername)"*. The story reproduced the ledger's "other two" phrasing
+(`deferred-work.md:3663-3664`) rather than re-deriving it.
 
-Everything else in the updated story holds. Confidence on R2-1 is high: the fall-through behavior was confirmed by reading the real computed at `BookingRequestPage.vue:245-252` and then executing the branch logic over the five input shapes in the table above, rather than reasoning about it.
+**Recommendation:** split the two codes. `USER_NOT_FOUND` is a genuine denial — take it. For `UNKNOWN`,
+either leave it routine, or (better) narrow `DaoAuthProvider`'s catch-all so infrastructure failures get
+their own code and only the genuinely-unauthenticatable cases map to `UNKNOWN`. Either way AC4 needs a
+sentence acknowledging the blast radius, and the AC should pin the decision rather than presenting the
+widening as cost-free.
+
+---
+
+### F5 — HIGH. AC8 claims to close "all ~9 items" but drops one
+
+The `## Deferred from: post-implementation story audit of skillars-deferred-146 (2026-10-07)` section
+(`deferred-work.md:3891-3920`) contains **exactly 9 bullets** (counted: 9 lines matching `^- \*\*`):
+
+| # | Ledger bullet | AC8 item |
+|---|---|---|
+| 1 | AC3 satisfied against an unmerged commit | item 9 |
+| 2 | `docs/testing/readme.md:152-156` stale units/run | items 4 **and** 5 |
+| 3 | Finding 1 narrative still asserts the refuted reasoning | item 6 |
+| 4 | AC1d undercounts: 7 sites not 6, 1 of 5 Awaitility sites | item 1 |
+| 5 | idle re-sweep tripled the worst case | item 8 |
+| 6 | `docs/deployment/baseline/pr.md:65` → `ci.yml:238-239` | item 3 |
+| 7 | `pr-build.yml:49-51` → `:55-57` | item 2 |
+| 8 | **"Deferred From This Investigation" item 1 (`spring.test.context.cache.maxSize`) arithmetic does not close against its own measurement; may be ~2× oversized** | **— none —** |
+| 9 | `DatabaseResetTestExecutionListener:118-121` 10s → 30s | item 7 |
+
+Bullet 8 is **not** in AC8, and it is **not** in Dev Notes' "Do not pick up" list either — so it is
+neither closed nor deliberately deferred, while AC8's own framing ("nine independent edits", Source
+line: "AC8, all ~9 items") asserts completeness. The substance of bullet 8: *"40 signatures with 8
+rebuilds implies 48 loads, not 44; the measured 44 implies ~4 rebuilds, i.e. ~4 × 4.6 s ≈ 18 s, roughly
+half the headline saving… the static count was not re-derived by this audit, so which one is open."*
+
+The proximate cause is visible in **F14**: AC8 item 1 attaches bullet 8's *section label*
+("`## Deferred From This Investigation` item 1") to bullet 4's *content* (the 7-call-site inventory).
+The two bullets were conflated and one was lost.
+
+**Fix:** add a tenth AC8 item for the `maxSize` arithmetic (text-only: correct the eviction inference
+and the ~35 s sizing, or mark the signature count as un-re-derived), or move it explicitly to "Do not
+pick up" with a reason. Also drop the "all ~9 items" / "nine independent edits" phrasing in favour of an
+exact count after the fix.
+
+---
+
+### F6 — MEDIUM. `SubscriptionServiceTest` does not exist, and Design A's field-ordering rationale rests on it
+
+The story references it four times as an existing artefact:
+
+- AC1: *"`SubscriptionServiceTest.setUp()`'s constructor call and mock field list updated for the new constructor parameter."*
+- Design A: *"appending last minimizes `SubscriptionServiceTest`'s constructor-call diff"*
+- Project Structure Notes, "Changed test files": `src/test/java/com/softropic/skillars/platform/payment/service/SubscriptionServiceTest.java`
+- AC9: re-run `SubscriptionServiceTest`
+
+At `df07a842` there is **no such file**. `find src/test -iname "*Subscription*"` returns
+`PlayerSubscriptionQueryAdapterTest`, `PlayerSubscriptionOwnershipIT`, `SubscriptionResourceIT`,
+`SubscriptionLifecycleIT`, `SubscriptionSchedulerIsolationTest`, `SubscriptionSchedulerLockTest`,
+`SubscriptionServiceConcurrencyIT`, `SubscriptionServiceStripeReconciliationIT` — and no
+`SubscriptionServiceTest`. `grep -rn "new SubscriptionService(" src/` returns **zero hits** repo-wide.
+
+Two consequences:
+
+1. **Design A's entire field-placement rationale is vacuous.** Nothing constructs `SubscriptionService`
+   manually, so constructor-parameter position has no diff to minimise. (Contrast `DisputeServiceTest`,
+   which *does* exist — the deferred-148 precedent is real, it just does not transfer here.)
+2. **The placement instruction is wrong on its own terms.** Design A says to append *"after `lockRetryer`,
+   before the separate `@Autowired @Lazy stripeWebhookService` field."* But `stripeWebhookService`
+   (`SubscriptionService.java:68`) is a plain `private final` field — the **last** `@RequiredArgsConstructor`
+   parameter. The `@Autowired @Lazy` member is `private SubscriptionService self` (`:71-72`), non-final
+   and field-injected, not a constructor parameter at all. Following the instruction literally inserts the
+   new parameter *second-to-last*, contradicting "appended last".
+
+**Fix:** declare the new field after `stripeWebhookService` (`:68`) if "last" is wanted; drop the
+diff-minimisation rationale; and change AC1's `setUp()` bullet plus the File List from "update" to
+"create (does not exist today)" — or retarget the coverage per **F9**.
+
+---
+
+### F7 — MEDIUM. Widening the route to `PLAYER` exposes three parent-only actions with no UI gate
+
+AC1 widens `parent/player/:playerId/subscription` to `roles: ['PARENT', 'PLAYER']` while Design A
+explicitly says: *"**Do not** touch `subscribePlayer`/`changePlayerTier`/`cancelPlayerSubscription`'s
+controller-level `@PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)`"* — and calls the result *"the
+complete, correctly-scoped fix."*
+
+`PlayerSubscriptionPage.vue` is not read-only. It exposes all three mutations:
+
+- `:107` cancel button (`t('subscription.cancel')`) → `:280` `paymentStore.cancelPlayerSubscription(playerId)`
+- `:124` subscribe dialog → `:259` `paymentStore.subscribePlayer({...})`
+- `:257` `paymentStore.changePlayerTier({ playerId, newTier })`
+
+and `grep isParent src/frontend/src/pages/parent/PlayerSubscriptionPage.vue` returns **nothing**. So a
+self-registered PLAYER lands on a page whose primary buttons 403 at the backend and surface as the
+generic `subscription.player.subscribeError` / `cancelError` notifications.
+
+The codebase's own dual-role precedent is the other half of the pattern the story cites. `routes.js:129-131`
+says so: *"reused by a self-registered PLAYER's own bookings list … — see ParentBookingsPage.vue's
+`authStore.isParent` button guards"*, and `ParentBookingsPage.vue:101,120,140` gate on
+`(authStore.isParent || authStore.isPlayer)`. AC1 ports the route half of the precedent and omits the
+button half.
+
+**Fix:** add an AC1 bullet gating the three mutating controls on `authStore.isParent` (with a read-only
+message or hidden state for PLAYER), or state explicitly in AC1 that the PLAYER view is read-only by
+design and that the 403s are accepted.
+
+---
+
+### F8 — MEDIUM. AC3's integration-test instruction cites a precedent that does not exist
+
+AC3: *"New `AuthResourceIT` (or `JWTAuthorizationFilterIT`, whichever this codebase's existing precedent
+uses for filter-level integration coverage — confirm at implementation time) case … **force that boundary
+in the test the same way other tests in this file already force it (an already-elapsed `dbRefreshToken`
+claim)**, rather than waiting 5 real minutes."*
+
+- `JWTAuthorizationFilterIT` does not exist. Only `JWTAuthorizationFilterTest` (a Mockito unit test).
+- `AuthResourceIT` contains **zero** occurrences of `dbRefreshToken` or `dbRToken`. The only test file
+  in the repo that touches that claim is `JwtManagerImplTest`.
+
+The class name is hedged; the *mechanism* is asserted as established fact and is false. There is no
+existing pattern to copy for forcing the DB-reauth boundary through a real HTTP round trip — the work is
+larger than the AC implies. (At unit level it is trivial: `JWTAuthorizationFilterTest` mocks
+`loginTokenManager.hasDbRefreshTokenExpired(request)` at `:171,:314,:338,:364,:421`, and
+`testWrappedAccountNotLoginAble_terminatesSession` at `:410-435` is a ready-made template.)
+
+**Fix:** drop the false "already force it" clause; either specify the integration mechanism concretely
+(mint a `potc` whose `dbRToken` is already past, via `JwtManagerImplTest`'s approach) or scope AC3's
+end-to-end proof to `JWTAuthorizationFilterTest` + a durability assertion per F1.
+
+---
+
+### F9 — MEDIUM. AC1 has no test that can fail if the bug is left unfixed — and the story never mentions the file that should carry it
+
+`PlayerSubscriptionOwnershipIT` already contains
+`getPlayerSubscription_selfRegisteredPlayer_returns200` (`:108-132`), added by deferred-147, which
+**passes today with the bug present** — because the class is `@WebMvcTest(SubscriptionResource.class)`
+with `@MockitoBean SubscriptionService` (`:71`), so `assertPlayerOwnership` never executes.
+`SubscriptionResourceIT` has the same shape (`:37`, `:49`), and its own header comment at `:34` points
+at `PlayerSubscriptionOwnershipIT` for `/player/me` coverage. No IT in the repo exercises
+`getPlayerSubscription` against a real `SubscriptionService`.
+
+The story never names `PlayerSubscriptionOwnershipIT` at all, and the coverage it does specify is two
+mock-based `SubscriptionServiceTest` cases in a file that does not exist (F6). A Mockito test that stubs
+`playerProfileRepository.existsByIdAndUserId(...) → true` proves only that the disjunct was written, not
+that the route works end-to-end — which is exactly the gap that let deferred-148 ship the route-level
+assumption that deferred-149 is now fixing.
+
+**Fix:** keep the unit cases, and add one of: (a) a `SubscriptionService`-level test with a real/stubbed
+repository pair covering `(parentLink=false, selfOwned=true) → pass` and
+`(false, false) → payment.subscription.playerOwnership`; or (b) extend `PlayerSubscriptionOwnershipIT`
+with a non-mocked service slice. Mention `PlayerSubscriptionOwnershipIT` in Project Structure Notes
+either way, since a reviewer will otherwise assume its green self-registered test already proves AC1.
+
+---
+
+### F10 — MEDIUM. Finding 7 misattributes the cause of `git.dirty=true`; removing the `.dockerignore` exclusions would change nothing
+
+Finding 7's heading and body claim *"`.dockerignore`'s exclusions make `git.dirty=true` permanent"* —
+that `.dockerignore` *"excludes several git-tracked paths from that same copied `.git/`"*, so JGit reports
+them as deletions.
+
+`.dockerignore`'s own header (`:3-4`) contradicts this: *"the Dockerfile only consumes three paths:
+`pom.xml`, `src/`, and `.git/`."* And the Dockerfile confirms it — `COPY pom.xml .` (`:6`),
+`COPY src/ src/` (`:10`), `COPY .git/ .git/` (`:11`), and nothing else. `docs/`, `requirements/`,
+`deploy/`, `.github/`, `mvnw`, `.gitignore`, `.gitattributes` are absent from the in-container working
+tree **because they are never `COPY`ed**, not because `.dockerignore` filters them out of the context.
+Deleting every exclusion at `.dockerignore:43-70` would leave `git.dirty=true` exactly as it is.
+
+The symptom is real and the chosen fix (feed the SHA in as a build arg) is right. But a dev who reads
+Finding 7 as written may try to narrow the exclusions instead, and will get nowhere.
+
+**Fix:** restate Finding 7's cause as "the Dockerfile copies only `pom.xml`/`src/`/`.git/`, so every
+other tracked path reads as deleted against the copied index" and keep `.dockerignore` out of the causal
+chain (it remains in scope only for AC7's last bullet, removing the now-obsolete `DO NOT add .git here`
+block at `:15-18`).
+
+---
+
+### F11 — MEDIUM. AC5 changes the rule but leaves four other statements of the old rule standing
+
+AC5 names only the two `if` conditions plus "log message"/"exception message". The old rule is written
+out in four more places, all of which become false:
+
+| Location | Text |
+|---|---|
+| `docs/deployment/monitoring.md:145` | *"also cross-checked against `reviews.updateCooldownDays` (**must stay strictly less**, at both boot and `PUT /api/config` …)"* |
+| `ConfigService.java:302` | javadoc: *"**strictly less than** reviews.updateCooldownDays, or the maturity floor silently supersedes the…"* |
+| `ConfigStartupAssertion.java:170-177` | the comment block above the guard, framed entirely as `minSessionAgeDays >= updateCooldownDays` |
+| `ConfigStartupAssertionTest:324-325` | *"Equal is still a violation here … **must be STRICTLY less than** updateCooldownDays"*, plus the now-misleading method names `reviewWindowOrderingEqualValues_flagsAsSuperseded` and `reviewWindowOrderingMinAgeBelowCooldown_doesNotFlag`, and `ConfigServiceTest`'s `…NotLessThanCooldownDefault_…` / `…NotGreaterThanMinAgeDefault_…` |
+
+This matters more than usual in this story, whose AC8 exists for precisely this class of drift — AC5
+would create nine-ish new instances of it in the same commit that fixes nine old ones.
+
+**Fix:** add these four sites to AC5's bullet list. `monitoring.md:145` is the one with real operator
+consequences.
+
+---
+
+### F12 — MEDIUM. AC5's "cannot break the current running configuration" argues from coded defaults, but both guards read stored config
+
+Finding 5: *"Current coded defaults (`getBoundedInt(key, 7, 1, 365)` / `getBoundedInt(key, 30, 1, 365)` — `ConfigStartupAssertion.java:178-181`) have a 23-day gap, comfortably clearing a 7-day minimum; the fix cannot break the current running configuration."*
+
+The coded values are the **fallback**. `ConfigStartupAssertion:178-181` calls
+`configService.getBoundedInt(key, default, 1, 365)`, which reads the stored `platform_config` row;
+`ConfigService.rejectReviewEligibilityWindowOrdering` reads the partner key's row directly
+(`readStoredBoundedInt`, per its own R2 javadoc at `:329-340`). `V156:7-8` seeds `7` / `30` with
+`ON CONFLICT (key) DO NOTHING`, so the seed only applies to a fresh database.
+
+The *old* guard admitted any gap ≥ 1. So a pair an admin set through `PUT /api/config` — `7`/`10`,
+`20`/`25`, anything with a gap of 1–6 — is legal today and becomes a **fail-fast boot violation outside
+the `dev` profile** the moment this change deploys. The story's safety argument never looks at stored
+state, and no AC checks it.
+
+**Fix:** add an AC5 bullet (or an AC9 deployment-precondition bullet): before/with the change, read the
+two stored rows in every deployed environment and normalise any pair with a gap < 7 — or ship a V-numbered
+data migration that clamps `updateCooldownDays` to `minSessionAgeDays + 7`. The code change itself is
+sound; the rollout is the unguarded part.
+
+---
+
+### F13 — LOW. AC8 item 5's figure is not what the target file says
+
+AC8 item 5 / Finding 8 item 5: *"`skillars-deferred-146`'s own story file Completion Notes table carries the **identical stale `0.07 ms` / `37574001244` pair** for the `[deferred-146] async quiesce:` row — same fix, same source numbers."*
+
+The table row (`…parallel-docker-image-job.md:315`) actually reads:
+
+> `| [deferred-146] async quiesce: (final, new) | — (not instrumented before this story) | **1199 invocations, 84 ms total, 0.1 ms mean** |`
+
+**`0.1 ms`, not `0.07 ms`.** The `0.07 ms` rendering exists only in `docs/testing/readme.md:152` (AC8
+item 4's target) and in that story's own Review Findings bullet at `:199`. The ledger's wording
+("carries the identical stale pair") is about the stale *run id and ms-era units*, which is true; the
+story turned that into a specific numeral that is not present.
+
+**Fix:** reword item 5 to "the stale `84 ms` / `0.1 ms` / run `37574001244` triple", so a dev applying
+the edit searches for text that exists.
+
+---
+
+### F14 — LOW. AC8 item 1's section attribution is wrong (and is how F5's item got lost)
+
+Finding 8 item 1 / AC8 item 1 attribute the inventory error to *"`skillars-deferred-146`'s own story
+file, `## Deferred From This Investigation` item 1 (`…:112`)"*.
+
+Line `112` is correct, but it sits inside **AC1d of the Acceptance Criteria section**
+(`## Acceptance Criteria` begins at `:92`): *"1d. **Given** `ConcurrencyLockWaitSupport.java:95` has the
+same `Awaitility.await().pollInterval(25ms)` shape … **Then** it is left alone, deliberately, and on
+volume alone: `assertGenuineLockRetryOccurred` has 6 call sites across 5 concurrency IT classes…"*
+
+`## Deferred From This Investigation` is at `:254-266` and its five items are about
+`spring.test.context.cache.maxSize`, prolonged-contention sleeps, context forks, Postgres tuning, and
+suite sharding — none mentions `assertGenuineLockRetryOccurred`. The ledger itself labels this bullet
+correctly ("skillars-deferred-146's **AC1d** undercounts its own evidence", `deferred-work.md:3900`);
+the "Deferred From This Investigation item 1" label belongs to the *different* ledger bullet that F5
+shows was dropped.
+
+**Fix:** re-label AC8 item 1 as "AC1d, line 112". That also makes the F5 gap visible.
+
+---
+
+### F15 — LOW. AC8 item 7's own citation is stale, contradicting the story's independent-re-verification claim
+
+Finding 8 opens: *"All verified still present at the cited locations on HEAD `df07a842`."* For item 7
+that is not so: the "`Quiescing can legitimately wait up to its own 10s bound`" comment is at
+`DatabaseResetTestExecutionListener.java:121-124`. `:118` is `recordQuiesceCost(System.nanoTime() - quiesceStartNanos);`
+and `:119` its closing brace.
+
+`:118-121` is the range printed in `deferred-work.md:3920` — i.e. copied from the ledger rather than
+re-anchored, which is the one thing the story's header promises did not happen. Note the story *did*
+avoid this on the adjacent item 8, where it described the comment's position in prose instead of reusing
+the ledger's `:331-335` (actual: `:336-338`).
+
+**Fix:** `:121-124`. Worth fixing precisely because AC8 is a citation-hygiene AC.
+
+---
+
+### F16 — LOW. Four further citation drifts
+
+- `UserRepository.java:71-74` → `changeAccountLockStatus` is `:73-75`.
+- `UserRepository.java:104-106` → `markCleanupFailed` is `:103-106` (`:103` is the `@Query` the
+  "`@Modifying @Query` precedent" claim depends on).
+- `DaoAuthProvider.java:42-56` → `authorize()` is `:28-59`; see F4.
+- References list `PlayerOwnershipGuard.java` under `platform/security/repo/`; it lives in
+  `platform/security/service/`.
+
+---
+
+### F17 — LOW. The Design A snippet will not compile as written
+
+Both the "current state" quote in Finding 1 and the replacement in Design A use the short name
+`PaymentGatewayException`. The real code uses the fully-qualified
+`com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException` inline
+(`SubscriptionService.java:901-902`), and
+`grep "import.*PaymentGatewayException" SubscriptionService.java` returns nothing — the class is **not
+imported**. Copying Design A's block verbatim produces a compile error, and the "current state" quote is
+a paraphrase presented as source.
+
+---
+
+### F18 — LOW. Design E's justification is logically inverted (the change itself is fine)
+
+Design E: *"This single change subsumes the old strict-ordering check (**a gap `< 7` can never be `<= 0`**)."*
+
+A gap of `0` is both `< 7` and `<= 0`, so the parenthetical is false as stated. The intended claim —
+`{gap ≤ 0} ⊂ {gap < 7}`, so replacing the old condition loses no coverage — is correct, and the code
+change is right. Reword so a reviewer is not left checking an argument that does not hold.
+
+---
+
+### F19 — LOW. The composite action has no `build-args` input
+
+Design G: *"extending `.github/actions/docker-build/action.yml`'s existing `build-args` input, which already carries `APK_UPGRADE_CACHE_BUST` the same way."*
+
+`action.yml`'s `inputs:` block (`:4-23`) declares `push`, `load`, `platforms`, `tags`, `labels` — no
+`build-args`. The `build-args:` at `:55` is a parameter the composite passes **into**
+`docker/build-push-action`, hard-coded to `APK_UPGRADE_CACHE_BUST=${{ github.run_id }}-${{ github.run_attempt }}`,
+and no caller sets it.
+
+AC7's deliverable is stated correctly (*"gains a new input (e.g. `commit-sha`) threaded into `build-args`"*),
+so this costs the dev only a moment of confusion — but "extending an existing input" and "adding the
+first-ever caller-settable build arg, appended to a hard-coded list" are different jobs.
+
+---
+
+### F20 — LOW (observation, not a defect in AC1 as scoped). Nothing in the UI links to the route being widened
+
+`grep -rn "player-subscription" src/frontend/src` returns two hits only: `routes.js:206` and
+`src/frontend/src/pages/parent/__tests__/PlayerSubscriptionPageSpec.js:42`. There is no nav entry,
+button, or `router.push` to this route anywhere — for PARENT either. So AC1's user-visible outcome
+("a self-registered adult player can read their own player subscription") is reachable only by typing
+the URL.
+
+AC1 is scoped to the API + route gate, so this is not a miss against its own text. It is flagged because
+it is the same bug class deferred-147 was created for (a correct backend with no UI entry point), and
+because AC1's user story is phrased as an end-user capability. Worth either a nav link or an explicit
+"no nav entry yet, deliberately" note.
+
+---
+
+## 5. What did **not** survive re-verification
+
+These were raised during the pass and killed on a second, skeptical read. Recorded so they are not
+re-raised as findings.
+
+**K1 — "`POST /api/auth/refresh` has no caller yet" is false.**
+`src/frontend/src/api/auth.api.js:45-47` defines `skillarsRefresh()` → `api.post('/api/auth/refresh')`,
+which looked like a direct contradiction. But `grep -rn "skillarsRefresh" src/frontend/src src/test`
+returns the definition and **nothing else** — it is dead code. The live session keep-alive is
+`sessionApi.refresh()` → `api.get('/refresh')` (`session.api.js:5`, called from
+`sessionManager.js:265`), a different endpoint per `AuthResource`'s own class javadoc (`:23-33`).
+**The story's claim stands.** Worth one clause in the story noting the unused wrapper exists.
+
+**K2 — "AC5 breaks existing tests."**
+I checked every affected case under the new `gap < 7` rule rather than assuming:
+`ConfigStartupAssertionTest` — setUp default stub 7/30 (gap 23, no trip ✔), `30/7` → throws ✔,
+`30/30` → throws ✔, `7/30` → no throw ✔. `ConfigServiceTest` — write min=30 vs stored cooldown default
+30 (gap 0) → throws ✔, write cooldown=7 vs min default 7 (gap 0) → throws ✔, write min=10 vs cooldown
+default 30 (gap 20) → persists ✔, stale-cache case min=100 vs stored cooldown 50 (gap −50) → throws ✔.
+**Every verdict is unchanged. AC5's "existing tests continue to pass" claim is correct.**
+
+**K3 — "AC4 breaks `testAuthorizationExceptionBubblesUp`."**
+That test (`JWTAuthorizationFilterTest:370-406`) asserts the *routine* branch
+(`verify(securityUtil, never()).terminateSession(...)`). It uses `SecurityError.MISSING_RIGHTS`, which
+AC4 does not touch. **No breakage.** (The widening's real cost is F4, not test fallout.)
+
+**K4 — a cross-ID-space bug in Design A's new disjunct.**
+Given this project's history (deferred-148's dispute bug; `Booking.playerId` being a profile PK, not a
+user id), I checked whether `existsByIdAndUserId(playerId, parentUserId)` mixes id spaces.
+`V138__baseline_schema.sql:4230-4231` FKs `parent_player_links.player_id → main.player_profiles(id)`
+and `:4223-4224` FKs `parent_id → main."user"(id)`. So the existing check and the new disjunct consume
+the same two id spaces, and the new disjunct matches `PlayerOwnershipGuard:34` exactly.
+**No bug. Design A is ID-space-correct.**
+
+**K5 — "the guard checks `player_profiles.parent_id` while the service checks `parent_player_links`, so parents can diverge too."**
+Structurally true, but `ShadowAccountService.createPlayerProfile` (`:55-78`) writes
+`profile.setParentId(parentId)` and the `ParentPlayerLink` row in the same transaction, and
+`linkAdditionalParent` (`:206-233`) is the only other writer. Not a live divergence. **Dropped** — it
+would be speculation, not a finding.
+
+**K6 — "Design B's new `.contains("security.emailTokenUsed")` assertion will fail because `ApiAdvice` localises the message."**
+Refuted at `ApiAdvice.java:559-561`: `messageSource.getMessage(...)` produces the human message, but the
+DTO is `new EmailTokenErrorDto(helpCode, new ErrorMsg(ex.getErrorCode(), message), ex.isCanResend())` —
+the **raw error code is in the body**. **The assertion will work.**
+
+**K7 — "the second seeded `email_verification_tokens` row will violate a constraint once it actually commits."**
+Refuted: the table has only `PRIMARY KEY (id)` (`V138:2341-2342`) and `UNIQUE (token)` (`:2348-2349`),
+plus an FK on `user_id`. No per-user uniqueness, `version`/`created_at` both defaulted. **The commit fix
+is safe**, and the expired-token test's `canResend`/`true` assertions still hold on the expiry branch
+(`CoachRegistrationService:119-120` passes `true`).
+
+**K8 — "a flagged user could never log in again, so Design C's clear-on-login is unreachable."**
+This would have made F1/F2 moot by making AC3 a lockout. Refuted by reading `AuthService.login()`
+end-to-end: it checks `passwordEncoder.matches` then `ensureAccountIsLive(user)` (`:288-295`, which
+tests only `activated` and `locked`) and **never** invokes Spring's `AccountStatusUserDetailsChecker`.
+`credentialsNonExpired` is consulted only on `DaoAuthProvider.authorize()`'s path (`:36`).
+**Design C's clear-on-login is reachable and correct.**
+
+---
+
+## 6. Recommendation — per-claim confidence
+
+**Do not start AC3 as written.** F1 and F2 are each sufficient on their own to make it fail: F1 silently
+(the flag never persists, and the specified mock-based unit test cannot detect it), F2 loudly but late
+(Envers revision insert fails on the first `user` write, including `login()`'s own flag clear). F3 fails
+CI. All three are cheap to fix in the spec — three or four extra AC bullets — and expensive to find
+during implementation. AC3's own Dev Note calls it *"the largest, highest-risk item in this story"*; the
+risk is concentrated in exactly the three places the spec is wrong.
+
+| Finding | Severity | Confidence | Basis |
+|---|---|---|---|
+| **F1** rollback kills AC3's write | Blocking | **Very high** | Existing javadoc states the rule (`RefreshTokenRepository:86-96`), `AuthService:216-218` repeats it, both premises re-verified (`AuthResource` not transactional; `open-in-view: false`; no `noRollbackFor` in `src/main`) |
+| **F2** Envers / `user_aud` | Blocking | **Very high** | `@Audited` at `User.java:45`, `hibernate-envers` at `pom.xml:410`, both sanctioned paths read in V143/V146, and V145 exists because of this exact mistake |
+| **F3** V158 fails migration lint | High | **Very high** | Rules + baselines read in `MigrationLint.java` (`:112,:149,:203,:225`), gate read in `MigrationConventionLintTest:86-97`, type convention quoted from V143's own header |
+| **F4** `UNKNOWN` ≠ zero-risk; four wrap codes not two | High | **High** on the enumeration (read the whole method); **medium-high** on the operational severity (depends on real DB-fault frequency, which I did not measure) |
+| **F5** AC8 drops the `maxSize` item | High | **Very high** | 9 ledger bullets counted mechanically; 8 mapped; the unmapped one is absent from both AC8 and "Do not pick up" |
+| **F6** `SubscriptionServiceTest` absent; field-order rationale void | Medium | **Very high** | `find` + `grep "new SubscriptionService("` → 0; field block read at `:49-72` |
+| **F7** PLAYER gets ungated parent-only actions | Medium | **High** | Page handlers at `:257,259,280`; no `isParent`; precedent read in `ParentBookingsPage.vue:101,120,140` |
+| **F8** no `dbRefreshToken` precedent in `AuthResourceIT` | Medium | **Very high** | `grep` across `src/test` → only `JwtManagerImplTest` |
+| **F9** AC1 coverage cannot catch the bug | Medium | **High** | `PlayerSubscriptionOwnershipIT:71` mocks the service; `SubscriptionResourceIT:34,49` defers to it |
+| **F10** `.dockerignore` is not the cause of `git.dirty` | Medium | **High** | Dockerfile `:6,10,11` + `.dockerignore:3-4`, which says so itself |
+| **F11** four surviving statements of the replaced rule | Medium | **Very high** | All four quoted |
+| **F12** stored-config rollout risk | Medium | **Medium-high** on severity (no visibility into what any deployed environment actually stores); **high** that the story's argument is incomplete |
+| **F13**–**F19** citation / wording defects | Low | **High** each | Each re-read directly; F13, F14, F15 are the ones with practical consequences |
+| **F20** no nav entry for the widened route | Low (observation) | **High** | `grep` → `routes.js` + its own spec only |
+
+**What I independently re-checked, and what I did not.** Re-checked at `df07a842`: every `file:line` in
+the story; both registration services' `verifyEmail`; the full bodies of `AuthService.login`/`refresh`,
+`DaoAuthProvider.authorize`, `JWTAuthorizationFilter.doFilterInternal`/`attemptAuthorization`/`isGenuineDenial`,
+`Principal.instanceFrom`, `assertPlayerOwnership`, `PlayerOwnershipGuard.check`,
+`ConfigStartupAssertion`/`ConfigService` guards, `quiesceAsyncExecutors`; the transaction annotations on
+`AuthService`, `RefreshTokenRepository`, `UserRepository`; the Envers setup; the Flyway baseline and
+migration lint rules; `ConfigStartupAssertionTest`/`ConfigServiceTest`/`JWTAuthorizationFilterTest`
+existing cases; `PlayerSubscriptionOwnershipIT` in full; the Dockerfile, `.dockerignore`, both workflows,
+the composite action, the git plugin config; all eight cited `deferred-work.md` sections; the
+deferred-146 story file's lines 82, 112, 228, 254-266, 296-325; `docs/testing/readme.md`,
+`docs/deployment/baseline/pr.md`, `docs/deployment/monitoring.md`,
+`docs/deployment/migration-conventions.md`. Verified by `grep`/`find`, not inference: the existence or
+absence of `SubscriptionServiceTest`, `DaoAuthProviderTest`, `PrincipalTest`, `JWTAuthorizationFilterIT`,
+`routerGuardSpec.js`, `changeAccountLockStatus` callers, `skillarsRefresh` callers,
+`new SubscriptionService(` call sites, `player-subscription` nav references, `noRollbackFor` anywhere.
+
+**Not verified, and not verifiable here:** the GitHub Actions figures in AC8 items 4/5/9
+(run `37584051185` and its µs/failsafe numbers) and all of AC6's live GitHub state (branch protection,
+ruleset `20583638`'s contents, PR #255's check-run list). These are reproduced faithfully from
+`deferred-work.md:3893-3895` and `:3888`, where they are recorded as log- and API-verified on 2026-10-07,
+but nothing in this repository can confirm them. Treat them as second-hand. No test or mutation run was
+executed as part of this review — every finding above is from reading current source.

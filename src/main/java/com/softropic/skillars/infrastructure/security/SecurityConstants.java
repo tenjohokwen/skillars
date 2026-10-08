@@ -118,6 +118,20 @@ public final class SecurityConstants {
     public static final String DB_REFRESH_TOKEN = "dbRToken";
 
     public static final Duration DB_REFRESH_TOKEN_INTERVAL = Duration.ofMinutes(5);
+
+    /*
+    skillars-deferred-149 AC3 code review (2026-10-08): epoch-millis timestamp of when THIS
+    session was last freshly authenticated (login, OTP completion, or a successful DB-reauth).
+    Unlike Claims.ISSUED_AT (reset on every fast-path extension — see JwtManagerImpl
+    .extendTtlOfToken), this claim is carried forward UNCHANGED across fast-path extensions, the
+    same way DB_REFRESH_TOKEN is — it is the backward-looking counterpart of that forward-looking
+    deadline. Compared against User.securitySessionInvalidatedAt on the DB-reauth path: a claim
+    that predates the stored invalidation timestamp means this specific JWT was issued before a
+    refresh-token-theft revocation and must not survive it, regardless of whether an unrelated
+    later login has since re-authenticated the account (securitySessionInvalidatedAt is a
+    monotonic revocation marker, not a per-session flag — it is never cleared by login).
+    */
+    public static final String SESSION_ISSUED_AT = "sessIat";
     public static final String BUS_ID = "busId";
     public static final Duration OTP_TTL = Duration.ofMinutes(30);
     public static final String LOGIN_INFO_ID = "lii";

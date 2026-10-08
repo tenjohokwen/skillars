@@ -1,7 +1,7 @@
 # Build context exclusions for the root Dockerfile.
 #
 # Before this file existed, every build shipped the full ~908MB working tree as context, even
-# though the Dockerfile only consumes three paths: `pom.xml`, `src/`, and `.git/`. Worse,
+# though the Dockerfile only consumes two paths: `pom.xml` and `src/`. Worse,
 # `src/frontend/node_modules` lives INSIDE `src/`, so `COPY src/ src/` dragged 397MB of
 # host-installed dependencies into the builder image — including native modules compiled for the
 # host OS/arch, which are wrong inside a linux/amd64 container. frontend-maven-plugin installs
@@ -12,15 +12,22 @@
 # `**/node_modules/` and both were found still shipping into the context (skillars-deferred-142
 # code review, 2026-10-05).
 #
-# DO NOT add `.git` here. The Dockerfile copies it deliberately: git-commit-id-maven-plugin
-# (pom.xml) reads it during `mvn package` to stamp build/commit metadata. Excluding it breaks
-# the build. At ~30MB it is a small part of the context anyway.
+# skillars-deferred-149 AC7: `.git/` is now excluded too. The Dockerfile used to COPY it for
+# git-commit-id-maven-plugin to read, but the Dockerfile's own COPY instructions only ever
+# brought in three paths out of the full repo (pom.xml, src/, .git/) -- not a limitation of the
+# plugin itself. JGit's dirty-check compared that necessarily-partial working directory against
+# the full tree the plugin expected, found every OTHER tracked path "deleted", and stamped
+# git.dirty=true regardless of the real commit's cleanliness. The Dockerfile now takes the commit
+# SHA as a build arg from the CI runner (where the full, unfiltered .git/ is genuinely available)
+# instead, so .git/ is no longer read by the image build at all — excluding it also closes the
+# "full repo history ships into the build context" exposure as a side effect.
 #
 # Everything below is either build output, host-only tooling, documentation, or secrets — none
 # of it is read by the Dockerfile.
 
 # ── Build output ──────────────────────────────────────────────────────────────
 target/
+.git/
 src/frontend/node_modules/
 src/frontend/dist/
 src/frontend/.quasar/

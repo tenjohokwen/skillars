@@ -202,10 +202,13 @@ const routes = [
         meta: { requiresAuth: true, requiresCoach: true },
       },
       {
+        // Dual-role (skillars-deferred-149 AC1): a self-registered PLAYER can now view their own
+        // player subscription too — PlayerSubscriptionPage.vue gates the parent-only mutating
+        // controls (cancel/subscribe/change-tier) on authStore.isParent for this role.
         path: 'parent/player/:playerId/subscription',
         name: 'player-subscription',
         component: () => import('pages/parent/PlayerSubscriptionPage.vue'),
-        meta: { requiresAuth: true, role: 'PARENT' },
+        meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
       },
       // Player registration flow (guest only) — adult (18+) self-registration
       {

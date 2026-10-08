@@ -87,8 +87,15 @@
               </q-item>
             </q-list>
             <div class="tier-actions">
+              <!-- Mutating controls — parent-only (skillars-deferred-149 AC1): subscribePlayer/
+                   changePlayerTier/cancelPlayerSubscription stay HAS_PARENT_ROLE-only server-side,
+                   so a self-registered PLAYER sees a read-only view here rather than controls that
+                   would all 403, matching ParentBookingsPage.vue's parent-only-for-mutating-actions
+                   precedent. -->
               <q-btn
-                v-if="tier.tier !== subscription?.tier && tier.tier !== 'ATHLETE'"
+                v-if="
+                  authStore.isParent && tier.tier !== subscription?.tier && tier.tier !== 'ATHLETE'
+                "
                 color="primary"
                 :label="
                   isUpgrade(tier.tier) ? t('subscription.upgrade') : t('subscription.downgrade')
@@ -98,6 +105,7 @@
               />
               <q-btn
                 v-else-if="
+                  authStore.isParent &&
                   tier.tier === subscription?.tier &&
                   tier.tier !== 'ATHLETE' &&
                   !subscription?.cancelAtPeriodEnd
@@ -179,12 +187,14 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
 import { usePaymentStore } from 'src/stores/payment.store'
+import { useAuthStore } from 'src/stores/auth.store'
 import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()
 const route = useRoute()
 const paymentStore = usePaymentStore()
+const authStore = useAuthStore()
 
 const playerId = computed(() => route.params.playerId)
 
