@@ -5,6 +5,9 @@ export const listCoachReviews = (coachId, page = 0, sort = 'newest') =>
 
 export const getMyReviewForCoach = (coachId) => api.get(`/api/reviews/me/coaches/${coachId}`)
 
+export const checkReviewEligibility = (coachId) =>
+  api.get(`/api/reviews/coaches/${coachId}/eligibility`)
+
 export const submitReview = (coachId, payload) =>
   api.post(`/api/reviews/coaches/${coachId}`, payload)
 

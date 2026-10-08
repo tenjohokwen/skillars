@@ -4,6 +4,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
@@ -27,6 +29,10 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
 class CoachProfileResourceIT extends AbstractIntegrationTest {
@@ -44,11 +50,18 @@ class CoachProfileResourceIT extends AbstractIntegrationTest {
 
     @LocalServerPort private int randomServerPort;
 
+    // Bug report (2026-10-08): CoachProfileService.getPublicProfile now resolves photoUrl through
+    // FileStorageService.signedDownloadUrl — mocked here rather than exercised against the real
+    // S3Presigner, mirroring PlayerTimelineResourceIT's own identical precedent for this bean.
+    @MockitoBean private FileStorageService fileStorageService;
+
     private UUID activeCoachProfileId;
     private UUID draftCoachProfileId;
 
     @BeforeEach
     void setUp() {
+        when(fileStorageService.signedDownloadUrl(anyString())).thenReturn("https://s3.test/signed-url");
+
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
                 "INSERT INTO main.authority (id, name, status, created_by, created_date) " +
@@ -113,6 +126,37 @@ class CoachProfileResourceIT extends AbstractIntegrationTest {
         assertThat(body.get("verificationTier")).isEqualTo("TRUSTED");
         assertThat(body.get("city")).isEqualTo("Frankfurt");
         assertThat(body.get("district")).isEqualTo("Sachsenhausen");
+    }
+
+    /**
+     * Bug report (2026-10-08): the coach's photo did not render on the public profile page either
+     * — same root cause as the search-results card (see {@code CoachMarketplaceResourceIT}'s
+     * sibling test): {@code photoUrl} is a bare private-bucket S3 key, not a browser-loadable URL.
+     */
+    @Test
+    void getCoachProfile_withPhoto_returnsSignedUrlNotRawKey() {
+        String rawKey = "coach_profile/" + ACTIVE_COACH_ID + "/2026/01/photo.jpg";
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "UPDATE marketplace.coach_profiles SET photo_url = ? WHERE id = ?",
+                rawKey, activeCoachProfileId);
+            return null;
+        });
+
+        ResponseEntity<Map> response = getProfile(activeCoachProfileId);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("photoUrl")).isEqualTo("https://s3.test/signed-url");
+        verify(fileStorageService).signedDownloadUrl(rawKey);
+    }
+
+    @Test
+    void getCoachProfile_noPhoto_photoUrlNullAndNeverSigned() {
+        ResponseEntity<Map> response = getProfile(activeCoachProfileId);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("photoUrl")).isNull();
+        verify(fileStorageService, never()).signedDownloadUrl(anyString());
     }
 
     @Test

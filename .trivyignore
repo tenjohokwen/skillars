@@ -51,3 +51,32 @@ CVE-2026-68525
 #
 # spring-webmvc: Remote Code Execution via improper path limitation in XsltView
 CVE-2026-47884
+
+# Temporary ignore — same situation as CVE-2026-47884 immediately above: no fixed spring-webmvc
+# has been published on the Spring Framework 6.x line.
+#
+# Trivy flags org.springframework:spring-webmvc 6.2.19 (same managed version, same spring-boot
+# 3.5.16 parent) for CVE-2026-47890 and names the fix as 7.0.9 — Spring Framework 7.x, same major,
+# incompatible Boot-4 bump as above. Confirmed via maven-metadata.xml (as of this entry):
+# 6.2.19 is still the latest published version on the 6.x line; there is nothing to bump to within
+# our current Boot major. Spring's own advisory separately confirms a 6.2.x backport exists only
+# for Spring Enterprise Support customers (6.2.20), not on the public Maven Central line we pull
+# from.
+#
+# The underlying flaw is CRLF injection causing SSE stream corruption, but ONLY when an SSE
+# response also streams a rendered Spring MVC VIEW FRAGMENT (Thymeleaf-style fragment rendering
+# interleaved with Server-Sent Events) — confirmed NOT reachable in this app: this codebase's SSE
+# endpoints (VideoSseService/BookingSseService/MessagingEmitterRegistry and their @RestController
+# callers) all emit plain data events directly via SseEmitter, never a rendered view/fragment, and
+# `grep -rn "ModelAndView\|Fragment" src/main/java` returns zero matches anywhere near them. This
+# app's only Thymeleaf-adjacent HTML lives under src/main/resources/mails/ (email templates
+# processed outside Spring MVC's view-resolution layer entirely) — Boot's own ThymeleafAutoConfiguration
+# even logs "Cannot find template location: classpath:/templates/" at startup, confirming zero
+# MVC-resolvable templates exist for a view fragment to ever be rendered from. Added during the
+# review-eligibility/coach-photo bug-fix PR (#262) with the project owner's explicit sign-off
+# (2026-10-08). REMOVE the moment a 6.2.x (or whatever 6.x line the Boot parent moves to) fix
+# ships, or if this app ever starts combining SSE with rendered view fragments (re-evaluate
+# reachability first).
+#
+# spring-webmvc: Stream corruption / CRLF injection in SSE responses that render view fragments
+CVE-2026-47890

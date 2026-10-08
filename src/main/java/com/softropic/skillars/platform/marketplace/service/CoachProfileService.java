@@ -49,6 +49,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -626,7 +627,7 @@ public class CoachProfileService {
         return new CoachProfileDto(
             profile.getId(),
             profile.getDisplayName(),
-            profile.getPhotoUrl(),
+            resolvePhotoUrl(profile.getPhotoUrl()),
             profile.getVerificationTier(),
             capabilityBadges,
             profile.getAverageRating() != null ? profile.getAverageRating() : 0.0,
@@ -645,6 +646,18 @@ public class CoachProfileService {
             mediaGallery,
             null  // reviews enriched at controller level to avoid circular service dependency
         );
+    }
+
+    /**
+     * Bug report (2026-10-08): {@code CoachProfile.photoUrl} is stored as the bare S3 object key
+     * ({@code coach_profile/{userId}/{yyyy}/{MM}/{uuid}.{ext}}, see {@code StorageKeyGenerator}) —
+     * the bucket is private, so a browser {@code <img src>} cannot load that key directly without
+     * going through {@code fileStorageService.signedDownloadUrl}. This profile's own {@code
+     * softDelete(profile.getPhotoUrl(), ...)} call above already uses the raw key correctly (deletion
+     * operates on the key, not a URL); only the value handed to the frontend needs resolving.
+     */
+    private String resolvePhotoUrl(String storageKey) {
+        return StringUtils.hasText(storageKey) ? fileStorageService.signedDownloadUrl(storageKey) : null;
     }
 
     /** Values of one {@code kind}, in the order the UNION ALL branch returned them. */
