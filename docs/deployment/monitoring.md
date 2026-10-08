@@ -142,7 +142,7 @@ to non-`dev`, so a developer who hand-edits a row to test still sees the signal.
 | `development.neglectedSkill.warmupSessionCount` | `[0, 10000]` | — | neg → neglected-skill warmup predicate inverts |
 | `subscription.pastDue.gracePeriodDays` | `[0, 365]` | — | neg → PAST_DUE grace cutoff moves into the future |
 | `reviews.autoHoldFlagThreshold` | `[1, 1000]` | — | 0 → the first flag on any review auto-holds it |
-| `reviews.minSessionAgeDays` | `[1, 365]` | — | out-of-range (incl. 0) falls back to the coded default (7), never to an unbounded floor; also cross-checked against `reviews.updateCooldownDays` (must stay strictly less, at both boot and `PUT /api/config` — a bad combination fails fast even though neither key does alone) |
+| `reviews.minSessionAgeDays` | `[1, 358]` | — | out-of-range (incl. 0, or above 358 — unreachable under the minimum-7-day cross-field gap since `reviews.updateCooldownDays` caps at 365) falls back to the coded default (7), never to an unbounded floor; also cross-checked against `reviews.updateCooldownDays` (must leave a minimum 7-day gap, at both boot and `PUT /api/config` — a bad combination fails fast even though neither key does alone) |
 | `reviews.updateCooldownDays` | `[1, 365]` | — | out-of-range (incl. 0) falls back to the coded default (30), never to an unbounded cooldown; same cross-check as `reviews.minSessionAgeDays` above |
 | `video.quota.{scout,instructor,academy,athlete}.storageBytes` | `[0, 2^63-1]` | — | neg → quota math breaks (0 is a legitimate "no upload" sentinel — scout is seeded 0) |
 | `video.quota.{scout,instructor,academy,athlete}.bandwidthBytesMonthly` | `[0, 2^63-1]` | — | neg → quota math breaks (0 is a legitimate "no streaming" sentinel) |

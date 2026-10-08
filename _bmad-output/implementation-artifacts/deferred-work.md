@@ -165,7 +165,6 @@ own draft re-added it as a new "AC9", re-traced it to the same conclusion (does 
 the real `CircuitBreakerFactory`), and closed it again in the story file itself rather than the ledger,
 since it was never re-added here.
 
-
 ## Last audit: 2026-09-04 (deferred-work.md prune + first-ever `deploy-*` re-audit)
 
 Two passes, both run during `skillars-deferred-92` story creation at `c2c47c1`.
@@ -1009,7 +1008,6 @@ Found or deliberately left while implementing the story. The first item is an **
 - **D3 — `CAPTURE_PENDING` has no automated exit.** A reserved row that never completes blocks the parent's cancel (AC2 returns 409 for as long as it stands), holds the coach's slot, and is refused by the sweeper. AC5 escalates it on every 15-minute sweep via `booking.payment_pending.unrecoverable{reason="CAPTURE_UNCONFIRMED"}` and Scenario 4 of `runbook.md` documents the manual resolution, but nothing times it out. **Deliberate.** Every automatic option is worse: declining could charge a parent for nothing, confirming could give away an unpaid session, and re-charging could take the money twice. Only a human can read the Stripe side. Recorded so the absence reads as a decision rather than an oversight.
 
 - **D7 — `PaymentWebhookIdempotencyIT` seeded no `booking.bookings` rows at all.** Found in Task 0's triage; the story's regression table predicted only that it might assert "exactly N rows". The class mocks `BookingService` specifically so transitions do not need a real booking, which meant `reserveCapture`'s locked read found nothing, returned `BOOKING_NOT_PENDING`, and left zero payment rows. Fixed by seeding a real `PAYMENT_PENDING` booking in the one test that reaches Stripe — the fixture, not the check, per `uat-2`'s recorded lesson. Recorded because it generalises: **any test that drives a settlement path now needs a real booking row**, which was not true before this story, and the other two tests in that class pass only because they never reach Stripe (full credit cover and pack-funded both skip the reservation).
-
 
 ## Deferred from: code review of skillars-uat-3-payment-capture-integrity-and-backup-retention (2026-08-11)
 
@@ -2142,7 +2140,6 @@ Six findings from the 3-layer code review (`bmad-review-adversarial-general` + `
 
 The runbook's SES cutover gate now references an executable preflight endpoint (`POST /v1/admin/ses/preflight`, `SesCutoverPreflightResource`, `skillars-deferred-114` AC5) for step 3, closing the two bullets that used to name this gap ("Runbook checklist manual, not code-enforced" and "No automated health check integration") — both deleted outright, per this file's own convention for a real fix rather than a decision.
 
-
 ## Deferred from: ad-hoc audit of notification + video modules (2026-09-16)
 
 `skillars-deferred-115-scheduler-transaction-isolation-hardening` (2026-09-16) was created to work both
@@ -2182,7 +2179,6 @@ to `skillars-deferred-115`, which explicitly scoped its own audit to `platform.n
 two subscription schedulers found the identical bug class deferred-115 just fixed for
 `VideoLifecycleScheduler` — none of the three findings below were previously in this ledger. All three
 closed by the story's own AC1/AC2/AC3 — bullets deleted outright per this file's own convention.
-
 
 ## Last audit: 2026-09-18 (skillars-deferred-123 story creation and dev-story completion)
 
@@ -3471,8 +3467,10 @@ does — silently discarding `application-test.yaml`'s own already-tuned `maximu
 ## Deferred from: code review of skillars-deferred-142 (2026-10-05)
 
 `/bmad-code-review` (Opus 5, three parallel layers + orchestrator re-verification). All 5 ACs verified
-TRUE. 2 decision-needed and 8 patch items were handled in the story itself; the nine below were
-classified defer — pre-existing, out of scope, or latent. Each was traced to real source, not assumed.
+TRUE. 2 decision-needed and 8 patch items were handled in the story itself; the six below were
+classified defer — pre-existing, out of scope, or latent (two further items — the `.dockerignore`
+`git.dirty=true` provenance gap and the full-repo-history-in-build-context exposure — were closed by
+skillars-deferred-149 AC7 and removed from this list). Each was traced to real source, not assumed.
 
 - **`findFirst()` picks an arbitrary role when a user holds two authorities that both map to a `SkillarsRole`.**
   `JwtManagerImpl.setSkillarsProfileCookie` (`:105`) takes the first mapped authority. Order traces to
@@ -3554,43 +3552,14 @@ classified defer — pre-existing, out of scope, or latent. Each was traced to r
   owner, asserting `httpOnly=false`/`maxAge`/`SameSite=Lax`/`path=/` once rather than per writer.
   `JwtManagerImplTest`'s two original assertions stay as role-derivation tests, not wire-format tests.]**
 
-- **`.dockerignore` single-segment patterns match the build-context root only.**
-  `.dockerignore` patterns are anchored full-path matches, so `*.jar`, `*.war`, `.DS_Store`, `*.iml`,
-  `*.log`, `*.diff` apply at the root and nested copies still ship. `.DS_Store` matters most on this
-  macOS host: Finder rewrites it on directory browse, changing its mtime, which busts the
-  `COPY src/ src/` cache layer the file was written to optimise. The file already uses `**/` correctly
-  for `node_modules` and `.vite`.
-  **When picked up:** prefix the single-segment patterns with `**/`. Bundle with the `src/frontend/node/`
-  and `src/frontend/coverage/` omissions (see the `.dockerignore` decision item in the story).
-
-- **`.dockerignore` exclusions make `git.dirty=true` and a `-dirty` describe string permanent in every image.**
-  `.git/` is copied deliberately for `git-commit-id-maven-plugin` (`pom.xml:733-748`), but the exclusions
-  remove git-*tracked* paths (`docs/`, `requirements/`, `_bmad/`, `.github/`, `deploy/`,
-  `docker-compose*.yml`, `Dockerfile`, `mvnw`, `mvnw.cmd`, `.gitignore`, `.gitattributes`) from the
-  builder's working tree, so JGit reports deletions against the copied `.git/` and stamps
-  `git.dirty=true` into the packaged `git.properties` on every build of a clean commit. A grep across
-  `src/`, `deploy/` and `.github/` found **zero** consumers, so impact is limited to `/manage/info`
-  provenance — a clean release build is no longer distinguishable from a dirty one.
-  **When picked up:** either set the plugin's `<dirty>` evaluation off in the Docker build, feed the SHA
-  in as a build arg, or re-include the tracked paths. Only worth doing if build provenance starts being
-  used for anything.
-
-- **`.git/` in the build context ships the full repo history into the builder layer.**
-  Any credential ever committed and later removed is still in that history and is copied into the
-  builder image. Bounded by the multi-stage build — the runtime image does not carry it — unless builder
-  cache is ever pushed to a registry (`--cache-to type=registry`), a common CI optimisation. The
-  `.dockerignore` header justifies inclusion on size alone ("~30MB is a small part of the context") and
-  does not state the exposure tradeoff.
-  **When picked up:** if builder-cache push is ever enabled, switch to passing the commit SHA as a build
-  arg (or run the stamping plugin outside the container) instead of copying `.git/`. Until then, record
-  the tradeoff in the `.dockerignore` comment rather than changing behaviour.
-
 ## Deferred from: code review of skillars-deferred-143 (2026-10-05)
 
 `/bmad-code-review` (three parallel layers — Blind Hunter diff-only, Edge Case Hunter diff+project,
 Acceptance Auditor diff+spec — findings independently re-verified against HEAD, not taken on trust).
-8 items classified defer below; 2 patch items and 6 dismissed false positives are recorded in the
-story file itself (`skillars-deferred-143-account-lock-enforcement-and-forced-logout-session-termination.md`,
+7 items classified defer below (one further item, `isGenuineDenial` not treating `USER_NOT_FOUND`/
+`UNKNOWN` as genuine denials, was closed by skillars-deferred-149 AC4 and removed from this list); 2
+patch items and 6 dismissed false positives are recorded in the story file itself
+(`skillars-deferred-143-account-lock-enforcement-and-forced-logout-session-termination.md`,
 Review Findings section).
 
 - **`cause instanceof AccountStatusException` in `JWTAuthorizationFilter.isGenuineDenial` is unreachable
@@ -3668,17 +3637,6 @@ Review Findings section).
   is meant to defend against). Fixed instead by narrowing `RefreshTokenRepository.markUsedByTokenHash`'s
   `@Query` to also require `r.used = false`, so a repeat write matches zero rows rather than needing
   to be gated — same bounded-cost outcome, no new conditional in the filter.]**
-
-- **`isGenuineDenial` doesn't treat `AuthorizationException(USER_NOT_FOUND)`/`(UNKNOWN)` — the other
-  two wrap codes `DaoAuthProvider.authorize()` can produce — as genuine denials.** A user whose row is
-  hard-deleted (`UserAdminService.deleteUserInformation`) while holding a valid JWT hits this path and
-  gets only cookie-clearing, not revocation, on the filter's leg. `AuthService.refresh()`'s own
-  `findById` rejection independently and fully revokes the same case, and `POST /api/auth/refresh` has
-  no caller today, so the practical gap is nil. `isGenuineDenial`'s scope was deliberately limited to
-  mirroring `maybePublishSecurityAlert`'s existing shape plus the one `ACCOUNT_NOT_LOGIN_ABLE`
-  correction the story's AC3 specified — not every `AuthorizationException` variant.
-  **When picked up:** widen `isGenuineDenial` to cover `USER_NOT_FOUND`/`UNKNOWN` too, at the same time
-  anyone revisits this predicate for another reason.
 
 ## Deferred from: manual review during skillars-deferred-143 (2026-10-05)
 
@@ -3780,86 +3738,7 @@ tree at the time of writing.
   the single owner, with `writeTo`/`removeFrom` and the pinning `SkillarsProfileCookieTest`. All four
   bundled items closed together, as this note asked.]**
 
-- **`AuthResourceIT.refresh_expiredToken_returns401` passes for the wrong reason — it never exercises
-  the expiry branch it is named for.** The test seeds its expired `refresh_tokens` row with a bare
-  `jdbcTemplate.update` outside any transaction. Because `spring.datasource.hikari.auto-commit` is
-  `false` (`application.yaml:183`, set so Hibernate can group statements into one transaction), such a
-  write is rolled back when the connection is released and the row never exists for the server to
-  find. Measured directly during `skillars-deferred-143` with a diagnostic probe: an `UPDATE` reported
-  `rowsUpdated=1` while the next statement read the old value, and an `INSERT` followed by a `SELECT`
-  found 0 rows. The test still returns 401, but via "refresh token not found" rather than "refresh
-  token has expired" — and the raw cookie it sends (`fakeRaw`) does not hash to the seeded
-  `token_hash` either way, so the expiry branch is unreachable from it regardless of the commit issue.
-  Left unchanged deliberately: `skillars-deferred-143` AC4 required the existing `refresh_*`
-  assertions to pass **unmodified**, and fixing this changes what the test proves.
-
-  **When picked up:** route the seed through `transactionTemplate` (the `commitWrite(...)` helper
-  `skillars-deferred-143` added to `AuthResourceIT` does exactly this) **and** send a raw cookie value
-  that actually hashes to the seeded `token_hash`, so the expiry branch is genuinely covered. Worth a
-  wider grep at the same time: any other IT seeding state with a bare `jdbcTemplate` write in a test
-  method body has the same silent no-op.
-  **[PARTIALLY CLOSED by skillars-deferred-144 AC5 — the seed now routes through `commitWrite`, and
-  the raw token is chosen first with its hash derived via `sha256Hex` (the old hardcoded hex literal
-  had no known preimage), plus a `usedFlagOf(...)` assertion proving the expiry branch specifically
-  was reached. The companion "wider grep" ask is explicitly NOT scoped into that story — still open,
-  left for a future story or a standalone grep-only pass.]**
-
 ---
-
-## Deferred from: code review of skillars-deferred-144 (2026-10-06)
-
-Three pre-existing items surfaced by `/bmad-code-review`'s four-layer run over the
-`skillars-deferred-144` implementation. None is caused by that change; each was independently
-re-verified against on-disk source (not reproduced from a layer's say-so) before being recorded.
-
-- **Non-canonical spellings of a real route bypass the coach profile-builder completeness gate.**
-  `src/frontend/src/router/index.js:89` gates on `to.path === '/coach/command-center'` — an exact
-  string compare. vue-router's matcher defaults to `strict: false, sensitive: false`, so
-  `/coach/command-center/` (trailing slash) and `/COACH/COMMAND-CENTER` both match the real route
-  (`matched.length === 2`, no `meta.notFound`) and therefore pass `isSafeRedirect`, while
-  `router.resolve()` leaves the literal spelling in `to.path`. The `loadStatus()` /
-  `if (!pbStore.isComplete) next('/coach/profile-builder')` branch never runs, so a coach with an
-  incomplete profile lands straight on `CoachCommandCenterPage`. The `requiresCoach` role gate still
-  holds (it uses `to.matched.some(...)`), so this is a flow-gate bypass, not an authorization one.
-  Not a regression — the inline shape-only guard `skillars-deferred-144` replaced accepted the same
-  strings — but that story made resolvability the authoritative "this redirect leads somewhere
-  usable" check, which makes this the natural place to close it.
-  **When picked up:** change the gate to `to.matched.some((r) => r.path === '/coach/command-center')`,
-  matching the idiom every other gate in that guard already uses (`matched[i].path` carries the full
-  resolved pattern). `createRouter({ strict: true, sensitive: true })` is the alternative; both
-  options exist in the installed vue-router 4.6.4. No spec anywhere under `src/frontend/src`
-  currently exercises a trailing-slash or case-variant path (recorded negative search:
-  `grep -rn "command-center/\|COMMAND-CENTER" src/frontend/src --include="*.js"` → no matches).
-
-- **Auth-only-but-role-unguarded routes are accepted as post-login redirect targets for any role.**
-  `src/frontend/src/router/routes.js:337-345` gives both the `/admin` parent and its
-  `health-dashboard` child only `meta: { requiresAuth: true }`, and `router/index.js:47-87` has no
-  admin gate at all. A planted `/#/login?redirect=/admin/health-dashboard` opened by a
-  PARENT/PLAYER/COACH passes `isSafeRedirect` (verified: `matched.length === 3`, no `meta.notFound`)
-  and renders the admin dashboard shell. The real boundary holds server-side — `/manage/**` is
-  ADMIN-only via `AppEndpoints.SECURED_MAPPINGS`, so every API call on the page fails — so the impact
-  is a broken-looking page, not data exposure. Same class applies to `/player/home`,
-  `/player/locker-room/:playerId`, `/player/development/:playerId`, and `/parent/dashboard`.
-  **When picked up:** give these routes the same `meta.role`/`meta.roles` treatment the guard already
-  honours for every other role-specific route, rather than special-casing them in `safeRedirect.js`.
-
-- **Theft-driven mass refresh-token revocation has never terminated a live JWT session.**
-  `AuthService.refresh()`'s two reuse-detection branches (`AuthService.java:153`, `:160`) call
-  `refreshTokenRepository.markAllUsedByUserId(ownerId)`, which touches only `refresh_tokens` and
-  never the `user` row. `DaoAuthProvider.authorize` (`DaoAuthProvider.java:28-59`) does
-  `retrieveUser` + `getPreAuthenticationChecks().check(user)` and never reads `refresh_tokens`, so
-  the victim's other open tab — holding a valid `potc` for an account that is neither locked nor
-  deactivated — keeps passing both the fast path and the 5-minute DB re-auth path, and
-  `extendTtlOfToken` re-mints a full 15-minute JWT each time. The session continues indefinitely.
-  This predates `skillars-deferred-144`: the `isRefreshTokenRevoked` check that story removed only
-  ever forced `authorize()`, which passes an unlocked account, so the theft case gained nothing from
-  it either. GDPR erasure is unaffected because it separately sets `locked=true` and renames the
-  login (`GdprErasureService.java:269-278`).
-  **When picked up:** decide whether "token reuse detected" should end live sessions at all. If yes,
-  the shape that already works in this codebase is the one `skillars-deferred-143` used for account
-  locking — flip state on the `user` row (or add a `sessions_invalid_after` column the
-  pre-authentication checks consult) so `authorize()` can actually see it. Note that fixing this
-  interacts directly with the AC8 decision recorded in `skillars-deferred-144`'s Review Findings.
 
 ## Deferred from: code review of skillars-deferred-145 (2026-10-06)
 
@@ -3893,26 +3772,6 @@ re-verified against on-disk source (not reproduced from a layer's say-so) before
   `DISTINCT` projection for the parent case. `AgePolicyService.findMessagingPoliciesByPlayerIds`
   (added by skillars-deferred-90 AC13) is the batched-lookup precedent if one is ever wanted.
 
-- **Pre-existing cross-ID-space authorization confusion in `DisputeService`.**
-  `DisputeService.java:90` — `boolean ownerEligible = raisedBy.equals(booking.getParentId()) ||
-  raisedBy.equals(booking.getPlayerId());` compares a **User** id against a **PlayerProfile** primary
-  key in the second disjunct. This is the same defect class as skillars-deferred-145's F2, and the
-  file itself documents awareness of the distinction eight lines earlier (the comment at `:85-88`
-  explains that `booking.getCoachId()` is "the coach *profile* UUID, not a user id, so this needs
-  the same profile-to-user-id hop"). In principle it lets a user raise a dispute on a stranger's
-  booking whose `player_id` coincides with their own user id. Not introduced by deferred-145, and
-  negligible in practice because both ID spaces are app-side `@Tsid` values (no DB sequence or
-  identity exists for `main."user"` or `main.player_profiles`), so a collision is not realistically
-  reachable.
-  **When picked up:** resolve the `PlayerProfile` and compare against its `userId`/`parentId`, the
-  shape deferred-145 adopted in `ReviewSubmissionService.checkEligibility`. **Correction (round-2
-  review, R10):** this entry originally said deferred-145's new
-  `DisputeRepository.existsActiveDisputeByAuthor` had propagated the same `b.playerId = :authorId`
-  disjunct and that both should be fixed together. That is no longer true — the disjunct was dropped
-  from the dispute query by round-1 patch item 10, and the method now carries a comment explaining why
-  it is absent there while retained (harmlessly, behind a `PlayerProfile` post-filter) in
-  `BookingRepository.findQualifyingCompletedBookings`. Only `DisputeService.java:90` is left to fix.
-
 ## Deferred from: code review of skillars-deferred-145, round 2 (2026-10-06)
 
 - **`sinceAfter` is computed from the stale pre-lock read and never re-derived after `refresh`.**
@@ -3929,79 +3788,24 @@ re-verified against on-disk source (not reproduced from a layer's say-so) before
   or per-review override, would make the "new qualifying session since last edit" bound bypassable by
   any near-simultaneous pair of PATCHes.
 
-- **The review-eligibility cross-key invariant is strict ordering, not a minimum gap.**
-  `ConfigStartupAssertion.java:182` and `ConfigService.java:321` both reject only
-  `reviews.minSessionAgeDays >= reviews.updateCooldownDays`. Deferred because strict ordering is what
-  the owner specified for D3 and it is correctly implemented in both halves. But the invariant is
-  necessary, not sufficient: `minSessionAgeDays = 29` with `updateCooldownDays = 30` passes both guards
-  while leaving only a one-day-wide window in which a qualifying session must fall, so edits at the
-  cooldown boundary still 403 as `reviews.noQualifyingSession` — exactly the symptom the guard's own
-  ERROR message attributes to a config error, now undetectable by that guard.
-  **When picked up:** express the invariant as a minimum gap (`cooldownDays - minSessionAgeDays >= N`)
-  rather than strict inequality, and pick `N` from the business cadence the two keys are meant to
-  produce together.
-
-- **The locked cooldown re-check precedes the status re-check, so a concurrent block reports the less
-  actionable error.** `ReviewSubmissionService.java:175-186` evaluates the cooldown on the refreshed
-  instance before the moderation-status guard. A concurrent `AdminReviewService.blockReview` sets both
-  `moderationStatus = BLOCKED` and `lastModifiedAt = now` (`AdminReviewService.java:144-145`), so the
-  author receives `reviews.updateTooSoon` ("modified within the cooldown window") rather than the
-  actual, actionable `reviews.editNotPermitted`. Deferred because the unlocked pre-check at `:121-133`
-  already had this ordering before skillars-deferred-145 — the locked path is a faithful mirror, not a
-  regression.
-  **When picked up:** reorder the status guard ahead of the cooldown guard at **both** sites together,
-  so the two paths stay mirrored and the author always gets the error they can act on.
-
 ## Deferred from: code review of skillars-deferred-146 (2026-10-07)
 
 _Line citations below are anchored to commit `df8e4501`+ (post-patch). They were re-anchored once already: the review wrote them against the pre-patch tree and the patch round's own javadoc expansion moved `isQuiesced` by ~70 lines. Grep the symbol if they look wrong._
 
 - **`[deferred-19]` reset mean moved 14.0 → 15.8 ms (+12.5%) between runs `37530194292` and `37574001244`** on identical invocation counts (1199 both times, +2.1 s total). Surfaced in skillars-deferred-146's own Completion Notes table but never remarked on. Most likely shared-runner variance; unexamined. Worth a glance if the number keeps climbing, since this story's premise is that the reset is no longer a cost worth optimising. **[AUDIT 2026-10-07: a third data point, pulled from the run on the actually-merged commit (`37584051185`, head `3e326217`): `1199 invocations, 19231 ms total, 16.0 ms mean` — so 14.0 → 15.8 → 16.0 across three consecutive runs of byte-identical reset code.** Still consistent with runner drift rather than a regression, but it is now a trend across three runs rather than a single-pair difference, and it is the main evidence that the failsafe shortfall in the first bullet of the audit section below is variance too. Re-check on the next few PR builds.]**
-- **`isQuiesced` pre-check sits outside the `try` in `DatabaseResetTestExecutionListener.quiesceAsyncExecutors` (call site `:305`, definition `:351-352`).** Spring's `ThreadPoolTaskExecutor.getActiveCount()` returns `0` when `threadPoolExecutor == null` ("Not initialized yet: assume no active threads") rather than throwing, so the `&&` short-circuit does **not** protect the following `getThreadPoolExecutor()`, which `Assert.state`-throws `IllegalStateException`. Unreachable today — all six production pools are `GracefulShutdownTaskExecutor` `@Bean`s initialized via `afterPropertiesSet` — but skillars-deferred-146 widened this method from `private` to package-private for its unit test, which is new exposure. A null-tolerant `getThreadPoolExecutorOrNull()`-style guard would close it.
-- **`recordQuiesceCost(...)` is not wrapped in a `finally` (`DatabaseResetTestExecutionListener.java:114-116`).** If `quiesceAsyncExecutors` throws, that invocation never reaches the counter — precisely the pathological case most worth having in the cost log. Trivial to fix; left out of skillars-deferred-146 because it is not a regression that story introduced (the reset counter beside it has the same shape).
-- **`docker-image` is a new PR check name that no repository ruleset references.** skillars-deferred-146 split the Docker build + Trivy scan out of `build` into their own job. Its AC2c correctly establishes that this un-gates nothing, because `master` has **no** required status checks at all (`GET /branches/master/protection` → 404; sole ruleset `NoDirectPush` id `20583638` carries only `deletion`/`non_fast_forward`/`pull_request` rules). So this is not a regression — but adding `docker-image` (and `build`) as required status checks is the follow-up that would make the CRITICAL/HIGH CVE gate mechanically blocking for the first time, rather than relying on a human reading three job results. Decision-needed, not a mechanical fix: it changes merge policy.
 
-## Deferred from: manual testing of skillars-deferred-147 (2026-10-07)
+## Deferred from: code review of skillars-deferred-149 (2026-10-08)
 
-_Found while root-causing a real 403/corrupted-id bug the owner hit manually testing the new Player Development Dashboard nav link — not from a code review pass. The fix for the page actually under test (`PlayerDevelopmentDashboardPage.vue`) is in skillars-deferred-147 itself; these three siblings carry the identical defect but were not part of that story's tested surface, so they are recorded here rather than silently fixed._
+_Line citations below were re-read from the working tree during triage, pre-commit. Grep the symbol if they look wrong._
 
-- **Three sibling pages read a large Tsid player-id route param via `Number(route.params.playerId)`, which silently corrupts it.** Same root cause as the one fixed in `PlayerDevelopmentDashboardPage.vue`: backend ids are 18-19 digit Tsids, past `Number.MAX_SAFE_INTEGER`, and the backend deliberately quotes `Long` as a JSON string (`CommonConfig.longToStringModule`) specifically so JS never has to represent one as a number — converting it back with `Number(...)` throws that protection away (e.g. `893573203704173564` → `893573203704173600`, reproduced directly via `node -e`). Found by grepping for the same pattern after fixing the confirmed instance; **not yet manually reproduced** in these three, since they belong to a different persona/page than skillars-deferred-147's own manual test covered. Sites: `src/frontend/src/pages/parent/ParentDevelopmentPortalPage.vue:124` (parent viewing a child's development portal), `src/frontend/src/pages/parent/ParentPlayerPortalPage.vue:76`, `src/frontend/src/pages/parent/PlayerSubscriptionPage.vue:189`.
-  **When picked up:** same one-line fix as skillars-deferred-147 — keep the route param as the raw string, don't `Number(...)` it. `ParentDevelopmentPortalPage.vue`'s version additionally does `isNaN(id) ? null : id` and compares the result against `playerStore.activePlayerId` (itself already a string from the same backend convention), so as a bonus the fix also corrects a latent always-`true` strict-inequality (`string !== number`) in that comparison. Worth a manual click-through on all three before closing, not just a code read — this exact bug read as "looks fine" until someone actually opened the page with a real id.
+- **No test pins that a self-registered PLAYER is rejected by the three mutating subscription methods.** `assertPlayerOwnership` (`SubscriptionService.java:901-908`) is shared by all four call sites (`:115`, `:321`, `:384`, `:459`). After AC1's widening the service layer can no longer distinguish "is a parent of this player" from "is this player", so the only thing stopping a self-registered PLAYER from cancelling or re-tiering is the `@PreAuthorize(HAS_PARENT_ROLE)` annotation one layer up (`SubscriptionResource.java:100`, `:110`, `:118`). Verified at review time that no mutating operation is newly exposed — but the invariant is now unasserted, and the parameter is still named `parentUserId` while also meaning "the player themselves."
+  **When picked up:** add a test proving a self-registered player is rejected by `subscribePlayer`/`changePlayerTier`/`cancelPlayerSubscription`, and consider renaming the parameter to `callerUserId`. The day someone grants self-registered adult players parent-equivalent billing authority (a plausible next story, since they are expected to manage their own subscription), every mutating method silently opens with no code change and no failing test.
 
-## Deferred from: post-implementation story audit of skillars-deferred-146 (2026-10-07)
+- **Required status checks on `master` live only in live GitHub ruleset config, with no versioned repo artifact.** AC6 was applied out-of-band via `gh api` to ruleset `20583638` and confirmed live at review time (all four rules present, contexts `build` + `docker-image`, `updated_at 2026-10-08T12:05:43+02:00`). Because it is repository configuration rather than a committed file, it is invisible to code review, unversioned, and lost on a repo migration or an accidental ruleset edit.
+  **When picked up:** either commit the ruleset as a checked-in definition applied by a workflow, or add a scheduled assertion that fails loudly if the required-checks rule disappears.
 
-_Source: `story-review.md`, a retrospective audit of the **already-merged** skillars-deferred-146 (merge `b27ce6f1`) run against real HEAD `ef2daac9` — not a pre-dev story review and not the `/bmad-code-review` pass whose own deferrals are in the section immediately above. Every claim below was re-executed, not read: the GitHub jobs API and full `gh run view --log` output for all three relevant runs (`37530194292`, `37574001244`, `37584051185`), the live branch-protection/ruleset API, `awaitility-4.3.0` and `spring-context-6.2.8` bytecode from this project's own `~/.m2`, and `git grep` across six commits. Four further candidate findings were killed by adversarial re-verification and are deliberately **not** listed here; they are recorded in `story-review.md` §6 so they are not re-raised. Line citations are anchored to `ef2daac9`._
+- **Nothing asserts the built image's `git.properties` contents in CI.** AC7's mechanism rests on `-Dmaven.gitcommitid.skip=true` (`Dockerfile:24`) matching the plugin's real skip property — verified at review time against `git-commit-id-maven-plugin-10.0.0`'s own `META-INF/maven/plugin.xml`, which declares `<skipViaCommandLine>${maven.gitcommitid.skip}</skipViaCommandLine>`. The quieter risk is a future plugin upgrade or a bound execution with its own `<skip>` config silently overwriting `target/classes/git.properties` during `process-resources` while the build still succeeds — restoring the original `git.dirty=true` symptom with the story recorded as fixed.
+  **When picked up:** add a CI step that extracts `BOOT-INF/classes/git.properties` from the built image and asserts `git.dirty=false` plus a non-empty, non-`local` SHA.
 
-- **skillars-deferred-146's AC3 was satisfied against a commit that never merged, and on the merged code its own investigation clause fires unactioned.** AC3 requires measured numbers "from this story's own CI run" and adds: "if the failsafe phase does not drop by at least 2m30s, the discrepancy is investigated and written up rather than accepted". The Completion Notes record run `37574001244` on commit `5f75dec8` — but PR #253's head is `3e326217` and the merge is `b27ce6f1`, three commits later. Marker-to-marker failsafe durations (`failsafe:3.5.6:integration-test` → `failsafe:3.5.6:verify`, `#19`-prefixed Docker-stage output filtered out), read directly from the logs: baseline `37530194292` = **698.34 s**; the recorded run `37574001244` = **541.22 s** (drop 157.1 s, clears the floor by 7 s); the merged head's run `37584051185` = **566.13 s** — a drop of **132.2 s (2m12s), 17.8 s BELOW AC3's 150 s floor**. The data was available before the merge: that run's `build` job completed at `07:05:47Z` and `b27ce6f1` is dated `07:06:25Z`, 38 seconds later. The story's own Completion Notes even demanded it ("AC3's numbers below predate the code-review patches and **must be re-confirmed on the next CI run before merge**"); the run happened, the story was never updated. Other merged-head numbers absent from the story: `build` job **12m06s** (story records 11m36s), `docker-image` **3m21s** (story: 3m17s). **Not believed to be a regression** — the unchanged `[deferred-19]` counter moved +14% between the same two runs (see the bullet above), and the merged run's own quiesce counter reads **44.9 µs/method (53776 µs total over 1199)**, proving the code-review re-sweep costs nothing — but "almost certainly variance" is the write-up AC3 required, not a substitute for it.
-  **When picked up:** append run `37584051185`'s five AC3 figures to skillars-deferred-146's Completion Notes beside the `5f75dec8` ones, and write the one paragraph reconciling the 132.2 s drop (the variance evidence is already in hand). Reopening the story is not warranted — the change is sound and AC4's gates passed on the merged commit too (`missCount = 44` against ceiling 45; container ceilings OK) — what is missing is the record AC3 made a precondition of closing. Do **not** delete this bullet by re-deriving the numbers from the story file; the story file is the thing that is wrong.
-
-- **`docs/testing/readme.md:152-156` records the post-fix quiesce cost from the unmerged commit, in the wrong units, and contradicts itself two lines later.** It states "Removing that took it to **0.07 ms mean (84 ms total over 1199 invocations)**, measured on run `37574001244`" and then "the quiesce counter reports microseconds, the reset counter milliseconds". Both cannot describe the same run: `37574001244` printed `[deferred-146] async quiesce: 1199 invocations, 84 ms total, 0.1 ms mean` — **milliseconds**, because the switch to microseconds was a later code-review patch. The shipped code reports µs, and its real value on the merged head is **44.9 µs mean / 53776 µs total** (run `37584051185`, verified in the log). The reset figures in the same paragraph (`14.0 ms mean over 1199 invocations (16.8 s total)`) are **correct** for the baseline run they cite — only the quiesce figure is from the wrong commit. This matters more than a typo because this document is the project's reference cost model for the test suite, and it currently names a number the shipped code cannot produce.
-  **When picked up:** one edit — 44.9 µs mean, 53.8 ms total, run `37584051185`. Same correction is needed in skillars-deferred-146's Completion Notes table (`[deferred-146] async quiesce:` row), which carries the identical stale pair.
-
-- **skillars-deferred-146's "Finding 1" narrative still asserts the reasoning its own code review refuted, 109 lines above the correction.** Finding 1 reads: "**The 25ms delay was never load-bearing.** … Those tasks are enqueued synchronously at `submit()` time, so by the time the previous method has returned they are already visible in `getActiveCount()`/the queue." That is wrong on the hot path, and the shipped javadoc says so: `DatabaseResetTestExecutionListener.java:266-277` — "**On the hot path they are not.** `ThreadPoolExecutor.execute()` takes the `addWorker(command, true)` branch whenever `workerCount < corePoolSize` … the task becomes the new `Worker`'s `firstTask` and **never enters `workQueue`**". Independently re-confirmed against the JDK: `execute` → `addWorker(command, true)`, `firstTask` bypasses `workQueue`, and `getActiveCount()` counts only workers whose AQS lock is held, which `runWorker` takes *after* `Thread.start()` returns. The story records the contradiction in its Review Findings section but **never edited Finding 1 itself**, which is the section a reader opens to find out why the change is safe. Inconsistent with the story's own practice elsewhere — AC1c and AC1d both correct a superseded reason inline, explicitly "so the next reader does not reinstate it".
-  **When picked up:** rewrite Finding 1's third paragraph to the honest "narrowed, not closed" statement the javadoc already uses, keeping the wrong reason visibly marked as wrong rather than deleting it.
-
-- **skillars-deferred-146's AC1d undercounts its own evidence on both axes: 7 call sites, not 6, and 1 of 5 unset-`pollDelay` Awaitility sites surveyed.** AC1d justifies leaving `ConcurrencyLockWaitSupport.java:95` alone "**on volume alone**: `assertGenuineLockRetryOccurred` has 6 call sites across 5 concurrency IT classes". There are **seven** live call sites: `SubscriptionServiceConcurrencyIT.java:172`, `CoachProfileServiceConcurrencyIT.java:219` and `:335`, `AdminReviewQueueIT.java:635`, `ReviewFlagServiceConcurrencyIT.java:236` and `:353`, `ReviewModerationServiceConcurrencyIT.java:170` (javadoc/comment mentions excluded). Verified as seven at `f789ce5b`, `70f41a1e`, `9a5e0993`, `5f75dec8`, `b27ce6f1` and HEAD — it was never six at any point in that story's life; and one of the five classes (`AdminReviewQueueIT`) is not a concurrency IT. Separately, AC1d presents that site as the only other one with "the same shape"; four more leave `pollDelay` unset and therefore inherit the fixed interval: `PlayerRegistrationResourceIT.java:425-430` and `CoachRegistrationResourceIT.java:732-737` (`pollInterval(100ms)`), and `RefundOutboxIT.java:126` / `SluSnapshotOutboxIT.java:222` (`untilAsserted`, default `FixedPollInterval(100ms)`). **The decision to leave all of them alone is still right** — 7 × 25 ms = 175 ms against the ~230 s skillars-deferred-146 was chasing, and all four extra sites wait on conditions that genuinely start false (a `pg_stat_activity` lock waiter; an outbox row drained by a background poller), so their delay is not waste. The open item is that AC1d exists precisely to record why other sites are left alone, and its inventory is wrong, so a future reader cannot rely on it.
-  **When picked up:** correct AC1d to 7 sites / ~175 ms and list the other four sites with the one-line reason each is harmless. No code change.
-
-- **The idle re-sweep tripled `quiesceAsyncExecutors`'s worst-case wait on the drains-but-never-times-out path, and both AC1 and the loop's own comment claim otherwise.** `DatabaseResetTestExecutionListener.java:301-339`: a pass that waits and **succeeds** sets `waited = true` with `timedOut = false`, so it gets a successor pass. Worst case with no timeout is 3 passes × 6 pools × just-under-30 s ≈ **540 s** per test method, against the pre-story 180 s. The comment at `:331-335` — "That caps the worst case at one pass -- six pools x 30s, the same ceiling this method always had" — is true only for the timeout path it was written about but is stated unconditionally; and AC1's "nothing about what it asserts or **how long it is willing to wait**" was written before the re-sweep existed and was never reconciled with it. Low likelihood: it needs a pool that repeatedly drains just shy of 30 s across three consecutive passes without ever tripping the catch, which in practice is a near-wedged pool that would time out. The common path is verified free — `waited` stays false, one pass, six cheap probes, and the merged run's counter (44.9 µs/method) proves it empirically.
-  **When picked up:** either qualify the comment ("…when a pass times out"; the no-timeout worst case is `MAX_QUIESCE_PASSES` × the old ceiling) or cap total time in the method rather than per-await. The comment is the cheaper and probably sufficient fix.
-
-- **`docs/deployment/baseline/pr.md:65` cites `ci.yml:71-74` for "Build and push Docker image"; the step is at `ci.yml:238-239`.** `ci.yml:71-74` is the middle of the `frontend-quality` rationale comment. The citation predates skillars-deferred-146 (verified at `f789ce5b`, `9a5e0993`, `b27ce6f1` and HEAD — the step has been at `:238` throughout; the stale reference dates to `721b3e1f`), so this is not a regression that story introduced. The reason it is worth recording anyway: skillars-deferred-146's doc-correction pass edited that exact code block and added a note directly above it at `pr.md:53-56` — "Line numbers below were re-anchored on 2026-10-07" — then fixed the `pr-build.yml:130-133` half and left the `ci.yml` half wrong, so a provably stale citation now sits underneath an explicit freshness claim.
-  **When picked up:** `ci.yml:238-239`, and while there, re-check that the re-anchor note's scope matches what was actually re-anchored.
-
-- **skillars-deferred-146's own `pr-build.yml:49-51` "no `-q`" citation is stale at HEAD; the comment is at `:55-57`.** It was correct when the story was written; the AC2b `timeout-minutes` comment block the story itself added at `pr-build.yml:23-28` pushed it down by 6 lines. Cited twice in the story — in the Baseline narrative and, more awkwardly, in the Dev Notes' runnable-command block ("this is what `pr-build.yml:49-51`'s 'no `-q`' rule protects"), which is the copy most likely to be reused. The story carefully warns that its `[Patch]` bullets' line numbers must not be reused against HEAD but applies no such warning to its Context or Dev Notes citations.
-  **When picked up:** re-anchor both to `:55-57`, or replace them with a grep for the comment text, which is what the story's own `[Patch]` disclaimer recommends for exactly this reason.
-
-- **"Deferred From This Investigation" item 1 (raise `spring.test.context.cache.maxSize`) has arithmetic that does not close against its own measurement, and may be ~2× oversized.** The item claims `maxSize = 32` with "**40 distinct context signatures** — so roughly 8 contexts are evicted and rebuilt", sized at "**~35s**". `size = 32, maxSize = 32` and `missCount = 44` both verified directly in run `37530194292`'s log — but 40 signatures with 8 rebuilds implies 48 loads, not 44; the measured 44 implies ~4 rebuilds, i.e. ~4 × 4.6 s ≈ **18 s**, roughly half the headline saving. Either the 40-signature static count or the 8-eviction inference is wrong; the static count was **not** re-derived by this audit, so which one is open. The rest of the item verifies exactly as written: `-Xmx4g` and `-Xlog:gc…:file=${project.build.directory}/failsafe-gc.log` are both in the failsafe `argLine` (`pom.xml:714`), single fork with no `forkCount`/`reuseForks` (`pom.xml:688`), and `failsafe-gc.log` is genuinely **not** in `pr-build.yml`'s upload paths — so the item's stated prerequisite (upload the GC log, baseline it, then change `maxSize`) is accurate.
-  **When picked up:** re-derive the signature count before sizing the work, since the item's entire justification is the number of seconds it names.
-
-- **`DatabaseResetTestExecutionListener.java:118-121` says quiescing "can legitimately wait up to its own **10s** bound"; the bound has been 30 s since skillars-deferred-136 AC4.** The correct value is documented in the same file's javadoc at `:241` ("`atMost` raised 10s -> 30s") and is live at `:311`. Pre-existing and not skillars-deferred-146's doing — skillars-deferred-136 raised the bound and did not update this comment. Recorded because skillars-deferred-146's AC1b cites this exact comment range as its rationale, so a reader arriving via that AC lands on the stale number.
-  **When picked up:** one-word edit, 10s → 30s.
-
-## Deferred from: code review of skillars-deferred-148 (2026-10-07)
-
-_One decision-needed finding from `/bmad-code-review` was resolved live by the owner, surfacing this gap as a deliberate deferral rather than folding it into deferred-148's own scope._
-
-- **`SubscriptionService.assertPlayerOwnership` has no self-registered-player branch — `parent/player/:playerId/subscription`'s read endpoint's `@PreAuthorize` authorizes a self-registered PLAYER, but the service call directly below it does not.** `SubscriptionResource.getMyPlayerSubscription` (`SubscriptionResource.java:91-92`) guards the read with `@PreAuthorize("@playerOwnershipGuard.check(authentication, #playerId)")`, which authorizes both a parent on a parent-owned profile and a self-registered player on their own (`existsByIdAndParentId` / `existsByIdAndUserId`) — the same dual check `skillars-deferred-147` added to `PlayerOwnershipGuard` for other resources. But `SubscriptionService.getPlayerSubscription`/`subscribePlayer`/`changePlayerTier`/`cancelPlayerSubscription` (all four of this route's backend calls) call `assertPlayerOwnership(parentUserId, playerId)` → `parentPlayerLinkRepository.existsByParentIdAndPlayerId(parentUserId, playerId)` (`SubscriptionService.java:899-904`) — a check against the `main.parent_player_links` table, parent-child only, with no self-registered-player disjunct at all. So a self-registered adult player who passes the controller's `@PreAuthorize` would still get `payment.subscription.playerOwnership` from the service call beneath it. Found during skillars-deferred-148's own code review (which proposed widening the route's `meta.roles` to match the `@PreAuthorize` layer) — re-traced one level deeper, and widening the route alone would not actually fix anything, since the service layer rejects the same caller regardless. `skillars-deferred-148` deliberately left the route `role: 'PARENT'`-only (matching what the backend *actually* supports end-to-end today) rather than fold this larger fix into a mechanical-fixes bundle.
-  **When picked up:** add a `PlayerProfileRepository`-based disjunct to `assertPlayerOwnership` (mirroring `PlayerOwnershipGuard.check`'s own `existsByIdAndUserId` half), then widen `parent/player/:playerId/subscription`'s route `meta` to `roles: ['PARENT', 'PLAYER']` to match, same pattern as the sibling dual-role routes (`routes.js:124,132,151,160`).
+- **Clear-on-login has only mock-level coverage.** `AuthServiceTest.java:141-158` calls `authService.login(...)` then asserts `assertThat(user.getSecuritySessionInvalidatedAt()).isNull()` — but `user` is a plain `new User()` returned by a mocked repository with no persistence context, so this proves only that the setter was called on the object passed in. It would pass identically if Hibernate never flushed. AC3 did not require real-DB coverage for this direction (only for the `REQUIRES_NEW` revert experiment, which did get a genuine Testcontainers IT), so this is scope rather than a missed requirement — but coverage is inverted relative to risk: the *clear* is the security-relevant direction, and two of this review's unresolved findings turn on it.
+  **When picked up:** extend `AuthServiceSessionInvalidationIT` with a real-DB assertion that a successful `login()` durably nulls the column after commit. Do this alongside whatever mechanism change resolves the two revocation findings, since the fix may change what "cleared" means.

@@ -110,6 +110,20 @@ public class ClaimsExtractorImpl implements ClaimsExtractor {
     }
 
     @Override
+    public Long extractSessionIssuedAt(HttpServletRequest request) {
+        final String token = CookieUtil.getCookieValue(request, JWT_COOKIE_NAME);
+        if (StringUtils.isNotBlank(token)) {
+            final Claims claims = extractClaims(token);
+            Object sessionIssuedAt = claims.get(SESSION_ISSUED_AT);
+            if (sessionIssuedAt == null) {
+                return null;
+            }
+            return Instant.ofEpochMilli(((Number) sessionIssuedAt).longValue()).toEpochMilli();
+        }
+        return null;
+    }
+
+    @Override
     public String extractUserNameSilently(HttpServletRequest request) {
         return extractClaimsSilently(request).map(Claims::getSubject).orElse(null);
     }

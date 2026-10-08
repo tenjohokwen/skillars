@@ -119,9 +119,11 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
         }
 
         // Code review 2026-09-23: measured from AFTER quiescing, not before. Quiescing can legitimately
-        // wait up to its own 10s bound; folding that into "database reset" cost (AC5.6, baselined at a
-        // ~100ms CI mean) would make the reported metric mostly measure unrelated async-pool drain time
-        // instead of the truncate/restore work it exists to track.
+        // wait up to its own 30s bound (skillars-deferred-136 AC4 raised it from the 10s this comment
+        // used to cite — see quiesceAsyncExecutors's own Awaitility.await().atMost call); folding that
+        // into "database reset" cost (AC5.6, baselined at a ~100ms CI mean) would make the reported
+        // metric mostly measure unrelated async-pool drain time instead of the truncate/restore work
+        // it exists to track.
         long startNanos = System.nanoTime();
 
         // Everything touching the database MUST run inside an explicit transaction.
@@ -334,8 +336,17 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
             // A pass in which anything timed out does not get a successor. Every executor in THIS
             // pass was still visited (see the catch above), so behaviour within a pass is identical
             // to the pre-story code; what is suppressed is only the re-sweep. That caps the
-            // worst case at one pass -- six pools x 30s, the same ceiling this method always had --
-            // instead of letting MAX_QUIESCE_PASSES multiply a wedged pool's timeout by three.
+            // worst case for a TIMED-OUT pass at that one pass -- six pools x 30s -- the same
+            // ceiling this method always had, instead of letting MAX_QUIESCE_PASSES multiply a
+            // wedged pool's timeout by three.
+            //
+            // skillars-deferred-149 AC8 item 8: that bound does NOT cover a pass that waits and
+            // succeeds on every pool (waited=true, timedOut=false) -- that one DOES get a
+            // successor pass. The true no-timeout worst case is MAX_QUIESCE_PASSES (3) x six pools
+            // x just-under-30s each -- up to ~540s, not the 180s a single-pass reading implies.
+            // Low-likelihood (needs a pool that repeatedly drains just shy of 30s three passes
+            // running without ever tripping the catch above) but stated precisely rather than left
+            // to imply an unconditional bound it does not have.
             if (!waited || timedOut) {
                 return;
             }

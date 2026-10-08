@@ -65,6 +65,11 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class ConfigStartupAssertion implements ApplicationListener<ApplicationReadyEvent> {
 
+    // skillars-deferred-149 AC5: the review-eligibility cross-field invariant's minimum qualifying
+    // window. Kept in sync with ConfigService.MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS — both guards
+    // read the same stored config independently and must agree on the rule they fail-fast/reject on.
+    private static final long MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS = 7;
+
     private final ConfigService configService;
     private final MeterRegistry meterRegistry;
     private final Environment env;
@@ -169,22 +174,37 @@ public class ConfigStartupAssertion implements ApplicationListener<ApplicationRe
         // as the reliability-strike pair above. Both reviews.minSessionAgeDays and
         // reviews.updateCooldownDays independently declare [1, 365] (ConfigBounds), so
         // ConfigService.rejectOutOfRange validates each in isolation and accepts a bad combination
-        // with a 200. If minSessionAgeDays >= updateCooldownDays, ReviewSubmissionService.updateReview's
-        // effective edit gate becomes max(cooldownDays, minAgeDays) — every attempt exactly at the
-        // intended cooldown boundary 403s as reviews.noQualifyingSession (the maturity floor, not the
-        // cooldown, is the real blocker), pointing the operator at sessions rather than config.
-        // failFast regardless of either individual key's own failFast=false: the degraded-anti-gaming
-        // read-time clamp each key gets on its own does not cover this combination at all.
+        // with a 200. ReviewSubmissionService.updateReview's effective edit gate is
+        // max(cooldownDays, minAgeDays) — a qualifying window that is too narrow (not just
+        // non-positive) still lets an edit attempt at the intended cooldown boundary 403 as
+        // reviews.noQualifyingSession (the maturity floor, not the cooldown, is the real blocker),
+        // pointing the operator at sessions rather than config. failFast regardless of either
+        // individual key's own failFast=false: the degraded-anti-gaming read-time clamp each key
+        // gets on its own does not cover this combination at all.
+        //
+        // skillars-deferred-149 AC5: widened from strict ordering (gap > 0) to a minimum 7-day gap
+        // — every pair the old condition rejected (gap <= 0) is a subset of every pair this one
+        // rejects (gap < 7), so this replaces the old condition without losing any coverage.
+        // Code review (2026-10-08): the max literals here MUST mirror each key's own declared
+        // ConfigBounds max — 358 for minSessionAgeDays (narrowed from 365 by this same review, to
+        // 365 - MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS), 365 for updateCooldownDays. Leaving a
+        // stale 365 here diverged this read from both ConfigBounds' declaration and
+        // ConfigService.rejectOutOfRange's PUT-path check (which reads the BoundedKey directly):
+        // a stored 359-365 was accepted as-is by this read, then rejected a few lines down by the
+        // cross-field guard with a message naming updateCooldownDays — a key the operator never
+        // touched and cannot raise, which is the exact confusing error the ConfigBounds narrowing
+        // exists to prevent.
         long minSessionAgeDays = configService.getBoundedInt(
-            ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), 7, 1, 365);
+            ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), 7, 1, 358);
         long updateCooldownDays = configService.getBoundedInt(
             ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), 30, 1, 365);
-        if (minSessionAgeDays >= updateCooldownDays) {
-            log.error("Platform config '{}' = {} is not strictly less than '{}' = {} — the update "
-                    + "cooldown would be silently superseded by the maturity floor (every edit attempt "
-                    + "at the intended cooldown boundary would 403 as reviews.noQualifyingSession "
-                    + "instead). Correct the stored values.",
+        if (updateCooldownDays - minSessionAgeDays < MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS) {
+            log.error("Platform config '{}' = {} must be at least {} days less than '{}' = {} — the "
+                    + "update cooldown would be silently superseded by the maturity floor (every edit "
+                    + "attempt near the intended cooldown boundary would 403 as "
+                    + "reviews.noQualifyingSession instead). Correct the stored values.",
                 ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), minSessionAgeDays,
+                MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS,
                 ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), updateCooldownDays);
             Counter.builder("config.value.misconfigured")
                 .tag("key", "reviews.eligibility_window_ordering")
@@ -192,8 +212,8 @@ public class ConfigStartupAssertion implements ApplicationListener<ApplicationRe
                 .register(meterRegistry)
                 .increment();
             failFastViolations.add(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key() + " = " + minSessionAgeDays
-                + " must be strictly less than " + ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()
-                + " = " + updateCooldownDays);
+                + " must be at least " + MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS + " days less than "
+                + ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key() + " = " + updateCooldownDays);
         }
 
         int locksChecked = assertSchedulerLockOrdering(failFastViolations);

@@ -20,6 +20,7 @@ import com.softropic.skillars.platform.payment.repo.PlayerSubscriptionChange;
 import com.softropic.skillars.platform.payment.repo.PlayerSubscriptionChangeRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLinkRepository;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Subscription;
 import com.stripe.param.SubscriptionListParams;
@@ -66,6 +67,7 @@ public class SubscriptionService {
     // comment), so StripeWebhookService's constructor never needs a SubscriptionService bean to exist
     // first, and there is no circular-construction cycle.
     private final StripeWebhookService stripeWebhookService;
+    private final PlayerProfileRepository playerProfileRepository;
 
     /** Self-reference so @Transactional on persist* methods is honoured via the Spring proxy. */
     @Autowired @Lazy
@@ -897,7 +899,9 @@ public class SubscriptionService {
     }
 
     private void assertPlayerOwnership(Long parentUserId, Long playerId) {
-        if (!parentPlayerLinkRepository.existsByParentIdAndPlayerId(parentUserId, playerId)) {
+        boolean owned = parentPlayerLinkRepository.existsByParentIdAndPlayerId(parentUserId, playerId)
+            || playerProfileRepository.existsByIdAndUserId(playerId, parentUserId);
+        if (!owned) {
             throw new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
                 "payment.subscription.playerOwnership");
         }

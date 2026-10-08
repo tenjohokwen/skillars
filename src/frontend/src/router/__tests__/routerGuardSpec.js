@@ -154,4 +154,27 @@ describe('router/index.js beforeEach — role-gated routes (deferred-148 AC4)', 
     // routeForRole('ADMIN') === '/admin/health-dashboard', which ADMIN itself passes.
     expect(router.currentRoute.value.path).toBe('/admin/health-dashboard')
   })
+
+  // skillars-deferred-149 AC1: /parent/player/:playerId/subscription widened from role: 'PARENT'
+  // to roles: ['PARENT', 'PLAYER'] — a self-registered PLAYER can now reach their own subscription
+  // page, matching the backend's dual-check assertPlayerOwnership fix.
+  it('does NOT redirect a self-registered PLAYER away from /parent/player/:playerId/subscription', async () => {
+    const router = await buildRouter({ auth: { userId: '1', role: 'PLAYER' } })
+
+    await router.push('/parent/player/893573203704173564/subscription')
+
+    expect(router.currentRoute.value.path).toBe('/parent/player/893573203704173564/subscription')
+  })
+
+  it('redirects a COACH away from /parent/player/:playerId/subscription via routeForRole', async () => {
+    const router = await buildRouter({
+      auth: { userId: '1', role: 'COACH' },
+      // Avoid the command-center profile-builder gate chaining this redirect further.
+      profileBuilder: { status: { profileComplete: true } },
+    })
+
+    await router.push('/parent/player/893573203704173564/subscription')
+
+    expect(router.currentRoute.value.path).toBe('/coach/command-center')
+  })
 })

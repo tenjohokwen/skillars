@@ -96,6 +96,16 @@ public class AuthService {
 
         ensureAccountIsLive(user);
 
+        // skillars-deferred-149 AC3 code review (2026-10-08): login() deliberately does NOT clear
+        // securitySessionInvalidatedAt anymore. It is a monotonic, account-wide "last theft
+        // revocation" epoch, not a per-login flag -- clearing it here let a victim's own innocent
+        // re-login re-arm an attacker's still-live stolen JWT (that JWT's own SESSION_ISSUED_AT
+        // claim still predates the real revocation; what mattered was never whether the column was
+        // null, it is whether THIS JWT's claim is older than it). A fresh login's own new JWT
+        // naturally carries a fresh SESSION_ISSUED_AT (see JwtManagerImpl.createLoginToken), which
+        // is never older than this column however it is set, so no clearing is needed for a
+        // legitimate login to succeed. See SecurityConstants.SESSION_ISSUED_AT's own javadoc.
+
         boolean phoneOtpRequired = configService.getBoolean("security.registration.phone-otp-required", true);
         if (user.getSkillarsRole() != null && phoneOtpRequired &&
             user.getVerificationStatus() != SkillarsVerificationStatus.BASIC_VERIFIED) {
@@ -155,6 +165,12 @@ public class AuthService {
                         // unrestricted, nothing is written to the context after this throw, and
                         // SecurityContextHolderFilter clears the thread-local per request anyway.
                         refreshTokenRepository.markAllUsedByUserId(ownerId);
+                        // skillars-deferred-149 AC3: markAllUsedByUserId above revokes
+                        // refresh_tokens but never touches the user row, so a standing JWT keeps
+                        // self-extending via the filter's no-DB-hit fast path. REQUIRES_NEW for the
+                        // identical reason as markAllUsedByUserId — this branch throws immediately
+                        // after, which would roll back an ambient write.
+                        userRepository.invalidateSessionsForUser(ownerId, Instant.now(ClockProvider.getClock()));
                         securityUtil.clearAuthCookies(res);
                         throw new BadCredentialsException("Token reuse detected — all sessions revoked");
                     });
@@ -164,6 +180,8 @@ public class AuthService {
                 // dropped SecurityContextHolder.clearContext() (vs. terminateSession) is harmless
                 // for the same reason noted there.
                 refreshTokenRepository.markAllUsedByUserId(ownerId);
+                // skillars-deferred-149 AC3: see the grace-window branch's identical call above.
+                userRepository.invalidateSessionsForUser(ownerId, Instant.now(ClockProvider.getClock()));
                 securityUtil.clearAuthCookies(res);
                 throw new BadCredentialsException("Token reuse detected — all sessions revoked");
             }

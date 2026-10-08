@@ -11,6 +11,7 @@ public interface ClaimsExtractor {
     Optional<Claims> extractClaimsSilently(HttpServletRequest request);
     Principal extractPrincipal(HttpServletRequest request);
     Long extractDbRefreshToken(HttpServletRequest request);
+    Long extractSessionIssuedAt(HttpServletRequest request);
     String extractUserNameSilently(HttpServletRequest request);
     Optional<String> extractSessionIdSilently(HttpServletRequest request);
     java.util.Set<org.springframework.security.core.authority.SimpleGrantedAuthority> getRoles(io.jsonwebtoken.Claims claims);

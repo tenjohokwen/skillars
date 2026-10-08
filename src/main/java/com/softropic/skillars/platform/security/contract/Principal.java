@@ -9,6 +9,7 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.User;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
@@ -22,6 +23,14 @@ public class Principal extends User {
     private final LoginIdType loginIdType;
     private final SkillarsRole skillarsRole;
     private final SkillarsVerificationStatus verificationStatus;
+    // skillars-deferred-149 AC3 code review (2026-10-08): the account-wide, monotonic "last
+    // refresh-token-theft revocation" epoch (null if the account has never had one). NOT consulted
+    // by credentialsNonExpired (reverted to hardcoded true below, after the review found that
+    // binding it here re-armed a stolen JWT on the victim's own next login and separately locked
+    // the still-live /authenticate endpoint out for every future login attempt). The real
+    // per-session check lives in JWTAuthorizationFilter's DB-reauth branch, comparing THIS value
+    // against the specific JWT's own SESSION_ISSUED_AT claim -- see that claim's own javadoc.
+    private final Instant securitySessionInvalidatedAt;
     //TODO add the session id
     //Please note that the email address used as the username/login is the one associate to the user at the user creation time. If users update their email address in their My Profile area, the username is not updated to reflect the new email address.
 
@@ -43,6 +52,7 @@ public class Principal extends User {
         this.loginIdType = builder.loginIdType;
         this.skillarsRole = builder.skillarsRole;
         this.verificationStatus = builder.verificationStatus;
+        this.securitySessionInvalidatedAt = builder.securitySessionInvalidatedAt;
     }
 
     public static class Builder {
@@ -64,6 +74,7 @@ public class Principal extends User {
         private LoginIdType loginIdType = LoginIdType.EMAIL;
         private SkillarsRole skillarsRole;
         private SkillarsVerificationStatus verificationStatus;
+        private Instant securitySessionInvalidatedAt;
 
         // Builder methods for User fields
         public Builder username(String username) {
@@ -132,6 +143,11 @@ public class Principal extends User {
             return this;
         }
 
+        public Builder securitySessionInvalidatedAt(Instant securitySessionInvalidatedAt) {
+            this.securitySessionInvalidatedAt = securitySessionInvalidatedAt;
+            return this;
+        }
+
         public Principal build() {
             return new Principal(this);
         }
@@ -147,6 +163,16 @@ public class Principal extends User {
                             .password(user.getPassword())
                             .enabled(user.isActivated())
                             .accountNonExpired(!user.hasAccountExpired())
+                            // skillars-deferred-149 AC3 code review (2026-10-08): reverted to
+                            // hardcoded true (was briefly bound to securitySessionInvalidatedAt ==
+                            // null). That bound credentialsNonExpired to an ACCOUNT-level flag that
+                            // AuthService.login() cleared on every successful login -- so a victim's
+                            // own re-login re-armed an attacker's still-live stolen JWT, and
+                            // separately locked the still-live /authenticate endpoint out of a
+                            // flagged account even with correct credentials, since Spring's
+                            // preAuthenticationChecks runs before the password check. The real fix
+                            // is per-JWT, not per-account -- see securitySessionInvalidatedAt below
+                            // and SecurityConstants.SESSION_ISSUED_AT's javadoc.
                             .credentialsNonExpired(true)
                             .accountNonLocked(!user.isLocked())
                             .authorities(grantedAuthorities)
@@ -156,6 +182,7 @@ public class Principal extends User {
                             .otpEnabled(user.isOtpEnabled())
                             .skillarsRole(user.getSkillarsRole())
                             .verificationStatus(user.getVerificationStatus())
+                            .securitySessionInvalidatedAt(user.getSecuritySessionInvalidatedAt())
                             .build();
     }
 
@@ -181,5 +208,9 @@ public class Principal extends User {
 
     public SkillarsVerificationStatus getVerificationStatus() {
         return verificationStatus;
+    }
+
+    public Instant getSecuritySessionInvalidatedAt() {
+        return securitySessionInvalidatedAt;
     }
 }

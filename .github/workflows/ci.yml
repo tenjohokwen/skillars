@@ -245,6 +245,7 @@ jobs:
           # :latest. (A run cancelled while pending in the concurrency group publishes nothing at
           # all — see the guard-step comment.)
           tags: ${{ steps.tags.outputs.tags }}
+          commit-sha: ${{ github.sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

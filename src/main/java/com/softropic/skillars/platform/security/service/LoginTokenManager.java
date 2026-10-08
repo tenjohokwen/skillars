@@ -134,4 +134,15 @@ public interface LoginTokenManager {
     void ensureAuthTokenPresent(HttpServletRequest request) throws AuthorizationException;
 
     Optional<String> extractSessionIdSilently(final HttpServletRequest request);
+
+    /**
+     * skillars-deferred-149 AC3 code review (2026-10-08): epoch-millis of when the incoming JWT's
+     * session was last freshly authenticated (login, OTP completion, or a successful DB-reauth) —
+     * preserved unchanged across fast-path extensions, unlike the JWT's own {@code iat}. Null for
+     * a token minted before this claim existed. See {@code SecurityConstants.SESSION_ISSUED_AT}'s
+     * own javadoc for the full mechanism this feeds.
+     * @param request holds the incoming token
+     * @return the claim value, or null if absent
+     */
+    Long extractSessionIssuedAt(final HttpServletRequest request);
 }

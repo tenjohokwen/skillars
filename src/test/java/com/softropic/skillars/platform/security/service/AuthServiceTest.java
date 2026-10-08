@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.repo.LoginAttemptRepository;
 import com.softropic.skillars.platform.security.repo.RefreshToken;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
+import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +22,7 @@ import java.util.Optional;
 
 import jakarta.servlet.http.Cookie;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -88,6 +90,9 @@ class AuthServiceTest {
         // branch itself were deleted entirely — it must prove THIS branch, specifically, ran.
         verify(refreshTokenRepository)
             .findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(eq(USER_ID), any());
+        // skillars-deferred-149 AC3: theft detection must also flip the user row, not just
+        // refresh_tokens — see UserRepository.invalidateSessionsForUser's own javadoc for why.
+        verify(userRepository).invalidateSessionsForUser(eq(USER_ID), any());
     }
 
     @Test
@@ -107,6 +112,7 @@ class AuthServiceTest {
         verify(securityUtil, never()).terminateSession(any(), any());
         verify(refreshTokenRepository, never())
             .findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(anyLong(), any());
+        verify(userRepository).invalidateSessionsForUser(eq(USER_ID), any());
     }
 
     @Test
@@ -130,5 +136,31 @@ class AuthServiceTest {
         verify(securityUtil, never()).terminateSession(any(), any());
         verify(refreshTokenRepository, never())
             .findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(anyLong(), any());
+        verify(userRepository).invalidateSessionsForUser(eq(USER_ID), any());
+    }
+
+    // skillars-deferred-149 AC3 code review (2026-10-08): login() deliberately does NOT clear
+    // securitySessionInvalidatedAt anymore — a previous implementation did, and that let a
+    // victim's own innocent re-login re-arm an attacker's still-live stolen JWT (clearing the
+    // account-wide flag undid the denial for every session, not just the one that should have
+    // been killed). The column is now a monotonic revocation epoch, write-once via
+    // UserRepository.invalidateSessionsForUser; login() must leave it exactly as it found it.
+    @Test
+    void login_success_doesNotClearPreviouslySetInvalidationFlag() {
+        User user = new User();
+        user.setId(USER_ID);
+        user.setLogin("player@skillars-test.com");
+        user.setPassword("hashed-password");
+        user.setActivated(true);
+        user.setLocked(false);
+        Instant invalidatedAt = Instant.now().minusSeconds(60);
+        user.setSecuritySessionInvalidatedAt(invalidatedAt);
+
+        when(userRepository.findOneByLogin("player@skillars-test.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("raw-password", "hashed-password")).thenReturn(true);
+
+        authService.login("player@skillars-test.com", "raw-password", "127.0.0.1", response);
+
+        assertThat(user.getSecuritySessionInvalidatedAt()).isEqualTo(invalidatedAt);
     }
 }

@@ -32,6 +32,11 @@ public class ConfigService {
 
     private static final String MISCONFIGURED_COUNTER = "config.value.misconfigured";
 
+    // skillars-deferred-149 AC5: kept in sync with
+    // ConfigStartupAssertion.MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS — both guards read the same
+    // stored config independently and must agree on the rule they fail-fast/reject on.
+    private static final long MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS = 7;
+
     private final PlatformConfigRepository configRepository;
     private final ConfigProperties configProperties;
     private final ConfigMapper configMapper;
@@ -298,9 +303,14 @@ public class ConfigService {
      * skillars-deferred-145 code review (D3, 2026-10-06): PUT-time half of the cross-field ordering
      * guard — {@code ConfigStartupAssertion} only catches a bad combination at the next restart, and
      * {@link #rejectOutOfRange} above only ever sees the single key being written, never the pair's
-     * relationship. Mirrors the boot check's own invariant exactly (reviews.minSessionAgeDays must be
-     * strictly less than reviews.updateCooldownDays, or the maturity floor silently supersedes the
-     * cooldown), reading the OTHER key's current effective value the same way every call site does.
+     * relationship. Mirrors the boot check's own invariant exactly (reviews.updateCooldownDays must
+     * be at least {@link #MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS} days greater than
+     * reviews.minSessionAgeDays, or the maturity floor silently supersedes the cooldown), reading the
+     * OTHER key's current effective value the same way every call site does.
+     *
+     * <p>skillars-deferred-149 AC5: widened from strict ordering (gap &gt; 0) to a minimum 7-day
+     * gap — every pair the old condition rejected (gap &lt;= 0) is a subset of every pair this one
+     * rejects (gap &lt; 7), so this replaces the old condition without losing any coverage.
      */
     private void rejectReviewEligibilityWindowOrdering(String key, String newValue) {
         boolean isMinAge = ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key().equals(key);
@@ -318,11 +328,12 @@ public class ConfigService {
             : readStoredBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS);
         long updateCooldownDays = isCooldown ? newValueParsed
             : readStoredBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS);
-        if (minSessionAgeDays >= updateCooldownDays) {
+        if (updateCooldownDays - minSessionAgeDays < MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "reviews.minSessionAgeDays (" + minSessionAgeDays + ") must be strictly less than "
-                    + "reviews.updateCooldownDays (" + updateCooldownDays + ") — the cooldown would be "
-                    + "silently superseded by the maturity floor");
+                "reviews.minSessionAgeDays (" + minSessionAgeDays + ") must be at least "
+                    + MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS + " days less than reviews.updateCooldownDays ("
+                    + updateCooldownDays + ") — the cooldown would be silently superseded by the "
+                    + "maturity floor");
         }
     }
 

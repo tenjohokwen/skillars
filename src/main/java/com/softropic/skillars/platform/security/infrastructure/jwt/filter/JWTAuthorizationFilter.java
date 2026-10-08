@@ -38,6 +38,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.Locale;
 
 import jakarta.servlet.FilterChain;
@@ -205,9 +206,18 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
             //An exception would be thrown if the user account is locked or not enabled
             final Authentication auth = daoAuthProvider.authorize(authentication,
                                                                   httpEndpointGuard.requiredAuthorities(req));
+            final Principal authorizedPrincipal = (Principal) auth.getDetails();
+            // skillars-deferred-149 AC3 code review (2026-10-08): the actual theft-revocation
+            // enforcement, moved here from Principal/DaoAuthProvider (see those classes' own
+            // comments for why a per-account credentialsNonExpired flag was wrong). This JWT's own
+            // SESSION_ISSUED_AT claim is compared against the just-authorized Principal's current
+            // securitySessionInvalidatedAt — a claim that predates it means this specific JWT was
+            // issued before a theft revocation and must not survive it, regardless of whether an
+            // unrelated later login has since re-authenticated the account.
+            assertSessionNotRevoked(req, authorizedPrincipal);
             //JWT with new db refresh token and new expiration
             //JWTUtil.e
-            loginTokenManager.renewLoginToken(res, (Principal) auth.getDetails());
+            loginTokenManager.renewLoginToken(res, authorizedPrincipal);
         } else {
             final Principal principal = loginTokenManager.extractPrincipal(req);
             // skillars-deferred-144 AC8: this used to also check isRefreshTokenRevoked(req,
@@ -223,13 +233,37 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
             // mass-revocation does NOT set locked, so it was never actually rejected by the removed
             // check either (authorize() has nothing to say about revoked refresh tokens — it only
             // succeeded and renewed the token); that gap is pre-existing and unaffected by this
-            // change, tracked separately rather than claimed as fixed here.
+            // change, tracked separately rather than claimed as fixed here. [skillars-deferred-149
+            // AC3: this specific gap -- theft-driven mass-revocation never being rejected by this
+            // filter -- IS now closed, but not on this (fast) path. The DB-reauth branch above
+            // calls assertSessionNotRevoked after every successful authorize(), bounding exposure
+            // to DB_REFRESH_TOKEN_INTERVAL; this fast path still does no DB work by design.]
             var authorities = CollectionUtils.emptyIfNull(principal == null ? null : principal.getAuthorities());
             daoAuthProvider.checkAuthorities(httpEndpointGuard.requiredAuthorities(req), authorities);
             //Emulates HttpSession ttl extension in which each request renews the ttl by X minutes
             // Just the ttl is extended. The dbRefreshToken is not touched.
             //Once the db refresh token expires, a call to the db is done whereas it is not done here.
             loginTokenManager.extendTtlOfToken(req, res);
+        }
+    }
+
+    /**
+     * skillars-deferred-149 AC3 code review (2026-10-08): the real theft-revocation check. A null
+     * {@code securitySessionInvalidatedAt} means this account has never had a revocation, so every
+     * JWT passes trivially — this is the overwhelmingly common case and costs one null check. A
+     * missing or stale {@code SESSION_ISSUED_AT} claim is treated as predating the revocation
+     * (fail closed): a token minted before this claim existed, or before the account's one
+     * revocation event, must not be grandfathered in just because the comparison is ambiguous.
+     */
+    private void assertSessionNotRevoked(final HttpServletRequest req, final Principal principal) {
+        final Instant invalidatedAt = principal.getSecuritySessionInvalidatedAt();
+        if (invalidatedAt == null) {
+            return;
+        }
+        final Long sessionIssuedAt = loginTokenManager.extractSessionIssuedAt(req);
+        if (sessionIssuedAt == null || sessionIssuedAt < invalidatedAt.toEpochMilli()) {
+            throw new AuthorizationException(
+                "Session predates a refresh-token-theft revocation", SecurityError.ACCOUNT_NOT_LOGIN_ABLE);
         }
     }
 
@@ -338,6 +372,16 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
      * would silently miss the exact accounts this story exists to protect. (The existing
      * {@code maybePublishSecurityAlert} has that same blind spot — pre-existing and out of scope
      * here, but not worth repeating.)
+     *
+     * <p>skillars-deferred-149 AC4: {@code USER_NOT_FOUND} (a hard-deleted user's row, still
+     * holding a valid JWT) is also widened in as a genuine denial. {@code UNKNOWN} is deliberately
+     * NOT widened — {@code DaoAuthProvider.authorize()} produces it for a generic
+     * infrastructure/connection-pool/lock-timeout failure too (see that class's own
+     * {@code InternalAuthenticationServiceException} and catch-all branches), and treating a
+     * transient DB blip as a genuine denial would revoke a real user's 7-day refresh token and
+     * force a full re-login for every user who happens to cross the 5-minute DB-reauth boundary
+     * during the blip — a materially different risk than this widening's "account is genuinely
+     * gone" framing.
      */
     private boolean isGenuineDenial(final RuntimeException cause) {
         return cause instanceof JWTTheftException
@@ -353,7 +397,8 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
                 // produce today.
                 || cause instanceof AccountStatusException
                 || (cause instanceof AuthorizationException ae
-                    && ae.getErrorCode() == SecurityError.ACCOUNT_NOT_LOGIN_ABLE);
+                    && (ae.getErrorCode() == SecurityError.ACCOUNT_NOT_LOGIN_ABLE
+                        || ae.getErrorCode() == SecurityError.USER_NOT_FOUND));
     }
 
     /**
