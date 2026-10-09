@@ -134,6 +134,14 @@ jobs:
           tags: skillars-app:pr-${{ github.event.pull_request.number }}
           commit-sha: ${{ github.sha }}
 
+      # skillars-deferred-150 AC6: skillars-deferred-149 AC7 fixed a permanent git.dirty=true
+      # false positive by patching git.properties into the built jar; nothing read the result
+      # back until now. Scoped to THIS job only -- ci.yml's equivalent build-and-push job
+      # pushes without `load: 'true'`, so its image is never loaded into the local Docker
+      # daemon and a `docker create` there would fail outright with "no such image".
+      - name: Assert git-provenance (AC6)
+        run: .github/scripts/assert-git-provenance.sh skillars-app:pr-${{ github.event.pull_request.number }} ${{ github.sha }}
+
       - name: Scan image for vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:

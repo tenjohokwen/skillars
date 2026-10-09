@@ -25,6 +25,7 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.*;
@@ -110,8 +111,30 @@ public class JwtManagerImpl implements LoginTokenManager {
     // Labeling them "ADMIN" would surface admin-only nav/UI to a non-admin on the frontend
     // (authStore.isAdmin reads this value directly). ANONYMOUS has no special frontend handling —
     // routeForRole/isAdmin/isCoach/isParent/isPlayer all safely treat it as "no known role".
+    // skillars-deferred-150 AC2: a multi-mapped-role claim set previously resolved via
+    // .findFirst() on whatever order Spring Security's own User.sortAuthorities (alphabetical,
+    // confirmed via javap against this project's resolved spring-security-core jar) happened to
+    // produce -- deterministic today by accident of that library internal, not by any precedence
+    // this codebase owns. Explicit precedence instead: ADMIN first, preserving today's actual
+    // behavior (alphabetical already puts ADMIN ahead of COACH/PARENT/PLAYER), since an
+    // admin-held authority should not be silently masked by an incidental second grant. Not
+    // currently triggerable -- no production path grants a second role-bearing authority after
+    // account creation -- this is defensive hardening for a future multi-role account.
+    //
+    // Accepted residual, NOT fixed here: AuthService.login()/refresh() write the SAME 'skp'
+    // cookie from a completely different source -- user.getSkillarsRole(), a single DB scalar
+    // column -- not from this method's ROLES-claim-derived precedence. For a hypothetical
+    // dual-role user, login would stamp the DB-authoritative role while a later token refresh
+    // (this method) stamps this precedence-derived role, which can disagree. Fixing that split
+    // would mean either giving this DB-free-by-design class DB access, or making AuthService
+    // claims-derived too -- both bigger changes than this AC's scope.
+    // Precedence order, highest first. ADMIN > COACH > PARENT > PLAYER -- see this method's own
+    // comment above for why. A List, not a Set, because order here IS the precedence.
+    private static final List<SkillarsRole> ROLE_PRECEDENCE =
+            List.of(SkillarsRole.ADMIN, SkillarsRole.COACH, SkillarsRole.PARENT, SkillarsRole.PLAYER);
+
     private void setSkillarsProfileCookie(HttpServletResponse res, Map<String, Object> claims) {
-        final SkillarsRole resolvedRole = getAuthoritiesSilently(claims).stream()
+        final EnumSet<SkillarsRole> mappedRoles = getAuthoritiesSilently(claims).stream()
                 .map(authority -> StringUtils.removeStart(authority.getAuthority(), "ROLE_"))
                 .flatMap(name -> {
                     try {
@@ -120,6 +143,9 @@ public class JwtManagerImpl implements LoginTokenManager {
                         return Stream.empty();
                     }
                 })
+                .collect(Collectors.toCollection(() -> EnumSet.noneOf(SkillarsRole.class)));
+        final SkillarsRole resolvedRole = ROLE_PRECEDENCE.stream()
+                .filter(mappedRoles::contains)
                 .findFirst()
                 .orElse(SkillarsRole.ANONYMOUS);
         final String role = resolvedRole.name();

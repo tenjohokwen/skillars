@@ -12,9 +12,11 @@
 --      profile builder (publish is what creates marketplace.coach_subscriptions
 --      and is what gives the coach a marketplace.coach_profiles row worth
 --      seeding against).
---   2. Parent registered and email verified.
+--   2. The owner account (a parent, OR a self-registered adult player seeding
+--      their own profile) registered and email verified.
 --   3. At least one player profile created (parent-created shadow account, or
---      an adult player's self-owned profile).
+--      an adult player's self-owned profile). Both shapes are matched by this
+--      script's ownership joins (pp.parent_id OR pp.user_id).
 --
 -- USAGE:
 --   dcl exec -T postgres psql -U postgres -d skillars \
@@ -22,8 +24,21 @@
 --     -v owner_email=parent@example.com \
 --     < docs/deployment/local/seed-accounts.sql
 --
+-- owner_email may be a parent's email (seeds every player profile the parent
+-- owns via parent_id) OR a self-registered adult player's own email (seeds
+-- their own self-owned profile via user_id) — pass whichever account's own
+-- players you want seeded.
+--
 -- Or edit the \set defaults below and pipe the file in with no -v flags.
 -- NEVER run this against UAT or production — it fabricates payment state.
+--
+-- VERIFICATION IS MANUAL-ONLY: no automated test runs this script. "Verified"
+-- means a human ran it against a real local Postgres and read the output below.
+--
+-- Step 4 (credit-wallet seed) is NON-IDEMPOTENT: payment.parent_credit_ledger
+-- is append-only (trg_ledger_no_update / trg_ledger_no_delete reject UPDATE and
+-- DELETE outright), so every run of this script adds another credit row — it
+-- cannot be corrected or replaced, only added to. Be careful re-running it.
 -- ============================================================================
 
 \set ON_ERROR_STOP on
@@ -151,9 +166,11 @@ WHERE u.email = :'owner_email';
 -- ---------------------------------------------------------------------------
 -- 5. Paid player subscription for every player owned by :owner_email.
 --
--- player_profiles.parent_id holds the OWNING user: the parent for a shadow
--- account, or the player themselves for a self-registered adult player. Both
--- cases are covered by this join.
+-- player_profiles.parent_id holds the OWNING user for a shadow account;
+-- player_profiles.user_id holds the OWNING user for a self-registered adult
+-- player. chk_pp_owner (main.player_profiles) forces exactly one of the two
+-- to be non-null per row, so this join matches a given profile on exactly
+-- one disjunct, never both.
 --
 -- chk_pps_pro_yearly / chk_pps_semi_pro_yearly require billing_interval =
 -- 'YEARLY' for the PRO and SEMI_PRO tiers, so YEARLY is hardcoded. Only ATHLETE
@@ -166,7 +183,7 @@ INSERT INTO payment.player_subscriptions
     (player_id, tier, billing_interval, status, current_period_end)
 SELECT pp.id, :'player_tier', 'YEARLY', 'ACTIVE', now() + interval '1 year'
 FROM main.player_profiles pp
-JOIN main."user" u ON u.id = pp.parent_id
+JOIN main."user" u ON u.id = pp.parent_id OR u.id = pp.user_id
 WHERE u.email = :'owner_email'
 ON CONFLICT (player_id) DO UPDATE
     SET tier               = EXCLUDED.tier,
@@ -212,6 +229,6 @@ GROUP BY u.email;
 \echo '--- Player subscriptions ---'
 SELECT pp.id AS player_id, pp.name, ps.tier, ps.billing_interval, ps.status, ps.current_period_end
 FROM main.player_profiles pp
-JOIN main."user" u                        ON u.id = pp.parent_id
+JOIN main."user" u                        ON u.id = pp.parent_id OR u.id = pp.user_id
 LEFT JOIN payment.player_subscriptions ps ON ps.player_id = pp.id
 WHERE u.email = :'owner_email';
