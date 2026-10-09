@@ -111,8 +111,8 @@ public class SubscriptionService {
     }
 
     @Transactional
-    public PlayerSubscriptionResponse getPlayerSubscription(Long parentUserId, Long playerId) {
-        assertPlayerOwnership(parentUserId, playerId);
+    public PlayerSubscriptionResponse getPlayerSubscription(Long callerUserId, Long playerId) {
+        assertPlayerOwnership(callerUserId, playerId);
         PaymentPlayerSubscription sub = findOrCreatePlayerSubscription(playerId);
         return toPlayerResponse(sub);
     }
@@ -316,9 +316,9 @@ public class SubscriptionService {
 
     // ─── Player Subscribe ────────────────────────────────────────────────────────
 
-    public PlayerSubscriptionResponse subscribePlayer(Long parentUserId, Long playerId,
+    public PlayerSubscriptionResponse subscribePlayer(Long callerUserId, Long playerId,
                                                        String tier, String billingInterval) {
-        assertPlayerOwnership(parentUserId, playerId);
+        assertPlayerOwnership(callerUserId, playerId);
         validatePlayerTierInterval(tier, billingInterval);
 
         PaymentPlayerSubscription sub = findOrCreatePlayerSubscription(playerId);
@@ -335,7 +335,7 @@ public class SubscriptionService {
         }
 
         com.softropic.skillars.platform.payment.repo.StripeCustomer stripeCustomer =
-            stripeCustomerRepository.findById(parentUserId)
+            stripeCustomerRepository.findById(callerUserId)
                 .orElseThrow(() -> new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
                     "payment.noPaymentMethod"));
         String paymentMethodId = stripeCustomer.getStripePaymentMethodId();
@@ -380,8 +380,8 @@ public class SubscriptionService {
 
     // ─── Player Change Tier ──────────────────────────────────────────────────────
 
-    public void changePlayerTier(Long parentUserId, Long playerId, String newTier) {
-        assertPlayerOwnership(parentUserId, playerId);
+    public void changePlayerTier(Long callerUserId, Long playerId, String newTier) {
+        assertPlayerOwnership(callerUserId, playerId);
 
         PaymentPlayerSubscription sub = paymentPlayerSubscriptionRepository.findByPlayerId(playerId)
             .orElseThrow(() -> new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
@@ -455,8 +455,8 @@ public class SubscriptionService {
 
     // ─── Player Cancel ────────────────────────────────────────────────────────────
 
-    public void cancelPlayerSubscription(Long parentUserId, Long playerId) {
-        assertPlayerOwnership(parentUserId, playerId);
+    public void cancelPlayerSubscription(Long callerUserId, Long playerId) {
+        assertPlayerOwnership(callerUserId, playerId);
 
         PaymentPlayerSubscription sub = paymentPlayerSubscriptionRepository.findByPlayerId(playerId)
             .orElseThrow(() -> new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
@@ -898,9 +898,9 @@ public class SubscriptionService {
         );
     }
 
-    private void assertPlayerOwnership(Long parentUserId, Long playerId) {
-        boolean owned = parentPlayerLinkRepository.existsByParentIdAndPlayerId(parentUserId, playerId)
-            || playerProfileRepository.existsByIdAndUserId(playerId, parentUserId);
+    private void assertPlayerOwnership(Long callerUserId, Long playerId) {
+        boolean owned = parentPlayerLinkRepository.existsByParentIdAndPlayerId(callerUserId, playerId)
+            || playerProfileRepository.existsByIdAndUserId(playerId, callerUserId);
         if (!owned) {
             throw new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
                 "payment.subscription.playerOwnership");

@@ -196,6 +196,26 @@ public class ReviewSubmissionService {
                 "Review was modified within the cooldown window",
                 ReviewErrorCode.UPDATE_TOO_SOON);
         }
+        // skillars-deferred-150 AC4: re-derive sinceAfter from the FRESH locked instance and
+        // re-run eligibility too, alongside the status/cooldown re-checks above. Latent today, not
+        // reachable: updateReview is the only normal-API writer of authorLastEditedAt besides
+        // submitReview's own creation-time write, and it always writes authorLastEditedAt together
+        // with lastModifiedAt from the same local now() -- so any concurrent edit that would
+        // invalidate this caller's sinceAfter also trips the cooldown guard above first. This
+        // closes the gap for a future change that decouples the two timestamp writes.
+        //
+        // Cost, not just correctness (code review 2026-10-09): this is checkEligibility's full
+        // evaluateEligibility work -- findQualifyingCompletedBookings plus one PlayerProfile
+        // lookup per distinct qualifying playerId, plus the dispute check -- running a SECOND time
+        // per call, and this second run happens WHILE HOLDING the PESSIMISTIC_WRITE row lock taken
+        // above, extending the lock-hold window by however long that query takes. Accepted
+        // deliberately: the status/cooldown re-checks already run inside this same lock window for
+        // the identical reason (closing the stale-refresh gap those guards exist for), and
+        // eligibility is latent/unreachable today exactly like them -- see the story's own Review
+        // Findings for why doing it any other way (e.g. before the lock) would reopen the gap.
+        Instant lockedSinceAfter = locked.getAuthorLastEditedAt() != null
+            ? locked.getAuthorLastEditedAt() : locked.getCreatedAt();
+        checkEligibility(locked.getCoachId(), authorId, lockedSinceAfter);
 
         locked.setRating(rating);
         locked.setBody(body);
@@ -275,6 +295,15 @@ public class ReviewSubmissionService {
             ReviewErrorCode.NO_QUALIFYING_SESSION);
     }
 
+    // skillars-deferred-150 AC3: must match BookingRepository.findQualifyingCompletedBookings'
+    // own HQL-literal `limit` exactly -- Java has no way to read that literal back, so this is a
+    // second hand, not a shared constant. Used only to log an observable signal if the cap is
+    // ever actually hit (code review 2026-10-09: the cap+ordering combination was unreachable
+    // in practice at review time, by design, but that made it silent-by-default too -- this log
+    // line is the one thing standing between "unreachable in practice" and "unreachable, but we
+    // would never find out if that stopped being true").
+    private static final int QUALIFYING_BOOKINGS_CAP = 50;
+
     private ReviewEligibilityDto evaluateEligibility(UUID coachId, Long authorId, Instant sinceAfter) {
         int minAgeDays = configService.getBoundedInt(
             ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), 7, 1, 365);
@@ -282,6 +311,11 @@ public class ReviewSubmissionService {
 
         List<BookingReviewEligibilityProjection> qualifying =
             bookingRepository.findQualifyingCompletedBookings(coachId, authorId, maturedBefore, sinceAfter);
+        if (qualifying.size() >= QUALIFYING_BOOKINGS_CAP) {
+            log.warn("findQualifyingCompletedBookings hit its {}-row cap for coachId={}, authorId={} -- "
+                    + "the owned playerId may have been truncated if it sorts above the cap",
+                QUALIFYING_BOOKINGS_CAP, coachId, authorId);
+        }
 
         boolean eligible = false;
         for (BookingReviewEligibilityProjection booking : qualifying) {

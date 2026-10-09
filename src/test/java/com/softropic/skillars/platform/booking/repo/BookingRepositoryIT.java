@@ -17,10 +17,14 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 // Boundary coverage for BookingRepository.findOverlappingBookings' half-open interval logic
 // (Story 3.11 review patch) — bookings.coach_id/parent_id/player_id carry no FK constraints, so
-// this seeds Booking rows directly with no coach/player/parent fixture data required. All seeded
-// rows use REQUESTED status, which is outside the DB-level excl_bkg_coach_slot_overlap exclusion
-// constraint's scope (see V87), so overlapping rows here don't trip that constraint — this test
-// is purely about the JPQL query's own boundary correctness.
+// this seeds Booking rows directly with no coach/player/parent fixture data required. The
+// findOverlappingBookings tests below all seed REQUESTED status, which is outside the DB-level
+// excl_bkg_coach_slot_overlap exclusion constraint's scope (see V87), so overlapping rows there
+// don't trip that constraint -- those tests are purely about the JPQL query's own boundary
+// correctness. skillars-deferred-150 AC3 added a sibling test for
+// findQualifyingCompletedBookings, which seeds COMPLETED rows instead (that query filters on
+// status = 'COMPLETED', so REQUESTED rows would never match) -- not every test in this class
+// uses REQUESTED.
 class BookingRepositoryIT extends AbstractIntegrationTest {
 
     @Autowired private BookingRepository bookingRepository;
@@ -188,6 +192,112 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
         assertThat(cve.getConstraintName()).as("PostgreSQLDialect does not template a 23P01 name").isNull();
         assertThat(cve.getSQLState()).isEqualTo("23P01");
         assertThat(cve.getSQLException().getMessage()).contains("excl_bkg_coach_slot_overlap");
+    }
+
+    // skillars-deferred-150 AC3: findQualifyingCompletedBookings now carries a defensive
+    // ORDER BY b.playerId + HQL-literal `limit 50`. ORDER BY is not optional alongside the bound —
+    // an unordered SELECT DISTINCT truncated by a bare LIMIT could silently drop the caller's one
+    // actually-owned playerId. This pins the ordering+cap combination deterministically picks the
+    // lowest 50 distinct playerIds, not an arbitrary Postgres-dependent subset, by seeding more
+    // distinct qualifying playerIds than the cap and asserting the exact boundary.
+    //
+    // Code review 2026-10-09 (Patch): also seeds four NEGATIVE-fixture rows with playerIds
+    // (-4..-1) that sort BELOW every matching row (1..55) but each violates exactly one WHERE
+    // filter (wrong coachId, wrong status, too-recent, too-old). Without these, the test cannot
+    // tell "the query filters correctly, then orders+caps" apart from a hypothetical "orders+caps
+    // first, filters after" bug -- the earlier version had no row that would surface such a bug,
+    // since every seeded row matched every filter.
+    @Test
+    void findQualifyingCompletedBookings_ordersAndCapsDeterministically() {
+        coachId = UUID.randomUUID();
+        Long authorId = 1L;
+        Instant now = Instant.now();
+        Instant sinceAfter = now.minusSeconds(365 * 86_400L);
+        Instant maturedBefore = now.plusSeconds(3600);
+
+        // 55 distinct qualifying playerIds (1..55), one booking each, all owned by the same
+        // author (parentId = authorId) against the same coach, all COMPLETED and within window.
+        for (long playerId = 1; playerId <= 55; playerId++) {
+            Booking booking = new Booking();
+            booking.setParentId(authorId);
+            booking.setPlayerId(playerId);
+            booking.setCoachId(coachId);
+            booking.setRequestedStartTime(now.minusSeconds(7200));
+            booking.setRequestedEndTime(now.minusSeconds(3600));
+            booking.setCanonicalTimezone("Europe/Berlin");
+            booking.setStatus("COMPLETED");
+            bookingRepository.save(booking);
+        }
+
+        // Negative fixtures: each would sort ahead of every matching row (lowest playerIds of
+        // all, -4..-1) if the query's WHERE filter did not actually exclude it.
+        Booking wrongCoach = new Booking();
+        wrongCoach.setParentId(authorId);
+        wrongCoach.setPlayerId(-4L);
+        wrongCoach.setCoachId(UUID.randomUUID()); // not this test's coachId
+        wrongCoach.setRequestedStartTime(now.minusSeconds(7200));
+        wrongCoach.setRequestedEndTime(now.minusSeconds(3600));
+        wrongCoach.setCanonicalTimezone("Europe/Berlin");
+        wrongCoach.setStatus("COMPLETED");
+        bookingRepository.save(wrongCoach);
+
+        Booking wrongStatus = new Booking();
+        wrongStatus.setParentId(authorId);
+        wrongStatus.setPlayerId(-3L);
+        wrongStatus.setCoachId(coachId);
+        wrongStatus.setRequestedStartTime(now.minusSeconds(7200));
+        wrongStatus.setRequestedEndTime(now.minusSeconds(3600));
+        wrongStatus.setCanonicalTimezone("Europe/Berlin");
+        wrongStatus.setStatus("REQUESTED"); // not COMPLETED
+        bookingRepository.save(wrongStatus);
+
+        Booking tooRecent = new Booking();
+        tooRecent.setParentId(authorId);
+        tooRecent.setPlayerId(-2L);
+        tooRecent.setCoachId(coachId);
+        tooRecent.setRequestedStartTime(now.plusSeconds(3600));
+        tooRecent.setRequestedEndTime(now.plusSeconds(7200));
+        tooRecent.setCanonicalTimezone("Europe/Berlin");
+        tooRecent.setStatus("COMPLETED");
+        bookingRepository.save(tooRecent);
+        // onCreate() stamps updatedAt = now() regardless of requestedStartTime; push it past
+        // maturedBefore (now+3600) directly (GenerationType.UUID assigns the id client-side at
+        // save(), so it's already available here) so this row fails the "<= maturedBefore"
+        // matured check. This project's bare-jdbcTemplate-writes-never-commit pitfall applies
+        // here as everywhere else (Hikari autocommit=false) -- wrap it.
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "UPDATE booking.bookings SET updated_at = ? WHERE id = ?",
+                java.sql.Timestamp.from(now.plusSeconds(7200)), tooRecent.getId());
+            return null;
+        });
+
+        Booking tooOld = new Booking();
+        tooOld.setParentId(authorId);
+        tooOld.setPlayerId(-1L);
+        tooOld.setCoachId(coachId);
+        tooOld.setRequestedStartTime(sinceAfter.minusSeconds(7200));
+        tooOld.setRequestedEndTime(sinceAfter.minusSeconds(3600));
+        tooOld.setCanonicalTimezone("Europe/Berlin");
+        tooOld.setStatus("COMPLETED");
+        bookingRepository.save(tooOld);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "UPDATE booking.bookings SET updated_at = ? WHERE id = ?",
+                java.sql.Timestamp.from(sinceAfter.minusSeconds(3600)), tooOld.getId());
+            return null;
+        });
+
+        List<BookingReviewEligibilityProjection> result =
+            bookingRepository.findQualifyingCompletedBookings(coachId, authorId, maturedBefore, sinceAfter);
+
+        List<Long> playerIds = result.stream().map(BookingReviewEligibilityProjection::getPlayerId).toList();
+        assertThat(playerIds).hasSize(50);
+        // ORDER BY b.playerId ascending + limit 50 must deterministically select the 50 lowest
+        // distinct MATCHING playerIds (1..50) -- none of the four negative fixtures (-4..-1),
+        // despite sorting ahead of every one of them.
+        List<Long> expected = java.util.stream.LongStream.rangeClosed(1, 50).boxed().toList();
+        assertThat(playerIds).isEqualTo(expected);
     }
 
     private Booking seedExisting() {

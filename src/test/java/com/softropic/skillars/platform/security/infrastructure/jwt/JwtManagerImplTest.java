@@ -657,6 +657,74 @@ public class JwtManagerImplTest {
         assertThat(skpJson).isEqualTo("{\"id\":\"" + originalPrincipal.getBusinessId() + "\",\"role\":\"ANONYMOUS\"}");
     }
 
+    // skillars-deferred-150 AC2 (code review 2026-10-09 Patch -- the original two tests here
+    // could not actually discriminate pre- from post-fix code, and have been replaced): this
+    // codebase's own Principal extends Spring Security's User, whose constructor
+    // unconditionally re-sorts authorities alphabetically (confirmed via javap) before
+    // TokenCreatorImpl ever serializes them into the ROLES claim -- so ANY test built via
+    // generateToken(principal, ...) hands getAuthoritiesSilently an already alphabetically
+    // ordered claim, regardless of which precedence logic later consumes it. Design B's chosen
+    // order (ADMIN > COACH > PARENT > PLAYER) was deliberately picked to equal alphabetical
+    // order ("preserve current behavior"), so a principal-based test can never tell the old
+    // findFirst()-over-library-sort mechanism apart from the new explicit one: both produce the
+    // identical answer for every possible role subset. These two tests instead hand-build a raw
+    // token via buildTokenWithCustomClaims, bypassing Principal/Spring-Security's own sort
+    // entirely, with the ROLES claim's JSON array placed in deliberately NON-alphabetical order
+    // -- forcing a real divergence: the old .findFirst() would read whatever order the stream
+    // happens to be in (here, JSON array order) and pick wrong; the new Set+ternary logic is
+    // order-independent and must still resolve to the intended role regardless of input order.
+    @Test
+    void testRefreshLoginToken_dualRole_resolvesToHigherPrecedenceParentOverPlayer() throws Exception {
+        initRequestMetadata();
+
+        Map<String, Object> claims = new HashMap<>();
+        claims.put(SUBJECT, "dualRoleUser");
+        // Deliberately non-alphabetical: PLAYER listed before PARENT. The old .findFirst() over
+        // this exact stream order would pick PLAYER; only an order-independent precedence picks
+        // PARENT correctly.
+        claims.put(ROLES, "[{\"role\":\"ROLE_PLAYER\"},{\"role\":\"ROLE_PARENT\"}]");
+        claims.put(CLIENT_ID, "testClientId");
+        claims.put(DISPLAY_NAME, "DualRoleUser");
+        claims.put(SESSION_ID, "testSessionId");
+        claims.put(BUS_ID, "bus-dualrole-1");
+        claims.put(GENDER, Gender.OTHER.toString());
+        String initialTokenString = buildTokenWithCustomClaims(
+            claims, Instant.now(ClockProvider.getClock()).plus(JWT_TTL), secret);
+
+        HttpServletResponse mockResponse = new MockHttpServletResponse();
+        jwtManager.refreshLoginToken(mockResponse, initialTokenString);
+
+        final String skpRaw = extractCookie(mockResponse, SKILLARS_PROFILE_COOKIE);
+        final String skpJson = java.net.URLDecoder.decode(skpRaw, StandardCharsets.UTF_8);
+        assertThat(skpJson).isEqualTo("{\"id\":\"bus-dualrole-1\",\"role\":\"PARENT\"}");
+    }
+
+    @Test
+    void testRefreshLoginToken_dualRole_resolvesToAdminOverCoach() throws Exception {
+        initRequestMetadata();
+
+        Map<String, Object> claims = new HashMap<>();
+        claims.put(SUBJECT, "dualRoleUser2");
+        // Deliberately non-alphabetical: COACH listed before ADMIN. The old .findFirst() over
+        // this exact stream order would pick COACH; only an order-independent precedence picks
+        // ADMIN correctly.
+        claims.put(ROLES, "[{\"role\":\"ROLE_COACH\"},{\"role\":\"ROLE_ADMIN\"}]");
+        claims.put(CLIENT_ID, "testClientId");
+        claims.put(DISPLAY_NAME, "DualRoleUser2");
+        claims.put(SESSION_ID, "testSessionId2");
+        claims.put(BUS_ID, "bus-dualrole-2");
+        claims.put(GENDER, Gender.OTHER.toString());
+        String initialTokenString = buildTokenWithCustomClaims(
+            claims, Instant.now(ClockProvider.getClock()).plus(JWT_TTL), secret);
+
+        HttpServletResponse mockResponse = new MockHttpServletResponse();
+        jwtManager.refreshLoginToken(mockResponse, initialTokenString);
+
+        final String skpRaw = extractCookie(mockResponse, SKILLARS_PROFILE_COOKIE);
+        final String skpJson = java.net.URLDecoder.decode(skpRaw, StandardCharsets.UTF_8);
+        assertThat(skpJson).isEqualTo("{\"id\":\"bus-dualrole-2\",\"role\":\"ADMIN\"}");
+    }
+
     @Test
     void testRefreshLoginToken_invalidInitialToken() {
         HttpServletResponse mockResponse = mock(HttpServletResponse.class);

@@ -3472,17 +3472,6 @@ classified defer — pre-existing, out of scope, or latent (two further items �
 `git.dirty=true` provenance gap and the full-repo-history-in-build-context exposure — were closed by
 skillars-deferred-149 AC7 and removed from this list). Each was traced to real source, not assumed.
 
-- **`findFirst()` picks an arbitrary role when a user holds two authorities that both map to a `SkillarsRole`.**
-  `JwtManagerImpl.setSkillarsProfileCookie` (`:105`) takes the first mapped authority. Order traces to
-  `User.authorities` = `new HashSet<>()` (`User.java:199`) with `Authority.hashCode()` = `name.hashCode()`,
-  so it is hash-derived, not business-meaningful. The module's own sibling for this exact operation,
-  `MessagingResource.resolveRole` (`:231-246`), hard-codes `COACH > PARENT > PLAYER` precedence and names
-  the dual-role case ("a caller who is both a parent and a self-registered player") in a comment.
-  **Not currently triggerable** — all four authority-assignment sites use `setAuthorities(Set.of(one))`
-  and `V139` seeds no multi-authority user.
-  **When picked up:** adopt `MessagingResource.resolveRole`'s precedence order here (or extract it), at
-  the same time any path that grants a second role-bearing authority is introduced. Harmless until then.
-
 - **`URLEncoder.encode` is form-encoding, not URI-component encoding, in all three `skp` writers.**
   `URLEncoder` emits `+` for space; the frontend's `hydrateFromCookie` decodes with `decodeURIComponent`,
   which leaves `+` literal — the two are not inverse functions. Latent only: today's payload is a numeric
@@ -3759,35 +3748,6 @@ tree at the time of writing.
   or revert to config-agnostic phrasing. Becomes a live correctness issue the moment an operator
   retunes `reviews.updateCooldownDays` — all three bundles would then state a false rule.
 
-- **`findQualifyingCompletedBookings` has no `LIMIT` or ordering.**
-  `BookingRepository.java:127-142` — the query returns every matching `COMPLETED` booking for the
-  author/coach pair, by design (the maturity floor deliberately has no upper bound), and
-  `ReviewSubmissionService.checkEligibility` streams it. Deferred because the real cost is small:
-  repeat `playerProfileRepository.findById` calls for the same player hit Hibernate's
-  persistence-context identity map, so query count is bounded by *distinct* players rather than
-  bookings, and `configService.find` is cache-backed. Already sized and accepted in the story's own
-  Dev Notes (F10). The `break` short-circuits only the eligible case — both rejection paths scan the
-  full set.
-  **When picked up:** add a `LIMIT`, or split into an exists-shaped query for the self case plus a
-  `DISTINCT` projection for the parent case. `AgePolicyService.findMessagingPoliciesByPlayerIds`
-  (added by skillars-deferred-90 AC13) is the batched-lookup precedent if one is ever wanted.
-
-## Deferred from: code review of skillars-deferred-145, round 2 (2026-10-06)
-
-- **`sinceAfter` is computed from the stale pre-lock read and never re-derived after `refresh`.**
-  `ReviewSubmissionService.java:140-142` computes `sinceAfter` from the unlocked `findByReviewIdAndAuthorId`
-  load; the post-refresh block (`:164-186`) re-checks the cooldown and the moderation status but never
-  re-runs `checkEligibility`, so a winning concurrent edit's new `authorLastEditedAt` is invisible to
-  this caller. Deferred because it is latent, not reachable today: `updateReview` is the column's sole
-  writer and always writes it together with `lastModifiedAt` from the same `now` (`:191-193`), so any
-  concurrent edit that would invalidate caller B's eligibility read also trips B's refreshed cooldown
-  check (pinned by `ReviewSubmissionServiceConcurrencyIT:284`).
-  **When picked up:** re-derive `sinceAfter` from the refreshed `locked` instance and re-run
-  `checkEligibility` after `entityManager.refresh`, or document the coupling at both sites. The masking
-  is implicit and undefended — decoupling the two timestamp writes, or giving the cooldown a per-role
-  or per-review override, would make the "new qualifying session since last edit" bound bypassable by
-  any near-simultaneous pair of PATCHes.
-
 ## Deferred from: code review of skillars-deferred-146 (2026-10-07)
 
 _Line citations below are anchored to commit `df8e4501`+ (post-patch). They were re-anchored once already: the review wrote them against the pre-patch tree and the patch round's own javadoc expansion moved `isQuiesced` by ~70 lines. Grep the symbol if they look wrong._
@@ -3798,14 +3758,11 @@ _Line citations below are anchored to commit `df8e4501`+ (post-patch). They were
 
 _Line citations below were re-read from the working tree during triage, pre-commit. Grep the symbol if they look wrong._
 
-- **No test pins that a self-registered PLAYER is rejected by the three mutating subscription methods.** `assertPlayerOwnership` (`SubscriptionService.java:901-908`) is shared by all four call sites (`:115`, `:321`, `:384`, `:459`). After AC1's widening the service layer can no longer distinguish "is a parent of this player" from "is this player", so the only thing stopping a self-registered PLAYER from cancelling or re-tiering is the `@PreAuthorize(HAS_PARENT_ROLE)` annotation one layer up (`SubscriptionResource.java:100`, `:110`, `:118`). Verified at review time that no mutating operation is newly exposed — but the invariant is now unasserted, and the parameter is still named `parentUserId` while also meaning "the player themselves."
-  **When picked up:** add a test proving a self-registered player is rejected by `subscribePlayer`/`changePlayerTier`/`cancelPlayerSubscription`, and consider renaming the parameter to `callerUserId`. The day someone grants self-registered adult players parent-equivalent billing authority (a plausible next story, since they are expected to manage their own subscription), every mutating method silently opens with no code change and no failing test.
-
 - **Required status checks on `master` live only in live GitHub ruleset config, with no versioned repo artifact.** AC6 was applied out-of-band via `gh api` to ruleset `20583638` and confirmed live at review time (all four rules present, contexts `build` + `docker-image`, `updated_at 2026-10-08T12:05:43+02:00`). Because it is repository configuration rather than a committed file, it is invisible to code review, unversioned, and lost on a repo migration or an accidental ruleset edit.
   **When picked up:** either commit the ruleset as a checked-in definition applied by a workflow, or add a scheduled assertion that fails loudly if the required-checks rule disappears.
 
-- **Nothing asserts the built image's `git.properties` contents in CI.** AC7's mechanism rests on `-Dmaven.gitcommitid.skip=true` (`Dockerfile:24`) matching the plugin's real skip property — verified at review time against `git-commit-id-maven-plugin-10.0.0`'s own `META-INF/maven/plugin.xml`, which declares `<skipViaCommandLine>${maven.gitcommitid.skip}</skipViaCommandLine>`. The quieter risk is a future plugin upgrade or a bound execution with its own `<skip>` config silently overwriting `target/classes/git.properties` during `process-resources` while the build still succeeds — restoring the original `git.dirty=true` symptom with the story recorded as fixed.
-  **When picked up:** add a CI step that extracts `BOOT-INF/classes/git.properties` from the built image and asserts `git.dirty=false` plus a non-empty, non-`local` SHA.
+## Deferred from: code review of skillars-deferred-150 (2026-10-09)
 
-- **Clear-on-login has only mock-level coverage.** `AuthServiceTest.java:141-158` calls `authService.login(...)` then asserts `assertThat(user.getSecuritySessionInvalidatedAt()).isNull()` — but `user` is a plain `new User()` returned by a mocked repository with no persistence context, so this proves only that the setter was called on the object passed in. It would pass identically if Hibernate never flushed. AC3 did not require real-DB coverage for this direction (only for the `REQUIRES_NEW` revert experiment, which did get a genuine Testcontainers IT), so this is scope rather than a missed requirement — but coverage is inverted relative to risk: the *clear* is the security-relevant direction, and two of this review's unresolved findings turn on it.
-  **When picked up:** extend `AuthServiceSessionInvalidationIT` with a real-DB assertion that a successful `login()` durably nulls the column after commit. Do this alongside whatever mechanism change resolves the two revocation findings, since the fix may change what "cleared" means.
+- **Null `ROLES` claim throws `IllegalArgumentException` past `getAuthoritiesSilently`'s catch.** `JwtManagerImpl.java:155-162` narrows its catch to `JsonProcessingException`, but `claims.get(ROLES) == null` makes `ObjectMapper.readValue((String) null, ...)` throw `IllegalArgumentException` instead. It propagates out of `setSkillarsProfileCookie` into `refreshLoginToken` (`:95`) *after* `createAndSetJwt` already wrote the JWT cookie at `:94` — a half-applied 2FA completion plus a 500. Pre-existing and unchanged by skillars-deferred-150, but now reachable from that story's changed lines (`:124`), which is why it surfaced. Fix is a null guard in `getAuthoritiesSilently` or a widened catch.
+- **The published image has no git-provenance assertion.** skillars-deferred-150 AC6 added the gate to `pr-build.yml` only. The reason is real and stated at `pr-build.yml:139-141`: `ci.yml`'s `build-and-push` job pushes without `load: 'true'`, so no image is in the local daemon and `docker create` would fail outright. But `ci.yml:247` passes `commit-sha: ${{ github.sha }}` exactly as the PR job does, so the images anyone actually runs are the ones with no provenance check. Closing it means `docker pull`-ing the pushed tag (or a second buildx invocation with `--load` alongside `--push`) and reusing `.github/scripts/assert-git-provenance.sh` unchanged. Not attempted in -150; the step comment does not say why the pull-back option was rejected.
+- **Make `findQualifyingCompletedBookings` correct-by-construction instead of bounded.** The `limit 50` added by skillars-deferred-150 AC3 is safe only because 50 is unreachable in practice; it is not correct by construction. The ownership test lives in Java (`ReviewSubmissionService.java:308`), strictly after truncation, so a caller whose owned `playerId` sorts above the 50 lowest qualifying ids gets a reproducible false `NO_QUALIFYING_SESSION`. `booking.bookings` has no FK on `player_id`, so orphaned ids really can occupy cap slots. Considered and rejected during the -150 code review (2026-10-09) in favour of keeping the bound plus a truncation `log.warn`: the bound is unreachable at current data volumes and the change would have enlarged an otherwise-complete six-AC diff. Closing it properly means pushing the parent/self ownership predicate into the query (join `player_profiles`, or pass the caller's owned playerIds in) and reworking the loop at `:302-312`, which currently also absorbs orphaned playerIds. Revisit if the truncation warning ever fires.

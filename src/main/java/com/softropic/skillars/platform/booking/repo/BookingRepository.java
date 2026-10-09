@@ -124,6 +124,23 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         @Param("playerId") Long playerId,
         @Param("windowStart") java.time.Instant windowStart);
 
+    // skillars-deferred-150 AC3: ORDER BY is required, not optional, alongside the bound -- but
+    // be precise about WHY (code review 2026-10-09 corrected an earlier draft of this comment
+    // that overclaimed safety here). ORDER BY b.playerId gives the caller's actually-owned
+    // playerId no special preference -- the ownership check (ReviewSubmissionService's Java loop)
+    // runs strictly AFTER this query's own truncation, so ordering cannot protect any specific
+    // row. What it buys is determinism: WITHOUT it, an unordered SELECT DISTINCT truncated by a
+    // bare `limit` returns a Postgres-internal, plan-dependent, call-to-call-unstable subset --
+    // the exact same input could pass on one call and false-deny on the next. WITH it, the same
+    // input always truncates to the same 50 rows, so the (already decided, see this story's
+    // Review Findings) accepted residual risk -- a parent/author with more than 50 distinct
+    // qualifying playerIds, where the one actually-owned row sorts above the cap -- is at least
+    // reproducible rather than flaky. The bound (50) is a generous insurance cap, safely above
+    // any realistic distinct-player-per-author-per-coach count; a literal HQL `limit` is used
+    // instead of Pageable to keep this method's 4-arg signature unchanged (Pageable would break
+    // ReviewSubmissionServiceTest's existing mock stub at compile time). See
+    // ReviewSubmissionService.evaluateEligibility's own QUALIFYING_BOOKINGS_CAP log line for the
+    // observability this residual risk did not have before this review.
     @Query("""
         SELECT DISTINCT b.playerId AS playerId
         FROM Booking b
@@ -132,6 +149,8 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
           AND b.status = 'COMPLETED'
           AND b.updatedAt <= :maturedBefore
           AND b.updatedAt > :sinceAfter
+        ORDER BY b.playerId
+        limit 50
         """)
     List<BookingReviewEligibilityProjection> findQualifyingCompletedBookings(
         @Param("coachId") UUID coachId,

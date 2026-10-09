@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * skillars-deferred-131 AC1 Fix 1. {@code review = coachReviewRepository.save(review)} inside
@@ -361,6 +362,115 @@ class ReviewSubmissionServiceConcurrencyIT extends AbstractIntegrationTest {
             String finalBody = jdbcTemplate.queryForObject(
                 "SELECT body FROM reviews.coach_reviews WHERE review_id = ?", String.class, reviewId);
             assertThat(finalBody).as("A's edit must survive, not be overwritten by B").isEqualTo("A's edit");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * skillars-deferred-150 AC4: {@code updateReview} must re-derive {@code sinceAfter} from the
+     * REFRESHED locked instance and re-run eligibility, not only the stale unlocked pre-check's
+     * result. This is latent in the normal path — {@code updateReview} is the only normal-API
+     * writer of {@code authorLastEditedAt} and it always writes it together with
+     * {@code lastModifiedAt} from the same local {@code now()}, so a concurrent edit that would
+     * invalidate {@code sinceAfter} always trips the already-re-checked cooldown guard first.
+     *
+     * <p>A fire-and-forget racing write cannot exercise this: it must land strictly between B's
+     * unlocked pre-read and B's lock acquisition (per this story's own test-recipe note). This
+     * mirrors {@code ReviewSubmissionIT#updateReview_epochBumpAppliesToFreshLockedState_notStaleInstance}'s
+     * timing-choreography exactly — an external holder takes a raw {@code SELECT ... FOR UPDATE},
+     * mutates ONLY {@code author_last_edited_at} (decoupling it from {@code lastModifiedAt}, a
+     * shape {@code updateReview} itself never produces), holds via a latch, then commits. The
+     * setUp() booking fixture (completed, matured, 10 days old) qualifies against the OLD
+     * {@code authorLastEditedAt} (40 days ago) but not against the NEW one (1 hour ago, written by
+     * the holder) — so B's pre-refresh checks all pass (unlocked pre-check eligibility, status,
+     * cooldown), and only the fix's post-refresh eligibility re-check can catch it.
+     */
+    @Test
+    void concurrentUpdateReview_eligibilityReCheckFiresWhenAuthorLastEditedAtIsDecoupledMidRace() throws Exception {
+        UUID reviewId = UUID.randomUUID();
+        Instant oldEditedAt = Instant.now().minusSeconds(86400L * 40); // outside the 30-day cooldown
+        Instant newEditedAt = Instant.now().minusSeconds(3600L); // after the qualifying booking (-10d)
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO reviews.coach_reviews " +
+                "(review_id, coach_id, author_id, author_role, rating, body, moderation_status, " +
+                " last_modified_at, author_last_edited_at, created_at, moderation_epoch) " +
+                "VALUES (?, ?, ?, 'PARENT', 3, 'original body', 'APPROVED', ?, ?, ?, 0)",
+                reviewId, coachProfileId, AUTHOR_ID,
+                Timestamp.from(oldEditedAt), Timestamp.from(oldEditedAt), Timestamp.from(oldEditedAt));
+            return null;
+        });
+
+        CountDownLatch decouplingWriteHeld = new CountDownLatch(1);
+        AtomicReference<Throwable> holderFailure = new AtomicReference<>();
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = executor.submit(() -> {
+                try {
+                    transactionTemplate.execute(status -> {
+                        jdbcTemplate.query(
+                            "SELECT review_id FROM reviews.coach_reviews WHERE review_id = ? FOR UPDATE",
+                            rs -> { }, reviewId);
+                        jdbcTemplate.update(
+                            "UPDATE reviews.coach_reviews SET author_last_edited_at = ? WHERE review_id = ?",
+                            Timestamp.from(newEditedAt), reviewId);
+                        decouplingWriteHeld.countDown();
+                        try {
+                            Thread.sleep(1200);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return null; // commit -> releases the row lock, author_last_edited_at now NEW
+                    });
+                } catch (Throwable t) {
+                    holderFailure.set(t);
+                }
+            });
+
+            assertThat(decouplingWriteHeld.await(5, TimeUnit.SECONDS))
+                .as("holder must take the row lock and write the decoupled author_last_edited_at first")
+                .isTrue();
+
+            // B's unlocked pre-read sees the OLD (still-committed) author_last_edited_at -- the holder's
+            // write is uncommitted -- so the pre-check eligibility/cooldown checks all pass. B then
+            // blocks on findByIdForUpdateNoWait until the holder commits and releases.
+            //
+            // Code review 2026-10-09 (Patch): wall-clock timing disambiguates WHICH check actually
+            // rejected B. If the interleaving above ever slipped (holder committed before B's own
+            // unlocked pre-read), B's PRE-check -- which exists identically pre- and post-fix --
+            // would also see the NEW authorLastEditedAt and reject instantly, making this test pass
+            // for the wrong reason (proving nothing about the post-refresh re-check this AC adds).
+            // A rejection that took most of the holder's 1200ms hold proves B genuinely blocked on
+            // the row lock and only failed AFTER entityManager.refresh -- i.e., the fix's own code
+            // path, not the pre-existing pre-check.
+            long startNanos = System.nanoTime();
+            Throwable bFailure = catchThrowable(
+                () -> reviewSubmissionService.updateReview(reviewId, AUTHOR_ID, 5, "B's edit"));
+            long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
+            holder.get(15, TimeUnit.SECONDS);
+
+            if (holderFailure.get() != null) {
+                throw new AssertionError("holder thread failed", holderFailure.get());
+            }
+            assertThat(elapsedMs)
+                .as("B must have blocked on the row lock for most of the holder's 1200ms hold -- a "
+                    + "near-instant rejection would mean the stale PRE-check caught it, not the "
+                    + "post-refresh re-check this test exists to pin")
+                .isGreaterThan(800L);
+            assertThat(bFailure)
+                .as("B's pre-refresh checks all passed against the OLD authorLastEditedAt; once "
+                    + "refreshed to the NEW one (no longer satisfied by the -10d qualifying booking), "
+                    + "the post-refresh eligibility re-check this AC adds must reject the edit")
+                .isInstanceOf(OperationNotAllowedException.class);
+            assertThat(((OperationNotAllowedException) bFailure).getErrorCode())
+                .isEqualTo(ReviewErrorCode.NO_QUALIFYING_SESSION);
+
+            String finalBody = jdbcTemplate.queryForObject(
+                "SELECT body FROM reviews.coach_reviews WHERE review_id = ?", String.class, reviewId);
+            assertThat(finalBody).as("the rejected edit must not have been applied")
+                .isEqualTo("original body");
         } finally {
             executor.shutdownNow();
         }

@@ -223,4 +223,40 @@ class SubscriptionResourceIT {
                 .param("playerId", String.valueOf(PLAYER_ID)))
             .andExpect(status().isNoContent());
     }
+
+    // skillars-deferred-150 AC5: skillars-deferred-149 AC1 widened SubscriptionService's
+    // assertPlayerOwnership to also accept a self-registered player acting on their own behalf, so
+    // the service layer can no longer distinguish "is a parent of this player" from "is this
+    // player" -- the ONLY thing stopping a self-registered PLAYER from subscribing/re-tiering/
+    // cancelling their own subscription is the controller-level @PreAuthorize(HAS_PARENT_ROLE),
+    // untested until now. @PreAuthorize rejects the ROLE_PLAYER caller before the (mocked) service
+    // is ever entered, so no stubbing beyond @WithMockUser is needed.
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void subscribePlayer_playerCaller_returns403() throws Exception {
+        mockMvc.perform(post("/api/payment/subscriptions/player/subscribe")
+                .contentType("application/json")
+                .content(objectMapper.writeValueAsString(
+                    java.util.Map.of("playerId", PLAYER_ID, "tier", "SEMI_PRO", "billingInterval", "YEARLY"))))
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void changePlayerTier_playerCaller_returns403() throws Exception {
+        mockMvc.perform(post("/api/payment/subscriptions/player/change-tier")
+                .contentType("application/json")
+                .content(objectMapper.writeValueAsString(
+                    java.util.Map.of("playerId", PLAYER_ID, "newTier", "PRO"))))
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void cancelPlayerSubscription_playerCaller_returns403() throws Exception {
+        mockMvc.perform(delete("/api/payment/subscriptions/player")
+                .param("playerId", String.valueOf(PLAYER_ID)))
+            .andExpect(status().isForbidden());
+    }
 }
