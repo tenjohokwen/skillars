@@ -1006,6 +1006,8 @@ export default {
       repeatNextWeek: 'Repeat for next week',
       repeatProposed: 'Repeat session proposed — parent will be notified',
       repeatFailed: 'Could not propose repeat session. Please try again.',
+      cancelSession: 'Cancel Session',
+      reportNoShow: 'Report No-Show',
     },
     revenue: {
       projectedTitle: 'Projected Revenue',
@@ -1382,6 +1384,14 @@ export default {
     coachCancelSuccess: 'Session cancelled. Parent has been notified.',
     noShowPlayerSuccess: 'No-show recorded for player',
     noShowCoachSuccess: 'No-show recorded for coach',
+    noShowPlayerConfirmTitle: 'Report No-Show',
+    noShowPlayerConfirmBody:
+      'Confirm that the player did not attend this session. This cannot be undone.',
+    coachCancelFailed: 'Unable to cancel this session. Please try again.',
+    noShowPlayerFailed: 'Unable to record the no-show. Please try again.',
+    alreadyCompleted:
+      'This session is already completed and cannot be changed. Raise a dispute instead.',
+    invalidTransition: 'This session is no longer in a state that allows this action.',
   },
   reliability: {
     pageTitle: 'Reliability Dashboard',

@@ -1178,6 +1178,14 @@ export default {
     coachCancelSuccess: 'Séance annulée. Le parent a été averti.',
     noShowPlayerSuccess: 'Absence du joueur enregistrée',
     noShowCoachSuccess: 'Absence du coach enregistrée',
+    noShowPlayerConfirmTitle: 'Signaler une absence',
+    noShowPlayerConfirmBody:
+      "Confirmez que le joueur ne s'est pas présenté à cette séance. Cette action est irréversible.",
+    coachCancelFailed: "Impossible d'annuler cette séance. Veuillez réessayer.",
+    noShowPlayerFailed: "Impossible d'enregistrer l'absence. Veuillez réessayer.",
+    alreadyCompleted:
+      'Cette séance est déjà terminée et ne peut plus être modifiée. Veuillez plutôt soumettre un litige.',
+    invalidTransition: "Cette séance n'est plus dans un état permettant cette action.",
   },
   reliability: {
     pageTitle: 'Tableau de bord de fiabilité',
@@ -1262,6 +1270,8 @@ export default {
       repeatNextWeek: 'Répéter la semaine prochaine',
       repeatProposed: 'Séance de répétition proposée — le parent sera averti',
       repeatFailed: 'Impossible de proposer la séance de répétition. Veuillez réessayer.',
+      cancelSession: 'Annuler la séance',
+      reportNoShow: 'Signaler une absence',
     },
     revenue: {
       projectedTitle: 'Revenu prévisionnel',
