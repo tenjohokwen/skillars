@@ -253,3 +253,25 @@ jobs:
             # payload, so on the manual :latest recovery path this label resolves to an empty string.
             # Cosmetic only — the ordering guard reads `revision` (fed from github.sha), never this.
             org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+
+      # skillars-deferred-151 AC7: pr-build.yml's docker-image job already asserts git-provenance
+      # on its own (never-pushed) build via `load: 'true'`. This job pushes without `load: 'true'`
+      # (`push: 'true'` only), so the published image — the one anyone actually runs — had no
+      # equivalent assertion. `docker login` already ran above, so the pull needs no new
+      # credentials. The sha-<short> tag is always in the tag list above (only :latest is
+      # conditional), so it is always pullable here.
+      #
+      # Accepted residual, disclosed not silent: this is a post-push DETECTOR, not a pre-push
+      # GATE. "Build and push Docker image" above is the job's last mutating step and has already
+      # published the tag by the time this step runs; nothing declares `needs: build-and-push`
+      # anywhere that would block on this step, and deploy.yml is manually triggered and gated only
+      # on tag existence. A failing assertion here produces a red CI job while the already-pushed,
+      # unverified image remains pullable and deployable. Closing that gap properly would mean
+      # restructuring to `push: 'false'` + `load: 'true'` + assert + a separate push step (or an
+      # equivalent pre-push gate) — a larger change than this AC's scope.
+      - name: Pull published image and assert git-provenance (AC7)
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${{ github.repository }}:sha-${{ steps.sha.outputs.short }}"
+          docker pull "${IMAGE}"
+          .github/scripts/assert-git-provenance.sh "${IMAGE}" "${{ github.sha }}"

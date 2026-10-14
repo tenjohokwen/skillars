@@ -574,6 +574,9 @@ export default {
       duplicateSlotStartTime:
         'Zwei oder mehr Anfragen in dieser Sammelanfrage haben dieselbe Startzeit.',
       overlappingSlots: 'Zwei oder mehr Anfragen in dieser Sammelanfrage überschneiden sich.',
+      sessionNotYetStarted:
+        'Diese Einheit kann nicht vor ihrem geplanten Beginn gestartet oder abgeschlossen werden.',
+      noShowTooEarly: 'Ein Nichterscheinen kann nicht vor Beginn der Einheit gemeldet werden.',
     },
   },
   video: {
@@ -738,6 +741,15 @@ export default {
     authorMismatch: 'Diese Bewertung gehört nicht Ihnen.',
     authorRoleNotAllowed: 'Trainer können keine Bewertungen abgeben.',
     validationError: 'Bitte überprüfen Sie Ihre Bewertung und versuchen Sie es erneut.',
+    myReviewsTitle: 'Meine Bewertungen',
+    incompleteProfile:
+      'Schließen Sie die Einrichtung Ihres Trainerprofils ab, um Ihre Bewertungen zu sehen.',
+    completeProfile: 'Profil vervollständigen',
+    respondLabel: 'Antwort verfassen (optional)',
+    respondSubmit: 'Antwort absenden',
+    ownReviewPendingModeration:
+      'Diese Bewertung wird geprüft und ist noch nicht öffentlich sichtbar.',
+    ownReviewBlocked: 'Diese Bewertung wurde durch die Moderation entfernt.',
   },
   session: {
     drillLibrary: {
@@ -1158,6 +1170,40 @@ export default {
         'Ihre Karte wurde gespeichert, aber die Ansicht konnte nicht aktualisiert werden. Bitte laden Sie die Seite neu.',
       unavailable: 'Kartenzahlungen sind derzeit nicht verfügbar',
     },
+    sessionPackTiersTitle: 'Sitzungspaket-Angebot',
+    myTiers: {
+      pageTitle: 'Mein Sitzungspaket-Angebot',
+      currentOffer: 'Ihr aktuelles Angebot',
+      noActiveOffer: 'Sie haben derzeit kein aktives Sitzungspaket-Angebot',
+      history: 'Ersetzte Angebote',
+      createNew: 'Neues Angebot erstellen',
+      replaceOffer: 'Ihr aktuelles Angebot ersetzen',
+      replaceConfirmTitle: 'Aktuelles Angebot ersetzen?',
+      replaceConfirmBody:
+        'Das Erstellen eines neuen Angebots deaktiviert sofort Ihr aktuelles Angebot. Eltern, die bereits unter dem alten Angebot gekauft haben, behalten ihre Einheiten; neue Käufe sind darunter nicht mehr möglich.',
+      labelField: 'Bezeichnung',
+      sessionCountField: 'Anzahl der Einheiten',
+      totalPriceField: 'Gesamtpreis (€)',
+      sessionCountWholeError: 'Die Anzahl der Einheiten muss eine ganze Zahl sein.',
+      priceFloorError:
+        'Der Preis pro Einheit ist zu niedrig — erhöhen Sie den Gesamtpreis oder verringern Sie die Anzahl der Einheiten.',
+      createFailed: 'Ihr Angebot konnte nicht erstellt werden. Bitte versuchen Sie es erneut.',
+      fetchError:
+        'Ihr Sitzungspaket-Angebot konnte nicht geladen werden. Bitte versuchen Sie es erneut.',
+      withdrawOffer: 'Angebot zurückziehen',
+      withdrawConfirmTitle: 'Ihr aktuelles Angebot zurückziehen?',
+      withdrawConfirmBody:
+        'Dadurch werden keine neuen Käufe unter Ihrem aktuellen Angebot mehr möglich. Eltern, die bereits gekauft haben, behalten ihre Einheiten.',
+      withdrawFailed:
+        'Ihr Angebot konnte nicht zurückgezogen werden. Bitte versuchen Sie es erneut.',
+      extendTitle: 'Ein Sitzungspaket verlängern',
+      extendHelp:
+        'Geben Sie die Kauf-ID des zu verlängernden Sitzungspakets ein. Dies ist nur einmal pro Paket möglich, und nur innerhalb von 14 Tagen vor Ablauf.',
+      extendPurchaseId: 'Kauf-ID',
+      extendCta: 'Verlängern',
+      extendFailed:
+        'Dieses Paket konnte nicht verlängert werden — prüfen Sie, ob es sich im gültigen Zeitfenster befindet und noch nicht verlängert wurde.',
+    },
   },
   admin: {
     health: {
@@ -1400,6 +1446,12 @@ export default {
     photoCurrentlySet: 'Foto derzeit festgelegt',
     removePhoto: 'Foto entfernen',
     confirmDeletePhoto: 'Ihr Profilfoto entfernen? Dies kann nicht rückgängig gemacht werden.',
+    sectionCoachBranding: 'Berichts-Branding',
+    editCoachBranding: 'Berichts-Branding bearbeiten',
+    brandingLogoLabel: 'Logo',
+    brandColourLabel: 'Markenfarbe',
+    brandColourInvalid: 'Geben Sie eine gültige Hex-Farbe ein, z. B. #3B82F6.',
+    brandColourPlaceholder: '#3B82F6',
     noChildren: 'Noch keine Kinder hinzugefügt.',
     updateCoachIdentity: 'Identität & Standort bearbeiten',
     updateCoachSpecialties: 'Spezialisierungen & Altersgruppen bearbeiten',
@@ -1410,6 +1462,7 @@ export default {
     coachSuspendedNote:
       'Ihr Trainerprofil ist gesperrt. Die Bearbeitung ist deaktiviert, bis es wieder aktiviert wird.',
     coachProfileLoadError: 'Ihr Trainerprofil konnte nicht geladen werden.',
+    coachBrandingLoadError: 'Ihr Bericht-Branding konnte nicht geladen werden.',
     noPlayerProfile: 'Sie haben Ihr Spielerprofil noch nicht vervollständigt.',
     completePlayerProfile: 'Spielerprofil vervollständigen',
     availabilityTimezoneReadonlyHint:

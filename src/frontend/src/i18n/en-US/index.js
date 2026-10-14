@@ -398,6 +398,14 @@ export default {
     authorMismatch: "This review doesn't belong to you.",
     authorRoleNotAllowed: "Coaches can't submit reviews.",
     validationError: 'Please check your review and try again.',
+    myReviewsTitle: 'My Reviews',
+    incompleteProfile: 'Finish setting up your coach profile to see your reviews.',
+    completeProfile: 'Complete your profile',
+    respondLabel: 'Write a response (optional)',
+    respondSubmit: 'Submit response',
+    ownReviewPendingModeration:
+      'This review is awaiting moderation and is not yet publicly visible.',
+    ownReviewBlocked: 'This review was removed by moderation.',
   },
   session: {
     expiring: 'Session Expiring',
@@ -734,6 +742,13 @@ export default {
     photoCurrentlySet: 'Photo currently set',
     removePhoto: 'Remove photo',
     confirmDeletePhoto: 'Remove your profile photo? This cannot be undone.',
+    // skillars-deferred-151 AC3: coach report branding — ACADEMY-tier only.
+    sectionCoachBranding: 'Report Branding',
+    editCoachBranding: 'Edit Report Branding',
+    brandingLogoLabel: 'Logo',
+    brandColourLabel: 'Brand Colour',
+    brandColourInvalid: 'Enter a valid hex colour, e.g. #3B82F6.',
+    brandColourPlaceholder: '#3B82F6',
     noChildren: 'No children added yet.',
     updateCoachIdentity: 'Edit Identity & Location',
     updateCoachSpecialties: 'Edit Specialties & Age Groups',
@@ -745,6 +760,7 @@ export default {
     coachSuspendedNote:
       'Your coach profile is suspended. Editing is disabled until it is reinstated.',
     coachProfileLoadError: 'Your coach profile could not be loaded.',
+    coachBrandingLoadError: 'Your report branding could not be loaded.',
     noPlayerProfile: "You haven't completed your player profile yet.",
     completePlayerProfile: 'Complete your player profile',
     // skillars-deferred-139 review D1: availability's timezone now follows the coach's own profile
@@ -1166,6 +1182,14 @@ export default {
         'You have reached the maximum number of sessions allowed in one batch.',
       duplicateSlotStartTime: 'Two or more requests in this batch have the same start time.',
       overlappingSlots: 'Two or more requests in this batch overlap.',
+      sessionNotYetStarted:
+        'This session cannot be started or completed before its scheduled start time.',
+      // skillars-deferred-151 AC6: recordNoShowCoach already returns this error key backend-side
+      // (since skillars-deferred-63) but it never had frontend copy — recordNoShowCoach itself has
+      // zero UI callers today (skillars-deferred-63's own documented decision), so this closes a
+      // long-standing gap for whenever a parent-facing no-show-report surface is eventually built,
+      // not a key this story's own UI wires up.
+      noShowTooEarly: 'A no-show cannot be reported before the session has started.',
     },
     wrapUp: {
       step1Title: 'Attendance',
@@ -1322,6 +1346,38 @@ export default {
       savedRefreshFailed:
         'Your card was saved, but we could not refresh the view. Reload to see it.',
       unavailable: 'Card payments are unavailable right now',
+    },
+    sessionPackTiersTitle: 'Session Pack Offer',
+    myTiers: {
+      pageTitle: 'My Session Pack Offer',
+      currentOffer: 'Your current offer',
+      noActiveOffer: 'You have no active session pack offer',
+      history: 'Replaced offers',
+      createNew: 'Create a new offer',
+      replaceOffer: 'Replace your current offer',
+      replaceConfirmTitle: 'Replace your current offer?',
+      replaceConfirmBody:
+        'Creating a new offer immediately deactivates your current one. Parents who already purchased under the old offer keep their sessions; no new purchases will be possible under it.',
+      labelField: 'Label',
+      sessionCountField: 'Number of sessions',
+      totalPriceField: 'Total price (€)',
+      sessionCountWholeError: 'Number of sessions must be a whole number.',
+      priceFloorError:
+        'The price per session is too low — increase the total price or reduce the session count.',
+      createFailed: 'Could not create your offer. Please try again.',
+      fetchError: 'Could not load your session pack offer. Please try again.',
+      withdrawOffer: 'Withdraw offer',
+      withdrawConfirmTitle: 'Withdraw your current offer?',
+      withdrawConfirmBody:
+        'This stops new purchases under your current offer. Parents who already purchased keep their sessions.',
+      withdrawFailed: 'Could not withdraw your offer. Please try again.',
+      extendTitle: 'Extend a session pack',
+      extendHelp:
+        'Enter the purchase ID of a session pack to extend. This can only be done once per pack, and only within 14 days before it expires.',
+      extendPurchaseId: 'Purchase ID',
+      extendCta: 'Extend',
+      extendFailed:
+        'Could not extend this pack — check that it is within its eligible window and has not already been extended.',
     },
   },
   revenue: {

@@ -19,10 +19,14 @@ vi.mock('src/api/marketplace.api', () => ({
 vi.mock('src/api/playerRegistration.api', () => ({
   playerRegistrationApi: { getMyProfile: vi.fn() },
 }))
+vi.mock('src/api/development.api', () => ({
+  getCoachBranding: vi.fn(),
+}))
 
 import { profileApi } from 'src/api/profile.api'
 import { getOwnCoachProfile } from 'src/api/marketplace.api'
 import { playerRegistrationApi } from 'src/api/playerRegistration.api'
+import { getCoachBranding } from 'src/api/development.api'
 import ProfilePage from 'src/pages/ProfilePage.vue'
 import EditPlayerPositionDialog from 'src/components/profile/EditPlayerPositionDialog.vue'
 
@@ -33,11 +37,12 @@ function mountPage(role, initialState = {}) {
   profileApi.getProfile.mockResolvedValue(BASE_ACCOUNT_PROFILE)
   getOwnCoachProfile.mockResolvedValue({ displayName: 'Coach Name', specialties: [] })
   playerRegistrationApi.getMyProfile.mockResolvedValue({ position: 'DEFENDER' })
+  getCoachBranding.mockResolvedValue({ logoSignedUrl: null, logoKey: null, brandColour: null })
 
   const pinia = createTestingPinia({
     createSpy: vi.fn,
     initialState: {
-      auth: { userId: '1', role },
+      auth: { userId: '1', role, ...initialState.auth },
       player: { players: [], ...initialState.player },
     },
   })
@@ -56,6 +61,7 @@ function mountPage(role, initialState = {}) {
         EditCoachPricingDialog: true,
         EditCoachAvailabilityDialog: true,
         EditCoachPhotoDialog: true,
+        EditCoachBrandingDialog: true,
         EditPlayerPositionDialog: true,
       },
     },
@@ -227,5 +233,50 @@ describe('ProfilePage.vue — role-gated sections (deferred-139 AC2/AC4/AC5/AC6)
     // parent's shared children dialog (AC5).
     expect(childDialogs[1].props('modelValue')).toBe(true)
     expect(childDialogs[1].props('playerId')).toBe(9)
+  })
+
+  // skillars-deferred-151 AC3: coach report branding section — three-state render (loading /
+  // locked / unlocked). authStore.fetchCoachTier() is stubbed by createTestingPinia (never runs
+  // its real body), so authStore.coachTier reflects exactly what initialState sets it to — the
+  // same cold-load-null scenario Finding 3's bug describes.
+  it('AC3 — a non-ACADEMY coach (coachTier not ACADEMY) sees the locked/upsell state, not the edit control', async () => {
+    const wrapper = mountPage('COACH', { auth: { coachTier: 'INSTRUCTOR' } })
+    await flushPromises()
+
+    const brandingSection = wrapper
+      .findAll('.profile-section')
+      .find((s) => s.text().includes('profile.sectionCoachBranding'))
+    expect(brandingSection.text()).toContain('security.featureGated')
+    expect(brandingSection.text()).not.toContain('profile.brandColourLabel')
+    expect(getCoachBranding).not.toHaveBeenCalled()
+  })
+
+  it('AC3 — an ACADEMY coach sees the branding section unlocked and fetches their branding', async () => {
+    const wrapper = mountPage('COACH', { auth: { coachTier: 'ACADEMY' } })
+    // Override AFTER mounting (still synchronous, before the component's own await chain reaches
+    // this call) — mountPage's own default mock would otherwise win, same precedent as the
+    // pre-existing "Patch 1" test above.
+    getCoachBranding.mockResolvedValue({
+      logoSignedUrl: 'https://cdn/logo.png',
+      logoKey: 'coach_branding/1/logo.png',
+      brandColour: '#3B82F6',
+    })
+    await flushPromises()
+
+    const brandingSection = wrapper
+      .findAll('.profile-section')
+      .find((s) => s.text().includes('profile.sectionCoachBranding'))
+    expect(brandingSection.text()).toContain('profile.brandColourLabel')
+    expect(brandingSection.text()).toContain('#3B82F6')
+    expect(brandingSection.text()).not.toContain('security.featureGated')
+    expect(getCoachBranding).toHaveBeenCalledTimes(1)
+  })
+
+  it('AC3 — a Player/Parent never renders the coach branding section at all', async () => {
+    const wrapper = mountPage('PLAYER')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('profile.sectionCoachBranding')
+    expect(getCoachBranding).not.toHaveBeenCalled()
   })
 })

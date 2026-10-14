@@ -261,23 +261,24 @@ public class ReportGenerationService {
         // coach forever; it renders as if branding was never set instead.
         CoachSubscriptionTier tier = coachProfileService.getCoachSubscriptionTier(coachId);
         if (tier != CoachSubscriptionTier.ACADEMY) {
-            return new CoachBrandingResponse(null, null);
+            return new CoachBrandingResponse(null, null, null);
         }
         Optional<CoachBranding> b = brandingRepository.findById(coachId);
-        String logoUrl = b.flatMap(br -> Optional.ofNullable(br.getLogoKey()))
+        String logoKey = b.map(CoachBranding::getLogoKey).orElse(null);
+        String logoUrl = Optional.ofNullable(logoKey)
             .map(fileStorageService::signedDownloadUrl).orElse(null);
         String colour = b.map(CoachBranding::getBrandColour).orElse(null);
-        return new CoachBrandingResponse(logoUrl, colour);
+        return new CoachBrandingResponse(logoUrl, logoKey, colour);
     }
 
     @Transactional
-    public void saveBranding(UUID coachId, CoachBrandingRequest request) {
+    public void saveBranding(UUID coachId, Long coachUserId, CoachBrandingRequest request) {
         CoachSubscriptionTier tier = coachProfileService.getCoachSubscriptionTier(coachId);
         if (tier != CoachSubscriptionTier.ACADEMY) {
             throw new FeatureGatedException("development.branding", "ACADEMY");
         }
         if (request.logoKey() != null) {
-            fileStorageService.assertOwnership(request.logoKey(), coachId.toString());
+            fileStorageService.assertOwnership(request.logoKey(), coachUserId.toString());
         }
         CoachBranding b = brandingRepository.findById(coachId).orElseGet(CoachBranding::new);
         b.setCoachId(coachId);

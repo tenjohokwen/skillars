@@ -38,8 +38,13 @@ public class CoachBrandingResource {
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
     @Observed(name = "development.branding.put")
     public ResponseEntity<Void> saveBranding(@RequestBody @Valid CoachBrandingRequest request) {
-        UUID coachId = coachProfileService.getCoachIdByUserId(securityUtil.getCurrentCoachUserId());
-        reportGenerationService.saveBranding(coachId, request);
+        // skillars-deferred-151 AC3: the ownership check inside saveBranding must compare against
+        // the caller's own user id (the value FileStorageService actually stamps onto a blob's
+        // ownerId at upload time), not the CoachProfile UUID — two different identifier spaces that
+        // can never match, which 403'd the designed upload flow on every real save.
+        Long coachUserId = securityUtil.getCurrentCoachUserId();
+        UUID coachId = coachProfileService.getCoachIdByUserId(coachUserId);
+        reportGenerationService.saveBranding(coachId, coachUserId, request);
         return ResponseEntity.noContent().build();
     }
 }

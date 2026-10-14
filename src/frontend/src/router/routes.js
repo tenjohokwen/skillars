@@ -202,6 +202,22 @@ const routes = [
         meta: { requiresAuth: true, requiresCoach: true },
       },
       {
+        // skillars-deferred-151 AC1: coach reviews self-service — GET /api/reviews/coaches/me +
+        // POST /api/reviews/{id}/response existed with zero frontend caller before this story.
+        path: 'coach/reviews',
+        name: 'coach-reviews',
+        component: () => import('pages/coach/CoachReviewsPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
+      {
+        // skillars-deferred-151 AC2: coach session-pack offer management — current-offer + history
+        // model (not a catalog, per the backend's one-active-tier-per-coach DB constraint).
+        path: 'coach/session-pack-tiers',
+        name: 'coach-session-pack-tiers',
+        component: () => import('pages/coach/CoachSessionPackTiersPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
+      {
         // Dual-role (skillars-deferred-149 AC1): a self-registered PLAYER can now view their own
         // player subscription too — PlayerSubscriptionPage.vue gates the parent-only mutating
         // controls (cancel/subscribe/change-tier) on authStore.isParent for this role.

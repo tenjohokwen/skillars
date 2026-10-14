@@ -163,6 +163,26 @@
             </q-item-section>
           </q-item>
 
+          <q-item clickable to="/coach/reviews" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="star" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('reviews.myReviewsTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/coach/session-pack-tiers" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="sell" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{
+                t('payment.sessionPackTiersTitle')
+              }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
           <q-item clickable to="/messaging" class="nav-item">
             <q-item-section avatar>
               <q-icon name="chat" class="nav-icon" />

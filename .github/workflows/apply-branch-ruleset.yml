@@ -1,0 +1,43 @@
+name: Apply branch-protection ruleset
+
+# skillars-deferred-151 AC8: the NoDirectPush ruleset (id 20583638 on master, confirmed via
+# `gh api repos/tenjohokwen/skillars/rulesets/20583638`) existed only as live, unversioned GitHub
+# config with no traceable origin in any story file. Committing it as code (.github/rulesets/
+# no-direct-push.json) is only useful if there's a way to re-apply it; this workflow is that path.
+#
+# GITHUB_TOKEN cannot do this: `administration` is a GitHub-App/fine-grained-PAT REPOSITORY
+# permission, not one of the fixed Actions `permissions:` scopes (actions, attestations, checks,
+# contents, deployments, discussions, id-token, issues, models, packages, pages, pull-requests,
+# repository-projects, security-events, statuses) — this repo's own existing workflows confirm
+# that closed set (every `permissions:` block here uses only contents/packages). A
+# `permissions: { administration: write }` block is invalid YAML for GitHub Actions and would
+# fail this whole workflow to parse, not silently no-op. RULESETS_PAT is a dedicated fine-grained
+# PAT with the `Administration: write` repository permission, used from the start.
+on:
+  workflow_dispatch:
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Apply or update ruleset
+        env:
+          GH_TOKEN: ${{ secrets.RULESETS_PAT }}
+        run: |
+          set -euo pipefail
+          # skillars-deferred-151 review Patch: `|| existing_id=""` previously swallowed a 5xx or a
+          # narrowed-PAT lookup failure into the same empty string as "ruleset genuinely absent",
+          # making the workflow POST a second NoDirectPush ruleset and report success. Let a real
+          # lookup failure fail the workflow (set -e); jq's `// empty` already yields a clean empty
+          # string, with exit 0, for the true "not found" case. --paginate guards against the
+          # ruleset list ever growing past gh's default single-page size.
+          existing_id=$(gh api --paginate "repos/${{ github.repository }}/rulesets" \
+            --jq 'first(.[] | select(.name=="NoDirectPush") | .id) // empty')
+          if [ -n "$existing_id" ]; then
+            gh api --method PUT "repos/${{ github.repository }}/rulesets/${existing_id}" --input .github/rulesets/no-direct-push.json
+          else
+            gh api --method POST "repos/${{ github.repository }}/rulesets" --input .github/rulesets/no-direct-push.json
+          fi
