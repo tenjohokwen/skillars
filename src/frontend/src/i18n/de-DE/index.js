@@ -413,6 +413,8 @@ export default {
       repeatProposed: 'Wiederholungssitzung vorgeschlagen — der Elternteil wird benachrichtigt',
       repeatFailed:
         'Wiederholungssitzung konnte nicht vorgeschlagen werden. Bitte erneut versuchen.',
+      cancelSession: 'Sitzung stornieren',
+      reportNoShow: 'Nichterscheinen melden',
     },
     revenue: {
       projectedTitle: 'Prognostizierter Umsatz',
@@ -1216,6 +1218,15 @@ export default {
     coachCancelSuccess: 'Sitzung storniert. Der Elternteil wurde benachrichtigt.',
     noShowPlayerSuccess: 'Nichterscheinen für den Spieler erfasst',
     noShowCoachSuccess: 'Nichterscheinen für den Coach erfasst',
+    noShowPlayerConfirmTitle: 'Nichterscheinen melden',
+    noShowPlayerConfirmBody:
+      'Bestätigen Sie, dass der Spieler nicht zu dieser Sitzung erschienen ist. Dies kann nicht widerrufen werden.',
+    coachCancelFailed: 'Diese Sitzung konnte nicht storniert werden. Bitte versuchen Sie es erneut.',
+    noShowPlayerFailed: 'Das Nichterscheinen konnte nicht erfasst werden. Bitte versuchen Sie es erneut.',
+    alreadyCompleted:
+      'Diese Sitzung ist bereits abgeschlossen und kann nicht mehr geändert werden. Reichen Sie stattdessen einen Streitfall ein.',
+    invalidTransition:
+      'Diese Sitzung befindet sich nicht mehr in einem Zustand, der diese Aktion erlaubt.',
   },
   reliability: {
     pageTitle: 'Zuverlässigkeits-Dashboard',

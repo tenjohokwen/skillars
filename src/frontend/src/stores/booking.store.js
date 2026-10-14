@@ -32,6 +32,8 @@ import {
   duplicateNextWeek,
   createBatch,
   acceptAllBatch,
+  coachCancelBooking,
+  recordNoShowPlayer,
 } from 'src/api/booking.api'
 import { purchaseSessionPack, getMySessionPacks, pauseSessionPack } from 'src/api/payment.api'
 
@@ -543,6 +545,14 @@ export const useBookingStore = defineStore('booking', () => {
     await declineReschedule(bookingId, rescheduleId)
   }
 
+  async function handleCoachCancelBooking(bookingId, cancelReason) {
+    await coachCancelBooking(bookingId, cancelReason)
+  }
+
+  async function handleRecordNoShowPlayer(bookingId) {
+    await recordNoShowPlayer(bookingId)
+  }
+
   async function handleRequestRescheduleAsCoach(bookingId, data) {
     await requestRescheduleAsCoach(bookingId, data)
   }
@@ -747,6 +757,8 @@ export const useBookingStore = defineStore('booking', () => {
     handleRequestReschedule,
     handleAcceptReschedule,
     handleDeclineReschedule,
+    handleCoachCancelBooking,
+    handleRecordNoShowPlayer,
     handleRequestRescheduleAsCoach,
     handleAcceptRescheduleAsParent,
     handleDeclineRescheduleAsParent,

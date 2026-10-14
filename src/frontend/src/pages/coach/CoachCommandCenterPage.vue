@@ -129,6 +129,28 @@
                 class="q-mt-xs"
                 @click="handleRepeatNextWeek(booking)"
               />
+              <q-btn
+                v-if="booking.status === 'UPCOMING'"
+                flat
+                dense
+                size="sm"
+                color="negative"
+                :label="t('booking.schedule.reportNoShow')"
+                class="q-mt-xs"
+                :loading="noShowActionId === booking.bookingId"
+                @click="openNoShowPlayerDialog(booking)"
+              />
+              <q-btn
+                v-if="['CONFIRMED', 'UPCOMING'].includes(booking.status)"
+                flat
+                dense
+                size="sm"
+                color="negative"
+                :label="t('booking.schedule.cancelSession')"
+                class="q-mt-xs"
+                :loading="coachCancelActionId === booking.bookingId"
+                @click="openCancelCoachDialog(booking)"
+              />
               <template v-if="booking.pendingReschedule">
                 <div class="text-caption q-mt-xs" style="color: var(--accent-warning)">
                   {{ t('booking.reschedule.pendingLabel') }}
@@ -262,6 +284,29 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <CancelCoachModal v-model="cancelCoachModalOpen" @confirm="handleCoachCancelConfirm" />
+
+    <!-- Report No-Show confirm dialog -->
+    <q-dialog v-model="noShowPlayerDialogOpen">
+      <q-card style="min-width: 320px">
+        <q-card-section>
+          <div class="text-h6">{{ t('cancellation.noShowPlayerConfirmTitle') }}</div>
+        </q-card-section>
+        <q-card-section>
+          {{ t('cancellation.noShowPlayerConfirmBody') }}
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn
+            unelevated
+            color="negative"
+            :label="t('common.confirm')"
+            @click="confirmNoShowPlayer"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -276,6 +321,7 @@ import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
 import ActiveSessionScreen from 'src/components/booking/ActiveSessionScreen.vue'
 import WrapUpSequence from 'src/components/booking/WrapUpSequence.vue'
 import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
+import CancelCoachModal from 'src/components/booking/CancelCoachModal.vue'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()
@@ -304,6 +350,13 @@ const coachRescheduleProposedStart = ref('')
 // Length of the booking being rescheduled, in milliseconds. The proposed end is always derived
 // from it, never typed — mirrors ParentBookingsPage.vue's own reschedule dialog.
 const coachRescheduleDurationMs = ref(0)
+
+const cancelCoachModalOpen = ref(false)
+const cancelCoachBookingId = ref(null)
+const coachCancelActionId = ref(null)
+const noShowPlayerDialogOpen = ref(false)
+const noShowPlayerBookingId = ref(null)
+const noShowActionId = ref(null)
 
 const coachRescheduleProposedEnd = computed(() => {
   if (!coachRescheduleProposedStart.value || !coachRescheduleDurationMs.value) return ''
@@ -589,6 +642,61 @@ async function handleDeclineReschedule(booking) {
     notifyIfScheduleStale(refreshed)
   } finally {
     rescheduleActionId.value = null
+  }
+}
+
+function openCancelCoachDialog(booking) {
+  cancelCoachBookingId.value = booking.bookingId
+  cancelCoachModalOpen.value = true
+}
+
+async function handleCoachCancelConfirm(reason) {
+  coachCancelActionId.value = cancelCoachBookingId.value
+  try {
+    await bookingStore.handleCoachCancelBooking(cancelCoachBookingId.value, reason)
+    notifyIfScheduleStale(await bookingStore.loadCoachSchedule(selectedWeek.value))
+    $q.notify({ message: t('cancellation.coachCancelSuccess'), type: 'positive' })
+  } catch (err) {
+    const refreshed = await bookingStore.loadCoachSchedule(selectedWeek.value)
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'booking.alreadyCompleted') {
+      $q.notify({ type: 'negative', message: t('cancellation.alreadyCompleted') })
+    } else if (errorKey === 'booking.invalidTransition') {
+      $q.notify({ type: 'negative', message: t('cancellation.invalidTransition') })
+    } else {
+      $q.notify({ type: 'negative', message: t('cancellation.coachCancelFailed') })
+    }
+    notifyIfScheduleStale(refreshed)
+  } finally {
+    coachCancelActionId.value = null
+  }
+}
+
+function openNoShowPlayerDialog(booking) {
+  noShowPlayerBookingId.value = booking.bookingId
+  noShowPlayerDialogOpen.value = true
+}
+
+async function confirmNoShowPlayer() {
+  noShowPlayerDialogOpen.value = false
+  noShowActionId.value = noShowPlayerBookingId.value
+  try {
+    await bookingStore.handleRecordNoShowPlayer(noShowPlayerBookingId.value)
+    notifyIfScheduleStale(await bookingStore.loadCoachSchedule(selectedWeek.value))
+    $q.notify({ message: t('cancellation.noShowPlayerSuccess'), type: 'positive' })
+  } catch (err) {
+    const refreshed = await bookingStore.loadCoachSchedule(selectedWeek.value)
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'booking.alreadyCompleted') {
+      $q.notify({ type: 'negative', message: t('cancellation.alreadyCompleted') })
+    } else if (errorKey === 'booking.invalidTransition') {
+      $q.notify({ type: 'negative', message: t('cancellation.invalidTransition') })
+    } else {
+      $q.notify({ type: 'negative', message: t('cancellation.noShowPlayerFailed') })
+    }
+    notifyIfScheduleStale(refreshed)
+  } finally {
+    noShowActionId.value = null
   }
 }
 
