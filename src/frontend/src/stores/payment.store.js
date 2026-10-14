@@ -3,6 +3,9 @@ import {
   getStripeStatus,
   fetchCreditBalance,
   fetchMySessionPackTiers,
+  createSessionPackTier,
+  deactivateSessionPackTier,
+  extendSessionPack,
   fetchMyStrikes,
   acknowledgeStrike,
   fetchCoachTiers,
@@ -29,6 +32,9 @@ const LOADING_KEYS = [
   'stripeStatus',
   'creditBalance',
   'sessionPackTiers',
+  'createSessionPackTier',
+  'deactivateSessionPackTier',
+  'extendSessionPack',
   'coachStrikes',
   'coachSubscription',
   'coachTiers',
@@ -101,6 +107,54 @@ export const usePaymentStore = defineStore('payment', {
         this.error.sessionPackTiers = err
       } finally {
         this.loading.sessionPackTiers = false
+      }
+    },
+    // skillars-deferred-151 AC2: createSessionPackTier/deactivateSessionPackTier were already
+    // exported from payment.api.js but never imported here — no call site in the frontend called
+    // either until CoachSessionPackTiersPage.vue. Both re-fetch the tier list on success so the
+    // page's current-offer/history view reflects the server's own one-active-tier invariant
+    // immediately, rather than the caller re-deriving it from the mutation response alone.
+    async createSessionPackTier(payload) {
+      this.loading.createSessionPackTier = true
+      this.error.createSessionPackTier = null
+      try {
+        const tier = await createSessionPackTier(payload)
+        await this.fetchSessionPackTiers()
+        return tier
+      } catch (err) {
+        this.error.createSessionPackTier = err
+        throw err
+      } finally {
+        this.loading.createSessionPackTier = false
+      }
+    },
+    async deactivateSessionPackTier(tierId) {
+      this.loading.deactivateSessionPackTier = true
+      this.error.deactivateSessionPackTier = null
+      try {
+        await deactivateSessionPackTier(tierId)
+        await this.fetchSessionPackTiers()
+      } catch (err) {
+        this.error.deactivateSessionPackTier = err
+        throw err
+      } finally {
+        this.loading.deactivateSessionPackTier = false
+      }
+    },
+    // Manual-extend widget (AC2): backend's two real failure reasons (already-extended 409,
+    // outside-the-14-day-window) both collapse through ApiAdvice's generic ResponseStatusException
+    // handling to errorKey "generic.requestError" — not branchable. The store surfaces the raw
+    // error; the page shows one generic failure message rather than attempting to distinguish them.
+    async extendSessionPack(purchaseId) {
+      this.loading.extendSessionPack = true
+      this.error.extendSessionPack = null
+      try {
+        await extendSessionPack(purchaseId)
+      } catch (err) {
+        this.error.extendSessionPack = err
+        throw err
+      } finally {
+        this.loading.extendSessionPack = false
       }
     },
     async fetchCoachStrikes() {

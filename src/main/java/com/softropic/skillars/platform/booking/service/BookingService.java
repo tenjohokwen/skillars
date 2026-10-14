@@ -843,6 +843,18 @@ public class BookingService {
             throw new OperationNotAllowedException("Coach does not own this booking", SecurityError.MISSING_RIGHTS);
         }
         rejectIfPostCompletion(booking); // skillars-deferred-106 AC9.2
+        // skillars-deferred-151 AC6: USER DECISION — this explicitly reverses
+        // spec-coach-booking-cancel-no-show.md's prior "Never add a client-side too-early guard on
+        // no-show reporting" note. That note's own reasoning ("the backend intentionally has none
+        // for this endpoint") no longer holds: recordNoShowPlayer's own sibling, recordNoShowCoach
+        // below, already has this exact guard, and leaving the player-facing path ungated made a
+        // full-fee, no-refund, no-strike-counterweight forfeiture reportable before a session ever
+        // started. Mirrors recordNoShowCoach's own check character-for-character.
+        if (Instant.now().isBefore(booking.getRequestedStartTime())) {
+            throw new OperationNotAllowedException(
+                "Cannot report a no-show before the booking's scheduled start time",
+                Map.of("requested start time", booking.getRequestedStartTime()), BookingError.NO_SHOW_TOO_EARLY);
+        }
         String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);
 
         try {

@@ -452,14 +452,21 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
     // ---- helpers ----
 
     private void insertUpcomingBooking(UUID id) {
-        Instant futureStart = Instant.now().plusSeconds(86400);
+        // skillars-deferred-151 AC6: was Instant.now().plusSeconds(86400) (24h in the future) — the
+        // new SESSION_NOT_YET_STARTED time gate on startSession/initiateQuickComplete now rejects a
+        // /start call against a future-dated booking. No test in this class reads
+        // requestedStartTime back or depends on it being in the future (every other test here jumps
+        // straight to a later status via setBookingStatus, bypassing /start entirely) — a past start
+        // time is also the semantically correct shape for a "session completion" test suite, whose
+        // fixtures represent sessions that have already begun.
+        Instant pastStart = Instant.now().minusSeconds(3600);
         jdbcTemplate.update(
             "INSERT INTO booking.bookings " +
             "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, " +
             "status, canonical_timezone, version, created_at, updated_at) " +
             "VALUES (?, ?, ?, ?, ?, ?, 'UPCOMING', 'Europe/Berlin', 0, ?, ?)",
             id, PARENT_ID, PLAYER_ID, coachProfileId,
-            Timestamp.from(futureStart), Timestamp.from(futureStart.plusSeconds(3600)),
+            Timestamp.from(pastStart), Timestamp.from(pastStart.plusSeconds(3600)),
             Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
         );
     }

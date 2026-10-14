@@ -165,8 +165,16 @@ public class JwtManagerImpl implements LoginTokenManager {
     }
 
     private Collection<SimpleGrantedAuthority> getAuthoritiesSilently(Map<String, Object> claims) {
+        // skillars-deferred-151 AC5: a null/non-String ROLES claim made ObjectMapper.readValue throw
+        // IllegalArgumentException, not JsonProcessingException — escaping this catch. Latent
+        // hardening, not a reachable live bug today: TokenCreatorImpl.java:49 sets ROLES
+        // unconditionally on every token it issues, and the token is HMAC-verified before this runs.
+        final Object rolesClaim = claims.get(ROLES);
+        if (!(rolesClaim instanceof String roles)) {
+            log.error("ROLES claim missing or not a string; treating as no authorities");
+            return List.of();
+        }
         try {
-            final String roles = (String) claims.get(ROLES);
             return jwtConfiguration.getMapper().readValue(roles, new TypeReference<List<SimpleGrantedAuthority>>() {});
         } catch (JsonProcessingException e) {
             log.error("Could not parse authorities from claims", e);

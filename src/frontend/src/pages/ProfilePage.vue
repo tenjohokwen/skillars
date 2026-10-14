@@ -262,6 +262,48 @@
             </template>
           </div>
 
+          <!-- skillars-deferred-151 AC3: coach report branding — role-gated, ACADEMY-tier gated.
+               Three-state render: loading (coachTier not resolved yet) / locked (not ACADEMY) /
+               unlocked. authStore.coachTier is only populated by fetchCoachTier(), whose one other
+               caller is an unrelated player page — a bare read here would be null on any cold
+               /profile load, hiding the feature from the coaches entitled to it. -->
+          <div v-if="authStore.isCoach" class="glass-card profile-section">
+            <div class="text-label q-mb-lg">{{ t('profile.sectionCoachBranding') }}</div>
+
+            <div v-if="brandingTierLoading" class="profile-row">
+              <div class="text-body">{{ t('common.loading') }}</div>
+            </div>
+            <div v-else-if="coachBrandingError" class="profile-row">
+              <div class="text-meta" style="color: var(--accent-danger)">
+                {{ t('profile.coachBrandingLoadError') }}
+              </div>
+              <q-btn flat dense no-caps :label="t('common.retry')" @click="loadCoachBranding" />
+            </div>
+            <div v-else-if="authStore.coachTier !== 'ACADEMY'" class="profile-row">
+              <div class="text-body">{{ t('security.featureGated') }}</div>
+            </div>
+            <template v-else>
+              <div class="profile-row">
+                <div>
+                  <div class="text-label">{{ t('profile.brandColourLabel') }}</div>
+                  <div class="text-body q-mt-xs">
+                    {{ coachBranding?.brandColour || '—' }}
+                  </div>
+                </div>
+                <q-btn
+                  flat
+                  dense
+                  icon="edit"
+                  round
+                  class="edit-btn"
+                  @click="showCoachBrandingDialog = true"
+                >
+                  <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
+                </q-btn>
+              </div>
+            </template>
+          </div>
+
           <!-- AC4: Player Profile section — role-gated, only ever shown to a player -->
           <div v-if="authStore.isPlayer" class="glass-card profile-section">
             <div class="text-label q-mb-lg">{{ $t('profile.sectionPlayerProfile') }}</div>
@@ -380,6 +422,11 @@
       :current="coachProfile"
       @updated="loadProfile"
     />
+    <EditCoachBrandingDialog
+      v-model="showCoachBrandingDialog"
+      :current="coachBranding"
+      @updated="loadCoachBranding"
+    />
 
     <!-- AC4/AC5: shared dialog — no playerId for the player's own position (AC4), a playerId for a
          parent editing one specific child's position (AC5) -->
@@ -402,6 +449,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { profileApi } from 'src/api/profile.api'
 import { getOwnCoachProfile } from 'src/api/marketplace.api'
+import { getCoachBranding } from 'src/api/development.api'
 import { playerRegistrationApi } from 'src/api/playerRegistration.api'
 import { useAuthStore } from 'src/stores/auth.store'
 import { usePlayerStore } from 'src/stores/playerStore'
@@ -417,6 +465,7 @@ import EditCoachSpecialtiesDialog from 'src/components/profile/EditCoachSpecialt
 import EditCoachPricingDialog from 'src/components/profile/EditCoachPricingDialog.vue'
 import EditCoachAvailabilityDialog from 'src/components/profile/EditCoachAvailabilityDialog.vue'
 import EditCoachPhotoDialog from 'src/components/profile/EditCoachPhotoDialog.vue'
+import EditCoachBrandingDialog from 'src/components/profile/EditCoachBrandingDialog.vue'
 import EditPlayerPositionDialog from 'src/components/profile/EditPlayerPositionDialog.vue'
 
 const { t } = useI18n()
@@ -444,6 +493,10 @@ const showCoachSpecialtiesDialog = ref(false)
 const showCoachPricingDialog = ref(false)
 const showCoachAvailabilityDialog = ref(false)
 const showCoachPhotoDialog = ref(false)
+const showCoachBrandingDialog = ref(false)
+const coachBranding = ref(null)
+const brandingTierLoading = ref(true)
+const coachBrandingError = ref(false)
 
 const showPlayerPositionDialog = ref(false)
 const showChildPositionDialog = ref(false)
@@ -483,6 +536,30 @@ async function loadCoachProfile() {
   }
 }
 
+// skillars-deferred-151 AC3: fetchCoachTier()'s only other caller is PlayerDevelopmentDashboardPage
+// — a page a coach has no reason to visit — so coachTier is still its initial null on any direct
+// visit to /profile without this call, reading as "not ACADEMY" for a genuine ACADEMY coach.
+//
+// skillars-deferred-151 review Patch: a failed branding GET must not leave coachBranding null while
+// still unlocking the edit card — EditCoachBrandingDialog reads the existing logoKey off
+// props.current, so a null current + a colour-only save would resend logoKey: null and silently
+// wipe the stored logo. coachBrandingError gates the edit affordance instead, mirroring
+// loadCoachProfile/coachProfileError above.
+async function loadCoachBranding() {
+  brandingTierLoading.value = true
+  coachBrandingError.value = false
+  try {
+    await authStore.fetchCoachTier()
+    if (authStore.coachTier === 'ACADEMY') {
+      coachBranding.value = await getCoachBranding()
+    }
+  } catch {
+    coachBrandingError.value = true
+  } finally {
+    brandingTierLoading.value = false
+  }
+}
+
 onMounted(async () => {
   await loadProfile()
 })
@@ -502,6 +579,7 @@ async function loadProfile() {
   // one of these must never block the two role-agnostic cards above from rendering.
   if (authStore.isCoach) {
     await loadCoachProfile()
+    await loadCoachBranding()
   }
   if (authStore.isPlayer) {
     try {

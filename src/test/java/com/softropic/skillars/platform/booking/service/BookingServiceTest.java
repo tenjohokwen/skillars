@@ -1478,6 +1478,13 @@ class BookingServiceTest {
     @Test
     void recordNoShowPlayer_concurrentModification_throwsRetryableException() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        // skillars-deferred-151 AC6: makeBooking's own shared default (Instant.now().plusSeconds(7200))
+        // is now rejected by the new SESSION_NOT_YET_STARTED-equivalent too-early guard this AC adds
+        // to recordNoShowPlayer — override to a past start/end here only, not in the shared helper
+        // (which many other tests rely on defaulting to the future), so this test still reaches the
+        // optimistic-lock path its assertion actually checks.
+        booking.setRequestedStartTime(Instant.now().minusSeconds(7200));
+        booking.setRequestedEndTime(Instant.now().minusSeconds(3600));
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
@@ -1492,6 +1499,27 @@ class BookingServiceTest {
             .hasCauseInstanceOf(OptimisticLockingFailureException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
+    }
+
+    // skillars-deferred-151 AC6: USER DECISION — reverses spec-coach-booking-cancel-no-show.md's
+    // prior "Never add a client-side too-early guard on no-show reporting" note for this specific
+    // endpoint. Mirrors recordNoShowCoach_beforeScheduledStartTime_throwsNoShowTooEarly below
+    // character-for-character.
+    @Test
+    void recordNoShowPlayer_beforeScheduledStartTime_throwsNoShowTooEarly() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        booking.setRequestedStartTime(Instant.now().plusSeconds(3600));
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        assertThatThrownBy(() -> bookingService.recordNoShowPlayer(booking.getId(), COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.NO_SHOW_TOO_EARLY));
+
+        verify(bookingRepository, never()).save(any(Booking.class));
     }
 
     // ---- cancelDueToPause tests ----

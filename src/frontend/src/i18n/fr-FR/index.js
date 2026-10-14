@@ -394,6 +394,14 @@ export default {
     authorMismatch: 'Cet avis ne vous appartient pas.',
     authorRoleNotAllowed: "Les coachs ne peuvent pas soumettre d'avis.",
     validationError: 'Veuillez vérifier votre avis et réessayer.',
+    myReviewsTitle: 'Mes avis',
+    incompleteProfile: 'Terminez la configuration de votre profil de coach pour voir vos avis.',
+    completeProfile: 'Compléter votre profil',
+    respondLabel: 'Rédiger une réponse (facultatif)',
+    respondSubmit: 'Envoyer la réponse',
+    ownReviewPendingModeration:
+      "Cet avis est en cours de modération et n'est pas encore visible publiquement.",
+    ownReviewBlocked: 'Cet avis a été retiré par la modération.',
   },
   session: {
     expiring: 'Session expirant',
@@ -729,6 +737,12 @@ export default {
     photoCurrentlySet: 'Photo actuellement définie',
     removePhoto: 'Supprimer la photo',
     confirmDeletePhoto: 'Supprimer votre photo de profil ? Cette action est irréversible.',
+    sectionCoachBranding: 'Image de marque du rapport',
+    editCoachBranding: "Modifier l'image de marque du rapport",
+    brandingLogoLabel: 'Logo',
+    brandColourLabel: 'Couleur de marque',
+    brandColourInvalid: 'Saisissez une couleur hexadécimale valide, ex. #3B82F6.',
+    brandColourPlaceholder: '#3B82F6',
     noChildren: 'Aucun enfant ajouté pour le moment.',
     updateCoachIdentity: "Modifier l'identité et la localisation",
     updateCoachSpecialties: 'Modifier les spécialités et groupes d’âge',
@@ -739,6 +753,7 @@ export default {
     coachSuspendedNote:
       'Votre profil entraîneur est suspendu. La modification est désactivée jusqu’à sa réactivation.',
     coachProfileLoadError: "Votre profil entraîneur n'a pas pu être chargé.",
+    coachBrandingLoadError: "L'image de marque de vos rapports n'a pas pu être chargée.",
     noPlayerProfile: "Vous n'avez pas encore complété votre profil joueur.",
     completePlayerProfile: 'Compléter votre profil joueur',
     availabilityTimezoneReadonlyHint:
@@ -1067,6 +1082,38 @@ export default {
       savedRefreshFailed:
         "Votre carte a été enregistrée, mais l'affichage n'a pas pu être actualisé. Rechargez la page pour la voir.",
       unavailable: 'Les paiements par carte ne sont pas disponibles pour le moment',
+    },
+    sessionPackTiersTitle: 'Offre de pack de séances',
+    myTiers: {
+      pageTitle: 'Mon offre de pack de séances',
+      currentOffer: 'Votre offre actuelle',
+      noActiveOffer: "Vous n'avez aucune offre de pack de séances active",
+      history: 'Offres remplacées',
+      createNew: 'Créer une nouvelle offre',
+      replaceOffer: 'Remplacer votre offre actuelle',
+      replaceConfirmTitle: 'Remplacer votre offre actuelle ?',
+      replaceConfirmBody:
+        "Créer une nouvelle offre désactive immédiatement l'offre actuelle. Les parents ayant déjà acheté sous l'ancienne offre conservent leurs séances ; aucun nouvel achat ne sera possible sous celle-ci.",
+      labelField: 'Libellé',
+      sessionCountField: 'Nombre de séances',
+      totalPriceField: 'Prix total (€)',
+      sessionCountWholeError: 'Le nombre de séances doit être un nombre entier.',
+      priceFloorError:
+        'Le prix par séance est trop bas — augmentez le prix total ou réduisez le nombre de séances.',
+      createFailed: 'Impossible de créer votre offre. Veuillez réessayer.',
+      fetchError: 'Impossible de charger votre offre de pack de séances. Veuillez réessayer.',
+      withdrawOffer: 'Retirer l’offre',
+      withdrawConfirmTitle: 'Retirer votre offre actuelle ?',
+      withdrawConfirmBody:
+        'Cela empêche tout nouvel achat sous votre offre actuelle. Les parents ayant déjà acheté conservent leurs séances.',
+      withdrawFailed: 'Impossible de retirer votre offre. Veuillez réessayer.',
+      extendTitle: 'Prolonger un pack de séances',
+      extendHelp:
+        "Saisissez l'identifiant d'achat du pack de séances à prolonger. Cette action n'est possible qu'une fois par pack, et uniquement dans les 14 jours précédant son expiration.",
+      extendPurchaseId: "Identifiant d'achat",
+      extendCta: 'Prolonger',
+      extendFailed:
+        "Impossible de prolonger ce pack — vérifiez qu'il est dans sa fenêtre d'éligibilité et qu'il n'a pas déjà été prolongé.",
     },
   },
   subscription: {
@@ -1428,6 +1475,9 @@ export default {
         'Vous avez atteint le nombre maximal de séances autorisées dans un même lot.',
       duplicateSlotStartTime: 'Deux demandes ou plus dans ce lot ont la même heure de début.',
       overlappingSlots: 'Deux demandes ou plus dans ce lot se chevauchent.',
+      sessionNotYetStarted:
+        'Cette séance ne peut pas être démarrée ou terminée avant son heure de début prévue.',
+      noShowTooEarly: 'Une absence ne peut pas être signalée avant le début de la séance.',
     },
     wrapUp: {
       step1Title: 'Présence',

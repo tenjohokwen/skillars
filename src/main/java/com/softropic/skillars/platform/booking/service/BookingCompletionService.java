@@ -29,7 +29,9 @@ import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -52,6 +54,7 @@ public class BookingCompletionService {
         Booking booking = bookingService.getBookingOrThrow(bookingId);
         verifyCoachOwnership(booking, coach);
         verifyStatus(booking, BookingStatus.UPCOMING);
+        verifyNotBeforeStartTime(booking);
         try {
             bookingService.transition(bookingId, BookingEvent.START, new TransitionContext(ActorRole.COACH, coachUserId));
         } catch (OptimisticLockingFailureException e) {
@@ -113,6 +116,7 @@ public class BookingCompletionService {
             throw new OperationNotAllowedException(
                 "Quick Complete requires an UPCOMING booking", SecurityError.MISSING_RIGHTS);
         }
+        verifyNotBeforeStartTime(booking);
         try {
             bookingService.transition(bookingId, BookingEvent.COMPLETE_PENDING, new TransitionContext(ActorRole.COACH, coachUserId));
         } catch (OptimisticLockingFailureException e) {
@@ -229,6 +233,19 @@ public class BookingCompletionService {
         if (current != expected) {
             throw new OperationNotAllowedException(
                 "Booking is in status " + current + ", expected " + expected, SecurityError.MISSING_RIGHTS);
+        }
+    }
+
+    // skillars-deferred-151 AC6: USER DECISION — gate all three UPCOMING-gated coach actions on the
+    // booking's scheduled start time, not just recordNoShowCoach (BookingService.java), which already
+    // has this exact check. Mirrors that method's own Instant.now()/isBefore shape character-for-
+    // character rather than introducing a second, differently-worded time check.
+    private void verifyNotBeforeStartTime(Booking booking) {
+        if (Instant.now().isBefore(booking.getRequestedStartTime())) {
+            throw new OperationNotAllowedException(
+                "Cannot start or complete a session before the booking's scheduled start time",
+                Map.of("requested start time", booking.getRequestedStartTime()),
+                BookingError.SESSION_NOT_YET_STARTED);
         }
     }
 }

@@ -657,6 +657,44 @@ public class JwtManagerImplTest {
         assertThat(skpJson).isEqualTo("{\"id\":\"" + originalPrincipal.getBusinessId() + "\",\"role\":\"ANONYMOUS\"}");
     }
 
+    // skillars-deferred-151 AC5: getAuthoritiesSilently's own catch only handled
+    // JsonProcessingException. A null/non-String ROLES claim makes
+    // ObjectMapper.readValue((String) null, ...) throw IllegalArgumentException instead, escaping
+    // that catch entirely. Latent defensive hardening, not a reachable live bug today —
+    // TokenCreatorImpl.java:49 sets ROLES unconditionally on every token it issues, so a client
+    // cannot forge a ROLES-absent token through any live path; this pins the fix's observable
+    // behavior via the one call site that matters (setSkillarsProfileCookie, called from
+    // refreshLoginToken) using the file's own buildTokenWithCustomClaims precedent, since the
+    // target method is private.
+    //
+    // Mutation check: revert getAuthoritiesSilently to its pre-fix body (drop the
+    // `instanceof String roles` guard) — this test goes RED two ways: refreshLoginToken throws
+    // IllegalArgumentException instead of completing, and no 'skp' cookie is written at all (the
+    // throw happens inside setSkillarsProfileCookie, before its own writeTo call — not "resolves to
+    // ANONYMOUS", which is the POST-fix behavior this test pins instead).
+    @Test
+    void testRefreshLoginToken_nullRolesClaim_degradesToAnonymousInsteadOfThrowing() throws Exception {
+        initRequestMetadata();
+
+        Map<String, Object> claims = new HashMap<>();
+        // No ROLES claim at all — the gap this fix hardens against.
+        claims.put(SUBJECT, "no-roles-claim-user");
+        claims.put(BUS_ID, "999");
+        claims.put(GENDER, Gender.FEMALE.toString());
+        claims.put(CLIENT_ID, "test-client");
+        claims.put(DB_REFRESH_TOKEN, Instant.now(ClockProvider.getClock()).plus(DB_REFRESH_TOKEN_INTERVAL).toEpochMilli());
+
+        String token = buildTokenWithCustomClaims(claims, Instant.now(ClockProvider.getClock()).plus(JWT_TTL), secret);
+
+        HttpServletResponse mockResponse = new MockHttpServletResponse();
+
+        assertThatCode(() -> jwtManager.refreshLoginToken(mockResponse, token)).doesNotThrowAnyException();
+
+        final String skpRaw = extractCookie(mockResponse, SKILLARS_PROFILE_COOKIE);
+        final String skpJson = java.net.URLDecoder.decode(skpRaw, StandardCharsets.UTF_8);
+        assertThat(skpJson).isEqualTo("{\"id\":\"999\",\"role\":\"ANONYMOUS\"}");
+    }
+
     // skillars-deferred-150 AC2 (code review 2026-10-09 Patch -- the original two tests here
     // could not actually discriminate pre- from post-fix code, and have been replaced): this
     // codebase's own Principal extends Spring Security's User, whose constructor

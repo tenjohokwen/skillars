@@ -356,6 +356,7 @@ const cancelCoachBookingId = ref(null)
 const coachCancelActionId = ref(null)
 const noShowPlayerDialogOpen = ref(false)
 const noShowPlayerBookingId = ref(null)
+const noShowPlayerRequestedStartTime = ref(null)
 const noShowActionId = ref(null)
 
 const coachRescheduleProposedEnd = computed(() => {
@@ -515,7 +516,29 @@ function generateSlotLink() {
   return window.location.origin + '/marketplace'
 }
 
+// skillars-deferred-151 AC6: client-side pre-check for immediate UX feedback (skip the API call
+// entirely for the common case); the backend's own SESSION_NOT_YET_STARTED guard is the real
+// enforcement and still fires for the race case (pre-check passes, then the clock ticks past a
+// page the coach left open, or they are simply a few seconds ahead of the server).
+//
+// skillars-deferred-151 review Decision: a zero-tolerance comparison against the device clock
+// hard-blocks a coach whose laptop clock is merely slow (e.g. NTP drift after sleep), even though
+// the server would allow the action. SESSION_START_GRACE_MS absorbs ordinary skew. An unparseable
+// requestedStartTime previously sailed straight past this guard (NaN > now is false) — fail closed
+// instead and let the authoritative server guard be the one to decide.
+const SESSION_START_GRACE_MS = 2 * 60 * 1000
+
+function isBeforeScheduledStart(booking) {
+  const start = new Date(booking.requestedStartTime).getTime()
+  if (Number.isNaN(start)) return true
+  return start - SESSION_START_GRACE_MS > Date.now()
+}
+
 async function handleStartSession(booking) {
+  if (isBeforeScheduledStart(booking)) {
+    $q.notify({ message: t('booking.errors.sessionNotYetStarted'), type: 'negative' })
+    return
+  }
   startingSessionId.value = booking.bookingId
   try {
     await bookingStore.handleStartSession(booking.bookingId)
@@ -527,14 +550,23 @@ async function handleStartSession(booking) {
     activeBookingStatus.value = 'IN_PROGRESS'
     startSessionSse(booking.bookingId)
     showActiveSession.value = true
-  } catch {
-    $q.notify({ message: t('booking.completion.actionError'), type: 'negative' })
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'booking.sessionNotYetStarted') {
+      $q.notify({ message: t('booking.errors.sessionNotYetStarted'), type: 'negative' })
+    } else {
+      $q.notify({ message: t('booking.completion.actionError'), type: 'negative' })
+    }
   } finally {
     startingSessionId.value = null
   }
 }
 
 async function handleQuickComplete(booking) {
+  if (isBeforeScheduledStart(booking)) {
+    $q.notify({ message: t('booking.errors.sessionNotYetStarted'), type: 'negative' })
+    return
+  }
   quickCompletingId.value = booking.bookingId
   try {
     await bookingStore.handleInitiateQuickComplete(booking.bookingId)
@@ -543,8 +575,13 @@ async function handleQuickComplete(booking) {
     activePlayerId.value = booking.playerId
     isLiveMode.value = false
     showWrapUp.value = true
-  } catch {
-    $q.notify({ message: t('booking.completion.actionError'), type: 'negative' })
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'booking.sessionNotYetStarted') {
+      $q.notify({ message: t('booking.errors.sessionNotYetStarted'), type: 'negative' })
+    } else {
+      $q.notify({ message: t('booking.completion.actionError'), type: 'negative' })
+    }
   } finally {
     quickCompletingId.value = null
   }
@@ -585,64 +622,89 @@ function notifyIfScheduleStale(refreshed) {
   }
 }
 
-async function handleAcceptReschedule(booking) {
-  rescheduleActionId.value = booking.bookingId
+// skillars-deferred-151 AC4: shared mutation->refresh->toast helper, DRY cleanup only — NOT a bug
+// fix (see Finding 4). loadCoachSchedule (booking.store.js:360-368) carries an explicit "NEVER
+// RETHROW" contract comment: two independent 2026-08-18 review passes already filed and withdrew
+// an "unguarded refresh -> unhandled rejection" defect against call sites of this loader. A fourth
+// pass should read that comment before refiling it, not re-derive the same false claim.
+//
+// Each caller keeps its own loading-ref `finally` block (actionIdRef/actionId here) and any
+// handler-specific pre-validation/dialog-close logic the helper has no reason to know about —
+// dialog-close-on-success lives inside the handler's own `mutate` callback (see
+// submitCoachReschedule), not in this helper.
+async function runCoachAction({
+  actionIdRef,
+  actionId,
+  mutate,
+  successMessage,
+  errorMessages = {},
+  genericErrorMessage,
+  refreshOnError = true,
+}) {
+  actionIdRef.value = actionId
   try {
-    await bookingStore.handleAcceptReschedule(booking.bookingId, booking.pendingReschedule.id)
+    await mutate()
     notifyIfScheduleStale(await bookingStore.loadCoachSchedule(selectedWeek.value))
-    $q.notify({ message: t('booking.reschedule.accepted'), type: 'positive' })
+    $q.notify({ message: t(successMessage), type: 'positive' })
   } catch (err) {
-    const refreshed = await bookingStore.loadCoachSchedule(selectedWeek.value)
+    // submitCoachReschedule is the one outlier: its catch does NOT refresh the schedule at all,
+    // unlike the other four handlers (`refreshOnError: false`).
+    const refreshed = refreshOnError
+      ? await bookingStore.loadCoachSchedule(selectedWeek.value)
+      : null
     const errorKey = err?.response?.data?.errorMsg?.errorKey
-    // RescheduleService.acceptReschedule used to answer four of these with MISSING_RIGHTS
-    // (skillars-deferred-31 AC3). Post-split, MISSING_RIGHTS here means exactly one thing — this
-    // coach does not own the booking — so it gets the authorization wording, not retry advice.
-    // rescheduleNotPending covers both PENDING checks in that method: the unlocked early-out and the
-    // locked re-read that loses the race against a concurrent decline.
-    if (errorKey === 'booking.coachUnavailable') {
-      $q.notify({ type: 'negative', message: t('booking.errors.coachUnavailable') })
-    } else if (errorKey === 'booking.slotUnavailable') {
-      $q.notify({ type: 'negative', message: t('booking.errors.slotUnavailable') })
-    } else if (errorKey === 'booking.rescheduleNotPending') {
-      $q.notify({ type: 'negative', message: t('booking.errors.rescheduleNotPending') })
-    } else if (errorKey === 'booking.notReschedulable') {
-      $q.notify({ type: 'negative', message: t('booking.errors.notReschedulable') })
-    } else if (errorKey === 'booking.startTimeInPast') {
-      $q.notify({ type: 'negative', message: t('booking.errors.startTimeInPast') })
-    } else if (errorKey === 'booking.slotOutsideAvailability') {
-      $q.notify({ type: 'negative', message: t('booking.errors.slotOutsideAvailability') })
-    } else if (errorKey === 'MISSING_RIGHTS') {
-      $q.notify({ type: 'negative', message: t('booking.errors.requestNotAllowed') })
-    } else {
-      $q.notify({ type: 'negative', message: t('booking.reschedule.acceptFailed') })
+    const messageKey =
+      (errorKey && Object.hasOwn(errorMessages, errorKey) && errorMessages[errorKey]) ||
+      genericErrorMessage
+    $q.notify({ type: 'negative', message: t(messageKey) })
+    if (refreshOnError) {
+      notifyIfScheduleStale(refreshed)
     }
-    notifyIfScheduleStale(refreshed)
   } finally {
-    rescheduleActionId.value = null
+    actionIdRef.value = null
   }
 }
 
+async function handleAcceptReschedule(booking) {
+  // RescheduleService.acceptReschedule used to answer four of these with MISSING_RIGHTS
+  // (skillars-deferred-31 AC3). Post-split, MISSING_RIGHTS here means exactly one thing — this
+  // coach does not own the booking — so it gets the authorization wording, not retry advice.
+  // rescheduleNotPending covers both PENDING checks in that method: the unlocked early-out and the
+  // locked re-read that loses the race against a concurrent decline.
+  await runCoachAction({
+    actionIdRef: rescheduleActionId,
+    actionId: booking.bookingId,
+    mutate: () =>
+      bookingStore.handleAcceptReschedule(booking.bookingId, booking.pendingReschedule.id),
+    successMessage: 'booking.reschedule.accepted',
+    errorMessages: {
+      'booking.coachUnavailable': 'booking.errors.coachUnavailable',
+      'booking.slotUnavailable': 'booking.errors.slotUnavailable',
+      'booking.rescheduleNotPending': 'booking.errors.rescheduleNotPending',
+      'booking.notReschedulable': 'booking.errors.notReschedulable',
+      'booking.startTimeInPast': 'booking.errors.startTimeInPast',
+      'booking.slotOutsideAvailability': 'booking.errors.slotOutsideAvailability',
+      MISSING_RIGHTS: 'booking.errors.requestNotAllowed',
+    },
+    genericErrorMessage: 'booking.reschedule.acceptFailed',
+  })
+}
+
 async function handleDeclineReschedule(booking) {
-  rescheduleActionId.value = booking.bookingId
-  try {
-    await bookingStore.handleDeclineReschedule(booking.bookingId, booking.pendingReschedule.id)
-    notifyIfScheduleStale(await bookingStore.loadCoachSchedule(selectedWeek.value))
-    $q.notify({ message: t('booking.reschedule.declined'), type: 'positive' })
-  } catch (err) {
-    const refreshed = await bookingStore.loadCoachSchedule(selectedWeek.value)
-    // Bare catch {} until skillars-deferred-31 AC3 — declineReschedule's not-PENDING rejection (the
-    // ordinary double-click, or losing the race to a concurrent accept) is now its own wire code and
-    // deserves its own message. Everything else keeps the generic decline failure.
-    const errorKey = err?.response?.data?.errorMsg?.errorKey
-    if (errorKey === 'booking.rescheduleNotPending') {
-      $q.notify({ message: t('booking.errors.rescheduleNotPending'), type: 'negative' })
-    } else {
-      $q.notify({ message: t('booking.reschedule.declineFailed'), type: 'negative' })
-    }
-    notifyIfScheduleStale(refreshed)
-  } finally {
-    rescheduleActionId.value = null
-  }
+  // declineReschedule's not-PENDING rejection (the ordinary double-click, or losing the race to a
+  // concurrent accept) is its own wire code and deserves its own message; everything else keeps
+  // the generic decline failure.
+  await runCoachAction({
+    actionIdRef: rescheduleActionId,
+    actionId: booking.bookingId,
+    mutate: () =>
+      bookingStore.handleDeclineReschedule(booking.bookingId, booking.pendingReschedule.id),
+    successMessage: 'booking.reschedule.declined',
+    errorMessages: {
+      'booking.rescheduleNotPending': 'booking.errors.rescheduleNotPending',
+    },
+    genericErrorMessage: 'booking.reschedule.declineFailed',
+  })
 }
 
 function openCancelCoachDialog(booking) {
@@ -651,53 +713,47 @@ function openCancelCoachDialog(booking) {
 }
 
 async function handleCoachCancelConfirm(reason) {
-  coachCancelActionId.value = cancelCoachBookingId.value
-  try {
-    await bookingStore.handleCoachCancelBooking(cancelCoachBookingId.value, reason)
-    notifyIfScheduleStale(await bookingStore.loadCoachSchedule(selectedWeek.value))
-    $q.notify({ message: t('cancellation.coachCancelSuccess'), type: 'positive' })
-  } catch (err) {
-    const refreshed = await bookingStore.loadCoachSchedule(selectedWeek.value)
-    const errorKey = err?.response?.data?.errorMsg?.errorKey
-    if (errorKey === 'booking.alreadyCompleted') {
-      $q.notify({ type: 'negative', message: t('cancellation.alreadyCompleted') })
-    } else if (errorKey === 'booking.invalidTransition') {
-      $q.notify({ type: 'negative', message: t('cancellation.invalidTransition') })
-    } else {
-      $q.notify({ type: 'negative', message: t('cancellation.coachCancelFailed') })
-    }
-    notifyIfScheduleStale(refreshed)
-  } finally {
-    coachCancelActionId.value = null
-  }
+  await runCoachAction({
+    actionIdRef: coachCancelActionId,
+    actionId: cancelCoachBookingId.value,
+    mutate: () => bookingStore.handleCoachCancelBooking(cancelCoachBookingId.value, reason),
+    successMessage: 'cancellation.coachCancelSuccess',
+    errorMessages: {
+      'booking.alreadyCompleted': 'cancellation.alreadyCompleted',
+      'booking.invalidTransition': 'cancellation.invalidTransition',
+    },
+    genericErrorMessage: 'cancellation.coachCancelFailed',
+  })
 }
 
 function openNoShowPlayerDialog(booking) {
   noShowPlayerBookingId.value = booking.bookingId
+  noShowPlayerRequestedStartTime.value = booking.requestedStartTime
   noShowPlayerDialogOpen.value = true
 }
 
 async function confirmNoShowPlayer() {
   noShowPlayerDialogOpen.value = false
-  noShowActionId.value = noShowPlayerBookingId.value
-  try {
-    await bookingStore.handleRecordNoShowPlayer(noShowPlayerBookingId.value)
-    notifyIfScheduleStale(await bookingStore.loadCoachSchedule(selectedWeek.value))
-    $q.notify({ message: t('cancellation.noShowPlayerSuccess'), type: 'positive' })
-  } catch (err) {
-    const refreshed = await bookingStore.loadCoachSchedule(selectedWeek.value)
-    const errorKey = err?.response?.data?.errorMsg?.errorKey
-    if (errorKey === 'booking.alreadyCompleted') {
-      $q.notify({ type: 'negative', message: t('cancellation.alreadyCompleted') })
-    } else if (errorKey === 'booking.invalidTransition') {
-      $q.notify({ type: 'negative', message: t('cancellation.invalidTransition') })
-    } else {
-      $q.notify({ type: 'negative', message: t('cancellation.noShowPlayerFailed') })
-    }
-    notifyIfScheduleStale(refreshed)
-  } finally {
-    noShowActionId.value = null
+  // skillars-deferred-151 AC6: same client-side pre-check as handleStartSession/handleQuickComplete
+  // — this decision explicitly reverses spec-coach-booking-cancel-no-show.md's prior "Never add a
+  // client-side too-early guard on no-show reporting" note (see recordNoShowPlayer's own backend
+  // comment for the same reversal).
+  if (isBeforeScheduledStart({ requestedStartTime: noShowPlayerRequestedStartTime.value })) {
+    $q.notify({ message: t('booking.errors.noShowTooEarly'), type: 'negative' })
+    return
   }
+  await runCoachAction({
+    actionIdRef: noShowActionId,
+    actionId: noShowPlayerBookingId.value,
+    mutate: () => bookingStore.handleRecordNoShowPlayer(noShowPlayerBookingId.value),
+    successMessage: 'cancellation.noShowPlayerSuccess',
+    errorMessages: {
+      'booking.alreadyCompleted': 'cancellation.alreadyCompleted',
+      'booking.invalidTransition': 'cancellation.invalidTransition',
+      'booking.noShowTooEarly': 'booking.errors.noShowTooEarly',
+    },
+    genericErrorMessage: 'cancellation.noShowPlayerFailed',
+  })
 }
 
 function openCoachRescheduleDialog(booking) {
@@ -726,41 +782,36 @@ async function submitCoachReschedule() {
     $q.notify({ message: t('booking.reschedule.requestFailed'), type: 'negative' })
     return
   }
-  rescheduleActionId.value = coachRescheduleBookingId.value
-  try {
-    const data = {
-      proposedStartTime: new Date(coachRescheduleProposedStart.value).toISOString(),
-      proposedEndTime: new Date(coachRescheduleProposedEnd.value).toISOString(),
-    }
-    await bookingStore.handleRequestRescheduleAsCoach(coachRescheduleBookingId.value, data)
-    coachRescheduleDialogOpen.value = false
-    notifyIfScheduleStale(await bookingStore.loadCoachSchedule(selectedWeek.value))
-    $q.notify({ message: t('booking.reschedule.requestSent'), type: 'positive' })
-  } catch (err) {
-    const errorKey = err?.response?.data?.errorMsg?.errorKey
+  // The one genuine outlier among the five handlers (Finding 4): its catch does NOT refresh the
+  // schedule at all, unlike the other four — `refreshOnError: false` below. Dialog-close-on-success
+  // lives inside `mutate`, still within runCoachAction's own try, since the helper has no reason to
+  // know about this handler's dialog state.
+  await runCoachAction({
+    actionIdRef: rescheduleActionId,
+    actionId: coachRescheduleBookingId.value,
+    mutate: async () => {
+      const data = {
+        proposedStartTime: new Date(coachRescheduleProposedStart.value).toISOString(),
+        proposedEndTime: new Date(coachRescheduleProposedEnd.value).toISOString(),
+      }
+      await bookingStore.handleRequestRescheduleAsCoach(coachRescheduleBookingId.value, data)
+      coachRescheduleDialogOpen.value = false
+    },
+    successMessage: 'booking.reschedule.requestSent',
     // Same error-key branching shape as ParentBookingsPage.vue's submitReschedule.
-    if (errorKey === 'booking.invalidSessionDuration') {
-      $q.notify({ message: t('booking.errors.invalidSessionDuration'), type: 'negative' })
-    } else if (errorKey === 'booking.notReschedulable') {
-      $q.notify({ message: t('booking.errors.notReschedulable'), type: 'negative' })
-    } else if (errorKey === 'booking.startTimeInPast') {
-      $q.notify({ message: t('booking.errors.startTimeInPast'), type: 'negative' })
-    } else if (errorKey === 'booking.invalidTimeRange') {
-      $q.notify({ message: t('booking.errors.invalidTimeRange'), type: 'negative' })
-    } else if (errorKey === 'booking.slotOutsideAvailability') {
-      $q.notify({ message: t('booking.errors.slotOutsideAvailability'), type: 'negative' })
-    } else if (errorKey === 'booking.sessionCrossesMidnight') {
-      $q.notify({ message: t('booking.errors.sessionCrossesMidnight'), type: 'negative' })
-    } else if (errorKey === 'booking.rescheduleAlreadyPending') {
-      $q.notify({ message: t('booking.errors.rescheduleAlreadyPending'), type: 'negative' })
-    } else if (errorKey === 'MISSING_RIGHTS') {
-      $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
-    } else {
-      $q.notify({ message: t('booking.reschedule.requestFailed'), type: 'negative' })
-    }
-  } finally {
-    rescheduleActionId.value = null
-  }
+    errorMessages: {
+      'booking.invalidSessionDuration': 'booking.errors.invalidSessionDuration',
+      'booking.notReschedulable': 'booking.errors.notReschedulable',
+      'booking.startTimeInPast': 'booking.errors.startTimeInPast',
+      'booking.invalidTimeRange': 'booking.errors.invalidTimeRange',
+      'booking.slotOutsideAvailability': 'booking.errors.slotOutsideAvailability',
+      'booking.sessionCrossesMidnight': 'booking.errors.sessionCrossesMidnight',
+      'booking.rescheduleAlreadyPending': 'booking.errors.rescheduleAlreadyPending',
+      MISSING_RIGHTS: 'booking.errors.requestNotAllowed',
+    },
+    genericErrorMessage: 'booking.reschedule.requestFailed',
+    refreshOnError: false,
+  })
 }
 
 async function handleRepeatNextWeek(booking) {

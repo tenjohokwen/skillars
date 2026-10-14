@@ -89,7 +89,19 @@ public enum BookingError implements ErrorCode {
      * a fail-fast guard even though {@code BookingStateMachine} already blocks the transition, so a
      * future refactor cannot open the path silently.
      */
-    BOOKING_ALREADY_COMPLETED;
+    BOOKING_ALREADY_COMPLETED,
+    /**
+     * skillars-deferred-151 AC6: guards {@code BookingCompletionService.startSession} and
+     * {@code initiateQuickComplete} — neither previously had a time-based gate, unlike their sibling
+     * {@code BookingService.recordNoShowCoach}, which already rejects with {@code NO_SHOW_TOO_EARLY}
+     * before the booking's scheduled start time. A USER DECISION reverses
+     * {@code spec-coach-booking-cancel-no-show.md}'s prior "Never add a client-side too-early guard"
+     * note for {@code recordNoShowPlayer} specifically (see that method's own call site) — this is a
+     * distinct code for the two completion-path methods, since "cannot start/quick-complete a
+     * session before it starts" is a different condition from "cannot report a no-show before it
+     * starts" even though both share the same underlying time check.
+     */
+    SESSION_NOT_YET_STARTED;
 
     @Override
     public String getErrorCode() {
@@ -114,6 +126,7 @@ public enum BookingError implements ErrorCode {
             case SLOT_BLOCKED_BY_COACH     -> "booking.slotBlockedByCoach";
             case BLOCK_OVERLAPS_BOOKING    -> "booking.blockOverlapsBooking";
             case BOOKING_ALREADY_COMPLETED -> "booking.alreadyCompleted";
+            case SESSION_NOT_YET_STARTED   -> "booking.sessionNotYetStarted";
         };
     }
 

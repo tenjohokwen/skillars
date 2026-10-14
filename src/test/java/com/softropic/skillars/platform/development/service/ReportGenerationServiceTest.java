@@ -342,7 +342,7 @@ class ReportGenerationServiceTest {
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
 
         var request = new com.softropic.skillars.platform.development.contract.CoachBrandingRequest(null, null);
-        assertThatThrownBy(() -> service.saveBranding(COACH_ID, request))
+        assertThatThrownBy(() -> service.saveBranding(COACH_ID, COACH_USER_ID, request))
             .isInstanceOf(FeatureGatedException.class);
     }
 
@@ -353,13 +353,73 @@ class ReportGenerationServiceTest {
 
         var request = new com.softropic.skillars.platform.development.contract.CoachBrandingRequest(
             "logos/test.png", "#3B82F6");
-        service.saveBranding(COACH_ID, request);
+        service.saveBranding(COACH_ID, COACH_USER_ID, request);
 
         ArgumentCaptor<CoachBranding> captor = ArgumentCaptor.forClass(CoachBranding.class);
         verify(brandingRepository).save(captor.capture());
         assertThat(captor.getValue().getCoachId()).isEqualTo(COACH_ID);
         assertThat(captor.getValue().getLogoKey()).isEqualTo("logos/test.png");
         assertThat(captor.getValue().getBrandColour()).isEqualTo("#3B82F6");
+    }
+
+    // ---- skillars-deferred-151 AC3: saveBranding's ownership check, exercised against a REAL
+    // FileStorageService (not the full mock every other test in this file uses), the gap that let
+    // the id-space bug (CoachProfile UUID vs. the caller's own numeric user id) ship untested. Only
+    // fileStorageObjectRepository is mocked here — assertOwnership's one real dependency — with a
+    // FileStorageObject fixture shaped exactly like what signUpload/confirmUpload actually stamp.
+    //
+    // Mutation check: revert CoachBrandingResource/ReportGenerationService to compare
+    // `coachId.toString()` instead of `coachUserId.toString()` and
+    // saveBranding_realFileStorageService_ownershipCheckPassesForCallersOwnUserId goes RED
+    // (AuthorizationException), since COACH_ID (a UUID) can never equal the fixture's numeric
+    // ownerId.
+    @Test
+    void saveBranding_realFileStorageService_ownershipCheckPassesForCallersOwnUserId() {
+        com.softropic.skillars.platform.filestorage.repo.FileStorageObjectRepository realRepoDeps =
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.filestorage.repo.FileStorageObjectRepository.class);
+        com.softropic.skillars.platform.filestorage.repo.FileStorageObject fixture =
+            com.softropic.skillars.platform.filestorage.repo.FileStorageObject.builder()
+                .key("coach_branding/logo.png")
+                .ownerId(COACH_USER_ID.toString())
+                .provider("s3")
+                .bucket("test-bucket")
+                .sizeBytes(1024L)
+                .build();
+        when(realRepoDeps.findByKey("coach_branding/logo.png")).thenReturn(Optional.of(fixture));
+
+        com.softropic.skillars.platform.filestorage.service.FileStorageService realFileStorageService =
+            new com.softropic.skillars.platform.filestorage.service.FileStorageService(
+                org.mockito.Mockito.mock(com.softropic.skillars.platform.filestorage.service.ValidationChain.class),
+                realRepoDeps,
+                org.mockito.Mockito.mock(com.softropic.skillars.platform.filestorage.service.StorageKeyGenerator.class),
+                org.mockito.Mockito.mock(software.amazon.awssdk.services.s3.presigner.S3Presigner.class),
+                org.mockito.Mockito.mock(com.softropic.skillars.infrastructure.blobstore.config.BlobstoreProperties.class),
+                org.mockito.Mockito.mock(com.softropic.skillars.platform.filestorage.config.FileStorageProperties.class),
+                org.mockito.Mockito.mock(software.amazon.awssdk.services.s3.S3Client.class),
+                org.mockito.Mockito.mock(com.softropic.skillars.platform.filestorage.repo.OutboxReplicationJobRepository.class),
+                org.mockito.Mockito.mock(ApplicationEventPublisher.class),
+                org.mockito.Mockito.mock(org.springframework.transaction.support.TransactionTemplate.class),
+                org.mockito.Mockito.mock(com.softropic.skillars.platform.filestorage.repo.StorageAccessEventRepository.class),
+                org.mockito.Mockito.mock(com.softropic.skillars.infrastructure.blobstore.service.StorageMetrics.class),
+                org.mockito.Mockito.mock(SecurityUtil.class));
+
+        ReportGenerationService realService = new ReportGenerationService(
+            coachProfileService, playerProfileService,
+            sluRepository, skillDefinitionRepository, compositeRepository, baselineRepository,
+            reportRepository, brandingRepository, realFileStorageService,
+            timelineEventListener, publisher, securityUtil, coachPlayerAuthorizationService,
+            playerProfileRepository, rateLimitingService
+        );
+        ReflectionTestUtils.setField(realService, "baseUrl", "http://app.test");
+
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.ACADEMY);
+        when(brandingRepository.findById(COACH_ID)).thenReturn(Optional.empty());
+
+        var request = new com.softropic.skillars.platform.development.contract.CoachBrandingRequest(
+            "coach_branding/logo.png", "#3B82F6");
+
+        assertThatCode(() -> realService.saveBranding(COACH_ID, COACH_USER_ID, request))
+            .doesNotThrowAnyException();
     }
 
     // ---- getBranding (Deferred-80 AC3) ----
@@ -377,6 +437,7 @@ class ReportGenerationServiceTest {
         var response = service.getBranding(COACH_ID);
 
         assertThat(response.logoSignedUrl()).isEqualTo("https://cdn.test/logos/test.png");
+        assertThat(response.logoKey()).isEqualTo("logos/test.png");
         assertThat(response.brandColour()).isEqualTo("#3B82F6");
     }
 

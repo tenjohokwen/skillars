@@ -79,7 +79,13 @@ class BookingCompletionServiceTest {
         booking.setCoachId(COACH_ID);
         booking.setPlayerId(PLAYER_ID);
         booking.setParentId(PARENT_ID);
-        booking.setRequestedStartTime(Instant.now());
+        // skillars-deferred-151 AC6: an explicit past offset, not a bare Instant.now() — the new
+        // SESSION_NOT_YET_STARTED time gate calls Instant.now() again at check time, and relying on
+        // two separate Instant.now() calls to land in the "right" order is this project's own
+        // documented Instant.now()-pair flake class (see chk_bkg_end_after_start's history). Several
+        // tests below set status to UPCOMING and expect startSession/initiateQuickComplete to
+        // proceed past this gate.
+        booking.setRequestedStartTime(Instant.now().minusSeconds(1));
         booking.setCanonicalTimezone("Europe/Berlin");
         booking.setStatus(BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
 
@@ -179,6 +185,34 @@ class BookingCompletionServiceTest {
 
         assertThatThrownBy(() -> service.startSession(BOOKING_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class);
+    }
+
+    // skillars-deferred-151 AC6: neither startSession nor initiateQuickComplete had a time-based
+    // gate before this fix, unlike their sibling BookingService.recordNoShowCoach.
+    @Test
+    void startSession_beforeScheduledStartTime_throwsSessionNotYetStarted() {
+        booking.setStatus(BookingStatus.UPCOMING.name());
+        booking.setRequestedStartTime(Instant.now().plusSeconds(3600));
+
+        assertThatThrownBy(() -> service.startSession(BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.SESSION_NOT_YET_STARTED);
+
+        verify(bookingService, never()).transition(any(), eq(BookingEvent.START), any());
+    }
+
+    @Test
+    void initiateQuickComplete_beforeScheduledStartTime_throwsSessionNotYetStarted() {
+        booking.setStatus(BookingStatus.UPCOMING.name());
+        booking.setRequestedStartTime(Instant.now().plusSeconds(3600));
+
+        assertThatThrownBy(() -> service.initiateQuickComplete(BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.SESSION_NOT_YET_STARTED);
+
+        verify(bookingService, never()).transition(any(), eq(BookingEvent.COMPLETE_PENDING), any());
     }
 
     @Test
