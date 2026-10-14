@@ -1184,7 +1184,7 @@ export default {
     coachCancelFailed: "Impossible d'annuler cette séance. Veuillez réessayer.",
     noShowPlayerFailed: "Impossible d'enregistrer l'absence. Veuillez réessayer.",
     alreadyCompleted:
-      "Cette séance est déjà terminée et ne peut plus être modifiée. Veuillez plutôt soumettre un litige.",
+      'Cette séance est déjà terminée et ne peut plus être modifiée. Veuillez plutôt soumettre un litige.',
     invalidTransition: "Cette séance n'est plus dans un état permettant cette action.",
   },
   reliability: {
