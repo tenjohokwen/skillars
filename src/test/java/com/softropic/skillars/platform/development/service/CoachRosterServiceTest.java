@@ -8,7 +8,6 @@ import com.softropic.skillars.platform.development.contract.RosterEntryResponse;
 import com.softropic.skillars.platform.development.contract.RosterResponse;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PlayerSluWeeklySnapshot;
-import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
@@ -37,6 +36,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyShort;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -52,10 +52,10 @@ class CoachRosterServiceTest {
 
     @Mock private BookingRepository bookingRepository;
     @Mock private PlayerProfileRepository playerProfileRepository;
-    @Mock private SluRepository sluRepository;
     @Mock private NeglectedSkillFlagRepository neglectedSkillFlagRepository;
     @Mock private SluWeeklySnapshotRepository snapshotRepository;
     @Mock private ConfigService configService;
+    @Mock private CoachPlayerLastSessionResolver coachPlayerLastSessionResolver;
 
     private CoachRosterService service;
 
@@ -76,9 +76,14 @@ class CoachRosterServiceTest {
     @BeforeEach
     void setUp() {
         service = new CoachRosterService(
-            bookingRepository, playerProfileRepository, sluRepository,
-            neglectedSkillFlagRepository, snapshotRepository, configService);
+            bookingRepository, playerProfileRepository,
+            neglectedSkillFlagRepository, snapshotRepository, configService,
+            coachPlayerLastSessionResolver);
         TestClockProvider.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
+        // Default: no merged signal at all — individual tests override via resolve(PLAYER_ID, COACH_ID)
+        // stubs below. lenient() because the no-qualifying-activity test never reaches buildEntry.
+        lenient().when(coachPlayerLastSessionResolver.resolve(anyLong(), any()))
+            .thenReturn(new CoachPlayerLastSessionResolver.LastCoachSessionSignal(null, null));
     }
 
     @AfterEach
@@ -94,7 +99,7 @@ class CoachRosterServiceTest {
         RosterResponse response = service.getRoster(COACH_ID);
 
         assertThat(response.players()).isEmpty();
-        verifyNoInteractions(playerProfileRepository, sluRepository, neglectedSkillFlagRepository, snapshotRepository);
+        verifyNoInteractions(playerProfileRepository, coachPlayerLastSessionResolver, neglectedSkillFlagRepository, snapshotRepository);
     }
 
     @Test
@@ -116,7 +121,8 @@ class CoachRosterServiceTest {
         Instant bookingTime = NOW.minus(Duration.ofDays(60));
         Instant sessionDate = NOW.minus(Duration.ofDays(5)); // more recent than the booking
         stubActivity(bookingTime);
-        when(sluRepository.findLastSessionDate(PLAYER_ID, COACH_ID)).thenReturn(sessionDate);
+        when(coachPlayerLastSessionResolver.resolve(PLAYER_ID, COACH_ID))
+            .thenReturn(new CoachPlayerLastSessionResolver.LastCoachSessionSignal(sessionDate, null));
         stubPlayerName("Recently Trained");
         stubNoNeglectedFlags();
         stubNoTrendData();
@@ -143,7 +149,8 @@ class CoachRosterServiceTest {
         Instant oldSessionDate = NOW.minus(Duration.ofDays(400));
         Instant futureBookingTime = NOW.plus(Duration.ofDays(21));
         stubActivity(futureBookingTime);
-        when(sluRepository.findLastSessionDate(PLAYER_ID, COACH_ID)).thenReturn(oldSessionDate);
+        when(coachPlayerLastSessionResolver.resolve(PLAYER_ID, COACH_ID))
+            .thenReturn(new CoachPlayerLastSessionResolver.LastCoachSessionSignal(oldSessionDate, null));
         stubPlayerName("Long Silent But Rebooked");
         stubNoNeglectedFlags();
         stubNoTrendData();

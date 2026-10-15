@@ -96,6 +96,8 @@ _Novelty:_ Avoids consent/sharing complexity in a marketplace of independent coa
 
 ### Role Playing
 
+> **Covered by `skillars-12-3-session-prep-card-and-timeline-access-clock-fix`** (created 2026-10-15). Pattern #9 below is implemented by that story, bundled with the SLU-clock-proxy fix from `deferred-work.md`. Do not re-pick it in a future brainstorm-mining pass.
+
 **Interactive Focus:** Walked through the coach's day-to-day moment of truth, then the player/parent's motivation, then paused to ground the session against the real Skillars codebase (`development` module) before continuing.
 
 **Key Breakthroughs:**
@@ -195,7 +197,7 @@ _Novelty:_ Reverses the single-direction authorship assumption running through e
 
 1. Roster-summary endpoint + derived roster page — **covered by `skillars-12-1-coach-player-roster-and-attention-summary` (created 2026-10-14)**
 2. Session-close recap capture — **covered by `skillars-12-2-session-close-recap-capture` (created 2026-10-15)**
-3. Session Prep Card inside the booking view
+3. Session Prep Card inside the booking view — **covered by `skillars-12-3-session-prep-card-and-timeline-access-clock-fix` (created 2026-10-15)**
 4. Coach-facing player-detail page (reused panels)
 5. Fast-follow: recap -> report-generation tie-in
 6. Deferred: player/parent-initiated flag
@@ -220,7 +222,7 @@ _Next steps:_
 _Resources needed:_ a small frontend form (likely in the booking-completion flow), a write path into the existing timeline event metadata.
 _Success indicator:_ every completed session has a recap attached, visible back to the coach on that player's timeline.
 
-**Priority 3: Session Prep Card**
+**Priority 3: Session Prep Card** — ✅ **Covered by `skillars-12-3-session-prep-card-and-timeline-access-clock-fix` (created 2026-10-15, Epic 12)**
 _Why this matters:_ this is the coach's single highest-value moment, identified directly in Role Playing.
 _Next steps:_
 1. Surface, inside an upcoming booking's detail view: last recap's "what's next," the derived focus thread, the player's open neglected-skill flags, and days-since-last-session.

@@ -10,7 +10,6 @@ import com.softropic.skillars.platform.development.contract.RosterResponse;
 import com.softropic.skillars.platform.development.contract.SkillTrendDirection;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PlayerSluWeeklySnapshot;
-import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
@@ -61,10 +60,10 @@ public class CoachRosterService {
 
     private final BookingRepository bookingRepository;
     private final PlayerProfileRepository playerProfileRepository;
-    private final SluRepository sluRepository;
     private final NeglectedSkillFlagRepository neglectedSkillFlagRepository;
     private final SluWeeklySnapshotRepository snapshotRepository;
     private final ConfigService configService;
+    private final CoachPlayerLastSessionResolver coachPlayerLastSessionResolver;
 
     public RosterResponse getRoster(UUID coachId) {
         Instant now = Instant.now(ClockProvider.getClock());
@@ -108,9 +107,12 @@ public class CoachRosterService {
         Long playerId = activity.getPlayerId();
         Instant latestBookingTime = activity.getLatestBookingTime();
 
-        // AC3: narrow, API-facing "last SLU-recorded session" — may be null (Quick Complete /
-        // builder-less history). See Dev Notes "lastSessionDate vs. last activity".
-        Instant lastSessionDate = sluRepository.findLastSessionDate(playerId, coachId);
+        // skillars-12-3 code review (2026-10-15) Patch, owner decision: was the narrow, SLU-only
+        // sluRepository.findLastSessionDate read (AC3 of skillars-12-1) — widened to the merged
+        // CoachPlayerLastSessionResolver signal so a Quick-Complete-only coach's roster entry agrees
+        // with the same coach's Session Prep Card and timeline-access clock, instead of three
+        // surfaces silently disagreeing about whether this coach and player have trained together.
+        Instant lastSessionDate = coachPlayerLastSessionResolver.resolve(playerId, coachId).lastSessionDate();
 
         // skillars-12-1 code review (2026-10-15) Patch, owner decision: the recency signal is
         // past-only — a roster-qualifying booking can be future-dated (ACCEPTED/PAYMENT_PENDING/

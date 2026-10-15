@@ -120,6 +120,15 @@
                 @click="handleQuickComplete(booking)"
               />
               <q-btn
+                v-if="booking.status === 'UPCOMING'"
+                flat
+                dense
+                size="sm"
+                :label="t('coach.sessionPrepButton')"
+                class="q-mt-xs"
+                @click="openSessionPrep(booking)"
+              />
+              <q-btn
                 v-if="booking.status === 'COMPLETED'"
                 flat
                 dense
@@ -307,6 +316,11 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <!-- Session Prep Card dialog (skillars-12-3 AC5/AC6) -->
+    <q-dialog v-model="showSessionPrep">
+      <SessionPrepCard :booking-id="activePrepBookingId" :player-name="activePrepPlayerName" />
+    </q-dialog>
   </q-page>
 </template>
 
@@ -322,6 +336,7 @@ import ActiveSessionScreen from 'src/components/booking/ActiveSessionScreen.vue'
 import WrapUpSequence from 'src/components/booking/WrapUpSequence.vue'
 import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
 import CancelCoachModal from 'src/components/booking/CancelCoachModal.vue'
+import SessionPrepCard from 'src/components/booking/SessionPrepCard.vue'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()
@@ -358,6 +373,10 @@ const noShowPlayerDialogOpen = ref(false)
 const noShowPlayerBookingId = ref(null)
 const noShowPlayerRequestedStartTime = ref(null)
 const noShowActionId = ref(null)
+
+const showSessionPrep = ref(false)
+const activePrepBookingId = ref(null)
+const activePrepPlayerName = ref('')
 
 const coachRescheduleProposedEnd = computed(() => {
   if (!coachRescheduleProposedStart.value || !coachRescheduleDurationMs.value) return ''
@@ -730,6 +749,12 @@ function openNoShowPlayerDialog(booking) {
   noShowPlayerBookingId.value = booking.bookingId
   noShowPlayerRequestedStartTime.value = booking.requestedStartTime
   noShowPlayerDialogOpen.value = true
+}
+
+function openSessionPrep(booking) {
+  activePrepBookingId.value = String(booking.bookingId)
+  activePrepPlayerName.value = booking.playerName
+  showSessionPrep.value = true
 }
 
 async function confirmNoShowPlayer() {

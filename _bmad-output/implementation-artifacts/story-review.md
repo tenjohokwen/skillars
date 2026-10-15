@@ -1,312 +1,228 @@
-# Story Review — skillars-12-2-session-close-recap-capture
+# Pre-Implementation Story Review — `skillars-12-3-session-prep-card-and-timeline-access-clock-fix`
 
 **Audit date:** 2026-10-15
-**Story:** `_bmad-output/implementation-artifacts/skillars-12-2-session-close-recap-capture.md` (Story 12.2: Session-Close Recap Capture), status `ready-for-dev`
-**Real HEAD at audit time:** `9e3ae6a1` — *Merge pull request #266 from tenjohokwen/story/12-1-coach-player-roster-and-attention-summary*
+**Real HEAD at audit time:** `108d9d9f` — `build(deps-dev): bump com.google.guava:guava-testlib (#273)`
+**Story status at audit time:** `ready-for-dev` (confirmed from `sprint-status.yaml`'s `development_status` map, line 365 — not from the header comment prose)
 
-HEAD was read with `git rev-parse` / `git log -1` **before** the story was opened, and re-confirmed unchanged at the end of the audit. **Every citation below was verified against that HEAD on disk — not against any commit SHA, line number, or "master is at…" claim written inside the story itself.** The source brainstorm doc was read from the **working tree** (it carries uncommitted annotations).
-
-Verification ran as four parallel read-only layers, followed by a mandatory adversarial re-verification pass (Step 4b) in which every surviving finding's evidence was re-read fresh with the goal of refuting it. Section 6 lists what that pass killed or downgraded — including findings the layers raised and findings the auditor raised.
-
-**Scale:** ~95 discrete claims checked (46 code citations, 23 ledger/precedent attributions, 24 mechanistic claims, plus AC-by-AC flow walks). **2 HIGH + 5 MEDIUM + 13 LOW findings survived.** 9 candidate findings were killed or downgraded in Step 4b.
+> **Every citation below was verified against the working tree at `108d9d9f`.** No SHA, line count, or "as of drafting" claim written inside the story was trusted. The story's own lineage references an earlier review run against HEAD `9e3ae6a1` (story 12-2's pass); that SHA is **not** what anything here was checked against.
+>
+> Method: four parallel read-only verification layers (citations / ledger-and-precedent attributions / mechanistic claims / corner cases), followed by a mandatory adversarial re-verification pass in which every surviving finding's evidence was re-opened and re-read with the goal of refuting it. Section 6 records what that pass killed.
 
 ---
 
-## 1. Verdict
+## 1. Citation verification
 
-The story is **unusually well-grounded** — its design is correct, its single-redaction-point analysis is right, its ID-space reasoning is right, its back-compat constructor strategy is right, and the overwhelming majority of its 46 file:line citations land exactly. It is **not** ready to hand to a developer as-is, for three reasons, in priority order:
-
-1. **One product decision is presented as settled when the source doc says the opposite** (Finding M1). It drives AC4, AC6, Task 3.2 and one of Task 3.3's three tests. It needs an owner's call before dev starts, not after.
-2. **Two defects would bite a developer who follows the tasks literally** (Findings H1, H2) — one guaranteed CI failure, one silent user-facing dead-end.
-3. **A cluster of counting/attribution errors** (Findings L1–L3, M4) would mislead a developer mid-task or survive into the next story as inherited misinformation.
-
----
-
-## 2. Citation verification (Layer 1)
-
-46 citations checked. **41 MATCH, 5 DRIFTED, 0 fabricated.** Only the drifts and the consequential confirmations are tabulated; a plain MATCH with no implication is omitted for length.
-
-| Citation | Verdict | Evidence / corrected location |
-|---|---|---|
-| `WrapUpRequest.java:13-21` | MATCH | 7 record components, order exactly as described; `@NotBlank` already imported (AC1 needs no new import). File is 21 lines. |
-| `WrapUpRequest.java:18` | MATCH | `    String voiceNoteText,` — and **zero** validation annotations (bears on Finding L9). |
-| `SessionCompletionData.java:17-65`; `:49-50` | MATCH | `@Entity` L17, class L22, closes L65. L49 `@Column(name = "voice_note_text", length = 2000)` / L50 `private String voiceNoteText;` |
-| `BookingCompletionService.java:138-143`; `:142` | MATCH | L142 is `scd.setVoiceNoteText(req.voiceNoteText());` exactly. (Setter block actually begins L135.) |
-| `BookingCompletionService.java:166-170` | MATCH | LIVE-mode publish, inside `if ("LIVE".equals(req.mode()))` at L160. |
-| `BookingCompletionService.java:197-198`; `:201-205` | MATCH | L197-198 `findByBookingId(...).orElseThrow(...)`; L201-205 the publish. |
-| `submitWrapUp = :128-182` | MATCH | `@Transactional` L127, signature L128, closes L182. |
-| **`confirmCompletion = :185-215`** | **DRIFTED** | Actual **L184-206** (`@Transactional` L184, sig L185, closes L206). The cited range overshoots 9 lines into the unrelated private helper `deserializeHomeworkDrillIds` (**L208-218**) — a developer told to edit "at L185-215" is editing across a method boundary. |
-| `QuickCompleteTimeoutService.java:65-69`; `:50-78` | MATCH | Publish L65-69 inside `transactionTemplate.executeWithoutResult`; method `@Scheduled` L50, `@SchedulerLock` L51-52, sig L53, closes L78. |
-| `BookingCompletedEvent.java:10-37` | MATCH on range; **framing wrong** | Range exact (file is 37 lines). But it is a **`class extends ApplicationEvent`** with Lombok `@Getter`, **not** a record, and its constructor takes **10** parameters. See Finding L1. |
-| `TimelineEventListener.java:34-48`; `:66-78` | MATCH | Annotations verified on `onBookingCompleted` itself (L34-35), not borrowed from the identically-annotated sibling `onRadarEntrySubmitted` (L50-52). `Map.of("coachId", …)` at L43. |
-| `TimelineQueryService.java:28-58`; `:39-48`; `:50-57`; `:53-56` | MATCH | All four ranges exact. |
-| `TimelineEventResponse.java` | MATCH | Record, 6 components, `metadata` last, typed `Map<String, Object>`. |
-| `SluCalculationServiceIT.java:768` | MATCH | Sole `new BookingCompletedEvent(` in the file. |
-| `HomeworkAssignmentServiceTest.java:68,82,92,104,125` | MATCH | Exactly those 5, no more. |
-| `SessionPlanServiceTest.java:319,332,348,367` | MATCH | Exactly those 4, no more. |
-| `SessionCompletionResourceIT.java:188-234` | MATCH (body offsets ~2 low) | Both named tests exist (L189, L213). `Map.of(` bodies are at **L196-202** and **L220-226**; story said ~194-201 / ~218-225. Story used "~", so advisory only. |
-| `BookingCompletionServiceTest.java:99,132,255` | MATCH | All three are `new WrapUpRequest(...)`, currently 7-arg. Repo-wide: exactly these 3. |
-| `PlayerTimelineResourceIT.java:492-499` | MATCH | `insertTimelineEvent`; insert columns `(id, player_id, event_type, reference_module, occurred_at)` — the story's "inserts no metadata at all today" is **correct**, and is the root of Finding H1. |
-| **V157 / V158 "nullable single-purpose `ADD COLUMN` … no backfill"** | **DRIFTED — materially wrong** | See Finding M4. `SET LOCAL lock_timeout = '5s';` + `ADD COLUMN IF NOT EXISTS` do check out; "single-purpose" and "no backfill" do not. **V159 is confirmed free** (highest on disk is V158). |
-| `docs/deployment/migration-conventions.md` rule 1 | MATCH | L54-56, quoted verbatim: "New columns are nullable or carry a default". |
-| `WrapUpSequence.vue:6` | MATCH | `v-for="n in 4"`; pip classes use `n === step` / `n < step`, correct at 5. |
-| `WrapUpSequence.vue:221-227` | MATCH | Step-4 Done button; `:label` L224, `@click` L226. |
-| `WrapUpSequence.vue:30,59,84,112` → `t('common.next')` | MATCH | All four exact, and all four really are in Steps 1–2 as the story says. (A fifth use at L174 exists but is in **Step 3** — see Section 6, killed finding K1.) |
-| `WrapUpSequence.vue:~260`; `:340-348` | MATCH | Refs block L253-268 (`voiceNoteText` L260); payload object L340-348. |
-| `PlayerTimelinePanel.vue:31-45` | MATCH | `q-timeline-entry` loop; reads only `event.id`/`eventType`/`occurredAt`. No `metadata`, no `v-html`. |
-| `en-US/index.js:1203-1220`; `:861-876` | MATCH | Both exact. `step4Done: 'Done',` at L1219. |
-| **`de-DE/index.js:382-398`; `fr-FR/index.js:1491-1507`** | **DRIFTED (off-by-one)** | Blocks close one line later: **de-DE 382-399**, **fr-FR 1491-1508**. All three locales have 16-key parity. |
-| New spec files absent | MATCH | `components/booking/__tests__/` does not exist; `components/development/__tests__/` holds only `SkillsRadarChartSpec.js`. No spec anywhere references either component. Story correct. |
-
----
-
-## 3. Ledger & precedent attribution (Layer 2)
-
-23 attributions checked against **three** source classes each where applicable (the cited document; code comments/Javadoc near the discussed method; `git log --grep` / `git blame`). **No attribution was fabricated** — every cited document, heading and rule exists. **14 SUPPORTED, 7 PARTIALLY_SUPPORTED, 2 CONTRADICTED.**
-
-| Claim | Sources checked | Result | Verdict |
+| Citation | Verdict | Real location | Evidence |
 |---|---|---|---|
-| Build order P1–P6 as described | brainstorm L194-201, L171-173, L239-243 | Build order verbatim as story says. But the doc never says P6 is *permanently* deferred — Deferred #17 is "intentionally parked", and the Action Plan says "**revisit** once homework/messaging-adjacent stories are scheduled". | PARTIALLY_SUPPORTED |
-| Pattern #4 = "Structured Micro-Recap" | brainstorm L74-76 | Title exact. Concept names **three** components: "what we did, what went well, what's next". | PARTIALLY_SUPPORTED — see L8 |
-| Converge #15 "describes the recap as 'a small structured note (what we did / what's next), plus an optional free-text note'" | brainstorm L163-165, L217; phrase grep | Converge #15 contains **no** such parenthetical. The quoted phrase is **Priority 2 Next Steps item 1 (L217)**. Content real, location wrong. | PARTIALLY_SUPPORTED — see L7 |
-| Converge #16 + report-gen is the Fast-Follow | brainstorm L167-169, L200, L239-240 | Confirmed in two places ("**Fast-follow:** recap -> report-generation tie-in"). | SUPPORTED |
-| Decision #8 = "Coach A never sees Coach B's notes on the same player" | brainstorm L90-92, L131, L188 | Verbatim match. Decision #8 *itself* says nothing about player/parent visibility. | SUPPORTED |
-| Priority 2 Next Steps contains "Keep it coach-private per Decision #8" | brainstorm L219 | Verbatim: "3. Keep it coach-private per Decision #8 (siloed notes)." | SUPPORTED |
-| Role-Playing frames player/parent as wanting *more* visibility | brainstorm L97-104 | Both quoted fragments exact (L103). But the sentence's own point is that this need is **already satisfied** by an existing dashboard — not that the family should see coach-authored notes. | PARTIALLY_SUPPORTED |
-| Priority 2 plan: recap form → `SESSION_COMPLETED.metadata` JSONB | brainstorm L217-218, L133 | Verbatim match on both halves. | SUPPORTED |
-| **"Second use for the recap… is about which *feature* consumes the recap next, not a statement that the raw text must be hidden from the family"** | brainstorm L134, L131-132, L219, L221 | **The story's ellipsis elides the decisive clause.** See Finding M1. | **CONTRADICTED** |
-| Story 12.1 flagged the Quick-Complete blind spot for `lastSessionDate` | 12.1 L76-78, AC3 L25 | Heading and body exact; substance confirmed verbatim. Only nit: cited anchor is a truncated slug. | SUPPORTED |
-| 12.1 flagged `/neglected-skills` + `/slu/coach-contributions` gap as separate follow-up | 12.1 L82; brainstorm L118, L251; `deferred-work.md:3785`; `story-review.md:207` | Confirmed in four independent places. | SUPPORTED |
-| Priority 1 is `done` | `sprint-status.yaml:364`; `git log --grep`; HEAD | `done`; merged as `d7fb01bb`, merge commit `9e3ae6a1` = current HEAD. | SUPPORTED |
-| 12.2 is the second story of Epic 12 | `sprint-status.yaml` grep | Exactly two `skillars-12-*` keys. | SUPPORTED |
-| Awaitility required for async assertions | `project-context.md:63` | "Use **Awaitility** for verifying asynchronous outcomes." | SUPPORTED |
-| "Prefer Domain Events for cross-module communication" | `project-context.md:123` | Verbatim. | SUPPORTED |
-| Record DTOs / `<script setup>` / centralized `*.api.js` / i18n / Prettier gate | `project-context.md:42, 45, 47, 56, 70`; `.github/actions/frontend-quality/action.yml:36` | All five verbatim; Prettier gate confirmed live in CI (and in `.github/actions/`, not `workflows/`). | SUPPORTED |
-| **"Do not run `mvn verify` locally … GitHub CI is this project's *sole* full-verification authority"** attributed to `project-context.md` | `project-context.md` (full grep); no root `CLAUDE.md`; `docs/validation-strategy.md` | **Not in `project-context.md`.** Real authority is `docs/validation-strategy.md` (L20, L38), which the story never cites. And **"sole" is wrong** — L25-29 explicitly permits local `mvn verify` on user request, for cross-cutting changes, or as final pre-PR validation. | PARTIALLY_SUPPORTED — see L6 |
-| **V157/V158 are "nullable single-purpose `ADD COLUMN` … with no backfill"** | full text of V157, V158, V156; migration dir listing | **False on both counts.** | **CONTRADICTED** — see M4 |
-| Awaitility is an available test dependency | `pom.xml:474-479`; 17 importing test files | `awaitility 4.3.0`, `test` scope. In-module precedent exists (`SluCalculationServiceIT`, `ReportGenerationServiceIT`). Task 3.4 is feasible as written. | SUPPORTED |
+| `V138__baseline_schema.sql:420-428` — `player_timeline_events` table | **MATCH** | 420-428 exactly | `player_id bigint NOT NULL`, `occurred_at timestamptz NOT NULL`, `metadata jsonb`; **no `coach_id`** |
+| `V138__baseline_schema.sql:3334` — existing index | **MATCH** | 3334 | `idx_player_timeline_events_player_id ... USING btree (player_id, occurred_at DESC)`. Grep of all migrations: this is the only index on the table |
+| `TimelineQueryService.java:43-52` — `isCoach` branch | **MATCH** | 43-52 exactly | Verified firsthand |
+| `TimelineQueryService.java:37-41` — `expiryDays` config read | **DRIFTED** (undershoot) | real statement **33-41** | L33 `long expiryDays;` and L34 `try {` fall outside the cited range |
+| `TimelineQueryService.java:70-84` — `redactRecapIfNotAuthoringCoach` | **MATCH** | 70-84 exactly, name spelled identically | Verified firsthand |
+| `TimelineQueryService.java:37-52` — "the exact region Task 2.2 changes" | **DRIFTED** | real blast radius **L9, L28-30, L37-52** | Lombok `@RequiredArgsConstructor` means the new resolver dependency is declared at **28-30**, outside the cited range; the `SluRepository` import at L9 may go unused |
+| `ConfigBounds.java:148-151` — 3-arg-vs-4-arg Javadoc | **DRIFTED** | real Javadoc at **59-70** | 148-151 is only the `BoundedKey` declaration + a one-line Javadoc about `0/neg` semantics — no arity content. Verified firsthand |
+| `SluRepository.java:48-56` — `findLastSessionDate` | **MATCH** | 48-56 | Native `@Query`, `SELECT MAX(calculated_at) ... WHERE player_id=:playerId AND coach_id=:coachId`, returns bare nullable `Instant`, params `(Long, UUID)` |
+| `BookingCompletionService.java:228-232` — `verifyCoachOwnership` | **MATCH** | 228-232 exactly; is `private` | Throws `OperationNotAllowedException(..., SecurityError.MISSING_RIGHTS)`. Takes a `CoachProfile`, **not** a `UUID` |
+| `Session.java:37-38` — `coachId` | **MATCH** | 37-38 exactly | `@Column(name="coach_id", nullable=false) private UUID coachId;` |
+| `CoachCommandCenterPage.vue:90-203` / `:102-153` | **MATCH** (both ranges) | as cited | Caveat: 102-153 holds **five** buttons, not the three named (incl. a `COMPLETED`-gated "Repeat Next Week") |
+| `router/routes.js:181-185` — session-builder route | **DRIFTED** (undershoot) | route object spans **180-185** | `name` is exactly `coach-session-builder` — the story's guess is **correct**. But it is **not** the only `:bookingId` route (also `:317`, `:335` receipt routes) |
+| `i18n/en-US/index.js:239-255` — `coach.myPlayers*` | **MATCH** | `coach:` opens 239, closes 255 | `myPlayersNeglectedSkillCount: '{count} neglected skill \| {count} neglected skills'` — verbatim as claimed |
+| `V159__booking_session_completion_data_recap.sql` | **MATCH** | is the highest migration on disk | **V160 is genuinely free.** Both borrowed idioms (`SET LOCAL lock_timeout`, `ADD COLUMN IF NOT EXISTS`) present |
+| `PlayerTimelinePanel.vue` at `pages/coach/` | **DRIFTED** | real path `src/frontend/src/components/development/PlayerTimelinePanel.vue` | Substantive claims about it (no `coachId` prop, `store.fetchTimeline`) are correct |
+| `vitest.config.mjs` at `src/frontend/src/` | **DRIFTED** | real path `src/frontend/vitest.config.mjs` | `globals: false` confirmed |
+| All other named files | **EXIST** | as cited | `SessionPrepCard.vue`, `SessionPrepResource`, `CoachPlayerLastSessionResolver`, `SessionFocusThreadCalculator`, `SessionPrepService`, `SessionPrepResponse` correctly do **not** exist yet |
 
 ---
 
-## 4. Mechanistic claims (Layer 3)
+## 2. Ledger & precedent attribution
 
-24 claims checked by reading the **full body** of each named method, with an explicit check for confusable same-file siblings, and by tracing real transaction boundaries. **17 CONFIRMED, 6 PARTIALLY_CORRECT, 1 WRONG.**
+| Claim | Sources checked | Verdict |
+|---|---|---|
+| `deferred-work.md` heading "code review of skillars-12-2…" + SLU-clock-proxy bullet | doc / code comments / git | **SUPPORTED** — paraphrase faithful on every load-bearing point |
+| Ledger's "natural home is Priority 4's…" quote | doc / git | **SUPPORTED** — verbatim |
+| "coach UI CRUD audit" orphaned `SessionBuilderPage.vue` | doc / **independent frontend grep** / git | **SUPPORTED** — and the orphan is still real today: route name appears only in `routes.js` |
+| "this session actually happened" as the ledger's own wording | doc (0 hits) / code comments (says *"meaningfully committed block content"*) / git (0 hits all history) | **UNSUPPORTED** — reviewer's paraphrase promoted to a quote. See M6 |
+| Both source docs annotated as covered | doc / `git diff` | **SUPPORTED** — 1 annotation in `deferred-work.md`, 3 in the brainstorm |
+| Pattern #9 verbatim quote | doc / git | **MISATTRIBUTED** — two-source splice. See M6 |
+| Pattern #9 under `### Role Playing` | doc | **SUPPORTED** (`#Role-Playing` is the slug form) |
+| Priority 4 / Fast-Follow out-of-scope framing | doc | **SUPPORTED** |
+| Player/parent flag "permanently deferred" | doc | **PARTIALLY_SUPPORTED** — brainstorm says *"kept on the list"*, *"revisit once homework/messaging-adjacent stories are scheduled"* |
+| 12-1 and 12-2 are `done` | `development_status` map | **SUPPORTED** — both `done` (the "review" wording is a superseded prior note) |
+| 12-1's `lastActivityDate` merge-once precedent | doc / shipped code | **SUPPORTED** — confirmed in both |
+| 12-1 "sidestepped the gap by calling the repo directly" | doc | **PARTIALLY_SUPPORTED** — flag-and-defer is exact; the *sidestep rationale* is 12-3's own inference. 12-1's stated reason is reuse + the player-level data boundary |
+| `RosterAttentionCalculator(+Test)` precedent | code | **PARTIALLY_SUPPORTED** — real precedent is JUnit 5 + AssertJ, *"No Spring, no mocks"*. Both halves of the story's contradictory guidance are partly wrong. See L-group |
+| `CoachRosterResourceIT` class shape | code | **SUPPORTED** — `@Sql({SecurityIT.SEC_DATA_SQL_PATH})` + `extends AbstractIntegrationTest`; the rest is inherited |
+| `getCoachIdByUserId` precedent | code | **PARTIALLY_SUPPORTED** — method/types exact (`UUID getCoachIdByUserId(Long)`); the *layering* is inverted. See M4 |
+| "prefer events for cross-module communication" + read-only carve-out | 12-2 / `project-context.md:123` | **PARTIALLY_SUPPORTED** — rule wording exact; the carve-out is 12-3's inference. The `CoachRosterService`→`BookingRepository` precedent is real and does carry the argument |
+| `TimelineQueryService` has never had a unit test | 12-2 / test-tree search | **SUPPORTED** — only `PlayerTimelineResourceIT` references it |
+| 12-2's D1 in "Pre-Implementation Review Resolution" + "both point here" | doc | **PARTIALLY MISATTRIBUTED** — D1 is real and the Review Findings "Deferred" half is **correct**; D1 is *not* in "Pre-Implementation Review Resolution" (line 97, a different review's M/H/L findings), and neither section forward-references 12-3 |
+| `project-context.md` five rules | doc | **SUPPORTED** — 5/5 |
+| "migration count moves quickly" | git | **PARTIALLY_SUPPORTED** — 1 migration-touching commit in the last 20. The "verify V160 is free" hedge is still good practice |
 
-**Confirmed (consequential):**
-
-- **`submitWrapUp` is mode-agnostic until the publish decision** (`BookingCompletionService.java:127-182`). L129-158 identical for both modes; divergence begins L160. No `Session`/`SessionRepository` reference anywhere in the file. The story's core design premise holds. *Nuance the story glosses:* the LIVE branch also performs a state-machine `transition(QUICK_COMPLETE)` the QUICK branch does not.
-- **Single endpoint, `@Valid` applied** (`SessionCompletionResource.java:79-81`, `@Validated` at class level L38). `POST /{id}/complete` with `@RequestBody @Valid WrapUpRequest`. AC1's new `@NotBlank` will genuinely produce a rejection, and `ApiAdvice.java:471-473` maps `MethodArgumentNotValidException` → **400**, as claimed.
-- **`SessionCompletionData` is 1:1 per booking.** Entity `unique = true` (`:28-29`); DDL `session_completion_data_booking_id_key UNIQUE (booking_id)` (`V138:2194-2195`). AC2's premise holds.
-- **All 3 production publishers already hold the recap data** — `submitWrapUp` has `req`; `confirmCompletion` has `scd` (`:197-205`); the timeout job has `scd` (`:59-69`). No new repository lookup needed anywhere. Claim holds exactly.
-- **`confirmCompletion`'s `scd` can never be null** — `orElseThrow` → 404. And the `transition(COMPLETE)` at L192 shares the **same** `@Transactional` scope as that throw, so a missing row rolls the transition back: **no partial completion**. (Transaction boundary traced, not assumed.)
-- **Listener annotations are genuinely on `onBookingCompleted`** — `@TransactionalEventListener(AFTER_COMMIT)` + `@Async("taskExecutor")` (`TimelineEventListener.java:34-35`), delegating via `self` to `writeTimelineEvent` which is `@Transactional(REQUIRES_NEW)` (`:66`). The identically-annotated sibling `onRadarEntrySubmitted` (`:50-52`) was explicitly checked and is not the source.
-- **`metadata` is `Map<String, Object>`** via hypersistence `@Type(JsonType.class)`, column `jsonb`, **`updatable = false`** (`PlayerTimelineEvent.java:47-49`). Task 3.2's `coachId.toString().equals(metadata.get("coachId"))` **type-checks** (`String.equals(Object)`), behaves correctly (JSONB string → `String`), and is receiver-first so it is NPE-safe when the *key* is absent (though not when the *map* is null — Finding H1).
-- **ID spaces match.** `verifyCoachOwnership` compares `booking.getCoachId()` against `CoachProfile.getId()` (`:225-229`), and the reader uses `coachProfileService.getCoachIdByUserId(...)` → `CoachProfile::getId` (`CoachProfileService.java:707-711`). Same space. AC4's authoring-coach comparison **will** match — a plausible failure mode that does not materialize.
-- **`TimelineQueryService.getTimeline` is the only read path.** `PlayerTimelineRepository` has exactly three consumers in `src/main`: `TimelineEventListener` (write), `TimelineQueryService` (read), `GdprErasureService:1153` (bulk delete). One redaction point suffices. *Advisory:* `ReportGenerationService.java:216-220` is a **fourth caller of `writeTimelineEvent`** — Task 3.1 is safe only because it changes the map *inside* `onBookingCompleted` rather than the helper's signature.
-- **No ADMIN/STAFF path to the endpoint.** `@PreAuthorize("hasRole('ROLE_COACH') or @playerOwnershipGuard.check(...)")` (`PlayerTimelineResource.java:27`); `PlayerOwnershipGuard.check` matches only `existsByIdAndParentId`/`existsByIdAndUserId`; **no `RoleHierarchy` bean anywhere** in `src/main`. An admin is 403'd at the gate. AC4's `!isCoach` → never-redact branch creates **no** admin exposure.
-- **`voiceNoteText` is genuinely optional and write-only.** Zero validation annotations (`WrapUpRequest.java:18`); `grep getVoiceNoteText src/main` → **nothing**. Never read back, never exposed. The story's decision to leave it untouched is sound.
-- **`WrapUpSequence.vue` really does back both paths** — single mount at `CoachCommandCenterPage.vue:15` with `:is-live-mode`; Quick Complete sets `isLiveMode=false` (`:576`), live End-Session sets `true` (`:549`); both converge on `handleSubmitWrapUp` → `booking.api.js:57` → `POST /complete`.
-- **`*.api.js` is a true passthrough** — `export const submitWrapUp = (id, data) => api.post(...)` forwarding the whole payload object to `/api/bookings/{id}/complete`. No named-field picking. No edit needed.
-- **`SluCalculationService.onBookingCompleted` silently no-ops without a `Session` row** (`:57-62`, `log.debug`). Sole listener method in the class; no confusable sibling. *Downstream consequence the story leans on correctly but does not spell out:* this is also why a Quick-Complete-only coach has no `findLastSessionDate`, so such a coach gets `accessExpired=true` and sees **no** timeline at all — making AC4's "any other coach with non-expired access" a narrower population than it reads, which Task 3.3's second-coach IT must seed deliberately (an SLU row, not just a booking).
-
-**Partially correct / wrong:** see Findings L1 (arity), L2 (call-site count), L3 (expiry window), L4 (synchronicity), and Section 5.
+**Lineage note:** 12-2's own D1 (line 70) cites `SluCalculationService.java:52-62` and lists **three** early returns, omitting the `blocks` gate. The undercount originates there, was inherited by the ledger, and again by this story (see M6).
 
 ---
 
-## 5. Corner cases, false assumptions and missed flows (survived Step 4b)
+## 3. Mechanistic claims
+
+**The story's core premise is sound.** This was checked hardest, and it holds:
+
+- `TimelineQueryService.java:46` reads **only** `sluRepository.findLastSessionDate`. `getTimeline` calls exactly three collaborators; the timeline repository *is* consulted at `:55` but strictly **after** the gate and un-scoped by coach — an easy conflation that does not occur here. **CONFIRMED**
+- `TimelineQueryService.java:47` — `lastSession == null ||` — **null is explicitly treated as expired**, first in the disjunction. `accessExpired` is the real field name (`TimelineResponse.java:5-9`), and `PlayerTimelineResourceIT:257-266` already pins this behavior. **CONFIRMED** — had null meant "no check applies", the whole story would collapse. It doesn't.
+- `SluCalculationService.java:57-62` — the gate keys off **absence of a `session.sessions` row for the booking id**, matching its own log message *"Quick Complete or no session builder usage"*. **CONFIRMED**
+
+**Near-miss hazard explicitly cleared:** there are **two** different `onBookingCompleted(BookingCompletedEvent)` methods in `platform.development.service`, with identical `@TransactionalEventListener(AFTER_COMMIT)` + `@Async("taskExecutor")` annotations — `SluCalculationService:50` (six early returns) and `TimelineEventListener:44` (**zero** gates, writes unconditionally). Each was read in full and separately. Attributing one's gating to the other would invert the story's thesis; it also turns out to be the root of finding H3.
+
+**Entity/repository mechanics — all proposed derived queries parse:**
+
+| Claim | Verdict |
+|---|---|
+| `PlayerTimelineEvent.playerId` is `Long`, `occurredAt` is `Instant`, `eventType` is the enum, `metadata` is a `jsonb`-mapped `Map<String,Object>`, no `coach_id` today | **CONFIRMED** (verified firsthand) |
+| `findTopByPlayerIdAndCoachIdAndEventTypeOrderByOccurredAtDesc(Long, UUID, PlayerTimelineEventType)` parses | **CONFIRMED** |
+| `Session.status` is a **`String`** → `List.of("SAVED","COMPLETED")` is the correct param type (no enum trap) | **CONFIRMED** |
+| `Session.developmentFocus` is `List<String>`, non-null jsonb → Task 3.1's `List<List<String>>` is achievable | **CONFIRMED** |
+| `findTop10ByPlayerIdAndCoachIdAndStatusInOrderByCreatedAtDesc` parses; `findTop5ByPlayerIdOrderByCreatedAtDesc` is a direct in-interface precedent | **CONFIRMED** |
+| `NeglectedSkillFlagRepository.findByPlayerIdAndResolvedAtIsNull(Long)` + `.size()` is exactly 12-1's idiom (no `countBy*` exists) | **CONFIRMED** |
+| **ID space:** `Booking.playerId` is a `Long` `PlayerProfile` PK, and all four downstream repositories key off that same space and type | **CONFIRMED — the known trap does not bite** |
+| `SecurityConstants.HAS_COACH_ROLE` = `"hasRole('ROLE_COACH')"` | **CONFIRMED** |
+| `/neglected-skills` + `/slu/coach-contributions` have no relationship check | **CONFIRMED** against two convincing near-misses — `SluTargetService:27`/`:36` *do* call the guard while `getNeglectedSkills:53` does not; `SluDashboardService` guards 3 of 4 sibling endpoints. Verified method-by-method, not at class granularity |
+| `writeTimelineEvent` is **private** | **REFUTED** → H1 |
+| `Session.developmentFocus` is "only ever set via `SessionPlanService`" | **REFUTED** — `SessionTemplateService:158` also writes it. Consequence-free (stamps `DRAFT`, excluded by Task 3.2's filter) |
+| "the one key in this codebase using the 3-arg pattern" | **PARTIALLY_TRUE** — 10+ 3-arg call sites repo-wide; `NeglectedSkillDetectionService:73-85` also wraps one in a manual catch. The true claim is scoped to `HAS_CODE_DEFAULT`'s 18 keys, per `ConfigBounds.java:59-70` |
+
+**Transaction/async boundary (traced, not assumed).** `submitWrapUp`'s transaction commits the `session_completion_data` row and the state transition — **and nothing else**. *After* commit, two `AFTER_COMMIT` listeners dispatch onto `taskExecutor` (4 core / 16 max, `CallerRunsPolicy`). `writeTimelineEvent` then opens a **separate `REQUIRES_NEW`** transaction and commits the single INSERT alone; failures are caught and logged at `:65-67` with no rethrow, so a timeline-write failure **cannot** roll back booking completion. The SLU write and the timeline write are **not** in the same transaction as each other and have **no ordering guarantee**. Consequence for this story: **no new hazard for the `coach_id` write** (it lands in the same single INSERT), but the silent-loss path is what makes M2 reachable.
+
+---
+
+## 4. Corner cases, false assumptions, missed flows
 
 ### HIGH
 
-**H1 — Task 3.2's redaction condition NPEs on a `SESSION_COMPLETED` row with NULL `metadata`, breaking an existing IT that AC8 does not flag.**
-`PlayerTimelineResourceIT.java:492-499`, `:141`; story AC4 / Task 3.2.
+**H1 — `writeTimelineEvent` is `public` with a cross-class caller; widening it breaks compilation in two files no task names.**
+Task 1.3 says *"locate every call site of the **private** `writeTimelineEvent(...)` helper (`TimelineEventListener.java`, grep …)"* — wrong modifier, and the grep is scoped to the wrong file. Reality (`TimelineEventListener.java:87`): `public`, `@Transactional(REQUIRES_NEW)`, invoked via a `@Lazy self` proxy (it *must* be public). Three production call sites across two classes — `TimelineEventListener:58` (SESSION_COMPLETED), `:74` (RADAR_ASSESSMENT), and **`ReportGenerationService.java:216`** (PERFORMANCE_REPORT). Adding a 6th parameter is a **compile error** in `ReportGenerationService.java` plus **four Mockito arity compile errors** in `ReportGenerationServiceTest.java:216, 266-269, 285, 294`. Neither file appears in the story's Project Structure Notes or File List.
+*Also settles Task 1.3's open question:* `RadarEntrySubmittedEvent` has no coach field and `ReportGeneratedEvent` carries `coachName` (not an id) — so `null` is correct at both, exactly as AC2 permits.
+**Fix:** correct the modifier and call-site list; either pass `null` at `ReportGenerationService:216` and update the 4 verifications to six `any()`s, or add a 5-arg overload delegating with `null` so no existing caller changes.
 
-Task 3.2 prescribes the guard verbatim as `isCoach && coachId != null && coachId.toString().equals(metadata.get("coachId"))`, plus "build a defensive copy of the map before removing keys" — with **no `metadata != null` guard** in either the condition or the copy step. But `metadata` is a nullable JSONB column, and the existing IT seeding helper inserts **no metadata column at all**:
+**H2 — The V160 `CREATE INDEX` as specified fails the build.**
+`MigrationLint.Rule.BLOCKING_INDEX` (`MigrationLint.java:787-790`) rejects a `CREATE INDEX` without `CONCURRENTLY` and without a `-- migration-lint: allow-blocking-index <reason>` opt-out **immediately above the statement** (an opt-out elsewhere in the file explicitly no longer covers it). The grandfather baseline is V139 and *"every migration from V140 onward is bound by the full rule set with no grandfather exceptions"* — V160 qualifies. Task 1.1's index statement carries no marker. `CONCURRENTLY` is not an escape either: no migration in the repo uses it, and the conventions doc records that it permanently self-deadlocks under this project's Flyway. The gate is `MigrationConventionLintTest` — a plain unit test, so it fails fast in the `test` phase and blocks every downstream job.
+**Sharpening this audit added:** no post-baseline migration creates an index at all, so V160 would be the **first** — there is zero in-repo example to copy and the rule has never been exercised by a real migration.
+**Fix:** Task 1.1 must specify the statement-scoped marker with a reason including an estimated row count and build time, per the conventions doc's rule 4.
 
-```java
-"INSERT INTO development.player_timeline_events " +
-"(id, player_id, event_type, reference_module, occurred_at) " +
-"VALUES (gen_random_uuid(), ?, ?, ?, NOW())"
-```
-
-**Failure scenario:** a developer implements Task 3.2 exactly as written. `getTimeline_asCoach_withActiveAccess_returns200WithEvents` (`PlayerTimelineResourceIT.java:133`) seeds an SLU row *and* a `SESSION_COMPLETED` row with `metadata = NULL` at `:141`, then performs a **coach-authenticated** GET. It passes the expiry gate, reaches the `.map(...)`, and throws NPE inside `TimelineQueryService` (no try/catch there) → **500 instead of 200 → IT fails**. Both halves of Task 3.2 fail this way: `new HashMap<>(null)` NPEs too.
-
-Precisely **one** existing IT breaks. The other two seeded `SESSION_COMPLETED` rows are safe: `:191` is in `getTimeline_asParent_...` and `:226` in `getTimeline_asSelfRegisteredPlayer_...`, both `!isCoach` → short-circuit before touching the map. *(Layer 4 reported "two ITs" and named `:191` as a coach test; that is wrong — corrected here.)*
-
-**Fix:** add `metadata != null` to the guard, and have the helper return the map untouched when null. The story's AC8 carefully enumerates test fallout for AC1's validation change but performs no equivalent sweep for AC4's redaction change — that sweep is the real gap.
-
-**H2 — AC1 makes a 400 reachable from the wizard for the first time, and nothing in the chain can surface it: the coach gets a silent dead-end.**
-`WrapUpSequence.vue:337-353`, `booking.store.js:516-519`, `boot/axios.js:157-250`; story AC1 / Task 4.1.
-
-Task 4.1 specifies the two new inputs as `q-input type="textarea" outlined autogrow` with **no `maxlength`, no `counter`, no `:rules`**; the only client gate is `:disable="!recapWhatWeDid.trim() || !recapWhatsNext.trim()"`, which guards blankness only. AC1 adds `@Size(max = 500)` server-side. The full error chain, verified end to end:
-
-- `WrapUpSequence.vue:337-353` — `try { … } finally { submitting.value = false }`. **No `catch`.**
-- `booking.store.js:516-519` — `await submitWrapUp(...)`. **No catch.**
-- `boot/axios.js` interceptor — explicit branches for **401** (`:162`), **403** (`:226`, `console.warn` only), **5xx** (`:236`, `console.error` only), network and setup errors. **No 400 branch** → falls through to `return Promise.reject(error)` (`:250`) with no notify and not even a console line.
-
-**Failure scenario:** a coach writes a 520-character "what we did" in an `autogrow` textarea with no visible limit and taps submit → backend returns 400 → unhandled promise rejection inside a `@click` handler → `submitting` resets, the overlay stays open, **no error message, no hint what is wrong**, and the booking remains stuck in `COMPLETED_PENDING_CONFIRMATION`.
-
-This is genuinely new. Today **no** validated field on this request can fail from the UI — ratings are `q-rating` 1–5, `mode` is hardcoded, `playerAttended` is a checkbox, and `homeworkDrillIds` is capped at 2 by `toggleDrill` (`:273`, matching `@Size(max = 2)`). I verified each. AC1's `@Size(max=500)` is the first field a coach can actually violate, and it lands on a path with zero error surfacing. No task adds a `maxlength`, a `:rules`, or a `catch`.
+**H3 — The new signal grants 90 days of full-timeline access for a session the player did not attend.**
+The two `BookingCompletedEvent` consumers diverge precisely on attendance: `SluCalculationService.java:52-55` returns early on `!event.isPlayerAttended()` (no SLU row → no clock reset today), while `TimelineEventListener.onBookingCompleted` writes the `SESSION_COMPLETED` row **unconditionally** — grep for `attend` in that file returns **zero** hits. The non-attended wrap-up is a live, intentional path (`BookingCompletionService.java:138`; `WrapUpSequence.vue` exposes a switchable `playerAttended` toggle). Story 12-2's own D3 states the SLU skip is the *only* thing distinguishing the two cases — and the SLU row *is* the access clock.
+*Failure scenario:* coach C's single booking with player P is wrapped up with `playerAttended = false`. Today → `accessExpired=true` forever. After this story → `accessExpired=false`, and C reads P's **entire** development timeline (radar assessments, performance reports, other coaches' session events) for 90 days on the strength of a session that never happened. `deferred-work.md:3794` specifically warns that changing this policy *"widens data access for currently-expired coaches and deserves its own ACs and tests."*
+**Fix:** make it a decision, not a side effect. Either scope the new signal to attended sessions (requires attendance in the row — the table has no such column today), or accept it explicitly in an AC with an IT asserting the behavior.
 
 ### MEDIUM
 
-**M1 — AC4's player/parent-visible recap contradicts the source brainstorm in four places; the story presents a product departure as a settled inference, and supports it with a truncated quote.**
-Story Dev Notes reason (d) + AC4; brainstorm L131-132, L134, L219, L221.
+**M1 — Task 2.3's seeding instruction produces a test that cannot pass.**
+`insertSessionCompletedEventWithRecap` (`PlayerTimelineResourceIT:584-595`) inserts `(id, player_id, event_type, reference_module, occurred_at, metadata)` — **no `coach_id`**. Task 1.4's new query filters on that **column**. The V160 backfill runs once at Flyway time against an empty table, and `DatabaseResetTestExecutionListener` truncates before every test method, so no test row ever receives a backfilled value. Following Task 2.3's `jdbcTemplate` branch verbatim, the headline AC1/AC8 test asserts `accessExpired=false` and gets `true` — and the dev plausibly concludes the production merge is broken and debugs the wrong half. Secondary: *"directly via `jdbcTemplate` matching the existing helper's pattern"* points at the half that **doesn't commit** — all three existing callers wrap it in `transactionTemplate.execute(...)` (e.g. `:159`), which is what makes it commit under hikari `auto-commit=false`.
+**Fix:** state that the fallback requires a widened/new helper setting `coach_id`. Worth also recording the silver lining: because the existing helper leaves `coach_id` NULL, none of 12-2's three redaction tests are perturbed.
 
-The story writes: *"The brainstorm's own 'Second use for the recap… feeding `ReportGenerationService`' note is about which **feature** consumes the recap next, not a statement that the raw text must be hidden from the family on the timeline."* The ellipsis removes the decisive clause. Verbatim L134:
+**M2 — AC3 can label a recap with a date it did not come from.**
+AC3 ties `lastWhatWeDid`/`lastWhatsNext` to *"that same most-recent own-authored `SESSION_COMPLETED` event"*, but Task 2.1's resolver returns `max(SLU, timeline)` — which **may be the SLU value** — and Task 3.4 assembles the two sources with no reconciliation rule. Divergence is reachable via two paths: the async swallow at `TimelineEventListener:65-67` (12-2 accepted this as "silent async-write loss"), and the story's **own** "Known residual risk" window, where a `coach_id IS NULL` row is invisible to Task 1.4's query. That paragraph reasons only about the *clock* (*"a row with neither simply doesn't move the clock"*) and never follows the consequence through to the recap.
+*Failure scenario:* Jan 10 Quick Complete with recap R1 (timeline row, no SLU). Feb 10 builder session, timeline write silently lost, SLU row commits. Resolver → Feb 10; recap query → the Jan 10 row. Card renders **"Last session: 10 Feb — What we did: R1"**.
+**Fix:** add `lastRecapSessionDate` to `SessionPrepResponse` and render the recap under *that*, or null the recap fields unless the event's `occurredAt` equals the merged date (falling back to AC5's "no recap yet"). State the rule in AC3.
 
-> "Second use for the recap, **chosen explicitly over a parent-visible summary for now**: feeding the existing `ReportGenerationService`/`PerformanceReportResource` pipeline…"
+**M3 — The backfill is an unbounded full-table `UPDATE` held open across a blocking index build.**
+`docs/deployment/migration-conventions.md` requires backfills to be *chunked*, *"never one unbounded full-table write"*, and its rule 6 note is explicit that the lint *"does not decide whether a present `WHERE` actually bounds anything — **review still owns that half.**"* The story's `WHERE coach_id IS NULL AND metadata ? 'coachId'` matches every existing `SESSION_COMPLETED` row by design, inside a single Flyway transaction, followed by a blocking `CREATE INDEX` on the same table under `lock_timeout = '5s'`. `deferred-work.md:3798` separately records that this table's real cardinality is **unknown**.
+**Fix:** add the `allow-full-table-dml` marker with a measured row count and explicit sign-off, or split the index into its own migration so the UPDATE's row locks aren't held while a `SHARE` lock is acquired.
 
-That clause *is* a decision not to make the recap parent-visible yet. Three further independent signals point the same way:
+**M4 — The coachId-resolution layering is inverted, the tasks contradict each other, and Task 3.6 asks for an unassertable assertion.**
+Both cited precedents (`CoachBrandingResource`, `CoachRosterResource:33-35`) resolve `UUID coachId` **in the resource** and hand the service a `UUID`. Task 3.4 has `SessionPrepService.getPrep(UUID bookingId, Long coachUserId)` resolve it **inside the service**; Task 3.5 then says the resource resolves `coachUserId` *"the same way `CoachRosterResource` does"* — which never passes a `coachUserId` anywhere. Separately, Task 3.6 requires asserting a different coach's booking *"must not leak the player's name"* — but `SessionPrepResponse` has **no name field**, for any caller; a dev either invents one (creating a real leak surface AC3 doesn't list) or writes a vacuous assertion. And the two negative cases produce **different** statuses that no AC states: unknown booking → **404** (`ResourceNotFoundException` → `ApiAdvice:611-617`), wrong coach → **403** (`OperationNotAllowedException` → `ApiAdvice:329-333`).
+**Fix:** pick one layering and make 3.4/3.5 agree (resolving in the resource matches both precedents and avoids a cross-module repository dependency). Replace the "player's name" wording with the real assertions, and note that the 403/404 split reveals *booking existence* — not player data — and is the deliberate, precedented behavior. Also note for AC5 that the card's player name must come from the parent's prop.
 
-- **L131-132:** "Decision #8 (siloed history) is refined, not reversed: **raw session notes stay private per coach**; aggregate skill-contribution percentages stay cross-coach visible (confirmed explicitly for the coach view too, not just parent/player)." The contrast structure is explicit — *raw notes* are private per coach; *aggregates* are the thing visible to coach **and** parent/player.
-- **L219:** "Keep it coach-private per Decision #8 (siloed notes)."
-- **L221** (Priority 2 success indicator): "every completed session has a recap attached, visible back to **the coach** on that player's timeline." Coach only.
+**M5 — `maxCodes` has no specified value or source anywhere in the story.**
+Task 3.1 takes it as a parameter, Task 3.7 tests that it caps, Task 3.4's assembly never mentions it, and AC3 says only *"a list, possibly empty"*. No AC, task, or Dev Note names a number, constant, or config key — unlike every other tunable in this area. A dev picking a `ConfigService` key would need a `ConfigBounds` registration + `HAS_CODE_DEFAULT` entry + Flyway seed, which was a blocking finding in story 12-1.
+**Fix:** name it — a private `static final int MAX_FOCUS_CODES = N`, explicitly *not* a config key.
 
-The story goes further than omitting this: it instructs the developer to disregard L219 — *"Do not read 'coach-private' … as player/parent-exclusion."* Read against L131-132, "coach-private" is not merely cross-coach.
-
-In fairness, the story's other three reasons are factually sound: Decision #8's literal text **is** cross-coach only (verified), and the player/parent **do** see their own full unredacted timeline today (verified). So this is a defensible product argument — but it is a **deliberate departure from the source doc**, not an inference from it, and the story presents it as settled. It drives AC4, AC6, Task 3.2 and one of Task 3.3's three tests.
-
-**Recommended action:** get an explicit owner decision before dev starts. Absent one, the default consistent with the source doc is to redact `whatWeDid`/`whatsNext` for every viewer except the authoring coach.
-
-**M2 — Neither AC2's persistence nor AC3's two *deferred* publish paths have any planned test coverage: a forgotten setter passes every planned test while silently losing every QUICK-mode recap.**
-Story Tasks 1.5, 1.6, 3.3, 3.4.
-
-Tracing what the planned tests actually assert:
-- **Task 1.5** — the two ITs assert `204` + `bookings.status`. They never read `booking.session_completion_data`.
-- **Task 1.6** — the three unit call sites get two extra ctor args; existing assertions are `event.getBookingId()` / `event.isPlayerAttended()`. Nothing asserts the new scd fields or the event's new fields.
-- **Task 3.4** — a **LIVE**-mode `submitWrapUp` → Awaitility-poll the timeline. But the LIVE publish reads from the **request**, not the row (`BookingCompletionService.java:166-170`), and Task 2.2 keeps it that way (`pass req.recapWhatWeDid(), req.recapWhatsNext()`). So this test passes without the row ever being correct.
-- **Task 3.3** — seeds `player_timeline_events` metadata directly via `jdbcTemplate`, bypassing the write path entirely.
-
-**No planned test ever reads `what_we_did`/`whats_next` back out of `session_completion_data`, and neither scd-sourced publisher (`confirmCompletion:197-205`, `QuickCompleteTimeoutService:59-69`) is exercised at all.**
-
-**Failure scenario:** the developer omits Task 1.4's two setters, or transposes them (`setWhatsNext(req.recapWhatWeDid())`). Every test in Tasks 1.5, 1.6, 3.3 and 3.4 stays green. In production, LIVE-mode recaps appear correctly; **every QUICK-mode booking writes NULL recap columns**, both deferred publishers then pass `null, null`, and Task 3.1's "include only when non-null" silently omits the keys — so the entire Quick-Complete population gets no recap on the timeline, with no error anywhere. AC1 explicitly promises "This applies identically whether `mode` is `LIVE` or `QUICK`"; the test plan only proves LIVE.
-
-**M3 — If the async timeline write fails, the recap is absent from the timeline forever, with no reconciliation path. AC3 states the write unconditionally.**
-`TimelineEventListener.java:34-48`; story AC3.
-
-Transaction boundaries traced and confirmed as the story assumes: all three publish sites are inside a real transaction, so `AFTER_COMMIT` does fire for all three. But on failure the listener does `catch (Exception e) { log.error(...) }` — **no outbox, no retry, no DLQ**, unlike the sibling `SluPersistenceRetrier`/`SluPersistenceDispatcher` in the same package, which do have retry infrastructure.
-
-**Failure scenario:** the `taskExecutor` pool rejects the task under saturation, or the `REQUIRES_NEW` transaction hits a connection timeout → one ERROR log line → the player/parent and the authoring coach never see that session's recap, and **nothing ever reconciles it from `session_completion_data`**, where the text is sitting durably. Note `Map.of` also rejects nulls, so Task 3.1's "include only when non-null" is load-bearing: get it wrong and every recap write NPEs into this same silent catch. The story's "Known residual edge case" section discusses only a hypothetical future 9-arg publisher, not this live path.
-
-**M4 — The V157/V158 migration precedent is mischaracterized on both counts.**
-Story Task 1.3 + Dev Notes "Migration safety".
-
-The story says V159 should match "the exact convention used by `V157…` and `V158…` (both nullable single-purpose `ADD COLUMN` migrations with no backfill)". Verified by reading both files in full:
-
-- **V157 is not backfill-free.** It ends with `UPDATE reviews.coach_reviews SET author_last_edited_at = CASE WHEN moderation_epoch = 0 THEN created_at ELSE last_modified_at END WHERE author_last_edited_at IS NULL;` — with ~20 lines of comment justifying it, its own header calling it a "Single-transaction backfill".
-- **V158 is not single-purpose.** After its `ADD COLUMN` it runs two CTE-based `UPDATE main.platform_config` statements, self-described as "unrelated to the column above but added to this migration because V158 is new/unmerged and this is cheap".
-
-The `SET LOCAL lock_timeout = '5s';` + `ADD COLUMN IF NOT EXISTS` half of the claim **is** correct, and **V159 is confirmed free**. The story's *actual plan* (nullable, no backfill) is also correct and properly grounded in `migration-conventions.md` rule 1 — which I verified independently. **The hazard is instructional:** a developer copying the stated convention will open both files, find backfills and unrelated DML, and could reasonably conclude extra statements are acceptable here.
-
-**M5 — Task 1.3 never states the SQL column type, against a table whose only text precedent uses a different size.**
-`V138__baseline_schema.sql:270-283`; `SessionCompletionData.java:49-50`; story Tasks 1.2/1.3.
-
-Task 1.2 specifies `@Column(length = 500)`; Task 1.3 says only "additive, nullable `ADD COLUMN IF NOT EXISTS`" — **no type** — while the V157/V158 migrations it claims to copy "verbatim" both name an explicit type. The table's actual precedent is `voice_note_text character varying(2000)` with `@Column(length = 2000)` and **no `@Size`** on the DTO — four times the story's cap. With `ddl-auto: none`, nothing validates the entity's `length=500` against whatever V159 creates.
-
-**Failure scenario:** the developer writes `ADD COLUMN IF NOT EXISTS what_we_did text` (a reasonable reading of "additive, nullable"). The 500 bound then exists only in `@Size(max=500)` on the DTO — which, per Finding H2, surfaces to the user as nothing at all. Either type is *functionally* safe (a passing `@Size` value cannot overflow `varchar(500)`), so this is a specification gap rather than a data bug — but it should be pinned explicitly.
+**M6 — Two load-bearing attributions are inaccurate in ways that mislead on scope.**
+(a) The "Pattern #9" block quote is a **two-source splice**: Pattern #9 ends at `_Novelty:_`; the second sentence (*"Reuse the same single-player endpoints…"*) is Priority 3's Action Planning `_Next steps:_` item 2, ~110 lines away in a different top-level section. Pattern #9 also never mentions neglected skills (that is Next Steps item 1). A dev treating the quoted block as the authoritative mandate gets a scope boundary matching neither source. This is the same defect class 12-2's own review already caught and corrected once.
+(b) *"this session actually happened"* appears **nowhere** — not in the ledger, not in `SluCalculationService`'s comments (which say *"meaningfully committed block content"*), not in all of git history. Worse, Task 3.2 instructs mirroring *"`SluCalculationService.onBookingCompleted`'s own definition"*, but that method has **six** independent early returns (`:52` attendance, `:57` no `Session` row, `:66` status, `:73` empty blocks, `:111` no drills, `:170` empty stats). The status filter mirrors **one** of six. A dev taking "mirror" literally either adds gates the ACs don't want or burns time on the mismatch.
+**Fix:** attribute the spliced sentence to Action Planning; drop the fabricated quote and state plainly that Task 3.2 intentionally mirrors only the *status* clause, because the focus thread needs `developmentFocus`, not drills. Also note AC1's claim that zero SLU rows means "Quick Complete or builder-less" is **narrower than reality** — a DRAFT or drill-less builder session also yields none, which *strengthens* the case for the fix.
 
 ### LOW
 
-**L1 — `BookingCompletedEvent` constructor arity is off by one throughout.** The existing constructor takes **10** parameters (`Object source` + 9 fields), not 9. So the story's "new 11-arg constructor" is really **12-arg**, and "keep the existing 9-arg constructor" means the existing **10-arg** one. Every "9-arg"/"11-arg" mention in Task 2.1 and the blast-radius Dev Note is wrong. *The plan itself is sound:* it is a `class extends ApplicationEvent` with Lombok `@Getter`, so a second delegating constructor is legal and idiomatic, the accessors the story uses (`event.getCoachId()`, `getWhatWeDid()`) match, and there is no overload ambiguity. Had it been a record, the story's wording would have been impossible to implement as written.
-
-**L2 — Call-site count is wrong.** `grep -rn "new BookingCompletedEvent(" src/` → **13** total: **3** production + **10** test. The story says 11 (3 + 8). Its own enumerated list contains all 10 test line numbers and every one is correct — only the arithmetic is wrong, in both Task 2.1 and the "touch exactly 3 production files, 0 test files" heading. The plan is unaffected (the overload still makes all 10 zero-change).
-
-**L3 — "The 90-day expiry check" is not a fixed 90 days.** `TimelineQueryService.java:33` reads `configService.getBoundedLong("development.timeline.coachAccessExpiryDays", 1L, 3650L)`; 90 is the seeded value (`V139__baseline_seed_data.sql:79`) and the missing-key fallback (`:35-36`). The story states "the 90-day-since-last-session expiry check" as fact at least three times. **This matters for Task 3.3:** the second-coach IT must seed "non-expired" access robustly against the configured value rather than assuming 90.
-
-**L4 — AC3's "fires synchronously in the same request for `LIVE` mode" is misleading.** The *publish* is in-request and inside the transaction, but delivery is always `AFTER_COMMIT` + `@Async`, so nothing recap-related reaches the timeline in-request. The story's own Task 3.4 states this correctly — AC3 is the inconsistent one.
-
-**L5 — Task 1.1 and Task 1.6 are mutually incompatible.** Task 1.1 says insert the two fields *"after the existing `voiceNoteText` field and before `homeworkDrillIds`/`mode`"* (record positions 6–7). Task 1.6 says update the three unit call sites *"with two new **trailing** string args"*. For a record's positional canonical constructor these cannot both be right. Following Task 1.6 after Task 1.1 yields a **compile error** (arg 6 would be a `List` where a `String` is expected) — so it fails loudly rather than binding wrong values, but it will cost the developer a cycle. Pick one; trailing is the lower-risk choice.
-
-**L6 — The `mvn verify` rule is attributed to the wrong document, and overstated.** The story's Testing Standards says "GitHub CI is this project's **sole** full-verification authority" and the References section credits `project-context.md`. The rule is not in `project-context.md`; it lives in `docs/validation-strategy.md` (L20, L38), which the story never cites. And "sole" is wrong — L25-29 explicitly permits local `mvn verify` on user request, for cross-cutting changes, or as final pre-PR validation.
-
-**L7 — Converge #15 is misquoted.** The story attributes "(what we did / what's next), plus an optional free-text note" to Converge #15, which contains no such parenthetical. The wording is **Priority 2 Next Steps item 1 (brainstorm L217)**. Content real, location wrong.
-
-**L8 — Pattern #4's third component is silently dropped.** Pattern #4 (L74-76) names *three* pieces: "what we did, **what went well**, what's next". The story claims to cover Pattern #4 and ships two. *Largely mitigated:* the brainstorm's own **converged** text (L133, L217) settles on two plus an optional free-text note, and the story's Dev Notes reason this through explicitly, treating the third piece as the pre-existing `voiceNoteText`. So the two-field design is correct; only the unqualified "covers Pattern #4" claim needs a sentence.
-
-**L9 — `voiceNoteText` is described as having "app-level-only requiredness via the request DTO".** It has **no validation annotation at all** (`WrapUpRequest.java:18`) — it is not required at any level. The story's own earlier Dev Notes correctly call it "optional", so this is an internal inconsistency in the Migration-safety paragraph.
-
-**L10 — `confirmCompletion` citation overshoots a method boundary.** Cited `:185-215`; actual `L184-206`. `L208-218` is the unrelated private helper `deserializeHomeworkDrillIds`.
-
-**L11 — de-DE / fr-FR i18n block ends are off by one** (de-DE **382-399**, fr-FR **1491-1508**). Also, Task 5.2's unnumbered "de-DE/fr-FR siblings" hides that the `development.timeline` blocks sit at **de-DE:1098** and **fr-FR:854** — nowhere near the en-US line numbers given. All three locales do have structurally identical key sets, so the task is doable; the pointer is just unhelpful.
-
-**L12 — No recap-correction path exists, and the idempotency guard the flow relies on does not fire where its comment claims.** `SessionCompletionData.id` is `GenerationType.UUID`, an in-VM generator, so `save()` issues no immediate INSERT and the `session_completion_data_booking_id_key` violation surfaces at flush/commit — **outside** the `catch (DataIntegrityViolationException)` at `BookingCompletionService.java:152-158`. That constraint is also absent from `ApiAdvice`'s `CONFLICT_CONSTRAINTS` (`:159-173`), so the caller gets a **400**, not the silent no-op the comment promises. Either way no `BookingCompletedEvent` is re-published. In LIVE mode a second submit is blocked earlier by `verifyStatus` (403); in **QUICK** mode the status stays `COMPLETED_PENDING_CONFIRMATION`, so a retry reaches `save` and fails there. Pre-existing in shape — but this story is the first to put user-authored content on that path, and it adds no edit capability and no AC covering correction.
-
-**L13 — AC4's "the player/parent viewing their own timeline" does not hold for a dual-role user.** `isCoach` is computed purely from the authority list (`PlayerTimelineResource.java:30`), never cross-referenced against ownership, and `User.authorities` is a `Set`. A coach who is also a parent on the platform takes the `isCoach` branch on their own child's timeline, so the expiry gate applies and — after this story — recaps authored by their child's other coaches are stripped, contrary to AC4's promise. Pre-existing in shape (such a user already gets an empty timeline today absent an SLU row); the story's wording simply does not acknowledge the case. Blast radius unknown: the data model permits the combination and nothing forbids it, but no seed data, test, or product doc establishes it as a live state.
-
-**L14 — Vitest runs with `globals: false`.** `vitest.config.mjs` registers no test-runner globals, so Task 6's two new specs must explicitly import `describe`/`it`/`expect`/`vi`. Not mentioned in Task 6. (Spec *discovery* is fine — `include` covers `src/**/__tests__/**/*.{js,mjs}`, so the brand-new `components/booking/__tests__/` directory is picked up automatically.)
+- **L1** — `Session.createdAt` is **plan-creation** time (`@PrePersist`, set when the builder is first opened), not session time; `Session` carries no conducted/scheduled date at all. Ten sessions bulk-planned for March all stamp ≈1 Feb and would outrank a session actually conducted 15 Jan, so `OrderByCreatedAtDesc` can return unconducted plans. The story's "no join needed" is true for the `coachId` filter, not the time semantic.
+- **L2** — Task 3.1's tie-break is under-determined *within* a session: all codes in one `developmentFocus` list share the same index, so equal-count codes from the same session have no defined order → a non-deterministic unit test. Add a final deterministic tiebreak.
+- **L3** — AC1's "if any other existing event type already stores a `coachId` key the same way" is **false**: `PERFORMANCE_REPORT` writes `coachName`, `RADAR_ASSESSMENT` writes only `skillCodes`. The backfill's broader scope buys nothing; say it is defensive only.
+- **L4** — `SessionPrepCard.vue` is placed in `components/booking/` but told to use the `coach.*` namespace, while its cited sibling `WrapUpSequence.vue` uses `booking.*` 23× and `coach.*` zero times (as does the whole button region it joins). Defensible, but state *why* it departs so the next reader doesn't "fix" it.
+- **L5** — Task 5.2's "extend" is available (`CoachCommandCenterPageSpec.js` exists, 298 lines) but the spec mounts `shallow: true` with `coachSchedule: null` and drives handlers via `wrapper.vm` — so **no booking cards render at all**. Asserting a rendered, status-gated button needs a different mount mode than the file's single helper provides.
+- **L6** — AC1's fix amplifies an open ledger defect: `PlayerTimelineRepository.findByPlayerIdOrderByOccurredAtDesc` takes no `Pageable` (`deferred-work.md:3798`), and AC1's whole purpose is to let many more coaches past the gate that currently short-circuits them with `List.of()`. Latency/payload only — worth a residual-risk line so it isn't later re-triaged as a 12-3 regression.
+- **L7** — Testing Standards says *"Mockito + AssertJ … matching `RosterAttentionCalculatorTest`'s precedent"* while Task 3.7 says *"Mockito/AssertJ not needed"*. The real precedent is JUnit 5 + AssertJ with an explicit *"No Spring, no mocks"* Javadoc — so **both** are partly wrong. (12-1 made the same Mockito error; inherited, not invented.)
+- **L8** — Task 1.2: every other mapped column on `PlayerTimelineEvent` declares `updatable = false`; adding `coachId` without it makes the new column the lone mutable one.
+- **L9** — Task 3.4 needs a **null guard** on `metadata` (nullable; `insertTimelineEvent` seeds rows with none, and `TimelineQueryService:66-69` documents this) and an `Object`→`String` narrowing. Neither is mentioned.
+- **L10** — After Task 1 the row carries **two** authoring-coach identities: the `coach_id` column (new query) and the `metadata.coachId` **String** (still used by `redactRecapIfNotAuthoringCoach:76`). Task 3.4 reads metadata off a column-filtered result — reintroducing one layer down the "two computations can silently disagree" risk the story's own resolver Dev Note argues against.
+- **L11** — `ReportGenerationService.java:146` is a **third** consumer of the same SLU-only clock, hard-gating with `AccessDeniedException("Coach has no session history with this player")`. The story fixes one of three, so a Quick-Complete-only coach will be able to read their timeline and open the Prep Card while still being refused report generation. Out of AC scope; worth a deferred-work line.
+- **L12** — Line-range and fact corrections: config read is 33-41 not 37-41; `routes.js` route object is 180-185 not 181-185; `CoachCommandCenterPage.vue:102-153` holds five buttons not three; `verifyCoachOwnership` has **six** call sites not "exactly two" and takes a `CoachProfile` not a `UUID` (the duplication argument still stands); `coach/session-builder/:bookingId` is not the only `:bookingId` route; Task 4.1's snippet is missing `export const`; `WrapUpSequence.vue` has a fourth prop (`isLiveMode`); the `mvn verify` rule's real source is `docs/validation-strategy.md` (uncited).
+- **L13** — Task 4.3's insertion into `CoachCommandCenterPage.vue`'s card block will stale line citations in two open ledger items (`deferred-work.md:3796`, `:843`) and 12-2's D3. Cosmetic.
 
 ---
 
-## 6. What did not survive re-verification
+## 5. What the story got right (independently verified, not taken on its word)
 
-Nine candidate findings were killed or downgraded in Step 4b. Four were raised by the layers; five were raised by me during independent verification. Listing them is the point of this section — a report with uniformly high confidence and no calibration differences is itself evidence this pass did not happen.
+Listed so real coverage is distinguishable from silence:
 
-**K1 — "A fifth `t('common.next')` at `WrapUpSequence.vue:174` is left behind." (Layers 1 and 4) — KILLED.** The story's citation reads "reusing the same key already used by **Steps 1 and 2** at lines 30, 59, 84, 112". `:30` is Step 1; `:59/:84/:112` are Step 2 (block `37-119`). The fifth use at `:174` is inside **Step 3** (block `120-177`), which Task 4.1 does not touch. The citation is accurate as written and nothing is left behind. Both layers flagged this; both were wrong.
-
-**K2 — "A duplicate QUICK-mode `submitWrapUp` silently returns 204 and discards the recap." (mine) — CORRECTED, then folded into L12.** My initial reading assumed the `catch (DataIntegrityViolationException)` fired at `save()`. It does not: `GenerationType.UUID` defers the INSERT past the `try`. The outcome is a commit-time 400, not a silent success. The underlying concern (no correction path, no re-publish) survives as L12 with the mechanism stated correctly.
-
-**K3 — "Layer 4: two existing ITs break on NULL metadata." — DOWNGRADED to one.** Layer 4 named `PlayerTimelineResourceIT:191` as a coach test. It is not: `:191` sits in `getTimeline_asParent_returns200WithFullTimeline`, which takes the `!isCoach` short-circuit. Only `:141` (in the coach test at `:133`) breaks. H1 reports one.
-
-**K4 — "`Map.of()`'s 10-pair ceiling will break Task 1.5's IT request bodies." (mine) — KILLED.** Both bodies carry 5 pairs (`SessionCompletionResourceIT:196-202`, `:220-226`); adding two lands at 7, well under the limit.
-
-**K5 — "Stale recap text leaks into the next wrap-up because the new refs are never reset." (mine) — KILLED.** `WrapUpSequence` is mounted under `v-if="showWrapUp"` (`CoachCommandCenterPage.vue:15`), so the component is destroyed and every `<script setup>` ref is re-created on each reopen. No reset needed. Relatedly verified: no back/previous mechanism, no `maxStep` guard, no `watch` on `step`, and nothing treats `step === 4` as "last" except the button being replaced — so the `v-if`/`v-else-if` chain accepts `step === 5` cleanly and the pip loop is correct at 5.
-
-**K6 — "An admin/staff caller falls into `!isCoach` and sees every coach's private recap." (mine) — KILLED.** No admin path exists: `@PreAuthorize` admits only `ROLE_COACH` or the ownership guard, there is **no `RoleHierarchy` bean** in `src/main`, and no impersonation/support-view feature. An admin is 403'd before reaching `getTimeline`. Decision #8 holds. *(Worth a code comment in the new helper: if a future story grants admins read access, that branch silently becomes a leak.)*
-
-**K7 — "In-place mutation of the entity's metadata map triggers a stray UPDATE / data loss." — DOWNGRADED to non-issue.** `TimelineQueryService` is class-level `@Transactional(readOnly = true)` (`:21`) and `metadata` is `@Column(..., updatable = false)` (`:48`), so even a developer who ignores Task 3.2's "defensive copy" instruction cannot persist a stripped map. The instruction is still correct practice; the risk behind it is not live.
-
-**K8 — "Task 6's new specs won't be verified because frontend tests aren't in CI." (mine) — DOWNGRADED to advisory.** `.github/workflows/frontend-unit-tests.yml` auto-triggers on any PR whose diff touches `src/frontend/**`, so the two specs **will** run. They are explicitly **not** a required status check, so a red suite does not block merge — but the story never claims otherwise, and its only CI claim (the mandatory Prettier gate) is accurate. Advisory, not a finding.
-
-**K9 — "Duplicate `BookingCompletedEvent` could create duplicate recap rows." — KILLED.** The confirm/timeout race is state-machine guarded: `findPendingQuickCompletes` requires `status = COMPLETED_PENDING_CONFIRMATION`, `confirmCompletion` requires the same and both go through `bookingService.transition(..., COMPLETE, ...)`; the timeout job catches `BookingStateTransitionException | OptimisticLockingFailureException` and skips. Multi-instance duplication is covered by real ShedLock (`@SchedulerLock(name=…, lockAtMostFor="PT15M", lockAtLeastFor="PT2M")`). *Residual, not a finding:* the timeline write itself has no unique constraint and no existence check (unlike `SluCalculationService.onBookingCompleted:79-84`, which does guard) — so if a future path ever double-publishes, the duplicate becomes user-visible now that the row carries real text. Worth a note, not a change.
-
----
-
-## 7. Also checked and found correct
-
-Recording these because they are the places a reviewer would most expect a defect, and the story got them right:
-
-- **No other caller of `POST /api/bookings/{id}/complete` anywhere.** Full sweep across `.java/.ts/.js/.vue/.yaml/.yml/.json/.sh/.sql/.py/.http`: production is the single centralized `booking.api.js:57`, reached only from `booking.store.js:516`, reached only from `WrapUpSequence.vue:340`. Tests are the two ITs. `new WrapUpRequest(...)` is exactly the three unit sites. **No** Playwright/e2e suite, **no** OpenAPI/springdoc/swagger artifact, **no** Postman collection, no seed script, no admin tool, no mobile client. The story's "2 ITs + 3 unit sites + 1 component" is exactly right.
-- **No non-coach-typed wrap-up flow exists** that AC1's `@NotBlank` would start 400'ing — no force-complete, no auto-complete, no retry job builds a `WrapUpRequest`. `confirmCompletion` and the timeout job only *read* the row.
-- **GDPR erasure already covers the new free text** — `GdprErasureService:1153` deletes timeline rows by `playerId`, so no new erasure gap.
-- **No XSS exposure.** `PlayerTimelinePanel.vue` uses only `{{ }}` interpolation; 500 chars of free text in a `q-timeline-entry` default slot is auto-escaped. Task 5.1 needs no `v-html`. `event.metadata` arrives camelCase as a parsed object (no naming strategy in play; `development.store.js:199-210` assigns the response with zero transformation).
-- **Reachability is unchanged.** `PlayerTimelinePanel` is mounted only at `ParentDevelopmentPortalPage.vue:97` and `PlayerDevelopmentDashboardPage.vue:115`, routed `meta.role: 'PARENT'` / `'PLAYER'` (`routes.js:140-144`, `:278-282`). No coach or admin route renders either page — so the story's "zero new routes" claim holds, and AC4's redaction is an API-level fix with no frontend surface today.
-- **i18n is safe to edit as planned.** `common.next` exists in all three locales (`en-US:669`, `de-DE:7`, `fr-FR:671`); `step4Done` appears in exactly four places — `WrapUpSequence.vue:224` plus the three locale entries — so removing it breaks nothing. `development.timeline` exists in all three with identical key sets.
-- **Test infrastructure is ready.** Awaitility 4.3.0 is `test`-scoped with in-module precedent. No Jacoco coverage threshold in `pom.xml`. `IntegrationTestConventionTest` constrains only context forking / `@TestPropertySource` counts — extending two existing IT classes trips neither.
-- **AC→task mapping is complete in both directions.** AC1→T1.1/1.5, AC2→T1.2/1.3/1.4, AC3→T2.1/2.2/3.1/3.4, AC4→T3.2/3.3, AC5→T4.1/4.2/6.1, AC6→T5.1/6.2, AC7→T4.3/5.2, AC8→T1.5; AC9 is a negative AC with no task by design. No orphan tasks. The coverage *gaps inside* that mapping are Findings M2 and H2.
+- **The core premise** — null *is* treated as expired; `accessExpired` *is* the real field; the SLU gate *is* real and does skip Quick Complete.
+- **V160 is free**; `V159` is the highest on disk.
+- **`metadata` is `jsonb`**, so `?` is valid; the sole writer of a top-level `coachId` always writes a UUID string (never empty, never nested), so `(metadata->>'coachId')::uuid` **cannot fail on real data**; NULL-metadata rows are skipped safely.
+- `SET LOCAL lock_timeout` **does** apply to later statements (one transaction per migration; V159 is the exact precedent).
+- The proposed index **fits** the query and is **not redundant** with the existing `(player_id, occurred_at DESC)`.
+- Both IT helpers use **explicit column lists**, so a new nullable column breaks no existing seed.
+- **No type mismatch in the merge** — both signals are `Instant`, and both are `Instant.now()` at AFTER_COMMIT processing of the same event, so they share a semantic and differ by milliseconds. The "later of the two" merge does not systematically prefer the wrong one.
+- **The null-safe max is strictly non-regressive** — it returns null only when *both* inputs are null, a strict subset of today's null case, so no coach who passes today can fail after.
+- **AC1's "existing tests stay green unmodified" is TRUE** — each fixture was checked individually; the two `accessExpired=true` tests seed no timeline row at all, and per-method truncation rules out cross-test pollution.
+- **No reassigned/substituted-coach leak** — `Booking.coach_id` is `updatable = false`, so a booking's coach can never change.
+- **All four repositories share one ID space** (`Long` `PlayerProfile` PK) — the known `Booking.playerId` trap does **not** bite here.
+- **AC4's status-agnostic design cannot NPE** — `player_id` is `bigint NOT NULL`; there are no group/open bookings.
+- **`openNeglectedSkillCount` is no new privacy leak** — `NeglectedSkillFlag` has no `coach_id` column at all, and 12-1 already returns the identical count to a coach.
+- **The route name guess `coach-session-builder` is exact**, the route's coach guard won't bounce, and `SessionBuilderPage.vue` tolerates an arbitrary `bookingId` (404 → `initForBooking`).
+- **`booking.playerId` and `booking.playerName` ARE in scope** for Task 4.2's props (`ScheduleBookingItem` carries both); the id field is `booking.bookingId`.
+- **The `q-dialog` child DOES remount per open** — so `onMounted` refires and there is no stale-`bookingId` bug (see §6).
+- **Locale files are genuinely in sync** (one unrelated key missing from two locales); the pluralization shape is verbatim correct. Caveat: **no CI gate on locale parity exists** — Task 4.4's sync requirement is reviewer-enforced only.
+- **AC8's "no existing test anywhere today" holds.**
+- The unguarded-endpoint claim, the `CoachRosterResourceIT` shape, `HAS_COACH_ROLE`, `project-context.md`'s five rules, and the orphaned-route ledger item all check out.
 
 ---
 
-## 8. Recommendation
+## 6. What did NOT survive adversarial re-verification
 
-**Per-finding confidence**, rather than a blanket score:
+Recorded because a report with uniformly high confidence and no calibration differences is itself evidence this pass didn't happen.
+
+1. **"The `mvn verify` 'sole' claim regresses an already-corrected attribution"** — *downgraded to a missing citation (L12).* The story qualifies it with *"for routine story work"*, which matches `docs/validation-strategy.md:20` (*"not part of the normal `/bmad-dev-story` workflow"*) and `:38` (*"GitHub CI is the authoritative environment"*). Substantively accurate; only the citation is absent.
+2. **The `Booking.playerId` ID-space trap** — *killed.* All four downstream repositories were checked individually; every one takes the same `Long` `PlayerProfile` PK. A plausible, high-prior failure mode in this codebase that simply does not apply here.
+3. **`q-dialog` reusing a mounted child with a stale `bookingId`** — *killed.* Traced into Quasar's `use-portal.js` / `QDialog.js`: the slot subtree is destroyed on hide and recreated on show, so `onMounted` refires. Only a narrow caveat survives (re-opening mid-close-transition reuses the instance), not the predicted bug.
+4. **"Existing `PlayerTimelineResourceIT` tests will break"** — *killed.* Every fixture was opened; the two flip candidates seed no timeline event whatsoever. AC1's claim is correct — though the protection comes partly from the seed helper's `coach_id` blind spot, which is precisely what makes M1 a defect.
+5. **"A non-UUID / nested / empty `coachId` could abort the backfill cast"** — *killed.* The sole writer always emits `event.getCoachId().toString()`; no migration INSERTs into the table.
+6. **"NULL `metadata` could break `?`"** — *killed.* `NULL ? 'coachId'` yields NULL → row skipped; `JsonType` never writes `'null'::jsonb` or a scalar.
+7. **Reassigned-coach leak through the new signal** — *killed* by `updatable = false` on `Booking.coach_id`.
+8. **`openNeglectedSkillCount` as a cross-coach privacy leak** — *killed*; the flag has no coach dimension and 12-1 set the precedent.
+9. **"Every other cited line range is accurate"** (asserted by the corner-case layer) — *refuted.* Two other layers independently quoted `ConfigBounds.java:148-151`'s actual content, and my own read confirms it is the `BoundedKey` declaration with no arity Javadoc (real support at 59-70). A blanket accuracy claim was wrong where a specific one was right.
+10. **"The `ConfigBounds` citation has the wrong directory (`infrastructure/` vs `config/`)"** — *dropped.* The story cites only a filename, no path; the "wrong path" was the verifying layer's own inference from its search. Only the line-number and scope halves of that finding stand.
+11. **`Session.status` enum-parameter trap** — *killed.* `status` is a `String`, so `List<String>` is correct.
+12. **"V160 may be taken"** — *killed*; free, with the story's own hedge being reasonable practice regardless.
+
+---
+
+## 7. Recommendation
+
+**Status: do not start Task 1 as written. H1, H2, and M1 are each independently sufficient to produce a red build or a failing headline test on the first attempt; H3 is a product decision that should be made before code, not after.** None of this requires a redesign — the story's architecture is sound and its core premise was verified correct. This is a patch pass.
+
+Confidence, per claim rather than as a blanket score:
 
 | Finding | Confidence | Basis |
 |---|---|---|
-| H1 (NULL-metadata NPE) | **Very high** | Independently verified twice; exact breaking test identified by reading all three seeding call sites and their auth context. Layer 4's count corrected. |
-| H2 (unsurfaced 400) | **Very high** | Full chain read end to end by hand — component, store, and all interceptor branches. The "first reachable validation failure" framing verified field-by-field, including `toggleDrill`'s cap. |
-| M1 (brainstorm contradiction) | **High on the facts; it is a product call, not a bug** | All four brainstorm passages read verbatim in the working tree. The elided clause is unambiguous. Whether to follow the brainstorm or depart from it is the owner's decision — I am flagging that a decision is being made silently, not asserting AC4 is wrong. |
-| M2 (untested persistence + deferred paths) | **High** | Derived by reading each planned task against the code it targets; the LIVE-publish-reads-`req` detail is the load-bearing step and was verified directly. |
-| M3 (silent async loss) | **High** on mechanism; **moderate** on likelihood | The swallow-and-log is verified verbatim and the absent retry infra confirmed against siblings. Trigger frequency is environmental. |
-| M4 (V157/V158 precedent) | **Very high** | Both migrations read in full, twice. |
-| M5 (unspecified column type) | **High** | Specification gap, verified; functionally safe either way, so low blast radius. |
-| L1, L2, L10, L11 (counts and ranges) | **Very high** | Mechanical, re-counted by hand. |
-| L3, L4, L7, L8, L9 | **High** | Each traced to the exact line. |
-| L5 (Task 1.1 vs 1.6) | **High** | Record semantics; fails at compile time, so self-limiting. |
-| L6 (`mvn verify` attribution) | **High** | Confirmed absent from the cited doc and present in another. |
-| L12 (no correction path) | **Moderate-high** on mechanism | The deferred-INSERT reasoning is sound and `CONFLICT_CONSTRAINTS` was checked, but the precise flush point was reasoned about rather than observed at runtime; two layers disagreed on it, which is why it is LOW and why the finding is framed around the missing capability rather than the exact status code. |
-| L13 (dual-role user) | **High** on mechanism; **unknown** blast radius | Code path verified; whether the role combination occurs in practice could not be established from the repo. |
-| L14 (`globals: false`) | **Very high** | Read from config. |
+| H1 (`writeTimelineEvent` public + cross-class caller + 4 arity-pinned verifications) | **Highest** | Re-verified firsthand by direct grep and file read, independent of the reporting layer |
+| H2 (V160 `CREATE INDEX` fails `MigrationConventionLintTest`) | **Highest** | Lint rule, grandfather baseline, and test-class wiring all read firsthand; additionally established that no post-baseline migration creates an index, so there is no precedent to copy |
+| H3 (attendance asymmetry widens data access) | **Highest** | Verified firsthand — zero `attend` hits in `TimelineEventListener`, against `SluCalculationService:52-55` |
+| M1 (Task 2.3 seeding cannot pass) | **Highest** | Helper's column list and the callers' `transactionTemplate` wrapper both read firsthand |
+| M6 (Pattern #9 splice; fabricated "actually happened" quote; 6-gate undercount) | **High** | Both documents and the full method body read firsthand; quote absence confirmed across doc, code comments, and all git history |
+| M3 (unbounded backfill), M4 (layering + unassertable assertion + 403/404), M5 (`maxCodes`) | **High** | Single-layer evidence, but each quotes a convention doc, a record definition, or an exhaustive absence that I spot-checked |
+| M2 (recap/date mismatch) | **Medium-high** | The mechanism is confirmed (async swallow + the story's own `coach_id IS NULL` window); the *frequency* is low and I did not attempt to quantify it |
+| L1–L13 | **Medium** | Reported by one layer with file:line evidence; I re-checked L11, L7's precedent, and the L12 line ranges myself, not the rest |
 
-**What was independently re-checked by me, not just by a layer:** the `BookingCompletedEvent` type/arity; the full `submitWrapUp` / `confirmCompletion` / `QuickCompleteTimeoutService` bodies; `TimelineEventListener`; `TimelineQueryService`; `PlayerTimelineResource` and its `@PreAuthorize`; `PlayerTimelineEvent.metadata`'s type and `updatable=false`; the `session_completion_data` DDL and unique constraint; V157/V158 in full; the coachId ID-space chain; all four brainstorm passages behind M1; the Pattern-#4-vs-converged-text question; every `new BookingCompletedEvent(` call site (re-counted after Layer 1 contradicted itself); the three timeline-seeding call sites and their auth context; the entire 400-surfacing chain; `toggleDrill`; `insertTimelineEvent`; the i18n key sweep; the vitest config; and `GdprErasureService`.
+**Independently re-checked by me, not accepted on a layer's word:** H1, H2, H3, M1, M6, the `ConfigBounds` contradiction, the third SLU-clock consumer (L11), the `developmentFocus` second writer, the `SluTargetService` guard near-miss, `TimelineQueryService`'s and `PlayerTimelineEvent`'s full contents, and V160's availability.
 
-**What I did not independently re-verify** and am relaying on a single layer's evidence: the `ApiAdvice` 403/5xx branch details beyond the 400 gap; the `SluPersistenceRetrier` comparison in M3; the exhaustive "no Playwright/OpenAPI/Postman" sweep in Section 7; and the `CoachCommandCenterPage` entry-path line numbers (`:549`, `:576`, `:590-594`). None of these carries a finding on its own.
+**Not independently re-checked:** L1–L6, L8–L10, L13, the locale-parity key diff, the Quasar portal trace, and the per-fixture `PlayerTimelineResourceIT` enumeration. These rest on a single layer's cited evidence and should be treated as credible but unconfirmed.
 
-**Suggested disposition before dev starts:**
-
-1. **Resolve M1 with the owner** — it is the only item that changes what gets built.
-2. **Patch H1 and H2 into the story** — add `metadata != null` to Task 3.2's guard and an AC8-style regression note naming `PlayerTimelineResourceIT:133`; add `maxlength`/`counter` to Task 4.1's inputs and either a `catch` in `handleSubmitWrapUp` or a `:rules` gate.
-3. **Add the missing coverage from M2** — one assertion reading the two columns back out of `session_completion_data`, and one test through a deferred publisher (`confirmCompletion` is the cheaper of the two).
-4. **Correct the counting and attribution errors** (L1, L2, L3, L5, L6, L7, L10, L11, M4) — cheap edits that prevent the errors propagating into the next story.
-5. Pin the column type (M5), and note the silent-failure mode in AC3 (M3).
-
-The story does **not** need redesign. Items 2–5 are edits to the story file; item 1 is a question for the owner.
+**Suggested order:** resolve H3 as a product decision first (it may add a column to the same V160 migration, so it should land before Task 1.1 is written); then patch H1, H2, M1 into the task list; then M2–M6; then the L-group as editorial corrections. Status can stay `ready-for-dev` once the task list is patched.

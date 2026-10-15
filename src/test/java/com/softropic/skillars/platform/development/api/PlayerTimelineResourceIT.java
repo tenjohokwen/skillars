@@ -265,6 +265,75 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         assertThat((Boolean) response.getBody().get("accessExpired")).isTrue();
     }
 
+    // skillars-12-3 AC1/AC8 headline test: a Quick-Complete-only coach (zero player_skill_stats
+    // rows) with one attended SESSION_COMPLETED timeline event carrying their own populated
+    // coach_id must no longer read accessExpired=true, and must be able to read their own recap
+    // back.
+    @Test
+    @SuppressWarnings("unchecked")
+    void getTimeline_asCoach_withOnlyAttendedTimelineEvent_noSluRows_returnsAccessNotExpiredAndRecapReadable() {
+        transactionTemplate.execute(status -> {
+            insertSessionCompletedEventWithRecap(PLAYER_ID, coachProfileId,
+                "Worked on first touch", "Continue weak-foot drills", true);
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            timelineUrl(), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((Boolean) response.getBody().get("accessExpired")).isFalse();
+        List<Map<String, Object>> events = (List<Map<String, Object>>) response.getBody().get("events");
+        assertThat(events).isNotEmpty();
+        Map<String, Object> metadata = (Map<String, Object>) events.get(0).get("metadata");
+        assertThat(metadata.get("whatWeDid")).isEqualTo("Worked on first touch");
+        assertThat(metadata.get("whatsNext")).isEqualTo("Continue weak-foot drills");
+    }
+
+    // skillars-12-3 AC1's attendance gate (Task 2.3 negative case): a non-attended
+    // SESSION_COMPLETED event is written with coach_id left NULL (TimelineEventListener's
+    // attendance gate, Task 1.3) and must NOT advance the coach-access clock.
+    @Test
+    @SuppressWarnings("unchecked")
+    void getTimeline_asCoach_withOnlyNonAttendedTimelineEvent_noSluRows_returnsAccessExpired() {
+        transactionTemplate.execute(status -> {
+            insertSessionCompletedEventWithRecap(PLAYER_ID, coachProfileId,
+                "Worked on first touch", "Continue weak-foot drills", false);
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            timelineUrl(), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((Boolean) response.getBody().get("accessExpired")).isTrue();
+    }
+
+    // skillars-12-3 AC2: the merge is additive — a coach with only a qualifying SLU row and no
+    // qualifying timeline row must see no change from today's passing behavior.
+    @Test
+    @SuppressWarnings("unchecked")
+    void getTimeline_asCoach_withOnlySluRow_noQualifyingTimelineRow_stillReturnsAccessNotExpired() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO development.player_skill_stats " +
+                "(id, player_id, coach_id, skill_code, slu_value, session_id, calculated_at) " +
+                "VALUES (gen_random_uuid(), ?, ?, 'PAC', 10.00, gen_random_uuid(), NOW())",
+                PLAYER_ID, coachProfileId
+            );
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            timelineUrl(), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((Boolean) response.getBody().get("accessExpired")).isFalse();
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     void getTimeline_asParent_returns200WithFullTimeline() {
@@ -580,16 +649,26 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
     }
 
     // skillars-12-2 Task 3.3: insertTimelineEvent above never sets metadata, so a dedicated
-    // seeding helper is needed to cover AC4's coach-only recap redaction.
+    // seeding helper is needed to cover AC4's coach-only recap redaction. Defaults to attended=true
+    // (today's passing behavior: the clock-advancing coach_id column is populated).
     private void insertSessionCompletedEventWithRecap(long playerId, UUID coachId, String whatWeDid, String whatsNext) {
+        insertSessionCompletedEventWithRecap(playerId, coachId, whatWeDid, whatsNext, true);
+    }
+
+    // skillars-12-3 Task 2.3: widened to set coach_id, mirroring TimelineEventListener's own
+    // attendance gate (Task 1.3) — attended=false leaves coach_id NULL, exactly as production code
+    // would for a non-attended wrap-up, while the metadata.coachId string (used only by
+    // TimelineQueryService's redaction rule) is still always set to the authoring coach.
+    private void insertSessionCompletedEventWithRecap(
+            long playerId, UUID coachId, String whatWeDid, String whatsNext, boolean attended) {
         String metadataJson = String.format(
             "{\"coachId\":\"%s\",\"whatWeDid\":\"%s\",\"whatsNext\":\"%s\"}",
             coachId, whatWeDid, whatsNext);
         jdbcTemplate.update(
             "INSERT INTO development.player_timeline_events " +
-            "(id, player_id, event_type, reference_module, occurred_at, metadata) " +
-            "VALUES (gen_random_uuid(), ?, 'SESSION_COMPLETED', 'booking', NOW(), ?::jsonb)",
-            playerId, metadataJson
+            "(id, player_id, event_type, reference_module, occurred_at, metadata, coach_id) " +
+            "VALUES (gen_random_uuid(), ?, 'SESSION_COMPLETED', 'booking', NOW(), ?::jsonb, ?)",
+            playerId, metadataJson, attended ? coachId : null
         );
     }
 }
