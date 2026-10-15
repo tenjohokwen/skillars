@@ -213,4 +213,29 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0"))
     @Query("SELECT b FROM Booking b WHERE b.id = :id")
     Optional<Booking> findByIdForUpdate(@Param("id") UUID id);
+
+    // skillars-12-1 AC1/Task 1.1: deliberately NOT CoachPlayerAuthorizationService's
+    // ACTIVE_RELATIONSHIP_STATUSES (that answers an authorization question, this a roster-membership
+    // one — see Task 1.2). recencyFloor is AC1's own 730-day bound; no cap/limit like
+    // findQualifyingCompletedBookings — that query's cap exists for an unrelated reason (bounding an
+    // author-ownership check) that does not apply here.
+    //
+    // skillars-12-1 code review (2026-10-15) Patch: ORDER BY b.playerId — a GROUP BY with no ORDER BY
+    // has a Postgres-plan-dependent, call-to-call-unstable output order; CoachRosterService.getRoster
+    // sorts this result by attentionScore via a stable Stream.sorted, so two players tied on score
+    // (the common case: every brand-new, flag-free, trend-free player scores exactly 0.0) would
+    // otherwise reshuffle between refreshes. This gives ties a deterministic, reproducible tie-break.
+    @Query("""
+        SELECT b.playerId AS playerId, MAX(b.requestedStartTime) AS latestBookingTime
+        FROM Booking b
+        WHERE b.coachId = :coachId
+          AND b.status IN :statuses
+          AND b.requestedStartTime >= :recencyFloor
+        GROUP BY b.playerId
+        ORDER BY b.playerId
+        """)
+    List<RosterPlayerActivityProjection> findRosterPlayerActivityByCoachIdAndStatusIn(
+        @Param("coachId") UUID coachId,
+        @Param("statuses") List<String> statuses,
+        @Param("recencyFloor") Instant recencyFloor);
 }

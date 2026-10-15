@@ -273,6 +273,16 @@ export default {
     commandCenterSidebar: 'Aktive Klienten',
     commandCenterNoClients: 'Diese Woche keine aktiven Klienten',
     commandCenterSchedule: 'Zeitplan',
+    myPlayersTitle: 'Meine Spieler',
+    myPlayersEmpty: 'Noch keine Spieler in Ihrem Kader',
+    myPlayersIncompleteProfile:
+      'Schließen Sie Ihr Trainerprofil ab, um hier Ihren Spielerkader zu sehen.',
+    myPlayersCompleteProfile: 'Profil vervollständigen',
+    myPlayersLastSessionLabel: 'Letzte Einheit: {date}',
+    myPlayersNeverTrainedTogether: 'Sie haben noch nicht zusammen trainiert',
+    myPlayersDormantBadge: 'Länger nicht gehört',
+    myPlayersNeglectedSkillCount:
+      '{count} vernachlässigte Fähigkeit | {count} vernachlässigte Fähigkeiten',
   },
   player: {
     nav: 'Spieler',

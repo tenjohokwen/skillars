@@ -154,6 +154,15 @@
             </q-item-section>
           </q-item>
 
+          <q-item clickable to="/coach/players" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="groups" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('coach.myPlayersTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
           <q-item clickable to="/coach/revenue" class="nav-item">
             <q-item-section avatar>
               <q-icon name="bar_chart" class="nav-icon" />

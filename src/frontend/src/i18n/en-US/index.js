@@ -243,6 +243,15 @@ export default {
     commandCenterSidebar: 'Active Clients',
     commandCenterNoClients: 'No active clients this week',
     commandCenterSchedule: 'Schedule',
+    myPlayersTitle: 'My Players',
+    myPlayersEmpty: 'No players on your roster yet',
+    myPlayersIncompleteProfile:
+      'Finish setting up your coach profile to see your player roster here.',
+    myPlayersCompleteProfile: 'Complete Profile',
+    myPlayersLastSessionLabel: 'Last session: {date}',
+    myPlayersNeverTrainedTogether: "You haven't trained together yet",
+    myPlayersDormantBadge: 'Gone quiet',
+    myPlayersNeglectedSkillCount: '{count} neglected skill | {count} neglected skills',
   },
   player: {
     nav: 'Player',
