@@ -3,7 +3,7 @@
     <!-- Step pip indicator -->
     <div class="wrap-up__pips">
       <div
-        v-for="n in 4"
+        v-for="n in 5"
         :key="n"
         class="wrap-up__pip"
         :class="{ 'wrap-up__pip--active': n === step, 'wrap-up__pip--done': n < step }"
@@ -218,11 +218,47 @@
         </q-card>
       </div>
 
+      <q-btn unelevated class="wrap-up__next-btn" :label="t('common.next')" @click="step = 5" />
+    </div>
+
+    <!-- Step 5: Session Recap -->
+    <div v-else-if="step === 5" class="wrap-up__step">
+      <div class="text-h6 q-mb-lg">{{ t('booking.wrapUp.step5Title') }}</div>
+
+      <q-input
+        v-model="recapWhatWeDid"
+        type="textarea"
+        outlined
+        autogrow
+        maxlength="500"
+        counter
+        class="q-mb-md full-width"
+        :label="t('booking.wrapUp.step5WhatWeDidLabel')"
+        :placeholder="t('booking.wrapUp.step5WhatWeDidPlaceholder')"
+      />
+      <q-input
+        v-model="recapWhatsNext"
+        type="textarea"
+        outlined
+        autogrow
+        maxlength="500"
+        counter
+        class="q-mb-md full-width"
+        :label="t('booking.wrapUp.step5WhatsNextLabel')"
+        :placeholder="t('booking.wrapUp.step5WhatsNextPlaceholder')"
+      />
+
       <q-btn
         unelevated
         class="wrap-up__next-btn"
-        :label="t('booking.wrapUp.step4Done')"
+        :label="t('booking.wrapUp.step5Done')"
         :loading="submitting"
+        :disable="
+          !recapWhatWeDid.trim() ||
+          !recapWhatsNext.trim() ||
+          recapWhatWeDid.length > 500 ||
+          recapWhatsNext.length > 500
+        "
         @click="handleSubmitWrapUp"
       />
     </div>
@@ -232,6 +268,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
 import { getDrillSuggestions } from 'src/api/booking.api'
 import { signUpload, confirmUpload } from 'src/api/marketplace.api'
@@ -248,6 +285,7 @@ const props = defineProps({
 const emit = defineEmits(['wrap-up-complete', 'cancelled'])
 
 const { t } = useI18n()
+const $q = useQuasar()
 const bookingStore = useBookingStore()
 
 const step = ref(1)
@@ -261,6 +299,8 @@ const voiceNoteText = ref('')
 const isRecording = ref(false)
 const recorder = ref(null)
 const homeworkDrillIds = ref([])
+const recapWhatWeDid = ref('')
+const recapWhatsNext = ref('')
 const drillSuggestions = ref([])
 const submitting = ref(false)
 const sessionDnaData = ref(null)
@@ -336,6 +376,7 @@ async function fetchDrillSuggestions() {
 
 async function handleSubmitWrapUp() {
   submitting.value = true
+  let submitSucceeded = false
   try {
     await bookingStore.handleSubmitWrapUp(props.bookingId, {
       playerAttended: playerAttended.value,
@@ -345,10 +386,27 @@ async function handleSubmitWrapUp() {
       voiceNoteText: voiceNoteText.value || null,
       homeworkDrillIds: homeworkDrillIds.value,
       mode: props.isLiveMode ? 'LIVE' : 'QUICK',
+      recapWhatWeDid: recapWhatWeDid.value.trim(),
+      recapWhatsNext: recapWhatsNext.value.trim(),
     })
-    emit('wrap-up-complete')
+    submitSucceeded = true
+  } catch (err) {
+    // skillars-12-2 code review (P3): branch on errorKey like the sibling handlers in
+    // CoachCommandCenterPage.vue (handleStartSession/handleQuickComplete) — a bare catch would
+    // collapse a real 403/409/5xx into a misleading "recap submission failed" message.
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'booking.concurrentModification') {
+      $q.notify({ type: 'negative', message: t('booking.errors.concurrentModification') })
+    } else {
+      $q.notify({ type: 'negative', message: t('booking.wrapUp.step5SubmitError') })
+    }
   } finally {
     submitting.value = false
+  }
+  // Emitted outside the try/catch so a throwing parent listener on an already-successful submit
+  // is never mistaken for (and reported as) a submit failure.
+  if (submitSucceeded) {
+    emit('wrap-up-complete')
   }
 }
 

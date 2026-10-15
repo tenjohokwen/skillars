@@ -96,7 +96,8 @@ class BookingCompletionServiceTest {
     @Test
     void submitWrapUp_liveMode_completesBookingAndDeductsCredit() {
         when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, null, List.of(), "LIVE");
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, null, List.of(), "LIVE",
+            "Worked on first touch", "Continue weak-foot drills");
 
         service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req);
 
@@ -107,6 +108,10 @@ class BookingCompletionServiceTest {
         BookingCompletedEvent event = captor.getValue();
         assertThat(event.getBookingId()).isEqualTo(BOOKING_ID);
         assertThat(event.isPlayerAttended()).isTrue();
+        // skillars-12-2 code review (P5): the LIVE-mode publish reads the recap straight from
+        // the request's two trailing args — assert both land on the right getter, not transposed.
+        assertThat(event.getWhatWeDid()).isEqualTo("Worked on first touch");
+        assertThat(event.getWhatsNext()).isEqualTo("Continue weak-foot drills");
     }
 
     @Test
@@ -129,7 +134,8 @@ class BookingCompletionServiceTest {
     @Test
     void submitWrapUp_quickMode_doesNotTransitionStatusAndPublishesConfirmationEvent() {
         when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-        WrapUpRequest req = new WrapUpRequest(true, 3, 4, 4, "Good session", List.of(), "QUICK");
+        WrapUpRequest req = new WrapUpRequest(true, 3, 4, 4, "Good session", List.of(), "QUICK",
+            "Worked on passing accuracy", "Focus on finishing next session");
 
         User parent = new User();
         parent.setEmail("parent@test.com");
@@ -157,6 +163,8 @@ class BookingCompletionServiceTest {
 
         SessionCompletionData scd = new SessionCompletionData();
         scd.setPlayerAttended(true);
+        scd.setWhatWeDid("Worked on passing accuracy");
+        scd.setWhatsNext("Focus on finishing next session");
         when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(scd));
 
         service.confirmCompletion(BOOKING_ID, PARENT_ID);
@@ -165,7 +173,10 @@ class BookingCompletionServiceTest {
 
         ArgumentCaptor<BookingCompletedEvent> captor = ArgumentCaptor.forClass(BookingCompletedEvent.class);
         verify(eventPublisher).publishEvent(captor.capture());
-        assertThat(captor.getValue().getBookingId()).isEqualTo(BOOKING_ID);
+        BookingCompletedEvent event = captor.getValue();
+        assertThat(event.getBookingId()).isEqualTo(BOOKING_ID);
+        assertThat(event.getWhatWeDid()).isEqualTo("Worked on passing accuracy");
+        assertThat(event.getWhatsNext()).isEqualTo("Focus on finishing next session");
     }
 
     @Test
@@ -252,7 +263,8 @@ class BookingCompletionServiceTest {
     void submitWrapUp_liveMode_concurrentModification_throwsRetryableException() {
         booking.setStatus(BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
         when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, null, List.of(), "LIVE");
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, null, List.of(), "LIVE",
+            "Worked on first touch", "Continue weak-foot drills");
         doThrow(new OptimisticLockingFailureException("stale version"))
             .when(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.QUICK_COMPLETE), any(TransitionContext.class));
 

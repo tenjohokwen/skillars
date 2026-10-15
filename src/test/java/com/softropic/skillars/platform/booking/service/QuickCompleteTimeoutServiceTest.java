@@ -71,6 +71,8 @@ class QuickCompleteTimeoutServiceTest {
         scd.setEffortRating(4);
         scd.setFocusRating(3);
         scd.setTechniqueRating(5);
+        scd.setWhatWeDid("Worked on first touch");
+        scd.setWhatsNext("Continue weak-foot drills");
         when(completionDataRepository.findPendingQuickCompletes(any(Instant.class))).thenReturn(List.of(scd));
 
         Booking booking = new Booking();
@@ -86,6 +88,10 @@ class QuickCompleteTimeoutServiceTest {
         BookingCompletedEvent event = captor.getValue();
         assertThat(event.getBookingId()).isEqualTo(BOOKING_ID);
         assertThat(event.getParentId()).isEqualTo(PARENT_ID);
+        // skillars-12-2 code review (P5): this publisher reads the recap from the already-fetched
+        // scd row — assert both land on the right getter, not transposed.
+        assertThat(event.getWhatWeDid()).isEqualTo("Worked on first touch");
+        assertThat(event.getWhatsNext()).isEqualTo("Continue weak-foot drills");
     }
 
     @Test

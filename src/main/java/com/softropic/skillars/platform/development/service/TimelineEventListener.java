@@ -17,6 +17,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -24,6 +25,13 @@ import java.util.UUID;
 @RequiredArgsConstructor
 @Slf4j
 public class TimelineEventListener {
+
+    // skillars-12-2 code review (P2): shared with TimelineQueryService's redaction denylist so
+    // the two metadata-key spellings can't drift apart — not a guarantee that every FUTURE key
+    // added here gets redacted there (that would need an allowlist), only that these three don't.
+    public static final String METADATA_KEY_COACH_ID = "coachId";
+    public static final String METADATA_KEY_WHAT_WE_DID = "whatWeDid";
+    public static final String METADATA_KEY_WHATS_NEXT = "whatsNext";
 
     private final PlayerTimelineRepository timelineRepository;
 
@@ -35,12 +43,24 @@ public class TimelineEventListener {
     @Async("taskExecutor")
     public void onBookingCompleted(BookingCompletedEvent event) {
         try {
+            // skillars-12-2 AC3: Map.of(...) rejects null values outright, and null recap
+            // fields are a real possibility here from two sources — not just the back-compat
+            // 10-arg BookingCompletedEvent constructor (Task 2.1), which has zero production
+            // callers (its 10 remaining call sites are all tests): a production publisher using
+            // the 12-arg constructor can still pass real nulls for any booking whose
+            // session_completion_data row predates the V159 migration (the two columns are
+            // nullable with no backfill). So the recap keys are added conditionally, not
+            // unconditionally — do not "clean up" this guard by reverting to Map.of(...).
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put(METADATA_KEY_COACH_ID, event.getCoachId().toString());
+            if (event.getWhatWeDid() != null) metadata.put(METADATA_KEY_WHAT_WE_DID, event.getWhatWeDid());
+            if (event.getWhatsNext() != null) metadata.put(METADATA_KEY_WHATS_NEXT, event.getWhatsNext());
             self.writeTimelineEvent(
                 event.getPlayerId(),
                 PlayerTimelineEventType.SESSION_COMPLETED,
                 event.getBookingId(),
                 "booking",
-                Map.of("coachId", event.getCoachId().toString())
+                metadata
             );
         } catch (Exception e) {
             log.error("Failed to write SESSION_COMPLETED timeline event: playerId={}", event.getPlayerId(), e);

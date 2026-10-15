@@ -141,6 +141,8 @@ public class BookingCompletionService {
         scd.setTechniqueRating(req.techniqueRating());
         scd.setVoiceNoteText(req.voiceNoteText());
         scd.setCompletionMode(req.mode());
+        scd.setWhatWeDid(req.recapWhatWeDid());
+        scd.setWhatsNext(req.recapWhatsNext());
 
         if (req.homeworkDrillIds() != null && !req.homeworkDrillIds().isEmpty()) {
             try {
@@ -166,7 +168,8 @@ public class BookingCompletionService {
             eventPublisher.publishEvent(new BookingCompletedEvent(
                 this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
                 scd.isPlayerAttended(), req.effortRating(), req.focusRating(), req.techniqueRating(),
-                req.homeworkDrillIds() != null ? req.homeworkDrillIds() : List.of()
+                req.homeworkDrillIds() != null ? req.homeworkDrillIds() : List.of(),
+                req.recapWhatWeDid(), req.recapWhatsNext()
             ));
         } else {
             String parentEmail = userRepository.findById(booking.getParentId())
@@ -201,7 +204,7 @@ public class BookingCompletionService {
         eventPublisher.publishEvent(new BookingCompletedEvent(
             this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
             scd.isPlayerAttended(), scd.getEffortRating(), scd.getFocusRating(), scd.getTechniqueRating(),
-            homeworkDrillIds
+            homeworkDrillIds, scd.getWhatWeDid(), scd.getWhatsNext()
         ));
     }
 

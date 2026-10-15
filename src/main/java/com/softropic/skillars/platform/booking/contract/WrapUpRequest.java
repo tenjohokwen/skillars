@@ -17,5 +17,7 @@ public record WrapUpRequest(
     @Min(1) @Max(5) Integer techniqueRating,
     String voiceNoteText,
     @Size(max = 2) List<UUID> homeworkDrillIds,
-    @NotBlank @Pattern(regexp = "LIVE|QUICK") String mode
+    @NotBlank @Pattern(regexp = "LIVE|QUICK") String mode,
+    @NotBlank @Size(max = 500) String recapWhatWeDid,
+    @NotBlank @Size(max = 500) String recapWhatsNext
 ) {}
