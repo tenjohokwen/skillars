@@ -117,7 +117,7 @@ _Novelty:_ History finds the coach at the moment he needs it (pre-session), inst
 - `NeglectedSkillDetectionService` (weekly batch) flags skills a player hasn't exercised recently; `DrillSuggestionService` already scores session-builder drill suggestions higher if they address a neglected skill, and `DrillCard.vue` already shows a "neglected skill" badge during session building.
 - `CoachContributionDto` / `/slu/coach-contributions` already exposes a **cross-coach**, per-skill percentage-contribution breakdown for a player -- this is in tension with the earlier Decision #8 (siloed-per-coach history) and needs reconciling: raw session notes can stay siloed while aggregate skill-development numbers are already, by design, shared across coaches.
 - **The actual gap is almost entirely frontend.** `PlayerTimelinePanel.vue` and the exposure/narrative/neglected-skill/coach-contribution endpoints are consumed only by the Player and Parent dashboards. No coach-facing page (Command Center, Session Builder, Drill Library, Revenue, Reviews, etc.) surfaces any of it, and there is no "my players" roster anywhere in the app today.
-- Side observation (not in scope for this session): `/exposure`, `/narrative`, `/neglected-skills`, `/coach-contributions` are gated only by `hasRole('ROLE_COACH')`, with no check that *this* coach has ever trained *that* player -- unlike the timeline endpoint, which does enforce the relationship via the 90-day rule. Worth a follow-up look outside this brainstorm.
+- Side observation (not in scope for this session): `/exposure`, `/narrative`, `/neglected-skills`, `/coach-contributions` are gated only by `hasRole('ROLE_COACH')`, with no check that *this* coach has ever trained *that* player -- unlike the timeline endpoint, which does enforce the relationship via the 90-day rule. Worth a follow-up look outside this brainstorm. **[CORRECTED by `skillars-12-4-coach-facing-player-detail-page` (created 2026-10-15): re-verified against HEAD — this list is only half right.** `SluDashboardService.requireCoachPlayerRelationshipIfCoach` already gated `/exposure` and `/narrative` (and `/slu/skill-trends`, not named here) at the time of this brainstorm; only `/neglected-skills` and `/slu/coach-contributions` genuinely lacked the check. That story closes the gap for those two.]**
 
 **User Creative Strengths:** Pulled the session back to ground truth at exactly the right moment -- recognizing that "the player already has this" was a signal the brainstorm was about to reinvent something, rather than letting the facilitator keep speculating.
 **Energy Level:** High -- the grounding sharpened rather than deflated the session; moving into SCAMPER with a much more concrete convergence target.
@@ -138,7 +138,7 @@ _Novelty:_ History finds the coach at the moment he needs it (pre-session), inst
 
 **Ideas Generated:**
 
-> **Converge #10, Converge #11, and Converge #13 are covered by `skillars-12-1-coach-player-roster-and-attention-summary`** (created 2026-10-14) — see the annotation under Pattern #1 above. **Converge #15 (the capture itself) and the write-side half of Converge #16 (threading the recap onto `BookingCompletedEvent`) are covered by `skillars-12-2-session-close-recap-capture`** (created 2026-10-15) — see the annotation under Converge #15 below; Converge #16's report-generation-consumption half is explicitly that story's own Fast-Follow and remains open. Converge #12, #14, and Deferred #17 are NOT covered by either story and remain open for future Epic 12 stories.
+> **Converge #10, Converge #11, and Converge #13 are covered by `skillars-12-1-coach-player-roster-and-attention-summary`** (created 2026-10-14) — see the annotation under Pattern #1 above. **Converge #15 (the capture itself) and the write-side half of Converge #16 (threading the recap onto `BookingCompletedEvent`) are covered by `skillars-12-2-session-close-recap-capture`** (created 2026-10-15) — see the annotation under Converge #15 below; Converge #16's report-generation-consumption half is explicitly that story's own Fast-Follow and remains open. **Converge #12 is covered by `skillars-12-4-coach-facing-player-detail-page`** (created 2026-10-15) — see the annotation under Converge #12 below. Converge #14 and Deferred #17 are NOT covered by any story yet and remain open for future Epic 12 stories.
 
 **[Converge #10]: Derived Lightweight Roster**
 _Concept:_ "My players" = distinct players with an active-status booking against this coach, no new entity.
@@ -147,6 +147,8 @@ _Novelty:_ Zero new persistence; reuses the exact relationship predicate other c
 **[Converge #11]: Roster-Summary Endpoint**
 _Concept:_ One new, dedicated endpoint returns thin per-player signals (last session, neglected-skill count, attention score) for the whole roster in one call; existing single-player endpoints stay untouched for drill-down.
 _Novelty:_ Solves the N+1 problem without duplicating any existing single-player logic.
+
+> **Covered by `skillars-12-4-coach-facing-player-detail-page`** (created 2026-10-15). Converge #12 below is implemented by that story, bundled with the pre-existing `/neglected-skills` + `/slu/coach-contributions` relationship-check-gap fix from `deferred-work.md`. Do not re-pick it in a future brainstorm-mining pass.
 
 **[Converge #12]: Reused Player Panels on a New Coach Page**
 _Concept:_ A new coach-facing player-detail page assembles `PlayerTimelinePanel.vue` (unchanged), a neglected-skills panel, and the coach-contribution breakdown -- all existing endpoints, new page only.
@@ -230,7 +232,7 @@ _Next steps:_
 _Resources needed:_ a new UI section on the booking detail view; no new backend beyond what Priority 2/4 already expose.
 _Success indicator:_ a coach opening Thursday's booking with Alex sees what they worked on last time without navigating anywhere else.
 
-**Priority 4: Coach-Facing Player-Detail Page**
+**Priority 4: Coach-Facing Player-Detail Page** — ✅ **Covered by `skillars-12-4-coach-facing-player-detail-page` (created 2026-10-15, Epic 12)**
 _Why this matters:_ turns the roster from a list into a real relationship/history view.
 _Next steps:_
 1. New coach-only route/page assembling `PlayerTimelinePanel.vue` (unchanged), a neglected-skills panel (`/neglected-skills`), and the coach-contribution breakdown (`/coach-contributions`), all existing endpoints.
