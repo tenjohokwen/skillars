@@ -150,6 +150,19 @@ public final class ConfigBounds {
         new BoundedKey("development.timeline.coachAccessExpiryDays", 1L, 3650L, false,
             "0/neg → coach development-timeline access reads as always expired", 90L);
 
+    /**
+     * {@code CoachRosterService} — skillars-12-1 AC4/Task 2.4: registered in
+     * {@link #HAS_CODE_DEFAULT} and read via the 4-arg {@code getBoundedLong(key, defaultValue, min,
+     * max)}, same as {@link #TIMELINE_COACH_ACCESS_EXPIRY_DAYS} immediately above — code review
+     * (2026-10-15) Patch: an earlier version of this Javadoc wrongly claimed that key is
+     * "deliberately NOT in {@code HAS_CODE_DEFAULT}"; it is, two lines below in that set. 30 days is
+     * deliberately shorter than the unrelated 90-day {@code coachAccessExpiryDays} above — "flag as
+     * dormant" is an earlier, softer signal than "revoke timeline access".
+     */
+    public static final BoundedKey DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS =
+        new BoundedKey("development.roster.dormantAfterDays", 1L, 3650L, false,
+            "0/neg/absurd → every roster player reads as dormant, or none ever do", 30L);
+
     /** {@code DevelopmentCorrelationService} — neg → every session qualifies (0 = legitimate). */
     public static final BoundedKey DEVELOPMENT_CORRELATION_MIN_SESSION_COUNT =
         new BoundedKey("development.correlation.minSessionCount", 0L, 10000L, false,
@@ -385,6 +398,7 @@ public final class ConfigBounds {
         REVIEWS_UPDATE_COOLDOWN_DAYS.key(),
         REVIEWS_AUTO_HOLD_FLAG_THRESHOLD.key(),
         TIMELINE_COACH_ACCESS_EXPIRY_DAYS.key(),
+        DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.key(),
         RATE_LIMIT_BUCKET_TTL_HOURS.key(),
         RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS.key(),
         GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key());
@@ -406,6 +420,7 @@ public final class ConfigBounds {
             VIDEO_ACCESS_COACH_WINDOW_DAYS,
             VIDEO_RESERVATION_TIMEOUT_MINUTES,
             TIMELINE_COACH_ACCESS_EXPIRY_DAYS,
+            DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS,
             DEVELOPMENT_CORRELATION_MIN_SESSION_COUNT,
             DEVELOPMENT_NEGLECTED_SKILL_WARMUP_SESSION_COUNT,
             SUBSCRIPTION_PAST_DUE_GRACE_PERIOD_DAYS,

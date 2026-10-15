@@ -160,6 +160,12 @@ const routes = [
         meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
       },
       {
+        path: 'coach/players',
+        name: 'coach-players',
+        component: () => import('pages/coach/MyPlayersPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
+      {
         path: 'coach/booking-requests',
         name: 'coach-booking-requests',
         component: () => import('pages/coach/CoachBookingRequestsPage.vue'),

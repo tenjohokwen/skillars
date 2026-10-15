@@ -7,6 +7,15 @@ export default {
     commandCenterSidebar: 'Clients actifs',
     commandCenterNoClients: 'Aucun client actif cette semaine',
     commandCenterSchedule: 'Planning',
+    myPlayersTitle: 'Mes joueurs',
+    myPlayersEmpty: "Aucun joueur dans votre effectif pour l'instant",
+    myPlayersIncompleteProfile:
+      'Terminez la configuration de votre profil coach pour voir votre effectif ici.',
+    myPlayersCompleteProfile: 'Compléter le profil',
+    myPlayersLastSessionLabel: 'Dernière séance : {date}',
+    myPlayersNeverTrainedTogether: "Vous n'avez pas encore joué ensemble",
+    myPlayersDormantBadge: 'Silence radio',
+    myPlayersNeglectedSkillCount: '{count} compétence négligée | {count} compétences négligées',
   },
   player: {
     nav: 'Joueur',

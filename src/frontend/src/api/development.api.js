@@ -50,3 +50,6 @@ export const getCoachContributions = (playerId, days = 30) =>
 // of the neglected-skill gating signal. Backend: SkillExposureResource#getSkillTrends.
 export const getSkillTrends = (playerId, weeks = 8) =>
   api.get(`/api/development/players/${playerId}/slu/skill-trends`, { params: { weeks } })
+
+// skillars-12-1 AC1: the coach's own attention-ranked player roster.
+export const getCoachRoster = () => api.get('/api/development/coaches/me/roster')
