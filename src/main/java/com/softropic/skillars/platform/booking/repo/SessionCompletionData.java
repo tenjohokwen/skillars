@@ -49,6 +49,12 @@ public class SessionCompletionData {
     @Column(name = "voice_note_text", length = 2000)
     private String voiceNoteText;
 
+    @Column(name = "what_we_did", length = 500)
+    private String whatWeDid;
+
+    @Column(name = "whats_next", length = 500)
+    private String whatsNext;
+
     @Column(name = "homework_drill_ids")
     private String homeworkDrillIds;
 

@@ -57,6 +57,8 @@ Topic and goals were provided directly by the user at session start (no live dis
 
 > **Covered by `skillars-12-1-coach-player-roster-and-attention-summary`** (created 2026-10-14). Pattern #1, Pattern #2, Pattern #3, Converge #10, Converge #11, and Converge #13 below are implemented by that story. Do not re-pick them in a future brainstorm-mining pass.
 
+> **Covered by `skillars-12-2-session-close-recap-capture`** (created 2026-10-15). Pattern #4 below is implemented by that story. Do not re-pick it in a future brainstorm-mining pass.
+
 **[Pattern #1]: People-First Roster**
 _Concept:_ Coach's home view is a list of players (derived from completed bookings), not a list of bookings -- each with a last-session date.
 _Novelty:_ Inverts the existing booking-centric UI into a relationship-centric one without new entities.
@@ -134,7 +136,7 @@ _Novelty:_ History finds the coach at the moment he needs it (pre-session), inst
 
 **Ideas Generated:**
 
-> **Converge #10, Converge #11, and Converge #13 are covered by `skillars-12-1-coach-player-roster-and-attention-summary`** (created 2026-10-14) — see the annotation under Pattern #1 above. Converge #12, #14, #15, #16 and Deferred #17 are NOT covered by that story and remain open for future Epic 12 stories.
+> **Converge #10, Converge #11, and Converge #13 are covered by `skillars-12-1-coach-player-roster-and-attention-summary`** (created 2026-10-14) — see the annotation under Pattern #1 above. **Converge #15 (the capture itself) and the write-side half of Converge #16 (threading the recap onto `BookingCompletedEvent`) are covered by `skillars-12-2-session-close-recap-capture`** (created 2026-10-15) — see the annotation under Converge #15 below; Converge #16's report-generation-consumption half is explicitly that story's own Fast-Follow and remains open. Converge #12, #14, and Deferred #17 are NOT covered by either story and remain open for future Epic 12 stories.
 
 **[Converge #10]: Derived Lightweight Roster**
 _Concept:_ "My players" = distinct players with an active-status booking against this coach, no new entity.
@@ -155,6 +157,8 @@ _Novelty:_ Magnifies existing signals into a single prioritization cue rather th
 **[Converge #14]: Derived Focus Thread**
 _Concept:_ The "what have we been working on" thread is computed from the frequency/recency of `Session.developmentFocus` codes across past sessions, not a new freeform field.
 _Novelty:_ Reuses data already captured for drill suggestion; no new capture burden on the coach.
+
+> **Covered by `skillars-12-2-session-close-recap-capture`** (created 2026-10-15). Converge #15 (the capture itself) and the write-side half of Converge #16 (threading the recap onto `BookingCompletedEvent` into `PlayerTimelineEvent.SESSION_COMPLETED` metadata) below are implemented by that story; Converge #16's report-generation-consumption half remains open as that story's own Fast-Follow. Do not re-pick Converge #15 in a future brainstorm-mining pass.
 
 **[Converge #15]: Session-Close Recap**
 _Concept:_ A small structured note captured when a coach closes out a session, surfaced both forward (next session's prep) and backward (this player's history view).
@@ -190,7 +194,7 @@ _Novelty:_ Reverses the single-direction authorship assumption running through e
 **Prioritization Results -- Agreed Build Order:**
 
 1. Roster-summary endpoint + derived roster page — **covered by `skillars-12-1-coach-player-roster-and-attention-summary` (created 2026-10-14)**
-2. Session-close recap capture
+2. Session-close recap capture — **covered by `skillars-12-2-session-close-recap-capture` (created 2026-10-15)**
 3. Session Prep Card inside the booking view
 4. Coach-facing player-detail page (reused panels)
 5. Fast-follow: recap -> report-generation tie-in
@@ -207,7 +211,7 @@ _Next steps:_
 _Resources needed:_ one new endpoint/service in `development` (or a thin composition over `SluDashboardService`/`NeglectedSkillFlagRepository`/`BookingRepository`), one new Vue page + route under `pages/coach/`.
 _Success indicator:_ a coach can open one page and see every player he has an active or recently-lapsed relationship with, ranked by who needs attention.
 
-**Priority 2: Session-Close Recap Capture**
+**Priority 2: Session-Close Recap Capture** — ✅ **Covered by `skillars-12-2-session-close-recap-capture` (created 2026-10-15, Epic 12)**
 _Why this matters:_ the one genuinely new data point the whole design depends on -- unlocks prep, history, and reports.
 _Next steps:_
 1. Add a small structured recap form (what we did / what's next, plus an optional free-text note) triggered at session/booking completion.

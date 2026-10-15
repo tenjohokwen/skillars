@@ -5,6 +5,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +22,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -198,7 +200,9 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
                 "effortRating", 4,
                 "focusRating", 3,
                 "techniqueRating", 5,
-                "mode", "LIVE"
+                "mode", "LIVE",
+                "recapWhatWeDid", "Worked on first touch",
+                "recapWhatsNext", "Continue weak-foot drills"
             ),
             authenticatedHeaders(coachCookies), Void.class
         );
@@ -207,6 +211,11 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
         String status = jdbcTemplate.queryForObject(
             "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId);
         assertThat(status).isEqualTo("COMPLETED");
+
+        Map<String, Object> recap = jdbcTemplate.queryForMap(
+            "SELECT what_we_did, whats_next FROM booking.session_completion_data WHERE booking_id = ?", bookingId);
+        assertThat(recap.get("what_we_did")).isEqualTo("Worked on first touch");
+        assertThat(recap.get("whats_next")).isEqualTo("Continue weak-foot drills");
     }
 
     @Test
@@ -222,7 +231,9 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
                 "effortRating", 3,
                 "focusRating", 4,
                 "techniqueRating", 4,
-                "mode", "QUICK"
+                "mode", "QUICK",
+                "recapWhatWeDid", "Worked on passing accuracy",
+                "recapWhatsNext", "Focus on finishing next session"
             ),
             authenticatedHeaders(coachCookies), Void.class
         );
@@ -231,6 +242,81 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
         String status = jdbcTemplate.queryForObject(
             "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId);
         assertThat(status).isEqualTo("COMPLETED_PENDING_CONFIRMATION");
+    }
+
+    // skillars-12-2 AC1: recapWhatWeDid/recapWhatsNext are the first fields on this request a
+    // coach can actually violate from the UI — ratings are capped q-rating controls, mode is
+    // hardcoded, homeworkDrillIds is capped at 2 by toggleDrill.
+    @Test
+    void submitWrapUp_blankRecapWhatWeDid_returns400() {
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/complete",
+            HttpMethod.POST,
+            Map.of(
+                "playerAttended", true,
+                "effortRating", 4,
+                "focusRating", 3,
+                "techniqueRating", 5,
+                "mode", "LIVE",
+                "recapWhatWeDid", "",
+                "recapWhatsNext", "Continue weak-foot drills"
+            ),
+            authenticatedHeaders(coachCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    // skillars-12-2 code review (P6): Task 1.5 covered blank recapWhatWeDid only — a missing
+    // (absent) key and a blank recapWhatsNext are each distinct @NotBlank failure modes on the
+    // other side of the same validation and were untested.
+    @Test
+    void submitWrapUp_missingRecapWhatsNext_returns400() {
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/complete",
+            HttpMethod.POST,
+            Map.of(
+                "playerAttended", true,
+                "effortRating", 4,
+                "focusRating", 3,
+                "techniqueRating", 5,
+                "mode", "LIVE",
+                "recapWhatWeDid", "Worked on first touch"
+                // recapWhatsNext deliberately omitted
+            ),
+            authenticatedHeaders(coachCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void submitWrapUp_blankRecapWhatsNext_returns400() {
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/complete",
+            HttpMethod.POST,
+            Map.of(
+                "playerAttended", true,
+                "effortRating", 4,
+                "focusRating", 3,
+                "techniqueRating", 5,
+                "mode", "LIVE",
+                "recapWhatWeDid", "Worked on first touch",
+                "recapWhatsNext", ""
+            ),
+            authenticatedHeaders(coachCookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
     @Test
@@ -285,6 +371,55 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
         ))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    // skillars-12-2 Task 3.4: exercises the QUICK-mode deferred publish path end-to-end
+    // (submitWrapUp → session_completion_data → confirmCompletion → BookingCompletedEvent →
+    // async AFTER_COMMIT TimelineEventListener), deliberately NOT the LIVE-mode path, whose
+    // publish reads straight from the in-hand request and would stay green even if
+    // BookingCompletionService.submitWrapUp's scd.setWhatWeDid/setWhatsNext calls were broken
+    // or omitted entirely.
+    @Test
+    void submitWrapUp_quickModeThenConfirmCompletion_writesRecapToPlayerTimeline() {
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Void> wrapUpResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/complete",
+            HttpMethod.POST,
+            Map.of(
+                "playerAttended", true,
+                "effortRating", 4,
+                "focusRating", 4,
+                "techniqueRating", 3,
+                "mode", "QUICK",
+                "recapWhatWeDid", "Quick-complete recap: dribbling drills",
+                "recapWhatsNext", "Quick-complete recap: ball control next"
+            ),
+            authenticatedHeaders(coachCookies), Void.class
+        );
+        assertThat(wrapUpResponse.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Void> confirmResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/confirm-completion",
+            HttpMethod.PUT, null, authenticatedHeaders(parentCookies), Void.class
+        );
+        assertThat(confirmResponse.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        Awaitility.await("SESSION_COMPLETED timeline event written asynchronously after commit")
+            .atMost(Duration.ofSeconds(10))
+            .pollInterval(Duration.ofMillis(100))
+            .until(() -> jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM development.player_timeline_events " +
+                "WHERE reference_id = ? AND event_type = 'SESSION_COMPLETED'", Integer.class, bookingId) > 0);
+
+        Map<String, Object> metadata = jdbcTemplate.queryForMap(
+            "SELECT metadata->>'whatWeDid' AS what_we_did, metadata->>'whatsNext' AS whats_next " +
+            "FROM development.player_timeline_events " +
+            "WHERE reference_id = ? AND event_type = 'SESSION_COMPLETED'", bookingId);
+        assertThat(metadata.get("what_we_did")).isEqualTo("Quick-complete recap: dribbling drills");
+        assertThat(metadata.get("whats_next")).isEqualTo("Quick-complete recap: ball control next");
     }
 
     @Test

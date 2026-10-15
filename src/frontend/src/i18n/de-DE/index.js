@@ -395,7 +395,14 @@ export default {
       step3Placeholder: 'Notiz eingeben...',
       step4Title: 'Hausaufgaben-Übungen',
       step4NoSuggestions: 'Übungsvorschläge folgen in Kürze',
-      step4Done: 'Fertig',
+      step5Title: 'Sitzungs-Rückblick',
+      step5WhatWeDidLabel: 'Worauf wir uns konzentriert haben',
+      step5WhatWeDidPlaceholder: 'Z. B. Ballannahme, 1-gegen-1-Dribbling...',
+      step5WhatsNextLabel: 'Was als Nächstes kommt',
+      step5WhatsNextPlaceholder: 'Z. B. Weiter am schwachen Fuß arbeiten...',
+      step5Done: 'Fertig',
+      step5SubmitError:
+        'Der Sitzungsabschluss konnte nicht übermittelt werden. Bitte versuchen Sie es erneut.',
     },
     availability: {
       title: 'Verfügbarkeit verwalten',

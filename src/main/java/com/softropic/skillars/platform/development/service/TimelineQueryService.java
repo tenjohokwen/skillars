@@ -1,8 +1,10 @@
 package com.softropic.skillars.platform.development.service;
 
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.development.contract.PlayerTimelineEventType;
 import com.softropic.skillars.platform.development.contract.TimelineEventResponse;
 import com.softropic.skillars.platform.development.contract.TimelineResponse;
+import com.softropic.skillars.platform.development.repo.PlayerTimelineEvent;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineRepository;
 import com.softropic.skillars.platform.development.repo.SluRepository;
 import lombok.RequiredArgsConstructor;
@@ -12,7 +14,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Slf4j
@@ -52,8 +56,30 @@ public class TimelineQueryService {
             .stream()
             .map(e -> new TimelineEventResponse(
                 e.getId(), e.getEventType(), e.getReferenceId(),
-                e.getReferenceModule(), e.getOccurredAt(), e.getMetadata()))
+                e.getReferenceModule(), e.getOccurredAt(),
+                redactRecapIfNotAuthoringCoach(e, isCoach, coachId)))
             .toList();
         return new TimelineResponse(false, null, events);
+    }
+
+    // skillars-12-2 AC4: the recap ("whatWeDid"/"whatsNext") written into a SESSION_COMPLETED
+    // event's metadata is visible only to the coach who authored it — stripped for every other
+    // viewer (another coach, or the player/parent). metadata is a nullable JSONB column, and the
+    // existing PlayerTimelineResourceIT seeding helper never sets one at all, so this method must
+    // not assume it is non-null.
+    private Map<String, Object> redactRecapIfNotAuthoringCoach(PlayerTimelineEvent event, boolean isCoach, UUID coachId) {
+        Map<String, Object> metadata = event.getMetadata();
+        if (metadata == null || event.getEventType() != PlayerTimelineEventType.SESSION_COMPLETED) {
+            return metadata;
+        }
+        boolean isAuthoringCoach = isCoach && coachId != null
+            && coachId.toString().equals(metadata.get(TimelineEventListener.METADATA_KEY_COACH_ID));
+        if (isAuthoringCoach) {
+            return metadata;
+        }
+        Map<String, Object> redacted = new HashMap<>(metadata);
+        redacted.remove(TimelineEventListener.METADATA_KEY_WHAT_WE_DID);
+        redacted.remove(TimelineEventListener.METADATA_KEY_WHATS_NEXT);
+        return redacted;
     }
 }

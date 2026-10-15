@@ -65,7 +65,8 @@ public class QuickCompleteTimeoutService {
                     eventPublisher.publishEvent(new BookingCompletedEvent(
                         this, scd.getBookingId(), scd.getCoachId(), scd.getPlayerId(),
                         booking.getParentId(), scd.isPlayerAttended(), scd.getEffortRating(),
-                        scd.getFocusRating(), scd.getTechniqueRating(), List.of()
+                        scd.getFocusRating(), scd.getTechniqueRating(), List.of(),
+                        scd.getWhatWeDid(), scd.getWhatsNext()
                     ));
                 });
                 log.info("Auto-confirmed Quick Complete for booking {}", scd.getBookingId());

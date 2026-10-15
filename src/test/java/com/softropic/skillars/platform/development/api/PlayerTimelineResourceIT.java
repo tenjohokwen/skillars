@@ -151,6 +151,87 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         assertThat((List<?>) response.getBody().get("events")).isNotEmpty();
     }
 
+    // skillars-12-2 AC4: the recap ("whatWeDid"/"whatsNext") written into a SESSION_COMPLETED
+    // event's metadata is visible only to its authoring coach.
+    @Test
+    @SuppressWarnings("unchecked")
+    void getTimeline_asAuthoringCoach_includesRecapFields() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO development.player_skill_stats " +
+                "(id, player_id, coach_id, skill_code, slu_value, session_id, calculated_at) " +
+                "VALUES (gen_random_uuid(), ?, ?, 'PAC', 10.00, gen_random_uuid(), NOW())",
+                PLAYER_ID, coachProfileId
+            );
+            insertSessionCompletedEventWithRecap(PLAYER_ID, coachProfileId,
+                "Worked on first touch", "Continue weak-foot drills");
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            timelineUrl(), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<String, Object>> events = (List<Map<String, Object>>) response.getBody().get("events");
+        Map<String, Object> metadata = (Map<String, Object>) events.get(0).get("metadata");
+        assertThat(metadata.get("whatWeDid")).isEqualTo("Worked on first touch");
+        assertThat(metadata.get("whatsNext")).isEqualTo("Continue weak-foot drills");
+    }
+
+    // A second coach with otherwise-valid (non-expired) access must not see the recap — but
+    // must still see the event itself. This coach needs a real player_skill_stats row for THEIR
+    // OWN coach-player pair (not just a booking), or TimelineQueryService's expiry check returns
+    // an empty event list before ever reaching redaction, making the assertion vacuous.
+    @Test
+    @SuppressWarnings("unchecked")
+    void getTimeline_asSecondCoachWithActiveAccess_excludesRecapFieldsButIncludesEvent() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO development.player_skill_stats " +
+                "(id, player_id, coach_id, skill_code, slu_value, session_id, calculated_at) " +
+                "VALUES (gen_random_uuid(), ?, ?, 'PAC', 10.00, gen_random_uuid(), NOW())",
+                PLAYER_ID, academyProfileId
+            );
+            insertSessionCompletedEventWithRecap(PLAYER_ID, coachProfileId,
+                "Worked on first touch", "Continue weak-foot drills");
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(ACADEMY_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            timelineUrl(), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((Boolean) response.getBody().get("accessExpired")).isFalse();
+        List<Map<String, Object>> events = (List<Map<String, Object>>) response.getBody().get("events");
+        assertThat(events).isNotEmpty();
+        Map<String, Object> event = events.get(0);
+        assertThat(event.get("eventType")).isEqualTo("SESSION_COMPLETED");
+        Map<String, Object> metadata = (Map<String, Object>) event.get("metadata");
+        assertThat(metadata.get("coachId")).isEqualTo(coachProfileId.toString());
+        assertThat(metadata).doesNotContainKeys("whatWeDid", "whatsNext");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void getTimeline_asParent_excludesRecapFields() {
+        transactionTemplate.execute(status -> {
+            insertSessionCompletedEventWithRecap(PLAYER_ID, coachProfileId,
+                "Worked on first touch", "Continue weak-foot drills");
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            timelineUrl(), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<String, Object>> events = (List<Map<String, Object>>) response.getBody().get("events");
+        Map<String, Object> metadata = (Map<String, Object>) events.get(0).get("metadata");
+        assertThat(metadata).doesNotContainKeys("whatWeDid", "whatsNext");
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     void getTimeline_asCoach_withExpiredAccess_returns200WithAccessExpired() {
@@ -495,6 +576,20 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
             "(id, player_id, event_type, reference_module, occurred_at) " +
             "VALUES (gen_random_uuid(), ?, ?, ?, NOW())",
             playerId, eventType, referenceModule
+        );
+    }
+
+    // skillars-12-2 Task 3.3: insertTimelineEvent above never sets metadata, so a dedicated
+    // seeding helper is needed to cover AC4's coach-only recap redaction.
+    private void insertSessionCompletedEventWithRecap(long playerId, UUID coachId, String whatWeDid, String whatsNext) {
+        String metadataJson = String.format(
+            "{\"coachId\":\"%s\",\"whatWeDid\":\"%s\",\"whatsNext\":\"%s\"}",
+            coachId, whatWeDid, whatsNext);
+        jdbcTemplate.update(
+            "INSERT INTO development.player_timeline_events " +
+            "(id, player_id, event_type, reference_module, occurred_at, metadata) " +
+            "VALUES (gen_random_uuid(), ?, 'SESSION_COMPLETED', 'booking', NOW(), ?::jsonb)",
+            playerId, metadataJson
         );
     }
 }
