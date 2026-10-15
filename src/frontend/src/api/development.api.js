@@ -53,3 +53,6 @@ export const getSkillTrends = (playerId, weeks = 8) =>
 
 // skillars-12-1 AC1: the coach's own attention-ranked player roster.
 export const getCoachRoster = () => api.get('/api/development/coaches/me/roster')
+
+// skillars-12-3 AC3: the Session Prep Card's backing endpoint.
+export const getSessionPrep = (bookingId) => api.get(`/api/development/bookings/${bookingId}/prep`)

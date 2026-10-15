@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 // IMMUTABLE: append-only — do NOT add delete() or update-path methods EXCEPT for GDPR Article 17 erasure
@@ -54,6 +55,20 @@ public interface SluRepository extends JpaRepository<PlayerSkillStat, UUID> {
         WHERE player_id = :playerId AND coach_id = :coachId
         """)
     Instant findLastSessionDate(@Param("playerId") Long playerId, @Param("coachId") UUID coachId);
+
+    // skillars-12-3 code review (2026-10-15) Patch, owner decision: lets CoachPlayerLastSessionResolver
+    // disambiguate "a genuinely newer, different SLU-only session exists" from "this is the SAME
+    // session whose two independently-async-stamped signals just landed in the opposite order" by
+    // comparing booking identity rather than raw timestamps.
+    @Query(nativeQuery = true, value = """
+        SELECT s.booking_id
+        FROM development.player_skill_stats p
+        JOIN session.sessions s ON s.id = p.session_id
+        WHERE p.player_id = :playerId AND p.coach_id = :coachId
+        ORDER BY p.calculated_at DESC
+        LIMIT 1
+        """)
+    Optional<UUID> findLastSessionBookingId(@Param("playerId") Long playerId, @Param("coachId") UUID coachId);
 
     @Query(nativeQuery = true, value = """
         SELECT coach_id, skill_code, SUM(slu_value) AS total_slu

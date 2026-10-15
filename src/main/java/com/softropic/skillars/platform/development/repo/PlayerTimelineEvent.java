@@ -47,4 +47,7 @@ public class PlayerTimelineEvent {
     @Type(JsonType.class)
     @Column(name = "metadata", columnDefinition = "jsonb", updatable = false)
     private Map<String, Object> metadata;
+
+    @Column(name = "coach_id", updatable = false)
+    private UUID coachId;
 }

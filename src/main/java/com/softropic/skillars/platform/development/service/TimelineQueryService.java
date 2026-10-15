@@ -6,7 +6,6 @@ import com.softropic.skillars.platform.development.contract.TimelineEventRespons
 import com.softropic.skillars.platform.development.contract.TimelineResponse;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineEvent;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineRepository;
-import com.softropic.skillars.platform.development.repo.SluRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -26,8 +25,8 @@ import java.util.UUID;
 public class TimelineQueryService {
 
     private final PlayerTimelineRepository timelineRepository;
-    private final SluRepository sluRepository;
     private final ConfigService configService;
+    private final CoachPlayerLastSessionResolver coachPlayerLastSessionResolver;
 
     public TimelineResponse getTimeline(Long playerId, boolean isCoach, UUID coachId) {
         long expiryDays;
@@ -41,9 +40,11 @@ public class TimelineQueryService {
         }
 
         if (isCoach) {
-            // "Activity" = most recent completed session (SLU record) for this coach-player pair.
-            // Report generation and radar assessments do NOT reset the access clock.
-            Instant lastSession = sluRepository.findLastSessionDate(playerId, coachId);
+            // "Activity" = most recent completed, attended session with this coach, merged across
+            // the SLU-row signal and the coach-scoped timeline signal (skillars-12-3 AC1) — a
+            // Quick-Complete-only coach with zero SLU rows now reads this correctly too. Report
+            // generation and radar assessments do NOT reset the access clock.
+            Instant lastSession = coachPlayerLastSessionResolver.resolve(playerId, coachId).lastSessionDate();
             boolean expired = lastSession == null ||
                 lastSession.isBefore(Instant.now().minus(expiryDays, ChronoUnit.DAYS));
             if (expired) {

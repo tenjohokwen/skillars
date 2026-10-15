@@ -55,12 +55,17 @@ public class TimelineEventListener {
             metadata.put(METADATA_KEY_COACH_ID, event.getCoachId().toString());
             if (event.getWhatWeDid() != null) metadata.put(METADATA_KEY_WHAT_WE_DID, event.getWhatWeDid());
             if (event.getWhatsNext() != null) metadata.put(METADATA_KEY_WHATS_NEXT, event.getWhatsNext());
+            // skillars-12-3 AC1: a non-attended wrap-up must not earn coach timeline access any
+            // more than it earns an SLU row today — mirrors SluCalculationService.onBookingCompleted's
+            // own !event.isPlayerAttended() early return exactly.
+            UUID coachIdForClock = event.isPlayerAttended() ? event.getCoachId() : null;
             self.writeTimelineEvent(
                 event.getPlayerId(),
                 PlayerTimelineEventType.SESSION_COMPLETED,
                 event.getBookingId(),
                 "booking",
-                metadata
+                metadata,
+                coachIdForClock
             );
         } catch (Exception e) {
             log.error("Failed to write SESSION_COMPLETED timeline event: playerId={}", event.getPlayerId(), e);
@@ -87,6 +92,17 @@ public class TimelineEventListener {
     public void writeTimelineEvent(Long playerId, PlayerTimelineEventType type,
                                    UUID referenceId, String referenceModule,
                                    Map<String, Object> metadata) {
+        writeTimelineEvent(playerId, type, referenceId, referenceModule, metadata, null);
+    }
+
+    // skillars-12-3 Task 1.3: coachId is the attendance-gated signal CoachPlayerLastSessionResolver
+    // reads to merge with the SLU-only clock (AC1) — null for RADAR_ASSESSMENT/PERFORMANCE_REPORT,
+    // whose source events (RadarEntrySubmittedEvent, ReportGeneratedEvent) carry nothing resolvable
+    // to a coach id usable here, and for a non-attended SESSION_COMPLETED.
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void writeTimelineEvent(Long playerId, PlayerTimelineEventType type,
+                                   UUID referenceId, String referenceModule,
+                                   Map<String, Object> metadata, UUID coachId) {
         PlayerTimelineEvent evt = new PlayerTimelineEvent();
         evt.setPlayerId(playerId);
         evt.setEventType(type);
@@ -94,6 +110,7 @@ public class TimelineEventListener {
         evt.setReferenceModule(referenceModule);
         evt.setOccurredAt(Instant.now());
         evt.setMetadata(metadata);
+        evt.setCoachId(coachId);
         timelineRepository.save(evt);
     }
 }

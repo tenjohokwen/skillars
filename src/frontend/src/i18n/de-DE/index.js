@@ -283,6 +283,16 @@ export default {
     myPlayersDormantBadge: 'Länger nicht gehört',
     myPlayersNeglectedSkillCount:
       '{count} vernachlässigte Fähigkeit | {count} vernachlässigte Fähigkeiten',
+    sessionPrepButton: 'Vorbereitung',
+    sessionPrepTitle: 'Sitzungsvorbereitung',
+    sessionPrepWhatWeDidLabel: 'Was wir erarbeitet haben',
+    sessionPrepWhatsNextLabel: 'Was als Nächstes kommt',
+    sessionPrepNoRecapYet: 'Noch keine Zusammenfassung',
+    sessionPrepFocusThreadLabel: 'Schwerpunkt-Verlauf',
+    sessionPrepNoFocusThreadYet: 'Noch kein Schwerpunkt-Verlauf',
+    sessionPrepNoNeglectedSkills: 'Keine vernachlässigten Fähigkeiten',
+    sessionPrepPlanButton: 'Diese Einheit planen',
+    sessionPrepError: 'Sitzungsvorbereitung konnte nicht geladen werden',
   },
   player: {
     nav: 'Spieler',
