@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { i18n } from 'boot/i18n'
 import {
   getSkillDefinitions,
   getSkillExposure,
@@ -51,20 +52,35 @@ export const useDevelopmentStore = defineStore('development', () => {
       const response = await getSkillDefinitions()
       skillDefinitions.value = response
     } catch (err) {
-      error.value = err?.response?.data?.message ?? 'Failed to load skill definitions'
+      error.value =
+        err?.response?.data?.errorMsg?.message ??
+        i18n.global.t('development.portal.skillDefinitionsLoadError')
     }
   }
 
+  let _exposureSeq = 0
+
   async function fetchExposure(playerId, weeks = 8) {
+    if (!playerId) return
+    const seq = ++_exposureSeq
+    exposure.value = null
     loading.value = true
     error.value = null
     try {
       const response = await getSkillExposure(playerId, weeks)
-      exposure.value = response
+      if (seq === _exposureSeq) {
+        exposure.value = response
+      }
     } catch (err) {
-      error.value = err?.response?.data?.message ?? 'Failed to load skill exposure'
+      if (seq === _exposureSeq) {
+        error.value =
+          err?.response?.data?.errorMsg?.message ??
+          i18n.global.t('development.portal.exposureLoadError')
+      }
     } finally {
-      loading.value = false
+      if (seq === _exposureSeq) {
+        loading.value = false
+      }
     }
   }
 
@@ -196,16 +212,28 @@ export const useDevelopmentStore = defineStore('development', () => {
     }
   }
 
+  let _timelineSeq = 0
+
   async function fetchTimeline(playerId) {
+    if (!playerId) return
+    const seq = ++_timelineSeq
+    timeline.value = null
     timelineLoading.value = true
     timelineError.value = null
     try {
       const response = await getTimeline(playerId)
-      timeline.value = response
+      if (seq === _timelineSeq) {
+        timeline.value = response
+      }
     } catch (err) {
-      timelineError.value = err?.response?.data?.message ?? 'Failed to load timeline'
+      if (seq === _timelineSeq) {
+        timelineError.value =
+          err?.response?.data?.errorMsg?.message ?? i18n.global.t('development.timeline.loadError')
+      }
     } finally {
-      timelineLoading.value = false
+      if (seq === _timelineSeq) {
+        timelineLoading.value = false
+      }
     }
   }
 
@@ -214,6 +242,7 @@ export const useDevelopmentStore = defineStore('development', () => {
   async function fetchCoachContributions(playerId) {
     if (!playerId) return
     const seq = ++_coachContributionsSeq
+    coachContributions.value = []
     coachContributionsLoading.value = true
     coachContributionsError.value = null
     try {
@@ -224,7 +253,8 @@ export const useDevelopmentStore = defineStore('development', () => {
     } catch (err) {
       if (seq === _coachContributionsSeq) {
         coachContributionsError.value =
-          err?.response?.data?.message ?? 'development.portal.contributionsLoadError'
+          err?.response?.data?.errorMsg?.message ??
+          i18n.global.t('development.portal.contributionsLoadError')
       }
     } finally {
       if (seq === _coachContributionsSeq) {

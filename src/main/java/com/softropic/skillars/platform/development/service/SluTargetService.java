@@ -6,6 +6,9 @@ import com.softropic.skillars.platform.development.contract.SluTargetResponse;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PlayerSluTarget;
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
+import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,6 +24,8 @@ public class SluTargetService {
     private final SluTargetRepository sluTargetRepository;
     private final NeglectedSkillFlagRepository flagRepository;
     private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    private final SecurityUtil securityUtil;
+    private final PlayerProfileRepository playerProfileRepository;
 
     @Transactional(readOnly = true)
     public List<SluTargetResponse> getTargets(UUID coachId, Long playerId) {
@@ -51,9 +56,18 @@ public class SluTargetService {
 
     @Transactional(readOnly = true)
     public List<NeglectedSkillResponse> getNeglectedSkills(Long playerId) {
+        requireCoachPlayerRelationshipIfCoach(playerId);
         return flagRepository.findByPlayerIdAndResolvedAtIsNull(playerId)
             .stream()
             .map(f -> new NeglectedSkillResponse(f.getSkillCode(), f.getDetectedAt()))
             .toList();
+    }
+
+    private void requireCoachPlayerRelationshipIfCoach(Long playerId) {
+        if (securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)
+                && !playerProfileRepository.existsByIdAndParentId(playerId, securityUtil.requireCurrentUserId())) {
+            coachPlayerAuthorizationService.requireCoachPlayerRelationship(
+                securityUtil.getCurrentCoachUserId(), playerId);
+        }
     }
 }

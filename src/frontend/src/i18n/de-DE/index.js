@@ -293,6 +293,14 @@ export default {
     sessionPrepNoNeglectedSkills: 'Keine vernachlässigten Fähigkeiten',
     sessionPrepPlanButton: 'Diese Einheit planen',
     sessionPrepError: 'Sitzungsvorbereitung konnte nicht geladen werden',
+    playerDetailTitle: 'Entwicklung von {playerName}',
+    playerDetailUnknownPlayerName: 'diesem Spieler',
+    playerDetailNeglectedSkillsTitle: 'Vernachlässigte Fähigkeiten',
+    playerDetailNoNeglectedSkills: 'Keine vernachlässigten Fähigkeiten',
+    playerDetailContributionsTitle: 'Trainerbeiträge',
+    playerDetailNoContributions: 'Keine Trainerbeitragsdaten für die letzten 30 Tage',
+    playerDetailError: 'Entwicklungsdaten des Spielers konnten nicht geladen werden',
+    playerDetailBackToRoster: 'Zurück zu Meine Spieler',
   },
   player: {
     nav: 'Spieler',
@@ -1115,6 +1123,7 @@ export default {
     timeline: {
       title: 'Spieler-Zeitstrahl',
       noEvents: 'Noch keine Zeitstrahl-Ereignisse.',
+      loadError: 'Zeitstrahl konnte nicht geladen werden',
       accessExpired:
         'Ihr Coaching-Zugriff auf den Zeitstrahl dieses Spielers ist abgelaufen ({days} Tage Inaktivität).',
       eventType: {
@@ -1138,6 +1147,8 @@ export default {
       neglectedAlert:
         'Vernachlässigte Fähigkeiten erkannt: {skills}. Fragen Sie Ihren Trainer nach zusätzlichem Fokus.',
       contributionsLoadError: 'Trainerbeiträge konnten nicht geladen werden',
+      exposureLoadError: 'Fähigkeitsexposition konnte nicht geladen werden',
+      skillDefinitionsLoadError: 'Fähigkeitsdefinitionen konnten nicht geladen werden',
     },
   },
   payment: {

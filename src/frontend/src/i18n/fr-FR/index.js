@@ -26,6 +26,15 @@ export default {
     sessionPrepNoNeglectedSkills: 'Aucune compétence négligée',
     sessionPrepPlanButton: 'Planifier cette séance',
     sessionPrepError: 'Impossible de charger la préparation de séance',
+    playerDetailTitle: 'Développement de {playerName}',
+    playerDetailUnknownPlayerName: 'ce joueur',
+    playerDetailNeglectedSkillsTitle: 'Compétences négligées',
+    playerDetailNoNeglectedSkills: 'Aucune compétence négligée',
+    playerDetailContributionsTitle: 'Contributions des coachs',
+    playerDetailNoContributions:
+      'Aucune donnée de contribution de coach pour les 30 derniers jours',
+    playerDetailError: 'Impossible de charger les données de développement du joueur',
+    playerDetailBackToRoster: 'Retour à Mes joueurs',
   },
   player: {
     nav: 'Joueur',
@@ -864,6 +873,7 @@ export default {
     timeline: {
       title: 'Chronologie du joueur',
       noEvents: 'Aucun événement dans la chronologie pour le moment.',
+      loadError: 'Échec du chargement de la chronologie',
       accessExpired: "Votre accès au suivi de ce joueur a expiré ({days} jours d'inactivité).",
       eventType: {
         SESSION_COMPLETED: 'Séance terminée',
@@ -886,6 +896,8 @@ export default {
       neglectedAlert:
         'Compétences négligées détectées : {skills}. Demandez à votre coach un focus supplémentaire.',
       contributionsLoadError: 'Échec du chargement des contributions du coach',
+      exposureLoadError: "Échec du chargement de l'exposition aux compétences",
+      skillDefinitionsLoadError: 'Échec du chargement des définitions de compétences',
     },
   },
   theme: {

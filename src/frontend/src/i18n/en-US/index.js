@@ -262,6 +262,14 @@ export default {
     sessionPrepNoNeglectedSkills: 'No neglected skills',
     sessionPrepPlanButton: 'Plan this session',
     sessionPrepError: 'Could not load session prep',
+    playerDetailTitle: "{playerName}'s Development",
+    playerDetailUnknownPlayerName: 'this player',
+    playerDetailNeglectedSkillsTitle: 'Neglected Skills',
+    playerDetailNoNeglectedSkills: 'No neglected skills',
+    playerDetailContributionsTitle: 'Coach Contributions',
+    playerDetailNoContributions: 'No coach contribution data for the last 30 days',
+    playerDetailError: 'Could not load player development data',
+    playerDetailBackToRoster: 'Back to My Players',
   },
   player: {
     nav: 'Player',
@@ -871,6 +879,7 @@ export default {
     timeline: {
       title: 'Player Timeline',
       noEvents: 'No timeline events yet.',
+      loadError: 'Failed to load timeline',
       accessExpired:
         "Your coaching access to this player's timeline expired ({days} days of inactivity).",
       eventType: {
@@ -892,6 +901,8 @@ export default {
       coachContribution: '{coachName} contributed {pct}% of {skill} exposure in the last 30 days',
       neglectedAlert: 'Neglected skills detected: {skills}. Ask your coach about extra focus.',
       contributionsLoadError: 'Failed to load coach contributions',
+      exposureLoadError: 'Failed to load skill exposure',
+      skillDefinitionsLoadError: 'Failed to load skill definitions',
     },
   },
   video: {
