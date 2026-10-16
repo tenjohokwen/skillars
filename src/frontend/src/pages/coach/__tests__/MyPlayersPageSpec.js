@@ -3,6 +3,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { createRouter, createMemoryHistory } from 'vue-router'
 
 vi.mock('src/api/development.api', () => ({
   getCoachRoster: vi.fn(),
@@ -10,6 +11,11 @@ vi.mock('src/api/development.api', () => ({
 
 import { getCoachRoster } from 'src/api/development.api'
 import MyPlayersPage from 'src/pages/coach/MyPlayersPage.vue'
+
+// A realistic 18-19 digit Tsid, reused from ParentDevelopmentPortalPageSpec.js's own fixture —
+// large enough that a Number(...) regression on the receiving CoachPlayerDetailPage would be
+// caught, unlike this spec's other fixtures' small playerId: 1.
+const LARGE_PLAYER_ID = '893573203704173564'
 
 const PLAYER = (overrides = {}) => ({
   playerId: 1,
@@ -21,11 +27,26 @@ const PLAYER = (overrides = {}) => ({
   ...overrides,
 })
 
+function createTestRouter() {
+  return createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/coach/players', name: 'coach-players', component: { template: '<div />' } },
+      {
+        path: '/coach/players/:playerId',
+        name: 'coach-player-detail',
+        component: { template: '<div />' },
+      },
+    ],
+  })
+}
+
 const mounted = []
 function mountPage() {
-  const wrapper = mount(MyPlayersPage)
+  const router = createTestRouter()
+  const wrapper = mount(MyPlayersPage, { global: { plugins: [router] } })
   mounted.push(wrapper)
-  return wrapper
+  return { wrapper, router }
 }
 
 describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
@@ -36,14 +57,14 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
 
   it('shows a spinner while loading', () => {
     getCoachRoster.mockReturnValue(new Promise(() => {}))
-    const wrapper = mountPage()
+    const { wrapper } = mountPage()
 
     expect(wrapper.findComponent({ name: 'QSpinner' }).exists()).toBe(true)
   })
 
   it('renders an incomplete-profile state on a 404 (no CoachProfile row yet)', async () => {
     getCoachRoster.mockRejectedValue({ response: { status: 404 } })
-    const wrapper = mountPage()
+    const { wrapper } = mountPage()
     await flushPromises()
 
     expect(wrapper.text()).toContain('coach.myPlayersIncompleteProfile')
@@ -51,7 +72,7 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
 
   it('renders a generic error state on a non-404 failure', async () => {
     getCoachRoster.mockRejectedValue({ response: { status: 500 } })
-    const wrapper = mountPage()
+    const { wrapper } = mountPage()
     await flushPromises()
 
     expect(wrapper.text()).toContain('common.errorGeneric')
@@ -59,7 +80,7 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
 
   it('renders an explicit empty state when the roster has zero entries', async () => {
     getCoachRoster.mockResolvedValue({ players: [] })
-    const wrapper = mountPage()
+    const { wrapper } = mountPage()
     await flushPromises()
 
     expect(wrapper.text()).toContain('coach.myPlayersEmpty')
@@ -82,7 +103,7 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
         PLAYER({ playerId: 2, playerName: 'Sam Rivera', dormant: true, lastSessionDate: null }),
       ],
     })
-    const wrapper = mountPage()
+    const { wrapper } = mountPage()
     await flushPromises()
 
     expect(wrapper.text()).toContain('Alex Kane')
@@ -100,7 +121,7 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
     getCoachRoster.mockResolvedValue({
       players: [PLAYER({ dormant: true, lastSessionDate: '2026-01-01T00:00:00Z' })],
     })
-    const wrapper = mountPage()
+    const { wrapper } = mountPage()
     await flushPromises()
 
     expect(wrapper.text()).toContain('coach.myPlayersDormantBadge')
@@ -111,9 +132,53 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
     getCoachRoster.mockResolvedValue({
       players: [PLAYER({ dormant: false, lastSessionDate: null })],
     })
-    const wrapper = mountPage()
+    const { wrapper } = mountPage()
     await flushPromises()
 
     expect(wrapper.text()).toContain('coach.myPlayersNeverTrainedTogether')
+  })
+
+  it('navigates to coach-player-detail with playerId param and playerName query on row click', async () => {
+    getCoachRoster.mockResolvedValue({
+      players: [PLAYER({ playerId: LARGE_PLAYER_ID, playerName: 'Alex Kane' })],
+    })
+    const { wrapper, router } = mountPage()
+    await router.push('/coach/players')
+    await flushPromises()
+    const pushSpy = vi.spyOn(router, 'push')
+
+    await wrapper.find('.player-item').trigger('click')
+
+    expect(pushSpy).toHaveBeenCalledWith({
+      name: 'coach-player-detail',
+      params: { playerId: LARGE_PLAYER_ID },
+      query: { playerName: 'Alex Kane' },
+    })
+  })
+
+  // Review Patch 7: rows were mouse-only (no role, tabindex, or keyboard handler) — a keyboard or
+  // screen-reader user had no way to reach the new detail page at all.
+  it('is keyboard-reachable: row has role=button/tabindex and Enter/Space trigger navigation', async () => {
+    getCoachRoster.mockResolvedValue({
+      players: [PLAYER({ playerId: LARGE_PLAYER_ID, playerName: 'Alex Kane' })],
+    })
+    const { wrapper, router } = mountPage()
+    await router.push('/coach/players')
+    await flushPromises()
+    const pushSpy = vi.spyOn(router, 'push')
+    const row = wrapper.find('.player-item')
+
+    expect(row.attributes('role')).toBe('button')
+    expect(row.attributes('tabindex')).toBe('0')
+
+    await row.trigger('keyup.enter')
+    await row.trigger('keyup.space')
+
+    expect(pushSpy).toHaveBeenCalledTimes(2)
+    expect(pushSpy).toHaveBeenCalledWith({
+      name: 'coach-player-detail',
+      params: { playerId: LARGE_PLAYER_ID },
+      query: { playerName: 'Alex Kane' },
+    })
   })
 })

@@ -57,20 +57,23 @@ class SkillExposureResourceIT extends AbstractIntegrationTest {
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
 
-    private static final long COACH_USER_ID   = 9570000001L;
-    private static final long COACH2_USER_ID  = 9570000002L;
-    private static final long PARENT_USER_ID  = 9570000010L;
-    private static final long WRONG_PARENT_ID = 9570000011L;
-    private static final long PLAYER_ID       = 9570000020L;
-    private static final long WRONG_PLAYER_ID = 9570000021L;
+    private static final long COACH_USER_ID    = 9570000001L;
+    private static final long COACH2_USER_ID   = 9570000002L;
+    private static final long UNRELATED_COACH_USER_ID = 9570000003L;
+    private static final long PARENT_USER_ID   = 9570000010L;
+    private static final long WRONG_PARENT_ID  = 9570000011L;
+    private static final long PLAYER_ID        = 9570000020L;
+    private static final long WRONG_PLAYER_ID  = 9570000021L;
 
-    private static final String COACH_EMAIL        = "coach.exposure@skillars-test.com";
-    private static final String COACH2_EMAIL       = "coach2.exposure@skillars-test.com";
-    private static final String PARENT_EMAIL       = "parent.exposure@skillars-test.com";
-    private static final String WRONG_PARENT_EMAIL = "wrongparent.exposure@skillars-test.com";
+    private static final String COACH_EMAIL           = "coach.exposure@skillars-test.com";
+    private static final String COACH2_EMAIL          = "coach2.exposure@skillars-test.com";
+    private static final String UNRELATED_COACH_EMAIL = "unrelatedcoach.exposure@skillars-test.com";
+    private static final String PARENT_EMAIL          = "parent.exposure@skillars-test.com";
+    private static final String WRONG_PARENT_EMAIL    = "wrongparent.exposure@skillars-test.com";
 
     private UUID coachProfileId;
     private UUID coach2ProfileId;
+    private UUID unrelatedCoachProfileId;
 
     @BeforeEach
     void setUp() {
@@ -88,6 +91,13 @@ class SkillExposureResourceIT extends AbstractIntegrationTest {
             grantRole(COACH2_USER_ID, "ROLE_COACH");
             coach2ProfileId = insertCoachProfile(COACH2_USER_ID);
             insertSubscription(coach2ProfileId, "INSTRUCTOR");
+
+            // Task 3.1: a coach with NO booking relationship to PLAYER_ID at all — insertCompletedBooking
+            // is deliberately never called for this one, unlike coachProfileId/coach2ProfileId above.
+            insertUser(UNRELATED_COACH_USER_ID, UNRELATED_COACH_EMAIL, passwordHash, "COACH");
+            grantRole(UNRELATED_COACH_USER_ID, "ROLE_COACH");
+            unrelatedCoachProfileId = insertCoachProfile(UNRELATED_COACH_USER_ID);
+            insertSubscription(unrelatedCoachProfileId, "INSTRUCTOR");
 
             insertUser(PARENT_USER_ID, PARENT_EMAIL, passwordHash, "PARENT");
             grantRole(PARENT_USER_ID, "ROLE_PARENT");
@@ -268,6 +278,16 @@ class SkillExposureResourceIT extends AbstractIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).hasSize(1);
         assertThat(((Map<?, ?>) response.getBody().get(0)).get("skillCode")).isEqualTo("PAC");
+    }
+
+    @Test
+    void getNeglectedSkills_asCoachWithNoRelationship_returns403() {
+        String cookies = loginAndGetCookies(UNRELATED_COACH_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/development/players/" + PLAYER_ID + "/neglected-skills",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), List.class
+        )).isInstanceOf(HttpClientErrorException.class)
+          .satisfies(ex -> assertThat(((HttpClientErrorException) ex).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
     @Test

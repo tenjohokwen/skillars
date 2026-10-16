@@ -188,6 +188,10 @@ class ParentDevelopmentPortalResourceIT extends AbstractIntegrationTest {
                 "VALUES (?, ?, NOW()) ON CONFLICT DO NOTHING",
                 coachProfileId, "INSTRUCTOR"
             );
+            // Task 2's relationship-check fix means this coach now needs a real booking relationship
+            // with PLAYER_ID to keep getting 200 here — this test's own originally-intended happy path
+            // (a coach WITH a relationship) rather than becoming the no-relationship case.
+            insertCompletedBooking(coachProfileId, PARENT_USER_ID, PLAYER_ID);
             return null;
         });
 
@@ -199,6 +203,7 @@ class ParentDevelopmentPortalResourceIT extends AbstractIntegrationTest {
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         } finally {
             transactionTemplate.execute(status -> {
+                jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ? AND player_id = ?", coachProfileId, PLAYER_ID);
                 jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id = ?", coachProfileId);
                 jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
                 jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id = ?", coachUserId);
@@ -206,6 +211,63 @@ class ParentDevelopmentPortalResourceIT extends AbstractIntegrationTest {
                 return null;
             });
         }
+    }
+
+    @Test
+    void getCoachContributions_asCoachWithNoRelationship_returns403() {
+        long coachUserId = 9610000002L;
+        String coachEmail = "unrelatedcoach.portal@skillars-test.com";
+        UUID coachProfileId = UUID.randomUUID();
+        String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
+
+        transactionTemplate.execute(status -> {
+            insertAuthority(9613, "ROLE_COACH");
+            insertUser(coachUserId, coachEmail, passwordHash, "COACH");
+            grantRole(coachUserId, "ROLE_COACH");
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_profiles " +
+                "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) " +
+                "VALUES (?, ?, 'Unrelated Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
+                coachProfileId, coachUserId
+            );
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_subscriptions (coach_id, tier, active_since) " +
+                "VALUES (?, ?, NOW()) ON CONFLICT DO NOTHING",
+                coachProfileId, "INSTRUCTOR"
+            );
+            // Deliberately no booking inserted against PLAYER_ID — this is the "no relationship" case.
+            return null;
+        });
+
+        try {
+            String cookies = loginAndGetCookies(coachEmail);
+            assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+                contributionsUrl(PLAYER_ID), HttpMethod.GET, null, authenticatedHeaders(cookies), List.class))
+                .isInstanceOf(HttpClientErrorException.class)
+                .satisfies(ex -> assertThat(((HttpClientErrorException) ex).getStatusCode())
+                    .isEqualTo(HttpStatus.FORBIDDEN));
+        } finally {
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.update("DELETE FROM marketplace.coach_subscriptions WHERE coach_id = ?", coachProfileId);
+                jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachProfileId);
+                jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id = ?", coachUserId);
+                jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", coachUserId);
+                return null;
+            });
+        }
+    }
+
+    private void insertCompletedBooking(UUID coachId, Long parentId, Long playerId) {
+        jdbcTemplate.update(
+            "INSERT INTO booking.bookings " +
+            "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, status, " +
+            " canonical_timezone, version, created_at, updated_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, 'COMPLETED', 'Europe/Berlin', 0, ?, ?)",
+            UUID.randomUUID(), parentId, playerId, coachId,
+            Timestamp.from(Instant.now().minusSeconds(7200)),
+            Timestamp.from(Instant.now().minusSeconds(3600)),
+            Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
+        );
     }
 
     @Test

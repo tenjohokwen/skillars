@@ -35,7 +35,12 @@
         <div
           v-for="player in players"
           :key="player.playerId"
-          class="player-item q-mb-md q-pb-md row items-center justify-between"
+          class="player-item clickable q-mb-md q-pb-md row items-center justify-between"
+          role="button"
+          tabindex="0"
+          @click="goToPlayerDetail(player)"
+          @keyup.enter="goToPlayerDetail(player)"
+          @keyup.space="goToPlayerDetail(player)"
         >
           <div>
             <div class="text-body1" style="color: var(--text-primary)">
@@ -66,9 +71,11 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { getCoachRoster } from 'src/api/development.api'
 
 const { t, locale } = useI18n()
+const router = useRouter()
 
 const loading = ref(true)
 const loadError = ref(false)
@@ -100,6 +107,14 @@ function lastSessionLabel(player) {
     date: new Date(player.lastSessionDate).toLocaleDateString(locale.value),
   })
 }
+
+function goToPlayerDetail(player) {
+  router.push({
+    name: 'coach-player-detail',
+    params: { playerId: player.playerId },
+    query: { playerName: player.playerName },
+  })
+}
 </script>
 
 <style lang="scss" scoped>
@@ -110,6 +125,10 @@ function lastSessionLabel(player) {
 
 .player-item {
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.player-item.clickable {
+  cursor: pointer;
 }
 
 .player-item:last-child {
