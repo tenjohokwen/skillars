@@ -878,6 +878,9 @@ export default {
       title: 'Chronologie du joueur',
       noEvents: 'Aucun événement dans la chronologie pour le moment.',
       loadError: 'Échec du chargement de la chronologie',
+      loadMore: 'Charger plus',
+      loadMoreError: "Échec du chargement d'événements supplémentaires",
+      loadMoreRetry: 'Réessayer',
       accessExpired: "Votre accès au suivi de ce joueur a expiré ({days} jours d'inactivité).",
       eventType: {
         SESSION_COMPLETED: 'Séance terminée',

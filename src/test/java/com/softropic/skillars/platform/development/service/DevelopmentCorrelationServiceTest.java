@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.development.contract.CorrelationInsightType;
 import com.softropic.skillars.platform.development.contract.CorrelationResponse;
@@ -13,6 +14,7 @@ import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
+import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,6 +30,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -51,6 +55,45 @@ class DevelopmentCorrelationServiceTest {
             sluRepository, compositeRepository, baselineRepository,
             coachProfileService, configService, coachPlayerAuthorizationService
         );
+    }
+
+    // skillars-deferred-153 AC5 code review (2026-10-17): NEW — getInsights is a READ endpoint and
+    // must call the WIDENED requireCoachPlayerRelationshipForRead, not the narrow
+    // requireCoachPlayerRelationship the write-path call sites still use. Without this, a player who
+    // already shows on the coach's roster in one of the 8 roster-only statuses (PAYMENT_PENDING,
+    // IN_PROGRESS, PAUSED, COMPLETED_PENDING_CONFIRMATION, NO_SHOW_*, DISPUTED, REFUND_PENDING)
+    // would 403 here — the exact inconsistency AC5 exists to close. A mocked authorization service
+    // no-ops, so no pre-existing test in this class could have distinguished the two calls.
+    //
+    // verifyNoMoreInteractions is the assertion that does the work: it fails if EITHER
+    // requireCoachPlayerRelationship overload (Long,Long) or (UUID,Long) is called instead of, or in
+    // addition to, the ForRead one.
+    @Test
+    void getInsights_callsWidenedReadRelationshipCheck_notTheNarrowWriteCheck() {
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID))
+            .thenReturn(CoachSubscriptionTier.ACADEMY);
+        when(configService.getBoundedLong("development.correlation.minSessionCount", 0L, 10000L)).thenReturn(5L);
+        when(sluRepository.countDistinctSessions(PLAYER_ID)).thenReturn(3L);
+
+        service.getInsights(PLAYER_ID, COACH_ID);
+
+        verify(coachPlayerAuthorizationService).requireCoachPlayerRelationshipForRead(COACH_ID, PLAYER_ID);
+        verifyNoMoreInteractions(coachPlayerAuthorizationService);
+    }
+
+    // The relationship check runs FIRST — before the tier gate and before any DB read — so an
+    // unauthorized coach cannot learn a player's session count from the response shape.
+    @Test
+    void getInsights_relationshipCheckRunsBeforeTheTierGateAndAnyDataRead() {
+        org.mockito.Mockito.doThrow(new OperationNotAllowedException(
+                "Coach has no booking relationship with this player", SecurityError.MISSING_RIGHTS))
+            .when(coachPlayerAuthorizationService)
+            .requireCoachPlayerRelationshipForRead(COACH_ID, PLAYER_ID);
+
+        assertThatThrownBy(() -> service.getInsights(PLAYER_ID, COACH_ID))
+            .isInstanceOf(OperationNotAllowedException.class);
+
+        verifyNoMoreInteractions(coachProfileService, sluRepository, compositeRepository, baselineRepository);
     }
 
     @Test

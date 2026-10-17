@@ -49,12 +49,19 @@ class CoachPlayerAuthorizationIT extends AbstractIntegrationTest {
     private static final long DUAL_ROLE_USER_ID   = 9_330_000_030L;
     private static final long PLAYER_ID           = 9_330_000_020L;
     private static final long DUAL_ROLE_PLAYER_ID = 9_330_000_021L;
+    // skillars-deferred-153 AC6: a coach who is ALSO the self-owner of the player profile in
+    // question (a synthetic, not-currently-reachable-in-production shape — see
+    // CoachPlayerAuthorizationService.requireCoachPlayerRelationshipIfCoach's own Javadoc — but the
+    // new self-owner arm is defense-in-depth once centralized, so it gets real coverage).
+    private static final long SELF_OWNER_COACH_USER_ID = 9_330_000_040L;
+    private static final long SELF_OWNED_PLAYER_ID     = 9_330_000_041L;
 
     private static final String COACH_EMAIL        = "coach.relationship@skillars-test.com";
     private static final String PARENT_EMAIL       = "parent.relationship@skillars-test.com";
     private static final String OTHER_PARENT_EMAIL = "other.relationship@skillars-test.com";
     private static final String ADMIN_EMAIL        = "admin.relationship@skillars-test.com";
     private static final String DUAL_ROLE_EMAIL    = "dualrole.relationship@skillars-test.com";
+    private static final String SELF_OWNER_COACH_EMAIL = "selfowner.relationship@skillars-test.com";
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
@@ -89,6 +96,17 @@ class CoachPlayerAuthorizationIT extends AbstractIntegrationTest {
             grantRole(DUAL_ROLE_USER_ID, "ROLE_COACH");
             grantRole(DUAL_ROLE_USER_ID, "ROLE_PARENT");
             insertCoachProfile(DUAL_ROLE_USER_ID);
+
+            insertUser(SELF_OWNER_COACH_USER_ID, SELF_OWNER_COACH_EMAIL, passwordHash, "COACH");
+            grantRole(SELF_OWNER_COACH_USER_ID, "ROLE_COACH");
+            insertCoachProfile(SELF_OWNER_COACH_USER_ID);
+            jdbcTemplate.update(
+                "INSERT INTO main.player_profiles " +
+                "(id, name, date_of_birth, position, age_tier, user_id, independent_account_allowed, created_at, created_by) " +
+                "VALUES (?, 'Self Owned Player', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
+                SELF_OWNED_PLAYER_ID, Date.valueOf(LocalDate.now().minusYears(19)),
+                SELF_OWNER_COACH_USER_ID, Timestamp.from(Instant.now())
+            );
 
             jdbcTemplate.update(
                 "INSERT INTO main.player_profiles " +
@@ -139,6 +157,21 @@ class CoachPlayerAuthorizationIT extends AbstractIntegrationTest {
 
         ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
             baseUrl() + "/api/development/players/" + DUAL_ROLE_PLAYER_ID + "/exposure",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    // skillars-deferred-153 AC6: the new self-owner arm — a coach who owns the player profile
+    // themselves (existsByIdAndUserId) skips the relationship check entirely, exactly like the
+    // pre-existing parent-owner arm above.
+    @Test
+    void coachIsPlayersSelfOwner_withNoCoachingRelationship_stillSucceeds() {
+        String cookies = loginAndGetCookies(SELF_OWNER_COACH_EMAIL);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/development/players/" + SELF_OWNED_PLAYER_ID + "/exposure",
             HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class
         );
 

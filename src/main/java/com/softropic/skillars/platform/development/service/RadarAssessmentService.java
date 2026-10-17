@@ -92,7 +92,9 @@ public class RadarAssessmentService {
 
     @Transactional(readOnly = true)
     public RadarAssessmentListResponse getMyEntries(Long coachUserId, Long playerId) {
-        coachPlayerAuthorizationService.requireCoachPlayerRelationship(coachUserId, playerId);
+        // skillars-deferred-153 AC5: a read endpoint — widened to match the roster's own membership
+        // status width. submitAssessment (write) above stays on the narrow check deliberately.
+        coachPlayerAuthorizationService.requireCoachPlayerRelationshipForRead(coachUserId, playerId);
         UUID coachId = coachProfileService.getCoachIdByUserId(coachUserId);
 
         CoachSubscriptionTier tier = coachProfileService.getCoachSubscriptionTier(coachId);

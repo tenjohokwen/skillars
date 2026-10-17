@@ -145,6 +145,30 @@ describe('EditCoachBrandingDialog.vue (deferred-151 AC3)', () => {
     expect(wrapper.emitted('updated')).toBeUndefined()
   })
 
+  // skillars-deferred-153 AC9: the thrown Error carries no .response, so the generic
+  // error.network banner was already correct user-facing behavior (not changed by this story) —
+  // the gap was that nothing logged the captured status, making a failed upload undiagnosable
+  // from logs. Spies on console.error rather than asserting on hasError/the banner text (already
+  // covered by the test above).
+  it('a failed logo upload PUT logs the error via console.error', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500 })
+    signUpload.mockResolvedValue({ key: 'coach_branding/42/new.png', uploadUrl: 'https://upload' })
+
+    const wrapper = mountDialog()
+    wrapper.vm.selectedFile = new File(['x'], 'logo.png', { type: 'image/png' })
+
+    await wrapper.vm.handleSave()
+    await flushPromises()
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      'Coach branding logo upload failed',
+      expect.objectContaining({ message: expect.stringContaining('500') }),
+    )
+
+    consoleErrorSpy.mockRestore()
+  })
+
   it('shows a security.featureGated error if the tier changes mid-session', async () => {
     saveCoachBranding.mockRejectedValue({
       response: { data: { errorMsg: { errorKey: 'security.featureGated', message: 'gated' } } },

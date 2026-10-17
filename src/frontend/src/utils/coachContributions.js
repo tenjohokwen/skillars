@@ -37,3 +37,17 @@ export function topAttributions(contributions) {
 export function hasTopAttributions(contributions) {
   return topAttributions(contributions).length > 0
 }
+
+// skillars-deferred-153 AC10: the 30%-threshold/group-by-skill logic above was already shared
+// (deferred-152 AC2), but the SELECTION RULE deciding which of two empty-state messages to show —
+// "no coach has worked with this player at all" vs. "coach(es) worked with this player but none
+// cleared the threshold" — was independently re-implemented on CoachPlayerDetailPage.vue and
+// ParentDevelopmentPortalPage.vue, differing only in which i18n namespace each page maps the two
+// outcomes onto. Returns the discriminator, not the i18n key itself, since the two pages use
+// different key namespaces for the same two outcomes.
+//
+// @param {Array} coachContributions
+// @returns {'none' | 'belowThreshold'}
+export function contributionEmptyStateKind(coachContributions) {
+  return (coachContributions ?? []).length === 0 ? 'none' : 'belowThreshold'
+}

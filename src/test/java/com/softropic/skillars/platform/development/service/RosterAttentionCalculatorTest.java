@@ -47,22 +47,23 @@ class RosterAttentionCalculatorTest {
         assertThat(negative.attentionScore()).isCloseTo(0.0, offset(1e-9));
     }
 
-    // skillars-deferred-152 AC5: inverted by the `>` -> `>=` fix, and the actual regression that
-    // AC closes -- dormant() and the saturated recencyNorm must AGREE at exactly dormantAfterDays,
-    // not merely "dormant is true". recencyNorm is already saturated to 1.0 there (clampedDays
-    // clamps AT dormantAfterDays, not before it), so under the old strict `>` this exact day read
-    // as "maximally urgent by score" but "not dormant by badge" for one day.
+    // skillars-deferred-152 AC5: the `dormant` boolean still uses the raw dormantAfterDays
+    // comparison (>=), so d == dormantAfterDays is still dormant.
     //
-    // skillars-deferred-152 code review (2026-10-17): a separate
-    // daysSinceLastActivityAtThreshold_isDormant case asserted only the first of these two lines
-    // on the identical input, so it was strictly subsumed by this one and has been folded in.
+    // skillars-deferred-153 AC8: this used to also assert the recencyNorm SATURATED (0.4) at
+    // exactly dormantAfterDays — that coupling is exactly what this AC removes. The recency term
+    // now divides by the fixed RECENCY_NORMALIZATION_DAYS (90), not dormantAfterDays, so d=30 is
+    // dormant (30 >= 30) but NOT recency-saturated (30/90 x 0.4 ~ 0.133, not 0.4) — these two facts
+    // deliberately disagree now, which is the point: dormant and "how urgent does the score read"
+    // are no longer the same question.
     @Test
-    void daysSinceLastActivityAtThreshold_isDormant_andAgreesWithSaturatedRecencyScore() {
+    void daysSinceLastActivityAtThreshold_isDormant_butRecencyScoreNoLongerSaturated() {
         RosterAttentionCalculator.Result atThreshold = RosterAttentionCalculator.compute(
             new RosterAttentionCalculator.Signals(30, 0, 0, 30, false));
 
         assertThat(atThreshold.dormant()).isTrue();
-        assertThat(atThreshold.attentionScore()).isCloseTo(0.4, offset(1e-9));
+        assertThat(atThreshold.attentionScore()).isCloseTo(30.0 / 90.0 * 0.4, offset(1e-9));
+        assertThat(atThreshold.attentionScore()).isNotCloseTo(0.4, offset(1e-9));
     }
 
     // skillars-deferred-152 code review (2026-10-17): pins the OTHER side of the boundary the
@@ -93,16 +94,42 @@ class RosterAttentionCalculatorTest {
         assertThat(withUpcoming.attentionScore()).isEqualTo(withoutUpcoming.attentionScore());
     }
 
+    // skillars-deferred-153 AC8: renamed and rewritten — the recency component now clamps at the
+    // FIXED RECENCY_NORMALIZATION_DAYS (90), not at the operator-configurable dormantAfterDays (30)
+    // this test used to pin. d=31 (one past the OLD ceiling) no longer equals d=9999 — it reads
+    // well under saturation now (31/90 x 0.4 ~ 0.138); only d=90 and beyond saturate to 0.4.
     @Test
-    void recencyComponent_clampsAtDormancyThreshold() {
-        // Far beyond the threshold normalizes to the same 1.0 as exactly-at-threshold-plus-one.
-        RosterAttentionCalculator.Result atCeiling = RosterAttentionCalculator.compute(
-            new RosterAttentionCalculator.Signals(31, 0, 0, 30, false));
+    void recencyComponent_clampsAtFixedNinetyDayHorizon_notAtDormancyThreshold() {
+        RosterAttentionCalculator.Result atNewCeiling = RosterAttentionCalculator.compute(
+            new RosterAttentionCalculator.Signals(90, 0, 0, 30, false));
         RosterAttentionCalculator.Result wayPast = RosterAttentionCalculator.compute(
             new RosterAttentionCalculator.Signals(9999, 0, 0, 30, false));
+        RosterAttentionCalculator.Result justPastOldCeiling = RosterAttentionCalculator.compute(
+            new RosterAttentionCalculator.Signals(31, 0, 0, 30, false));
 
-        assertThat(atCeiling.attentionScore()).isEqualTo(wayPast.attentionScore());
-        assertThat(atCeiling.attentionScore()).isCloseTo(0.4, offset(1e-9));
+        assertThat(atNewCeiling.attentionScore()).isEqualTo(wayPast.attentionScore());
+        assertThat(atNewCeiling.attentionScore()).isCloseTo(0.4, offset(1e-9));
+        assertThat(justPastOldCeiling.attentionScore()).isNotEqualTo(wayPast.attentionScore());
+        assertThat(justPastOldCeiling.attentionScore()).isCloseTo(31.0 / 90.0 * 0.4, offset(1e-9));
+    }
+
+    // skillars-deferred-153 AC8: the actual decoupling — retuning dormantAfterDays to its own
+    // legal extremes (min=1, max=3650) must no longer change the recency contribution to
+    // attentionScore for an identical daysSinceLastActivity, even though it still flips the
+    // `dormant` badge (which stays coupled to dormantAfterDays, by design).
+    @Test
+    void recencyScore_decoupledFromDormantAfterDays_atItsLegalExtremes() {
+        RosterAttentionCalculator.Result minDormantAfterDays = RosterAttentionCalculator.compute(
+            new RosterAttentionCalculator.Signals(45, 0, 0, 1, false));
+        RosterAttentionCalculator.Result maxDormantAfterDays = RosterAttentionCalculator.compute(
+            new RosterAttentionCalculator.Signals(45, 0, 0, 3650, false));
+
+        assertThat(minDormantAfterDays.dormant()).isTrue();   // 45 >= 1
+        assertThat(maxDormantAfterDays.dormant()).isFalse();  // 45 < 3650
+        // Despite the opposite dormant verdicts, the recency-driven score is identical — no longer
+        // reshaped by dormantAfterDays at all.
+        assertThat(minDormantAfterDays.attentionScore()).isEqualTo(maxDormantAfterDays.attentionScore());
+        assertThat(minDormantAfterDays.attentionScore()).isCloseTo(45.0 / 90.0 * 0.4, offset(1e-9));
     }
 
     @Test

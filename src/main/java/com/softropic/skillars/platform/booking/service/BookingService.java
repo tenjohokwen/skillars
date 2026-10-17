@@ -101,7 +101,7 @@ public class BookingService {
         Map.entry(BookingEvent.NO_SHOW_PLAYER,   EnumSet.of(ActorRole.COACH)),
         Map.entry(BookingEvent.NO_SHOW_COACH,    EnumSet.of(ActorRole.PARENT, ActorRole.SYSTEM)),
         Map.entry(BookingEvent.COMPLETE_PENDING, EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
-        Map.entry(BookingEvent.COMPLETE,         EnumSet.of(ActorRole.PARENT, ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.COMPLETE,         EnumSet.of(ActorRole.PARENT, ActorRole.SYSTEM, ActorRole.ADMIN)),
         Map.entry(BookingEvent.QUICK_COMPLETE,   EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
         Map.entry(BookingEvent.DISPUTE,          EnumSet.of(ActorRole.PARENT, ActorRole.COACH)),
         Map.entry(BookingEvent.SETTLE_REFUND,    EnumSet.of(ActorRole.SYSTEM)),

@@ -10,6 +10,7 @@ import com.lowagie.text.Phrase;
 import com.lowagie.text.pdf.PdfPCell;
 import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.development.contract.CoachBrandingRequest;
 import com.softropic.skillars.platform.development.contract.CoachBrandingResponse;
@@ -35,9 +36,6 @@ import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
-import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
-import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
-import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.infrastructure.security.RateLimited;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -91,10 +89,9 @@ public class ReportGenerationService {
     private final FileStorageService fileStorageService;
     private final TimelineEventListener timelineEventListener;
     private final ApplicationEventPublisher publisher;
-    private final SecurityUtil securityUtil;
     private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
-    private final PlayerProfileRepository playerProfileRepository;
     private final com.softropic.skillars.infrastructure.security.RateLimitingService rateLimitingService;
+    private final ConfigService configService;
 
     @Value("${baseurl}")
     private String baseUrl;
@@ -156,6 +153,23 @@ public class ReportGenerationService {
         Instant lastSession = coachPlayerLastSessionResolver.resolve(playerId, coachId).lastSessionDate();
         if (lastSession == null) {
             throw new AccessDeniedException("Coach has no session history with this player");
+        }
+        // skillars-deferred-153 AC7: report generation now shares TimelineQueryService's own
+        // recency policy — a coach whose last session with this player predates the same
+        // development.timeline.coachAccessExpiryDays window the timeline already refuses is
+        // refused a report the same way, instead of accepting an arbitrarily stale signal.
+        // Duplicated rather than extracted into a shared helper: TimelineQueryService still needs
+        // the raw expiryDays value to populate TimelineResponse.accessExpiryDays, so centralizing
+        // the read elsewhere would not remove a dependency from either call site.
+        long expiryDays;
+        try {
+            expiryDays = configService.getBoundedLong("development.timeline.coachAccessExpiryDays", 1L, 3650L);
+        } catch (Exception e) {
+            log.warn("Config key 'development.timeline.coachAccessExpiryDays' missing — defaulting to 90 days", e);
+            expiryDays = 90L;
+        }
+        if (lastSession.isBefore(Instant.now().minus(expiryDays, java.time.temporal.ChronoUnit.DAYS))) {
+            throw new AccessDeniedException("Coach's last session with this player predates the access window");
         }
 
         CoachProfileDto coach = coachProfileService.getPublicProfile(coachId);
@@ -237,11 +251,7 @@ public class ReportGenerationService {
     }
 
     public List<PerformanceReportResponse> listReports(Long playerId) {
-        if (securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)
-                && !playerProfileRepository.existsByIdAndParentId(playerId, securityUtil.requireCurrentUserId())) {
-            coachPlayerAuthorizationService.requireCoachPlayerRelationship(
-                securityUtil.getCurrentCoachUserId(), playerId);
-        }
+        coachPlayerAuthorizationService.requireCoachPlayerRelationshipIfCoach(playerId);
         List<PerformanceReport> reports =
             reportRepository.findByPlayerIdAndStatusOrderByGeneratedAtDesc(playerId, ReportStatus.READY);
         Set<UUID> coachIds = reports.stream().map(PerformanceReport::getCoachId).collect(Collectors.toSet());

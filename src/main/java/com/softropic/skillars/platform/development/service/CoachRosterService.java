@@ -14,6 +14,7 @@ import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotReposit
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -50,10 +51,13 @@ public class CoachRosterService {
     // it settles back to COMPLETED or proceeds to a refund) is wrong. REFUNDED stays excluded — a
     // processed refund is the engagement being formally unwound, a principled cut-off that avoids an
     // indefinite 730-day tail for a refunded one-off.
-    private static final List<String> ROSTER_MEMBERSHIP_STATUSES = List.of(
-        "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS", "PAUSED",
-        "COMPLETED_PENDING_CONFIRMATION", "COMPLETED", "NO_SHOW_PLAYER", "NO_SHOW_COACH",
-        "DISPUTED", "REFUND_PENDING");
+    //
+    // skillars-deferred-153 AC5: now references CoachPlayerAuthorizationService's own
+    // READ_RELATIONSHIP_STATUSES directly instead of maintaining a second, separately-typed copy of
+    // the identical 12-value list — closes the drift risk between "who shows on the roster" and
+    // "who detail-view read endpoints let the coach actually see" permanently.
+    private static final List<String> ROSTER_MEMBERSHIP_STATUSES =
+        CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES;
 
     private static final long RECENCY_FLOOR_DAYS = 730;
     private static final int TREND_WEEKS_BACK = 12;
@@ -69,9 +73,21 @@ public class CoachRosterService {
         Instant now = Instant.now(ClockProvider.getClock());
         Instant recencyFloor = now.minus(Duration.ofDays(RECENCY_FLOOR_DAYS));
 
+        // skillars-deferred-153 AC3: caps the candidate set BEFORE the per-player fan-out below runs
+        // — see findRosterPlayerActivityByCoachIdAndStatusIn's own Javadoc for the UNSORTED-PageRequest
+        // requirement (its own ORDER BY already orders most-recently-active first) and the accepted
+        // recency-vs-attention-score trade-off this cap makes. `now` is passed so the cap ranks
+        // past-only, matching the same past-only rule hasUpcomingBooking applies below.
+        long maxPlayers = configService.getBoundedLong(
+            ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.key(),
+            ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.defaultValue(),
+            ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.min(),
+            ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.max());
+
         List<RosterPlayerActivityProjection> activities =
             bookingRepository.findRosterPlayerActivityByCoachIdAndStatusIn(
-                coachId, ROSTER_MEMBERSHIP_STATUSES, recencyFloor);
+                coachId, now, ROSTER_MEMBERSHIP_STATUSES, recencyFloor,
+                PageRequest.of(0, (int) maxPlayers));
 
         if (activities.isEmpty()) {
             return new RosterResponse(List.of());

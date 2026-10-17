@@ -77,7 +77,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useDevelopmentStore } from 'src/stores/development.store'
-import { hasTopAttributions } from 'src/utils/coachContributions'
+import { hasTopAttributions, contributionEmptyStateKind } from 'src/utils/coachContributions'
 import CoachContributionSection from 'src/components/development/CoachContributionSection.vue'
 import PlayerTimelinePanel from 'src/components/development/PlayerTimelinePanel.vue'
 
@@ -104,8 +104,10 @@ const hasTopContributions = computed(() => hasTopAttributions(store.coachContrib
 // AC2: "no data at all" and "data exists but none cleared the 30% threshold" are meaningfully
 // different situations for a coach -- conflating them (as the single pre-existing string did)
 // can read as "no coach has worked with this player," which is false in the second case.
+// skillars-deferred-153 AC10: the length===0 check itself now lives in the shared
+// contributionEmptyStateKind helper, not re-derived here.
 const noContributionsKey = computed(() =>
-  store.coachContributions.length === 0
+  contributionEmptyStateKind(store.coachContributions) === 'none'
     ? 'coach.playerDetailNoContributions'
     : 'coach.playerDetailContributionsBelowThreshold',
 )

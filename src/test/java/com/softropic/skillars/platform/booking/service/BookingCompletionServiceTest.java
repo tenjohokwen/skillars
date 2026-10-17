@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.BookingStateTransitionException;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
+import com.softropic.skillars.platform.booking.contract.ForceCompleteOutcome;
 import com.softropic.skillars.platform.booking.contract.QuickCompleteConfirmationRequiredEvent;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.contract.WrapUpRequest;
@@ -320,5 +321,164 @@ class BookingCompletionServiceTest {
             .isInstanceOf(OperationNotAllowedException.class)
             .hasCauseInstanceOf(OptimisticLockingFailureException.class)
             .extracting(t -> ((OperationNotAllowedException) t).getErrorCode()).isEqualTo(BookingError.CONCURRENT_MODIFICATION);
+    }
+
+    // skillars-deferred-153 AC1
+    @Test
+    void forceCompleteWithPlaceholderData_savesPlaceholderRowAndTransitionsToComplete() {
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.empty());
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        // skillars-deferred-153 code review (2026-10-17): returns an outcome, not void.
+        ForceCompleteOutcome outcome = service.forceCompleteWithPlaceholderData(
+            BOOKING_ID, com.softropic.skillars.platform.booking.contract.ActorRole.SYSTEM, null);
+        assertThat(outcome).isEqualTo(ForceCompleteOutcome.FORCE_COMPLETED);
+
+        ArgumentCaptor<SessionCompletionData> scdCaptor = ArgumentCaptor.forClass(SessionCompletionData.class);
+        verify(completionDataRepository).save(scdCaptor.capture());
+        SessionCompletionData saved = scdCaptor.getValue();
+        assertThat(saved.getBookingId()).isEqualTo(BOOKING_ID);
+        assertThat(saved.getCoachId()).isEqualTo(COACH_ID);
+        assertThat(saved.getPlayerId()).isEqualTo(PLAYER_ID);
+        assertThat(saved.isPlayerAttended()).isFalse();
+        assertThat(saved.getCompletionMode()).isEqualTo("QUICK");
+        assertThat(saved.getEffortRating()).isNull();
+        assertThat(saved.getWhatWeDid()).isNull();
+
+        verify(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.COMPLETE),
+            eq(new TransitionContext(com.softropic.skillars.platform.booking.contract.ActorRole.SYSTEM, null)));
+
+        ArgumentCaptor<BookingCompletedEvent> eventCaptor = ArgumentCaptor.forClass(BookingCompletedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getBookingId()).isEqualTo(BOOKING_ID);
+        assertThat(eventCaptor.getValue().isPlayerAttended()).isFalse();
+    }
+
+    @Test
+    void forceCompleteWithPlaceholderData_admin_passesAdminActorThrough() {
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.empty());
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        ForceCompleteOutcome outcome = service.forceCompleteWithPlaceholderData(
+            BOOKING_ID, com.softropic.skillars.platform.booking.contract.ActorRole.ADMIN, 999L);
+
+        assertThat(outcome).isEqualTo(ForceCompleteOutcome.FORCE_COMPLETED);
+        verify(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.COMPLETE),
+            eq(new TransitionContext(com.softropic.skillars.platform.booking.contract.ActorRole.ADMIN, 999L)));
+    }
+
+    // skillars-deferred-153 code review (2026-10-17): RE-AUTHORED. This previously stubbed save() to
+    // throw DataIntegrityViolationException and asserted a benign skip — behavior that no longer
+    // exists (and never really could; see forceCompleteWithPlaceholderData's Javadoc on why the DIV
+    // catch was unreachable with an in-VM @GeneratedValue id generator). The realistic "a real
+    // wrap-up landed first" case is now a cheap pre-check that returns ALREADY_RESOLVED before any
+    // write at all.
+    @Test
+    void forceCompleteWithPlaceholderData_completionDataAlreadyExists_returnsAlreadyResolvedWithoutWriting() {
+        SessionCompletionData existing = new SessionCompletionData();
+        existing.setBookingId(BOOKING_ID);
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+
+        ForceCompleteOutcome outcome = service.forceCompleteWithPlaceholderData(
+            BOOKING_ID, com.softropic.skillars.platform.booking.contract.ActorRole.SYSTEM, null);
+
+        assertThat(outcome).isEqualTo(ForceCompleteOutcome.ALREADY_RESOLVED);
+        verify(completionDataRepository, never()).save(any());
+        verify(bookingService, never()).transition(any(), eq(BookingEvent.COMPLETE), any());
+        verify(eventPublisher, never()).publishEvent(any(BookingCompletedEvent.class));
+    }
+
+    // skillars-deferred-153 code review (2026-10-17): RE-AUTHORED, same reason as above — the status
+    // mismatch is now a pre-check returning NOT_STUCK, so no orphan placeholder row is written for a
+    // misdirected bookingId (which would have permanently blocked the coach's own submitWrapUp
+    // through the session_completion_data_booking_id_key UNIQUE constraint).
+    @Test
+    void forceCompleteWithPlaceholderData_bookingNotPendingConfirmation_returnsNotStuckWithoutWriting() {
+        booking.setStatus(BookingStatus.COMPLETED.name());
+
+        ForceCompleteOutcome outcome = service.forceCompleteWithPlaceholderData(
+            BOOKING_ID, com.softropic.skillars.platform.booking.contract.ActorRole.SYSTEM, null);
+
+        assertThat(outcome).isEqualTo(ForceCompleteOutcome.NOT_STUCK);
+        // The NOT_STUCK pre-check runs BEFORE the completion-data read, so that read never happens.
+        verify(completionDataRepository, never()).findByBookingId(any());
+        verify(completionDataRepository, never()).save(any());
+        verify(bookingService, never()).transition(any(), eq(BookingEvent.COMPLETE), any());
+        verify(eventPublisher, never()).publishEvent(any(BookingCompletedEvent.class));
+    }
+
+    // skillars-deferred-153 code review (2026-10-17): a genuine concurrent race must PROPAGATE to the
+    // caller's own transaction boundary, where it is actually catchable, instead of being swallowed
+    // here and failing at commit with UnexpectedRollbackException. StuckCompletionSweeperService
+    // catches exactly these three types OUTSIDE its TransactionTemplate.
+    @Test
+    void forceCompleteWithPlaceholderData_transitionLosesRace_propagatesToCaller() {
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.empty());
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        doThrow(new BookingStateTransitionException(BookingStatus.COMPLETED, BookingEvent.COMPLETE))
+            .when(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.COMPLETE), any(TransitionContext.class));
+
+        assertThatThrownBy(() -> service.forceCompleteWithPlaceholderData(
+                BOOKING_ID, com.softropic.skillars.platform.booking.contract.ActorRole.SYSTEM, null))
+            .isInstanceOf(BookingStateTransitionException.class);
+
+        verify(eventPublisher, never()).publishEvent(any(BookingCompletedEvent.class));
+    }
+
+    @Test
+    void forceCompleteWithPlaceholderData_duplicateRowConstraintViolation_propagatesToCaller() {
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.empty());
+        doThrow(new org.springframework.dao.DataIntegrityViolationException("duplicate key"))
+            .when(completionDataRepository).save(any());
+
+        assertThatThrownBy(() -> service.forceCompleteWithPlaceholderData(
+                BOOKING_ID, com.softropic.skillars.platform.booking.contract.ActorRole.SYSTEM, null))
+            .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+        verify(bookingService, never()).transition(any(), eq(BookingEvent.COMPLETE), any());
+        verify(eventPublisher, never()).publishEvent(any(BookingCompletedEvent.class));
+    }
+
+    // skillars-deferred-153 AC1 code review (2026-10-17): NEW — the coach-facing half of the sweeper.
+    // A coach who finishes the wizard after the sweeper already auto-completed the booking must get
+    // an actionable message, not verifyStatus's raw "Booking is in status COMPLETED, expected
+    // COMPLETED_PENDING_CONFIRMATION".
+    @Test
+    void submitWrapUp_bookingAutoCompletedBySweeper_throwsNoLongerEditable() {
+        booking.setStatus(BookingStatus.COMPLETED.name());
+        SessionCompletionData placeholder = new SessionCompletionData();
+        placeholder.setBookingId(BOOKING_ID);
+        placeholder.setPlayerAttended(false);   // all four isSweeperPlaceholder conditions
+        placeholder.setCompletionMode("QUICK"); // whatWeDid/whatsNext/voiceNoteText left null
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(placeholder));
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, null, List.of(), "LIVE",
+            "Worked on first touch", "Continue weak-foot drills");
+
+        assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("auto-completed after the wrap-up was left unsubmitted");
+
+        verify(completionDataRepository, never()).save(any());
+    }
+
+    // The guard is deliberately narrow: a COMPLETED booking whose existing row is a REAL coach
+    // submission (recap text present) must still fall through to verifyStatus's generic message —
+    // the placeholder-specific wording would be a lie there.
+    @Test
+    void submitWrapUp_bookingCompletedWithRealWrapUpRow_fallsThroughToGenericStatusMismatch() {
+        booking.setStatus(BookingStatus.COMPLETED.name());
+        SessionCompletionData real = new SessionCompletionData();
+        real.setBookingId(BOOKING_ID);
+        real.setPlayerAttended(true);
+        real.setWhatWeDid("Worked on first touch");
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(real));
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, null, List.of(), "LIVE",
+            "Worked on first touch", "Continue weak-foot drills");
+
+        assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("Booking is in status COMPLETED, expected COMPLETED_PENDING_CONFIRMATION");
+
+        verify(completionDataRepository, never()).save(any());
     }
 }

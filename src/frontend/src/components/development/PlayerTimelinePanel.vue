@@ -48,6 +48,34 @@
       <div v-else class="text-body2 text-grey-6 q-pa-sm">
         {{ $t('development.timeline.noEvents') }}
       </div>
+
+      <div v-if="store.timeline.hasMore" class="text-center q-mt-md">
+        <q-btn
+          flat
+          color="primary"
+          :loading="store.timelineLoadingMore"
+          :label="$t('development.timeline.loadMore')"
+          @click="loadMore"
+        />
+
+        <!-- skillars-deferred-153 code review: a failed "Load more" renders INLINE here, inside
+             the events branch, so the already-loaded timeline above stays on screen. It used to
+             set store.timelineError, which the first banner branch above renders in place of the
+             whole list — taking the retry button down with it and leaving no way back. Retrying
+             is just loadMore() again: the store cleared timelineLoadMoreError on entry. -->
+        <div v-if="store.timelineLoadMoreError" class="text-caption text-negative q-mt-sm">
+          {{ store.timelineLoadMoreError }}
+          <q-btn
+            flat
+            dense
+            no-caps
+            size="sm"
+            color="primary"
+            :label="$t('development.timeline.loadMoreRetry')"
+            @click="loadMore"
+          />
+        </div>
+      </div>
     </template>
   </div>
 </template>
@@ -95,6 +123,10 @@ function eventColour(type) {
 
 function formatDate(isoString) {
   return date.formatDate(isoString, 'DD MMM YYYY HH:mm')
+}
+
+function loadMore() {
+  store.fetchTimeline(props.playerId, store.timelinePage + 1)
 }
 
 onMounted(() => {

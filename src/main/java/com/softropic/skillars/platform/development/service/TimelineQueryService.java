@@ -8,6 +8,8 @@ import com.softropic.skillars.platform.development.repo.PlayerTimelineEvent;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,7 +30,7 @@ public class TimelineQueryService {
     private final ConfigService configService;
     private final CoachPlayerLastSessionResolver coachPlayerLastSessionResolver;
 
-    public TimelineResponse getTimeline(Long playerId, boolean isCoach, UUID coachId) {
+    public TimelineResponse getTimeline(Long playerId, boolean isCoach, UUID coachId, int page, int size) {
         long expiryDays;
         try {
             // skillars-deferred-107 AC2: 0/neg → coach timeline access reads as always expired.
@@ -48,19 +50,22 @@ public class TimelineQueryService {
             boolean expired = lastSession == null ||
                 lastSession.isBefore(Instant.now().minus(expiryDays, ChronoUnit.DAYS));
             if (expired) {
-                return new TimelineResponse(true, expiryDays, List.of());
+                return new TimelineResponse(true, expiryDays, List.of(), false);
             }
         }
 
-        List<TimelineEventResponse> events = timelineRepository
-            .findByPlayerIdOrderByOccurredAtDesc(playerId)
-            .stream()
+        // skillars-deferred-153 AC4: UNSORTED — findByPlayerIdOrderByOccurredAtDescIdDesc's own ORDER BY
+        // already orders this; a Sort carried on the Pageable is appended AFTER that ORDER BY and
+        // would silently do nothing.
+        Slice<PlayerTimelineEvent> slice = timelineRepository
+            .findByPlayerIdOrderByOccurredAtDescIdDesc(playerId, PageRequest.of(page, size));
+        List<TimelineEventResponse> events = slice.getContent().stream()
             .map(e -> new TimelineEventResponse(
                 e.getId(), e.getEventType(), e.getReferenceId(),
                 e.getReferenceModule(), e.getOccurredAt(),
                 redactRecapIfNotAuthoringCoach(e, isCoach, coachId)))
             .toList();
-        return new TimelineResponse(false, null, events);
+        return new TimelineResponse(false, null, events, slice.hasNext());
     }
 
     // skillars-12-2 AC4: the recap ("whatWeDid"/"whatsNext") written into a SESSION_COMPLETED

@@ -5,9 +5,6 @@ import com.softropic.skillars.platform.development.contract.NeglectedSkillRespon
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
-import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
-import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
-import com.softropic.skillars.platform.security.service.SecurityUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,6 +12,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -31,68 +29,58 @@ class SluTargetServiceTest {
     @Mock private SluTargetRepository sluTargetRepository;
     @Mock private NeglectedSkillFlagRepository flagRepository;
     @Mock private CoachPlayerAuthorizationService coachPlayerAuthorizationService;
-    @Mock private SecurityUtil securityUtil;
-    @Mock private PlayerProfileRepository playerProfileRepository;
 
     private SluTargetService service;
 
     private static final Long PLAYER_ID = 500L;
-    private static final Long COACH_USER_ID = 777L;
+    private static final UUID COACH_ID = UUID.randomUUID();
 
     @BeforeEach
     void setUp() {
-        service = new SluTargetService(
-            sluTargetRepository, flagRepository, coachPlayerAuthorizationService,
-            securityUtil, playerProfileRepository);
+        service = new SluTargetService(sluTargetRepository, flagRepository, coachPlayerAuthorizationService);
         lenient().when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(List.of());
+        lenient().when(sluTargetRepository.findByIdCoachIdAndIdPlayerId(COACH_ID, PLAYER_ID)).thenReturn(List.of());
     }
 
+    // skillars-deferred-153 AC6: the inline requireCoachPlayerRelationshipIfCoach predicate was
+    // consolidated onto CoachPlayerAuthorizationService — this service now unconditionally
+    // delegates to that one shared method.
     @Test
-    void getNeglectedSkills_asParentOrPlayer_relationshipCheckNeverInvoked() {
-        when(securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)).thenReturn(false);
-
+    void getNeglectedSkills_delegatesRelationshipCheckToSharedMethod() {
         List<NeglectedSkillResponse> result = service.getNeglectedSkills(PLAYER_ID);
 
         assertThat(result).isEmpty();
-        verify(coachPlayerAuthorizationService, never()).requireCoachPlayerRelationship(any(Long.class), any());
+        verify(coachPlayerAuthorizationService).requireCoachPlayerRelationshipIfCoach(PLAYER_ID);
     }
 
     @Test
-    void getNeglectedSkills_asCoachWithRelationship_succeeds() {
-        when(securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)).thenReturn(true);
-        when(securityUtil.requireCurrentUserId()).thenReturn(COACH_USER_ID);
-        when(playerProfileRepository.existsByIdAndParentId(PLAYER_ID, COACH_USER_ID)).thenReturn(false);
-        when(securityUtil.getCurrentCoachUserId()).thenReturn(COACH_USER_ID);
-
-        List<NeglectedSkillResponse> result = service.getNeglectedSkills(PLAYER_ID);
-
-        assertThat(result).isEmpty();
-        verify(coachPlayerAuthorizationService).requireCoachPlayerRelationship(COACH_USER_ID, PLAYER_ID);
-    }
-
-    @Test
-    void getNeglectedSkills_asCoachWithNoRelationship_throws() {
-        when(securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)).thenReturn(true);
-        when(securityUtil.requireCurrentUserId()).thenReturn(COACH_USER_ID);
-        when(playerProfileRepository.existsByIdAndParentId(PLAYER_ID, COACH_USER_ID)).thenReturn(false);
-        when(securityUtil.getCurrentCoachUserId()).thenReturn(COACH_USER_ID);
+    void getNeglectedSkills_sharedMethodDenies_throwsAndNeverQueriesFlags() {
         doThrow(new OperationNotAllowedException("no relationship", SecurityError.MISSING_RIGHTS))
-            .when(coachPlayerAuthorizationService).requireCoachPlayerRelationship(COACH_USER_ID, PLAYER_ID);
+            .when(coachPlayerAuthorizationService).requireCoachPlayerRelationshipIfCoach(PLAYER_ID);
 
         assertThatThrownBy(() -> service.getNeglectedSkills(PLAYER_ID))
             .isInstanceOf(OperationNotAllowedException.class);
         verify(flagRepository, never()).findByPlayerIdAndResolvedAtIsNull(any());
     }
 
+    // skillars-deferred-153 AC5: getTargets is a read endpoint — widened to the roster's own
+    // membership status width via requireCoachPlayerRelationshipForRead, not the narrow
+    // requireCoachPlayerRelationship setTargets (write) still uses.
     @Test
-    void getNeglectedSkills_asCoachWhoIsAlsoPlayersParent_relationshipCheckSkipped() {
-        when(securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)).thenReturn(true);
-        when(securityUtil.requireCurrentUserId()).thenReturn(COACH_USER_ID);
-        when(playerProfileRepository.existsByIdAndParentId(PLAYER_ID, COACH_USER_ID)).thenReturn(true);
+    void getTargets_usesWidenedReadRelationshipCheck() {
+        service.getTargets(COACH_ID, PLAYER_ID);
 
-        List<NeglectedSkillResponse> result = service.getNeglectedSkills(PLAYER_ID);
+        verify(coachPlayerAuthorizationService).requireCoachPlayerRelationshipForRead(COACH_ID, PLAYER_ID);
+        verify(coachPlayerAuthorizationService, never()).requireCoachPlayerRelationship(any(UUID.class), any());
+    }
 
-        assertThat(result).isEmpty();
-        verify(coachPlayerAuthorizationService, never()).requireCoachPlayerRelationship(any(Long.class), any());
+    @Test
+    void getTargets_sharedMethodDenies_throwsAndNeverQueriesTargets() {
+        doThrow(new OperationNotAllowedException("no relationship", SecurityError.MISSING_RIGHTS))
+            .when(coachPlayerAuthorizationService).requireCoachPlayerRelationshipForRead(COACH_ID, PLAYER_ID);
+
+        assertThatThrownBy(() -> service.getTargets(COACH_ID, PLAYER_ID))
+            .isInstanceOf(OperationNotAllowedException.class);
+        verify(sluTargetRepository, never()).findByIdCoachIdAndIdPlayerId(any(), any());
     }
 }

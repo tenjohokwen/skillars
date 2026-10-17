@@ -5,9 +5,6 @@ import com.softropic.skillars.platform.development.contract.CoachContributionDto
 import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
-import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
-import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
-import com.softropic.skillars.platform.security.service.SecurityUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -37,20 +34,15 @@ class SluContributionServiceTest {
     @Mock private SluRepository sluRepository;
     @Mock private CoachProfileService coachProfileService;
     @Mock private CoachPlayerAuthorizationService coachPlayerAuthorizationService;
-    @Mock private SecurityUtil securityUtil;
-    @Mock private PlayerProfileRepository playerProfileRepository;
 
     private SluContributionService service;
 
     private static final Long PLAYER_ID = 500L;
-    private static final Long COACH_USER_ID = 777L;
     private static final Instant SINCE = Instant.parse("2026-01-01T00:00:00Z");
 
     @org.junit.jupiter.api.BeforeEach
     void setUp() {
-        service = new SluContributionService(
-            sluRepository, coachProfileService, coachPlayerAuthorizationService,
-            securityUtil, playerProfileRepository);
+        service = new SluContributionService(sluRepository, coachProfileService, coachPlayerAuthorizationService);
         lenient().when(sluRepository.findCoachContributionsByPlayerId(PLAYER_ID, SINCE)).thenReturn(List.of());
     }
 
@@ -113,49 +105,23 @@ class SluContributionServiceTest {
         assertThat(result.get(0).coachDisplayName()).isEqualTo("Unknown");
     }
 
+    // skillars-deferred-153 AC6: the inline requireCoachPlayerRelationshipIfCoach predicate
+    // (role/self-owner/relationship logic) was consolidated onto CoachPlayerAuthorizationService —
+    // this service now unconditionally delegates to that one shared method.
     @Test
-    void getCoachContributions_asParentOrPlayer_relationshipCheckNeverInvoked() {
-        when(securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)).thenReturn(false);
-
+    void getCoachContributions_delegatesRelationshipCheckToSharedMethod() {
         service.getCoachContributions(PLAYER_ID, SINCE);
 
-        verify(coachPlayerAuthorizationService, never()).requireCoachPlayerRelationship(any(Long.class), any());
+        verify(coachPlayerAuthorizationService).requireCoachPlayerRelationshipIfCoach(PLAYER_ID);
     }
 
     @Test
-    void getCoachContributions_asCoachWithRelationship_succeeds() {
-        when(securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)).thenReturn(true);
-        when(securityUtil.requireCurrentUserId()).thenReturn(COACH_USER_ID);
-        when(playerProfileRepository.existsByIdAndParentId(PLAYER_ID, COACH_USER_ID)).thenReturn(false);
-        when(securityUtil.getCurrentCoachUserId()).thenReturn(COACH_USER_ID);
-
-        assertThat(service.getCoachContributions(PLAYER_ID, SINCE)).isEmpty();
-
-        verify(coachPlayerAuthorizationService).requireCoachPlayerRelationship(COACH_USER_ID, PLAYER_ID);
-    }
-
-    @Test
-    void getCoachContributions_asCoachWithNoRelationship_throws() {
-        when(securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)).thenReturn(true);
-        when(securityUtil.requireCurrentUserId()).thenReturn(COACH_USER_ID);
-        when(playerProfileRepository.existsByIdAndParentId(PLAYER_ID, COACH_USER_ID)).thenReturn(false);
-        when(securityUtil.getCurrentCoachUserId()).thenReturn(COACH_USER_ID);
+    void getCoachContributions_sharedMethodDenies_throwsAndNeverQueriesSlu() {
         doThrow(new OperationNotAllowedException("no relationship", SecurityError.MISSING_RIGHTS))
-            .when(coachPlayerAuthorizationService).requireCoachPlayerRelationship(COACH_USER_ID, PLAYER_ID);
+            .when(coachPlayerAuthorizationService).requireCoachPlayerRelationshipIfCoach(PLAYER_ID);
 
         assertThatThrownBy(() -> service.getCoachContributions(PLAYER_ID, SINCE))
             .isInstanceOf(OperationNotAllowedException.class);
         verify(sluRepository, never()).findCoachContributionsByPlayerId(any(), any());
-    }
-
-    @Test
-    void getCoachContributions_asCoachWhoIsAlsoPlayersParent_relationshipCheckSkipped() {
-        when(securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)).thenReturn(true);
-        when(securityUtil.requireCurrentUserId()).thenReturn(COACH_USER_ID);
-        when(playerProfileRepository.existsByIdAndParentId(PLAYER_ID, COACH_USER_ID)).thenReturn(true);
-
-        assertThat(service.getCoachContributions(PLAYER_ID, SINCE)).isEmpty();
-
-        verify(coachPlayerAuthorizationService, never()).requireCoachPlayerRelationship(any(Long.class), any());
     }
 }

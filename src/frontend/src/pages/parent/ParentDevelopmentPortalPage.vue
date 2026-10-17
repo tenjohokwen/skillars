@@ -109,13 +109,17 @@
       </q-card-section>
     </q-card>
 
-    <!-- Timeline -->
+    <!-- Timeline — skillars-deferred-153 code review: :key="playerId" forces a clean remount on
+         child switch, since PlayerTimelinePanel.vue only fetches in onMounted with no playerId
+         prop watcher. Reachable here specifically: this page watches route.params.playerId for
+         param-only sibling switches, so without the key the panel keeps the previous child's
+         events and its "Load more" appends the new child's page 1 onto them. -->
     <q-card>
       <q-card-section>
         <div class="text-subtitle1">{{ $t('development.timeline.title') }}</div>
       </q-card-section>
       <q-card-section>
-        <PlayerTimelinePanel :player-id="playerId" />
+        <PlayerTimelinePanel :player-id="playerId" :key="playerId" />
       </q-card-section>
     </q-card>
   </q-page>
@@ -127,7 +131,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { usePlayerStore } from 'src/stores/playerStore'
 import { useBookingStore } from 'src/stores/booking.store'
 import { useDevelopmentStore } from 'src/stores/development.store'
-import { hasTopAttributions } from 'src/utils/coachContributions'
+import { hasTopAttributions, contributionEmptyStateKind } from 'src/utils/coachContributions'
 import SluNarrativeSummary from 'src/components/development/SluNarrativeSummary.vue'
 import SkillsRadarChart from 'src/components/development/SkillsRadarChart.vue'
 import SkillExposureBarChart from 'src/components/development/SkillExposureBarChart.vue'
@@ -152,10 +156,12 @@ const hasActivePacks = computed(() => bookingStore.sessionPacks.some((p) => p.st
 const hasTopContributions = computed(() => hasTopAttributions(store.coachContributions))
 
 // AC2: "no data at all" and "data exists but none cleared the 30% threshold" are meaningfully
-// different situations for a coach -- conflating them can read as "no coach has worked with
+// different situations for a parent -- conflating them can read as "no coach has worked with
 // this player," which is false in the second case.
+// skillars-deferred-153 AC10: the length===0 check itself now lives in the shared
+// contributionEmptyStateKind helper, not re-derived here.
 const noContributionsKey = computed(() =>
-  store.coachContributions.length === 0
+  contributionEmptyStateKind(store.coachContributions) === 'none'
     ? 'development.portal.noContributionsState'
     : 'development.portal.contributionsBelowThresholdState',
 )

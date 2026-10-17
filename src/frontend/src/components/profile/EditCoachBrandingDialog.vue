@@ -206,6 +206,10 @@ async function handleSave() {
     emit('updated')
     close()
   } catch (err) {
+    // skillars-deferred-153 AC9: the thrown Error above carries no .response, so the shared
+    // error.network banner below is already the right (accepted) user-facing message — the gap
+    // was that nothing logged the captured status, making a failed upload undiagnosable from logs.
+    console.error('Coach branding logo upload failed', err)
     // Defensive: the ACADEMY gate could still change mid-session between page load and save.
     setError(err)
   } finally {

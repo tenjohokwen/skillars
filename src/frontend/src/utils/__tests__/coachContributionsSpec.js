@@ -7,7 +7,11 @@
 // guards against is future drift between those copies at the exact boundary value.
 
 import { describe, it, expect } from 'vitest'
-import { topAttributions, hasTopAttributions } from 'src/utils/coachContributions'
+import {
+  topAttributions,
+  hasTopAttributions,
+  contributionEmptyStateKind,
+} from 'src/utils/coachContributions'
 
 function contribution(skillCode, percentageContribution, coachDisplayName = 'Coach One') {
   return { skillCode, percentageContribution, coachDisplayName }
@@ -45,5 +49,28 @@ describe('coachContributions — 30% threshold boundary', () => {
     expect(hasTopAttributions([contribution('SHOOTING', 10), contribution('PASSING', 35)])).toBe(
       true,
     )
+  })
+})
+
+// skillars-deferred-153 AC10: the empty-state SELECTION RULE — which was independently
+// re-implemented on CoachPlayerDetailPage.vue and ParentDevelopmentPortalPage.vue (differing only
+// in which i18n namespace each page maps the two outcomes onto) — is now this one shared
+// discriminator both pages call instead of each re-deriving the length===0 check.
+describe('contributionEmptyStateKind', () => {
+  it('returns "none" for an empty array', () => {
+    expect(contributionEmptyStateKind([])).toBe('none')
+  })
+
+  it('returns "none" for undefined/null (no data fetched yet)', () => {
+    expect(contributionEmptyStateKind(undefined)).toBe('none')
+    expect(contributionEmptyStateKind(null)).toBe('none')
+  })
+
+  it('returns "belowThreshold" when contributions exist, regardless of their percentages', () => {
+    expect(contributionEmptyStateKind([contribution('SHOOTING', 5)])).toBe('belowThreshold')
+    // Even a contribution that itself clears the 30% threshold — this discriminator only answers
+    // "does raw contribution data exist at all," not "did anything clear the threshold"; the
+    // caller combines it with hasTopAttributions separately for the full UI decision.
+    expect(contributionEmptyStateKind([contribution('SHOOTING', 90)])).toBe('belowThreshold')
   })
 })
