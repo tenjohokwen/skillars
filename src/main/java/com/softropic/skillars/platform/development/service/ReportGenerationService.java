@@ -82,6 +82,7 @@ public class ReportGenerationService {
     private final CoachProfileService coachProfileService;
     private final PlayerProfileService playerProfileService;
     private final SluRepository sluRepository;
+    private final CoachPlayerLastSessionResolver coachPlayerLastSessionResolver;
     private final SkillDefinitionRepository skillDefinitionRepository;
     private final PlayerRadarCompositeRepository compositeRepository;
     private final PlayerRadarBaselineRepository baselineRepository;
@@ -142,8 +143,17 @@ public class ReportGenerationService {
             throw new FeatureGatedException("development.report", "INSTRUCTOR");
         }
 
-        // Coach-player relationship guard
-        Instant lastSession = sluRepository.findLastSessionDate(playerId, coachId);
+        // Coach-player relationship guard. skillars-deferred-152 AC3: was the SLU-only
+        // sluRepository.findLastSessionDate signal, the third and final of three independently-
+        // discovered instances of that same narrow gate (CoachRosterService/TimelineQueryService/
+        // SessionPrepService already use the merged resolver below) -- now widened to match. This
+        // is a real, bounded authorization widening, not a pure mechanical swap: buildSkillEntries/
+        // sumTotalSluByPlayerId/countDistinctSessions below are keyed by playerId alone (the
+        // player's entire cross-coach SLU history), not scoped to this coach, so a newly-permitted
+        // Quick-Complete-only coach's report now also shows that wider aggregate. Bounded severity:
+        // requireCoachPlayerRelationship above already requires an active booking relationship;
+        // this is a second, narrower layer being relaxed, not the only protection.
+        Instant lastSession = coachPlayerLastSessionResolver.resolve(playerId, coachId).lastSessionDate();
         if (lastSession == null) {
             throw new AccessDeniedException("Coach has no session history with this player");
         }

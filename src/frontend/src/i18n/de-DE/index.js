@@ -299,6 +299,8 @@ export default {
     playerDetailNoNeglectedSkills: 'Keine vernachlässigten Fähigkeiten',
     playerDetailContributionsTitle: 'Trainerbeiträge',
     playerDetailNoContributions: 'Keine Trainerbeitragsdaten für die letzten 30 Tage',
+    playerDetailContributionsBelowThreshold:
+      'Kein Trainerbeitrag hat für eine Fähigkeit in den letzten 30 Tagen den Schwellenwert von 30 % erreicht',
     playerDetailError: 'Entwicklungsdaten des Spielers konnten nicht geladen werden',
     playerDetailBackToRoster: 'Zurück zu Meine Spieler',
   },
@@ -1147,6 +1149,9 @@ export default {
       neglectedAlert:
         'Vernachlässigte Fähigkeiten erkannt: {skills}. Fragen Sie Ihren Trainer nach zusätzlichem Fokus.',
       contributionsLoadError: 'Trainerbeiträge konnten nicht geladen werden',
+      noContributionsState: 'Keine Trainerbeitragsdaten für die letzten 30 Tage',
+      contributionsBelowThresholdState:
+        'Kein Trainerbeitrag hat für eine Fähigkeit in den letzten 30 Tagen den Schwellenwert von 30 % erreicht',
       exposureLoadError: 'Fähigkeitsexposition konnte nicht geladen werden',
       skillDefinitionsLoadError: 'Fähigkeitsdefinitionen konnten nicht geladen werden',
     },
@@ -1280,6 +1285,8 @@ export default {
     verificationFailed: 'Verifizierung fehlgeschlagen',
     generic: 'Ein unerwarteter Fehler ist aufgetreten. Bitte erneut versuchen.',
     network: 'Netzwerkfehler. Bitte überprüfen Sie Ihre Verbindung.',
+    badRequest:
+      'Diese Anfrage konnte nicht abgeschlossen werden. Bitte überprüfen Sie Ihre Angaben und versuchen Sie es erneut.',
     helpCode: 'Hilfecode',
     tryAgain: 'Bitte erneut versuchen',
     contactSupport:

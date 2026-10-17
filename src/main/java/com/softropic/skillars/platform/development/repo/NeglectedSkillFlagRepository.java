@@ -10,6 +10,12 @@ public interface NeglectedSkillFlagRepository extends JpaRepository<NeglectedSki
 
     List<NeglectedSkillFlag> findByPlayerIdAndResolvedAtIsNull(Long playerId);
 
+    // skillars-deferred-152 AC4: additive sibling for call sites that only need the count
+    // (CoachRosterService, SessionPrepService) -- the entity-returning method above stays for its
+    // other callers (SluDashboardService, SluTargetService, NeglectedSkillProcessor,
+    // DrillSuggestionService).
+    int countByPlayerIdAndResolvedAtIsNull(Long playerId);
+
     Optional<NeglectedSkillFlag> findByPlayerIdAndSkillCodeAndResolvedAtIsNull(Long playerId, String skillCode);
 
     @org.springframework.data.jpa.repository.Modifying

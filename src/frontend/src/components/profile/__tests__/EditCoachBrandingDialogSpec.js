@@ -57,6 +57,11 @@ describe('EditCoachBrandingDialog.vue (deferred-151 AC3)', () => {
   afterEach(() => {
     while (mounted.length) mounted.pop().unmount()
     vi.clearAllMocks()
+    // skillars-deferred-152 code review (2026-10-17): restore the default success stub here, not
+    // at the end of the test body that overrides it. vi.clearAllMocks() clears calls, not
+    // implementations, so a failing assertion in the res.ok test below used to leave
+    // { ok: false, status: 500 } installed for every later test in this file.
+    global.fetch = vi.fn().mockResolvedValue({ ok: true })
   })
 
   it('prefills brandColour from the current prop on open', () => {
@@ -119,6 +124,25 @@ describe('EditCoachBrandingDialog.vue (deferred-151 AC3)', () => {
     await flushPromises()
 
     expect(saveCoachBranding).toHaveBeenCalledWith('k', null)
+  })
+
+  // skillars-deferred-152 AC9: the global.fetch mock above (`{ ok: true }`) tested nothing about
+  // response handling until this story's `if (!res.ok) throw ...` check was added -- a failed PUT
+  // previously flowed straight through to confirmUpload/saveCoachBranding unchecked.
+  it('a failed logo upload PUT (res.ok false) surfaces an error and does not proceed to confirm/save', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500 })
+    signUpload.mockResolvedValue({ key: 'coach_branding/42/new.png', uploadUrl: 'https://upload' })
+
+    const wrapper = mountDialog()
+    wrapper.vm.selectedFile = new File(['x'], 'logo.png', { type: 'image/png' })
+
+    await wrapper.vm.handleSave()
+    await flushPromises()
+
+    expect(confirmUpload).not.toHaveBeenCalled()
+    expect(saveCoachBranding).not.toHaveBeenCalled()
+    expect(wrapper.vm.hasError).toBe(true)
+    expect(wrapper.emitted('updated')).toBeUndefined()
   })
 
   it('shows a security.featureGated error if the tier changes mid-session', async () => {

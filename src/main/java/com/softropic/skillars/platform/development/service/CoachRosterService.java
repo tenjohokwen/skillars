@@ -89,7 +89,13 @@ public class CoachRosterService {
             ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.min(),
             ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.max());
 
+        // skillars-deferred-152 AC6: findAllById above silently returns fewer rows than requested
+        // for any player_profiles row that's gone missing (latent today -- that table is NOT NULL
+        // and never hard-deleted, GdprErasureService tombstones instead -- but not impossible).
+        // Filtering here, before buildEntry, means an identity-less roster row is never surfaced at
+        // all, rather than shipping a bare "playerName": null into the response.
         List<RosterEntryResponse> entries = activities.stream()
+            .filter(activity -> namesByPlayerId.containsKey(activity.getPlayerId()))
             .map(activity -> buildEntry(activity, coachId, namesByPlayerId, dormantAfterDays, now))
             .sorted(Comparator.comparingDouble(RosterEntryResponse::attentionScore).reversed())
             .toList();
@@ -128,7 +134,7 @@ public class CoachRosterService {
             : lastSessionDate;
         long daysSinceLastActivity = Duration.between(lastActivityDate, now).toDays();
 
-        int neglectedCount = neglectedSkillFlagRepository.findByPlayerIdAndResolvedAtIsNull(playerId).size();
+        int neglectedCount = neglectedSkillFlagRepository.countByPlayerIdAndResolvedAtIsNull(playerId);
 
         int decliningCount = 0;
         for (List<BigDecimal> series : weeklySeriesBySkill(playerId).values()) {

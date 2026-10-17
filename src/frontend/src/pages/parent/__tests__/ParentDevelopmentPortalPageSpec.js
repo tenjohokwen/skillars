@@ -19,6 +19,7 @@ vi.mock('src/boot/axios', () => ({
 }))
 
 import ParentDevelopmentPortalPage from 'src/pages/parent/ParentDevelopmentPortalPage.vue'
+import CoachContributionSection from 'src/components/development/CoachContributionSection.vue'
 
 const mounted = []
 
@@ -47,6 +48,47 @@ async function mountPage(playerId = LARGE_PLAYER_ID, initialState = {}) {
   const wrapper = mount(ParentDevelopmentPortalPage, {
     shallow: true,
     global: { plugins: [pinia, router] },
+  })
+  mounted.push(wrapper)
+  await flushPromises()
+  return { wrapper, pinia, router }
+}
+
+// deferred-152 AC2: `shallow: true` (above) stubs out <q-page> with no slot content at all
+// (config.global.renderStubDefaultSlot is false), which would blank out this page's entire body
+// — including the CoachContributionSection empty-state text this describe block below asserts
+// on. Mirrors CoachPlayerDetailPageSpec.js's own documented precedent: mount non-shallow and
+// stub only the heavy children unrelated to what's under test.
+async function mountPageForContributions(playerId = LARGE_PLAYER_ID, initialState = {}) {
+  const pinia = createTestingPinia({
+    createSpy: vi.fn,
+    initialState: { auth: { role: 'PARENT' }, ...initialState },
+  })
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      {
+        path: '/parent/players/:playerId/development',
+        name: 'parent-development',
+        component: ParentDevelopmentPortalPage,
+      },
+    ],
+  })
+  router.push(`/parent/players/${playerId}/development`)
+  await router.isReady()
+
+  const wrapper = mount(ParentDevelopmentPortalPage, {
+    global: {
+      plugins: [pinia, router],
+      stubs: {
+        SkillsRadarChart: true,
+        SluNarrativeSummary: true,
+        SkillExposureBarChart: true,
+        PerformanceReportsPanel: true,
+        PlayerTimelinePanel: true,
+        SessionPackTracker: true,
+      },
+    },
   })
   mounted.push(wrapper)
   await flushPromises()
@@ -87,5 +129,35 @@ describe('ParentDevelopmentPortalPage.vue — playerId precision (deferred-148 A
     await flushPromises()
 
     expect(pushSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('ParentDevelopmentPortalPage.vue — coach-contribution empty state (deferred-152 AC2)', () => {
+  it('renders CoachContributionSection when a contribution clears the 30% threshold', async () => {
+    const { wrapper } = await mountPageForContributions(LARGE_PLAYER_ID, {
+      development: { coachContributions: [{ skillCode: 'PAC', percentageContribution: 40 }] },
+    })
+
+    expect(wrapper.findComponent(CoachContributionSection).exists()).toBe(true)
+  })
+
+  it('shows the genuinely-no-data message when there is no contribution data at all', async () => {
+    const { wrapper } = await mountPageForContributions(LARGE_PLAYER_ID, {
+      development: { coachContributions: [] },
+    })
+
+    expect(wrapper.findComponent(CoachContributionSection).exists()).toBe(false)
+    expect(wrapper.text()).toContain('development.portal.noContributionsState')
+    expect(wrapper.text()).not.toContain('development.portal.contributionsBelowThresholdState')
+  })
+
+  it('shows the below-threshold message when contribution data exists but none clears 30%', async () => {
+    const { wrapper } = await mountPageForContributions(LARGE_PLAYER_ID, {
+      development: { coachContributions: [{ skillCode: 'PAC', percentageContribution: 10 }] },
+    })
+
+    expect(wrapper.findComponent(CoachContributionSection).exists()).toBe(false)
+    expect(wrapper.text()).toContain('development.portal.contributionsBelowThresholdState')
+    expect(wrapper.text()).not.toContain('development.portal.noContributionsState')
   })
 })

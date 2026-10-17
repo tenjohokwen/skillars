@@ -56,7 +56,7 @@
             :contributions="store.coachContributions"
           />
           <div v-else class="text-body2" style="color: var(--text-secondary)">
-            {{ $t('coach.playerDetailNoContributions') }}
+            {{ $t(noContributionsKey) }}
           </div>
         </q-card-section>
       </q-card>
@@ -77,6 +77,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useDevelopmentStore } from 'src/stores/development.store'
+import { hasTopAttributions } from 'src/utils/coachContributions'
 import CoachContributionSection from 'src/components/development/CoachContributionSection.vue'
 import PlayerTimelinePanel from 'src/components/development/PlayerTimelinePanel.vue'
 
@@ -98,18 +99,16 @@ const neglectedSkillNames = computed(() =>
   ),
 )
 
-const hasTopContributions = computed(() => {
-  const bySkill = {}
-  for (const c of store.coachContributions) {
-    if (
-      !bySkill[c.skillCode] ||
-      c.percentageContribution > bySkill[c.skillCode].percentageContribution
-    ) {
-      bySkill[c.skillCode] = c
-    }
-  }
-  return Object.values(bySkill).some((c) => c.percentageContribution >= 30)
-})
+const hasTopContributions = computed(() => hasTopAttributions(store.coachContributions))
+
+// AC2: "no data at all" and "data exists but none cleared the 30% threshold" are meaningfully
+// different situations for a coach -- conflating them (as the single pre-existing string did)
+// can read as "no coach has worked with this player," which is false in the second case.
+const noContributionsKey = computed(() =>
+  store.coachContributions.length === 0
+    ? 'coach.playerDetailNoContributions'
+    : 'coach.playerDetailContributionsBelowThreshold',
+)
 
 // Renders a single generic translated message rather than surfacing store.error/
 // store.coachContributionsError's own raw text directly: those two refs can legitimately disagree

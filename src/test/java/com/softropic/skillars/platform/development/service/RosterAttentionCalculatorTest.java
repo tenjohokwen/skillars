@@ -47,12 +47,34 @@ class RosterAttentionCalculatorTest {
         assertThat(negative.attentionScore()).isCloseTo(0.0, offset(1e-9));
     }
 
+    // skillars-deferred-152 AC5: inverted by the `>` -> `>=` fix, and the actual regression that
+    // AC closes -- dormant() and the saturated recencyNorm must AGREE at exactly dormantAfterDays,
+    // not merely "dormant is true". recencyNorm is already saturated to 1.0 there (clampedDays
+    // clamps AT dormantAfterDays, not before it), so under the old strict `>` this exact day read
+    // as "maximally urgent by score" but "not dormant by badge" for one day.
+    //
+    // skillars-deferred-152 code review (2026-10-17): a separate
+    // daysSinceLastActivityAtThreshold_isDormant case asserted only the first of these two lines
+    // on the identical input, so it was strictly subsumed by this one and has been folded in.
     @Test
-    void daysSinceLastActivityAtThreshold_isNotDormant() {
-        RosterAttentionCalculator.Result r = RosterAttentionCalculator.compute(
+    void daysSinceLastActivityAtThreshold_isDormant_andAgreesWithSaturatedRecencyScore() {
+        RosterAttentionCalculator.Result atThreshold = RosterAttentionCalculator.compute(
             new RosterAttentionCalculator.Signals(30, 0, 0, 30, false));
 
-        assertThat(r.dormant()).isFalse();
+        assertThat(atThreshold.dormant()).isTrue();
+        assertThat(atThreshold.attentionScore()).isCloseTo(0.4, offset(1e-9));
+    }
+
+    // skillars-deferred-152 code review (2026-10-17): pins the OTHER side of the boundary the
+    // `>` -> `>=` fix moved. `>=` and `>` differ only AT d == dormantAfterDays, so without this
+    // case nothing stopped a future change from sliding the threshold a day early -- the existing
+    // inputs were 0, 30, 31, 60, 100, 9999 and -10, none of them one day below the threshold.
+    @Test
+    void daysSinceLastActivityOneDayBelowThreshold_isNotDormant() {
+        RosterAttentionCalculator.Result justBelow = RosterAttentionCalculator.compute(
+            new RosterAttentionCalculator.Signals(29, 0, 0, 30, false));
+
+        assertThat(justBelow.dormant()).isFalse();
     }
 
     // skillars-12-1 code review (2026-10-15) Patch, owner decision: a future-dated roster-qualifying

@@ -272,6 +272,41 @@ describe('ProfilePage.vue — role-gated sections (deferred-139 AC2/AC4/AC5/AC6)
     expect(getCoachBranding).toHaveBeenCalledTimes(1)
   })
 
+  // skillars-deferred-152 AC8: the already-fetched coachBranding.logoSignedUrl was never rendered
+  // on this page -- only reachable from inside EditCoachBrandingDialog.
+  it('AC8 — an ACADEMY coach with a saved logo sees it rendered, not just the colour swatch', async () => {
+    const wrapper = mountPage('COACH', { auth: { coachTier: 'ACADEMY' } })
+    getCoachBranding.mockResolvedValue({
+      logoSignedUrl: 'https://cdn/logo.png',
+      logoKey: 'coach_branding/1/logo.png',
+      brandColour: '#3B82F6',
+    })
+    await flushPromises()
+
+    const brandingSection = wrapper
+      .findAll('.profile-section')
+      .find((s) => s.text().includes('profile.sectionCoachBranding'))
+    const logoImg = brandingSection.findComponent({ name: 'QImg' })
+    expect(logoImg.exists()).toBe(true)
+    expect(logoImg.props('src')).toBe('https://cdn/logo.png')
+  })
+
+  it('AC8 — an ACADEMY coach with no saved logo degrades gracefully to the colour-only row', async () => {
+    const wrapper = mountPage('COACH', { auth: { coachTier: 'ACADEMY' } })
+    getCoachBranding.mockResolvedValue({
+      logoSignedUrl: null,
+      logoKey: null,
+      brandColour: '#3B82F6',
+    })
+    await flushPromises()
+
+    const brandingSection = wrapper
+      .findAll('.profile-section')
+      .find((s) => s.text().includes('profile.sectionCoachBranding'))
+    expect(brandingSection.findComponent({ name: 'QImg' }).exists()).toBe(false)
+    expect(brandingSection.text()).toContain('#3B82F6')
+  })
+
   it('AC3 — a Player/Parent never renders the coach branding section at all', async () => {
     const wrapper = mountPage('PLAYER')
     await flushPromises()

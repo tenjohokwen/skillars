@@ -283,7 +283,50 @@
               <div class="text-body">{{ t('security.featureGated') }}</div>
             </div>
             <template v-else>
-              <div class="profile-row">
+              <!-- AC8: the logo was already fetched (coachBranding.logoSignedUrl) but never
+                   rendered here -- only reachable from inside EditCoachBrandingDialog. -->
+              <div v-if="coachBranding?.logoSignedUrl" class="profile-row">
+                <div class="row items-center q-gutter-md">
+                  <q-img :src="coachBranding.logoSignedUrl" class="coach-branding-logo-preview">
+                    <!-- AC8: ReportGenerationService.getBranding re-presigns on every call, but
+                         this page fetches once on mount -- a tab left open past the presigned
+                         URL's TTL would otherwise show a broken image with no way to recover. -->
+                    <template #error>
+                      <div
+                        class="column items-center justify-center full-height q-gutter-xs"
+                        style="color: var(--text-secondary)"
+                      >
+                        <q-icon name="broken_image" size="24px" />
+                        <q-btn
+                          flat
+                          dense
+                          no-caps
+                          size="sm"
+                          :label="t('common.retry')"
+                          @click="loadCoachBranding"
+                        />
+                      </div>
+                    </template>
+                  </q-img>
+                  <div>
+                    <div class="text-label">{{ t('profile.brandColourLabel') }}</div>
+                    <div class="text-body q-mt-xs">
+                      {{ coachBranding?.brandColour || '—' }}
+                    </div>
+                  </div>
+                </div>
+                <q-btn
+                  flat
+                  dense
+                  icon="edit"
+                  round
+                  class="edit-btn"
+                  @click="showCoachBrandingDialog = true"
+                >
+                  <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
+                </q-btn>
+              </div>
+              <div v-else class="profile-row">
                 <div>
                   <div class="text-label">{{ t('profile.brandColourLabel') }}</div>
                   <div class="text-body q-mt-xs">
@@ -666,6 +709,13 @@ const currentInfo = computed(() => {
   &:first-of-type {
     padding-top: 0;
   }
+}
+
+.coach-branding-logo-preview {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  border: 1px solid var(--border-soft);
 }
 
 .edit-btn {

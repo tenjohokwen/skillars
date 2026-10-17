@@ -67,7 +67,9 @@ vi.mock('src/api/payment.api', () => ({
 }))
 
 import { getCoachBookingRequests, acceptAllBatch, createBatch } from 'src/api/booking.api'
+import { getMySessionPacks } from 'src/api/payment.api'
 import { useBookingStore } from 'src/stores/booking.store'
+import { i18n } from 'boot/i18n'
 
 function deferred() {
   let resolve
@@ -439,6 +441,24 @@ describe('booking.store — coach-request ordering + batch-accept guards (deferr
       store.removeSlotFromBasket(slotA.startTime)
 
       expect(store.batchBasket).toEqual([slotA])
+    })
+  })
+
+  describe('loadPlayerPacks packsError (deferred-152 AC1)', () => {
+    afterEach(() => {
+      i18n.global.locale.value = 'en-US'
+    })
+
+    it('surfaces the translated getErrorMessage fallback, not the old hardcoded English literal', async () => {
+      i18n.global.locale.value = 'fr-FR'
+      getMySessionPacks.mockRejectedValue({ response: { status: 500, data: {} } })
+      const store = useBookingStore()
+
+      await store.loadPlayerPacks('p1')
+
+      expect(store.packsError).toBe(i18n.global.t('error.generic'))
+      expect(store.packsError).not.toBe('Failed to load session packs')
+      expect(store.packsLoading).toBe(false)
     })
   })
 })

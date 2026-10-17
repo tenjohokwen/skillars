@@ -268,6 +268,8 @@ export default {
     playerDetailNoNeglectedSkills: 'No neglected skills',
     playerDetailContributionsTitle: 'Coach Contributions',
     playerDetailNoContributions: 'No coach contribution data for the last 30 days',
+    playerDetailContributionsBelowThreshold:
+      "No coach's contribution reached the 30% threshold for any skill in the last 30 days",
     playerDetailError: 'Could not load player development data',
     playerDetailBackToRoster: 'Back to My Players',
   },
@@ -630,6 +632,7 @@ export default {
   error: {
     generic: 'An unexpected error occurred. Please try again.',
     network: 'Network error. Please check your connection.',
+    badRequest: 'That request could not be completed. Please check your details and try again.',
     helpCode: 'Help Code',
     tryAgain: 'Please try again',
     contactSupport: 'If the problem persists, contact support with the help code.',
@@ -901,6 +904,9 @@ export default {
       coachContribution: '{coachName} contributed {pct}% of {skill} exposure in the last 30 days',
       neglectedAlert: 'Neglected skills detected: {skills}. Ask your coach about extra focus.',
       contributionsLoadError: 'Failed to load coach contributions',
+      noContributionsState: 'No coach contribution data for the last 30 days',
+      contributionsBelowThresholdState:
+        "No coach's contribution reached the 30% threshold for any skill in the last 30 days",
       exposureLoadError: 'Failed to load skill exposure',
       skillDefinitionsLoadError: 'Failed to load skill definitions',
     },

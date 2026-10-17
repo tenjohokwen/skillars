@@ -55,7 +55,13 @@ final class RosterAttentionCalculator {
     record Result(double attentionScore, boolean dormant) {}
 
     static Result compute(Signals signals) {
-        boolean dormant = signals.daysSinceLastActivity() > signals.dormantAfterDays()
+        // skillars-deferred-152 AC5: was strictly `>`, which disagreed with recencyNorm's own
+        // clamp-at-dormantAfterDays below for exactly one day (d == dormantAfterDays): recencyNorm
+        // is already fully saturated to 1.0 there, but `dormant` required the strictly-greater
+        // `d > dormantAfterDays`. `>=` closes that one-day gap. Fix the comparison only — do not
+        // touch daysSinceLastActivity's own computation (CoachRosterService), which also feeds the
+        // roster's sort order and would silently re-score every player away from this boundary.
+        boolean dormant = signals.daysSinceLastActivity() >= signals.dormantAfterDays()
             && !signals.hasUpcomingBooking();
 
         // Defense-in-depth only: CoachRosterService now derives daysSinceLastActivity from
