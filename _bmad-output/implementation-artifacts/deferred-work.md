@@ -3464,143 +3464,19 @@ does — silently discarding `application-test.yaml`'s own already-tuned `maximu
 
 ---
 
-## Deferred from: code review of skillars-deferred-142 (2026-10-05)
-
-`/bmad-code-review` (Opus 5, three parallel layers + orchestrator re-verification). All 5 ACs verified
-TRUE. 2 decision-needed and 8 patch items were handled in the story itself; the six below were
-classified defer — pre-existing, out of scope, or latent (two further items — the `.dockerignore`
-`git.dirty=true` provenance gap and the full-repo-history-in-build-context exposure — were closed by
-skillars-deferred-149 AC7 and removed from this list). Each was traced to real source, not assumed.
-
-- **`URLEncoder.encode` is form-encoding, not URI-component encoding, in all three `skp` writers.**
-  `URLEncoder` emits `+` for space; the frontend's `hydrateFromCookie` decodes with `decodeURIComponent`,
-  which leaves `+` literal — the two are not inverse functions. Latent only: today's payload is a numeric
-  id plus an enum name, neither of which can contain a space. Present identically at `AuthService.java:132`,
-  `:218` and `JwtManagerImpl.java:108`.
-  **When picked up:** fix all three together (or extract a shared serializer) — the moment the `skp`
-  payload gains a free-text field such as a display name. Fixing one site alone would create exactly the
-  divergence skillars-deferred-142 AC2 set out to eliminate.
-  **[AUDIT 2026-10-05: still present and still latent, re-verified at all three writers. Two of the
-  three citations have drifted — `AuthService.java:218` is now `:270` (skillars-deferred-143 inserted
-  ~52 lines above it) and `JwtManagerImpl.java:108` is now `:119`; `AuthService.java:132` is unchanged.
-  The "extract a shared serializer" option is now written up as its own umbrella item under "Deferred
-  from: manual review during skillars-deferred-143 (2026-10-05)" — pick this up there rather than
-  alone.]** **[CLOSED by skillars-deferred-144 AC1 — `SkillarsProfileCookie.writeTo` replaces
-  `URLEncoder.encode(json, ...)` with `.replace("+", "%20")` applied uniformly at the single new call
-  site, pinned by `SkillarsProfileCookieTest.writeTo_roleContainingSpace_encodesSpaceAsPercent20NotPlus`.]**
-
-- **The open-redirect guard now exists as two independent textual copies.**
-  `OtpPage.vue:151-155` and `LoginPage.vue:170-174` are byte-identical by design — skillars-deferred-142
-  AC3 explicitly required the verbatim copy for consistency. But open-redirect guards get revised
-  (`/\` variants, percent-encoded forms, tab/newline injection), and when one copy is hardened nothing
-  signals that a second exists. Same failure shape `roleRoutes.js` was created to eliminate for the role
-  map (skillars-deferred-92 AC16).
-  **When picked up:** extract `isSafeRedirect(path)` into a shared module, test it once, and call it from
-  both pages — ideally before a third caller appears.
-  **[CLOSED by skillars-deferred-144 AC3 — extracted into `src/frontend/src/router/safeRedirect.js`,
-  pinned by `safeRedirectSpec.js`; both pages now import and call it.]**
-
-- **A `redirect` query value that passes the guard but matches no route lands the just-authenticated user on the 404 page.**
-  The guard validates shape only (`startsWith('/') && !startsWith('//')`), never resolvability, so
-  `?redirect=/typo` ends a successful login or OTP verification on `ErrorNotFound.vue`
-  (`routes.js:352-355`) with no fallback to `routeForRole`. Confirmed it cannot leave the origin
-  (`quasar.config.js:40` sets `vueRouterMode: 'hash'`; history mode prepends the origin explicitly).
-  Affects `LoginPage.vue` and `OtpPage.vue` equally.
-  **When picked up:** fold a `router.resolve(path).matched.length > 0` check into the shared
-  `isSafeRedirect` above, falling back to `routeForRole`. Natural companion to the previous item.
-  **[CLOSED by skillars-deferred-144 AC3 — `matched.length > 0` alone turned out to be a no-op
-  against `routes.js`'s own catch-all (verified by executing vue-router 4.6.4 against this exact
-  route shape); fixed by tagging the catch-all `meta: { notFound: true }` and excluding it in
-  `isSafeRedirect`.]**
-
-- **`OtpPage.vue` uses `router.push`, leaving the spent `/otp` page in history.**
-  After verification the `loginInfoId` is consumed server-side, so Back returns the authenticated user to
-  a dead OTP form; re-submitting errors against a consumed id. `VideoManagementPage.vue:108` uses
-  `replace` for its terminal redirect, as does the rest of the codebase for post-auth navigation.
-  **When picked up:** change to `router.replace` whenever `/otp` is next touched — it is a one-word fix,
-  deferred only because the OTP flow is unreachable from the live UI today.
-  **[CLOSED by skillars-deferred-144 AC4 — switched to `router.replace`. Correction recorded in the
-  story itself: `VideoManagementPage.vue:108` is a 403-access-denied bounce inside a `catch` block,
-  not a terminal post-auth redirect — `PlayerHomeRedirectPage.vue` is the real precedent. `LoginPage
-  .vue`'s own `router.push` is deliberately left unchanged (a user can legitimately want to return to
-  `/login`).]**
-
-- **Neither new `skp` unit test asserts a cookie attribute.**
-  `JwtManagerImplTest:622-654` assert only the decoded JSON payload. The feature depends entirely on the
-  unnamed `false` (httpOnly) that lets JS read the cookie — flip it and both tests stay green while the
-  cookie becomes invisible to `hydrateFromCookie`. Verified correct today and byte-identical to
-  `AuthService`'s call, so this is coverage strength rather than a defect.
-  **When picked up:** add `httpOnly=false` / `maxAge` / `SameSite=Lax` assertions, ideally as a shared
-  helper covering all three `skp` writers at once.
-  **[AUDIT 2026-10-05: still present — the two assertions are at `JwtManagerImplTest.java:635` and
-  `:654` and check only the decoded JSON. The "shared helper covering all three writers" this asks for
-  is the umbrella item under "Deferred from: manual review during skillars-deferred-143 (2026-10-05)",
-  which proposes `SkillarsProfileCookie` as the single owner; the attribute assertions become one test
-  against that type. Pick up together.]** **[CLOSED by skillars-deferred-144 AC1/AC7 —
-  `SkillarsProfileCookieTest` is the shared helper this asked for: one test class, against the single
-  owner, asserting `httpOnly=false`/`maxAge`/`SameSite=Lax`/`path=/` once rather than per writer.
-  `JwtManagerImplTest`'s two original assertions stay as role-derivation tests, not wire-format tests.]**
-
 ## Deferred from: code review of skillars-deferred-143 (2026-10-05)
 
 `/bmad-code-review` (three parallel layers — Blind Hunter diff-only, Edge Case Hunter diff+project,
 Acceptance Auditor diff+spec — findings independently re-verified against HEAD, not taken on trust).
-7 items classified defer below (one further item, `isGenuineDenial` not treating `USER_NOT_FOUND`/
-`UNKNOWN` as genuine denials, was closed by skillars-deferred-149 AC4 and removed from this list); 2
-patch items and 6 dismissed false positives are recorded in the story file itself
+1 item classified defer below (six others — the dead `AccountStatusException` disjunct,
+`refresh()`'s double revocation write, the optimistic-lock-loser comment gap, the conditional-to-
+unconditional revocation on logout, `isGenuineDenial`'s overly-generic parameter type, and the
+missing per-client throttle on the revocation write — were all closed by skillars-deferred-144
+AC6.1-AC6.6 and removed from this list; one further item, `isGenuineDenial` not treating
+`USER_NOT_FOUND`/`UNKNOWN` as genuine denials, was closed by skillars-deferred-149 AC4 and also
+removed); 2 patch items and 6 dismissed false positives are recorded in the story file itself
 (`skillars-deferred-143-account-lock-enforcement-and-forced-logout-session-termination.md`,
 Review Findings section).
-
-- **`cause instanceof AccountStatusException` in `JWTAuthorizationFilter.isGenuineDenial` is unreachable
-  in production, by the predicate's own javadoc.** `DaoAuthProvider.authorize()` (`:47-51`) always
-  rewraps a caught `AccountStatusException` as `AuthorizationException(ACCOUNT_NOT_LOGIN_ABLE)` before
-  it reaches the filter. The four pre-existing tests that mock `daoAuthProvider` to throw raw
-  `DisabledException`/`LockedException` exercise a shape production code cannot produce; the real path
-  has its own dedicated test (`testWrappedAccountNotLoginAble_terminatesSession`). Harmless, arguably
-  reasonable defense-in-depth against a future caller bypassing `DaoAuthProvider`.
-  **When picked up:** decide whether to remove the dead disjunct or leave it as documented insurance.
-  **[CLOSED by skillars-deferred-144 AC6.1 — decision taken: KEEP, with a one-line comment at the
-  disjunct itself stating it is unreachable today and is deliberate defense-in-depth.]**
-
-- **`AuthService.refresh()`'s reuse-detection branch writes the refresh-token revocation twice.**
-  `refreshTokenRepository.markAllUsedByUserId(ownerId)` already revokes every token for the user,
-  including the one `securityUtil.terminateSession(req, res)`'s own `markUsedByTokenHash` call
-  redundantly re-marks a moment later via the raw cookie hash. Both idempotent (`used` is monotonic);
-  only cost is one extra `UPDATE` per reuse-detection event.
-  **When picked up:** skip `terminateSession`'s revocation when `markAllUsedByUserId` already ran, or
-  accept the extra write as immaterial.
-  **[CLOSED by skillars-deferred-144 AC6.2 — both branches now call `securityUtil.clearAuthCookies
-  (res)` instead of `terminateSession(req, res)`, pinned by the new `AuthServiceTest`.]**
-
-- **`AuthService.refresh()`'s optimistic-lock-loser comment doesn't name `markUsedByTokenHash` as a
-  second possible concurrent writer of the same row.** The comment reasons "unnecessary — the winning
-  request has already committed `used=true`," considering only a second concurrent *refresh* as the
-  other writer. A concurrent forced-logout's `markUsedByTokenHash` is a second writer the comment
-  doesn't name — the conclusion still holds (both only ever set `used=true`), reasoning is incomplete.
-  **When picked up:** extend the comment, no behavior change needed.
-  **[CLOSED by skillars-deferred-144 AC6.3 — the comment now names a concurrent forced-logout's
-  `markUsedByTokenHash` as the second possible writer, alongside the already-named concurrent
-  refresh.]**
-
-- **`AuthService.logout()`'s refresh-token revocation went from conditional to unconditional,
-  undisclosed.** Pre-diff, `.filter(t -> !t.isUsed())` only wrote if the token wasn't already used;
-  `markUsedByTokenHash`'s bulk `UPDATE` now runs unconditionally on every logout. Functionally
-  equivalent end state, one extra write per logout of an already-dead token — a reasonable cost of the
-  bulk-update redesign (see the story's AC2 Dev Notes on the `REQUIRES_NEW` deadlock it avoids), but
-  never stated as a tradeoff anywhere.
-  **When picked up:** add a one-line comment acknowledging it; no behavior change expected.
-  **[CLOSED by skillars-deferred-144 AC6.4 — one-line comment added at `SecurityUtil.terminateSession`'s
-  revocation call; corrected post-AC6.6 by that story's own code review to say the repeat write now
-  costs nothing (matches zero rows) rather than "one extra UPDATE".]**
-
-- **`JWTAuthorizationFilter.isGenuineDenial(Exception cause)` is typed against the generic
-  superclass rather than the caught union** (`AccountStatusException | AuthorizationException |
-  AccessDeniedException`, the only types its one call site can pass). Harmless today; a future
-  unrelated caller passing an arbitrary exception would silently get `false` rather than a compile
-  error.
-  **When picked up:** narrow the parameter type if a second call site is ever added.
-  **[CLOSED by skillars-deferred-144 AC6.5 — parameter narrowed from `Exception` to `RuntimeException`,
-  strictly narrower and still covers all three types the one call site passes.]**
 
 - **`markUsedByTokenHash`/`markAllUsedByUserId` calls are unguarded against transient DB failures.**
   A `DataAccessException` mid-call propagates to `ApiAdvice`'s generic `Throwable` handler (500)
@@ -3609,144 +3485,6 @@ Review Findings section).
   for this class of call. Not a new regression.
   **When picked up:** only worth adding bespoke handling if this class of DB failure is ever observed
   in production for an auth-adjacent write.
-
-- **`isGenuineDenial`'s `ACCOUNT_NOT_LOGIN_ABLE` branch has no per-client throttle on the
-  `REQUIRES_NEW` revocation write, unlike `maybePublishSecurityAlert`'s audit-event throttle for the
-  identical cause.** A client that ignores `Set-Cookie` and keeps replaying the same stale JWT for a
-  since-locked account triggers one `markUsedByTokenHash` write per request, indefinitely — the same
-  write-amplification class `SecurityAlertThrottle` exists to bound on the audit-log side of this
-  exact cause. `daoAuthProvider.authorize()`'s own DB read already happens unthrottled on every such
-  retry pre-diff, so this adds one write to an existing read-amplifier rather than introducing
-  amplification from zero.
-  **When picked up:** reuse `SecurityAlertThrottle`'s per-client+cause dedup pattern for the
-  revocation call too.
-  **[CLOSED by skillars-deferred-144 AC6.6 — the originally-proposed `SecurityAlertThrottle` reuse
-  was tried during drafting and rejected (it is documented as volume control, not a security
-  decision, and its client-identifier key collapses to a shared IP for exactly the client this item
-  is meant to defend against). Fixed instead by narrowing `RefreshTokenRepository.markUsedByTokenHash`'s
-  `@Query` to also require `r.used = false`, so a repeat write matches zero rows rather than needing
-  to be gated — same bounded-cost outcome, no new conditional in the filter.]**
-
-## Deferred from: manual review during skillars-deferred-143 (2026-10-05)
-
-Not from the `/bmad-code-review` run above — both items were surfaced by direct questions and
-observations while implementing `skillars-deferred-143`, and verified against HEAD `3a62698c`+working
-tree at the time of writing.
-
-- **`JwtManagerImpl.deleteLoginToken()` clears six cookies but not `skp`, even though the same class
-  now writes `skp`.** `deleteLoginToken` (`JwtManagerImpl.java:183-190`) removes `potc`, `bcookie`,
-  `user`, `admin`, `ION`, `rint` — not `skp` (`SKILLARS_PROFILE_COOKIE`) and not `rtkn`. There is no
-  comment explaining the omission and it is not a design decision: `deleteLoginToken` dates from
-  `e82840ae init`, while `skp` and `rtkn` were both introduced later in `fbc5f5c4 "Authentication &
-  JWT Security"` and the method was never extended. The compensating clearing was hand-rolled in
-  `AuthService` instead — which is the duplication `skillars-deferred-143` consolidated into
-  `SecurityUtil.clearAuthCookies` (`SecurityUtil.java:189-193`).
-
-  The ownership boundary that *would* justify it ("`JwtManagerImpl` owns the JWT-session cookies;
-  `rtkn` is a DB-backed credential and `JwtManagerImpl` is deliberately DB-free; `skp` is a
-  frontend-facing hint") holds for `rtkn` but **no longer holds for `skp`**: `skillars-deferred-142`
-  (`3a62698c`) made `JwtManagerImpl` a *writer* of `skp` via `setSkillarsProfileCookie`
-  (`JwtManagerImpl.java:121`). The write/delete asymmetry is now inside one class — 3 writers
-  (`AuthService.java:134`, `AuthService.java:272`, `JwtManagerImpl.java:121`) against 1 remover
-  (`SecurityUtil.java:192`). This is the concrete form of the "`skp` duplication / three writer
-  sites" item `skillars-deferred-143` listed as explicitly out of scope in its Dev Notes.
-
-  **Observable consequence, bounded:** `deleteLoginToken` has only two callers.
-  `SecurityUtil.clearAuthCookies:190` immediately follows it with `rtkn` + `skp`, so that path is
-  covered. `JWTAuthorizationFilter.java:164` — the routine-denial branch (expired JWT, tokenless
-  request, `AuthorizationException(MISSING_RIGHTS)`) — calls it alone, so **`skp` survives a routine
-  401**. `skp` is `httpOnly=false` and `auth.store.js:74`'s `hydrateFromCookie()` reads it, so the SPA
-  can still hydrate a `userId`/`role` from a dead session after an idle-out. **Not an auth bypass** —
-  server-side authorization runs off `@PreAuthorize` + the JWT `ROLES` claim, never `skp` — so this is
-  stale UI state, not privilege. The frontend partially compensates at `auth.store.js:48` (clears
-  `skp` client-side on deliberate logout, with a comment about this exact redirect race), which does
-  not cover a server-initiated 401. **Pre-existing, not introduced by `skillars-deferred-143`:** the
-  deleted `securityUtil.logout(res)` was `clearContext` + `deleteLoginToken` for *every* caught cause,
-  so `skp` previously survived **all** filter 401s; that story narrowed it to routine causes only.
-
-  **When picked up:** adding `skp` to `deleteLoginToken` is the cheap fix — a pure
-  `Set-Cookie: Max-Age=0` header with no DB cost, which is precisely why `rtkn` must stay out of that
-  path (revoking `rtkn` on every idle-out is the write-amplification and self-defeating problem
-  `skillars-deferred-143` AC3 documents). Both callers tolerate it; `SecurityUtil.clearAuthCookies`
-  would emit a harmless duplicate removal header. Note this **is** a behaviour change on the routine
-  denial path, which `skillars-deferred-143` AC3 deliberately froze, so it needs its own AC and a test
-  asserting an expired-JWT 401 now expires `skp`. Best done together with the `skp`-consolidation
-  item (collapse the three writers onto one owner) rather than as a drive-by.
-  **[CLOSED by skillars-deferred-144 AC2 — `JwtManagerImpl.deleteLoginToken` now also calls
-  `SkillarsProfileCookie.removeFrom(response)`; `rtkn` deliberately left out, per this item's own
-  reasoning above. The routine-denial-branch behaviour change was disclosed explicitly (not a
-  drive-by) and proven at the filter level by `AuthResourceIT
-  .routineDenial_expiredJwt_alsoClearsSkillarsProfileCookie`.]**
-
-- **The `skp` cookie's wire format is known by three separate writers; no type owns it.**
-  `SKILLARS_PROFILE_COOKIE`'s payload shape, its quoting invariant, its encoding and its four cookie
-  attributes are open-coded at `AuthService.java:132-135` (login), `AuthService.java:270-273`
-  (refresh) and `JwtManagerImpl.java:119-121` (`setSkillarsProfileCookie`, added by
-  `skillars-deferred-142`). The two `AuthService` blocks are **byte-for-byte identical**, all 14 lines
-  including the 9-line cautionary comment; `JwtManagerImpl` differs only in the three lines above it.
-
-  **Why this one is worth extracting even though the `sha256Hex` duplication in the same module was
-  deliberately left alone:** the distinguishing property is how the duplication fails. `sha256Hex` is a
-  universally-specified algorithm with no project-local invariant — get it wrong and it fails loudly.
-  The `skp` format carries a project-local invariant (`id` must be a **quoted** string) that fails
-  **silently**, and it has already cost a production bug: an unquoted `id` corrupted `authStore.userId`
-  via IEEE-754 rounding and surfaced much later as a 403 on coach photo upload (found by manual
-  testing 2026-10-01). That 10-line comment exists because of it, and it is now copied twice. Format
-  knowledge that has already bitten once, duplicated across three writers, with the invariant enforced
-  only by a repeated comment, is the case for a single owner.
-
-  **The seam is clean.** Only role derivation and the id source genuinely differ — `user.getSkillarsRole()`
-  with an `"ADMIN"` fallback vs. the `ROLES` claim with an `ANONYMOUS` fallback, and `user.getId()` vs.
-  `claims.get(BUS_ID)`. Those differences are load-bearing and must stay (see
-  `JwtManagerImpl.java:90-102`: collapsing the two fallbacks would surface admin-only nav to a
-  non-admin). Everything downstream of `(id, role)` is identical and extractable.
-
-  **When picked up — this is the umbrella for the other `skp` items in this file; do them together.**
-  Proposed home: `platform/security/contract/SkillarsProfileCookie.java` — `SkillarsRole` already lives
-  in that package, and both `platform.security.service.AuthService` and
-  `platform.security.infrastructure.jwt.JwtManagerImpl` are inside the security module, so neither
-  import breaks the layering rules in `project-context.md`. It cannot sit beside `CookieUtil` in
-  `infrastructure.security`, which must stay business-agnostic and this knows `SkillarsRole`. Shape:
-  a `record SkillarsProfileCookie(String id, String role)` with `writeTo(HttpServletResponse)` and
-  `removeFrom(HttpServletResponse)`. Have it own **removal** as well as writing — that is what fixes the
-  asymmetry in the item above, since `skp` is written in three places but cleared only in
-  `SecurityUtil.java:192`, which is precisely how `JwtManagerImpl` came to write `skp` without ever
-  clearing it. Rough size: one ~40-line file, three call sites collapsing to a line or two each
-  (net ≈ −35 lines), `SecurityUtil.clearAuthCookies` delegating, plus one focused unit test pinning the
-  wire format. That test is the real payoff: the quoted-id invariant is currently asserted only
-  indirectly, across three separate tests mirroring the three writers.
-
-  **Bundle with:** the `deleteLoginToken`/`skp` asymmetry item above, and both `skp` items under
-  *"Deferred from: code review of skillars-deferred-142 …"* — the `URLEncoder`-vs-`decodeURIComponent`
-  mismatch (whose own note already says "fix all three together, or extract a shared serializer") and
-  the missing cookie-attribute assertions (which already asks for "a shared helper covering all three
-  `skp` writers at once"). All four are the same refactor; done separately they are strictly more work,
-  and three of them cannot be fixed at one site without recreating the divergence
-  `skillars-deferred-142` AC2 set out to remove.
-  **[CLOSED by skillars-deferred-144 AC1 — `SkillarsProfileCookie` (`platform.security.contract`) is
-  the single owner, with `writeTo`/`removeFrom` and the pinning `SkillarsProfileCookieTest`. All four
-  bundled items closed together, as this note asked.]**
-
----
-
-## Deferred from: code review of skillars-deferred-145 (2026-10-06)
-
-- **i18n copy hardcodes operator-tunable values ("30 days", "18").**
-  **[CLOSED by skillars-deferred-145 round-2 review (R7) — `updateTooSoon` no longer states a number
-  in any of the three bundles ("You have edited this review too recently — please try again later."
-  and its de-DE/fr-FR equivalents), and `noQualifyingSession` was reworded in the same pass to cover
-  all three of its causes rather than only the maturity one. The `parentalReviewNotApplicable` half of
-  this item is moot: round-1 decision D2 deleted that error code and its message before they ever
-  shipped, so there is no "18 or older" string anywhere to fix — the original wording of this entry
-  was written while that code still existed and is corrected here at source.]**
-  `src/frontend/src/i18n/{en-US,fr-FR,de-DE}/index.js` — `updateTooSoon` stated "once every 30 days"
-  while `reviews.updateCooldownDays` is operator-settable over `[1, 365]`. Deferred because Task 4 explicitly prescribed this wording (the
-  prior copy hardcoded "once per year"), so it is a resolved decision rather than a newly found
-  gap. Note the inconsistency inside the same change: `noQualifyingSession` was deliberately
-  written config-agnostic ("has had time to settle") for a key with the identical range.
-  **When picked up:** switch both strings to vue-i18n interpolation fed from the live config value,
-  or revert to config-agnostic phrasing. Becomes a live correctness issue the moment an operator
-  retunes `reviews.updateCooldownDays` — all three bundles would then state a false rule.
 
 ## Deferred from: code review of skillars-deferred-146 (2026-10-07)
 
@@ -3765,52 +3503,24 @@ User asked to find and expose backend coach functionality missing from the UI. I
 Also found but explicitly out of scope for this pass (not coach-specific, or likely superseded):
 - `POST/GET /api/disputes` — booking dispute raise/view, `IS_AUTHENTICATED` incl. coach role, zero frontend usage for **any** role. Cross-role gap, not coach-only.
 - `POST /api/reviews/{id}/flag`, messaging delete/report endpoints (`messaging/api/MessagingResource.java:145,157,176`) — same pattern, any authenticated role, no UI for anyone.
-- `GET /api/development/players/{id}/neglected-skills` (`NeglectedSkillResource.java:21`) — likely superseded by `neglectedSkillCodes` already surfaced via `/exposure` and consumed in `development.store.js:46`; re-check before building a UI for it. **[RE-CHECKED by `skillars-12-4-coach-facing-player-detail-page` (created 2026-10-15): confirmed true** — no frontend code calls this dedicated endpoint; the new coach player-detail page's neglected-skills panel reuses the already-fetched `/exposure` data instead. **The endpoint itself is still fixed by that story** (its missing coach-player-relationship check, see the `skillars-12-1` deferred-work entry below) because it remains a live, independently reachable production API regardless of which UI path calls it.]**
 - `GET /api/development/players/{id}/slu/skill-trends` and `GET /api/session/sessions/{sessionId}` — minor, low-priority unused endpoints with working alternate paths already in the UI.
 
-
-## Deferred from: code review of skillars-deferred-151-coach-ui-gaps-handler-hygiene-null-roles-fix-time-gate-and-ci-ruleset-hardening (2026-10-14)
-
-- **No end-to-end integration test pins the `coach_branding` id space.** Four places must agree that the owner id is the caller's numeric user id, not the `CoachProfile` UUID: `CoachBrandingResource` (threads `getCurrentCoachUserId()`), `ReportGenerationService.saveBranding` (the `assertOwnership` call this story fixed), `StorageResource`'s new `"coach_branding"` `OWNER_BOUND_ENTITIES` entry, and `EditCoachBrandingDialog.vue`'s `entityId: String(authStore.userId)`. The AC3 unit test was empirically confirmed to go RED when the fix is reverted, and both sides were traced to `Principal.businessId`, so the fix is sound — but the test constructs its own `FileStorageObject` fixture with `.ownerId(COACH_USER_ID.toString())` rather than deriving it from `signUpload`/`confirmUpload`. An IT through `/api/storage/sign/upload` → confirm → `PUT /branding` would pin all four call sites against drift. Added assurance, not an open defect. **[RESOLVED by `skillars-deferred-152-store-error-i18n-sweep-contribution-threshold-dedup-and-coach-roster-fixes` (implemented 2026-10-16), AC7: `ReportGenerationServiceIT.saveBranding_realSignUploadConfirmFlow_allFourIdSpaceCallSitesAgreeEndToEnd` now exercises the real sign-upload → S3 PUT → confirm → `PUT /branding` round trip for a real coach user, pinning all four id-space call sites together. Closed.]**
-- **`ProfilePage.vue` fetches `logoSignedUrl` and never renders it** (`:385-403`). The unlocked branding section shows only the hex colour, so a coach who has uploaded a logo cannot see it from the profile page — the preview exists only inside `EditCoachBrandingDialog`. Cosmetic/incomplete rather than wrong. **[RESOLVED by `skillars-deferred-152-store-error-i18n-sweep-contribution-threshold-dedup-and-coach-roster-fixes` (implemented 2026-10-16), AC8: `ProfilePage.vue`'s unlocked branding section now renders `coachBranding.logoSignedUrl` via `q-img` (with an error-slot retry affordance for an expired presigned URL), instead of only the colour swatch. Closed.]**
-- **Two weak frontend spec assertions.** `CoachSessionPackTiersPageSpec.js:72` asserts `expect(wrapper.text()).not.toContain('deactivate')` against a page whose rendered text is untranslated i18n keys — it would pass even if a fully wired deactivate button existed, as long as its label key were not literally spelled `deactivate`. `EditCoachBrandingDialogSpec.js:22` stubs `global.fetch` as `{ ok: true }`, supplying an `ok` the component never reads. Test-quality, not product defects. **[RE-CHECKED 2026-10-16 (`skillars-deferred-152` drafting): the `CoachSessionPackTiersPageSpec.js` half is stale — that file no longer contains the cited assertion; its current test (`:69-81`) asserts on real `payment.myTiers.*` i18n keys and counts exactly one `withdrawOffer` button. Already closed by other work, not by a story that documented it. The `EditCoachBrandingDialogSpec.js` half is **RESOLVED by `skillars-deferred-152-store-error-i18n-sweep-contribution-threshold-dedup-and-coach-roster-fixes` (implemented 2026-10-16), AC9**: `EditCoachBrandingDialog.vue`'s `handleSave` now checks `if (!res.ok) throw new Error(...)` after the PUT, and a new spec case asserts the failure path (confirm/save never called, error surfaced). Both halves closed.]**
-
-## Deferred from: coach UI CRUD audit (2026-10-14)
-
-- **Training sessions — built but orphaned.** `SessionBuilderPage.vue` (`coach/session-builder/:bookingId`) has genuine drill/block editing, development-focus selection, draft/save, and template save — but I confirmed via grep that no page anywhere links or navigates to this route. It only exists as a raw path in `router/routes.js`; a coach can't reach it through any button or menu. Session templates (`SessionTemplateVault.vue`) and the drill library are themselves properly routed, but depend on the orphaned builder page as their entry point. **[CLOSED by `skillars-12-3-session-prep-card-and-timeline-access-clock-fix` (side effect, found and annotated 2026-10-16 during `skillars-deferred-152`'s drafting): `components/booking/SessionPrepCard.vue:55-60` renders a `<q-btn :to="{ name: 'coach-session-builder', params: { bookingId } }" />`, and `SessionPrepCard` is rendered from the reachable `CoachCommandCenterPage.vue:322`. No longer orphaned. Do not re-pick. Corrected 2026-10-17 by `skillars-deferred-152`'s code review: this annotation originally said `SessionPrepCard.vue:59` renders a `RouterLink` and credited `skillars-12-3`'s AC2 — the file is under `components/booking/`, not `components/development/`, contains zero `RouterLink`/`router-link` occurrences, and the closure came from AC6. The story's own Dev Notes already carried the corrected version.]**
 
 ## Deferred from: code review of skillars-12-1-coach-player-roster-and-attention-summary (2026-10-15)
 
 - **Unbounded per-player fan-out on the roster endpoint, with no cap and no pagination.** `CoachRosterService.buildEntry` issues 3 queries per roster player (`findLastSessionDate`, `findByPlayerIdAndResolvedAtIsNull` — which materializes full entities only to call `.size()` — and `findByPlayerIdFromWeek`), and `RosterResponse` has no page/limit field, so there is no forward path to bound it without a contract change. The story's Performance note explicitly resolved this ("coach rosters are small — tens of players, not thousands"; "do not introduce a bespoke batched/aggregate native query"), so it is recorded rather than patched. **But the stated reasoning is now contradicted by AC1's own 730-day recency floor**, added later in the same story: roster membership is every distinct player over *two years*, not the coach's current players. An academy coach with 300 distinct players over that window produces ~900 synchronous queries in one GET, hydrating up to 300 × 12 weeks × 15 skills of `PlayerSluWeeklySnapshot` entities into a single never-cleared persistence context, and returns an unpaginated array. Revisit when either a real roster exceeds ~100 players or the endpoint shows up in latency monitoring; the cheap first step is `select count` on the roster query per coach to find the actual cardinality distribution before designing pagination.
 - **Roster membership is wider than the `development` module's own authorization predicate.** `ROSTER_MEMBERSHIP_STATUSES` (10 statuses) deliberately exceeds `CoachPlayerAuthorizationService.ACTIVE_RELATIONSHIP_STATUSES` (4), which AC1 mandates and Task 1.2 explicitly protects. Consequence not considered when that decision was taken: for a pair whose only booking sits in `NO_SHOW_PLAYER`/`NO_SHOW_COACH`/`PAYMENT_PENDING`/`IN_PROGRESS`/`PAUSED`/`COMPLETED_PENDING_CONFIRMATION`, `requireCoachPlayerRelationship` returns **deny** — so `GET /api/development/players/{id}/slu/skill-trends` 403s for that pair while the roster still returns the player with an `attentionScore` whose declining term is derived from `findByPlayerIdFromWeek`, which takes `playerId` only and is therefore **player-global** (training accumulated with other coaches). Honestly scoped: `lastSessionDate` *is* coach-scoped and reads null for such a pair, and `openNeglectedSkillCount` is already reachable by any `ROLE_COACH` via `NeglectedSkillResource.java:22` with no relationship check at all (pre-existing). So the newly-widened disclosure is the trend-derived component of one float, not the whole row. Worth settling alongside the pre-existing `/neglected-skills` + `/slu/coach-contributions` relationship-check gap rather than in isolation. **[PARTIALLY COVERED by `skillars-12-4-coach-facing-player-detail-page` (created 2026-10-15): the `/neglected-skills` + `/slu/coach-contributions` relationship-check gap referenced in this bullet's last sentence is closed by that story** (re-verified against current HEAD during that story's drafting: of the four endpoints the brainstorm doc's own side-observation named, only these two genuinely lacked the check — `/exposure`, `/narrative`, and `/slu/skill-trends` already enforce it via `SluDashboardService.requireCoachPlayerRelationshipIfCoach`). **This bullet's own primary finding — the `ROSTER_MEMBERSHIP_STATUSES`-vs-`ACTIVE_RELATIONSHIP_STATUSES` width mismatch itself — remains open and is NOT fixed by that story**; `skillars-12-4`'s new player-detail page only degrades gracefully (an error banner) when a roster row for one of the six wider-only statuses now 403s on the two newly-fixed endpoints instead of silently 200ing. Do not re-pick the relationship-check-gap half of this item; the roster-membership-width half is still open for a future story.] [CORRECTED 2026-10-16 (skillars-12-4 pre-implementation story review): this bullet's own counts were stale. Recounting `CoachRosterService.java:53-56` directly gives **12** statuses, not 10, and the set difference against `ACTIVE_RELATIONSHIP_STATUSES`'s 4 is **8**, not 6 — the six named above plus `DISPUTED` and `REFUND_PENDING`, both added by this same story's (skillars-12-1's) own code-review owner decision (`CoachRosterService.java:47-52`) specifically because they "represent a session that genuinely happened." The width-mismatch finding itself is still open and still correctly NOT fixed by skillars-12-4 — only the figures were wrong.]**
-- **`Duration.toDays()` truncation shifts the dormancy boundary by up to 24h.** `CoachRosterService.java:112` truncates toward zero and `RosterAttentionCalculator.java:40` compares `>`, so the operator-facing key `development.roster.dormantAfterDays = 30` actually flags dormancy only after 31 full days. Separately, at exactly 30 days the recency component already saturates (`recencyNorm = 1.0`, full 0.4 weight) while `dormant` is still `false` — a player at maximum recency urgency carries no dormant badge. A literal deviation from AC4's "more than a configurable threshold number of days ago", but sub-day precision is not meaningful for a "has this player gone quiet" signal. Fix if a future AC ever pins the boundary exactly. **[RESOLVED by `skillars-deferred-152-store-error-i18n-sweep-contribution-threshold-dedup-and-coach-roster-fixes` (implemented 2026-10-16), AC5: `RosterAttentionCalculator.java`'s `dormant` comparison changed from `>` to `>=` (comparison only, `toDays()` left untouched), so a player at exactly `dormantAfterDays` now agrees with the already-saturated recency score. Closed.]**
-- **`playerName` can be null in the roster response with no fallback.** `CoachRosterService.java:74-77` builds a `HashMap` from `findAllById`, which silently returns fewer rows than requested, and `:134` does an unguarded `.get(playerId)`. `booking.bookings.player_id` has **no foreign key** to `main.player_profiles(id)` (verified against `V138__baseline_schema.sql` — the `ALTER TABLE ONLY booking.bookings` block declares only `batch_id` and `session_pack_purchase_id`), so a missing profile row leaves the booking behind and the frontend renders an identity-less row with badges and a date caption attached. Latent rather than reachable: no code path in `src/main/java` deletes a `player_profiles` row (GDPR erasure only locks it and sets a tombstone). Add an `orElse` or filter if a hard-delete path is ever introduced. **[RESOLVED by `skillars-deferred-152-store-error-i18n-sweep-contribution-threshold-dedup-and-coach-roster-fixes` (implemented 2026-10-16), AC6: `CoachRosterService.getRoster` now filters out any roster entry whose `player_profiles` row is missing, before `buildEntry` runs — no `"playerName": null` can reach the response. Closed.]**
 - **`dormantAfterDays` doubles as the recency normalizer, so one operator knob reshapes the whole AC5 ordering.** `RosterAttentionCalculator.java:42-43` clamps days into `[0, dormantAfterDays]` and then divides by the same value. At the legal minimum `1`, every player not seen today normalizes to `1.0` — a 2-day-silent player and a 400-day-silent player score identically and the recency term degenerates to a constant. At the legal maximum `3650`, a 300-day-silent player contributes `0.4 × 300/3650 ≈ 0.033`, effectively switching recency off and leaving ranking to the neglected/declining terms. The key is documented as a soft "flag as dormant" signal, so an operator changing it would not expect to retune the ranking. No realistic value (14–90 days) triggers either degeneration, and no test covers any value other than 30/90/5. Consider decoupling the normalizer from the threshold (e.g. a fixed 90-day recency horizon) if the knob is ever exposed in an admin UI.
 
 ## Deferred from: code review of skillars-12-2-session-close-recap-capture (2026-10-15)
-
-> **Covered by `skillars-12-3-session-prep-card-and-timeline-access-clock-fix` (created 2026-10-15).** The SLU-clock-proxy bullet immediately below is implemented by that story's AC1/AC2 — the coach-access clock now reads the later of the existing SLU-row signal and a new coach-scoped `player_timeline_events.coach_id` lookup, bundled with the Session Prep Card (Priority 3 of the 2026-10-14 brainstorm) because the Prep Card needed the exact same fixed signal. Do not re-pick this item in a future deferred-work-mining pass.
-
-- **The coach timeline access clock reads SLU rows, a lossy proxy for its own definition of "completed session" -- so a Quick-Complete-only coach can never read their own data back.** `TimelineQueryService.getTimeline` short-circuits for any coach whose clock has expired (`TimelineQueryService.java:43-52`), and `SluRepository.findLastSessionDate` (`SluRepository.java:51-56`) resolves that clock from `development.player_skill_stats` alone. The table's sole writer, `SluCalculationService.onBookingCompleted`, returns early on three independent conditions (`SluCalculationService.java:52-62`): the player did not attend, no `Session` row exists for the booking (**every Quick Complete, and every LIVE session run without a saved session plan**), or the session is not in `SAVED`/`COMPLETED`. The clock's own comment defines activity as "most recent completed session" -- which is exactly right as intent, but SLU rows do not faithfully record it. Consequence for story 12.2: a coach who captures a session recap through the Quick-Complete path writes it into `player_timeline_events.metadata` and then receives `accessExpired=true` with an empty `events` list on their own `GET /api/development/players/{playerId}/timeline`, so AC4's promise that the recap is "readable via the API today" does not hold for the dominant capture path. **This is the same blind spot Story 12.1 independently flagged for its roster `lastSessionDate`** -- one root cause, two stories affected, which is why it is recorded as a single bundled item rather than twice. Accepted for 12.2 rather than patched because no data is lost: the recap is durable in both `booking.session_completion_data` and `player_timeline_events.metadata`, so whenever the clock is fixed it surfaces the entire accumulated history retroactively, making the cost of waiting near zero -- whereas changing a coach access-expiry policy (deliberately introduced by skillars-deferred-107) widens data access for currently-expired coaches and deserves its own ACs and tests. Implementation cost when taken up: `player_timeline_events` has **no `coach_id` column** (coach identity lives only inside the JSONB `metadata`) and its only index is `(player_id, occurred_at DESC)` (`V138__baseline_schema.sql:3334`), so satisfying the clock from timeline events needs either a JSONB expression index or a real `coach_id` column plus backfill -- price that before choosing between amending `findLastSessionDate` and adding a second clock source. Natural home is Priority 4's coach-facing player-detail page, which cannot ship without confronting this gate anyway.
 
 - **Abandoning the now-mandatory wrap-up step 5 strands the booking permanently in `COMPLETED_PENDING_CONFIRMATION`.** `WrapUpSequence.vue:221` turns step 4's terminal submit into a "Next", and the only submit now sits behind two mandatory free-text fields on step 5 (`:256-261`). A coach who taps Quick Complete (status already moved to `COMPLETED_PENDING_CONFIRMATION`) and then navigates away, reloads, or closes the tab before filling both fields writes no `session_completion_data` row at all. Terminal consequences, each traced: the only sweeper requires an existing row (`SessionCompletionDataRepository.java:17-28`, `WHERE s.completionMode = 'QUICK' AND s.createdAt < :cutoff AND EXISTS (...)`), so the booking is never auto-confirmed; the parent cannot rescue it either, because `confirmCompletion` transitions first and then does `findByBookingId(bookingId).orElseThrow(...)` (`BookingCompletionService.java:195-201`), rolling the whole transaction back; and the two `showWrapUp = true` writers (`CoachCommandCenterPage.vue:577`, `:593`) are both gated on status `UPCOMING`, so there is no UI path back into the wizard. No admin or scheduled remediation exists — `grep -rn "BookingEvent.COMPLETE\b" src/main/java` returns 4 hits (`QuickCompleteTimeoutService:62`, `BookingService:104` policy map, `BookingStateMachine:69`, `BookingCompletionService:195`), none remedial. The wizard is also non-resumable: `v-if="showWrapUp"` (`CoachCommandCenterPage.vue:16`) unmounts the component and destroys every ref. **Honestly scoped:** the dead-end itself is pre-existing — a coach could already abandon at steps 1-4 — so this story widens an existing hole rather than opening one. It is recorded because the widening is deliberate and the consequence is permanent. The cheap first step is an admin force-complete path (or letting the sweeper pick up `COMPLETED_PENDING_CONFIRMATION` bookings with no completion-data row after the timeout). Note that the related rolling-deploy skew case raised in the same review was dismissed because the application is not yet in production -- but this abandonment path needs no deploy to trigger, so it stands on its own.
 - **The recap text on `booking.session_completion_data` survives GDPR erasure and never appears in the DSAR export.** Erasure deletes only the timeline copy — `playerTimelineRepository.deleteByPlayerId(playerId)` (`GdprErasureService.java:1153`) — and nothing deletes or anonymises the durable `what_we_did`/`whats_next` columns. Negative searches: `grep -rln "SessionCompletionData\|session_completion_data" src/main` returns exactly 4 files (`BookingCompletionService`, `SessionCompletionData`, `QuickCompleteTimeoutService`, `SessionCompletionDataRepository`), none under `platform/admin`; `GdprExportService` declares 13 dependencies, none a timeline or completion-data repository. The table also has no FK from `booking_id` to `bookings` (`V138__baseline_schema.sql:2191-2195` declares only a UNIQUE), so no cascade reaches it. Consequence: coach-authored free text about an erased player persists indefinitely, and the player cannot see it in their own subject-access export. **Pre-existing in shape:** `voice_note_text` on the same table has the identical gap today, so this is not a divergence from the table's established handling — but it is now two more free-text columns about a child. Note also that this story's Dev Notes line 90 summarises `story-review.md` as "GDPR erasure already covering the new columns"; that holds for the timeline metadata keys (as the story's own residual-risk bullet correctly scopes it) but not for the columns. Settle alongside `voice_note_text` rather than in isolation.
 - **The unbounded player-timeline query now returns up to ~1 KB of recap per completed session.** `PlayerTimelineRepository.findByPlayerIdOrderByOccurredAtDesc(Long playerId)` (`PlayerTimelineRepository.java:12`) takes no `Pageable` and applies no limit; it is consumed at `TimelineQueryService.java:54-61`. Previously each `SESSION_COMPLETED` row's metadata was a bare `{"coachId": "..."}`; it now carries two 500-char strings, so the response grows linearly in completed sessions with no ceiling. Non-authoring viewers still pay the full DB read and a per-row `new HashMap<>(metadata)` copy (`TimelineQueryService.java:80`) — only the wire payload is stripped, not the work. **Pre-existing:** the missing pagination predates this story; the recap raises the per-row constant. Revisit together with the roster endpoint's unbounded fan-out (recorded under story 12.1) rather than separately, since both are the same "no `Pageable` on a per-player history read" shape. Cheap first step: a `select count` on `player_timeline_events` per player to find the real cardinality distribution before designing pagination.
 
-## Deferred from: pre-implementation story review of skillars-12-3-session-prep-card-and-timeline-access-clock-fix (2026-10-15)
-
-- **A third, independent consumer of the SLU-only "has this coach ever worked with this player" signal remains unfixed.** `ReportGenerationService` (around `ReportGenerationService.java:145-147`) gates report generation with `Instant lastSession = sluRepository.findLastSessionDate(playerId, coachId); if (lastSession == null) { throw new AccessDeniedException("Coach has no session history with this player"); }` — the identical narrow signal `skillars-12-3` fixes for `TimelineQueryService`'s coach-access clock. `skillars-12-3` deliberately does not touch this call site (out of its AC scope — see that story's Dev Notes "A third, still-unfixed SLU-only gate"). Consequence: after `skillars-12-3` ships, a Quick-Complete-only coach will be able to read their own timeline and open the Session Prep Card, while still being refused report generation for the same player, for the same underlying reason the other two surfaces no longer have. Found during `skillars-12-3`'s pre-implementation story review, not during its original research pass. Revisit by applying the same `CoachPlayerLastSessionResolver` this story introduces (`platform.development.service`) to this call site instead of calling `sluRepository.findLastSessionDate` directly — the resolver already exists once this story ships, so this follow-up should be a small, isolated change, not a re-derivation. **[RESOLVED by `skillars-deferred-152-store-error-i18n-sweep-contribution-threshold-dedup-and-coach-roster-fixes` (implemented 2026-10-16), AC3: `ReportGenerationService` now calls `CoachPlayerLastSessionResolver.resolve(...).lastSessionDate()` instead of `sluRepository.findLastSessionDate` directly — the same merged signal `CoachRosterService`/`TimelineQueryService`/`SessionPrepService` already use. A Quick-Complete-only coach can now generate a report for a player they've trained. Closed.]**
-
-## Deferred from: code review of skillars-12-3-session-prep-card-and-timeline-access-clock-fix (2026-10-15)
-
-- **`findByPlayerIdAndResolvedAtIsNull(playerId).size()` selects and hydrates N JPA entities purely to produce an integer.** Two call sites now share the shape: the new `SessionPrepService.java:78` (added by `skillars-12-3`) and the pre-existing `CoachRosterService.java:129` (shipped by `skillars-12-1`). Each materialises every unresolved `NeglectedSkillFlag` row for the player, attaches them all to the persistence context, then discards them to read `.size()`. **Deliberately not fixed in `skillars-12-3`:** AC3 required the new endpoint to reuse 12-1's neglected-skill read "exactly as story 12-1 does", and per this project's review convention a new call site that matches an established sibling shape is not a divergence to be patched in isolation — changing only the new one would leave the two surfaces reading the same data by two different mechanisms, which is the kind of drift `skillars-12-3` was itself fixing elsewhere. Cheap, isolated follow-up: add `long countByPlayerIdAndResolvedAtIsNull(Long playerId)` to `NeglectedSkillFlagRepository` and switch **both** call sites to it in the same change. Cost is bounded today (flags are per-player and resolved flags drop out), so this is efficiency hygiene rather than a live risk — but it is unbounded by any constraint in the schema, and the roster endpoint already fans this call out across a coach's entire roster, one query per player, which is where it will bite first. Settle alongside the roster endpoint's unbounded fan-out already recorded under story 12-1 rather than separately — same root shape. **[RESOLVED by `skillars-deferred-152-store-error-i18n-sweep-contribution-threshold-dedup-and-coach-roster-fixes` (implemented 2026-10-16), AC4: a new `countByPlayerIdAndResolvedAtIsNull` repository method was added and both call sites (`CoachRosterService`, `SessionPrepService`) switched to it. The count-query half is closed; the roster fan-out itself (`deferred-work.md` story 12.1 entry above) is still open and still needs a pagination-contract decision — do not re-pick that half.]**
-
 ## Deferred from: code review of skillars-12-4-coach-facing-player-detail-page (2026-10-16)
 
-- **Ten further `err?.response?.data?.message` reads remain in `development.store.js`.** `skillars-12-4`'s Task 4.0 fixed two of the twelve (`fetchExposure`, `fetchCoachContributions`), and this review's patch pass fixed two more (`fetchSkillDefinitions:55`, `fetchTimeline:219`) because the new page surfaces them directly. The remaining ten — `fetchNarrative:90`, `fetchTargets:100`, `saveTargets:110`, `fetchRadarEntries:121`, `submitAssessment:133`, `fetchRadarDisplay:145`, `savePreferences:165`, `fetchCorrelationInsights:177`, `fetchReports:192`, `generateReport:205` — all read a field the backend's `ErrorDto` never populates (the real shape is `{helpCode, errorMsg:{errorKey, message}}`, see `ApiAdvice.toErrorDTO` and `boot/axios.js:228`), so every one of them falls back to a hardcoded English literal that reaches de-DE and fr-FR users verbatim. This is the same class of bug `skillars-deferred-92` AC14 already fixed once in `src/utils/errorHandler.js`. **Worth settling as a single sweep rather than per-story:** `src/utils/errorHandler.js` already exports `getErrorMessage(error)`, which parses the real `ErrorDto` shape and handles the no-response network case — but `development.store.js` does not import it, and `errorHandler`'s own status-code fallbacks (`'Bad request'`, `'Forbidden'`, …) are themselves hardcoded English, so the sweep should translate those fallbacks first and then route all twelve store call sites through the shared helper. `booking.store.js:293` has the same bug and should be included. **[RESOLVED by `skillars-deferred-152-store-error-i18n-sweep-contribution-threshold-dedup-and-coach-roster-fixes` (implemented 2026-10-16), AC1: `errorHandler.js`'s status-code fallbacks now route through `i18n.global.t(...)` (401→`security.sessionExpired`, 5xx→`error.generic`), and all ten `development.store.js` sites plus `booking.store.js:293` now use `getErrorMessage(err)`. Two further `AvailabilityManagerPage.vue` duplicates (`:279`, `:358`) remain deliberately out of scope — this was a store-wide, not repo-wide, sweep; left for a future pass. Closed.]**
-- **The 30% top-contribution threshold is duplicated between `CoachPlayerDetailPage.vue:111` and `CoachContributionSection.vue:35`.** AC9 required the page to wrap the component and supply its own empty state, because the component's root `v-if="topAttributions.length > 0"` has no `v-else`. The implementation satisfies this by re-implementing the component's group-by-skill-then-`>= 30` logic at page level (`.some(...)` against the component's `.filter(...).length > 0`). The two are logically equivalent today — verified term by term — so nothing is broken. But the threshold now lives in two files with no shared constant, and no test pins them together: `CoachPlayerDetailPageSpec.js` tests 60% and 10%, never 30% itself, so a `>=` → `>` divergence in either copy would pass CI while producing exactly the failure AC9 named ("the heading shows with no body, or the empty state shows alongside real content"). Cheap fix: export the threshold (or a `hasTopAttributions` predicate) from `CoachContributionSection.vue` and have the page import it, plus one boundary test at exactly 30. **[RESOLVED by `skillars-deferred-152-store-error-i18n-sweep-contribution-threshold-dedup-and-coach-roster-fixes` (implemented 2026-10-16), AC2: extracted to a new shared module `src/frontend/src/utils/coachContributions.js` (`topAttributions`/`hasTopAttributions`), imported by both `CoachContributionSection.vue` and `CoachPlayerDetailPage.vue`, plus a third previously-missed consumer (`ParentDevelopmentPortalPage.vue`) now wrapped with the same empty-state pattern. A boundary test at exactly 30% pins all consumers. Closed.]**
 - **`requireCoachPlayerRelationshipIfCoach` omits `PlayerOwnershipGuard`'s `existsByIdAndUserId` self-owner arm — now in four copies.** `skillars-12-4` AC3 explicitly scoped this out ("Pre-existing, out-of-scope adjacent gap (do not fix here)") and correctly copied the existing incomplete predicate verbatim rather than silently fixing one of four copies. Recording it here so the count is accurate: the helper now exists in `SluDashboardService.java:132-138`, `SluTargetService.java:66-72` and `SluContributionService.java:100-106`, and the same incomplete predicate also appears in `RadarDisplayService.java:46` and `ReportGenerationService.java:231`. Because `@PreAuthorize("hasRole('ROLE_COACH') or @playerOwnershipGuard.check(...)")` short-circuits on `hasRole`, the guard's self-owner arm (`PlayerProfileRepository.existsByIdAndUserId`, added by `skillars-deferred-147`) is never evaluated for a COACH-role caller, so the service helper is the only ownership check on that path — and it handles coach-is-also-guardian but not coach-is-also-the-player. **Re-confirmed not currently reachable during this review:** `ShadowAccountResource.java:46` gates `createSelfOwnedPlayerProfile` on `HAS_PLAYER_ROLE` and `CoachRegistrationService.java:83-84` only grants `ROLE_COACH` at new-user registration, so no production path produces a user holding both `ROLE_COACH` and a self-owned `PlayerProfile`. Fix all five copies together (ideally by moving the helper onto `CoachPlayerAuthorizationService`, which is already injected at every site) if a dual-role path is ever introduced.
-- **"No coach contribution data for the last 30 days" is shown whenever the data falls below the 30% threshold, not only when it is absent.** `coach.playerDetailNoContributions` (`en-US/index.js:270`, `de-DE/index.js:301`, `fr-FR/index.js:34-35`) renders whenever every per-skill top contributor is under 30% — i.e. real contribution data exists, it just did not clear the display threshold. The story's own spec demonstrates the case: `CoachPlayerDetailPageSpec.js:150-165` feeds a genuine 10% contribution and expects that exact string. Settle together with the threshold-duplication item above, since both turn on the same constant: either reword the three strings to something threshold-aware ("No coach contributed more than 30% of any skill in the last 30 days") or distinguish the genuinely-empty case (`coachContributions.length === 0`) from the filtered-to-empty case in the page. **[RESOLVED by `skillars-deferred-152-store-error-i18n-sweep-contribution-threshold-dedup-and-coach-roster-fixes` (implemented 2026-10-16), AC2 — resolved via the "distinguish the cases" option: `coach.playerDetailNoContributions` (genuinely no data) now has a sibling `coach.playerDetailContributionsBelowThreshold` (data exists, below 30%) in all three locale bundles, with `CoachPlayerDetailPage.vue` selecting between them; `development.portal.noContributionsState`/`contributionsBelowThresholdState` do the same for the new `ParentDevelopmentPortalPage.vue` consumer. Closed.]**
 - **`playerName` travels in the URL query string, putting a minor's name in browser history, bookmarks and referrers.** `MyPlayersPage.vue:107-113` pushes `query: { playerName: player.playerName }` and `CoachPlayerDetailPage.vue:91-93` reads it back. This was a deliberate AC5 design decision — it mirrors `SessionPrepCard.vue`'s precedent of taking `playerName` from data the parent already has rather than adding a fetch, and it is why no extra round-trip exists — so it is recorded, not reopened. The privacy cost is real though: this product's players are minors, and a shared or screenshotted URL leaks a name that a bare `playerId` would not. Revisit if a player-name lookup becomes available on a call the page already makes (e.g. adding `playerName` to the `/exposure` response), at which point the query param can become a presentational hint rather than the only source.
 - **No param constraint on `coach/players/:playerId`.** `routes.js:167-172` accepts any string, so a typo'd sub-path under `/coach/players/` resolves to the detail page and issues API calls with a garbage id rather than falling through to a 404. A `:playerId(\\d+)` constraint would turn it into a routing miss. Low value on its own; worth folding into any future pass that adds param constraints across the router, since no other route in `routes.js` constrains its params either — this is a repo-wide convention gap, not a defect this story introduced.
 
