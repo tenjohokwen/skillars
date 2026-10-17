@@ -302,6 +302,15 @@ public class ReviewSubmissionService {
     // in practice at review time, by design, but that made it silent-by-default too -- this log
     // line is the one thing standing between "unreachable in practice" and "unreachable, but we
     // would never find out if that stopped being true").
+    //
+    // skillars-deferred-154 AC4: since the ownership predicate moved INTO the repository query
+    // (a JOIN against PlayerProfile's current parentId/userId, replacing the old
+    // (b.parentId = :authorId OR b.playerId = :authorId) filter), every row in a capped result is
+    // now correctly-owned by construction -- the warning below no longer means "the owned
+    // playerId may have been truncated," only "this author has at least 50 distinct, currently-
+    // owned children with this coach." (code review 2026-10-17: "at least," not "more than" --
+    // the guard is `size() >= CAP` and `limit 50` means size() can never EXCEED 50, so the branch
+    // fires at exactly 50 too, which is in fact the only value it can ever observe.)
     private static final int QUALIFYING_BOOKINGS_CAP = 50;
 
     private ReviewEligibilityDto evaluateEligibility(UUID coachId, Long authorId, Instant sinceAfter) {
@@ -313,8 +322,8 @@ public class ReviewSubmissionService {
             bookingRepository.findQualifyingCompletedBookings(coachId, authorId, maturedBefore, sinceAfter);
         if (qualifying.size() >= QUALIFYING_BOOKINGS_CAP) {
             log.warn("findQualifyingCompletedBookings hit its {}-row cap for coachId={}, authorId={} -- "
-                    + "the owned playerId may have been truncated if it sorts above the cap",
-                QUALIFYING_BOOKINGS_CAP, coachId, authorId);
+                    + "this author has at least {} distinct, currently-owned children with this coach",
+                QUALIFYING_BOOKINGS_CAP, coachId, authorId, QUALIFYING_BOOKINGS_CAP);
         }
 
         boolean eligible = false;

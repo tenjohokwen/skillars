@@ -127,17 +127,17 @@ const routes = [
         // Dual-role (Deferred-82 AC3): a self-registered PLAYER can now reach their own
         // session-pack dashboard too. The `parent/` prefix is retained for route/code reuse
         // with the parent-managed-player flow, not because this destination is parent-only.
-        path: 'parent/players/:playerId/packs',
+        path: 'parent/players/:playerId(\\d+)/packs',
         component: () => import('pages/parent/SessionPackDashboardPage.vue'),
         meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
       },
       {
-        path: 'parent/players/:playerId/sessions',
+        path: 'parent/players/:playerId(\\d+)/sessions',
         component: () => import('pages/parent/ParentPlayerPortalPage.vue'),
         meta: { requiresAuth: true, role: 'PARENT' },
       },
       {
-        path: 'parent/players/:playerId/development',
+        path: 'parent/players/:playerId(\\d+)/development',
         name: 'parent-development',
         component: () => import('pages/parent/ParentDevelopmentPortalPage.vue'),
         meta: { requiresAuth: true, role: 'PARENT' },
@@ -166,7 +166,7 @@ const routes = [
         meta: { requiresAuth: true, requiresCoach: true },
       },
       {
-        path: 'coach/players/:playerId',
+        path: 'coach/players/:playerId(\\d+)',
         name: 'coach-player-detail',
         component: () => import('pages/coach/CoachPlayerDetailPage.vue'),
         meta: { requiresAuth: true, requiresCoach: true },
@@ -233,7 +233,7 @@ const routes = [
         // Dual-role (skillars-deferred-149 AC1): a self-registered PLAYER can now view their own
         // player subscription too — PlayerSubscriptionPage.vue gates the parent-only mutating
         // controls (cancel/subscribe/change-tier) on authStore.isParent for this role.
-        path: 'parent/player/:playerId/subscription',
+        path: 'parent/player/:playerId(\\d+)/subscription',
         name: 'player-subscription',
         component: () => import('pages/parent/PlayerSubscriptionPage.vue'),
         meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
@@ -275,13 +275,13 @@ const routes = [
         // Dual-role (skillars-deferred-148 Finding 4 correction): PlayerOwnershipGuard authorizes
         // both a self-registered PLAYER and a PARENT on their own/their child's player profile —
         // ParentPlayerPortalPage.vue's "View Locker Room" button depends on the PARENT half.
-        path: 'player/locker-room/:playerId',
+        path: 'player/locker-room/:playerId(\\d+)',
         name: 'player-locker-room',
         component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),
         meta: { requiresAuth: true, roles: ['PLAYER', 'PARENT'] },
       },
       {
-        path: 'player/development/:playerId',
+        path: 'player/development/:playerId(\\d+)',
         name: 'player-development',
         component: () => import('pages/player/PlayerDevelopmentDashboardPage.vue'),
         meta: { requiresAuth: true, role: 'PLAYER' },

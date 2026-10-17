@@ -1,6 +1,10 @@
 package com.softropic.skillars.platform.booking.repo;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
+import com.softropic.skillars.platform.security.contract.AgeTier;
+import com.softropic.skillars.platform.security.contract.PlayerPosition;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -8,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -28,6 +33,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 class BookingRepositoryIT extends AbstractIntegrationTest {
 
     @Autowired private BookingRepository bookingRepository;
+    @Autowired private PlayerProfileRepository playerProfileRepository;
 
     private static final List<String> STATUSES = List.of("REQUESTED");
 
@@ -201,12 +207,22 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
     // lowest 50 distinct playerIds, not an arbitrary Postgres-dependent subset, by seeding more
     // distinct qualifying playerIds than the cap and asserting the exact boundary.
     //
-    // Code review 2026-10-09 (Patch): also seeds four NEGATIVE-fixture rows with playerIds
-    // (-4..-1) that sort BELOW every matching row (1..55) but each violates exactly one WHERE
-    // filter (wrong coachId, wrong status, too-recent, too-old). Without these, the test cannot
-    // tell "the query filters correctly, then orders+caps" apart from a hypothetical "orders+caps
-    // first, filters after" bug -- the earlier version had no row that would surface such a bug,
-    // since every seeded row matched every filter.
+    // Code review 2026-10-09 (Patch): also seeds four NEGATIVE-fixture rows that each violate
+    // exactly one WHERE filter (wrong coachId, wrong status, too-recent, too-old). Without these,
+    // the test cannot tell "the query filters correctly, then orders+caps" apart from a
+    // hypothetical "orders+caps first, filters after" bug -- the earlier version had no row that
+    // would surface such a bug, since every seeded row matched every filter.
+    //
+    // skillars-deferred-154 AC4: REWRITTEN, not patched -- the query now inner-JOINs PlayerProfile,
+    // so every seeded row (matching or negative) needs a real player_profiles row behind its
+    // playerId, not a client-settable small integer (PlayerProfile.id is a TSID, @Tsid-generated).
+    // Seeds real PlayerProfile rows owned by authorId (via parentId), captures their ACTUAL
+    // generated ids, and asserts against those captured ids (sorted ascending) instead of a
+    // literal 1..50. Also adds the required new case: a booking whose playerId numerically
+    // coincides with authorId, with a non-matching parentId, proving it is excluded now that the
+    // dead `OR b.playerId = :authorId` branch is gone (it has no backing PlayerProfile row, so the
+    // new inner JOIN excludes it on its own — raw jdbcTemplate insert is legitimate here since
+    // booking.bookings carries no FK on player_id).
     @Test
     void findQualifyingCompletedBookings_ordersAndCapsDeterministically() {
         coachId = UUID.randomUUID();
@@ -215,9 +231,33 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
         Instant sinceAfter = now.minusSeconds(365 * 86_400L);
         Instant maturedBefore = now.plusSeconds(3600);
 
-        // 55 distinct qualifying playerIds (1..55), one booking each, all owned by the same
+        // player_profiles.parent_id carries an FK to main.user — unlike bookings' own
+        // coach_id/parent_id/player_id (see class comment above), a real PlayerProfile row behind
+        // the new inner JOIN needs a real owning user row underneath it.
+        insertAuthorUser(authorId);
+
+        // (code review 2026-10-17) The four negative fixtures' PlayerProfile rows are created FIRST,
+        // before the 55 matching ones, and that ordering is load-bearing. @Tsid ids are time-sorted
+        // and strictly ascending within a JVM, so creation order IS sort order. The pre-rewrite
+        // fixture used hardcoded playerIds -4..-1 specifically so the negative rows would sort BELOW
+        // every matching row (1..55) and therefore land inside the 50-row window if the query ever
+        // regressed to "order+cap first, filter after" -- that is the whole bug these four rows exist
+        // to catch. Creating them after the 55-row loop (as the first rewrite did) made their TSIDs
+        // the four HIGHEST of the 59, pushing them past the cap, where such a regression would no
+        // longer surface them and the comment below would be crediting them with discrimination they
+        // no longer had.
+        Long wrongCoachPlayerId = createPlayerProfile(authorId);
+        Long wrongStatusPlayerId = createPlayerProfile(authorId);
+        Long tooRecentPlayerId = createPlayerProfile(authorId);
+        Long tooOldPlayerId = createPlayerProfile(authorId);
+
+        // 55 distinct qualifying PlayerProfile rows, one booking each, all owned by the same
         // author (parentId = authorId) against the same coach, all COMPLETED and within window.
-        for (long playerId = 1; playerId <= 55; playerId++) {
+        List<Long> matchingPlayerIds = new java.util.ArrayList<>();
+        for (int i = 0; i < 55; i++) {
+            Long playerId = createPlayerProfile(authorId);
+            matchingPlayerIds.add(playerId);
+
             Booking booking = new Booking();
             booking.setParentId(authorId);
             booking.setPlayerId(playerId);
@@ -229,11 +269,14 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
             bookingRepository.save(booking);
         }
 
-        // Negative fixtures: each would sort ahead of every matching row (lowest playerIds of
-        // all, -4..-1) if the query's WHERE filter did not actually exclude it.
+        // Negative fixtures: each has a real, authorId-owned PlayerProfile behind its playerId
+        // (so the inner JOIN itself cannot be what excludes it) but violates exactly one other
+        // WHERE filter -- and each sorts BELOW every matching row (their profiles were created
+        // first, see above), so an "order+cap first, filter after" regression would pull them
+        // inside the 50-row window and turn the assertions below red.
         Booking wrongCoach = new Booking();
         wrongCoach.setParentId(authorId);
-        wrongCoach.setPlayerId(-4L);
+        wrongCoach.setPlayerId(wrongCoachPlayerId);
         wrongCoach.setCoachId(UUID.randomUUID()); // not this test's coachId
         wrongCoach.setRequestedStartTime(now.minusSeconds(7200));
         wrongCoach.setRequestedEndTime(now.minusSeconds(3600));
@@ -243,7 +286,7 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
 
         Booking wrongStatus = new Booking();
         wrongStatus.setParentId(authorId);
-        wrongStatus.setPlayerId(-3L);
+        wrongStatus.setPlayerId(wrongStatusPlayerId);
         wrongStatus.setCoachId(coachId);
         wrongStatus.setRequestedStartTime(now.minusSeconds(7200));
         wrongStatus.setRequestedEndTime(now.minusSeconds(3600));
@@ -253,7 +296,7 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
 
         Booking tooRecent = new Booking();
         tooRecent.setParentId(authorId);
-        tooRecent.setPlayerId(-2L);
+        tooRecent.setPlayerId(tooRecentPlayerId);
         tooRecent.setCoachId(coachId);
         tooRecent.setRequestedStartTime(now.plusSeconds(3600));
         tooRecent.setRequestedEndTime(now.plusSeconds(7200));
@@ -274,7 +317,7 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
 
         Booking tooOld = new Booking();
         tooOld.setParentId(authorId);
-        tooOld.setPlayerId(-1L);
+        tooOld.setPlayerId(tooOldPlayerId);
         tooOld.setCoachId(coachId);
         tooOld.setRequestedStartTime(sinceAfter.minusSeconds(7200));
         tooOld.setRequestedEndTime(sinceAfter.minusSeconds(3600));
@@ -288,16 +331,78 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
             return null;
         });
 
+        // skillars-deferred-154 AC4: the numeric-coincidence case -- a booking whose playerId
+        // happens to equal authorId's own numeric value, with a DIFFERENT parentId, so neither
+        // half of the old (b.parentId = :authorId OR b.playerId = :authorId) filter's dead second
+        // arm has any legitimate relationship to lean on. No PlayerProfile row exists with
+        // id = authorId (TSIDs are 18-19 digits; authorId is a small literal), so the new inner
+        // JOIN excludes it on its own.
+        UUID coincidenceBookingId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings "
+                    + "(id, coach_id, parent_id, player_id, status, requested_start_time, "
+                    + "requested_end_time, version, created_at, updated_at, canonical_timezone) "
+                    + "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
+                coincidenceBookingId, coachId, authorId + 999L, authorId,
+                java.sql.Timestamp.from(now.minusSeconds(7200)),
+                java.sql.Timestamp.from(now.minusSeconds(3600)),
+                java.sql.Timestamp.from(now.minusSeconds(86400)),
+                java.sql.Timestamp.from(now.minusSeconds(3600)));
+            return null;
+        });
+
+        // (code review 2026-10-17) Pins the ordering property the four negative fixtures' whole
+        // discriminating power rests on: each must sort BELOW every matching row, or an
+        // "order+cap first, filter after" regression would never surface them inside the 50-row
+        // window. @Tsid ids are time-sorted, so this holds only while their profiles are created
+        // before the 55-row loop above. Without this assertion that ordering is enforced by comment
+        // alone, and swapping the two blocks back disarms the fixtures silently — which is precisely
+        // what the first rewrite of this test did.
+        long lowestMatchingPlayerId = matchingPlayerIds.stream().min(Long::compareTo).orElseThrow();
+        assertThat(List.of(wrongCoachPlayerId, wrongStatusPlayerId, tooRecentPlayerId, tooOldPlayerId))
+            .allSatisfy(negativeId -> assertThat(negativeId).isLessThan(lowestMatchingPlayerId));
+
         List<BookingReviewEligibilityProjection> result =
             bookingRepository.findQualifyingCompletedBookings(coachId, authorId, maturedBefore, sinceAfter);
 
         List<Long> playerIds = result.stream().map(BookingReviewEligibilityProjection::getPlayerId).toList();
         assertThat(playerIds).hasSize(50);
         // ORDER BY b.playerId ascending + limit 50 must deterministically select the 50 lowest
-        // distinct MATCHING playerIds (1..50) -- none of the four negative fixtures (-4..-1),
-        // despite sorting ahead of every one of them.
-        List<Long> expected = java.util.stream.LongStream.rangeClosed(1, 50).boxed().toList();
+        // ACTUAL (TSID-generated) matching playerIds -- none of the four negative fixtures, and
+        // not the numeric-coincidence row (authorId itself, which has no PlayerProfile behind it).
+        List<Long> expected = matchingPlayerIds.stream().sorted().limit(50).toList();
         assertThat(playerIds).isEqualTo(expected);
+        assertThat(playerIds).doesNotContain(authorId);
+    }
+
+    private void insertAuthorUser(long userId) {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.\"user\" (id, created_by, created_date, last_modified_by, "
+                    + "last_modified_date, request_id, status, dob, email, first_name, gender, "
+                    + "lang_key, last_name, iso2_country, phone, activated, locked, login, "
+                    + "login_id_type, password_hash, otp_enabled, skillars_role, verification_status) "
+                    + "VALUES (?, 'system', ?, 'system', ?, 'test-req', 'ACTIVE', '1985-06-01', ?, "
+                    + "'Test', 'OTHER', 'en', 'Author', 'DE', ?, true, false, ?, 'EMAIL', "
+                    + "'not-a-real-hash', false, 'PARENT', 'BASIC_VERIFIED') "
+                    + "ON CONFLICT (id) DO NOTHING",
+                userId, java.sql.Timestamp.from(Instant.now()), java.sql.Timestamp.from(Instant.now()),
+                "booking.repo.it." + userId + "@skillars-test.com", "921" + (userId % 10000000),
+                "booking.repo.it." + userId + "@skillars-test.com");
+            return null;
+        });
+    }
+
+    private Long createPlayerProfile(Long parentId) {
+        PlayerProfile profile = new PlayerProfile();
+        profile.setName("Qualifying Player");
+        profile.setDateOfBirth(LocalDate.of(2012, 1, 1));
+        profile.setPosition(PlayerPosition.MIDFIELDER);
+        profile.setAgeTier(AgeTier.AGE_10_12);
+        profile.setParentId(parentId);
+        profile.setIndependentAccountAllowed(true);
+        return playerProfileRepository.save(profile).getId();
     }
 
     private Booking seedExisting() {

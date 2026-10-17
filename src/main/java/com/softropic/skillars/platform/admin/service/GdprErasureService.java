@@ -193,6 +193,14 @@ public class GdprErasureService {
     // assertConnectionPoolNotSaturated throw and any other exception not one of the three typed
     // reasons above (a GdprRequest/User "not found" RuntimeException, or anything unforeseen).
     private static final String UNCLASSIFIED_FAILURE = "UNCLASSIFIED_FAILURE";
+    // (code review 2026-10-17, skillars-deferred-154 AC2): the COACH branch's own session-recap
+    // anonymisation now has the same two-way classification the PLAYER branch has carried since
+    // skillars-deferred-129 — a lock_timeout trip on the unindexed coach_id scan vs. a genuine
+    // deadlock — distinguished by catch TYPE at the call site, not by cause inspection. Named for the
+    // coach branch rather than reusing the CHILD_* reasons above, which mean "one of N child player
+    // profiles" and would misdescribe this statement in the admin alert queue.
+    private static final String COACH_RECAP_LOCK_TIMEOUT = "COACH_RECAP_LOCK_TIMEOUT";
+    private static final String COACH_RECAP_CONTENDED = "COACH_RECAP_CONTENDED";
 
     // skillars-deferred-136 AC2: retryFailedErasures's own sweep sizing — mirrors
     // EmailRetryScheduler.MAX_RETRY_ATTEMPTS's shape, not its value. GDPR erasure failures are
@@ -287,6 +295,60 @@ public class GdprErasureService {
             cp.setCity(null);
             cp.setDistrict(null);
             coachProfileRepository.save(cp);
+
+            // skillars-deferred-154 AC2: booking.session_completion_data.{voice_note_text,
+            // what_we_did, whats_next} are coach-authored free text, but anonymizeByPlayerId (used
+            // by the PLAYER branch below) is keyed on playerId — a coach's own erasure never touched
+            // this table, so their authored recap text survived their own erasure indefinitely.
+            //
+            // (code review 2026-10-17, two findings) This statement runs in its OWN REQUIRES_NEW
+            // transaction rather than inline in eraseTransactional's, for two independent reasons:
+            //
+            // 1. setStatementLockTimeout issues set_config('lock_timeout', ?, true) — is_local = true
+            //    is TRANSACTION-scoped, NOT per-statement (see that method's own Javadoc: "issues the
+            //    transaction-scoped lock_timeout bound ahead of one statement group", and
+            //    deletePlayerDevelopmentData's: "transaction-local and covers every statement through
+            //    commit, this one included"). Set inline, the 5s bound would have silently governed
+            //    every remaining write in eraseTransactional — messageRepository.deleteAllBySenderId,
+            //    resolveOpenAlertsForDeletedMessages, the two coachReviewRepository writes,
+            //    markAllUsedByUserId, deleteExpiredByUserId, the terminal gdprRequestRepository.save,
+            //    and the commit-time flush of the main."user" and coach_profiles UPDATEs above — none
+            //    of which previously carried any lock_timeout at all on a COACH erasure. The PLAYER
+            //    branch's identical call site is safe only because it already sits inside
+            //    requiresNewTemplate, which is what confines the setting there; this call site did not.
+            // 2. session_completion_data carries no index on coach_id (only idx_scd_booking_id), so
+            //    this UPDATE is a sequential scan taking a row lock on every matching row — contention
+            //    is exactly why it needs the bound. But with no catch, a lock_timeout trip (55P03)
+            //    propagated straight out of eraseTransactional and rolled back the ENTIRE erasure —
+            //    user anonymisation, coach-profile anonymisation, the message/review deletes, the
+            //    PROCESSING status write — landing in GdprEventListener's generic catch, which only
+            //    markFailed + log.errors: no reason code, no AdminAlert, i.e. an unalerted FAILED.
+            //    Mirrors the PLAYER branch's own skip-and-alert instead: the recap anonymisation is
+            //    skipped and alerted, and the rest of the erasure still commits. The UPDATE is
+            //    idempotent and one-way, so the daily GdprErasureRetryScheduler simply re-runs it.
+            //
+            // raiseErasureAlert must stay OUTSIDE the requiresNewTemplate boundary — see its own Javadoc
+            // (skillars-deferred-135 AC1) for why catching inside it defeats the isolation entirely.
+            long coachRecapLockTimeoutSeconds = configService.getBoundedLong(
+                ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
+            try {
+                requiresNewTemplate.executeWithoutResult(status -> {
+                    setStatementLockTimeout(coachRecapLockTimeoutSeconds);
+                    sessionCompletionDataRepository.anonymizeByCoachId(cp.getId());
+                });
+            } catch (PessimisticLockingFailureException e) {
+                // CannotAcquireLockException (SQLSTATE 40P01, a genuine deadlock) is a SUBCLASS of
+                // PessimisticLockingFailureException and is not a lock_timeout trip — classify the two
+                // apart by catch type, exactly as the PLAYER branch does, so an operator triaging the
+                // alert queue can tell one hot statement from a real deadlock.
+                String reason = e instanceof CannotAcquireLockException
+                    ? COACH_RECAP_CONTENDED : COACH_RECAP_LOCK_TIMEOUT;
+                log.warn("[GDPR_ERASURE] COACH-branch coachId={} session-recap anonymisation failed "
+                        + "(reason={}) — skipping it; the rest of the erasure still commits and the "
+                        + "daily retry scheduler will re-run it. requestId={} userId={}",
+                    cp.getId(), reason, requestId, userId);
+                raiseErasureAlert(requestId, reason);
+            }
         });
 
         // Hard-delete messages (all rows including soft-deleted — Article 17)

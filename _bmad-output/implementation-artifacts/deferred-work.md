@@ -787,8 +787,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D4: `PerformanceReportsPanel` wrapped in extra `q-card` in parent portal may produce a double-card visual artifact — requires runtime visual verification [`ParentDevelopmentPortalPage.vue`]
 
 ## Deferred from: code review of skillars-6-5-video-privacy-rbac-account-deletion-cascades (2026-06-23)
-<!-- skillars-deferred-100 AC7: verified closed by AC3 at WORKTREE:src/main/java/com/softropic/skillars/platform/video/repo/VideoRepository.java:118 (version = version + 1 added; NativeModifyingVersionAuditTest guards); by AC5 at WORKTREE:src/main/java/com/softropic/skillars/platform/video/service/VideoLifecycleService.java:40 (READY removed from PROCESSING transitions) -->
-<!-- skillars-deferred-100 AC7 (2026-09-08): W3 (native @Modifying bypasses @Version) closed by AC3 — audit produced (Dev Agent Record), VideoRepository.resetLifecycleLockedAt gained `version = version + 1`, RefreshTokenRepository.markAllUsedByUserId allow-listed with reason, NativeModifyingVersionAuditTest guards new cases. W5 (PROCESSING→READY backward-compat bypass) closed by AC5 — READY removed from PROCESSING in VALID_TRANSITIONS; the two legitimate reconciliation-correction callers moved to VideoLifecycleService.reconcileToReady() (no bypass counter/WARN); belt-and-suspenders ERROR+counter+throw kept on the plain path. -->
 - W9: `canDelete(null, videoId)` belt-and-suspenders is a no-op for non-HTTP callers — null auth causes broad catch to swallow the re-check; `@PreAuthorize` is the primary enforceable gate; acceptable for current call sites [`VideoDeletionService.java:117`]
 
 ## Deferred from: code review of skillars-5-4-skills-radar-display-development-correlation (2026-06-19)
@@ -821,8 +819,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - W6: `SessionTemplate.blocks` null risk if `session.getBlocks()` null — `Session.blocks` is NOT NULL in DB so sessions should never have null blocks; constraint prevents [`SessionTemplateService.java:createTemplate`]
 
 ## Deferred from: code review of skillars-4-3-custom-drill-uploads (2026-06-17)
-<!-- skillars-deferred-100 AC7: verified closed by AC2 at WORKTREE:src/main/java/com/softropic/skillars/platform/video/service/ReconciliationWorkerScheduler.java:165 (sweepOrphanedProviderAssets) + src/main/java/com/softropic/skillars/platform/video/service/VideoService.java:314 (tracker.record) + src/main/resources/db/migration/V131__pending_provider_asset.sql -->
-<!-- skillars-deferred-100 AC7 (2026-09-08): W3 (crash/rollback after videoService.initializeUpload orphans the provider asset — reconciliation worker cannot find it) closed by AC2. VideoService.initializeUpload / retryUpload now write a `main.pending_provider_asset` row via PendingProviderAssetTracker (REQUIRES_NEW, survives the caller rollback) the instant the Bunny asset is created, acked in the same tx as the Video persist. ReconciliationWorkerScheduler.sweepOrphanedProviderAssets() purges rows older than app.video.orphan-asset.ttl with no matching videos.provider_asset_id via videoProviderAdapter.deleteAsset() (idempotent) and writes ReconciliationIncident(ORPHANED_ASSET, …) — its first producer. Included the [Note 2026-08-27] scoping this to the crash/rollback variant. -->
 - W8: AC 3 "configurable 60-min timeout" not specifically wired to drill uploads — inherits pre-existing `UploadSession.expiresAt` scheduler; not changed by this story [`platform.video` scheduler]
 - W9: `@TransactionalEventListener` silently drops events if called outside a transaction — hypothetical only; `DrillUploadService` is `@Transactional` so all call paths have a transaction [`VideoPhysicalDeletionListener.java`]
 
@@ -934,8 +930,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - Credentials visible in `/proc/<pid>/environ` when `.env` is sourced — project-wide pattern, not introduced by this story `[DECIDED 2026-09-10 (skillars-deferred-107 AC6): accept as won't-fix. Mechanism corrected by that story's code review: env-guard.sh bare-sources .env with no `set -a`, so the scripts hold the creds as UNEXPORTED shell vars — NOT in their own /proc/<pid>/environ. The real surfaces are the short-lived `PGPASSWORD=… docker exec -e` child's environ and the postgres/app container envs (via `docker compose --env-file`) — all root-only, single-tenant VPS, `.env` is root:root 0600, `deploy` user has no read. PGPASSFILE evaluated and rejected. See docs/deployment/secrets-reference.md#accepted-credential-exposure-surface and the pointer comments in pg-backup.sh / restore-from-dump.sh. The ps-aux argv half WAS fixed (skillars-deferred-94 AC1).]`
 
 ## Deferred from: code review of skillars-3-9-bulk-session-request-from-calendar (2026-06-16)
-<!-- skillars-deferred-100 AC7: W1 verified stale — closed by skillars-deferred-69 AC6 at 8af28a42:src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java:509 (+ :407); W2 verified closed by AC4 at WORKTREE:src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchStatusListener.java:31 (@Transactional REQUIRES_NEW readOnly) -->
-<!-- skillars-deferred-100 AC7 (2026-09-08): W1 deleted as STALE — closed by skillars-deferred-69 AC6 (verified at HEAD 8af28a42): both writers of booking_batches.status now take batchRepository.findByIdForUpdate(batchId) under lockRetryer.withBoundedRetry and share computeBatchStatus(...) — updateBatchStatusFromBooking (BookingBatchService.java:509) and acceptAll's trailing tx (:407). W2 closed by AC4 — BookingBatchStatusListener.onBookingStatusChanged is now @Transactional(propagation = REQUIRES_NEW, readOnly = true), giving the findById lookup an explicit boundary consistent with updateBatchStatusFromBooking's own REQUIRES_NEW; the batchId != null guard is kept. -->
 - W3: `parentName` null in `getParentBookings()` — pre-existing behavior, no AC requires parent name on parent's own bookings view [`BookingService.java`]
 - W4: `getCoachBookingRequests` derives `parentName` from first booking in batch — data invariant guaranteed at creation; reachable only via direct DB manipulation [`BookingService.java`]
 - W5: Confirm button in batch review dialog has no `hasCredits` guard — backend validates and returns error; Epic 7 will wire credit display to frontend [`BookingRequestPage.vue`] — **[AUDIT 2026-08-04: SUPERSEDED — not a defect. `BookingRequestPage.vue:249` now carries an explicit decision comment: "Do NOT gate on hasCredits: AC 3 allows booking via platform credit or full card payment." A warning banner (line 20) covers the UX. Retained only so the decision is not re-litigated.]**
@@ -970,12 +964,9 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 
 ## Deferred from: code review of skillars-7-3-cancellation-refund-reliability-strikes (2026-06-25)
 - D1: `buildSort()` has identical branches for "price" and "rating" — pre-existing; both fall back to `displayName`; price sort is applied in Java post-enrichment [`CoachSearchService.java:buildSort`]
-<!-- skillars-deferred-100 AC7: verified closed by AC1 at WORKTREE:src/main/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeService.java:85 (findByIdForUpdate under lockRetryer before the count/threshold/status decision; ReliabilityStrikeConcurrencyIT) -->
-<!-- skillars-deferred-100 AC7 (2026-09-08): D4 (concurrent strike issuance race — two simultaneous issue() calls both read count=N and both fire StrikeThresholdReachedEvent) closed by AC1. ReliabilityStrikeService.issue() now takes a PESSIMISTIC_WRITE lock on the coach row via lockRetryer.withBoundedRetry(() -> coachProfileRepository.findByIdForUpdate(coachId)) before the count/threshold/status decision; the count read moved under the lock so the loser blocks, re-reads status = PENDING_REVIEW/REDUCED, and its existing guard suppresses the duplicate event. ReliabilityStrikeConcurrencyIT covers it. -->
 - D5: `CoachCancellationHistory.createdAt` with `@Column(updatable=false)` + `@PrePersist` — in-memory entity is null until DB round-trip if ever used with batch `saveAll`; low risk given single-save usage [`CoachCancellationHistory.java`]
 
 ## Deferred from: code review of skillars-11-1-payment-path-parity-gaps (2026-08-03)
-- D5: `pausePack` holds a pessimistic row lock across booking cancellations and event publishing within one `@Transactional` method — same single-transaction shape as the legacy method this story mirrors. [`src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java`] **[CLOSED by skillars-deferred-136 AC3 — investigated and DISCLOSED-AND-DECLINED, not narrowed.** `BookingService.transition()` (reached via the cancellation loop) was read in full and confirmed to acquire exactly one lock, on the `booking` table's own single row — no lock-ordering hazard from other tables. But narrowing would also require moving the pre-existing "one pause per pack lifetime" (`purchase.getPausedUntil() != null`) check from the top of the method (read once, under the lock) to immediately before the final write, so a second concurrent `pausePack` on the SAME purchase can't pass that check under an unlocked read and only discover the conflict after already cancelling bookings — a second, independent correctness surface disproportionate to what D5 itself (a contention/timing concern, not a functional bug) asked for. Lock scope left exactly as-is; D1 and D8 fixed unconditionally instead per this AC's own disclosed-fallback path.]**
 - D9: Stringly-typed computed `status` field and hardcoded `CONFLICT_STATUSES` list rather than shared enums — consistent with existing codebase convention; legacy also uses string status constants. [`src/main/java/com/softropic/skillars/platform/payment/contract/SessionPackPurchaseResponse.java`, `PackSessionService.java`]
 
 ## Deferred from: code review of skillars-deferred-15-payment-pending-sweeper-accept-path-integrity (2026-08-05)
@@ -1011,40 +1002,9 @@ Found or deliberately left while implementing the story. The first item is an **
 
 ## Deferred from: code review of skillars-uat-3-payment-capture-integrity-and-backup-retention (2026-08-11)
 
-Adversarial code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor). 13 patch findings were resolved in the same pass; these 6 were deliberately left open. (`DisputeService`'s unguarded `findById` was independently raised by this review too — already tracked above as D5, not duplicated here.)
-
-- **`reserveCapture`'s `REQUIRES_NEW` + `PESSIMISTIC_WRITE` opens a second pooled connection per attempted reservation, held up to the 5s `lock.timeout` under contention**, with no discussion anywhere of connection-pool sizing. A burst of concurrent settle attempts against contended booking rows is a new resource-exhaustion vector this change introduces. Speculative and load-dependent — no load test exists either way. [`src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java:73-105`]
-  **[CLOSED by skillars-deferred-137 AC2 — see the D14 bullet below (2026-08-11) for the full fix
-  summary; same finding, same fix, restated across two overlapping review passes of this story.]**
-
-## Deferred from: code review of skillars-uat-3-payment-capture-integrity-and-backup-retention (2026-08-11)
-
 All 13 patch findings were applied; these are the review's own deferrals plus one item the patch round produced.
 
 - **D11 (from the patch round, not the review) — `PaymentPendingSweeper.sweepOne`'s row lock is justified by reasoning, not by a test.** The review correctly found that `sweepOne` decided on the *absence* of a payment row and then wrote one, while `reserveCapture` concurrently decided on the absence of the same row and inserted `CAPTURE_PENDING` — so an unlocked sweeper could commit `CHARGE_FAILED` over a granted reservation (`save()` on an assigned `@Id` with no `@Version` is a `merge()`, i.e. an UPDATE, not a failing INSERT). Fixed by re-reading under `findByIdForUpdate`, the same lock `reserveCapture` takes. **The IT written to prove it was deleted for passing unchanged against the unlocked code**: both threads start on one latch, but the sweeper first reads config and runs the stranded-booking query while `reserveCapture` goes almost straight to its insert, so the reservation committed first every time and the correct outcome came from the payment-row check rather than the lock. That the six existing `PaymentPendingSweeperTest` cases all broke when the lock landed does confirm the production path changed, but a mock swap is not proof of serialisation. The lock's read-then-write window is microseconds wide and not reachable from a test at this level; proving it would need either production instrumentation (a test-only hook inside `sweepOne`) or a DB-level fault injector, both of which are their own change. Recorded rather than left implicit, because this project has now three times found a lock whose test passed without it (`deferred-13`, `deferred-15`, and this one).
-
-- **D14 — `reserveCapture`'s `REQUIRES_NEW` + `PESSIMISTIC_WRITE` opens a second pooled connection per attempted reservation**, held up to the 5 s lock timeout under contention, with no pool-sizing analysis behind it. On the batch path that is one extra connection per credit-funded booking, taken sequentially. Load-dependent and speculative without a concurrency/load test, but it is a new resource pattern on the busiest path and should be measured before the platform carries real volume. [`BookingPaymentPersistenceService.java:73-105`]
-  **[CLOSED by skillars-deferred-137 AC2 — reused skillars-deferred-136's own `RoutingDataSource`
-  infrastructure (built explicitly "business-agnostic, reusable by any future module needing a second
-  dedicated pool") to add a second named target, `DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY`,
-  backed by a new `paymentRequiresNewHikariConfig` bean (`maximumPoolSize = 5`, anchored to this
-  codebase's own seeded `booking.batch.maxSize = 5` concurrency-scale convention since these three
-  methods run sequentially within one batch listener invocation; `minimumIdle = 1`, unlike the GDPR
-  pool's `0`, since this sees regular production traffic; `connectionTimeout = 5_000`, half the GDPR
-  pool's 10s, since `onBookingAccepted`/`onBatchBookingAccepted` run synchronously on the HTTP request
-  thread and a fast fail here keeps the accept responsive, deferring to the already-existing
-  `PaymentPendingSweeper` reconciliation path). By this story's own drafting, the risk surface had also
-  grown from one method (`reserveCapture` alone, as this bullet and the 2026-08-24 one below both
-  scoped it) to three (`persistPaymentFailure`, `declineBatchBooking` too) — all three closed together.
-  Required a self-invocation split (`reserveCapture`/`reserveCaptureTransactional`, mirroring
-  `GdprErasureService.erase`/`eraseTransactional`) since all three are called externally through the
-  Spring proxy, so the routing key must be set in a new non-`@Transactional` wrapper BEFORE the
-  `@Transactional(REQUIRES_NEW)` proxy advice opens its connection — a routing key set inside the
-  annotated method's own body runs too late. Verified via a new `BookingPaymentDataSourceRoutingIT`
-  (direct routing proof + a real dedicated-pool-exhaustion fail-fast-at-5s proof) plus regression runs
-  of `CaptureReservationIT`, `BatchPaymentIT`, `PaymentPendingSweeperIT`, `PaymentWebhookIdempotencyIT`,
-  and `BatchAcceptPaymentIT` — all green, confirming none of the three methods' observable
-  transactional behavior changed, only which pool their `REQUIRES_NEW` connection comes from.]**
 
 ## Deferred from: skillars-uat-5-player-self-booking story creation (2026-08-12)
 
@@ -1146,16 +1106,6 @@ above rather than duplicated here. This section holds only what the story-creati
 
 ## Deferred from: code review of skillars-deferred-58-coach-availability-write-lock-consistency-and-pack-deduction-failure-record-transactional-safety (2026-08-24)
 
-- `persistPaymentFailure`'s new `@Transactional(propagation = Propagation.REQUIRES_NEW)` holds two
-  concurrent physical DB connections per payment-deduction failure (the suspended caller transaction plus
-  this method's own new one) instead of one. Deferred: this is the same tradeoff this class's two existing
-  `REQUIRES_NEW` methods (`reserveCapture`, `declineBatchBooking`) already accept, not a new risk
-  introduced by this story; revisit only if connection-pool exhaustion during a real payment-gateway outage
-  is ever observed in practice.
-  [`src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java:206-207`]
-  **[CLOSED by skillars-deferred-137 AC2 — see the D14 bullet under skillars-uat-3's own code review
-  (2026-08-11) for the full fix summary; this bullet's own connection-pressure observation (all three
-  `REQUIRES_NEW` methods, not just one) is exactly what that fix closes.]**
 - `deferred-work.md` and `sprint-status.yaml` accumulate indefinitely via ever-longer single lines (one
   line in each file already exceeds 40,000 characters) rather than being pruned or archived. Deferred:
   pre-existing project-wide convention followed identically by every prior story in this ledger, not
@@ -2672,7 +2622,9 @@ each AC's own Context section in the story file.
 Surfaced by `/bmad-code-review` across four parallel layers (Blind Hunter, Edge Case Hunter,
 Acceptance Auditor, `/txn-and-concurrency-audit`). All originally-filed items (seven pre-existing/latent
 bullets plus the EXPLAIN/index-coverage confirmation) have since been closed and deleted outright —
-leaving only the three `[DECIDED: accepted risk]` bullets below.
+leaving only the two `[DECIDED: accepted risk]` bullets below (a third, the `markFailed`
+alerting/auto-retry gap, was itself fully closed by skillars-deferred-133 AC1 then
+skillars-deferred-136 AC2, and has been pruned per this file's delete-outright convention).
 
 - **`[DECIDED: accepted risk — skillars-deferred-126]` AC1's skew fix is half-applied: `next_retry_at`
   eligibility stays on the app clock, so a sufficiently-skewed instance can prematurely dead-letter a
@@ -2722,54 +2674,6 @@ leaving only the three `[DECIDED: accepted risk]` bullets below.
   rather than silently no-opping — a visible failure, not a silent one, so this dependency is
   self-alarming if it ever breaks.) Accepted as a low-value cleanup gap, not fixed, since AC1's own
   scope was the lock-serialization fix alone.
-
-- **`[DECIDED: accepted risk — skillars-deferred-127]` skillars-deferred-127 AC1's shared
-  `player_profiles` lock introduces a new path into `GdprErasureService.markFailed`'s pre-existing
-  lack of `AdminAlert`/auto-retry on failure.** Before AC1, a GDPR erasure had no `player_profiles`
-  lock check at all, so it could not fail on lock contention. After AC1, `deletePlayerDevelopmentData`
-  can now hit `PessimisticLockingFailureException` under genuine contention with a concurrent
-  `recalculateComposite` — most severely, `recalculateComposite` can hold the same lock for up to
-  `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s configured ceiling (120s), while the erasure's own
-  `PessimisticLockRetryer` budget is only ~3.2s, so a genuinely contended erasure that previously
-  always succeeded can now fail fast. `GdprEventListener.onErasureRequested`'s catch routes this to
-  `markFailed`, which only `log.error`s — no `AdminAlert`, nothing auto-re-drives a `FAILED` request.
-  The user can manually re-submit (the transaction rolled back; they were never anonymised or locked
-  out, and `GdprRequestService.requestErasure` only blocks on `PENDING`/`PROCESSING`), but the failure
-  is silent to admins. **Not a gap AC1 introduces from scratch** — `markFailed`'s lack of alerting is
-  pre-existing and applies to every erasure-failure cause today, not just this new one — but this is
-  the first ledger record of it, and AC1 gives it a new, previously-nonexistent trigger path. Accepted
-  as documented, not fixed: building `AdminAlert` machinery across every `markFailed` cause is a
-  separate, larger concern for a future story, out of AC1's own scoped fix.
-  **[CLOSED by skillars-deferred-133 AC1 Fix 1 — alerting only, auto-retry stays open.]** `markFailed`
-  now raises a `GDPR_ERASURE_DEADLINE` alert (reason `UNCLASSIFIED_FAILURE`) unconditionally — via a new
-  `insertErasureAlertIfAbsent` helper extracted from `raiseErasureAlert`, called directly inside
-  `markFailed`'s own `REQUIRES_NEW` transaction (not through `raiseErasureAlert` itself, which would open
-  a second, concurrently-held connection from the same pool — the very failure mode
-  `skillars-deferred-132` AC1 Fix 4's pool-saturation pre-check exists to guard against). This also
-  widens `AdminQueueSummaryDto.gdprErasureDeadlines`/the `/queue?type=GDPR_ERASURE_DEADLINE` filter to
-  count non-deadline failures (pool saturation, missing-row cases) under the same bucket — an accepted,
-  disclosed semantic widening, not an oversight. **Auto-retry stays explicitly open** — a materially
-  bigger change (a re-drive scheduler); `GdprRequestService.requestErasure`'s own "only blocks on
-  PENDING/PROCESSING" guard already lets a user manually re-submit a `FAILED` request today. **Byproduct
-  fix, found during this same AC:** `raiseErasureAlert`'s per-`(requestId, reason)` dedup (added by the
-  2026-09-23 code review) was incompatible with `admin_alerts_unique_open_per_ref`
-  (`(reference_id, type)`-only) — a PARENT erasure raising two different reasons for two different
-  children could violate that unique index uncaught, converting a designed skip-and-continue into a full
-  rollback. Reverted to a reason-blind dedup plus a `DataIntegrityViolationException` catch (mirroring
-  `AdminAlertEventListener.insertAlert`'s established pattern).
-  **[CLOSED by skillars-deferred-136 AC2 — the "auto-retry stays explicitly open" residual this bullet
-  named is now built.** A new `GdprErasureService.retryFailedErasures()` (thin `@Scheduled`/
-  `@SchedulerLock` wrapper `GdprErasureRetryScheduler`, daily `0 0 6 * * *`) re-drives `FAILED`
-  `GdprRequest` rows past a 1-hour grace window (`failed_at`, a new column stamped by
-  `markFailedStatusUpdate`) and under a 3-attempt retry cap (`retry_count`, also new — V154 migration),
-  reusing `erase()`'s own entry point/safety mechanisms and its identical
-  `catch (Exception e) { markFailed(...) }` failure path. Dedup guard mirrors
-  `GdprRequestService.requestErasure`'s own PENDING/PROCESSING precondition so the sweep never races a
-  concurrent manual resubmit. **Real bug found and fixed during this AC's own implementation, not by
-  static review:** the first version's re-query loop (blindly re-querying page 0 until empty) hung
-  indefinitely in a real IT run whenever the dedup guard persistently skipped a candidate — a skipped
-  row is left completely unchanged, so it re-matched the identical filter forever. Fixed by tracking
-  already-considered ids within one sweep invocation, guaranteeing termination.]**
 
 ## Deferred from: code review of skillars-deferred-127-gdpr-radar-lock-serialization-config-upsert-and-scheduler-pool-fixes (2026-09-21)
 
@@ -2840,73 +2744,6 @@ Acceptance Auditor, and `/txn-and-concurrency-audit` run as a fourth layer). All
 that review were either patched in-story or resolved as owner decisions — see the story's own
 `## Review Findings` section for the full set.
 
-- **[Narrowed by skillars-deferred-129 AC1, 2026-09-22] No `lock_timeout`/`statement_timeout` bounds
-  the inner GDPR erasure transaction's bulk deletes.** This bullet documented TWO distinct hazards.
-  **Hazard 1 — a blocked statement hanging indefinitely — CLOSED.**
-  `GdprErasureService.deletePlayerDevelopmentData` (current `HEAD`: `:487-527`, drifted from this
-  bullet's original `:436-453` citation) now issues `SELECT set_config('lock_timeout', ...)` after
-  taking its `player_profiles` lock, via a new `ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS`
-  runtime-tunable key mirroring `RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS`'s own bounds (2–120s). **Not a
-  method-level ceiling** — Postgres `lock_timeout` is per-STATEMENT, so this bounds each of the
-  method's ~12 fixed delete/scan statements individually (plus one `INSERT` per distinct
-  performance-report S3 key), and the method's honest real worst case is documented as `N ×` the
-  configured seconds on the method's own Javadoc, not a hard ceiling AC2's `gdprEraseLockBudget`
-  enforces on its own. **Corrected 2026-09-23 code review:** the original text here claimed empirical
-  confirmation across "either" the native-query path and the JPQL path, overstating what this
-  story's own new IT actually exercises — only ONE statement shape, the JPQL `@Modifying`/bulk-delete
-  path (via `PlayerTimelineRepository.deleteByPlayerId`, itself converted from a derived N+1-shaped
-  delete to a real bulk statement by this same AC), is contended by a test here. Empirically
-  confirmed BY THIS STORY's own new IT that a lock-timeout trip on that JPQL path surfaces as
-  `PessimisticLockingFailureException` with cause `org.hibernate.PessimisticLockException`; the
-  equivalent claim for a native-query statement rests on the pre-existing
-  `RadarCompositeCalculationServiceConcurrencyIT` precedent (a different method's native
-  `INSERT ... ON CONFLICT`, not re-verified by this story) — **and further empirically discovered, correcting this
-  AC's own original assumption, that a genuinely-contended `player_profiles` lock ACQUISITION
-  failure (`PessimisticLockRetryer`'s own retry-budget exhaustion) surfaces with the IDENTICAL cause
-  class**, since both share Postgres SQLSTATE `55P03` — cause-inspection alone cannot discriminate
-  the two failure modes; a dedicated `DeleteStatementLockTimeoutException` marker, thrown only for a
-  failure downstream of the lock already being held, is what actually does. Both the PARENT-branch
-  and (newly, this AC) the PLAYER-branch call sites catch this distinctly from a genuine
-  `player_profiles` lock-acquisition contention, raising a new `CHILD_DELETE_LOCK_TIMEOUT`
-  `AdminAlert` reason distinct from the pre-existing `CHILD_CONTENDED`.
-  **Hazard 2 — the inner `REQUIRES_NEW` transaction's own pooled-*connection-acquisition* wait, up
-  to `connection-timeout: 30000` (three times AC2's ~10s `gdprEraseLockBudget`) — remains genuinely
-  open.** `lock_timeout` has no effect on a connection-pool acquisition wait; this story does not
-  touch it. Still annotated `[DECIDED: accepted risk — skillars-deferred-128]` for the single-child
-  hold-time residual this hazard is part of; revisit if a future story is asked to bound
-  connection-acquisition wait directly.
-  **[AUDIT 2026-09-23 (skillars-deferred-130): re-confirmed `[DECIDED: accepted risk —
-  skillars-deferred-128]` for a fourth consecutive story.** Investigated as a possible AC and declined
-  as a code-change item (owner decision, `AskUserQuestion`, this story's own creation session) after
-  discovering the "scoped connection-timeout override" originally imagined as a small fix is not one:
-  HikariCP has no per-call-site connection-acquisition-timeout override through the standard
-  `DataSource.getConnection()` path Spring's transaction manager uses (`connection-timeout` is
-  pool-wide only). The only real fix shape is a second, dedicated `HikariDataSource` scoped to
-  `deletePlayerDevelopmentData`'s own `REQUIRES_NEW` transaction — which would also need separate
-  wiring for the Testcontainers `@ServiceConnection` test path (`DataSourceConfig`'s custom
-  `HikariConfig` bean is entirely skipped there, per `datasource.container=true`) to even be
-  exercisable by `GdprErasureIT`. Extends this bullet's own "revisit if" condition with that concrete
-  finding.]**
-  **[CLOSED by skillars-deferred-136 AC1 — the dedicated `HikariDataSource` this bullet's own audit
-  named as the only real fix shape is now built, but NOT via the mechanism originally sketched.** A
-  pre-implementation spike (a `JpaTransactionManager` built against a deliberately-unreachable
-  `DataSource` but the app's real, shared `EntityManagerFactory`) empirically disproved "swap in a
-  second `PlatformTransactionManager` sharing the existing `EntityManagerFactory`" — Hibernate binds
-  one `EntityManagerFactory` to one `ConnectionProvider`/`DataSource` at bootstrap, so that design
-  would have left the dedicated pool completely unused. Built instead via a `RoutingDataSource`
-  (`infrastructure.config`, wraps `AbstractRoutingDataSource`) as the app's single `DataSource` bean,
-  routing to a small dedicated pool (max 3, `connection-timeout` 10s vs. the primary's 30s) via a
-  `ThreadLocal` key (`RoutingDataSourceContext`) set immediately before `erase()`'s/
-  `deletePlayerDevelopmentData`'s own `REQUIRES_NEW` acquisitions and cleared after — `initTemplates()`
-  itself was NOT changed. `assertConnectionPoolNotSaturated` updated to check the dedicated pool
-  specifically (it silently checked nothing once `dataSource` stopped being a plain `HikariDataSource` —
-  caught by the existing `GdprErasureIT` pool-saturation tests, not by inspection).
-  `TestConfig.java` gained the equivalent routing wiring (`datasource.container=true`), replacing its
-  prior reliance on Boot's own `JdbcConnectionDetails`-driven auto-configuration for the primary pool.
-  New `GdprErasureDataSourceRoutingIT` proves the dedicated pool is genuinely used
-  (`HikariPoolMXBean.getActiveConnections()` delta) and independently bounded (a saturation test fails
-  at ~10s, not the primary's 30s).]**
-
 ## Last audit: 2026-09-23 (skillars-deferred-130 dev-story completion)
 
 `skillars-deferred-130` closed out the "`platform.marketplace`/`platform.reviews` never audited"
@@ -2955,45 +2792,6 @@ Surfaced by `/bmad-code-review`'s four parallel layers (Blind Hunter, Edge Case 
 Auditor, and `/txn-and-concurrency-audit` as an owner-requested extra layer). These five were
 consciously **not** fixed in that story. The blocking/major findings from the same review were
 patched or resolved in-story — see that story's own `## Review Findings` section.
-
-- **D1 — GDPR erasure has no method-level wait ceiling; worst case is `(12 + M) × seconds` per
-  child.** `GdprErasureService.deletePlayerDevelopmentData` (`set_config` at `:596-598`, the twelve
-  bounded statements at `:610-640`). Postgres `lock_timeout` is per-STATEMENT, so the configured
-  value is spent independently by each of the twelve fixed statements plus one outbox `INSERT` per
-  non-null `storage_key` (`M`, unbounded). At the default `5s` that is ≥60s for one child; at
-  `ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS`'s permitted `max = 120L` it is ≥24
-  minutes — on the admin's HTTP request thread (`GdprEventListener.onErasureRequested` is a plain,
-  non-`@Async` `AFTER_COMMIT` listener), holding two pooled Hikari connections and an exclusive lock
-  on the already-anonymised `main."user"` row. `eraseParentChildren`'s `gdprEraseLockBudget` (10s) is
-  sampled only *between* children (`:361`) and cannot interrupt this. **Owner-decided, not an
-  oversight:** story review 2026-09-22 (`AskUserQuestion`) explicitly chose the simpler per-statement
-  bound over porting `RadarCompositeCalculationService`'s cumulative spend-down mechanism
-  (`:259-286` there), and the story documents the `N × seconds` arithmetic honestly rather than
-  overclaiming a ceiling. The change strictly improves on the prior *unbounded* wait. **Revisit if**
-  the bound is ever raised above the default in production, or if erasure moves off the request
-  thread — the fix shape is to re-issue `set_config` before each delete with
-  `min(configured, remaining)` against a running total, bailing once it would fall below the `2s`
-  floor. Bounding `M` (projection + `Pageable` cap, reconcile the remainder on a sweeper) is a
-  separate, smaller win.
-  **[CLOSED by skillars-deferred-137 AC1 — ported `RadarCompositeCalculationService`'s own cumulative
-  spend-down mechanism into `deletePlayerDevelopmentDataInDedicatedPool`: the ~12+M statements are
-  batched into four logical groups (timeline/SLU, radar, performance-report/homework, blob-enqueue),
-  each re-issuing `set_config` with a timeout shrunk to `remainingBudget / groupSize`, bounded overall
-  by a new `cumulativeLockWaitBudget` field (`Duration.ofSeconds(GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.max())`,
-  120s default — a plain field, not `static final` like Radar's, specifically so a test can shrink it
-  via `ReflectionTestUtils` rather than waiting out a real 120s budget). A group whose shrunk timeout
-  would fall below the 2s floor throws a new `CumulativeLockBudgetExhaustedException`, distinguished
-  from a single-statement `DeleteStatementLockTimeoutException` trip by its own `CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED`
-  alert reason at both call sites. A mid-child bail-out has NO partial-commit risk (a genuine finding
-  during implementation, correcting this bullet's own "revisit if" framing): the whole method already
-  runs inside one `requiresNewTemplate` REQUIRES_NEW transaction, so any bail-out rolls back every
-  statement this child's call already executed, not just the remaining ones — the re-drivability
-  concern this bullet worried about does not actually apply. Verified via 3 new deterministic unit
-  tests (`GdprErasureServiceTest`, shrinking the budget directly) plus a new real-Postgres IT
-  (`GdprErasureIT.erase_selfRegisteredPlayer_cumulativeLockWaitBudgetExhausted_bailsOutThenReDriveCompletesCleanly`)
-  proving a bailed-out child survives untouched and cleanly re-drives. All 34 existing `GdprErasureIT`
-  tests plus 12 `GdprErasureServiceTest` tests pass unmodified, confirming the single-statement
-  `lock_timeout` path is unchanged.]**
 
 - **D2 — Declared config bounds and enforced config bounds are stated in two places and can
   diverge.** `GdprErasureService` calls `configService.getBoundedLong(KEY.key(), 5L, 2L, 120L)`,
@@ -3107,62 +2905,6 @@ implementation. Each was independently re-verified against real source. None is 
   `AuthorRole` itself unchanged, would let a coach author a review as `AuthorRole.PARENT`, overlapping
   the lock sets nobody reviewing that reorder would connect to GDPR lock ordering).]**
 
-- **`CoachReviewRepository.findByIdForUpdate` diverges from the documented NOWAIT + `PessimisticLockRetryer`
-  convention** (`CoachReviewRepository.java:23-25`) — it carries no `@QueryHints`, unlike
-  `CoachProfileRepository.findByIdForUpdate` (`:35-38`), whose `jakarta.persistence.lock.timeout = "0"`
-  (NO_WAIT) plus bounded retry is documented at `:28-34` as this codebase's deliberate contention
-  strategy. No runtime `lock_timeout`/`statement_timeout` is set anywhere in `src/main/resources`, so
-  `POST /api/reviews/{reviewId}/flag` now blocks for the full duration of any concurrent admin
-  `approveReview`/`blockReview` or author `updateReview` transaction on that review, and flaggers of one
-  hot review fully serialize. **[DECIDED 2026-09-23 (owner, `AskUserQuestion`, code review of
-  skillars-deferred-130): accepted for now.** `flag()` stays consistent with the reviews module's three
-  existing blocking lockers (`ReviewSubmissionService.updateReview`, `AdminReviewService.approveReview`/
-  `blockReview`, `ReviewModerationService`). Adding NOWAIT means changing a shared repository method used
-  by four call sites, wrapping each in `PessimisticLockRetryer`, and adding a contention test per site —
-  module-wide work that does not belong in a narrow lock-fix story. Revisit if flag-endpoint latency or
-  admin-moderation contention is observed in production, or when the reviews module is next opened for a
-  locking change.**]
-
-  Note the blocking (not NO_WAIT) semantics are also what make the `FOR KEY SHARE` → `FOR UPDATE`
-  upgrade deadlock that skillars-deferred-130 AC1 Fix 1's ordering avoids a genuine PostgreSQL `40P01`
-  rather than a fail-fast `PessimisticLockingFailureException`.
-
-  **Triaged, NOT revisited (skillars-deferred-131 AC5, story-review audit M5-2):** this decision's own
-  stated revisit trigger — "when the reviews module is next opened for a locking change" — technically
-  fires, since Fix 5 is a locking-adjacent change to `flag()`. Revisited and left as-is: Fix 5 only moves
-  *when* the guards run relative to the lock (an ordering change, via an unlocked projection with no lock
-  of its own) — it does not touch the lock discipline itself (`findByIdForUpdate` is still a plain
-  blocking `FOR UPDATE`, still no `@QueryHints`). The module-wide cost this decision named (changing a
-  shared repository method used by four call sites, wrapping each in `PessimisticLockRetryer`, a
-  contention test per site) is unchanged and still does not belong in this story's scope. The trigger
-  remains armed for a future story that actually touches this lock's discipline.
-  **[Trigger partially discharged by skillars-deferred-132 AC1 Fix 2 (skillars-deferred-133 AC4
-  annotation — NOT `[CLOSED by ...]`, which would overstate what actually happened).** `flag()` no
-  longer blocks — it now takes a separate `findByIdForUpdateNoWait` method
-  (`CoachReviewRepository.java:39`), used only by `flag()`. The shared `findByIdForUpdate` method this
-  ledger item is actually about is unchanged, and still blocks (correctly, per this same decision) at
-  its other 5 call sites, re-verified against current `HEAD`: `ReviewSubmissionService.java:129,:164`,
-  `ReviewModerationService.java:102`, `AdminReviewService.java:81,:121`. The module-wide NOWAIT
-  conversion this decision's own cost estimate described remains armed for whichever of the two
-  original triggers fires first — sustained production contention (still cannot fire; no production
-  deploy of this application has ever happened, per skillars-deferred-117) or the reviews module's
-  locking discipline being opened again.]**
-  **[CLOSED by skillars-deferred-135 AC3 — the remaining 5 call sites converted to
-  `findByIdForUpdateNoWait` + `PessimisticLockRetryer.withBoundedRetry`, matching `flag()`'s own
-  precedent exactly: `AdminReviewService.approveReview`/`.blockReview`, `ReviewSubmissionService
-  .updateReview`/`.submitCoachResponse`, `ReviewModerationService.handleReviewSubmitted`. The
-  `ReviewModerationService` site — flagged by `findByIdForUpdateNoWait`'s own comment as possibly
-  needing genuinely blocking semantics — was empirically confirmed safe first, via a new dedicated
-  `ReviewModerationServiceConcurrencyIT` racing it against a REAL concurrent
-  `AdminReviewService.blockReview` call during the Gemini "thinking time" window: the admin's decision
-  correctly survives (the existing PENDING-only guard discards the stale verdict once NOWAIT+retry
-  finally lets it land), so all 5 sites converted, not 4. `PessimisticLockRetryerCallSiteAuditTest
-  .EXPECTED_CALL_SITE_COUNT` bumped 34→39. One pre-existing test
-  (`AdminReviewQueueIT.blockReview_whenAConcurrentBlockCommitsFirst_readsFreshStateAndRefuses`) assumed
-  genuinely-blocking semantics (a 5-second `Future.get` timeout) and needed restructuring to
-  `ConcurrencyLockWaitSupport`'s own bounded-delay-then-post-hoc-retry-proof pattern — the property it
-  proves (fresh-state read after contention, no duplicate audit row) is unchanged.]**
-
 ## Last audit: 2026-09-23 (skillars-deferred-131 dev-story completion)
 
 All eight bullets under `## Deferred from: code review of skillars-deferred-130-...` (2026-09-23, tail
@@ -3216,6 +2958,12 @@ disjoint row sets), the M5-2 NOWAIT-conversion trigger (armed, not pulled), the 
 and Fix 4's residual slow-`publishProfile` Stripe-orphan window (rarer post-fix, not eliminated — the
 durable remedy is a separate compensating-action/reconciliation-sweep story). Nothing else from this
 story's own scope remains open.
+**[CLEANUP 2026-10-17: struck M5-2 (closed by `skillars-deferred-135` AC3 — all remaining
+`CoachReviewRepository.findByIdForUpdate` call sites converted to NOWAIT + `PessimisticLockRetryer`),
+M6 (closed by `skillars-deferred-132` AC3 Fix 10 — both call sites now reference `ConfigBounds`
+constants by key), and Fix 4's residual (closed by `skillars-deferred-135` AC2's
+`reconcileStripeSubscriptions` sweep, which detects exactly this orphan shape) from this list — all
+three are now closed.]**
 
 ## Last audit: 2026-09-24 (skillars-deferred-132 dev-story completion)
 
@@ -3267,6 +3015,9 @@ and Fix 6's own known residual (the `ConditionTimeoutException` catch-and-procee
 task's race window open). Nothing else from this story's own scope remains open.
 **[CLEANUP 2026-09-26: struck "the Stripe → payment reconciliation sweep (a separate story)" from this
 list — it was built by `skillars-deferred-135` the following day, so it is no longer open.]**
+**[CLEANUP 2026-10-17: struck the `BoundedKey` missing-`default` residual — closed the same day by
+`skillars-deferred-133` AC2, which populated `defaultValue` for all 18 `HAS_CODE_DEFAULT` keys plus a
+`0L` sentinel for the rest.]**
 
 ## Last audit: 2026-09-24 (skillars-deferred-133 dev-story completion)
 
@@ -3390,6 +3141,11 @@ residual (alerting-only fix, narrower than the ledger's original ask); AC3's rem
 (detection latency, player-side orphans — the latter a final decision, not open work;
 `handleInvoicePaymentFailed` itself closed by skillars-deferred-134 AC2).
 Nothing else from this story's own scope remains open.
+**[CLEANUP 2026-10-17: struck M5-2's module-wide NOWAIT conversion — closed by `skillars-deferred-135`
+AC3, which converted the remaining 5 `CoachReviewRepository.findByIdForUpdate` call sites to
+`findByIdForUpdateNoWait` + `PessimisticLockRetryer`, matching `flag()`'s own precedent. AC1's
+auto-retry residual and AC3's detection-latency residual are discussed and deliberately left open by
+`skillars-deferred-153`'s own story-creation decision (2026-10-17) — see that story file.]**
 
 **[CLEANUP 2026-09-26: `## Deferred from: code review of skillars-deferred-136-...` section removed —
 its sole bullet (`TestConfig`'s new dedicated-pool `DataSource` bean adding connection-pool pressure on
@@ -3450,18 +3206,6 @@ does — silently discarding `application-test.yaml`'s own already-tuned `maximu
 
 **[CLOSED by skillars-deferred-142: `OtpPage.vue`'s post-OTP fallback now uses `routeForRole(authStore.role)` (verified at `OtpPage.vue:162`), and `VideoManagementPage.vue`'s 403 handler now retargets to `/player/dashboard` (verified at `VideoManagementPage.vue:108`) — both of the two items this section originally listed.]**
 
-- **`/dashboard` is `DEFAULT_ROUTE` for any unmapped or null role, which now has no nav link at all.**
-  `routeForRole()` (`roleRoutes.js:21-29`) falls through to `/dashboard` for a role absent from
-  `ROLE_ROUTES`, and deferred-141's AC1 made that page's only nav entry admin-only.
-
-  **Currently unreachable, by verification:** `SkillarsRole` is `{COACH, PARENT, PLAYER, ADMIN}` only,
-  `AuthService` falls back to `"ADMIN"` when role is null, and `hydrateFromCookie` requires both `id` and
-  `role`. `ROLE_LTD_ADMIN`/`ROLE_USER` exist as Spring authorities but are never emitted into the `skp`
-  cookie the frontend reads. The "Main" nav section also never goes empty — `/profile` stays ungated.
-
-  **When picked up:** if a fifth role is ever added, either give it a `ROLE_ROUTES` entry or restore a
-  role-appropriate nav entry for `DEFAULT_ROUTE`. No action needed while the enum holds at four.
-
 ---
 
 ## Deferred from: code review of skillars-deferred-143 (2026-10-05)
@@ -3492,10 +3236,6 @@ _Line citations below are anchored to commit `df8e4501`+ (post-patch). They were
 
 - **`[deferred-19]` reset mean moved 14.0 → 15.8 ms (+12.5%) between runs `37530194292` and `37574001244`** on identical invocation counts (1199 both times, +2.1 s total). Surfaced in skillars-deferred-146's own Completion Notes table but never remarked on. Most likely shared-runner variance; unexamined. Worth a glance if the number keeps climbing, since this story's premise is that the reset is no longer a cost worth optimising. **[AUDIT 2026-10-07: a third data point, pulled from the run on the actually-merged commit (`37584051185`, head `3e326217`): `1199 invocations, 19231 ms total, 16.0 ms mean` — so 14.0 → 15.8 → 16.0 across three consecutive runs of byte-identical reset code.** Still consistent with runner drift rather than a regression, but it is now a trend across three runs rather than a single-pair difference, and it is the main evidence that the failsafe shortfall in the first bullet of the audit section below is variance too. Re-check on the next few PR builds.]**
 
-## Deferred from: code review of skillars-deferred-150 (2026-10-09)
-
-- **Make `findQualifyingCompletedBookings` correct-by-construction instead of bounded.** The `limit 50` added by skillars-deferred-150 AC3 is safe only because 50 is unreachable in practice; it is not correct by construction. The ownership test lives in Java (`ReviewSubmissionService.java:308`), strictly after truncation, so a caller whose owned `playerId` sorts above the 50 lowest qualifying ids gets a reproducible false `NO_QUALIFYING_SESSION`. `booking.bookings` has no FK on `player_id`, so orphaned ids really can occupy cap slots. Considered and rejected during the -150 code review (2026-10-09) in favour of keeping the bound plus a truncation `log.warn`: the bound is unreachable at current data volumes and the change would have enlarged an otherwise-complete six-AC diff. Closing it properly means pushing the parent/self ownership predicate into the query (join `player_profiles`, or pass the caller's owned playerIds in) and reworking the loop at `:302-312`, which currently also absorbs orphaned playerIds. Revisit if the truncation warning ever fires.
-
 ## Deferred from: bmad-quick-dev coach UI-gap scan (2026-10-14)
 
 User asked to find and expose backend coach functionality missing from the UI. Investigation (`Explore` agent, full controller sweep cross-referenced against `src/frontend`) found four independently-shippable orphaned features. User selected all four to build; scoped as separate sequential goals rather than one spec. First goal (coach booking cancel / no-show reporting) shipped separately; the other three (reviews self-service, session-pack tier management, report branding) shipped via skillars-deferred-151.
@@ -3509,9 +3249,64 @@ Also found but explicitly out of scope for this pass (not coach-specific, or lik
 ## Deferred from: code review of skillars-12-4-coach-facing-player-detail-page (2026-10-16)
 
 - **`playerName` travels in the URL query string, putting a minor's name in browser history, bookmarks and referrers.** `MyPlayersPage.vue:107-113` pushes `query: { playerName: player.playerName }` and `CoachPlayerDetailPage.vue:91-93` reads it back. This was a deliberate AC5 design decision — it mirrors `SessionPrepCard.vue`'s precedent of taking `playerName` from data the parent already has rather than adding a fetch, and it is why no extra round-trip exists — so it is recorded, not reopened. The privacy cost is real though: this product's players are minors, and a shared or screenshotted URL leaks a name that a bare `playerId` would not. Revisit if a player-name lookup becomes available on a call the page already makes (e.g. adding `playerName` to the `/exposure` response), at which point the query param can become a presentational hint rather than the only source.
-- **No param constraint on `coach/players/:playerId`.** `routes.js:167-172` accepts any string, so a typo'd sub-path under `/coach/players/` resolves to the detail page and issues API calls with a garbage id rather than falling through to a 404. A `:playerId(\\d+)` constraint would turn it into a routing miss. Low value on its own; worth folding into any future pass that adds param constraints across the router, since no other route in `routes.js` constrains its params either — this is a repo-wide convention gap, not a defect this story introduced.
 
-## Deferred from: code review of skillars-deferred-153 (2026-10-17)
+## Deferred from: code review of skillars-deferred-154 (2026-10-17)
 
-- **GDPR recap anonymisation is player-keyed only, so an erased coach's own authored free text survives.** `skillars-deferred-153` AC2 closed the player side of this gap: `SessionCompletionDataRepository.anonymizeByPlayerId(Long)` nulls `voice_note_text`/`what_we_did`/`whats_next`, called from `GdprErasureService.java:1198-1199` inside the per-child `deletePlayerDevelopmentData` and keyed on `player_id`. The coach-erasure branch anonymises only `coach_profiles` (`GdprErasureService.java:285-290`), and `session_completion_data.coach_id` is never used as an anonymisation key — so after a *coach* exercises erasure, that coach's own authored recap text, next-steps text and voice-note transcript remain in `booking.session_completion_data` indefinitely. This is the symmetric half of the gap AC2 closed, and was explicitly outside AC2's scope (which was scoped to the player side by its own source ledger bullet), so it is recorded rather than treated as a defect of that story. Note the row is deliberately not deleted in either case — anonymise-in-place is the chosen shape, because the row's presence is what signals "this booking completed." Revisit alongside any future pass on coach-side erasure completeness; the fix is a second `@Modifying` statement keyed on `coach_id`, inserted into the coach branch with its own lock-budget accounting.
-- **The coach-facing report list is player-keyed, so the widened read gate exposes other coaches' report PDFs on a contested relationship.** `ReportGenerationService.listReports` (`:252-272`) gates on `skillars-deferred-153` AC5's new 12-status `READ_RELATIONSHIP_STATUSES`, then returns `findByPlayerIdAndStatusOrderByGeneratedAtDesc(playerId, READY)` — keyed by player alone, never by coach — with a signed download URL per row. So a coach whose only relationship with that player is `DISPUTED`, `REFUND_PENDING`, `NO_SHOW_PLAYER`, `NO_SHOW_COACH` or `PAYMENT_PENDING` can list and download performance-report PDFs authored by *other* coaches about that child. Deferred by owner decision (2026-10-17 code review) rather than fixed in `skillars-deferred-153`, for three reasons: the cross-coach design is **pre-existing** — `listReports` was already player-keyed before that story, which widened only *who* reaches it; there is **no unilateral escalation path**, since a coach can self-reach only `ACCEPTED`, which the pre-existing narrow list already permitted; and the correct scoping is a **product question nobody has been asked** — whether an academy head coach seeing a colleague's report about a shared player is a deliberate feature or an oversight. The uncomfortable case is specifically `DISPUTED`: a coach in an active dispute retains access to the child's full report history. Revisit with that product call; the likely fix is filtering `listReports` to the requesting coach's own reports (or adding an explicit academy-scoped sharing rule), which is a behaviour change for *every* coach, including those who had access before AC5, and so needs its own story rather than a review patch. Cheap interim mitigation if the dispute case is judged unacceptable before then: keep this one call site on the narrow `ACTIVE_RELATIONSHIP_STATUSES`, accepting that the reports panel will 403 for a roster-visible player — the exact inconsistency AC5 exists to remove.
+- **The seven new `(\d+)` route constraints have zero test coverage, and seven existing page specs still
+  declare the params unconstrained.** `routes.js:130,135,140,169,236,278,284` now constrain `:playerId` to
+  digits, but no spec asserts that a non-digit segment falls through to the `/:catchAll(.*)*` 404
+  (`routes.js:389`). Worse, every page spec that exercises these routes builds its own test router with the
+  **unconstrained** pattern — `MainLayoutSpec.js:87-88`, `MyPlayersPageSpec.js:36`,
+  `CoachPlayerDetailPageSpec.js:44`, `ParentDevelopmentPortalPageSpec.js:39,71`,
+  `PlayerSubscriptionPageSpec.js:41`, `ParentPlayerPortalPageSpec.js:39,43`,
+  `PlayerDevelopmentDashboardPageSpec.js:34` — so a future regression that emits a non-digit `playerId`
+  renders green in every test and 404s in production. `routerGuardSpec.js` is the one exception: it imports
+  the real router, so it genuinely exercises the constraint. **Note this was a deliberate scoping decision,
+  not an oversight** — skillars-deferred-154 AC6 says of AC3: "A manual check (malformed
+  `/coach/players/abc` 404s instead of rendering) is sufficient; do not add a new test file." Revisit only
+  if a non-digit-param regression actually reaches production.
+
+- **`PlayerProfileBuilderPage` now 404s instead of rendering the locker room if `profile.id` is ever
+  absent.** `PlayerProfileBuilderPage.vue:66` pushes `/player/locker-room/${profile.id}` with no truthiness
+  guard — the only one of the four path-template call sites without one. `MainLayout.vue:357,360` guard with
+  `selfPlayerId.value ? … : null`, and `PlayerHomeRedirectPage.vue:39-42` carries an explicit
+  `if (id == null)` added by a prior review for exactly this reason. Before skillars-deferred-154 AC3 an
+  `undefined` id still matched the unconstrained route and rendered the placeholder page; it now matches
+  nothing and lands on `ErrorNotFound` with no error surfaced. Low likelihood: `boot/axios.js:141-142`
+  unwraps `response.data` and `CommonConfig.java:48` serialises `Long` via `ToStringSerializer`, so a 200
+  always yields a digit string.
+
+- **The widened `/dashboard` nav condition is negative-space, so it briefly fires for COACH/PARENT/PLAYER
+  during `logout()`.** `MainLayout.vue:126` is
+  `v-if="authStore.isAdmin || (!authStore.isCoach && !authStore.isParent && !authStore.isPlayer)"`.
+  `authStore.logout()` calls `clearUser()` synchronously *before* awaiting the network call
+  (`auth.store.js:41-53`), setting `role.value = null` — so for the duration of that await all four role
+  computeds are false, the condition is true, and the generic "Dashboard" link appears while the
+  role-specific sections disappear. Clicking it in that window hits `/dashboard`, whose `meta.requiresAuth`
+  now fails, bouncing to `/login`. **Not** reachable during initial load: `router/index.js:40-45` calls
+  `hydrateFromCookie()` synchronously inside `beforeEach` before the first navigation resolves, and
+  `auth.store.js:77-80` sets `userId` and `role` together, so there is no authenticated-but-roleless render
+  window at startup. An allow-list (`isAdmin || isAnonymousRole`) would express skillars-deferred-154 AC5's
+  stated intent without the negative-space side effect, and would also stop silently opting in any future
+  `SkillarsRole` value that this condition currently captures by default.
+
+- **A wrap-up submitted after a coach's GDPR erasure survives it permanently — the coach side has no
+  erased-at tombstone.** `BookingCompletionService.submitWrapUp` (`BookingCompletionService.java:129-174`)
+  is a plain `@Transactional` that INSERTs a fresh `booking.session_completion_data` row carrying
+  `voiceNoteText`/`whatWeDid`/`whatsNext`, taking no lock on `coach_profiles` and consulting no erasure
+  state. skillars-deferred-154 AC2's new `anonymizeByCoachId` bulk UPDATE cannot see a row committed after
+  it runs, and — unlike the player side — there is no `coach_profiles` equivalent of
+  `player_profiles.development_data_erased_at` (`PlayerProfile.java:66-68`,
+  `V151__player_profiles_development_data_erased_at.sql:31`) for anything to re-check. The erased coach's
+  **access** token also stays valid (`refreshTokenRepository.markAllUsedByUserId` invalidates only refresh
+  tokens), and `coachProfileRepository.findByUserId` keeps resolving because the erasure nulls only
+  `bio`/`city`/`district` (`GdprErasureService.java:284-288`). So for the remaining JWT TTL an erased coach
+  can submit a wrap-up whose authored free text then persists indefinitely — the exact failure mode AC2
+  exists to close. **Owner decision 2026-10-17 (code review of skillars-deferred-154): accept as a known
+  residual**, consistent with AC2's own recorded scoping decision, which already deferred three
+  same-root-cause gaps (the `player_timeline_events.metadata` recap copy, `PerformanceReport.nextSteps`,
+  and `CoachProfile.displayName`). Closing it properly means a coach-side erased-at tombstone + Flyway
+  migration + a `submitWrapUp` guard — its own story, not a review patch. The two rejected alternatives are
+  recorded for whoever picks this up: a tombstone+migration now (correct but out of scope), or re-running
+  `anonymizeByCoachId` from an `AFTER_COMMIT` sweep (narrows but does not close the window, and adds a
+  second unindexed sequential-scan UPDATE).
