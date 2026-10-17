@@ -127,26 +127,45 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
 
     // skillars-deferred-150 AC3: ORDER BY is required, not optional, alongside the bound -- but
     // be precise about WHY (code review 2026-10-09 corrected an earlier draft of this comment
-    // that overclaimed safety here). ORDER BY b.playerId gives the caller's actually-owned
-    // playerId no special preference -- the ownership check (ReviewSubmissionService's Java loop)
-    // runs strictly AFTER this query's own truncation, so ordering cannot protect any specific
-    // row. What it buys is determinism: WITHOUT it, an unordered SELECT DISTINCT truncated by a
+    // that overclaimed safety here; code review 2026-10-17 corrected this paragraph a second time,
+    // because skillars-deferred-154 AC4 below invalidated its original premise).
+    //
+    // That premise WAS: "ORDER BY b.playerId gives the caller's actually-owned playerId no special
+    // preference -- the ownership check (ReviewSubmissionService's Java loop) runs strictly AFTER
+    // this query's own truncation, so ordering cannot protect any specific row." That is no longer
+    // true: as of AC4 the ownership predicate lives in THIS query's own WHERE clause (see below), so
+    // it is applied BEFORE truncation, not after it by a Java loop. Every row that survives to be
+    // truncated is already owned by the caller.
+    //
+    // What ORDER BY buys is therefore determinism, and only that: WITHOUT it, an unordered SELECT DISTINCT truncated by a
     // bare `limit` returns a Postgres-internal, plan-dependent, call-to-call-unstable subset --
     // the exact same input could pass on one call and false-deny on the next. WITH it, the same
-    // input always truncates to the same 50 rows, so the (already decided, see this story's
-    // Review Findings) accepted residual risk -- a parent/author with more than 50 distinct
-    // qualifying playerIds, where the one actually-owned row sorts above the cap -- is at least
-    // reproducible rather than flaky. The bound (50) is a generous insurance cap, safely above
-    // any realistic distinct-player-per-author-per-coach count; a literal HQL `limit` is used
-    // instead of Pageable to keep this method's 4-arg signature unchanged (Pageable would break
-    // ReviewSubmissionServiceTest's existing mock stub at compile time). See
-    // ReviewSubmissionService.evaluateEligibility's own QUALIFYING_BOOKINGS_CAP log line for the
-    // observability this residual risk did not have before this review.
+    // input always truncates to the same 50 rows. The bound (50) is a generous insurance cap,
+    // safely above any realistic distinct-player-per-author-per-coach count; a literal HQL
+    // `limit` is used instead of Pageable to keep this method's 4-arg signature unchanged
+    // (Pageable would break ReviewSubmissionServiceTest's existing mock stub at compile time).
+    //
+    // skillars-deferred-154 AC4: the ownership predicate is now pushed into THIS query via a join
+    // to PlayerProfile's current parentId/userId, rather than relying on Booking's own
+    // (b.parentId = :authorId OR b.playerId = :authorId) filter, which had two problems. First,
+    // `b.playerId = :authorId` compared two unrelated id spaces (authorId is always a User id;
+    // Booking.playerId is a PlayerProfile primary key) -- it could only ever "match" by numeric
+    // coincidence, never by a real relationship, and is dropped entirely below. Second,
+    // booking.bookings has no FK on player_id, so a row whose PlayerProfile no longer existed
+    // could in principle occupy a cap slot -- currently unreachable (nothing in this codebase
+    // deletes a PlayerProfile row), but the plain (inner) JOIN below closes that gap
+    // defensively anyway, for free. Every row in the capped result is now correctly-owned by
+    // construction: the previously-accepted residual risk above ("the owned playerId may have
+    // been truncated if it sorts above the cap") no longer applies -- the one remaining residual
+    // is a single author genuinely exceeding 50 distinct, currently-owned children with the same
+    // coach. See ReviewSubmissionService.evaluateEligibility's own QUALIFYING_BOOKINGS_CAP log
+    // line and its own comment block for the matching update there.
     @Query("""
         SELECT DISTINCT b.playerId AS playerId
         FROM Booking b
+        JOIN PlayerProfile pp ON pp.id = b.playerId
         WHERE b.coachId = :coachId
-          AND (b.parentId = :authorId OR b.playerId = :authorId)
+          AND (pp.userId = :authorId OR pp.parentId = :authorId)
           AND b.status = 'COMPLETED'
           AND b.updatedAt <= :maturedBefore
           AND b.updatedAt > :sinceAfter

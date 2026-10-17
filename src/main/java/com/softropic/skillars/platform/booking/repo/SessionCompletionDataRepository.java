@@ -41,4 +41,11 @@ public interface SessionCompletionDataRepository extends JpaRepository<SessionCo
     @Modifying
     @Query("UPDATE SessionCompletionData s SET s.voiceNoteText = NULL, s.whatWeDid = NULL, s.whatsNext = NULL WHERE s.playerId = :playerId")
     void anonymizeByPlayerId(@Param("playerId") Long playerId);
+
+    // skillars-deferred-154 AC2: anonymizeByPlayerId only runs from the PLAYER-side erasure branch —
+    // a coach's own erasure never touched this table, so their authored voice_note_text/what_we_did/
+    // whats_next survived their own erasure indefinitely. Identical shape, keyed on coachId instead.
+    @Modifying
+    @Query("UPDATE SessionCompletionData s SET s.voiceNoteText = NULL, s.whatWeDid = NULL, s.whatsNext = NULL WHERE s.coachId = :coachId")
+    void anonymizeByCoachId(@Param("coachId") UUID coachId);
 }

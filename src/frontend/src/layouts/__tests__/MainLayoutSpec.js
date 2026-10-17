@@ -360,8 +360,14 @@ describe('MainLayout.vue — role-aware dashboard navigation (deferred-141)', ()
       shallow: false,
     })
     expect(wrapper.find('[href="/dashboard"]').exists()).toBe(true)
-    // Mutation: remove `v-if="authStore.isAdmin"` from the /dashboard q-item → still true for
-    // every role below, so those three negative assertions would be the ones to go RED instead.
+    // Mutation: remove the /dashboard q-item's `v-if` entirely → still true for every role below,
+    // so those three negative assertions would be the ones to go RED instead.
+    // (code review 2026-10-17) This note used to quote the condition as `v-if="authStore.isAdmin"`.
+    // skillars-deferred-154 AC5 widened it to
+    // `authStore.isAdmin || (!authStore.isCoach && !authStore.isParent && !authStore.isPlayer)`,
+    // so the quoted text was stale. The mutant described above is unaffected by that widening —
+    // deleting the whole condition still turns the three negative assertions red — but the ADMIN-only
+    // mutant it originally named no longer exists.
   })
 
   it('COACH does not see the Main "Dashboard" link, but does see Command Center (/coach/command-center)', async () => {
@@ -394,6 +400,19 @@ describe('MainLayout.vue — role-aware dashboard navigation (deferred-141)', ()
     expect(wrapper.find('[href="/player/dashboard"]').exists()).toBe(true)
     expect(wrapper.find('[href="/coach/command-center"]').exists()).toBe(false)
     expect(wrapper.find('[href="/parent/dashboard"]').exists()).toBe(false)
+  })
+
+  // skillars-deferred-154 AC5: SkillarsRole gained a fifth value, ANONYMOUS (a JWT whose ROLES
+  // claim maps to no business role), which has no ROLE_ROUTES entry and no dedicated nav section
+  // of its own — without this widened condition it had no way back to /dashboard from the drawer
+  // at all. This is the only behavior this AC actually changes; the four assertions above pin
+  // that COACH/PARENT/PLAYER are unaffected (each still fails its own isCoach/isParent/isPlayer
+  // check, so the widened condition still evaluates to false for them).
+  it('an unmapped role (ANONYMOUS) sees the Main "Dashboard" link, having no dedicated nav of its own', async () => {
+    const { wrapper } = await mountLayout({ role: 'ANONYMOUS', userId: 5 }, undefined, undefined, {
+      shallow: false,
+    })
+    expect(wrapper.find('[href="/dashboard"]').exists()).toBe(true)
   })
 
   it('ADMIN sees only the Main "Dashboard" link, none of the three role-specific ones', async () => {

@@ -123,7 +123,14 @@
         <!-- Main navigation -->
         <div class="text-label q-px-md q-mb-sm">{{ $t('nav.sectionMain') }}</div>
 
-        <q-item v-if="authStore.isAdmin" clickable to="/dashboard" class="nav-item">
+        <q-item
+          v-if="
+            authStore.isAdmin || (!authStore.isCoach && !authStore.isParent && !authStore.isPlayer)
+          "
+          clickable
+          to="/dashboard"
+          class="nav-item"
+        >
           <q-item-section avatar>
             <q-icon name="dashboard" class="nav-icon" />
           </q-item-section>

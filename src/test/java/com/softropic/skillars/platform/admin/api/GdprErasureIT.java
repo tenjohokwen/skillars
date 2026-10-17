@@ -713,16 +713,85 @@ class GdprErasureIT extends AbstractIntegrationTest {
     }
 
     private void insertBookingForCompletionData(UUID bookingId, long playerId) {
+        insertBookingForCompletionData(bookingId, coachProfileId, playerId);
+    }
+
+    private void insertBookingForCompletionData(UUID bookingId, UUID coachId, long playerId) {
         jdbcTemplate.update(
             "INSERT INTO booking.bookings "
                 + "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, "
                 + "version, created_at, updated_at, canonical_timezone) "
                 + "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
-            bookingId, coachProfileId, PARENT_ID, playerId,
+            bookingId, coachId, PARENT_ID, playerId,
             Timestamp.from(Instant.now().minusSeconds(7200)),
             Timestamp.from(Instant.now().minusSeconds(3600)),
             Timestamp.from(Instant.now().minusSeconds(86400)),
             Timestamp.from(Instant.now().minusSeconds(86400)));
+    }
+
+    /**
+     * skillars-deferred-154 AC2: a coach's own erasure never anonymised their own authored
+     * session_completion_data rows before this fix — the only existing path,
+     * {@code anonymizeByPlayerId}, runs solely from the PLAYER-side erasure branch. A second, real
+     * {@code marketplace.coach_profiles} fixture (not just a different {@code coachId} UUID value
+     * with no backing row) proves the new {@code anonymizeByCoachId} call is genuinely scoped to the
+     * erased coach, not a blanket "anonymise everything" bug that would also pass against a
+     * coachId value with nothing behind it.
+     */
+    @Test
+    void erase_coachUser_anonymizesOwnSessionCompletionRecapForThatCoachOnly() {
+        UUID ownBookingId = UUID.randomUUID();
+        UUID otherCoachBookingId = UUID.randomUUID();
+        UUID otherCoachProfileId = UUID.randomUUID();
+        long otherCoachUserId = 9210_000_902L;
+        transactionTemplate.execute(status -> {
+            // coach_profiles.user_id carries an FK to main.user — a real user row is required
+            // underneath the second coach profile, not just the profile row itself.
+            insertUser(otherCoachUserId, "gdpr.erasure.othercoach.9210@skillars-test.com",
+                passwordEncoder.encode(TEST_PASSWORD), "COACH");
+            grantAuthority(otherCoachUserId, "ROLE_COACH");
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_profiles "
+                    + "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) "
+                    + "VALUES (?, ?, 'Unrelated Coach', 'Unrelated bio', 'Munich', "
+                    + "ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
+                otherCoachProfileId, otherCoachUserId);
+            insertBookingForCompletionData(ownBookingId, coachProfileId, SELF_PLAYER_PROFILE_ID);
+            insertBookingForCompletionData(otherCoachBookingId, otherCoachProfileId, SELF_PLAYER_PROFILE_ID);
+            jdbcTemplate.update(
+                "INSERT INTO booking.session_completion_data "
+                    + "(id, booking_id, coach_id, player_id, player_attended, voice_note_text, "
+                    + "what_we_did, whats_next, completion_mode, created_at) "
+                    + "VALUES (?, ?, ?, ?, true, 'Coach own voice note', "
+                    + "'Coach own recap', 'Coach own next step', 'LIVE', ?)",
+                UUID.randomUUID(), ownBookingId, coachProfileId, SELF_PLAYER_PROFILE_ID,
+                Timestamp.from(Instant.now()));
+            jdbcTemplate.update(
+                "INSERT INTO booking.session_completion_data "
+                    + "(id, booking_id, coach_id, player_id, player_attended, voice_note_text, "
+                    + "what_we_did, whats_next, completion_mode, created_at) "
+                    + "VALUES (?, ?, ?, ?, true, 'Unrelated coach voice note', "
+                    + "'Unrelated coach recap', 'Unrelated coach next step', 'LIVE', ?)",
+                UUID.randomUUID(), otherCoachBookingId, otherCoachProfileId, SELF_PLAYER_PROFILE_ID,
+                Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        erase(COACH_USER_ID);
+
+        Map<String, Object> ownRow = jdbcTemplate.queryForMap(
+            "SELECT voice_note_text, what_we_did, whats_next FROM booking.session_completion_data WHERE booking_id = ?",
+            ownBookingId);
+        assertThat(ownRow.get("voice_note_text")).isNull();
+        assertThat(ownRow.get("what_we_did")).isNull();
+        assertThat(ownRow.get("whats_next")).isNull();
+
+        Map<String, Object> otherRow = jdbcTemplate.queryForMap(
+            "SELECT voice_note_text, what_we_did, whats_next FROM booking.session_completion_data WHERE booking_id = ?",
+            otherCoachBookingId);
+        assertThat(otherRow.get("voice_note_text")).isEqualTo("Unrelated coach voice note");
+        assertThat(otherRow.get("what_we_did")).isEqualTo("Unrelated coach recap");
+        assertThat(otherRow.get("whats_next")).isEqualTo("Unrelated coach next step");
     }
 
     /** story-review.md M4, point 4th bullet: proves the orElse-skip decision — no exception, COMPLETED. */
