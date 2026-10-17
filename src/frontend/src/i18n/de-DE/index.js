@@ -1126,6 +1126,9 @@ export default {
       title: 'Spieler-Zeitstrahl',
       noEvents: 'Noch keine Zeitstrahl-Ereignisse.',
       loadError: 'Zeitstrahl konnte nicht geladen werden',
+      loadMore: 'Mehr laden',
+      loadMoreError: 'Weitere Ereignisse konnten nicht geladen werden',
+      loadMoreRetry: 'Erneut versuchen',
       accessExpired:
         'Ihr Coaching-Zugriff auf den Zeitstrahl dieses Spielers ist abgelaufen ({days} Tage Inaktivität).',
       eventType: {

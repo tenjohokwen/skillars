@@ -109,10 +109,13 @@
         </q-card-section>
       </q-card>
 
-      <!-- Player Timeline -->
+      <!-- Player Timeline — skillars-deferred-153 code review: :key="playerId" forces a clean
+           remount on playerId change, since PlayerTimelinePanel.vue only fetches in onMounted
+           with no playerId prop watcher. playerId is effectively fixed on this page, so this is
+           consistency with the coach/parent pages rather than a live bug fix. -->
       <q-card class="q-mt-md">
         <q-card-section>
-          <PlayerTimelinePanel :player-id="playerId" />
+          <PlayerTimelinePanel :player-id="playerId" :key="playerId" />
         </q-card-section>
       </q-card>
     </template>

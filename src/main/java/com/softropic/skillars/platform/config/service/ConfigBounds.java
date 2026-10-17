@@ -99,6 +99,29 @@ public final class ConfigBounds {
         new BoundedKey("booking.quick_complete_timeout_hours", 1L, 168L, false,
             "0 → Quick Complete auto-confirms instantly; neg → nonsense cutoff", 0L);
 
+    /**
+     * {@code StuckCompletionSweeperService} — skillars-deferred-153 AC1: registered in
+     * {@link #HAS_CODE_DEFAULT} and read via the 4-arg {@code getBoundedLong(key, defaultValue, min,
+     * max)}, same shape as {@link #DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS} — deliberately NOT
+     * {@link #BOOKING_QUICK_COMPLETE_TIMEOUT_HOURS}'s shape (a {@code 0L} not-applicable sentinel,
+     * excluded from {@code HAS_CODE_DEFAULT}, that only works because V139 seeds a real value
+     * separately). The two keys answer different questions — row exists and is awaiting parent
+     * confirmation (that key) vs. row never existed at all (this key) — so a separate key is
+     * correct.
+     *
+     * <p>Code review (2026-10-17), OWNER DECISION — default raised 24h → 72h and the floor raised
+     * 1h → 6h. Once this sweeper completes a booking the transition is one-way and there is no
+     * update path for the placeholder row, so a coach who finishes the wrap-up wizard after the
+     * cutoff permanently loses their recap, ratings, voice note and homework, and the session is
+     * recorded as not attended. At the old 1h floor that was a routine outcome rather than an edge
+     * case. This sweeper is a terminal catch-all for a booking nobody is waiting on, so a longer
+     * window costs nothing and removes almost all of the collision window; the floor exists so the
+     * window can never be retuned back down into the middle of a live wizard session.
+     */
+    public static final BoundedKey BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS =
+        new BoundedKey("booking.stuck_completion_timeout_hours", 6L, 720L, false,
+            "0/neg → every unconfirmed, row-less Quick Complete is force-completed near-instantly", 72L);
+
     /** {@code ModerationSlaMonitorService} — 0/neg → everything instantly SLA-breached. */
     public static final BoundedKey MODERATION_SLA_MINUTES =
         new BoundedKey("platform.moderation_sla_minutes", 1L, 10080L, true,
@@ -162,6 +185,17 @@ public final class ConfigBounds {
     public static final BoundedKey DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS =
         new BoundedKey("development.roster.dormantAfterDays", 1L, 3650L, false,
             "0/neg/absurd → every roster player reads as dormant, or none ever do", 30L);
+
+    /**
+     * {@code CoachRosterService} — skillars-deferred-153 AC3: caps the roster endpoint's candidate
+     * player set BEFORE the per-player fan-out runs (not response-only pagination after scoring).
+     * Registered in {@link #HAS_CODE_DEFAULT}, read via the 4-arg {@code getBoundedLong}, same shape
+     * as the adjacent {@link #DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS}. Default 150: margin above the
+     * ~100-player revisit trigger this story's own ledger citation used.
+     */
+    public static final BoundedKey DEVELOPMENT_ROSTER_MAX_PLAYERS =
+        new BoundedKey("development.roster.maxPlayers", 1L, 10000L, false,
+            "0/neg/absurd → the roster endpoint returns an empty or unreasonably tiny candidate set", 150L);
 
     /** {@code DevelopmentCorrelationService} — neg → every session qualifies (0 = legitimate). */
     public static final BoundedKey DEVELOPMENT_CORRELATION_MIN_SESSION_COUNT =
@@ -401,7 +435,9 @@ public final class ConfigBounds {
         DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.key(),
         RATE_LIMIT_BUCKET_TTL_HOURS.key(),
         RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS.key(),
-        GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key());
+        GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(),
+        BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS.key(),
+        DEVELOPMENT_ROSTER_MAX_PLAYERS.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -437,7 +473,9 @@ public final class ConfigBounds {
             RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS,
             RATE_LIMIT_BUCKET_TTL_HOURS,
             RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS,
-            GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS));
+            GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS,
+            BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS,
+            DEVELOPMENT_ROSTER_MAX_PLAYERS));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

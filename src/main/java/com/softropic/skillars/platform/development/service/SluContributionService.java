@@ -3,9 +3,6 @@ package com.softropic.skillars.platform.development.service;
 import com.softropic.skillars.platform.development.contract.CoachContributionDto;
 import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
-import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
-import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
-import com.softropic.skillars.platform.security.service.SecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.BadSqlGrammarException;
@@ -31,15 +28,13 @@ public class SluContributionService {
     private final SluRepository sluRepository;
     private final CoachProfileService coachProfileService;
     private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
-    private final SecurityUtil securityUtil;
-    private final PlayerProfileRepository playerProfileRepository;
 
     /**
      * Returns per-skill, per-coach SLU contribution percentages for the given time window.
      * Only includes skills where at least one coach has contributed SLU.
      */
     public List<CoachContributionDto> getCoachContributions(Long playerId, Instant since) {
-        requireCoachPlayerRelationshipIfCoach(playerId);
+        coachPlayerAuthorizationService.requireCoachPlayerRelationshipIfCoach(playerId);
         List<Object[]> rows = sluRepository.findCoachContributionsByPlayerId(playerId, since);
 
         if (rows.isEmpty()) {
@@ -95,13 +90,5 @@ public class SluContributionService {
             result.add(new CoachContributionDto(name, skillCode, pct));
         }
         return result;
-    }
-
-    private void requireCoachPlayerRelationshipIfCoach(Long playerId) {
-        if (securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)
-                && !playerProfileRepository.existsByIdAndParentId(playerId, securityUtil.requireCurrentUserId())) {
-            coachPlayerAuthorizationService.requireCoachPlayerRelationship(
-                securityUtil.getCurrentCoachUserId(), playerId);
-        }
     }
 }

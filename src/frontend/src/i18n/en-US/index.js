@@ -883,6 +883,9 @@ export default {
       title: 'Player Timeline',
       noEvents: 'No timeline events yet.',
       loadError: 'Failed to load timeline',
+      loadMore: 'Load more',
+      loadMoreError: 'Failed to load more events',
+      loadMoreRetry: 'Try again',
       accessExpired:
         "Your coaching access to this player's timeline expired ({days} days of inactivity).",
       eventType: {

@@ -20,6 +20,15 @@ final class RosterAttentionCalculator {
     private static final double NEGLECTED_WEIGHT = 0.35;
     private static final double DECLINING_WEIGHT = 0.25;
 
+    // skillars-deferred-153 AC8: the recency NORMALIZER is now decoupled from the operator-
+    // configurable dormantAfterDays threshold — retuning that key previously silently reshaped the
+    // whole attentionScore ranking (and degenerated at its own legal bounds: min=1 saturated every
+    // non-today player to 1.0, max=3650 effectively switched recency off). dormantAfterDays stays
+    // in Signals and continues to control ONLY the `dormant` boolean below — this constant is a
+    // fixed 90-day horizon, reusing 90 to match this module's existing coachAccessExpiryDays
+    // default (TimelineQueryService), not a second operator-configurable key.
+    private static final long RECENCY_NORMALIZATION_DAYS = 90;
+
     private RosterAttentionCalculator() {
     }
 
@@ -33,9 +42,11 @@ final class RosterAttentionCalculator {
      *                              {@code hasUpcomingBooking}) rather than clamped to {@code now},
      *                              so a long-silent player with a newly-booked future session still
      *                              scores on their real last activity.
-     * @param dormantAfterDays     the configured threshold (AC4) — the raw value used for the
-     *                              dormancy comparison, and the clamp ceiling for the recency score
-     *                              component
+     * @param dormantAfterDays     the configured threshold (AC4) — used for the dormancy comparison
+     *                              ONLY. skillars-deferred-153 AC8 decoupled the recency score from
+     *                              this value; its clamp ceiling is now the fixed
+     *                              {@link #RECENCY_NORMALIZATION_DAYS}, so retuning this operator key
+     *                              no longer reshapes the whole ranking
      * @param hasUpcomingBooking   true when the player has a roster-qualifying booking whose
      *                              {@code requestedStartTime} is in the future — code review
      *                              (2026-10-15) Patch, owner decision: suppresses only the
@@ -56,19 +67,29 @@ final class RosterAttentionCalculator {
 
     static Result compute(Signals signals) {
         // skillars-deferred-152 AC5: was strictly `>`, which disagreed with recencyNorm's own
-        // clamp-at-dormantAfterDays below for exactly one day (d == dormantAfterDays): recencyNorm
-        // is already fully saturated to 1.0 there, but `dormant` required the strictly-greater
-        // `d > dormantAfterDays`. `>=` closes that one-day gap. Fix the comparison only — do not
-        // touch daysSinceLastActivity's own computation (CoachRosterService), which also feeds the
-        // roster's sort order and would silently re-score every player away from this boundary.
+        // clamp for exactly one day (d == dormantAfterDays). `>=` closed that one-day gap. Keep the
+        // `>=`, but note its original rationale no longer holds: skillars-deferred-153 AC8 moved the
+        // recency clamp onto the fixed RECENCY_NORMALIZATION_DAYS, so the two lines below are now
+        // deliberately independent and recencyNorm is NOT saturated at d == dormantAfterDays (at the
+        // default 30 it is 30/90 ≈ 0.33). `>=` is retained as the correct dormancy boundary in its own
+        // right — "silent for at least the configured window" — not to align with the recency term.
+        // Do not touch daysSinceLastActivity's own computation (CoachRosterService), which also feeds
+        // the roster's sort order and would silently re-score every player away from this boundary.
         boolean dormant = signals.daysSinceLastActivity() >= signals.dormantAfterDays()
             && !signals.hasUpcomingBooking();
 
         // Defense-in-depth only: CoachRosterService now derives daysSinceLastActivity from
         // past-only activity (see the Signals Javadoc), so a negative value should be unreachable —
         // this guard just keeps the score well-defined if that invariant is ever violated upstream.
-        long clampedDays = Math.min(Math.max(signals.daysSinceLastActivity(), 0), signals.dormantAfterDays());
-        double recencyNorm = (double) clampedDays / signals.dormantAfterDays();
+        //
+        // skillars-deferred-153 AC8: clamp/normalize against the FIXED RECENCY_NORMALIZATION_DAYS,
+        // not the operator-configurable dormantAfterDays — this line and the `dormant` boolean
+        // above are now deliberately doing different things with the same daysSinceLastActivity
+        // input. dormantAfterDays itself is floored at 1 by its own config bound, so it cannot be 0
+        // here either way — not a new risk, but worth noting since this divides by a different
+        // constant now.
+        long clampedDays = Math.min(Math.max(signals.daysSinceLastActivity(), 0), RECENCY_NORMALIZATION_DAYS);
+        double recencyNorm = (double) clampedDays / RECENCY_NORMALIZATION_DAYS;
 
         int clampedNeglected = Math.min(Math.max(signals.neglectedCount(), 0), NEGLECTED_CAP);
         double neglectedNorm = (double) clampedNeglected / NEGLECTED_CAP;

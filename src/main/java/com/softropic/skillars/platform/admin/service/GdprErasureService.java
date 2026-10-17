@@ -13,6 +13,7 @@ import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.admin.repo.GdprRequest;
 import com.softropic.skillars.platform.admin.repo.GdprRequestRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.session.repo.HomeworkCompletionRepository;
@@ -88,6 +89,7 @@ public class GdprErasureService {
     private final CoachProfileRepository coachProfileRepository;
     private final PlayerProfileRepository playerProfileRepository;
     private final BookingRepository bookingRepository;
+    private final SessionCompletionDataRepository sessionCompletionDataRepository;
     private final MessageRepository messageRepository;
     private final CoachReviewRepository coachReviewRepository;
     private final SluRepository sluRepository;
@@ -1181,6 +1183,20 @@ public class GdprErasureService {
                 performanceReportRepository.deleteAllByPlayerId(playerId);
                 homeworkCompletionRepository.deleteAllByPlayerId(playerId);
                 remainingLockBudget = spendDownLockBudget(remainingLockBudget, group3StartedAt);
+
+                // skillars-deferred-153 AC2: session_completion_data lives in the `booking` schema,
+                // not `development` — this method's own cumulative-lock-budget arithmetic above is
+                // sized to its pre-existing, development-schema-only statement count (12 + M), and
+                // folding this UPDATE into one of those groups would require re-deriving that
+                // arithmetic for a table this method otherwise has nothing to do with. Deliberately
+                // kept as its own independently-bounded step instead: same per-statement
+                // lock_timeout convention (setStatementLockTimeout), but using the full
+                // (unshrunk) lockTimeoutSeconds and NOT counted against remainingLockBudget/
+                // cumulativeLockWaitBudget — a CumulativeLockBudgetExhaustedException from an
+                // earlier group already distinguishes "development data genuinely survives this
+                // run" from this statement's own, separate (and much smaller) contention risk.
+                setStatementLockTimeout(lockTimeoutSeconds);
+                sessionCompletionDataRepository.anonymizeByPlayerId(playerId);
 
                 // Group 4 (M statements, M = childBlobKeys.size()): the blob-deletion outbox INSERTs.
                 // Skipped entirely when M is zero — nothing to bound, and dividing by zero statements

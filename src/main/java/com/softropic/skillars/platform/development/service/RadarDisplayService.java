@@ -13,9 +13,6 @@ import com.softropic.skillars.platform.development.repo.PlayerRadarComposite;
 import com.softropic.skillars.platform.development.repo.PlayerRadarCompositeRepository;
 import com.softropic.skillars.platform.development.repo.SkillDefinition;
 import com.softropic.skillars.platform.development.repo.SkillDefinitionRepository;
-import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
-import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
-import com.softropic.skillars.platform.security.service.SecurityUtil;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,16 +34,10 @@ public class RadarDisplayService {
     private final PlayerRadarBaselineRepository baselineRepository;
     private final SkillDefinitionRepository skillDefinitionRepository;
     private final CoachRadarPreferenceRepository preferenceRepository;
-    private final SecurityUtil securityUtil;
     private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
-    private final PlayerProfileRepository playerProfileRepository;
 
     public RadarDisplayResponse getRadarDisplay(Long playerId) {
-        if (securityUtil.isCurrentUserInRole(AuthoritiesConstants.COACH)
-                && !playerProfileRepository.existsByIdAndParentId(playerId, securityUtil.requireCurrentUserId())) {
-            coachPlayerAuthorizationService.requireCoachPlayerRelationship(
-                securityUtil.getCurrentCoachUserId(), playerId);
-        }
+        coachPlayerAuthorizationService.requireCoachPlayerRelationshipIfCoach(playerId);
         List<SkillDefinition> allSkills =
             skillDefinitionRepository.findAllByActiveTrueOrderByDisplayOrderAsc();
         Map<String, PlayerRadarComposite> compositeMap = compositeRepository

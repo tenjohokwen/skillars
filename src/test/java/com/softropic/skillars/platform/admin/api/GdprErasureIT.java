@@ -661,6 +661,70 @@ class GdprErasureIT extends AbstractIntegrationTest {
         verify(fileStorageService, times(1)).deleteRawBytes(any());
     }
 
+    /**
+     * skillars-deferred-153 AC2: session_completion_data's three coach-authored free-text columns
+     * (the pre-existing voice_note_text gap, plus the newer what_we_did/whats_next) must not survive
+     * the player's own erasure. Asserts both the erased player's own row is anonymized AND an
+     * unrelated player's row is left completely untouched — anonymizeByPlayerId is scoped by
+     * player_id, not by booking/coach.
+     */
+    @Test
+    void erase_selfRegisteredPlayer_anonymizesSessionCompletionRecapForThatPlayerOnly() {
+        UUID erasedBookingId = UUID.randomUUID();
+        UUID otherBookingId = UUID.randomUUID();
+        long otherPlayerId = 9210_777_951_999L;
+        transactionTemplate.execute(status -> {
+            insertBookingForCompletionData(erasedBookingId, SELF_PLAYER_PROFILE_ID);
+            insertBookingForCompletionData(otherBookingId, otherPlayerId);
+            jdbcTemplate.update(
+                "INSERT INTO booking.session_completion_data "
+                    + "(id, booking_id, coach_id, player_id, player_attended, voice_note_text, "
+                    + "what_we_did, whats_next, completion_mode, created_at) "
+                    + "VALUES (?, ?, ?, ?, true, 'Voice note about first touch', "
+                    + "'Worked on first touch', 'Continue weak-foot drills', 'LIVE', ?)",
+                UUID.randomUUID(), erasedBookingId, coachProfileId, SELF_PLAYER_PROFILE_ID,
+                Timestamp.from(Instant.now()));
+            jdbcTemplate.update(
+                "INSERT INTO booking.session_completion_data "
+                    + "(id, booking_id, coach_id, player_id, player_attended, voice_note_text, "
+                    + "what_we_did, whats_next, completion_mode, created_at) "
+                    + "VALUES (?, ?, ?, ?, true, 'Unrelated voice note', "
+                    + "'Unrelated recap', 'Unrelated next step', 'LIVE', ?)",
+                UUID.randomUUID(), otherBookingId, coachProfileId, otherPlayerId,
+                Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        erase(SELF_PLAYER_USER_ID);
+
+        Map<String, Object> erasedRow = jdbcTemplate.queryForMap(
+            "SELECT voice_note_text, what_we_did, whats_next FROM booking.session_completion_data WHERE booking_id = ?",
+            erasedBookingId);
+        assertThat(erasedRow.get("voice_note_text")).isNull();
+        assertThat(erasedRow.get("what_we_did")).isNull();
+        assertThat(erasedRow.get("whats_next")).isNull();
+
+        Map<String, Object> otherRow = jdbcTemplate.queryForMap(
+            "SELECT voice_note_text, what_we_did, whats_next FROM booking.session_completion_data WHERE booking_id = ?",
+            otherBookingId);
+        assertThat(otherRow.get("voice_note_text")).isEqualTo("Unrelated voice note");
+        assertThat(otherRow.get("what_we_did")).isEqualTo("Unrelated recap");
+        assertThat(otherRow.get("whats_next")).isEqualTo("Unrelated next step");
+    }
+
+    private void insertBookingForCompletionData(UUID bookingId, long playerId) {
+        jdbcTemplate.update(
+            "INSERT INTO booking.bookings "
+                + "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, "
+                + "version, created_at, updated_at, canonical_timezone) "
+                + "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
+            bookingId, coachProfileId, PARENT_ID, playerId,
+            Timestamp.from(Instant.now().minusSeconds(7200)),
+            Timestamp.from(Instant.now().minusSeconds(3600)),
+            Timestamp.from(Instant.now().minusSeconds(86400)),
+            Timestamp.from(Instant.now().minusSeconds(86400)));
+    }
+
     /** story-review.md M4, point 4th bullet: proves the orElse-skip decision — no exception, COMPLETED. */
     @Test
     void erase_playerWithNoProfileRow_completesSuccessfullyWithoutError() {

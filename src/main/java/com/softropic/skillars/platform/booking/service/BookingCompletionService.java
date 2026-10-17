@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
+import com.softropic.skillars.platform.booking.contract.ForceCompleteOutcome;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.contract.QuickCompleteConfirmationRequiredEvent;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
@@ -33,6 +34,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -129,6 +131,22 @@ public class BookingCompletionService {
         CoachProfile coach = resolveCoach(coachUserId);
         Booking booking = bookingService.getBookingOrThrow(bookingId);
         verifyCoachOwnership(booking, coach);
+
+        // skillars-deferred-153 AC1 (code review, 2026-10-17): distinguish "the stuck-completion
+        // sweeper already auto-completed this booking" from a generic status mismatch. This is the one
+        // case where the coach is about to lose recap text they just typed, and verifyStatus's raw
+        // "Booking is in status COMPLETED, expected COMPLETED_PENDING_CONFIRMATION" tells them nothing
+        // actionable. The transition is one-way (BookingStateMachine has no path back to
+        // COMPLETED_PENDING_CONFIRMATION) and there is no update path for an existing row, so the
+        // honest message is that the session is closed — not that something went wrong.
+        if (BookingStatus.valueOf(booking.getStatus()) == BookingStatus.COMPLETED) {
+            Optional<SessionCompletionData> existing = completionDataRepository.findByBookingId(bookingId);
+            if (existing.isPresent() && isSweeperPlaceholder(existing.get())) {
+                throw new OperationNotAllowedException(
+                    "This session was auto-completed after the wrap-up was left unsubmitted and can no longer be edited",
+                    SecurityError.MISSING_RIGHTS);
+            }
+        }
         verifyStatus(booking, BookingStatus.COMPLETED_PENDING_CONFIRMATION);
 
         SessionCompletionData scd = new SessionCompletionData();
@@ -184,6 +202,73 @@ public class BookingCompletionService {
         }
     }
 
+    /**
+     * skillars-deferred-153 AC1: shared by the stuck-completion sweeper (SYSTEM) and the admin
+     * force-complete action (ADMIN) for a booking left in COMPLETED_PENDING_CONFIRMATION with no
+     * SessionCompletionData row at all (an abandoned wrap-up). Modeled on {@link #submitWrapUp},
+     * not {@link #confirmCompletion} — that method only reads an existing row and hard-fails when
+     * it's missing, while this one must build one. {@code playerAttended = false}: the wizard's
+     * attendance checkbox is never persisted until the final submit, so there is no real signal to
+     * recover for an abandoned session; {@code false} is the conservative default (mirrors
+     * TimelineEventListener's own {@code !isPlayerAttended() → null coachId} principle for exactly
+     * this question). Every rating/recap/voice-note field is left {@code null} — nullable at the
+     * schema level, so no migration is needed; the row's presence signals "this booking completed,"
+     * its null recap fields signal "no coach-authored recap was ever captured."
+     *
+     * <p>Releases the coach's payout, exactly as {@code QuickCompleteTimeoutService}'s own
+     * timeout-based auto-confirm already does — see {@code CoachPayoutEnqueueListener}'s Javadoc.
+     *
+     * <p><b>Exception classification belongs to the callers, not here (code review, 2026-10-17).</b>
+     * An earlier revision caught {@code DataIntegrityViolationException} around the {@code save} and
+     * {@code BookingStateTransitionException}/{@code OptimisticLockingFailureException} around the
+     * transition, returning normally from each. Neither could work. The DIV catch was unreachable:
+     * {@code SessionCompletionData.id} uses {@code @GeneratedValue(GenerationType.UUID)}, an in-VM
+     * generator, so {@code persist} only queues the INSERT and nothing flushes before this method
+     * returns — the UNIQUE violation surfaces at commit, outside any catch here. And swallowing the
+     * transition exception could not help either: {@code BookingService.transition} is
+     * {@code @Transactional} REQUIRED, so by the time it propagates the shared transaction is
+     * already rollback-only and a normal return just fails at commit with
+     * {@code UnexpectedRollbackException}. This repo documents that rule twice — see
+     * {@code PendingProviderAssetTracker} and {@code ReviewSubmissionService}. So the two realistic
+     * cases are now cheap pre-checks that return an outcome, and a genuine concurrent race is left
+     * to propagate to the caller's own boundary, where it is actually catchable (the sweeper catches
+     * it outside its {@code TransactionTemplate}, mirroring {@code QuickCompleteTimeoutService}).
+     *
+     * @return which of the three outcomes occurred; never {@code null}
+     */
+    @Transactional
+    public ForceCompleteOutcome forceCompleteWithPlaceholderData(UUID bookingId, ActorRole actorRole, Long actorUserId) {
+        Booking booking = bookingService.getBookingOrThrow(bookingId);
+
+        // Pre-checks, not race guards. The sweeper's own query already filters on both conditions, but
+        // the admin endpoint accepts any bookingId straight from a support ticket. Without these, a
+        // misdirected id would write the placeholder row first and only then have the state machine
+        // reject the transition — leaving an orphan row that permanently blocks the coach's own
+        // submitWrapUp through the session_completion_data_booking_id_key UNIQUE constraint.
+        if (BookingStatus.valueOf(booking.getStatus()) != BookingStatus.COMPLETED_PENDING_CONFIRMATION) {
+            return ForceCompleteOutcome.NOT_STUCK;
+        }
+        if (completionDataRepository.findByBookingId(bookingId).isPresent()) {
+            return ForceCompleteOutcome.ALREADY_RESOLVED;
+        }
+
+        SessionCompletionData scd = new SessionCompletionData();
+        scd.setBookingId(bookingId);
+        scd.setCoachId(booking.getCoachId());
+        scd.setPlayerId(booking.getPlayerId());
+        scd.setPlayerAttended(false);
+        scd.setCompletionMode("QUICK");
+        completionDataRepository.save(scd);
+
+        bookingService.transition(bookingId, BookingEvent.COMPLETE, new TransitionContext(actorRole, actorUserId));
+
+        eventPublisher.publishEvent(new BookingCompletedEvent(
+            this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
+            scd.isPlayerAttended(), null, null, null, List.of(), null, null
+        ));
+        return ForceCompleteOutcome.FORCE_COMPLETED;
+    }
+
     @Transactional
     public void confirmCompletion(UUID bookingId, Long parentUserId) {
         Booking booking = bookingService.getBookingOrThrow(bookingId);
@@ -229,6 +314,19 @@ public class BookingCompletionService {
         if (!Objects.equals(booking.getCoachId(), coach.getId())) {
             throw new OperationNotAllowedException("Coach does not own this booking", SecurityError.MISSING_RIGHTS);
         }
+    }
+
+    /**
+     * skillars-deferred-153 AC1 (code review, 2026-10-17): recognises a row written by
+     * {@code forceCompleteWithPlaceholderData} rather than by a real coach submission — all three
+     * recap fields null and the player recorded absent, which a genuine wrap-up never produces
+     * (step 5 is mandatory, so at least {@code whatWeDid} is always set on a real submit).
+     */
+    private boolean isSweeperPlaceholder(SessionCompletionData existing) {
+        return !existing.isPlayerAttended()
+            && existing.getWhatWeDid() == null
+            && existing.getWhatsNext() == null
+            && existing.getVoiceNoteText() == null;
     }
 
     private void verifyStatus(Booking booking, BookingStatus expected) {

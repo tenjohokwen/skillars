@@ -70,6 +70,11 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
     private UUID academyProfileId;
     private UUID scoutProfileId;
 
+    // skillars-deferred-153 AC4 code review (2026-10-17): see insertTimelineEvent's Javadoc. Base is
+    // truncated to whole seconds so the seeded instants round-trip exactly through the JSON response.
+    private final Instant seedBase = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+    private int timelineSeedSequence;
+
     @BeforeEach
     void setUp() {
         when(fileStorageService.storeBytes(any(), anyString(), anyString())).thenReturn("reports/test/report.pdf");
@@ -149,6 +154,115 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat((Boolean) response.getBody().get("accessExpired")).isFalse();
         assertThat((List<?>) response.getBody().get("events")).isNotEmpty();
+    }
+
+    // skillars-deferred-153 AC4: standard offset pagination — hasMore=true while a further page
+    // exists, false once the last page is reached. Uses the PARENT role (isCoach=false) so the
+    // access-expiry gate (a separate, unrelated concern) never enters into it.
+    //
+    // skillars-deferred-153 code review (2026-10-17): the seeded events now carry DISTINCT,
+    // explicitly-ordered occurred_at values (see insertTimelineEvent), so the page CONTENTS are
+    // assertable too — not just their size. Under the old transaction-constant NOW() seeding, all
+    // three events shared one timestamp and these tests passed for any row order whatsoever.
+    @Test
+    @SuppressWarnings("unchecked")
+    void getTimeline_asParent_firstPageOfThree_returnsHasMoreTrue() {
+        List<String> newestFirstIds = seedTimelineEvents(3);
+
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            timelineUrl(0, 2), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((List<?>) response.getBody().get("events")).hasSize(2);
+        assertThat((Boolean) response.getBody().get("hasMore")).isTrue();
+        // Newest first, and specifically the two newest — not just "two of them".
+        assertThat(idsOf(response)).containsExactly(newestFirstIds.get(0), newestFirstIds.get(1));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void getTimeline_asParent_lastPageOfThree_returnsHasMoreFalse() {
+        List<String> newestFirstIds = seedTimelineEvents(3);
+
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            timelineUrl(1, 2), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((List<?>) response.getBody().get("events")).hasSize(1);
+        assertThat((Boolean) response.getBody().get("hasMore")).isFalse();
+        // ...and it is the OLDEST of the three, i.e. the page boundary really fell where it should.
+        assertThat(idsOf(response)).containsExactly(newestFirstIds.get(2));
+    }
+
+    // skillars-deferred-153 AC4 code review (2026-10-17): NEW — walks EVERY page and asserts each
+    // event is returned exactly once, with no duplicate and no gap. This is the property offset
+    // pagination over a non-unique sort key actually breaks, and nothing asserted it before.
+    @Test
+    @SuppressWarnings("unchecked")
+    void getTimeline_asParent_pagingAcrossEveryPage_returnsEachEventExactlyOnce() {
+        List<String> newestFirstIds = seedTimelineEvents(5);
+
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+        List<String> seenIds = new java.util.ArrayList<>();
+        List<Integer> pageSizes = new java.util.ArrayList<>();
+        List<Boolean> hasMoreFlags = new java.util.ArrayList<>();
+
+        for (int page = 0; page < 3; page++) {
+            ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+                timelineUrl(page, 2), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            seenIds.addAll(idsOf(response));
+            pageSizes.add(idsOf(response).size());
+            hasMoreFlags.add((Boolean) response.getBody().get("hasMore"));
+        }
+
+        assertThat(pageSizes).containsExactly(2, 2, 1);
+        assertThat(hasMoreFlags).containsExactly(true, true, false);
+        // No duplicate and no gap: every seeded event came back exactly once, in newest-first order.
+        assertThat(seenIds).doesNotHaveDuplicates();
+        assertThat(seenIds).containsExactlyElementsOf(newestFirstIds);
+    }
+
+    // skillars-deferred-153 code review (2026-10-17): NEW — the actual regression test for the
+    // ...OrderByOccurredAtDescIdDesc tie-break. All four events share ONE occurred_at (precisely what
+    // the old NOW()-based seeding produced for every event in a transaction, and what production
+    // produces whenever several events are written for one player in one transaction). Without the
+    // `id DESC` tie-break the sort key is non-unique, Postgres is free to return a different row
+    // order per LIMIT/OFFSET query, and a row can appear on two consecutive pages or be skipped
+    // entirely — which the frontend renders as a duplicate :key or a silently missing event.
+    //
+    // Deliberately NOT asserting the DIRECTION of the id ordering: Postgres orders `uuid` by
+    // unsigned bytes while Java's UUID.compareTo compares the two halves as SIGNED longs, so the two
+    // disagree. "Exactly once, no duplicate, no gap" is the property that matters and is portable.
+    @Test
+    @SuppressWarnings("unchecked")
+    void getTimeline_asParent_eventsSharingOneOccurredAt_pageWithoutDuplicateOrGap() {
+        Instant shared = seedBase.minusSeconds(3600);
+        transactionTemplate.execute(status -> {
+            for (int i = 0; i < 4; i++) {
+                insertTimelineEvent(PLAYER_ID, "SESSION_COMPLETED", "booking", shared);
+            }
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+        List<String> seenIds = new java.util.ArrayList<>();
+        for (int page = 0; page < 2; page++) {
+            ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+                timelineUrl(page, 2), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat((List<?>) response.getBody().get("events")).hasSize(2);
+            seenIds.addAll(idsOf(response));
+        }
+
+        assertThat(seenIds).hasSize(4).doesNotHaveDuplicates();
+        // Sanity: the sort key really was non-unique for this fixture.
+        Integer distinctTimestamps = jdbcTemplate.queryForObject(
+            "SELECT COUNT(DISTINCT occurred_at) FROM development.player_timeline_events WHERE player_id = ?",
+            Integer.class, PLAYER_ID);
+        assertThat(distinctTimestamps).isEqualTo(1);
     }
 
     // skillars-12-2 AC4: the recap ("whatWeDid"/"whatsNext") written into a SESSION_COMPLETED
@@ -550,6 +664,10 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         return baseUrl() + "/api/development/players/" + PLAYER_ID + "/timeline";
     }
 
+    private String timelineUrl(int page, int size) {
+        return timelineUrl() + "?page=" + page + "&size=" + size;
+    }
+
     private String reportsUrl() {
         return baseUrl() + "/api/development/players/" + PLAYER_ID + "/reports";
     }
@@ -639,14 +757,72 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         );
     }
 
+    /**
+     * skillars-deferred-153 AC4 code review (2026-10-17): seeds DISTINCT, explicitly-ordered
+     * {@code occurred_at} values.
+     *
+     * <p>This helper used {@code NOW()}, which is <strong>transaction-constant</strong> in Postgres:
+     * every event seeded inside one {@code transactionTemplate.execute} block landed on the
+     * identical timestamp. The paging tests below therefore passed regardless of row order, and the
+     * new {@code ...OrderByOccurredAtDescIdDesc} tie-break had nothing to assert against. Each call
+     * now lands one minute older than the previous one, so <em>seeding order is newest-first order</em>
+     * — exactly the order the endpoint returns — and page boundaries become genuinely assertable.
+     *
+     * <p>Computed in Java rather than in SQL on purpose: an in-statement {@code NOW() - (? * INTERVAL
+     * '1 minute')} would leave the parameter's type for Postgres to infer, and the sequence has to
+     * keep advancing across separate transactions within one test anyway.
+     */
     private void insertTimelineEvent(long playerId, String eventType, String referenceModule) {
+        insertTimelineEvent(playerId, eventType, referenceModule, nextSeedOccurredAt());
+    }
+
+    /** Explicit-timestamp overload — lets a test seed several events on the IDENTICAL instant. */
+    private void insertTimelineEvent(long playerId, String eventType, String referenceModule, Instant occurredAt) {
         jdbcTemplate.update(
             "INSERT INTO development.player_timeline_events " +
             "(id, player_id, event_type, reference_module, occurred_at) " +
-            "VALUES (gen_random_uuid(), ?, ?, ?, NOW())",
-            playerId, eventType, referenceModule
+            "VALUES (gen_random_uuid(), ?, ?, ?, ?)",
+            playerId, eventType, referenceModule, Timestamp.from(occurredAt)
         );
     }
+
+    /** One minute older on every call. JUnit builds a fresh test instance per method, so the
+     *  sequence restarts at 0 for each test without any explicit reset. */
+    private Instant nextSeedOccurredAt() {
+        return seedBase.minusSeconds(60L * timelineSeedSequence++);
+    }
+
+    /**
+     * Seeds {@code count} SESSION_COMPLETED events one minute apart and returns their ids in
+     * newest-first order — i.e. the exact order the endpoint is expected to return them in.
+     *
+     * <p>Asserting on ids read back from the DB rather than on the serialized {@code occurredAt}
+     * strings keeps the assertion independent of Jackson's Instant rendering and of any
+     * timestamptz/JVM-timezone round-tripping, while still pinning order, page boundaries and
+     * one-row-per-event exactly.
+     */
+    private List<String> seedTimelineEvents(int count) {
+        transactionTemplate.execute(status -> {
+            for (int i = 0; i < count; i++) {
+                insertTimelineEvent(PLAYER_ID, "SESSION_COMPLETED", "booking");
+            }
+            return null;
+        });
+        return jdbcTemplate.queryForList(
+            "SELECT id::text FROM development.player_timeline_events " +
+            "WHERE player_id = ? ORDER BY occurred_at DESC",
+            String.class, PLAYER_ID);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> eventsOf(ResponseEntity<Map> response) {
+        return (List<Map<String, Object>>) response.getBody().get("events");
+    }
+
+    private List<String> idsOf(ResponseEntity<Map> response) {
+        return eventsOf(response).stream().map(e -> (String) e.get("id")).toList();
+    }
+
 
     // skillars-12-2 Task 3.3: insertTimelineEvent above never sets metadata, so a dedicated
     // seeding helper is needed to cover AC4's coach-only recap redaction. Defaults to attended=true
@@ -664,11 +840,14 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         String metadataJson = String.format(
             "{\"coachId\":\"%s\",\"whatWeDid\":\"%s\",\"whatsNext\":\"%s\"}",
             coachId, whatWeDid, whatsNext);
+        // skillars-deferred-153 AC4 code review (2026-10-17): shares insertTimelineEvent's
+        // distinct-timestamp sequence instead of the transaction-constant NOW(), so two recap events
+        // seeded in one transaction can never collide on occurred_at either.
         jdbcTemplate.update(
             "INSERT INTO development.player_timeline_events " +
             "(id, player_id, event_type, reference_module, occurred_at, metadata, coach_id) " +
-            "VALUES (gen_random_uuid(), ?, 'SESSION_COMPLETED', 'booking', NOW(), ?::jsonb, ?)",
-            playerId, metadataJson, attended ? coachId : null
+            "VALUES (gen_random_uuid(), ?, 'SESSION_COMPLETED', 'booking', ?, ?::jsonb, ?)",
+            playerId, Timestamp.from(nextSeedOccurredAt()), metadataJson, attended ? coachId : null
         );
     }
 }

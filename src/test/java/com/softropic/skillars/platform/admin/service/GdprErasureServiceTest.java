@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.admin.repo.GdprRequest;
 import com.softropic.skillars.platform.admin.repo.GdprRequestRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
@@ -91,6 +92,7 @@ class GdprErasureServiceTest {
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private BookingRepository bookingRepository;
+    @Mock private SessionCompletionDataRepository sessionCompletionDataRepository;
     @Mock private MessageRepository messageRepository;
     @Mock private CoachReviewRepository coachReviewRepository;
     @Mock private SluRepository sluRepository;
@@ -140,7 +142,7 @@ class GdprErasureServiceTest {
 
         service = new GdprErasureService(
             gdprRequestRepository, adminAlertRepository, userRepository, coachProfileRepository,
-            playerProfileRepository, bookingRepository, messageRepository, coachReviewRepository,
+            playerProfileRepository, bookingRepository, sessionCompletionDataRepository, messageRepository, coachReviewRepository,
             sluRepository, sluWeeklySnapshotRepository, playerSluWeeklySnapshotAppliedRepository,
             sluTargetRepository, radarAssessmentRepository, neglectedSkillFlagRepository,
             playerRadarBaselineRepository, playerRadarCompositeRepository, performanceReportRepository,

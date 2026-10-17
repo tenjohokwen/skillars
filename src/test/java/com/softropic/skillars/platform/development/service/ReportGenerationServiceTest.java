@@ -20,7 +20,6 @@ import com.softropic.skillars.platform.marketplace.service.PlayerProfileService;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
-import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -68,9 +67,8 @@ class ReportGenerationServiceTest {
     @Mock private FileStorageService fileStorageService;
     @Mock private TimelineEventListener timelineEventListener;
     @Mock private ApplicationEventPublisher publisher;
-    @Mock private SecurityUtil securityUtil;
     @Mock private CoachPlayerAuthorizationService coachPlayerAuthorizationService;
-    @Mock private PlayerProfileRepository playerProfileRepository;
+    @Mock private com.softropic.skillars.platform.config.service.ConfigService configService;
     // skillars-deferred-92 AC18: a real instance, not a mock. The per-coach limit is the
     // point of the AC, and a mock would return false for tryConsume and silently reject
     // every call, or be stubbed to always allow and prove nothing.
@@ -93,10 +91,16 @@ class ReportGenerationServiceTest {
             sluRepository, coachPlayerLastSessionResolver,
             skillDefinitionRepository, compositeRepository, baselineRepository,
             reportRepository, brandingRepository, fileStorageService,
-            timelineEventListener, publisher, securityUtil, coachPlayerAuthorizationService,
-            playerProfileRepository, rateLimitingService
+            timelineEventListener, publisher, coachPlayerAuthorizationService,
+            rateLimitingService, configService
         );
         ReflectionTestUtils.setField(service, "baseUrl", "http://app.test");
+        // skillars-deferred-153 AC7: a bare @Mock ConfigService does not throw on an unstubbed call —
+        // getBoundedLong returns Mockito's default 0L, which would make every existing happy-path
+        // generateReport test (lastSessionDate stubbed as "1 hour ago") start throwing
+        // AccessDeniedException. lenient() — the stale-signal test below overrides with its own value.
+        org.mockito.Mockito.lenient().when(configService.getBoundedLong(
+            "development.timeline.coachAccessExpiryDays", 1L, 3650L)).thenReturn(90L);
     }
 
     private CoachProfileDto coachDto() {
@@ -198,6 +202,22 @@ class ReportGenerationServiceTest {
 
         assertThatThrownBy(() -> service.generateReport(COACH_USER_ID, PLAYER_ID, "keep at it"))
             .isInstanceOf(AccessDeniedException.class);
+    }
+
+    // skillars-deferred-153 AC7: report generation now shares TimelineQueryService's own recency
+    // policy — a non-null but stale lastSessionDate (predating the configured
+    // development.timeline.coachAccessExpiryDays window) is denied, not just a null one.
+    @Test
+    void generateReport_lastSessionPredatesAccessWindow_throwsAccessDeniedException() {
+        when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
+        when(coachPlayerLastSessionResolver.resolve(PLAYER_ID, COACH_ID)).thenReturn(
+            new CoachPlayerLastSessionResolver.LastCoachSessionSignal(Instant.now().minus(200, java.time.temporal.ChronoUnit.DAYS), null));
+        when(configService.getBoundedLong("development.timeline.coachAccessExpiryDays", 1L, 3650L)).thenReturn(90L);
+
+        assertThatThrownBy(() -> service.generateReport(COACH_USER_ID, PLAYER_ID, "stale"))
+            .isInstanceOf(AccessDeniedException.class);
+        verify(reportRepository, never()).saveAndFlush(any());
     }
 
     // skillars-deferred-152 AC3/Task 3: the third and final SLU-only report-generation gate now
@@ -331,6 +351,35 @@ class ReportGenerationServiceTest {
 
     // ---- listReports (READY-only) ----
 
+    // skillars-deferred-153 AC6 code review (2026-10-17): NEW. Task 9 claimed coverage of the
+    // newly-shared listReports authorization call but none was added — the pre-existing listReports_*
+    // tests below pass only because the mocked CoachPlayerAuthorizationService no-ops, so dropping
+    // the call entirely (re-opening the IDOR the AC6 consolidation closed) would have kept them
+    // green. This asserts the delegation to the consolidated predicate explicitly.
+    @Test
+    void listReports_delegatesToConsolidatedIfCoachAuthorizationCheck() {
+        when(reportRepository.findByPlayerIdAndStatusOrderByGeneratedAtDesc(PLAYER_ID, ReportStatus.READY))
+            .thenReturn(List.of());
+
+        service.listReports(PLAYER_ID);
+
+        verify(coachPlayerAuthorizationService).requireCoachPlayerRelationshipIfCoach(PLAYER_ID);
+    }
+
+    // ...and it runs BEFORE the repository read, so a rejected caller never reaches the data.
+    @Test
+    void listReports_authorizationRejects_neverReadsReports() {
+        doThrow(new AccessDeniedException("no relationship"))
+            .when(coachPlayerAuthorizationService).requireCoachPlayerRelationshipIfCoach(PLAYER_ID);
+
+        assertThatThrownBy(() -> service.listReports(PLAYER_ID))
+            .isInstanceOf(AccessDeniedException.class);
+
+        verify(reportRepository, never())
+            .findByPlayerIdAndStatusOrderByGeneratedAtDesc(any(), any());
+        verify(fileStorageService, never()).signedDownloadUrl(anyString());
+    }
+
     @Test
     void listReports_callsSignedDownloadUrl() {
         PerformanceReport r1 = readyReport(COACH_ID, "reports/r1/report.pdf");
@@ -438,8 +487,8 @@ class ReportGenerationServiceTest {
             sluRepository, coachPlayerLastSessionResolver,
             skillDefinitionRepository, compositeRepository, baselineRepository,
             reportRepository, brandingRepository, realFileStorageService,
-            timelineEventListener, publisher, securityUtil, coachPlayerAuthorizationService,
-            playerProfileRepository, rateLimitingService
+            timelineEventListener, publisher, coachPlayerAuthorizationService,
+            rateLimitingService, configService
         );
         ReflectionTestUtils.setField(realService, "baseUrl", "http://app.test");
 

@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.development.service;
 import com.softropic.skillars.infrastructure.util.TestClockProvider;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.RosterPlayerActivityProjection;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.development.contract.RosterEntryResponse;
 import com.softropic.skillars.platform.development.contract.RosterResponse;
@@ -16,8 +17,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -34,7 +37,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyShort;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -84,6 +86,24 @@ class CoachRosterServiceTest {
         // stubs below. lenient() because the no-qualifying-activity test never reaches buildEntry.
         lenient().when(coachPlayerLastSessionResolver.resolve(anyLong(), any()))
             .thenReturn(new CoachPlayerLastSessionResolver.LastCoachSessionSignal(null, null));
+        // skillars-deferred-153 AC3: getRoster() now reads maxPlayers via the same 4-arg
+        // getBoundedLong call shape as dormantAfterDays, UNCONDITIONALLY and before even querying
+        // activities — lenient() because the no-qualifying-activity/missing-profile tests never
+        // reach buildEntry's own dormantAfterDays read but still need a sane (non-zero) default here,
+        // since PageRequest.of(0, 0) throws.
+        //
+        // skillars-deferred-153 code review (2026-10-17): stubbed PER KEY, not with a blanket
+        // anyString(). The previous single anyString() stub matched EVERY bounded-long key, so it
+        // silently retuned development.roster.dormantAfterDays to the maxPlayers value (150) for
+        // every test that did not override it — and stubDormantAfterDays() had the mirror-image
+        // problem, setting the effective maxPlayers to the dormancy threshold. Each key now gets its
+        // own value and the coupling is gone.
+        lenient().when(configService.getBoundedLong(
+                eq(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.key()), anyLong(), anyLong(), anyLong()))
+            .thenReturn(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.defaultValue());
+        lenient().when(configService.getBoundedLong(
+                eq(ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.key()), anyLong(), anyLong(), anyLong()))
+            .thenReturn(ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.defaultValue());
     }
 
     @AfterEach
@@ -93,7 +113,10 @@ class CoachRosterServiceTest {
 
     @Test
     void getRoster_withNoQualifyingActivity_returnsEmptyRosterWithoutFurtherLookups() {
-        when(bookingRepository.findRosterPlayerActivityByCoachIdAndStatusIn(eq(COACH_ID), anyList(), any()))
+        // skillars-deferred-153 code review (2026-10-17): 5-arg form — `now` was inserted SECOND so
+        // the in-@Query ORDER BY can clamp a future-dated booking down to `now` before ranking.
+        when(bookingRepository.findRosterPlayerActivityByCoachIdAndStatusIn(
+                eq(COACH_ID), any(Instant.class), anyList(), any(Instant.class), any(Pageable.class)))
             .thenReturn(List.of());
 
         RosterResponse response = service.getRoster(COACH_ID);
@@ -198,6 +221,81 @@ class CoachRosterServiceTest {
         verifyNoInteractions(coachPlayerLastSessionResolver, neglectedSkillFlagRepository, snapshotRepository);
     }
 
+    // skillars-deferred-153 AC3: the configured maxPlayers bound is passed through as the
+    // PageRequest's size, unsorted (the query's own ORDER BY already orders most-recently-active
+    // first — a sorted Pageable would be appended after it and silently do nothing).
+    @Test
+    void getRoster_candidateSetExceedsMaxPlayers_passesConfiguredCapAsUnsortedPageRequestSize() {
+        when(configService.getBoundedLong(
+                eq(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.key()),
+                anyLong(), anyLong(), anyLong()))
+            .thenReturn(200L);
+        stubActivity(NOW.minusSeconds(3600));
+        stubPlayerName("Capped Candidate");
+        stubNoNeglectedFlags();
+        stubNoTrendData();
+
+        service.getRoster(COACH_ID);
+
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+        org.mockito.Mockito.verify(bookingRepository).findRosterPlayerActivityByCoachIdAndStatusIn(
+            eq(COACH_ID), any(Instant.class), anyList(), any(Instant.class), pageableCaptor.capture());
+        Pageable captured = pageableCaptor.getValue();
+        assertThat(captured.getPageNumber()).isZero();
+        assertThat(captured.getPageSize()).isEqualTo(200);
+        assertThat(captured.getSort().isUnsorted()).isTrue();
+    }
+
+    // skillars-deferred-153 code review (2026-10-17): NEW — the inserted `now` parameter must be the
+    // service's own ClockProvider-pinned instant, and recencyFloor must be 730 days before it. The
+    // query's ORDER BY clamps MAX(requestedStartTime) against this `now`, so passing the wrong value
+    // (or a second, independently-taken Instant.now()) would silently change which players survive
+    // the cap for a coach whose candidate set exceeds maxPlayers.
+    @Test
+    void getRoster_passesClockPinnedNowAndSevenThirtyDayRecencyFloorToTheQuery() {
+        stubActivity(NOW.minusSeconds(3600));
+        stubPlayerName("Clock Pinned");
+        stubNoNeglectedFlags();
+        stubNoTrendData();
+        stubDormantAfterDays(30);
+
+        service.getRoster(COACH_ID);
+
+        ArgumentCaptor<Instant> nowCaptor = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<Instant> floorCaptor = ArgumentCaptor.forClass(Instant.class);
+        org.mockito.Mockito.verify(bookingRepository).findRosterPlayerActivityByCoachIdAndStatusIn(
+            eq(COACH_ID), nowCaptor.capture(), anyList(), floorCaptor.capture(), any(Pageable.class));
+
+        assertThat(nowCaptor.getValue()).isEqualTo(NOW);
+        assertThat(floorCaptor.getValue()).isEqualTo(NOW.minus(Duration.ofDays(730)));
+    }
+
+    // skillars-deferred-153 code review (2026-10-17): NEW — the two roster config keys must read
+    // independently. Guards the exact defect the old blanket anyString() stub hid: with maxPlayers
+    // configured high and dormantAfterDays configured low, the 60-day-stale player must still read
+    // as dormant (i.e. dormantAfterDays was NOT overwritten by the maxPlayers value).
+    @Test
+    void getRoster_maxPlayersAndDormantAfterDaysAreReadIndependently() {
+        when(configService.getBoundedLong(
+                eq(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.key()),
+                anyLong(), anyLong(), anyLong()))
+            .thenReturn(500L);
+        stubDormantAfterDays(5);
+        stubActivity(NOW.minus(Duration.ofDays(60)));
+        stubPlayerName("Long Dormant");
+        stubNoNeglectedFlags();
+        stubNoTrendData();
+
+        RosterEntryResponse entry = singleEntry(service.getRoster(COACH_ID));
+
+        assertThat(entry.dormant()).isTrue();
+
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+        org.mockito.Mockito.verify(bookingRepository).findRosterPlayerActivityByCoachIdAndStatusIn(
+            eq(COACH_ID), any(Instant.class), anyList(), any(Instant.class), pageableCaptor.capture());
+        assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(500);
+    }
+
     @Test
     void getRoster_mapsPlayerNameFromProfileRepository() {
         stubActivity(NOW.minusSeconds(3600));
@@ -214,7 +312,8 @@ class CoachRosterServiceTest {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private void stubActivity(Instant latestBookingTime) {
-        when(bookingRepository.findRosterPlayerActivityByCoachIdAndStatusIn(eq(COACH_ID), anyList(), any()))
+        when(bookingRepository.findRosterPlayerActivityByCoachIdAndStatusIn(
+                eq(COACH_ID), any(Instant.class), anyList(), any(Instant.class), any(Pageable.class)))
             .thenReturn(List.of(activity(PLAYER_ID, latestBookingTime)));
     }
 
@@ -237,8 +336,14 @@ class CoachRosterServiceTest {
             .thenReturn(List.of());
     }
 
+    // skillars-deferred-153 code review (2026-10-17): keyed on DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS
+    // specifically. The previous anyString() form also overwrote maxPlayers with `days` — so
+    // stubDormantAfterDays(30) silently capped the candidate set at 30, and stubDormantAfterDays(0)
+    // would have thrown from PageRequest.of(0, 0).
     private void stubDormantAfterDays(long days) {
-        when(configService.getBoundedLong(anyString(), anyLong(), anyLong(), anyLong())).thenReturn(days);
+        when(configService.getBoundedLong(
+                eq(ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.key()), anyLong(), anyLong(), anyLong()))
+            .thenReturn(days);
     }
 
     private RosterEntryResponse singleEntry(RosterResponse response) {

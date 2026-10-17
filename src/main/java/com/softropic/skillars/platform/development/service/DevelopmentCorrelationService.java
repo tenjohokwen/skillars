@@ -47,7 +47,9 @@ public class DevelopmentCorrelationService {
     private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
 
     public CorrelationResponse getInsights(Long playerId, UUID coachId) {
-        coachPlayerAuthorizationService.requireCoachPlayerRelationship(coachId, playerId);
+        // skillars-deferred-153 AC5: a read endpoint — widened to match the roster's own membership
+        // status width.
+        coachPlayerAuthorizationService.requireCoachPlayerRelationshipForRead(coachId, playerId);
         CoachSubscriptionTier tier = coachProfileService.getCoachSubscriptionTier(coachId);
         if (tier != CoachSubscriptionTier.ACADEMY) {
             throw new FeatureGatedException("development.correlation", "ACADEMY");

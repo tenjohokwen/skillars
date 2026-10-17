@@ -38,6 +38,7 @@ import {
   getCorrelationInsights,
   listReports,
   generateReport,
+  getTimeline,
 } from 'src/api/development.api'
 import { useDevelopmentStore } from 'src/stores/development.store'
 
@@ -139,5 +140,187 @@ describe('development.store — error-message i18n sweep (deferred-152 AC1)', ()
     const store = useDevelopmentStore()
     await expect(store.generateReport('p1', 'next steps')).rejects.toBeTruthy()
     expect(store.reportsError).toBe(i18n.global.t('error.generic'))
+  })
+})
+
+// skillars-deferred-153 AC4: fetchTimeline's append-on-page>0 restructure — page 0 replaces
+// (today's established behavior), page > 0 appends under a SEPARATE timelineLoadingMore flag
+// rather than hiding the already-rendered panel.
+describe('development.store — fetchTimeline pagination (deferred-153 AC4)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('page 0 replaces the timeline wholesale', async () => {
+    getTimeline.mockResolvedValue({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [{ id: 'e1' }],
+      hasMore: true,
+    })
+    const store = useDevelopmentStore()
+
+    await store.fetchTimeline('p1')
+
+    expect(getTimeline).toHaveBeenCalledWith('p1', 0)
+    expect(store.timeline.events).toEqual([{ id: 'e1' }])
+    expect(store.timeline.hasMore).toBe(true)
+    expect(store.timelinePage).toBe(0)
+  })
+
+  it('page > 0 appends to the existing events array without clearing it first', async () => {
+    getTimeline.mockResolvedValueOnce({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [{ id: 'e1' }],
+      hasMore: true,
+    })
+    const store = useDevelopmentStore()
+    await store.fetchTimeline('p1')
+
+    getTimeline.mockResolvedValueOnce({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [{ id: 'e2' }],
+      hasMore: false,
+    })
+    await store.fetchTimeline('p1', 1)
+
+    expect(getTimeline).toHaveBeenLastCalledWith('p1', 1)
+    expect(store.timeline.events).toEqual([{ id: 'e1' }, { id: 'e2' }])
+    expect(store.timeline.hasMore).toBe(false)
+    expect(store.timelinePage).toBe(1)
+  })
+
+  it('page > 0 uses timelineLoadingMore, not timelineLoading, and never hides the panel', async () => {
+    getTimeline.mockResolvedValueOnce({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [{ id: 'e1' }],
+      hasMore: true,
+    })
+    const store = useDevelopmentStore()
+    await store.fetchTimeline('p1')
+
+    let sawLoadingDuringAppend
+    getTimeline.mockImplementationOnce(async () => {
+      sawLoadingDuringAppend = {
+        loading: store.timelineLoading,
+        loadingMore: store.timelineLoadingMore,
+      }
+      return {
+        accessExpired: false,
+        accessExpiryDays: null,
+        events: [{ id: 'e2' }],
+        hasMore: false,
+      }
+    })
+    await store.fetchTimeline('p1', 1)
+
+    expect(sawLoadingDuringAppend).toEqual({ loading: false, loadingMore: true })
+    expect(store.timeline).not.toBeNull()
+    expect(store.timelineLoadingMore).toBe(false)
+  })
+
+  it('page 0 surfaces the translated error fallback on failure', async () => {
+    getTimeline.mockRejectedValue(rejection(500))
+    const store = useDevelopmentStore()
+    await store.fetchTimeline('p1')
+    expect(store.timelineError).toBe(i18n.global.t('development.timeline.loadError'))
+  })
+
+  // skillars-deferred-153 code review: a failed "Load more" must not take the whole rendered
+  // timeline down with it. timelineError drives PlayerTimelinePanel.vue's full-panel banner,
+  // which replaces the events list (and the retry button), so the page > 0 failure path has to
+  // land in its own ref and leave both timelineError and the loaded events alone.
+  it('page > 0 failure sets timelineLoadMoreError, not timelineError, and keeps the events', async () => {
+    getTimeline.mockResolvedValueOnce({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [{ id: 'e1' }],
+      hasMore: true,
+    })
+    const store = useDevelopmentStore()
+    await store.fetchTimeline('p1')
+
+    getTimeline.mockRejectedValueOnce(rejection(500))
+    await store.fetchTimeline('p1', 1)
+
+    expect(store.timelineLoadMoreError).toBe(i18n.global.t('development.timeline.loadMoreError'))
+    expect(store.timelineError).toBeNull()
+    expect(store.timeline.events).toEqual([{ id: 'e1' }])
+    expect(store.timeline.hasMore).toBe(true)
+    expect(store.timelineLoadingMore).toBe(false)
+  })
+
+  it('a page > 0 request does not clear a standing page-0 error', async () => {
+    getTimeline.mockRejectedValueOnce(rejection(500))
+    const store = useDevelopmentStore()
+    await store.fetchTimeline('p1')
+    expect(store.timelineError).toBe(i18n.global.t('development.timeline.loadError'))
+
+    getTimeline.mockResolvedValueOnce({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [{ id: 'e2' }],
+      hasMore: false,
+    })
+    await store.fetchTimeline('p1', 1)
+
+    expect(store.timelineError).toBe(i18n.global.t('development.timeline.loadError'))
+  })
+
+  it('a successful page 0 clears both the page-0 and the load-more error', async () => {
+    getTimeline.mockResolvedValueOnce({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [{ id: 'e1' }],
+      hasMore: true,
+    })
+    const store = useDevelopmentStore()
+    await store.fetchTimeline('p1')
+
+    getTimeline.mockRejectedValueOnce(rejection(500))
+    await store.fetchTimeline('p1', 1)
+    expect(store.timelineLoadMoreError).not.toBeNull()
+
+    getTimeline.mockResolvedValueOnce({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [{ id: 'e3' }],
+      hasMore: false,
+    })
+    await store.fetchTimeline('p1')
+
+    expect(store.timelineError).toBeNull()
+    expect(store.timelineLoadMoreError).toBeNull()
+  })
+
+  // skillars-deferred-153 code review: coach access can expire between page 0 and page 1. The
+  // backend then answers with accessExpired: true and an empty events array; appending would
+  // keep the earlier events on screen under the expiry banner — displaying precisely the data
+  // the backend just withheld. The expired response therefore replaces rather than merges.
+  it('page > 0 with accessExpired replaces the timeline instead of appending', async () => {
+    getTimeline.mockResolvedValueOnce({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [{ id: 'e1' }],
+      hasMore: true,
+    })
+    const store = useDevelopmentStore()
+    await store.fetchTimeline('p1')
+
+    getTimeline.mockResolvedValueOnce({
+      accessExpired: true,
+      accessExpiryDays: 90,
+      events: [],
+      hasMore: false,
+    })
+    await store.fetchTimeline('p1', 1)
+
+    expect(store.timeline.accessExpired).toBe(true)
+    expect(store.timeline.accessExpiryDays).toBe(90)
+    expect(store.timeline.events).toEqual([])
   })
 })

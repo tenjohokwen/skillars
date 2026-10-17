@@ -36,11 +36,18 @@ export const useDevelopmentStore = defineStore('development', () => {
   const correlationLoading = ref(false)
   const reports = ref([])
   const timeline = ref(null)
+  const timelinePage = ref(0)
   const reportsLoading = ref(false)
   const timelineLoading = ref(false)
+  const timelineLoadingMore = ref(false)
   const reportGenerating = ref(false)
   const reportsError = ref(null)
   const timelineError = ref(null)
+  // skillars-deferred-153 code review: load-more failures need their OWN error ref. timelineError
+  // is consumed by PlayerTimelinePanel.vue as a full-panel banner that replaces the events list,
+  // so reusing it for a page > 0 failure wiped the already-loaded timeline (and with it the
+  // "Load more" button that was the only way to clear the error) — a dead end until remount.
+  const timelineLoadMoreError = ref(null)
   const coachContributions = ref([])
   const coachContributionsLoading = ref(false)
   const coachContributionsError = ref(null)
@@ -215,25 +222,57 @@ export const useDevelopmentStore = defineStore('development', () => {
 
   let _timelineSeq = 0
 
-  async function fetchTimeline(playerId) {
+  // skillars-deferred-153 AC4: page === 0 replaces (today's established behavior — a fresh
+  // player selection must not show stale events); page > 0 appends under a SEPARATE loading flag
+  // so the already-rendered panel is not hidden while "Load more" is in flight.
+  async function fetchTimeline(playerId, page = 0) {
     if (!playerId) return
     const seq = ++_timelineSeq
-    timeline.value = null
-    timelineLoading.value = true
-    timelineError.value = null
+    if (page === 0) {
+      timeline.value = null
+      timelineLoading.value = true
+      // A fresh page-0 load supersedes both error states — it rebuilds the panel from scratch.
+      timelineError.value = null
+      timelineLoadMoreError.value = null
+    } else {
+      timelineLoadingMore.value = true
+      // skillars-deferred-153 code review: deliberately does NOT clear timelineError. A page > 0
+      // request is only reachable from the events branch, which never renders while a page-0
+      // error stands; clearing it here would silently drop a failure the user has not seen.
+      timelineLoadMoreError.value = null
+    }
     try {
-      const response = await getTimeline(playerId)
+      const response = await getTimeline(playerId, page)
       if (seq === _timelineSeq) {
-        timeline.value = response
+        // skillars-deferred-153 code review: an appended response carrying accessExpired REPLACES
+        // instead of merging. The backend answers an expired coach-access window with
+        // accessExpired: true and an empty events array — merging would keep the previously
+        // loaded events on screen underneath the expiry banner, i.e. keep displaying exactly the
+        // data the backend just decided to withhold.
+        timeline.value =
+          page === 0 || !timeline.value || response.accessExpired
+            ? response
+            : { ...response, events: [...timeline.value.events, ...response.events] }
+        timelinePage.value = page
       }
     } catch (err) {
       if (seq === _timelineSeq) {
-        timelineError.value =
-          err?.response?.data?.errorMsg?.message ?? i18n.global.t('development.timeline.loadError')
+        // page 0 failed with nothing rendered → full-panel banner. page > 0 failed with a
+        // populated timeline on screen → inline message beside "Load more", list untouched.
+        // The fallback copy differs too: "Failed to load timeline" misdescribes a load-more
+        // failure, where the timeline itself is still right there above the message.
+        const serverMessage = err?.response?.data?.errorMsg?.message
+        if (page === 0) {
+          timelineError.value = serverMessage ?? i18n.global.t('development.timeline.loadError')
+        } else {
+          timelineLoadMoreError.value =
+            serverMessage ?? i18n.global.t('development.timeline.loadMoreError')
+        }
       }
     } finally {
       if (seq === _timelineSeq) {
         timelineLoading.value = false
+        timelineLoadingMore.value = false
       }
     }
   }
@@ -281,11 +320,14 @@ export const useDevelopmentStore = defineStore('development', () => {
     correlationLoading,
     reports,
     timeline,
+    timelinePage,
     reportsLoading,
     timelineLoading,
+    timelineLoadingMore,
     reportGenerating,
     reportsError,
     timelineError,
+    timelineLoadMoreError,
     fetchSkillDefinitions,
     fetchExposure,
     fetchNarrative,

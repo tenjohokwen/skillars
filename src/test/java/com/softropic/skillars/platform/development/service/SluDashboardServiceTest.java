@@ -8,8 +8,6 @@ import com.softropic.skillars.platform.development.contract.SkillTrendResponse;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PlayerSluWeeklySnapshot;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
-import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
-import com.softropic.skillars.platform.security.service.SecurityUtil;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +26,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.mockito.ArgumentMatchers.anyShort;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
@@ -37,9 +36,7 @@ class SluDashboardServiceTest {
     @Mock private SluWeeklySnapshotRepository snapshotRepository;
     @Mock private NeglectedSkillFlagRepository flagRepository;
     @Mock private SluNarrativeService narrativeService;
-    @Mock private SecurityUtil securityUtil;
     @Mock private CoachPlayerAuthorizationService coachPlayerAuthorizationService;
-    @Mock private PlayerProfileRepository playerProfileRepository;
 
     private SluDashboardService service;
 
@@ -48,8 +45,7 @@ class SluDashboardServiceTest {
     @BeforeEach
     void setUp() {
         service = new SluDashboardService(
-            snapshotRepository, flagRepository, narrativeService, securityUtil,
-            coachPlayerAuthorizationService, playerProfileRepository);
+            snapshotRepository, flagRepository, narrativeService, coachPlayerAuthorizationService);
     }
 
     @AfterEach
@@ -244,6 +240,39 @@ class SluDashboardServiceTest {
         List<NarrativeKeyDto> result = service.getNarrativeSummary(PLAYER_ID);
 
         assertThat(result).isEmpty();
+    }
+
+    // skillars-deferred-153 AC6: all three entry points now delegate to the consolidated
+    // CoachPlayerAuthorizationService.requireCoachPlayerRelationshipIfCoach, closing the gap this
+    // class's own private inline predicate (missing PlayerOwnershipGuard's self-owner arm) left.
+    @Test
+    void getWeeklyExposure_delegatesRelationshipCheckToSharedMethod() {
+        when(snapshotRepository.findByPlayerIdFromWeek(eq(PLAYER_ID), anyShort(), anyShort(), anyShort(), anyShort()))
+            .thenReturn(List.of());
+        when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(List.of());
+
+        service.getWeeklyExposure(PLAYER_ID, 4);
+
+        org.mockito.Mockito.verify(coachPlayerAuthorizationService).requireCoachPlayerRelationshipIfCoach(PLAYER_ID);
+    }
+
+    @Test
+    void getSkillTrends_delegatesRelationshipCheckToSharedMethod() {
+        when(snapshotRepository.findByPlayerIdFromWeek(eq(PLAYER_ID), anyShort(), anyShort(), anyShort(), anyShort()))
+            .thenReturn(List.of());
+
+        service.getSkillTrends(PLAYER_ID, 4);
+
+        org.mockito.Mockito.verify(coachPlayerAuthorizationService).requireCoachPlayerRelationshipIfCoach(PLAYER_ID);
+    }
+
+    @Test
+    void getNarrativeSummary_delegatesRelationshipCheckToSharedMethod() {
+        when(narrativeService.generate(PLAYER_ID)).thenReturn(List.of());
+
+        service.getNarrativeSummary(PLAYER_ID);
+
+        org.mockito.Mockito.verify(coachPlayerAuthorizationService).requireCoachPlayerRelationshipIfCoach(PLAYER_ID);
     }
 
     private PlayerSluWeeklySnapshot makeSnapshot(short year, short week, String skill, BigDecimal slu) {

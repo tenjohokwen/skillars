@@ -36,7 +36,8 @@ export const generateReport = (playerId, nextSteps) =>
 
 export const listReports = (playerId) => api.get(`/api/development/players/${playerId}/reports`)
 
-export const getTimeline = (playerId) => api.get(`/api/development/players/${playerId}/timeline`)
+export const getTimeline = (playerId, page = 0, size = 50) =>
+  api.get(`/api/development/players/${playerId}/timeline`, { params: { page, size } })
 
 export const getCoachBranding = () => api.get('/api/development/coaches/me/branding')
 

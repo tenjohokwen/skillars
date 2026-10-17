@@ -51,6 +51,8 @@ class CoachRosterResourceIT extends AbstractIntegrationTest {
     private static final String CLIENT_ID      = "testClientId";
     private static final String TEST_PASSWORD  = "TestPass@123!";
     private static final String DORMANT_AFTER_DAYS_KEY = "development.roster.dormantAfterDays";
+    // skillars-deferred-153 AC3 code review (2026-10-17).
+    private static final String MAX_PLAYERS_KEY = "development.roster.maxPlayers";
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
@@ -116,6 +118,13 @@ class CoachRosterResourceIT extends AbstractIntegrationTest {
             insertBooking(otherCoachProfileId, OTHER_COACH_PLAYER_ID, "COMPLETED", Instant.now());
             return null;
         });
+
+        // skillars-deferred-153 AC3 code review (2026-10-17): reset the cap to the production default
+        // on every test. The cap tests below set it to 1 or 2, and that platform_config row survives
+        // into the next test — JUnit does not guarantee method order, so without this reset a cap test
+        // running first silently caps every other test's roster and they fail looking for a player the
+        // cap removed. Tests that need a cap set it explicitly; everything else must start uncapped.
+        setMaxPlayers("150");
     }
 
     @Test
@@ -334,6 +343,134 @@ class CoachRosterResourceIT extends AbstractIntegrationTest {
         assertThat(playerIds).doesNotContain(beyondFloorPlayerId);
     }
 
+    // skillars-deferred-153 AC3 code review (2026-10-17): NEW. CoachRosterResourceIT was never
+    // touched by the AC3 change despite being claimed as modified, which left AC3's two
+    // self-declared load-bearing constraints with NO real-DB coverage at all. Those constraints are
+    // (a) the method must keep its List<> return type — a Page<> would derive a COUNT query over this
+    // GROUP BY, which Spring Data evaluates per-group and which then throws
+    // IncorrectResultSizeDataAccessException — and (b) the ORDER BY must stay written into the
+    // @Query text with an UNSORTED PageRequest, because Spring Data appends a Pageable-carried Sort
+    // AFTER the query's own ORDER BY. Only a real Postgres round-trip with a candidate set LARGER
+    // than maxPlayers exercises either one: this test is the only thing in the suite that proves the
+    // capped query executes at all, and that the in-@Query ORDER BY — not insertion order, not the
+    // post-scoring attentionScore sort — is what decides which rows survive the LIMIT.
+    @Test
+    @SuppressWarnings("unchecked")
+    void getRoster_candidateSetExceedsMaxPlayers_capsToTheMostRecentlyActivePlayers() {
+        long recentPlayerId = 9700000070L;
+        long middlePlayerId = 9700000071L;
+        long stalePlayerId  = 9700000072L;
+        transactionTemplate.execute(status -> {
+            // The base fixture's own three bookings would otherwise compete for the capped slots.
+            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
+            insertPlayer(recentPlayerId, "Recent");
+            insertPlayer(middlePlayerId, "Middle");
+            insertPlayer(stalePlayerId, "Stale");
+            insertBooking(coachProfileId, recentPlayerId, "COMPLETED", Instant.now().minusSeconds(1L * 24 * 3600));
+            insertBooking(coachProfileId, middlePlayerId, "COMPLETED", Instant.now().minusSeconds(10L * 24 * 3600));
+            insertBooking(coachProfileId, stalePlayerId,  "COMPLETED", Instant.now().minusSeconds(30L * 24 * 3600));
+            return null;
+        });
+        setMaxPlayers("2");
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            rosterUrl(), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<String, Object>> players = (List<Map<String, Object>>) response.getBody().get("players");
+        List<Long> playerIds = players.stream().map(p -> Long.parseLong((String) p.get("playerId"))).toList();
+
+        // The cap really truncated the candidate set...
+        assertThat(playerIds).hasSize(2);
+        // ...and it kept the two most recently active, dropping the staleest — i.e. the @Query's own
+        // ORDER BY drove the LIMIT. Note the deliberate consequence recorded in the query's Javadoc:
+        // the 30-day-stale player is the HIGHEST-attention one of the three, and it is exactly the
+        // one the cap discards.
+        assertThat(playerIds).containsExactlyInAnyOrder(recentPlayerId, middlePlayerId);
+        assertThat(playerIds).doesNotContain(stalePlayerId);
+    }
+
+    /**
+     * skillars-deferred-153 AC3 code review (2026-10-17): NEW — the past-only clamp
+     * ({@code MAX(CASE WHEN b.requestedStartTime > :now THEN :now ELSE b.requestedStartTime END)}).
+     *
+     * <p>ROSTER_MEMBERSHIP_STATUSES deliberately includes ACCEPTED/PAYMENT_PENDING/CONFIRMED/
+     * UPCOMING, so a roster-qualifying booking can be future-dated. Before the clamp the cap ranked
+     * by the raw future timestamp, so a player with a session 40 days out outranked one with a
+     * session 2 days out. The clamp collapses every future-dated booking to exactly {@code :now}, so
+     * all of them TIE and {@code b.playerId ASC} decides — distance into the future no longer buys a
+     * slot. With {@code maxPlayers = 1} the two orderings disagree on the single survivor, which is
+     * what makes this assertable at all.
+     *
+     * <p><b>Honest scope note.</b> The clamp does NOT demote a future-only player below a player
+     * with genuine recent past activity: the clamped value is {@code :now}, which is still strictly
+     * greater than any past timestamp, so {@code pastActivePlayerId} below is dropped under both the
+     * old and the new ORDER BY. That is asserted here as current behaviour, not endorsed — see the
+     * review notes accompanying this change.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void getRoster_cap_ranksFutureDatedBookingsAtNowRatherThanByDistanceIntoTheFuture() {
+        long nearFuturePlayerId   = 9700000080L;   // lower id — wins the clamped tie-break
+        long farFuturePlayerId    = 9700000081L;   // higher id — would win WITHOUT the clamp
+        long pastActivePlayerId   = 9700000082L;
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id = ?", coachProfileId);
+            insertPlayer(nearFuturePlayerId, "Near Future");
+            insertPlayer(farFuturePlayerId, "Far Future");
+            insertPlayer(pastActivePlayerId, "Recently Trained");
+            // Non-overlapping slots: excl_bkg_coach_slot_overlap forbids two bookings for the same
+            // coach with overlapping time ranges in any of these statuses.
+            insertBooking(coachProfileId, nearFuturePlayerId, "ACCEPTED", Instant.now().plusSeconds(2L * 24 * 3600));
+            insertBooking(coachProfileId, farFuturePlayerId, "ACCEPTED", Instant.now().plusSeconds(40L * 24 * 3600));
+            insertBooking(coachProfileId, pastActivePlayerId, "COMPLETED", Instant.now().minusSeconds(2L * 24 * 3600));
+            return null;
+        });
+        setMaxPlayers("1");
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            rosterUrl(), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<String, Object>> players = (List<Map<String, Object>>) response.getBody().get("players");
+        List<Long> playerIds = players.stream().map(p -> Long.parseLong((String) p.get("playerId"))).toList();
+
+        assertThat(playerIds).containsExactly(nearFuturePlayerId);
+        // The 40-days-out booking buys no advantage over the 2-days-out one any more.
+        assertThat(playerIds).doesNotContain(farFuturePlayerId);
+        // See the "honest scope note" above: the clamp does not rescue this one.
+        assertThat(playerIds).doesNotContain(pastActivePlayerId);
+    }
+
+    // skillars-deferred-153 AC3 code review (2026-10-17): NEW — roster MEMBERSHIP is unchanged by
+    // the clamp. A player whose only booking is future-dated still appears on the roster when the
+    // candidate set fits inside maxPlayers; the clamp only affects which rows survive the cap.
+    @Test
+    @SuppressWarnings("unchecked")
+    void getRoster_futureDatedOnlyPlayer_stillAppearsWhenUnderTheCap() {
+        long futureOnlyPlayerId = 9700000090L;
+        transactionTemplate.execute(status -> {
+            insertPlayer(futureOnlyPlayerId, "Future Only");
+            insertBooking(coachProfileId, futureOnlyPlayerId, "ACCEPTED",
+                Instant.now().plusSeconds(21L * 24 * 3600));
+            return null;
+        });
+        setMaxPlayers("150");
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            rosterUrl(), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        List<Map<String, Object>> players = (List<Map<String, Object>>) response.getBody().get("players");
+        List<Long> playerIds = players.stream().map(p -> Long.parseLong((String) p.get("playerId"))).toList();
+
+        assertThat(playerIds).contains(futureOnlyPlayerId, DORMANT_NEGLECTED_PLAYER_ID, ACTIVE_CLEAN_PLAYER_ID);
+        // hasUpcomingBooking suppresses the dormant badge for a future-dated booking.
+        assertThat(entryFor(response, futureOnlyPlayerId).get("dormant")).isEqualTo(false);
+    }
+
     private Map<String, Object> entryFor(ResponseEntity<Map> response, long playerId) {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> players = (List<Map<String, Object>>) response.getBody().get("players");
@@ -341,6 +478,19 @@ class CoachRosterResourceIT extends AbstractIntegrationTest {
             .filter(p -> Long.parseLong((String) p.get("playerId")) == playerId)
             .findFirst()
             .orElseThrow();
+    }
+
+    // skillars-deferred-153 AC3 code review (2026-10-17): own platform_config id (9702) so it can
+    // coexist with setDormantAfterDays's row (9700) — ON CONFLICT is on `key`, not `id`.
+    private void setMaxPlayers(String value) {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.platform_config (id, key, value, value_type) " +
+                "VALUES (9702, ?, ?, 'LONG') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                MAX_PLAYERS_KEY, value);
+            return null;
+        });
+        configService.invalidate();
     }
 
     private void setDormantAfterDays(String value) {
