@@ -118,6 +118,13 @@ class CoachRosterResourceIT extends AbstractIntegrationTest {
             insertBooking(otherCoachProfileId, OTHER_COACH_PLAYER_ID, "COMPLETED", Instant.now());
             return null;
         });
+
+        // skillars-deferred-153 AC3 code review (2026-10-17): reset the cap to the production default
+        // on every test. The cap tests below set it to 1 or 2, and that platform_config row survives
+        // into the next test — JUnit does not guarantee method order, so without this reset a cap test
+        // running first silently caps every other test's roster and they fail looking for a player the
+        // cap removed. Tests that need a cap set it explicitly; everything else must start uncapped.
+        setMaxPlayers("150");
     }
 
     @Test
