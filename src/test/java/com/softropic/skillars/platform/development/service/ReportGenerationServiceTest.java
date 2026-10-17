@@ -59,6 +59,7 @@ class ReportGenerationServiceTest {
     @Mock private CoachProfileService coachProfileService;
     @Mock private PlayerProfileService playerProfileService;
     @Mock private SluRepository sluRepository;
+    @Mock private CoachPlayerLastSessionResolver coachPlayerLastSessionResolver;
     @Mock private SkillDefinitionRepository skillDefinitionRepository;
     @Mock private PlayerRadarCompositeRepository compositeRepository;
     @Mock private PlayerRadarBaselineRepository baselineRepository;
@@ -89,7 +90,8 @@ class ReportGenerationServiceTest {
     void setUp() {
         service = new ReportGenerationService(
             coachProfileService, playerProfileService,
-            sluRepository, skillDefinitionRepository, compositeRepository, baselineRepository,
+            sluRepository, coachPlayerLastSessionResolver,
+            skillDefinitionRepository, compositeRepository, baselineRepository,
             reportRepository, brandingRepository, fileStorageService,
             timelineEventListener, publisher, securityUtil, coachPlayerAuthorizationService,
             playerProfileRepository, rateLimitingService
@@ -106,7 +108,8 @@ class ReportGenerationServiceTest {
     private void stubGenerateReport(CoachSubscriptionTier tier) {
         when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(tier);
-        when(sluRepository.findLastSessionDate(PLAYER_ID, COACH_ID)).thenReturn(Instant.now().minusSeconds(3600));
+        when(coachPlayerLastSessionResolver.resolve(PLAYER_ID, COACH_ID)).thenReturn(
+            new CoachPlayerLastSessionResolver.LastCoachSessionSignal(Instant.now().minusSeconds(3600), null));
         when(coachProfileService.getPublicProfile(COACH_ID)).thenReturn(coachDto());
         when(playerProfileService.getPlayerNameByPlayerId(PLAYER_ID)).thenReturn("Alex Player");
         when(playerProfileService.getPlayerAgeByPlayerId(PLAYER_ID)).thenReturn(12);
@@ -159,7 +162,8 @@ class ReportGenerationServiceTest {
         stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
         when(coachProfileService.getCoachIdByUserId(otherCoachUserId)).thenReturn(otherCoachId);
         when(coachProfileService.getCoachSubscriptionTier(otherCoachId)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
-        when(sluRepository.findLastSessionDate(PLAYER_ID, otherCoachId)).thenReturn(Instant.now().minusSeconds(3600));
+        when(coachPlayerLastSessionResolver.resolve(PLAYER_ID, otherCoachId)).thenReturn(
+            new CoachPlayerLastSessionResolver.LastCoachSessionSignal(Instant.now().minusSeconds(3600), null));
         when(coachProfileService.getPublicProfile(otherCoachId)).thenReturn(coachDto());
 
         for (int i = 0; i < 10; i++) {
@@ -189,10 +193,36 @@ class ReportGenerationServiceTest {
     void generateReport_coachWithNoPlayerRelationship_throwsAccessDeniedException() {
         when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
-        when(sluRepository.findLastSessionDate(PLAYER_ID, COACH_ID)).thenReturn(null);
+        when(coachPlayerLastSessionResolver.resolve(PLAYER_ID, COACH_ID)).thenReturn(
+            new CoachPlayerLastSessionResolver.LastCoachSessionSignal(null, null));
 
         assertThatThrownBy(() -> service.generateReport(COACH_USER_ID, PLAYER_ID, "keep at it"))
             .isInstanceOf(AccessDeniedException.class);
+    }
+
+    // skillars-deferred-152 AC3/Task 3: the third and final SLU-only report-generation gate now
+    // reads the merged signal CoachRosterService/TimelineQueryService/SessionPrepService already
+    // use, so a Quick-Complete-only coach (no SLU row, only a coach-scoped timeline
+    // SESSION_COMPLETED event) can generate a report.
+    //
+    // skillars-deferred-152 code review (2026-10-17): this test pins the CALL-SITE SWAP, which is
+    // all it can pin -- with the resolver mocked, an SLU-backed and a timeline-only signal are the
+    // same LastCoachSessionSignal value, so no stub here can distinguish them. (An earlier version
+    // re-stubbed resolve(...) with a value byte-for-byte identical to stubGenerateReport's and
+    // claimed in a comment to be constructing the Quick-Complete-only shape; that stub was a
+    // literal no-op and has been removed.) The merge itself lives in CoachPlayerLastSessionResolver
+    // and is exercised end-to-end against a real DB by SessionPrepResourceIT and, since 2026-10-17,
+    // by CoachPlayerLastSessionResolverTest's own unit cases -- including the timeline-only-no-SLU
+    // shape (the Quick-Complete-only coach) that this test deliberately does not claim to cover.
+    @Test
+    void generateReport_accessGateReadsMergedResolverNotSluRepositoryDirectly() {
+        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+
+        assertThatCode(() -> service.generateReport(COACH_USER_ID, PLAYER_ID, "First report for this coach"))
+            .doesNotThrowAnyException();
+
+        verify(coachPlayerLastSessionResolver).resolve(PLAYER_ID, COACH_ID);
+        verify(sluRepository, never()).findLastSessionDate(any(), any());
     }
 
     @Test
@@ -405,7 +435,8 @@ class ReportGenerationServiceTest {
 
         ReportGenerationService realService = new ReportGenerationService(
             coachProfileService, playerProfileService,
-            sluRepository, skillDefinitionRepository, compositeRepository, baselineRepository,
+            sluRepository, coachPlayerLastSessionResolver,
+            skillDefinitionRepository, compositeRepository, baselineRepository,
             reportRepository, brandingRepository, realFileStorageService,
             timelineEventListener, publisher, securityUtil, coachPlayerAuthorizationService,
             playerProfileRepository, rateLimitingService

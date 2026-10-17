@@ -183,11 +183,14 @@ async function handleSave() {
       })
 
       const { key, uploadUrl } = signRes
-      await fetch(uploadUrl, {
+      const res = await fetch(uploadUrl, {
         method: 'PUT',
         body: file,
         headers: { 'Content-Type': contentType },
       })
+      if (!res.ok) {
+        throw new Error(`Logo upload PUT failed with status ${res.status}`)
+      }
 
       const confirmRes = await confirmUpload(key, {
         contentType,

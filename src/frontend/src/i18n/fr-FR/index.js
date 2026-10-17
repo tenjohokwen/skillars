@@ -33,6 +33,8 @@ export default {
     playerDetailContributionsTitle: 'Contributions des coachs',
     playerDetailNoContributions:
       'Aucune donnée de contribution de coach pour les 30 derniers jours',
+    playerDetailContributionsBelowThreshold:
+      "Aucune contribution d'un coach n'a atteint le seuil de 30 % pour une compétence au cours des 30 derniers jours",
     playerDetailError: 'Impossible de charger les données de développement du joueur',
     playerDetailBackToRoster: 'Retour à Mes joueurs',
   },
@@ -633,6 +635,8 @@ export default {
   error: {
     generic: 'Une erreur inattendue est survenue. Veuillez réessayer.',
     network: 'Erreur réseau. Veuillez vérifier votre connexion.',
+    badRequest:
+      "Cette requête n'a pas pu être traitée. Veuillez vérifier vos informations et réessayer.",
     helpCode: "Code d'aide",
     tryAgain: 'Veuillez réessayer',
     contactSupport: "Si le problème persiste, contactez le support avec le code d'aide.",
@@ -896,6 +900,9 @@ export default {
       neglectedAlert:
         'Compétences négligées détectées : {skills}. Demandez à votre coach un focus supplémentaire.',
       contributionsLoadError: 'Échec du chargement des contributions du coach',
+      noContributionsState: 'Aucune donnée de contribution de coach pour les 30 derniers jours',
+      contributionsBelowThresholdState:
+        "Aucune contribution d'un coach n'a atteint le seuil de 30 % pour une compétence au cours des 30 derniers jours",
       exposureLoadError: "Échec du chargement de l'exposition aux compétences",
       skillDefinitionsLoadError: 'Échec du chargement des définitions de compétences',
     },

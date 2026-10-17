@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { i18n } from 'boot/i18n'
+import { getErrorMessage } from 'src/utils/errorHandler'
 import {
   getSkillDefinitions,
   getSkillExposure,
@@ -90,7 +91,7 @@ export const useDevelopmentStore = defineStore('development', () => {
       const response = await getNarrativeSummary(playerId)
       narrative.value = response
     } catch (err) {
-      error.value = err?.response?.data?.message ?? 'Failed to load narrative summary'
+      error.value = getErrorMessage(err)
     }
   }
 
@@ -100,7 +101,7 @@ export const useDevelopmentStore = defineStore('development', () => {
       const response = await getMyTargets(playerId)
       targets.value = response
     } catch (err) {
-      error.value = err?.response?.data?.message ?? 'Failed to load targets'
+      error.value = getErrorMessage(err)
     }
   }
 
@@ -110,7 +111,7 @@ export const useDevelopmentStore = defineStore('development', () => {
       await setMyTargets(playerId, newTargets)
       await fetchTargets(playerId)
     } catch (err) {
-      error.value = err?.response?.data?.message ?? 'Failed to save targets'
+      error.value = getErrorMessage(err)
     }
   }
 
@@ -121,7 +122,7 @@ export const useDevelopmentStore = defineStore('development', () => {
       const response = await getMyRadarEntries(playerId)
       radarEntries.value = response
     } catch (err) {
-      error.value = err?.response?.data?.message ?? 'Failed to load radar entries'
+      error.value = getErrorMessage(err)
     } finally {
       radarLoading.value = false
     }
@@ -133,7 +134,7 @@ export const useDevelopmentStore = defineStore('development', () => {
       await postRadarAssessment(playerId, assessment)
       await fetchRadarEntries(playerId)
     } catch (err) {
-      error.value = err?.response?.data?.message ?? 'Failed to submit assessment'
+      error.value = getErrorMessage(err)
       throw err
     }
   }
@@ -145,7 +146,7 @@ export const useDevelopmentStore = defineStore('development', () => {
       const response = await getRadarDisplay(playerId)
       radarDisplay.value = response
     } catch (err) {
-      error.value = err?.response?.data?.message ?? 'Failed to load radar display'
+      error.value = getErrorMessage(err)
     } finally {
       radarDisplayLoading.value = false
     }
@@ -165,7 +166,7 @@ export const useDevelopmentStore = defineStore('development', () => {
       await putRadarPreferences(playerId, selectedSkillCodes)
       radarPreferences.value = { selectedSkillCodes }
     } catch (err) {
-      error.value = err?.response?.data?.message ?? 'Failed to save preferences'
+      error.value = getErrorMessage(err)
     }
   }
 
@@ -177,7 +178,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     } catch (err) {
       // Non-Academy coaches get 403 here — store null silently; UI shows teaser
       if (err?.response?.status !== 403) {
-        error.value = err?.response?.data?.message ?? 'Failed to load correlation insights'
+        error.value = getErrorMessage(err)
       }
       correlationInsights.value = null
     } finally {
@@ -192,7 +193,7 @@ export const useDevelopmentStore = defineStore('development', () => {
       const response = await listReports(playerId)
       reports.value = response
     } catch (err) {
-      reportsError.value = err?.response?.data?.message ?? 'Failed to load reports'
+      reportsError.value = getErrorMessage(err)
     } finally {
       reportsLoading.value = false
     }
@@ -205,7 +206,7 @@ export const useDevelopmentStore = defineStore('development', () => {
       await apiGenerateReport(playerId, nextSteps)
       await fetchReports(playerId)
     } catch (err) {
-      reportsError.value = err?.response?.data?.message ?? 'Failed to generate report'
+      reportsError.value = getErrorMessage(err)
       throw err
     } finally {
       reportGenerating.value = false

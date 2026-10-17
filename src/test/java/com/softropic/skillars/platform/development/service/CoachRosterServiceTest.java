@@ -182,6 +182,22 @@ class CoachRosterServiceTest {
         assertThat(entry.attentionScore()).isCloseTo(0.05, offset(1e-9));
     }
 
+    // skillars-deferred-152 AC6: findAllById silently returns fewer rows than requested for a
+    // missing player_profiles row (latent today, see Dev Notes) — the entry is filtered out of the
+    // roster entirely rather than surfacing a bare "playerName": null, and buildEntry's own
+    // downstream lookups (neglected flags, trend data, the last-session resolver) are never reached
+    // for it.
+    @Test
+    void getRoster_playerProfileRowMissing_filtersEntryOutOfRoster() {
+        stubActivity(NOW.minusSeconds(3600));
+        when(playerProfileRepository.findAllById(List.of(PLAYER_ID))).thenReturn(List.of());
+
+        RosterResponse response = service.getRoster(COACH_ID);
+
+        assertThat(response.players()).isEmpty();
+        verifyNoInteractions(coachPlayerLastSessionResolver, neglectedSkillFlagRepository, snapshotRepository);
+    }
+
     @Test
     void getRoster_mapsPlayerNameFromProfileRepository() {
         stubActivity(NOW.minusSeconds(3600));
@@ -210,7 +226,10 @@ class CoachRosterServiceTest {
     }
 
     private void stubNoNeglectedFlags() {
-        when(neglectedSkillFlagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(List.of());
+        // skillars-deferred-152 AC4: production code now calls the count query, not the
+        // entity-returning one -- stubbing the old method here would be an unconsulted stub
+        // and throw UnnecessaryStubbingException under this class's strict (MockitoExtension) stubs.
+        when(neglectedSkillFlagRepository.countByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(0);
     }
 
     private void stubNoTrendData() {

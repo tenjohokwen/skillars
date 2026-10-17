@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed, onUnmounted } from 'vue'
+import { getErrorMessage } from 'src/utils/errorHandler'
 import {
   getCoachAvailability,
   addAvailabilityWindow,
@@ -290,7 +291,7 @@ export const useBookingStore = defineStore('booking', () => {
       // silently trusting it. `null` means "all players" (playerId not passed).
       sessionPacksPlayerId.value = playerId ?? null
     } catch (e) {
-      packsError.value = e?.response?.data?.message ?? e?.message ?? 'Failed to load session packs'
+      packsError.value = getErrorMessage(e)
     } finally {
       packsLoading.value = false
     }

@@ -58,8 +58,29 @@
       </q-card-section>
     </q-card>
 
-    <!-- Coach contribution narrative -->
-    <CoachContributionSection :contributions="store.coachContributions" class="q-mb-md" />
+    <!-- Coach contribution narrative — AC2: CoachContributionSection's own root v-if has no
+         v-else, so it renders nothing when its top-per-skill/>=30% filter result is empty.
+         hasTopContributions mirrors that same filter at the page level so this page can show
+         its own empty state instead of relying on the child's silent collapse. -->
+    <CoachContributionSection
+      v-if="hasTopContributions"
+      :contributions="store.coachContributions"
+      class="q-mb-md"
+    />
+    <!-- skillars-deferred-152 code review (2026-10-17): the empty state renders only once a load
+         has actually settled. coachContributions is [] while the fetch is in flight and still []
+         after it fails, so unguarded this arm asserted "No coach contribution data for the last
+         30 days" alongside the pageError banner on a failed load — a confident false claim where
+         the pre-AC2 code silently collapsed. Unlike CoachPlayerDetailPage.vue there is no
+         `v-if="!loading && !pageError"` body gate on this page to inherit, and adding one would
+         change every card's mount timing here, so the guard is scoped to this section. -->
+    <div
+      v-else-if="!store.coachContributionsLoading && !store.coachContributionsError"
+      class="text-body2 q-mb-md"
+      style="color: var(--text-secondary)"
+    >
+      {{ $t(noContributionsKey) }}
+    </div>
 
     <!-- Skill exposure bar chart -->
     <q-card class="q-mb-md">
@@ -106,6 +127,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { usePlayerStore } from 'src/stores/playerStore'
 import { useBookingStore } from 'src/stores/booking.store'
 import { useDevelopmentStore } from 'src/stores/development.store'
+import { hasTopAttributions } from 'src/utils/coachContributions'
 import SluNarrativeSummary from 'src/components/development/SluNarrativeSummary.vue'
 import SkillsRadarChart from 'src/components/development/SkillsRadarChart.vue'
 import SkillExposureBarChart from 'src/components/development/SkillExposureBarChart.vue'
@@ -126,6 +148,17 @@ const loading = ref(false)
 // True only when at least one pack is ACTIVE — exhausted/expired packs still appear in
 // the list, but the "Find a coach" CTA must show whenever no active credits exist (AC4).
 const hasActivePacks = computed(() => bookingStore.sessionPacks.some((p) => p.status === 'ACTIVE'))
+
+const hasTopContributions = computed(() => hasTopAttributions(store.coachContributions))
+
+// AC2: "no data at all" and "data exists but none cleared the 30% threshold" are meaningfully
+// different situations for a coach -- conflating them can read as "no coach has worked with
+// this player," which is false in the second case.
+const noContributionsKey = computed(() =>
+  store.coachContributions.length === 0
+    ? 'development.portal.noContributionsState'
+    : 'development.portal.contributionsBelowThresholdState',
+)
 
 // Map raw skill codes to human-readable names so the neglected alert is parent-friendly.
 const neglectedSkillNames = computed(() =>

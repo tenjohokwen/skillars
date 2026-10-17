@@ -33,6 +33,31 @@ const defaultErrorKeyByStatus = {
   404: 'error.notFound',
 }
 
+// skillars-deferred-152 code review (2026-10-17): status-code fallback MESSAGE keys, deliberately
+// a separate map from defaultErrorKeyByStatus above rather than a second hardcoded copy of it.
+// The two serve different jobs and must not be collapsed: defaultErrorKeyByStatus is the
+// machine-readable `errorKey` discriminator (boot/axios.js:164-192 tells security.unauthorized
+// apart from security.sessionExpired on a 401 to decide whether to render "session expired"),
+// while these are the strings a user actually reads. Two entries therefore diverge on purpose:
+//   401 → security.sessionExpired, not security.unauthorized ("You do not have the required
+//         rights" is a 403-shaped, not-authenticated-vs-not-authorized message)
+//   400 → error.badRequest, not validation.badRequest (that key is developer-facing copy:
+//         "Check method argument mismatch, missing parameters e.t.c.")
+// 403/404 read through from the map above precisely so the shared values cannot drift.
+const fallbackMessageKeyByStatus = {
+  400: 'error.badRequest',
+  401: 'security.sessionExpired',
+  403: defaultErrorKeyByStatus[403],
+  404: defaultErrorKeyByStatus[404],
+}
+
+// No error.serverError key exists in any locale bundle, so 5xx maps to error.generic — which
+// preserves the 5xx-vs-client distinction the pre-sweep English literals ('Server error' vs
+// 'An error occurred') had, instead of collapsing 5xx into the error.unknown used for every
+// other unmapped status.
+const SERVER_ERROR_MESSAGE_KEY = 'error.generic'
+const UNKNOWN_ERROR_MESSAGE_KEY = 'error.unknown'
+
 /**
  * Parse API error into structured object.
  * Handles axios error structure and extracts ErrorDto fields.
@@ -42,6 +67,7 @@ const defaultErrorKeyByStatus = {
  *   helpCode: string|null,
  *   errorKey: string,
  *   message: string,
+ *   messageKey: string|null,
  *   fieldErrors: Object.<string, string>,
  *   isValidationError: boolean,
  *   status: number
@@ -79,25 +105,21 @@ export function parseApiError(error) {
     }
   }
 
-  // Extract message - from errorMsg or provide default
+  // Extract message - from errorMsg or provide default.
+  // skillars-deferred-152 code review (2026-10-17): `messageKey` is reported alongside the
+  // resolved string so consumers that render from a key can honour the deliberate choices above
+  // instead of re-deriving their own. useErrorHandler.errorMessage previously preferred errorKey
+  // unconditionally, which meant the 401 and 5xx decisions here never reached the ~40 components
+  // on that path -- they still rendered security.unauthorized / error.unknown. It stays null when
+  // the backend supplied its own message, so the errorKey-first rule still wins there (a
+  // translated key beats the server's English text).
   let message = data?.errorMsg?.message
+  let messageKey = null
   if (!message) {
-    switch (status) {
-      case 400:
-        message = 'Bad request'
-        break
-      case 401:
-        message = 'Unauthorized'
-        break
-      case 403:
-        message = 'Forbidden'
-        break
-      case 404:
-        message = 'Not found'
-        break
-      default:
-        message = status >= 500 ? 'Server error' : 'An error occurred'
-    }
+    messageKey =
+      fallbackMessageKeyByStatus[status] ||
+      (status >= 500 ? SERVER_ERROR_MESSAGE_KEY : UNKNOWN_ERROR_MESSAGE_KEY)
+    message = i18n.global.t(messageKey)
   }
 
   // Convert fieldErrors array to object { fieldName: message }
@@ -117,6 +139,7 @@ export function parseApiError(error) {
     helpCode,
     errorKey,
     message,
+    messageKey,
     fieldErrors,
     isValidationError,
     status,

@@ -19,21 +19,11 @@
 
 <script setup>
 import { computed } from 'vue'
+import { topAttributions as computeTopAttributions } from 'src/utils/coachContributions'
 
 const props = defineProps({ contributions: { type: Array, default: () => [] } })
 
-const topAttributions = computed(() => {
-  const bySkill = {}
-  for (const c of props.contributions) {
-    if (
-      !bySkill[c.skillCode] ||
-      c.percentageContribution > bySkill[c.skillCode].percentageContribution
-    ) {
-      bySkill[c.skillCode] = c
-    }
-  }
-  return Object.values(bySkill).filter((c) => c.percentageContribution >= 30)
-})
+const topAttributions = computed(() => computeTopAttributions(props.contributions))
 
 function firstNameOf(displayName) {
   return displayName?.split(' ')?.[0] ?? displayName

@@ -77,7 +77,7 @@ public class SessionPrepService {
         List<String> focusThreadSkillCodes =
             SessionFocusThreadCalculator.rank(developmentFocusHistory, SessionFocusThreadCalculator.MAX_FOCUS_CODES);
 
-        int openNeglectedSkillCount = neglectedSkillFlagRepository.findByPlayerIdAndResolvedAtIsNull(playerId).size();
+        int openNeglectedSkillCount = neglectedSkillFlagRepository.countByPlayerIdAndResolvedAtIsNull(playerId);
 
         return new SessionPrepResponse(
             playerId,

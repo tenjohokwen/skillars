@@ -167,7 +167,26 @@ describe('CoachPlayerDetailPage.vue (skillars-12-4)', () => {
     const { wrapper } = await mountPage()
     await flushPromises()
 
+    // deferred-152 AC2: data exists but didn't clear 30%, so this is the below-threshold
+    // message, NOT the genuinely-no-data one -- the two were a single conflated string before
+    // this story's split.
+    expect(wrapper.text()).toContain('coach.playerDetailContributionsBelowThreshold')
+    expect(wrapper.text()).not.toContain('coach.playerDetailNoContributions')
+    expect(wrapper.findComponent(CoachContributionSection).exists()).toBe(false)
+  })
+
+  it('shows the genuinely-no-data empty-contributions state when there is no contribution data at all (deferred-152 AC2)', async () => {
+    mockApiGetByUrl({
+      'skill-definitions': { resolve: SKILL_DEFINITIONS },
+      exposure: { resolve: { currentWeek: {}, trend: [], neglectedSkillCodes: [] } },
+      'coach-contributions': { resolve: [] },
+    })
+
+    const { wrapper } = await mountPage()
+    await flushPromises()
+
     expect(wrapper.text()).toContain('coach.playerDetailNoContributions')
+    expect(wrapper.text()).not.toContain('coach.playerDetailContributionsBelowThreshold')
     expect(wrapper.findComponent(CoachContributionSection).exists()).toBe(false)
   })
 

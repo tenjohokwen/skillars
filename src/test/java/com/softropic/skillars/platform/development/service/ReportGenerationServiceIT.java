@@ -1,19 +1,38 @@
 package com.softropic.skillars.platform.development.service;
 
 import com.softropic.skillars.infrastructure.storage.BaseStorageIT;
+import com.softropic.skillars.platform.development.contract.CoachBrandingRequest;
+import com.softropic.skillars.platform.development.contract.CoachBrandingResponse;
 import com.softropic.skillars.platform.development.contract.ReportGeneratedEvent;
+import com.softropic.skillars.platform.filestorage.contract.ConfirmUploadRequest;
+import com.softropic.skillars.platform.filestorage.contract.ConfirmUploadResponse;
+import com.softropic.skillars.platform.filestorage.contract.SignUploadRequest;
+import com.softropic.skillars.platform.filestorage.contract.SignUploadResponse;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.client.RestTemplate;
 
+import java.net.URI;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -34,10 +53,16 @@ class ReportGenerationServiceIT extends BaseStorageIT {
     @Autowired private ApplicationEventPublisher eventPublisher;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
+    @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private RestTemplate restTemplate;
 
     private static final long PARENT_USER_ID = 9576000001L;
     private static final long PLAYER_ID = 9576000010L;
     private static final UUID COACH_ID = UUID.randomUUID();
+
+    private static final long BRANDING_COACH_USER_ID = 9576000020L;
+    private static final String BRANDING_COACH_EMAIL = "coach.branding.it@skillars-test.com";
+    private static final String BRANDING_COACH_PASSWORD = "TestPass@123!";
 
     @Test
     void onReportGenerated_realAsyncPipeline_transitionsPendingUploadToReadyAndListable() {
@@ -74,6 +99,48 @@ class ReportGenerationServiceIT extends BaseStorageIT {
         assertThat(timelineCount).isEqualTo(1);
     }
 
+    // skillars-deferred-152 AC7/Task 7: a real sign-upload -> S3 PUT -> confirm -> PUT /branding
+    // round trip, rather than ReportGenerationServiceTest's hand-built FileStorageObject fixture
+    // (.ownerId(...) set directly) — proving the four id-space call sites this project's
+    // coach_branding ownership fix depends on actually agree end-to-end, not just that each one's
+    // own unit test passes in isolation: SecurityUtil.getCurrentCoachUserId() (CoachBrandingResource),
+    // ReportGenerationService.saveBranding's assertOwnership call, StorageResource's
+    // OWNER_BOUND_ENTITIES coach_branding entry (entityId must equal the authenticated principal's
+    // businessId -- the coach's user id, not the CoachProfile UUID), and the frontend's
+    // entityId: String(userId) (not exercised directly here, but this id space IS the contract it
+    // depends on). Follows StorageResourceIT's existing signUploadHttp/putToS3/confirmUploadHttp
+    // round-trip helpers rather than inventing a new upload-flow helper.
+    @Test
+    void saveBranding_realSignUploadConfirmFlow_allFourIdSpaceCallSitesAgreeEndToEnd() {
+        transactionTemplate.execute(status -> {
+            insertCoachUser(BRANDING_COACH_USER_ID, BRANDING_COACH_EMAIL,
+                passwordEncoder.encode(BRANDING_COACH_PASSWORD));
+            grantRole(BRANDING_COACH_USER_ID, "ROLE_COACH");
+            UUID coachId = insertCoachProfile(BRANDING_COACH_USER_ID);
+            insertSubscription(coachId, "ACADEMY");
+            return null;
+        });
+
+        HttpHeaders authHeaders = loginAsCoach(BRANDING_COACH_EMAIL, BRANDING_COACH_PASSWORD);
+
+        byte[] logoBytes = new byte[]{1, 2, 3, 4};
+        SignUploadResponse signResponse = signUploadHttp(
+            authHeaders, String.valueOf(BRANDING_COACH_USER_ID), "image/png", "png", logoBytes.length);
+
+        putToS3(signResponse.uploadUrl(), logoBytes, "image/png");
+
+        ConfirmUploadResponse confirmResponse =
+            confirmUploadHttp(authHeaders, signResponse.key(), "image/png", logoBytes.length);
+        assertThat(confirmResponse.key()).isEqualTo(signResponse.key());
+
+        saveBrandingHttp(authHeaders, signResponse.key(), "#3B82F6");
+
+        CoachBrandingResponse branding = getBrandingHttp(authHeaders);
+        assertThat(branding.logoKey()).isEqualTo(signResponse.key());
+        assertThat(branding.logoSignedUrl()).isNotBlank();
+        assertThat(branding.brandColour()).isEqualTo("#3B82F6");
+    }
+
     private String reportStatus(UUID reportId) {
         return jdbcTemplate.queryForObject(
             "SELECT status::text FROM development.performance_reports WHERE id = ?", String.class, reportId);
@@ -105,5 +172,142 @@ class ReportGenerationServiceIT extends BaseStorageIT {
             "69" + (PARENT_USER_ID % 100000000L),
             "reportgen.parent@skillars-test.com", "x"
         );
+    }
+
+    // ── AC7 coach-branding end-to-end helpers ───────────────────────────────
+
+    private void insertCoachUser(long userId, String email, String passwordHash) {
+        jdbcTemplate.update(
+            "INSERT INTO main.\"user\" " +
+            "(id, created_by, created_date, last_modified_by, last_modified_date, request_id, session_id, " +
+            "status, dob, email, first_name, gender, lang_key, last_name, iso2_country, phone, " +
+            "activated, locked, login, login_id_type, password_hash, otp_enabled, " +
+            "skillars_role, verification_status) " +
+            "VALUES (?, 'system', ?, 'system', ?, 'test-req', NULL, " +
+            "'ACTIVE', '1990-01-01', ?, 'Test', 'OTHER', 'en', 'Coach', 'DE', ?, " +
+            "true, false, ?, 'EMAIL', ?, false, " +
+            "'COACH', 'BASIC_VERIFIED')",
+            userId, Timestamp.from(Instant.now()), Timestamp.from(Instant.now()),
+            email, "69" + (userId % 100000000L), email, passwordHash);
+    }
+
+    private void grantRole(long userId, String roleName) {
+        jdbcTemplate.update(
+            "INSERT INTO main.user_authority (user_id, authority_id) " +
+            "VALUES (?, (SELECT id FROM main.authority WHERE name = ?)) ON CONFLICT DO NOTHING",
+            userId, roleName);
+    }
+
+    private UUID insertCoachProfile(long userId) {
+        UUID profileId = UUID.randomUUID();
+        jdbcTemplate.update(
+            "INSERT INTO marketplace.coach_profiles " +
+            "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) " +
+            "VALUES (?, ?, 'Branding Test Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
+            profileId, userId);
+        return profileId;
+    }
+
+    private void insertSubscription(UUID coachId, String tier) {
+        jdbcTemplate.update(
+            "INSERT INTO marketplace.coach_subscriptions (coach_id, tier, active_since) " +
+            "VALUES (?, ?, NOW()) ON CONFLICT DO NOTHING",
+            coachId, tier);
+    }
+
+    /** Mirrors AdminLogin.loginAsAdmin's POST /authenticate + Set-Cookie extraction for an
+     *  arbitrary (non-admin) seeded user, since AdminLogin itself is hardcoded to the admin
+     *  fixture's credentials. */
+    private HttpHeaders loginAsCoach(String email, String password) {
+        HttpHeaders loginHeaders = new HttpHeaders();
+        loginHeaders.setContentType(MediaType.APPLICATION_JSON);
+        loginHeaders.add(HttpHeaders.COOKIE, "fcookie=fingerprintCookie");
+        loginHeaders.add("user-agent", "Java/17.0.11");
+
+        Map<String, String> credentials = Map.of("id", email, "password", password);
+        ResponseEntity<Map> loginResponse = restTemplate.exchange(
+            baseUrl() + "/authenticate", HttpMethod.POST,
+            new HttpEntity<>(credentials, loginHeaders), Map.class);
+        assertThat(loginResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        List<String> setCookies = loginResponse.getHeaders().get(HttpHeaders.SET_COOKIE);
+        assertThat(setCookies).isNotNull().isNotEmpty();
+        String cookieHeader = String.join("; ",
+            setCookies.stream().map(c -> c.split(";", 2)[0]).toList());
+
+        HttpHeaders authHeaders = new HttpHeaders();
+        authHeaders.set(HttpHeaders.COOKIE, cookieHeader);
+        return authHeaders;
+    }
+
+    // JWTAuthorizationFilter/TokenValidatorImpl re-check the fingerprint (fcookie) + user-agent
+    // combo embedded in the JWT on every subsequent request, not only at login -- mirrors
+    // StorageResourceIT's own authenticatedHeaders() precedent exactly.
+    private HttpHeaders authenticatedHeaders(HttpHeaders authHeaders) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.addAll(authHeaders);
+        headers.add("user-agent", "Java/17.0.11");
+        headers.add(HttpHeaders.COOKIE, "fcookie=fingerprintCookie");
+        return headers;
+    }
+
+    private SignUploadResponse signUploadHttp(
+        HttpHeaders authHeaders, String entityId, String contentType, String extension, long sizeBytes) {
+        SignUploadRequest body = new SignUploadRequest(
+            "coach_branding", entityId, contentType, extension, sizeBytes, null, null);
+
+        HttpHeaders headers = authenticatedHeaders(authHeaders);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        ResponseEntity<SignUploadResponse> response = restTemplate.postForEntity(
+            baseUrl() + "/api/storage/sign/upload", new HttpEntity<>(body, headers), SignUploadResponse.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return response.getBody();
+    }
+
+    private void putToS3(String uploadUrl, byte[] content, String contentType) {
+        RestTemplate noRetryRestTemplate = new RestTemplateBuilder()
+            .requestFactory(SimpleClientHttpRequestFactory.class)
+            .build();
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType(contentType));
+        ResponseEntity<Void> response = noRetryRestTemplate.exchange(
+            URI.create(uploadUrl), HttpMethod.PUT, new HttpEntity<>(content, headers), Void.class);
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+    }
+
+    private ConfirmUploadResponse confirmUploadHttp(
+        HttpHeaders authHeaders, String key, String contentType, long sizeBytes) {
+        ConfirmUploadRequest body = new ConfirmUploadRequest(contentType, sizeBytes, null, null, null);
+
+        HttpHeaders headers = authenticatedHeaders(authHeaders);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        ResponseEntity<ConfirmUploadResponse> response = restTemplate.postForEntity(
+            baseUrl() + "/api/storage/confirm/" + key, new HttpEntity<>(body, headers), ConfirmUploadResponse.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return response.getBody();
+    }
+
+    private void saveBrandingHttp(HttpHeaders authHeaders, String logoKey, String brandColour) {
+        CoachBrandingRequest body = new CoachBrandingRequest(logoKey, brandColour);
+
+        HttpHeaders headers = authenticatedHeaders(authHeaders);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        ResponseEntity<Void> response = restTemplate.exchange(
+            baseUrl() + "/api/development/coaches/me/branding", HttpMethod.PUT,
+            new HttpEntity<>(body, headers), Void.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+    }
+
+    private CoachBrandingResponse getBrandingHttp(HttpHeaders authHeaders) {
+        HttpHeaders headers = authenticatedHeaders(authHeaders);
+
+        ResponseEntity<CoachBrandingResponse> response = restTemplate.exchange(
+            baseUrl() + "/api/development/coaches/me/branding", HttpMethod.GET,
+            new HttpEntity<>(headers), CoachBrandingResponse.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return response.getBody();
     }
 }
