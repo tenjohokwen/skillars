@@ -882,6 +882,8 @@ export default {
       loadMoreError: "Échec du chargement d'événements supplémentaires",
       loadMoreRetry: 'Réessayer',
       accessExpired: "Votre accès au suivi de ce joueur a expiré ({days} jours d'inactivité).",
+      whatWeDidLabel: 'Ce sur quoi nous avons travaillé',
+      whatsNextLabel: 'La prochaine étape',
       eventType: {
         SESSION_COMPLETED: 'Séance terminée',
         RADAR_ASSESSMENT: 'Évaluation radar',

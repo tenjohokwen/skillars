@@ -108,3 +108,144 @@ describe('PlayerTimelinePanel — Load more (deferred-153 AC4)', () => {
     expect(wrapper.text()).not.toContain('development.timeline.loadMore')
   })
 })
+
+describe('PlayerTimelinePanel — session recap (skillars-12-5 AC8)', () => {
+  it('renders both labels and both text values when both recap fields are present', () => {
+    const { wrapper } = mountPanel({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [
+        {
+          id: 'e1',
+          eventType: 'SESSION_COMPLETED',
+          occurredAt: new Date().toISOString(),
+          metadata: { coachId: 'c1', whatWeDid: 'Passing drills', whatsNext: 'Shooting drills' },
+        },
+      ],
+      hasMore: false,
+    })
+
+    expect(wrapper.text()).toContain('development.timeline.whatWeDidLabel')
+    expect(wrapper.text()).toContain('Passing drills')
+    expect(wrapper.text()).toContain('development.timeline.whatsNextLabel')
+    expect(wrapper.text()).toContain('Shooting drills')
+  })
+
+  it('renders only the whatWeDid label and value when whatsNext is absent', () => {
+    const { wrapper } = mountPanel({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [
+        {
+          id: 'e1',
+          eventType: 'SESSION_COMPLETED',
+          occurredAt: new Date().toISOString(),
+          metadata: { coachId: 'c1', whatWeDid: 'Passing drills' },
+        },
+      ],
+      hasMore: false,
+    })
+
+    expect(wrapper.text()).toContain('development.timeline.whatWeDidLabel')
+    expect(wrapper.text()).toContain('Passing drills')
+    expect(wrapper.text()).not.toContain('development.timeline.whatsNextLabel')
+  })
+
+  it('renders neither label for a redacted event (metadata has coachId only)', () => {
+    const { wrapper } = mountPanel({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [
+        {
+          id: 'e1',
+          eventType: 'SESSION_COMPLETED',
+          occurredAt: new Date().toISOString(),
+          metadata: { coachId: 'c1' },
+        },
+      ],
+      hasMore: false,
+    })
+
+    expect(wrapper.text()).not.toContain('development.timeline.whatWeDidLabel')
+    expect(wrapper.text()).not.toContain('development.timeline.whatsNextLabel')
+  })
+
+  it('does not crash and renders neither label when metadata is absent entirely (legacy row)', () => {
+    const { wrapper } = mountPanel({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [{ id: 'e1', eventType: 'SESSION_COMPLETED', occurredAt: new Date().toISOString() }],
+      hasMore: false,
+    })
+
+    expect(wrapper.text()).not.toContain('development.timeline.whatWeDidLabel')
+    expect(wrapper.text()).not.toContain('development.timeline.whatsNextLabel')
+  })
+
+  it('renders neither recap label and leaks no array content for a RADAR_ASSESSMENT event', () => {
+    const { wrapper } = mountPanel({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [
+        {
+          id: 'e1',
+          eventType: 'RADAR_ASSESSMENT',
+          occurredAt: new Date().toISOString(),
+          metadata: { skillCodes: ['PASSING'] },
+        },
+      ],
+      hasMore: false,
+    })
+
+    expect(wrapper.text()).not.toContain('development.timeline.whatWeDidLabel')
+    expect(wrapper.text()).not.toContain('development.timeline.whatsNextLabel')
+    expect(wrapper.text()).not.toContain('PASSING')
+  })
+
+  it('renders neither label for a non-SESSION_COMPLETED event even when recap-shaped metadata is present', () => {
+    const { wrapper } = mountPanel({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [
+        {
+          id: 'e1',
+          eventType: 'RADAR_ASSESSMENT',
+          occurredAt: new Date().toISOString(),
+          metadata: { whatWeDid: 'x' },
+        },
+      ],
+      hasMore: false,
+    })
+
+    expect(wrapper.text()).not.toContain('development.timeline.whatWeDidLabel')
+    expect(wrapper.text()).not.toContain('development.timeline.whatsNextLabel')
+  })
+
+  it('renders the recap label exactly once in a mixed list of a recap and a no-recap entry', () => {
+    const { wrapper } = mountPanel({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [
+        {
+          id: 'e1',
+          eventType: 'SESSION_COMPLETED',
+          occurredAt: new Date().toISOString(),
+          metadata: { coachId: 'c1', whatWeDid: 'Passing drills', whatsNext: 'Shooting drills' },
+        },
+        {
+          id: 'e2',
+          eventType: 'SESSION_COMPLETED',
+          occurredAt: new Date().toISOString(),
+          metadata: { coachId: 'c2' },
+        },
+      ],
+      hasMore: false,
+    })
+
+    const text = wrapper.text()
+    expect(text.split('development.timeline.whatWeDidLabel').length - 1).toBe(1)
+    expect(text.split('development.timeline.whatsNextLabel').length - 1).toBe(1)
+    expect(text.split('Passing drills').length - 1).toBe(1)
+    expect(text.split('Shooting drills').length - 1).toBe(1)
+  })
+})

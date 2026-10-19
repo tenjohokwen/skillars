@@ -164,6 +164,8 @@ _Novelty:_ Reuses data already captured for drill suggestion; no new capture bur
 
 > **Covered by `skillars-12-2-session-close-recap-capture`** (created 2026-10-15). Converge #15 (the capture itself) and the write-side half of Converge #16 (threading the recap onto `BookingCompletedEvent` into `PlayerTimelineEvent.SESSION_COMPLETED` metadata) below are implemented by that story; Converge #16's report-generation-consumption half remains open as that story's own Fast-Follow. Do not re-pick Converge #15 in a future brainstorm-mining pass.
 
+> **Converge #15's READ surface is covered by `skillars-12-5-coach-recap-on-player-timeline`** (created 2026-10-19). `skillars-12-2` captured and server-side-gated the recap but explicitly deferred rendering it (its AC8), and `skillars-12-4` then required `PlayerTimelinePanel.vue` **unchanged** (its AC4) — so Converge #15's own success indicator, *"visible back to the coach on that player's timeline"*, went unmet by both. `skillars-12-5` closes it as a frontend-only change (no backend work: the recap is already on the wire for the authoring coach). With that story, Converge #15 is fully covered end-to-end. **Converge #16's report-generation half remains the one open Fast-Follow.**
+
 **[Converge #15]: Session-Close Recap**
 _Concept:_ A small structured note captured when a coach closes out a session, surfaced both forward (next session's prep) and backward (this player's history view).
 _Novelty:_ The one deliberately-added new piece of manual data capture in the whole design -- justified because nothing else in the system currently captures "what actually happened" in the coach's own words.
@@ -200,9 +202,10 @@ _Novelty:_ Reverses the single-direction authorship assumption running through e
 1. Roster-summary endpoint + derived roster page — **covered by `skillars-12-1-coach-player-roster-and-attention-summary` (created 2026-10-14)**
 2. Session-close recap capture — **covered by `skillars-12-2-session-close-recap-capture` (created 2026-10-15)**
 3. Session Prep Card inside the booking view — **covered by `skillars-12-3-session-prep-card-and-timeline-access-clock-fix` (created 2026-10-15)**
-4. Coach-facing player-detail page (reused panels)
-5. Fast-follow: recap -> report-generation tie-in
-6. Deferred: player/parent-initiated flag
+4. Coach-facing player-detail page (reused panels) — **covered by `skillars-12-4-coach-facing-player-detail-page` (created 2026-10-15)**
+4b. Render the captured recap on that page's timeline (the read half of item 2) — **covered by `skillars-12-5-coach-recap-on-player-timeline` (created 2026-10-19)**
+5. Fast-follow: recap -> report-generation tie-in — **still open, no story yet**
+6. Deferred: player/parent-initiated flag — **still parked**
 
 ## Action Planning
 
@@ -215,7 +218,7 @@ _Next steps:_
 _Resources needed:_ one new endpoint/service in `development` (or a thin composition over `SluDashboardService`/`NeglectedSkillFlagRepository`/`BookingRepository`), one new Vue page + route under `pages/coach/`.
 _Success indicator:_ a coach can open one page and see every player he has an active or recently-lapsed relationship with, ranked by who needs attention.
 
-**Priority 2: Session-Close Recap Capture** — ✅ **Covered by `skillars-12-2-session-close-recap-capture` (created 2026-10-15, Epic 12)**
+**Priority 2: Session-Close Recap Capture** — ✅ **Capture covered by `skillars-12-2-session-close-recap-capture` (created 2026-10-15, Epic 12); the read surface this priority's own success indicator demands — "visible back to the coach on that player's timeline" — covered by `skillars-12-5-coach-recap-on-player-timeline` (created 2026-10-19, Epic 12)**
 _Why this matters:_ the one genuinely new data point the whole design depends on -- unlocks prep, history, and reports.
 _Next steps:_
 1. Add a small structured recap form (what we did / what's next, plus an optional free-text note) triggered at session/booking completion.
