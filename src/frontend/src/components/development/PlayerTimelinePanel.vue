@@ -42,6 +42,27 @@
                 : event.eventType
             }}
           </template>
+
+          <div
+            v-if="
+              event.eventType === 'SESSION_COMPLETED' &&
+              (event.metadata?.whatWeDid || event.metadata?.whatsNext)
+            "
+            class="q-mt-sm"
+          >
+            <div v-if="event.metadata?.whatWeDid">
+              <div class="text-caption text-weight-bold">
+                {{ $t('development.timeline.whatWeDidLabel') }}
+              </div>
+              <div class="text-body2 recap-text">{{ event.metadata.whatWeDid }}</div>
+            </div>
+            <div v-if="event.metadata?.whatsNext">
+              <div class="text-caption text-weight-bold q-mt-xs">
+                {{ $t('development.timeline.whatsNextLabel') }}
+              </div>
+              <div class="text-body2 recap-text">{{ event.metadata.whatsNext }}</div>
+            </div>
+          </div>
         </q-timeline-entry>
       </q-timeline>
 
@@ -134,3 +155,10 @@ onMounted(() => {
   store.fetchTimeline(props.playerId)
 })
 </script>
+
+<style scoped>
+.recap-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+</style>

@@ -1131,6 +1131,8 @@ export default {
       loadMoreRetry: 'Erneut versuchen',
       accessExpired:
         'Ihr Coaching-Zugriff auf den Zeitstrahl dieses Spielers ist abgelaufen ({days} Tage Inaktivität).',
+      whatWeDidLabel: 'Was wir erarbeitet haben',
+      whatsNextLabel: 'Was als Nächstes kommt',
       eventType: {
         SESSION_COMPLETED: 'Einheit abgeschlossen',
         RADAR_ASSESSMENT: 'Radar-Bewertung',

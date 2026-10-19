@@ -888,6 +888,8 @@ export default {
       loadMoreRetry: 'Try again',
       accessExpired:
         "Your coaching access to this player's timeline expired ({days} days of inactivity).",
+      whatWeDidLabel: 'What we worked on',
+      whatsNextLabel: "What's next",
       eventType: {
         SESSION_COMPLETED: 'Session Completed',
         RADAR_ASSESSMENT: 'Radar Assessment',
