@@ -252,6 +252,46 @@ class SessionPrepResourceIT extends AbstractIntegrationTest {
         assertThat(body.get("lastWhatsNext")).isEqualTo("Continue weak-foot drills");
     }
 
+    // skillars-deferred-155 AC6: the player/parent-initiated session-prep request, read directly off
+    // the booking row — no new query, so this proves the wiring through SessionPrepService end to end.
+    @Test
+    void getPrep_bookingHasPlayerRequest_includesItInResponse() {
+        long playerId = 9800000025L;
+        UUID[] bookingIdHolder = new UUID[1];
+        transactionTemplate.execute(status -> {
+            insertPlayer(playerId, "Player With Request");
+            bookingIdHolder[0] = insertBooking(coachProfileId, playerId, "CONFIRMED", Instant.now());
+            jdbcTemplate.update("UPDATE booking.bookings SET player_request = ? WHERE id = ?",
+                "Can we work on free kicks?", bookingIdHolder[0]);
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            prepUrl(bookingIdHolder[0]), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("playerRequest")).isEqualTo("Can we work on free kicks?");
+    }
+
+    @Test
+    void getPrep_bookingHasNoPlayerRequest_returnsNull() {
+        long playerId = 9800000026L;
+        UUID[] bookingIdHolder = new UUID[1];
+        transactionTemplate.execute(status -> {
+            insertPlayer(playerId, "Player Without Request");
+            bookingIdHolder[0] = insertBooking(coachProfileId, playerId, "CONFIRMED", Instant.now());
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            prepUrl(bookingIdHolder[0]), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("playerRequest")).isNull();
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private String prepUrl(UUID bookingId) {

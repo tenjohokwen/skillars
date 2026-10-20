@@ -704,6 +704,7 @@ export default {
     leave: 'Leave',
     stay: 'Stay',
     errorGeneric: 'Something went wrong. Please try again.',
+    edit: 'Edit',
   },
   profile: {
     subtitle: 'Manage your account details and preferences.',
@@ -1033,6 +1034,9 @@ export default {
       bookingsLoadError: 'Unable to load your bookings. Please refresh the page.',
       selectPack: 'Use a session pack',
       packOptionLabel: '{remaining} of {total} sessions left',
+      playerRequestLabel: 'Request for the coach',
+      playerRequestUpdateSuccess: 'Your request has been saved.',
+      playerRequestUpdateError: 'Could not save your request. Please try again.',
     },
     availability: {
       title: 'Manage Availability',
@@ -1216,6 +1220,9 @@ export default {
       // each a genuine authorization failure over a different object (player/pack, batch, booking).
       // Not split per object type — see skillars-deferred-32 AC3.
       requestNotAllowed: 'You do not have permission to perform this action.',
+      notEditable: 'This booking can no longer be edited.',
+      sessionAlreadyEnded:
+        'This session has already taken place, so your request can no longer be changed.',
       invalidSessionDuration:
         "The requested session length does not match this coach's session duration.",
       batchSizeExceeded: 'You can request up to {max} sessions in one batch.',

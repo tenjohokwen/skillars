@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.lowagie.text.pdf.PdfReader;
+import com.lowagie.text.pdf.parser.PdfTextExtractor;
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.development.contract.PlayerTimelineEventType;
 import com.softropic.skillars.platform.development.contract.ReportGeneratedEvent;
@@ -10,6 +12,8 @@ import com.softropic.skillars.platform.development.repo.PerformanceReport;
 import com.softropic.skillars.platform.development.repo.PerformanceReportRepository;
 import com.softropic.skillars.platform.development.repo.PlayerRadarBaselineRepository;
 import com.softropic.skillars.platform.development.repo.PlayerRadarCompositeRepository;
+import com.softropic.skillars.platform.development.repo.PlayerTimelineEvent;
+import com.softropic.skillars.platform.development.repo.PlayerTimelineRepository;
 import com.softropic.skillars.platform.development.repo.SkillDefinitionRepository;
 import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
@@ -73,6 +77,7 @@ class ReportGenerationServiceTest {
     @Mock private com.softropic.skillars.platform.config.service.ConfigService configService;
     @Mock private SecurityUtil securityUtil;
     @Mock private PlayerProfileRepository playerProfileRepository;
+    @Mock private PlayerTimelineRepository playerTimelineRepository;
     // skillars-deferred-92 AC18: a real instance, not a mock. The per-coach limit is the
     // point of the AC, and a mock would return false for tryConsume and silently reject
     // every call, or be stubbed to always allow and prove nothing.
@@ -96,7 +101,8 @@ class ReportGenerationServiceTest {
             skillDefinitionRepository, compositeRepository, baselineRepository,
             reportRepository, brandingRepository, fileStorageService,
             timelineEventListener, publisher, coachPlayerAuthorizationService,
-            rateLimitingService, configService, securityUtil, playerProfileRepository
+            rateLimitingService, configService, securityUtil, playerProfileRepository,
+            playerTimelineRepository
         );
         ReflectionTestUtils.setField(service, "baseUrl", "http://app.test");
         // skillars-deferred-153 AC7: a bare @Mock ConfigService does not throw on an unstubbed call —
@@ -126,6 +132,9 @@ class ReportGenerationServiceTest {
         when(baselineRepository.findByIdPlayerId(PLAYER_ID)).thenReturn(List.of());
         when(sluRepository.sumTotalSluByPlayerId(PLAYER_ID)).thenReturn(BigDecimal.valueOf(150));
         when(sluRepository.countDistinctSessions(PLAYER_ID)).thenReturn(5L);
+        // skillars-deferred-155 AC1: default to no recap history — tests that care about the
+        // "Session Notes" section override this stub explicitly.
+        when(playerTimelineRepository.findSessionNotesForReport(PLAYER_ID, COACH_ID, ReportGenerationService.REPORT_SESSION_NOTES_LIMIT)).thenReturn(List.of());
         PerformanceReport saved = new PerformanceReport();
         saved.setId(UUID.randomUUID());
         saved.setCoachId(COACH_ID);
@@ -173,6 +182,7 @@ class ReportGenerationServiceTest {
         when(coachPlayerLastSessionResolver.resolve(PLAYER_ID, otherCoachId)).thenReturn(
             new CoachPlayerLastSessionResolver.LastCoachSessionSignal(Instant.now().minusSeconds(3600), null));
         when(coachProfileService.getPublicProfile(otherCoachId)).thenReturn(coachDto());
+        when(playerTimelineRepository.findSessionNotesForReport(PLAYER_ID, otherCoachId, ReportGenerationService.REPORT_SESSION_NOTES_LIMIT)).thenReturn(List.of());
 
         for (int i = 0; i < 10; i++) {
             service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling.");
@@ -268,6 +278,131 @@ class ReportGenerationServiceTest {
 
         verify(fileStorageService, never()).storeBytes(any(), anyString(), anyString(), anyString());
         verify(timelineEventListener, never()).writeTimelineEvent(any(), any(), any(), any(), any());
+    }
+
+    // ---- skillars-deferred-155 AC1/AC2/AC3: "Session Notes" recap tie-in ----
+
+    private PlayerTimelineEvent sessionNoteEvent(Instant occurredAt, String whatWeDid, String whatsNext) {
+        PlayerTimelineEvent event = new PlayerTimelineEvent();
+        event.setPlayerId(PLAYER_ID);
+        event.setEventType(PlayerTimelineEventType.SESSION_COMPLETED);
+        event.setOccurredAt(occurredAt);
+        Map<String, Object> metadata = new java.util.HashMap<>();
+        metadata.put(TimelineEventListener.METADATA_KEY_COACH_ID, COACH_ID.toString());
+        if (whatWeDid != null) metadata.put(TimelineEventListener.METADATA_KEY_WHAT_WE_DID, whatWeDid);
+        if (whatsNext != null) metadata.put(TimelineEventListener.METADATA_KEY_WHATS_NEXT, whatsNext);
+        event.setMetadata(metadata);
+        return event;
+    }
+
+    private String extractPdfText(byte[] pdfBytes) throws Exception {
+        PdfReader reader = new PdfReader(pdfBytes);
+        try {
+            PdfTextExtractor extractor = new PdfTextExtractor(reader);
+            StringBuilder text = new StringBuilder();
+            for (int page = 1; page <= reader.getNumberOfPages(); page++) {
+                text.append(extractor.getTextFromPage(page));
+            }
+            return text.toString();
+        } finally {
+            reader.close();
+        }
+    }
+
+    @Test
+    void generateReport_multipleRecapEntries_renderInOrderUnderSessionNotes() throws Exception {
+        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+        Instant older = Instant.now().minus(10, java.time.temporal.ChronoUnit.DAYS);
+        Instant newer = Instant.now().minus(1, java.time.temporal.ChronoUnit.DAYS);
+        when(playerTimelineRepository.findSessionNotesForReport(PLAYER_ID, COACH_ID, ReportGenerationService.REPORT_SESSION_NOTES_LIMIT)).thenReturn(List.of(
+            sessionNoteEvent(newer, "Worked on first touch", "Shooting drills next"),
+            sessionNoteEvent(older, "Passing accuracy", "Set-piece delivery")
+        ));
+
+        service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling.");
+
+        ArgumentCaptor<ReportGeneratedEvent> eventCaptor = ArgumentCaptor.forClass(ReportGeneratedEvent.class);
+        verify(publisher).publishEvent(eventCaptor.capture());
+        String text = extractPdfText(eventCaptor.getValue().pdfBytes());
+        assertThat(text).contains("Session Notes");
+        assertThat(text.indexOf("Worked on first touch"))
+            .as("most-recent entry (query's own ORDER BY occurred_at DESC) must render first")
+            .isLessThan(text.indexOf("Passing accuracy"));
+        assertThat(text).contains("Shooting drills next", "Set-piece delivery");
+    }
+
+    /**
+     * skillars-deferred-155 code review, Decision 3(a): the Session Notes section is capped, and the
+     * cap is named in the heading only when the query actually came back full — otherwise a player with
+     * three sessions would be told they are seeing "the most recent 20". Also pins that the service
+     * passes its own REPORT_SESSION_NOTES_LIMIT down to the query rather than fetching full history.
+     */
+    @Test
+    void generateReport_recapHistoryAtTheCap_namesTheCapInTheHeading() throws Exception {
+        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+        List<PlayerTimelineEvent> atCap = new java.util.ArrayList<>();
+        for (int i = 0; i < ReportGenerationService.REPORT_SESSION_NOTES_LIMIT; i++) {
+            atCap.add(sessionNoteEvent(
+                Instant.now().minus(i + 1, java.time.temporal.ChronoUnit.DAYS),
+                "Session " + i + " work", "Session " + i + " next"));
+        }
+        when(playerTimelineRepository.findSessionNotesForReport(
+            PLAYER_ID, COACH_ID, ReportGenerationService.REPORT_SESSION_NOTES_LIMIT)).thenReturn(atCap);
+
+        service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling.");
+
+        ArgumentCaptor<ReportGeneratedEvent> eventCaptor = ArgumentCaptor.forClass(ReportGeneratedEvent.class);
+        verify(publisher).publishEvent(eventCaptor.capture());
+        String text = extractPdfText(eventCaptor.getValue().pdfBytes());
+        assertThat(text).contains(
+            "Session Notes (most recent " + ReportGenerationService.REPORT_SESSION_NOTES_LIMIT + " sessions)");
+    }
+
+    /** The cap is not advertised when the history is shorter than it — see the sibling above. */
+    @Test
+    void generateReport_recapHistoryBelowTheCap_doesNotNameTheCap() throws Exception {
+        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+        when(playerTimelineRepository.findSessionNotesForReport(
+            PLAYER_ID, COACH_ID, ReportGenerationService.REPORT_SESSION_NOTES_LIMIT)).thenReturn(List.of(
+                sessionNoteEvent(Instant.now().minus(1, java.time.temporal.ChronoUnit.DAYS),
+                    "Worked on first touch", "Shooting drills next")));
+
+        service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling.");
+
+        ArgumentCaptor<ReportGeneratedEvent> eventCaptor = ArgumentCaptor.forClass(ReportGeneratedEvent.class);
+        verify(publisher).publishEvent(eventCaptor.capture());
+        String text = extractPdfText(eventCaptor.getValue().pdfBytes());
+        assertThat(text).contains("Session Notes").doesNotContain("most recent");
+    }
+
+    @Test
+    void generateReport_noRecapHistory_omitsSessionNotesSectionEntirely() throws Exception {
+        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+        // default stub from stubGenerateReport already returns List.of() — explicit here for clarity.
+        when(playerTimelineRepository.findSessionNotesForReport(PLAYER_ID, COACH_ID, ReportGenerationService.REPORT_SESSION_NOTES_LIMIT)).thenReturn(List.of());
+
+        service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling.");
+
+        ArgumentCaptor<ReportGeneratedEvent> eventCaptor = ArgumentCaptor.forClass(ReportGeneratedEvent.class);
+        verify(publisher).publishEvent(eventCaptor.capture());
+        String text = extractPdfText(eventCaptor.getValue().pdfBytes());
+        assertThat(text).doesNotContain("Session Notes");
+    }
+
+    @Test
+    void generateReport_recapEntryWithOnlyOneFieldPresent_rendersThatFieldAndNotLiteralNull() throws Exception {
+        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+        when(playerTimelineRepository.findSessionNotesForReport(PLAYER_ID, COACH_ID, ReportGenerationService.REPORT_SESSION_NOTES_LIMIT)).thenReturn(List.of(
+            sessionNoteEvent(Instant.now().minus(2, java.time.temporal.ChronoUnit.DAYS), "Worked on first touch", null)
+        ));
+
+        service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling.");
+
+        ArgumentCaptor<ReportGeneratedEvent> eventCaptor = ArgumentCaptor.forClass(ReportGeneratedEvent.class);
+        verify(publisher).publishEvent(eventCaptor.capture());
+        String text = extractPdfText(eventCaptor.getValue().pdfBytes());
+        assertThat(text).contains("Session Notes", "Worked on first touch");
+        assertThat(text).doesNotContain("null");
     }
 
     @Test
@@ -561,7 +696,8 @@ class ReportGenerationServiceTest {
             skillDefinitionRepository, compositeRepository, baselineRepository,
             reportRepository, brandingRepository, realFileStorageService,
             timelineEventListener, publisher, coachPlayerAuthorizationService,
-            rateLimitingService, configService, securityUtil, playerProfileRepository
+            rateLimitingService, configService, securityUtil, playerProfileRepository,
+            playerTimelineRepository
         );
         ReflectionTestUtils.setField(realService, "baseUrl", "http://app.test");
 

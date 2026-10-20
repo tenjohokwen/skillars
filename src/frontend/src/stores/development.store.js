@@ -249,10 +249,26 @@ export const useDevelopmentStore = defineStore('development', () => {
         // accessExpired: true and an empty events array — merging would keep the previously
         // loaded events on screen underneath the expiry banner, i.e. keep displaying exactly the
         // data the backend just decided to withhold.
-        timeline.value =
-          page === 0 || !timeline.value || response.accessExpired
-            ? response
-            : { ...response, events: [...timeline.value.events, ...response.events] }
+        if (page === 0 || !timeline.value || response.accessExpired) {
+          timeline.value = response
+        } else {
+          // skillars-deferred-155 AC15: a wrap-up submitted in another tab between this page-0
+          // load and this "Load more" click can shift the offset and re-serve an already-rendered
+          // event — concatenating without this id-keyed merge would duplicate it under a
+          // duplicate :key.
+          //
+          // skillars-deferred-155 code review: merged via a Map so the SERVER's copy of a re-served
+          // event wins, rather than filtering the server's copy out and keeping the one already on
+          // screen. The payload can legitimately differ between the two requests — a coach can edit a
+          // wrap-up, and TimelineQueryService.redactRecapIfNotAuthoringCoach's decision flips the
+          // moment coach access expires — so keeping the stale copy could go on rendering recap text
+          // the backend has just decided to withhold, which is the same hazard the accessExpired
+          // branch above exists to close. Insertion order is preserved (already-loaded first, new
+          // ones appended), because Map keeps first-insertion position when a key is overwritten.
+          const merged = new Map(timeline.value.events.map((e) => [e.id, e]))
+          response.events.forEach((e) => merged.set(e.id, e))
+          timeline.value = { ...response, events: [...merged.values()] }
+        }
         timelinePage.value = page
       }
     } catch (err) {

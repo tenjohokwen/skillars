@@ -50,6 +50,8 @@ import static org.awaitility.Awaitility.await;
 class ReportGenerationServiceIT extends BaseStorageIT {
 
     @Autowired private ReportGenerationService reportGenerationService;
+    @Autowired private com.softropic.skillars.platform.development.repo.PlayerTimelineRepository
+        playerTimelineRepository;
     @Autowired private ApplicationEventPublisher eventPublisher;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
@@ -63,6 +65,83 @@ class ReportGenerationServiceIT extends BaseStorageIT {
     private static final long BRANDING_COACH_USER_ID = 9576000020L;
     private static final String BRANDING_COACH_EMAIL = "coach.branding.it@skillars-test.com";
     private static final String BRANDING_COACH_PASSWORD = "TestPass@123!";
+
+    /**
+     * skillars-deferred-155 code review: the only real-database exercise of
+     * {@code PlayerTimelineRepository.findSessionNotesForReport}. Before this, all five references to it
+     * in the test tree were Mockito stubs in {@code ReportGenerationServiceTest}, so the hand-written
+     * native SQL — {@code jsonb_exists(...)}, {@code metadata->>'coachId' = CAST(:coachId AS text)} with
+     * a UUID bind, a schema-qualified {@code SELECT *} hydrating entities, and the {@code LIMIT} /
+     * tie-broken {@code ORDER BY} — had never once been executed by Postgres. A binding or mapping
+     * error would have surfaced as a 500 on the first production report instead of a test failure.
+     *
+     * <p>The load-bearing assertion is the non-attended row: its {@code coach_id} column is NULL
+     * (TimelineEventListener.java:61 gates it on attendance) while {@code metadata.coachId} is set
+     * unconditionally (:55), so a column-based filter would silently drop a real recap. That is the
+     * trap AC1 exists to avoid, and only a real query can prove it is avoided.
+     */
+    @Test
+    void findSessionNotesForReport_realQuery_filtersOnMetadataKeyAndHonoursLimitAndOrder() {
+        UUID otherCoachId = UUID.randomUUID();
+        Instant base = Instant.parse("2026-03-01T10:00:00Z");
+        transactionTemplate.execute(status -> {
+            // 1. attended — coach_id column populated
+            insertTimelineEvent(base.plusSeconds(300), "SESSION_COMPLETED", COACH_ID,
+                "Attended recap", "Attended next", COACH_ID);
+            // 2. NON-attended — coach_id column NULL, metadata.coachId still set. Must be returned.
+            insertTimelineEvent(base.plusSeconds(200), "SESSION_COMPLETED", null,
+                "Non-attended recap", "Non-attended next", COACH_ID);
+            // 3. another coach's recap for the same player — must not leak
+            insertTimelineEvent(base.plusSeconds(100), "SESSION_COMPLETED", otherCoachId,
+                "Other coach recap", "Other coach next", otherCoachId);
+            // 4. this coach, but no recap keys at all — the jsonb_exists guard must drop it
+            insertTimelineEvent(base.plusSeconds(50), "SESSION_COMPLETED", COACH_ID,
+                null, null, COACH_ID);
+            // 5. this coach's recap keys on a different event type — the event_type filter must drop it
+            insertTimelineEvent(base.plusSeconds(10), "PERFORMANCE_REPORT", COACH_ID,
+                "Wrong type recap", "Wrong type next", COACH_ID);
+            return null;
+        });
+
+        var all = playerTimelineRepository.findSessionNotesForReport(PLAYER_ID, COACH_ID, 10);
+
+        assertThat(all).hasSize(2);
+        assertThat(all.get(0).getMetadata().get("whatWeDid")).isEqualTo("Attended recap");
+        assertThat(all.get(1).getMetadata().get("whatWeDid"))
+            .as("non-attended session's recap must survive the filter — coach_id column is NULL there")
+            .isEqualTo("Non-attended recap");
+        assertThat(all.get(1).getCoachId())
+            .as("proves the row really is the attendance-gated one")
+            .isNull();
+
+        var capped = playerTimelineRepository.findSessionNotesForReport(PLAYER_ID, COACH_ID, 1);
+        assertThat(capped).hasSize(1);
+        assertThat(capped.get(0).getMetadata().get("whatWeDid")).isEqualTo("Attended recap");
+    }
+
+    /**
+     * Builds the metadata object with only the keys that are actually present, mirroring
+     * TimelineEventListener.java:56-57's own conditional puts — the absent-key case is what the
+     * query's jsonb_exists guard has to discriminate on, so a fixture that always wrote both keys
+     * could not express it. Test inputs are controlled literals with no quotes to escape.
+     */
+    private void insertTimelineEvent(Instant occurredAt, String eventType, UUID coachIdColumn,
+                                     String whatWeDid, String whatsNext, UUID metadataCoachId) {
+        StringBuilder metadata = new StringBuilder("{\"coachId\":\"").append(metadataCoachId).append('"');
+        if (whatWeDid != null) {
+            metadata.append(",\"whatWeDid\":\"").append(whatWeDid).append('"');
+        }
+        if (whatsNext != null) {
+            metadata.append(",\"whatsNext\":\"").append(whatsNext).append('"');
+        }
+        metadata.append('}');
+        jdbcTemplate.update(
+            "INSERT INTO development.player_timeline_events "
+                + "(id, player_id, event_type, occurred_at, metadata, coach_id) "
+                + "VALUES (?, ?, ?, ?, ?::jsonb, ?)",
+            UUID.randomUUID(), PLAYER_ID, eventType, Timestamp.from(occurredAt),
+            metadata.toString(), coachIdColumn);
+    }
 
     @Test
     void onReportGenerated_realAsyncPipeline_transitionsPendingUploadToReadyAndListable() {

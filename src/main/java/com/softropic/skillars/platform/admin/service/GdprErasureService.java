@@ -202,6 +202,11 @@ public class GdprErasureService {
     private static final String COACH_RECAP_LOCK_TIMEOUT = "COACH_RECAP_LOCK_TIMEOUT";
     private static final String COACH_RECAP_CONTENDED = "COACH_RECAP_CONTENDED";
 
+    // skillars-deferred-155 code review, Decision 2(a): performance_reports.next_steps is NOT NULL, so
+    // the coach-erasure scrub overwrites it with this placeholder rather than nulling it — same
+    // convention as the "Deleted"/"User" writes on main.user above. Well inside the column's 500 chars.
+    private static final String ERASED_REPORT_NEXT_STEPS = "[Removed — coach account erased]";
+
     // skillars-deferred-136 AC2: retryFailedErasures's own sweep sizing — mirrors
     // EmailRetryScheduler.MAX_RETRY_ATTEMPTS's shape, not its value. GDPR erasure failures are
     // expected to be rare and each retry is a heavier full-erasure attempt (unlike a single email
@@ -262,6 +267,33 @@ public class GdprErasureService {
      * lives in the new outer {@link #erase} wrapper above, which this method's own
      * {@code @Transactional(REQUIRES_NEW)} advice would otherwise run BEFORE any of this method's own
      * code could execute. Business logic below is unchanged from before this rename.
+     *
+     * <p><b>What this erases, by branch</b> (skillars-deferred-155 AC9 — this inventory was previously
+     * only in the inline comments further down, which AC9 and its own Task 3.3 both asked to have
+     * summarised here):
+     * <ul>
+     *   <li><b>Always:</b> {@code main.user} identity fields (anonymised to
+     *       {@code deleted.<id>@erased.io} / "Deleted User"), messages, review bodies, refresh tokens,
+     *       expired GDPR requests, and the S3 blobs of previously COMPLETED export requests.</li>
+     *   <li><b>COACH:</b> {@code marketplace.coach_profiles} free text, plus — all inside one
+     *       {@code REQUIRES_NEW} block under a {@code lock_timeout} bound — three copies of the coach's
+     *       own authored narrative: {@code booking.session_completion_data} recap columns
+     *       (skillars-deferred-154 AC2), {@code development.player_timeline_events.metadata}'s
+     *       independent second copy of the same recap, and {@code development.performance_reports},
+     *       whose {@code next_steps} is replaced and whose PDF blob is enqueued for deletion. That last
+     *       one SCRUBS and keeps the row rather than deleting it: the table is a joint coach+player
+     *       artifact, so a delete would destroy the player's own record (skillars-deferred-155 code
+     *       review, Decision 2(a)).</li>
+     *   <li><b>PLAYER / PARENT:</b> the player's development data wholesale via
+     *       {@link #deletePlayerDevelopmentData}, including {@code player_timeline_events} row deletes
+     *       and {@code performance_reports} deletes — deletion is correct there because the data
+     *       subject owns those rows.</li>
+     * </ul>
+     *
+     * <p>A contended scrub in either the COACH or the PLAYER branch is skipped, alerted, and marks the
+     * request {@code FAILED} rather than {@code COMPLETED}, so the daily
+     * {@code GdprErasureRetryScheduler} re-drives it — see the {@code skipped} flag below. Reporting
+     * {@code COMPLETED} while data survives would be an Article 17 correctness regression.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void eraseTransactional(UUID requestId, Long userId) {
@@ -289,6 +321,16 @@ public class GdprErasureService {
         user.getPersistentTokens().clear();
         userRepository.save(user);
 
+        // skillars-deferred-155 code review, Decision 1(a): declared HERE, above the COACH block — not
+        // just above the PLAYER branch further down, which is where it used to live. The coach-side
+        // scrub's own catch has to be able to set it too. Before this fix the flag was declared after
+        // that block, so a contended coach scrub was alerted but the request was still written
+        // COMPLETED at the terminal status below, and retryFailedErasures selects only
+        // status = "FAILED" — meaning the skip was never re-driven and the coach's recap text, timeline
+        // metadata and report rows survived indefinitely while the request machine-readably claimed
+        // success. Same Article 17 reasoning this method already documents for the CHILD case.
+        AtomicBoolean skipped = new AtomicBoolean(false);
+
         // Anonymise coach_profiles (if coach)
         coachProfileRepository.findByUserId(userId).ifPresent(cp -> {
             cp.setBio(null);
@@ -300,6 +342,28 @@ public class GdprErasureService {
             // what_we_did, whats_next} are coach-authored free text, but anonymizeByPlayerId (used
             // by the PLAYER branch below) is keyed on playerId — a coach's own erasure never touched
             // this table, so their authored recap text survived their own erasure indefinitely.
+            //
+            // skillars-deferred-155 AC9: two more copies of the same underlying fact, scrubbed in
+            // the same unit. (1) development.player_timeline_events.metadata carries a SECOND,
+            // independent copy of the recap (written by TimelineEventListener at session-completion
+            // time, not wrap-up time) that anonymizeByCoachId above never touches — closing the gap
+            // skillars-deferred-154's own code review recorded as "its own story, not a review
+            // patch". (2) development.performance_reports now also carries the coach's verbatim
+            // recap history (skillars-deferred-155 AC1/AC2's own new "Session Notes" section) and
+            // was purged only by the PLAYER erasure branch (deletePlayerDevelopmentData) — never the
+            // coach's.
+            //
+            // (skillars-deferred-155 code review, Decision 2(a)) The report half SCRUBS and keeps the
+            // row; it deliberately does NOT mirror the PLAYER branch's findStorageKeys→delete→enqueue
+            // sequence, even though that is where it was first copied from. performance_reports is a
+            // joint artifact (coach_id NOT NULL *and* player_id NOT NULL), so a delete keyed on coachId
+            // destroys the player's own development record because a third party asked for erasure.
+            // Deleting is correct on the PLAYER branch only because the data subject owns the row
+            // there. Scrub-and-keep also matches the two statements above it. The blob is still
+            // enqueued for deletion — the PDF embeds the coach's verbatim recap text and cannot be
+            // scrubbed in place — so what survives is a row with a placeholder next_steps and no
+            // storage_key, which keeps the player's report history and its PERFORMANCE_REPORT timeline
+            // entries internally consistent.
             //
             // (code review 2026-10-17, two findings) This statement runs in its OWN REQUIRES_NEW
             // transaction rather than inline in eraseTransactional's, for two independent reasons:
@@ -335,6 +399,12 @@ public class GdprErasureService {
                 requiresNewTemplate.executeWithoutResult(status -> {
                     setStatementLockTimeout(coachRecapLockTimeoutSeconds);
                     sessionCompletionDataRepository.anonymizeByCoachId(cp.getId());
+                    playerTimelineRepository.anonymizeMetadataByCoachId(cp.getId());
+                    List<String> coachReportBlobKeys = performanceReportRepository.findStorageKeysByCoachId(cp.getId());
+                    performanceReportRepository.anonymizeByCoachId(cp.getId(), ERASED_REPORT_NEXT_STEPS);
+                    if (!coachReportBlobKeys.isEmpty()) {
+                        blobDeletionOutboxSupport.enqueue(coachReportBlobKeys);
+                    }
                 });
             } catch (PessimisticLockingFailureException e) {
                 // CannotAcquireLockException (SQLSTATE 40P01, a genuine deadlock) is a SUBCLASS of
@@ -343,11 +413,18 @@ public class GdprErasureService {
                 // alert queue can tell one hot statement from a real deadlock.
                 String reason = e instanceof CannotAcquireLockException
                     ? COACH_RECAP_CONTENDED : COACH_RECAP_LOCK_TIMEOUT;
-                log.warn("[GDPR_ERASURE] COACH-branch coachId={} session-recap anonymisation failed "
-                        + "(reason={}) — skipping it; the rest of the erasure still commits and the "
-                        + "daily retry scheduler will re-run it. requestId={} userId={}",
+                log.warn("[GDPR_ERASURE] COACH-branch coachId={} session-recap/report scrub failed "
+                        + "(reason={}) — skipping it; the rest of the erasure still commits, the request "
+                        + "is reported FAILED, and the daily retry scheduler re-runs it. "
+                        + "requestId={} userId={}",
                     cp.getId(), reason, requestId, userId);
                 raiseErasureAlert(requestId, reason);
+                // skillars-deferred-155 code review, Decision 1(a): gate the terminal status. Without
+                // this the request is written COMPLETED below even though the coach's recap text,
+                // timeline metadata and report rows all survive, and retryFailedErasures — which
+                // selects only status = "FAILED" — never re-drives the block. Every statement in the
+                // lambda above is idempotent, so the retry is safe to re-run wholesale.
+                skipped.set(true);
             }
         });
 
@@ -385,7 +462,8 @@ public class GdprErasureService {
         // request. Gates the terminal status below: a skip here means development data survives
         // this run, so the request must not be reported COMPLETED. An AtomicBoolean, not a plain
         // local, because the PLAYER branch's catch runs inside the ifPresentOrElse lambda below.
-        AtomicBoolean skipped = new AtomicBoolean(false);
+        // (skillars-deferred-155 code review, Decision 1(a)) Now declared above the COACH block rather
+        // than here, so that branch's catch can gate the terminal status too — see its comment there.
         if (role == SkillarsRole.PLAYER) {
             // skillars-deferred-132 AC2 Fix 9: read once here, before the lock acquisition inside
             // deletePlayerDevelopmentData, mirroring eraseParentChildren's own hoisted read below. This

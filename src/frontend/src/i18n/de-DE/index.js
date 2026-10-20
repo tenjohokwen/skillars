@@ -11,6 +11,7 @@ export default {
     leave: 'Verlassen',
     stay: 'Bleiben',
     errorGeneric: 'Etwas ist schiefgelaufen. Bitte erneut versuchen.',
+    edit: 'Bearbeiten',
     submit: 'Absenden',
     or: 'oder',
     menu: 'Menü',
@@ -54,6 +55,8 @@ export default {
       'Ungültiger oder fehlender Zurücksetzungsschlüssel. Bitte fordern Sie eine neue Zurücksetzung an.',
     verifyTokenMissing:
       'Kein Bestätigungstoken gefunden. Bitte prüfen Sie den Link in Ihrer E-Mail.',
+    emailVerifiedPleaseLogin:
+      'Ihre E-Mail-Adresse wurde bestätigt. Sie können sich jetzt anmelden.',
     phoneHintFormat: 'Mit Ländervorwahl angeben, z. B. +1 555 0100',
     accountNotVerified:
       'Ihr Konto ist noch nicht verifiziert. Bitte schließen Sie zunächst die Telefonverifizierung ab.',
@@ -398,6 +401,10 @@ export default {
       creditsRemaining: '{count} Guthaben bei diesem Trainer verbleibend',
       selectPack: 'Sitzungspaket verwenden',
       packOptionLabel: '{remaining} von {total} Sitzungen übrig',
+      playerRequestLabel: 'Anliegen an den Trainer',
+      playerRequestUpdateSuccess: 'Ihr Anliegen wurde gespeichert.',
+      playerRequestUpdateError:
+        'Ihr Anliegen konnte nicht gespeichert werden. Bitte versuchen Sie es erneut.',
     },
     wrapUp: {
       step4DnaError: 'Session-DNA konnte nicht geladen werden.',
@@ -603,6 +610,9 @@ export default {
       listMayBeStale:
         'Diese Liste ist möglicherweise nicht aktuell. Laden Sie die Seite neu, um den neuesten Stand zu sehen.',
       requestNotAllowed: 'Sie sind nicht berechtigt, diese Aktion auszuführen.',
+      notEditable: 'Diese Buchung kann nicht mehr bearbeitet werden.',
+      sessionAlreadyEnded:
+        'Diese Sitzung hat bereits stattgefunden, Ihr Anliegen kann nicht mehr geändert werden.',
       invalidSessionDuration:
         'Die angeforderte Sitzungsdauer entspricht nicht der Sitzungsdauer dieses Coaches.',
       batchSizeExceeded: 'Sie können bis zu {max} Sitzungen in einer Sammelanfrage anfragen.',

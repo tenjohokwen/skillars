@@ -87,3 +87,7 @@ export const coachCancelBooking = (bookingId, cancelReason) =>
 export const recordNoShowPlayer = (bookingId) =>
   api.post(`/api/bookings/${bookingId}/no-show-player`)
 export const recordNoShowCoach = (bookingId) => api.post(`/api/bookings/${bookingId}/no-show-coach`)
+
+// skillars-deferred-155 AC5: player/parent-initiated session-prep request.
+export const setPlayerRequest = (bookingId, playerRequest) =>
+  api.patch(`/api/bookings/${bookingId}/player-request`, { playerRequest })

@@ -43,4 +43,60 @@ public interface PlayerTimelineRepository extends JpaRepository<PlayerTimelineEv
     @Modifying
     @Query("DELETE FROM PlayerTimelineEvent e WHERE e.playerId = :playerId")
     int deleteByPlayerId(@Param("playerId") Long playerId);   // GDPR erasure only
+
+    // skillars-deferred-155 AC1: every SESSION_COMPLETED recap this coach authored for this player,
+    // full history, for the report-generation "Session Notes" section. Deliberately NOT a derived
+    // method on the entity's own coachId column — that column is attendance-gated (NULL for a
+    // completed-but-unattended session, see TimelineEventListener.onBookingCompleted), while
+    // metadata->>'coachId' is written unconditionally. A column-based filter would silently exclude
+    // every unattended session's real recap text; WHERE coach_id = ? never matches a NULL row. The
+    // jsonb_exists(...) guard also does AC3's "no empty section" work at the database level. Uses the
+    // (skillars-deferred-155 code review) Two additions to the ORDER BY / LIMIT tail. `, id DESC` is the
+    // tie-break this file's own sibling query at the top already carries: occurred_at is NOT unique
+    // ("Postgres NOW() is transaction-constant, so they all land on the identical value"), so without it
+    // same-timestamp Session Notes order nondeterministically and two regenerations of the same report
+    // can differ. `LIMIT :limit` bounds what was a full-history fetch — the exact unbounded-List shape
+    // skillars-deferred-153 AC4 removed from the sibling above, for the same reason (one row per
+    // completed session, up to 2x500 chars each, hydrated as entities and rendered into one in-memory
+    // PDF byte[]). The caller passes ReportGenerationService.REPORT_SESSION_NOTES_LIMIT.
+    // function form, not the bare `?` containment operator (metadata ? 'whatWeDid') — a literal `?`
+    // inside a Spring Data native @Query is ambiguous with JDBC's own positional-parameter syntax and
+    // has no precedent anywhere else in this codebase; jsonb_exists is the equivalent function call
+    // with no parser risk.
+    @Query(value = "SELECT * FROM development.player_timeline_events "
+        + "WHERE player_id = :playerId AND metadata->>'coachId' = CAST(:coachId AS text) "
+        + "AND event_type = 'SESSION_COMPLETED' "
+        + "AND (jsonb_exists(metadata, 'whatWeDid') OR jsonb_exists(metadata, 'whatsNext')) "
+        + "ORDER BY occurred_at DESC, id DESC "
+        + "LIMIT :limit", nativeQuery = true)
+    List<PlayerTimelineEvent> findSessionNotesForReport(
+        @Param("playerId") Long playerId, @Param("coachId") UUID coachId, @Param("limit") int limit);
+
+    // skillars-deferred-155 AC9: closes the gap skillars-deferred-154's own code review recorded as
+    // "its own story, not a review patch" — a coach's GDPR erasure already scrubs
+    // booking.session_completion_data (anonymizeByCoachId) but never touched this second,
+    // independent copy of the same recap text. Same metadata->>'coachId' filter as
+    // findSessionNotesForReport above, for the same attendance-gating reason — a column-based
+    // filter would silently skip any non-attended session's real recap text. JPQL cannot express
+    // JSONB key-removal (`-`), hence nativeQuery = true. coachId left in place: it is a structural
+    // reference key, not narrative PII (TimelineQueryService.redactRecapIfNotAuthoringCoach already
+    // establishes it surviving redaction as deliberate, asserted-correct behavior).
+    // (skillars-deferred-155 code review) The jsonb_exists guard is a provable no-op narrowing: a row
+    // carrying neither key has nothing for `- 'whatWeDid' - 'whatsNext'` to strip, so skipping it cannot
+    // change the outcome, and it stops the statement row-locking and rewriting every BOOKING_CONFIRMED /
+    // PERFORMANCE_REPORT row this coach ever touched. Deliberately NOT also filtered on
+    // `event_type = 'SESSION_COMPLETED'` even though only onBookingCompleted writes these keys today
+    // (verified: TimelineEventListener.java:56-57 is the sole writer): on a GDPR scrub an over-scan is
+    // cheap and an under-scrub is a compliance failure, and the guard above already excludes the rows
+    // an event_type filter would have. The read-side sibling above does filter on event_type, because a
+    // read that misses a historical oddity is harmless and only SESSION_COMPLETED belongs in a report.
+    // No index serves metadata->>'coachId' (V161 indexes the coach_id *column*), so this remains a
+    // sequential scan — which is exactly why the caller wraps it in the lock_timeout bound.
+    @Modifying
+    @Query(value = "UPDATE development.player_timeline_events "
+        + "SET metadata = metadata - 'whatWeDid' - 'whatsNext' "
+        + "WHERE metadata->>'coachId' = CAST(:coachId AS text) "
+        + "AND (jsonb_exists(metadata, 'whatWeDid') OR jsonb_exists(metadata, 'whatsNext'))",
+        nativeQuery = true)
+    void anonymizeMetadataByCoachId(@Param("coachId") UUID coachId);
 }

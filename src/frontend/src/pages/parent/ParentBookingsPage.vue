@@ -129,6 +129,33 @@
             @click="openCancelDialog(booking)"
             class="q-mt-xs self-start"
           />
+
+          <!-- Player/parent session-prep request (skillars-deferred-155 AC7).
+               skillars-deferred-155 code review: the read-only display is deliberately NOT nested
+               inside the editable-status gate below. Only the *edit affordance* is status-gated;
+               previously both were, so once the booking left CONFIRMED/UPCOMING the author could no
+               longer see what they had written while SessionPrepService:89 kept serving it to the
+               coach. -->
+          <div
+            v-if="(authStore.isParent || authStore.isPlayer) && booking.playerRequest"
+            class="text-caption q-mt-xs"
+          >
+            {{ t('booking.requests.playerRequestLabel') }}: {{ booking.playerRequest }}
+          </div>
+          <q-btn
+            v-if="
+              (authStore.isParent || authStore.isPlayer) &&
+              ['CONFIRMED', 'UPCOMING'].includes(booking.status)
+            "
+            flat
+            dense
+            size="sm"
+            class="self-start q-pa-none q-mt-xs"
+            :label="
+              booking.playerRequest ? t('common.edit') : t('booking.requests.playerRequestLabel')
+            "
+            @click="openPlayerRequestDialog(booking)"
+          />
         </q-item-section>
         <q-item-section side>
           <BookingStateChip :status="booking.status" :booking-id="booking.id" />
@@ -195,6 +222,28 @@
             color="primary"
             :label="t('booking.reschedule.submit')"
             @click="submitReschedule"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <!-- Player/parent session-prep request dialog (skillars-deferred-155 AC7) -->
+    <q-dialog v-model="playerRequestDialogOpen">
+      <q-card style="min-width: 320px">
+        <q-card-section>
+          <div class="text-h6">{{ t('booking.requests.playerRequestLabel') }}</div>
+        </q-card-section>
+        <q-card-section>
+          <q-input v-model="playerRequestText" type="textarea" maxlength="500" counter autofocus />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn
+            unelevated
+            color="primary"
+            :label="t('common.save')"
+            :loading="savingPlayerRequestId === playerRequestBookingId"
+            @click="submitPlayerRequest"
           />
         </q-card-actions>
       </q-card>
@@ -295,6 +344,11 @@ const cancelingId = ref(null)
 const cancelDialogOpen = ref(false)
 const cancelBookingId = ref(null)
 
+const playerRequestDialogOpen = ref(false)
+const playerRequestBookingId = ref(null)
+const playerRequestText = ref('')
+const savingPlayerRequestId = ref(null)
+
 function openCancelDialog(booking) {
   cancelBookingId.value = booking.id
   cancelDialogOpen.value = true
@@ -323,6 +377,45 @@ async function submitCancelBooking() {
     }
   } finally {
     cancelingId.value = null
+  }
+}
+
+function openPlayerRequestDialog(booking) {
+  playerRequestBookingId.value = booking.id
+  playerRequestText.value = booking.playerRequest ?? ''
+  playerRequestDialogOpen.value = true
+}
+
+async function submitPlayerRequest() {
+  savingPlayerRequestId.value = playerRequestBookingId.value
+  try {
+    await bookingStore.handleSetPlayerRequest(playerRequestBookingId.value, playerRequestText.value)
+    playerRequestDialogOpen.value = false
+    $q.notify({ message: t('booking.requests.playerRequestUpdateSuccess'), type: 'positive' })
+  } catch (err) {
+    // skillars-deferred-155 code review: branch on errorKey rather than swallowing the error with a
+    // bare `catch {}`. Every rejection here is a 403, but they are not all retryable — BOOKING_NOT_EDITABLE
+    // and SESSION_ALREADY_ENDED mean the booking moved on under a stale list, so "Please try again"
+    // invited a retry that can never succeed. Mirrors submitCancelBooking's own errorKey branching
+    // directly above. The list is also reloaded on those two so the now-ineligible Edit button goes away.
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'BOOKING_NOT_EDITABLE' || errorKey === 'SESSION_ALREADY_ENDED') {
+      const message =
+        errorKey === 'SESSION_ALREADY_ENDED'
+          ? t('booking.errors.sessionAlreadyEnded')
+          : t('booking.errors.notEditable')
+      playerRequestDialogOpen.value = false
+      $q.notify({ message, type: 'negative' })
+      await bookingStore.loadParentBookings()
+    } else if (errorKey === 'MISSING_RIGHTS') {
+      $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
+    } else if (errorKey === 'CONCURRENT_MODIFICATION') {
+      $q.notify({ message: t('booking.errors.concurrentModification'), type: 'negative' })
+    } else {
+      $q.notify({ message: t('booking.requests.playerRequestUpdateError'), type: 'negative' })
+    }
+  } finally {
+    savingPlayerRequestId.value = null
   }
 }
 

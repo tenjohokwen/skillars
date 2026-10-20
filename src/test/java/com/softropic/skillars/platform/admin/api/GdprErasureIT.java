@@ -60,6 +60,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -792,6 +793,156 @@ class GdprErasureIT extends AbstractIntegrationTest {
         assertThat(otherRow.get("voice_note_text")).isEqualTo("Unrelated coach voice note");
         assertThat(otherRow.get("what_we_did")).isEqualTo("Unrelated coach recap");
         assertThat(otherRow.get("whats_next")).isEqualTo("Unrelated coach next step");
+    }
+
+    /**
+     * skillars-deferred-155 AC9/AC10: closes the gap skillars-deferred-154's own code review
+     * recorded as "its own story, not a review patch" — development.player_timeline_events.metadata
+     * is a SECOND, independent copy of the coach's recap (written by TimelineEventListener at
+     * session-completion time, not wrap-up time) that anonymizeByCoachId above never touches.
+     * Covers both the attended case (entity coach_id column set) and the non-attended case
+     * (coach_id column NULL, metadata.coachId still set) — the specific case the metadata-key-vs-
+     * column distinction in AC9's query exists to protect, with no existing fixture to copy.
+     */
+    @Test
+    void erase_coachUser_anonymizesOwnTimelineMetadataRecapForThatCoachOnlyIncludingNonAttendedRow() {
+        UUID attendedEventId = UUID.randomUUID();
+        UUID nonAttendedEventId = UUID.randomUUID();
+        UUID otherCoachEventId = UUID.randomUUID();
+        UUID otherCoachProfileId = UUID.randomUUID();
+        long otherCoachUserId = 9210_000_903L;
+        transactionTemplate.execute(status -> {
+            insertUser(otherCoachUserId, "gdpr.erasure.othercoach2.9210@skillars-test.com",
+                passwordEncoder.encode(TEST_PASSWORD), "COACH");
+            grantAuthority(otherCoachUserId, "ROLE_COACH");
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_profiles "
+                    + "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) "
+                    + "VALUES (?, ?, 'Unrelated Coach Two', 'bio', 'Munich', "
+                    + "ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
+                otherCoachProfileId, otherCoachUserId);
+
+            // Attended: entity coach_id column set, matching the common case.
+            jdbcTemplate.update(
+                "INSERT INTO development.player_timeline_events "
+                    + "(id, player_id, event_type, occurred_at, metadata, coach_id) "
+                    + "VALUES (?, ?, 'SESSION_COMPLETED', ?, "
+                    + "jsonb_build_object('coachId', ?, 'whatWeDid', 'Coach own recap', 'whatsNext', 'Coach own next step'), ?)",
+                attendedEventId, SELF_PLAYER_PROFILE_ID, Timestamp.from(Instant.now()),
+                coachProfileId.toString(), coachProfileId);
+
+            // Non-attended: entity coach_id column NULL, metadata.coachId still set — the case
+            // this story's WHERE metadata->>'coachId' filter (not the column) must still catch.
+            jdbcTemplate.update(
+                "INSERT INTO development.player_timeline_events "
+                    + "(id, player_id, event_type, occurred_at, metadata, coach_id) "
+                    + "VALUES (?, ?, 'SESSION_COMPLETED', ?, "
+                    + "jsonb_build_object('coachId', ?, 'whatWeDid', 'Coach own non-attended recap', 'whatsNext', 'Coach own non-attended next step'), NULL)",
+                nonAttendedEventId, SELF_PLAYER_PROFILE_ID, Timestamp.from(Instant.now()),
+                coachProfileId.toString());
+
+            // Unrelated second coach — must survive untouched.
+            jdbcTemplate.update(
+                "INSERT INTO development.player_timeline_events "
+                    + "(id, player_id, event_type, occurred_at, metadata, coach_id) "
+                    + "VALUES (?, ?, 'SESSION_COMPLETED', ?, "
+                    + "jsonb_build_object('coachId', ?, 'whatWeDid', 'Unrelated coach recap', 'whatsNext', 'Unrelated coach next step'), ?)",
+                otherCoachEventId, SELF_PLAYER_PROFILE_ID, Timestamp.from(Instant.now()),
+                otherCoachProfileId.toString(), otherCoachProfileId);
+            return null;
+        });
+
+        erase(COACH_USER_ID);
+
+        String attendedMetadata = jdbcTemplate.queryForObject(
+            "SELECT metadata::text FROM development.player_timeline_events WHERE id = ?", String.class, attendedEventId);
+        assertThat(attendedMetadata).doesNotContain("whatWeDid", "whatsNext").contains("coachId");
+
+        String nonAttendedMetadata = jdbcTemplate.queryForObject(
+            "SELECT metadata::text FROM development.player_timeline_events WHERE id = ?", String.class, nonAttendedEventId);
+        assertThat(nonAttendedMetadata)
+            .as("the non-attended row has no entity coach_id column value — only metadata->>'coachId' "
+                + "identifies it, so a column-filtered scrub would have silently skipped this row")
+            .doesNotContain("whatWeDid", "whatsNext").contains("coachId");
+
+        String otherMetadata = jdbcTemplate.queryForObject(
+            "SELECT metadata::text FROM development.player_timeline_events WHERE id = ?", String.class, otherCoachEventId);
+        assertThat(otherMetadata).contains("Unrelated coach recap", "Unrelated coach next step");
+    }
+
+    /**
+     * skillars-deferred-155 AC9: this story's own AC1/AC2 put the coach's verbatim recap history
+     * into generated PDFs, enlarging a pre-existing gap — performance_reports was purged only by
+     * the PLAYER erasure branch (see erase_playerUser_deletesPerformanceReportFromS3 above), never
+     * the coach's.
+     *
+     * <p>skillars-deferred-155 code review, Decision 2(a): asserts SCRUB-and-keep, not delete.
+     * performance_reports is a joint artifact (coach_id NOT NULL *and* player_id NOT NULL), so
+     * deleting by coachId destroyed the player's own development record because a third party asked
+     * for erasure. The row must survive with next_steps replaced and storage_key nulled, while the
+     * blob — which embeds the coach's verbatim recap text and cannot be scrubbed in place — is still
+     * enqueued and deleted.
+     *
+     * <p>The unrelated coach's report is deliberately pinned to a DIFFERENT player id. Both fixtures
+     * originally used SELF_PLAYER_PROFILE_ID, and nothing in this class cleans performance_reports up,
+     * so the surviving row with its non-null storage_key leaked into
+     * erase_playerUser_deletesBothReportStatusesFromS3's strict
+     * {@code verify(fileStorageService, times(1)).deleteRawBytes(any())} — green only by JUnit's
+     * method ordering, and red the moment any method here was added or renamed. There is no FK on
+     * performance_reports.player_id (V138 declares only the pkey), so no extra profile fixture is
+     * needed.
+     */
+    @Test
+    void erase_coachUser_scrubsOwnPerformanceReportsButNotAnotherCoachs() {
+        UUID ownReportId = UUID.randomUUID();
+        UUID otherReportId = UUID.randomUUID();
+        UUID otherCoachProfileId = UUID.randomUUID();
+        long otherCoachUserId = 9210_000_904L;
+        long unrelatedPlayerProfileId = SELF_PLAYER_PROFILE_ID + 1;
+        String ownStorageKey = "reports/" + ownReportId + "/report.pdf";
+        String otherStorageKey = "reports/" + otherReportId + "/report.pdf";
+        transactionTemplate.execute(status -> {
+            insertUser(otherCoachUserId, "gdpr.erasure.othercoach3.9210@skillars-test.com",
+                passwordEncoder.encode(TEST_PASSWORD), "COACH");
+            grantAuthority(otherCoachUserId, "ROLE_COACH");
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_profiles "
+                    + "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) "
+                    + "VALUES (?, ?, 'Unrelated Coach Three', 'bio', 'Munich', "
+                    + "ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
+                otherCoachProfileId, otherCoachUserId);
+            jdbcTemplate.update(
+                "INSERT INTO development.performance_reports "
+                    + "(id, coach_id, player_id, generated_at, storage_key, next_steps) "
+                    + "VALUES (?, ?, ?, ?, ?, 'Keep working on first touch')",
+                ownReportId, coachProfileId, SELF_PLAYER_PROFILE_ID, Timestamp.from(Instant.now()), ownStorageKey);
+            jdbcTemplate.update(
+                "INSERT INTO development.performance_reports "
+                    + "(id, coach_id, player_id, generated_at, storage_key, next_steps) "
+                    + "VALUES (?, ?, ?, ?, ?, 'Unrelated next steps')",
+                otherReportId, otherCoachProfileId, unrelatedPlayerProfileId,
+                Timestamp.from(Instant.now()), otherStorageKey);
+            return null;
+        });
+
+        erase(COACH_USER_ID);
+        outboxService.drain();
+
+        // The PDF still goes — it embeds the coach's verbatim recap text.
+        verify(fileStorageService).deleteRawBytes(ownStorageKey);
+        verify(fileStorageService, never()).deleteRawBytes(otherStorageKey);
+
+        // ...but the row survives, scrubbed, so the player keeps their report history and its
+        // PERFORMANCE_REPORT timeline entries stay internally consistent.
+        Map<String, Object> ownRow = jdbcTemplate.queryForMap(
+            "SELECT next_steps, storage_key FROM development.performance_reports WHERE id = ?", ownReportId);
+        assertThat(ownRow.get("next_steps")).isEqualTo("[Removed — coach account erased]");
+        assertThat(ownRow.get("storage_key")).isNull();
+
+        Map<String, Object> otherRow = jdbcTemplate.queryForMap(
+            "SELECT next_steps, storage_key FROM development.performance_reports WHERE id = ?", otherReportId);
+        assertThat(otherRow.get("next_steps")).isEqualTo("Unrelated next steps");
+        assertThat(otherRow.get("storage_key")).isEqualTo(otherStorageKey);
     }
 
     /** story-review.md M4, point 4th bullet: proves the orElse-skip decision — no exception, COMPLETED. */

@@ -18,16 +18,28 @@
           {{ lastSessionLabel }}
         </div>
         <template v-if="prep.lastSessionDate">
-          <div v-if="hasRecap" class="q-mt-sm">
-            <div class="text-caption text-weight-bold">
-              {{ t('coach.sessionPrepWhatWeDidLabel') }}
-            </div>
-            <div class="text-body2">{{ prep.lastWhatWeDid }}</div>
-            <div class="text-caption text-weight-bold q-mt-xs">
-              {{ t('coach.sessionPrepWhatsNextLabel') }}
-            </div>
-            <div class="text-body2">{{ prep.lastWhatsNext }}</div>
-          </div>
+          <!-- skillars-deferred-155 code review: each field behind its own guard, mirroring
+               PlayerTimelinePanel.vue's own recap block. hasRecap is an OR, so with only one of the two
+               fields populated the other previously rendered a bolded <dt> over an empty <dd> — a
+               semantically declared empty definition, and the exact "no empty wrapper" condition
+               skillars-12-5 AC4 established. Reachable in production, not theoretical:
+               TimelineEventListener.java:46-54 documents that a publisher can pass real nulls for any
+               booking whose session_completion_data row predates V159 (both columns nullable, no
+               backfill), and :56-57 writes each key only when non-null. -->
+          <dl v-if="hasRecap" class="q-mt-sm">
+            <template v-if="prep.lastWhatWeDid?.trim()">
+              <dt class="text-caption text-weight-bold">
+                {{ t('coach.sessionPrepWhatWeDidLabel') }}
+              </dt>
+              <dd class="text-body2">{{ prep.lastWhatWeDid }}</dd>
+            </template>
+            <template v-if="prep.lastWhatsNext?.trim()">
+              <dt class="text-caption text-weight-bold q-mt-xs">
+                {{ t('coach.sessionPrepWhatsNextLabel') }}
+              </dt>
+              <dd class="text-body2">{{ prep.lastWhatsNext }}</dd>
+            </template>
+          </dl>
           <div v-else class="text-body2 q-mt-sm">{{ t('coach.sessionPrepNoRecapYet') }}</div>
         </template>
       </q-card-section>
@@ -42,6 +54,13 @@
           </q-badge>
         </div>
         <div v-else class="text-body2 q-mt-xs">{{ t('coach.sessionPrepNoFocusThreadYet') }}</div>
+      </q-card-section>
+
+      <q-card-section v-if="prep.playerRequest">
+        <div class="text-caption text-weight-bold">
+          {{ t('booking.requests.playerRequestLabel') }}
+        </div>
+        <div class="text-body2 q-mt-xs">{{ prep.playerRequest }}</div>
       </q-card-section>
 
       <q-card-section>
@@ -81,7 +100,9 @@ const loading = ref(true)
 const error = ref(false)
 const prep = ref(null)
 
-const hasRecap = computed(() => !!(prep.value?.lastWhatWeDid || prep.value?.lastWhatsNext))
+const hasRecap = computed(
+  () => !!(prep.value?.lastWhatWeDid?.trim() || prep.value?.lastWhatsNext?.trim()),
+)
 
 const lastSessionLabel = computed(() => {
   if (!prep.value?.lastSessionDate) return t('coach.myPlayersNeverTrainedTogether')
@@ -112,3 +133,17 @@ onMounted(async () => {
   }
 })
 </script>
+
+<style scoped>
+/* skillars-deferred-155 AC11: UA default margins on dl/dt/dd (dd: margin-inline-start: 40px;
+   dl: margin-block: 1em) would otherwise indent every recap value and add unwanted vertical
+   space — this codebase has no dl/dt/dd reset anywhere, including Quasar's own normalize sheet. */
+/* skillars-deferred-155 code review: :where() so the reset carries ZERO specificity. Written as a
+   bare `dl, dt, dd` selector it compiled to `dl[data-v-hash]` — specificity (0,1,1) — which beats
+   Quasar's own `.q-mt-sm` / `.q-mt-xs` utilities at (0,1,0) regardless of source order, silently
+   killing the 8px and 4px spacing still declared on this very markup. :where() keeps the UA margins
+   off while leaving the utility classes authoritative. */
+:where(dl, dt, dd) {
+  margin: 0;
+}
+</style>

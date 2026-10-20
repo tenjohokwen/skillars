@@ -35,6 +35,7 @@ import {
   acceptAllBatch,
   coachCancelBooking,
   recordNoShowPlayer,
+  setPlayerRequest,
 } from 'src/api/booking.api'
 import { purchaseSessionPack, getMySessionPacks, pauseSessionPack } from 'src/api/payment.api'
 
@@ -533,6 +534,16 @@ export const useBookingStore = defineStore('booking', () => {
     await loadParentBookings()
   }
 
+  // skillars-deferred-155 AC5/AC7: a full loadParentBookings() refetch rather than splicing the
+  // PATCH response in — the single-booking mapper leaves parentName/pendingReschedule/batchId/
+  // batchSize null (toBookingResponse:482), so a manual splice here would wipe the in-progress
+  // reschedule banner/Accept-Decline affordance until the next reload. Mirrors
+  // handleCancelBooking/handleRequestReschedule's own established refetch-after-mutate pattern.
+  async function handleSetPlayerRequest(bookingId, playerRequest) {
+    await setPlayerRequest(bookingId, playerRequest)
+    await loadParentBookings()
+  }
+
   async function handleRequestReschedule(bookingId, data) {
     await requestReschedule(bookingId, data)
     await loadParentBookings()
@@ -755,6 +766,7 @@ export const useBookingStore = defineStore('booking', () => {
     handleInitiateQuickComplete,
     handleConfirmCompletion,
     handleCancelBooking,
+    handleSetPlayerRequest,
     handleRequestReschedule,
     handleAcceptReschedule,
     handleDeclineReschedule,

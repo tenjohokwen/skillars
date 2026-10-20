@@ -51,6 +51,12 @@ public class Booking {
     @Column(length = 500)
     private String notes;
 
+    // skillars-deferred-155 AC4: editable any time the booking is CONFIRMED/UPCOMING, surfaced on
+    // the coach's Session Prep Card — deliberately NOT the same column as `notes` above, which is
+    // write-once at creation and surfaced on a different coach-facing screen (the request queue).
+    @Column(name = "player_request", length = 500)
+    private String playerRequest;
+
     @Version
     @Column(nullable = false)
     private Integer version;
