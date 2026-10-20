@@ -101,7 +101,29 @@ public enum BookingError implements ErrorCode {
      * session before it starts" is a different condition from "cannot report a no-show before it
      * starts" even though both share the same underlying time check.
      */
-    SESSION_NOT_YET_STARTED;
+    SESSION_NOT_YET_STARTED,
+    /**
+     * skillars-deferred-155 AC5: guards {@code BookingService.setPlayerRequest}. Deliberately a new
+     * code rather than reusing {@code BOOKING_ALREADY_COMPLETED}/{@code rejectIfPostCompletion} —
+     * that guard blocks exactly one of {@code BookingStatus}'s 18 values ({@code COMPLETED}) with a
+     * cancellation-flavoured message ("...raise a dispute instead"), which would misdescribe a
+     * rejected text edit. This code instead allow-lists the two statuses representing "this session
+     * is genuinely still going to happen" ({@code CONFIRMED}, {@code UPCOMING}) and rejects every
+     * other status — pre-confirmation ({@code REQUESTED}/{@code ACCEPTED}/{@code PAYMENT_PENDING},
+     * not yet locked in) and every post-session/terminal status alike — with a message about
+     * editability, not cancellation.
+     */
+    BOOKING_NOT_EDITABLE,
+    /**
+     * skillars-deferred-155 code review, Decision 4(a): guards the same
+     * {@code BookingService.setPlayerRequest} write as {@code BOOKING_NOT_EDITABLE}, but for the clock
+     * rather than the status — the session's {@code requestedEndTime} has passed. Kept as its own code
+     * so the UI can say "this session has already taken place" instead of the status rejection's
+     * "cannot be edited right now", which would invite a retry that can never succeed. Follows the same
+     * split-a-purpose-specific-code precedent as {@code SESSION_NOT_YET_STARTED} above, which exists for
+     * exactly the mirror-image reason on the no-show path.
+     */
+    SESSION_ALREADY_ENDED;
 
     @Override
     public String getErrorCode() {
@@ -127,6 +149,8 @@ public enum BookingError implements ErrorCode {
             case BLOCK_OVERLAPS_BOOKING    -> "booking.blockOverlapsBooking";
             case BOOKING_ALREADY_COMPLETED -> "booking.alreadyCompleted";
             case SESSION_NOT_YET_STARTED   -> "booking.sessionNotYetStarted";
+            case BOOKING_NOT_EDITABLE      -> "booking.notEditable";
+            case SESSION_ALREADY_ENDED     -> "booking.sessionAlreadyEnded";
         };
     }
 

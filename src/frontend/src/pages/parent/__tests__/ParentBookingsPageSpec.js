@@ -219,3 +219,60 @@ describe('ParentBookingsPage.vue — reschedule end derivation (deferred-108 AC2
     // 'Invalid prop: type check failed for prop "bookingId". Expected String … got Number' → RED.
   })
 })
+
+// skillars-deferred-155 AC7/AC8: the player/parent session-prep request edit affordance.
+describe('ParentBookingsPage.vue — player request edit affordance (deferred-155)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.restoreAllMocks()
+  })
+
+  it('opening the dialog pre-fills the existing playerRequest text', async () => {
+    const withRequest = { ...BOOKING_1H, playerRequest: 'Work on free kicks' }
+    const { wrapper } = mountPage({ booking: { parentBookings: [withRequest] } })
+    await flushPromises()
+
+    wrapper.vm.openPlayerRequestDialog(withRequest)
+
+    expect(wrapper.vm.playerRequestDialogOpen).toBe(true)
+    expect(wrapper.vm.playerRequestText).toBe('Work on free kicks')
+  })
+
+  it('opening the dialog for a booking with no existing request starts with empty text', async () => {
+    const { wrapper } = mountPage({ booking: { parentBookings: [BOOKING_1H] } })
+    await flushPromises()
+
+    wrapper.vm.openPlayerRequestDialog(BOOKING_1H)
+
+    expect(wrapper.vm.playerRequestText).toBe('')
+  })
+
+  it('submitting calls bookingStore.handleSetPlayerRequest and notifies success', async () => {
+    const { wrapper, bookingStore } = mountPage({ booking: { parentBookings: [BOOKING_1H] } })
+    await flushPromises()
+
+    wrapper.vm.openPlayerRequestDialog(BOOKING_1H)
+    wrapper.vm.playerRequestText = 'Shooting drills next time'
+    await wrapper.vm.submitPlayerRequest()
+
+    expect(bookingStore.handleSetPlayerRequest).toHaveBeenCalledWith(
+      BOOKING_1H.id,
+      'Shooting drills next time',
+    )
+    expect(wrapper.vm.playerRequestDialogOpen).toBe(false)
+    expect(notifySpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'positive' }))
+  })
+
+  it('a failed submit keeps the dialog open and notifies an error', async () => {
+    const { wrapper, bookingStore } = mountPage({ booking: { parentBookings: [BOOKING_1H] } })
+    await flushPromises()
+    bookingStore.handleSetPlayerRequest.mockRejectedValueOnce(new Error('network error'))
+
+    wrapper.vm.openPlayerRequestDialog(BOOKING_1H)
+    wrapper.vm.playerRequestText = 'Shooting drills next time'
+    await wrapper.vm.submitPlayerRequest()
+
+    expect(wrapper.vm.playerRequestDialogOpen).toBe(true)
+    expect(notifySpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'negative' }))
+  })
+})

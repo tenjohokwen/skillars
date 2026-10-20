@@ -127,6 +127,57 @@ describe('SessionPrepCard.vue (skillars-12-3)', () => {
     expect(wrapper.text()).not.toContain('coach.myPlayersNeverTrainedTogether')
   })
 
+  // skillars-deferred-155 AC12: hasRecap tests blankness via ?.trim(), not plain truthiness — a
+  // whitespace-only value must fall through to the "no recap yet" empty state, not an empty <dl>.
+  it("shows 'no recap yet' when both recap fields are whitespace-only", async () => {
+    getSessionPrep.mockResolvedValue(
+      PREP({ lastSessionDate: '2026-01-01T00:00:00Z', lastWhatWeDid: '   ', lastWhatsNext: '\n' }),
+    )
+    const wrapper = await mountCard()
+
+    expect(wrapper.text()).toContain('coach.sessionPrepNoRecapYet')
+    expect(wrapper.find('dl').exists()).toBe(false)
+  })
+
+  // skillars-deferred-155 code review: hasRecap is an OR, so with only ONE of the two fields
+  // populated the other used to render a bolded <dt> over an empty <dd> — a semantically declared
+  // empty definition. Reachable in production, not theoretical: TimelineEventListener.java:46-54
+  // documents that a publisher can pass real nulls for any booking whose session_completion_data row
+  // predates V159 (both columns nullable, no backfill). Each field now carries its own guard, as
+  // PlayerTimelinePanel.vue's equivalent block already did.
+  it('renders only the populated half of a one-sided recap, with no empty label', async () => {
+    getSessionPrep.mockResolvedValue(
+      PREP({
+        lastSessionDate: '2026-01-01T00:00:00Z',
+        lastWhatWeDid: 'Worked on first touch',
+        lastWhatsNext: null,
+      }),
+    )
+    const wrapper = await mountCard()
+
+    expect(wrapper.find('dl').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Worked on first touch')
+    expect(wrapper.text()).toContain('coach.sessionPrepWhatWeDidLabel')
+    expect(wrapper.text()).not.toContain('coach.sessionPrepWhatsNextLabel')
+    expect(wrapper.findAll('dt')).toHaveLength(1)
+    expect(wrapper.findAll('dd')).toHaveLength(1)
+  })
+
+  it('drops a whitespace-only half of a recap rather than labelling it', async () => {
+    getSessionPrep.mockResolvedValue(
+      PREP({
+        lastSessionDate: '2026-01-01T00:00:00Z',
+        lastWhatWeDid: '   ',
+        lastWhatsNext: 'Shooting drills next',
+      }),
+    )
+    const wrapper = await mountCard()
+
+    expect(wrapper.text()).toContain('Shooting drills next')
+    expect(wrapper.text()).not.toContain('coach.sessionPrepWhatWeDidLabel')
+    expect(wrapper.findAll('dt')).toHaveLength(1)
+  })
+
   it("shows 'no focus thread yet' when focusThreadSkillCodes is empty", async () => {
     getSessionPrep.mockResolvedValue(PREP({ lastSessionDate: '2026-01-01T00:00:00Z' }))
     const wrapper = await mountCard()
@@ -187,6 +238,23 @@ describe('SessionPrepCard.vue (skillars-12-3)', () => {
     expect(wrapper.text()).not.toContain('coach.sessionPrepNoRecapYet')
     expect(wrapper.text()).not.toContain('coach.sessionPrepNoFocusThreadYet')
     expect(wrapper.text()).not.toContain('coach.sessionPrepNoNeglectedSkills')
+  })
+
+  // skillars-deferred-155 AC7: the player/parent-initiated session-prep request, read-only on this
+  // card. Guarded on data presence alone — no new prop, matching skillars-12-5's own precedent.
+  it('renders the player request label and text when present', async () => {
+    getSessionPrep.mockResolvedValue(PREP({ playerRequest: 'Can we work on free kicks?' }))
+    const wrapper = await mountCard()
+
+    expect(wrapper.text()).toContain('booking.requests.playerRequestLabel')
+    expect(wrapper.text()).toContain('Can we work on free kicks?')
+  })
+
+  it('renders no player request section when playerRequest is absent', async () => {
+    getSessionPrep.mockResolvedValue(PREP())
+    const wrapper = await mountCard()
+
+    expect(wrapper.text()).not.toContain('booking.requests.playerRequestLabel')
   })
 
   it('the "Plan this session" link resolves to coach/session-builder/:bookingId for the given bookingId prop', async () => {

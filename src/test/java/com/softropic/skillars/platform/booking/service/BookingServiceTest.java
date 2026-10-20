@@ -67,6 +67,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -101,6 +102,7 @@ class BookingServiceTest {
     // proven by BookingServiceConcurrencyIT against a live database, as the AC requires.
     @Mock private EntityManager entityManager;
     @Mock private PessimisticLockRetryer lockRetryer;
+    @Mock private com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer contactDetailSanitizer;
 
     @Spy
     private BookingStateMachine bookingStateMachine = new BookingStateMachine();
@@ -121,6 +123,11 @@ class BookingServiceTest {
         // platform default. Lenient because the tests that fail before reaching the duration check
         // (unknown player, wrong parent, suspended coach, reversed range) never call it.
         lenient().when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofHours(1));
+        // skillars-deferred-155 AC5: passthrough default — tests exercising the actual redaction/
+        // truncation wiring override this explicitly.
+        lenient().when(contactDetailSanitizer.sanitize(anyString())).thenAnswer(
+            inv -> new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.SanitizerResult(
+                inv.getArgument(0), false));
     }
 
     // ---- createBookingRequest tests ----
@@ -1592,6 +1599,154 @@ class BookingServiceTest {
             .hasCauseInstanceOf(OptimisticLockingFailureException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
+    }
+
+    // ---- setPlayerRequest tests (skillars-deferred-155 AC5/AC8) ----
+
+    @Test
+    void setPlayerRequest_selfRegisteredPlayerOwnsBooking_savesAndReturnsIt() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        BookingResponse response = bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "Work on free kicks");
+
+        assertThat(response.playerRequest()).isEqualTo("Work on free kicks");
+        assertThat(booking.getPlayerRequest()).isEqualTo("Work on free kicks");
+    }
+
+    @Test
+    void setPlayerRequest_upcomingStatus_isAlsoEditable() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatCode(() -> bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "Shooting drills"))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    void setPlayerRequest_blankValue_clearsExistingRequest() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        booking.setPlayerRequest("old request");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "   ");
+
+        assertThat(booking.getPlayerRequest()).isNull();
+    }
+
+    @Test
+    void setPlayerRequest_callerDoesNotOwnBooking_throwsOperationNotAllowed() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        Long impostorId = PARENT_ID + 999;
+        assertThatThrownBy(() -> bookingService.setPlayerRequest(booking.getId(), impostorId, "not mine"))
+            .isInstanceOf(OperationNotAllowedException.class);
+    }
+
+    @Test
+    void setPlayerRequest_bookingStatusOutsideEditableWindow_throwsBookingNotEditable() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "too early"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.BOOKING_NOT_EDITABLE));
+    }
+
+    /**
+     * skillars-deferred-155 code review, Decision 4(a): the status allow-list alone left a
+     * never-completed UPCOMING booking editable forever — nothing sweeps UPCOMING
+     * ({@code StuckCompletionSweeperService} only handles COMPLETED_PENDING_CONFIRMATION,
+     * {@code BookingExpiryScheduler} only stale pre-confirmation requests), so a session the coach
+     * simply never wrapped up kept accepting "work on X next time" edits long after it had happened.
+     * Status is still UPCOMING here — only the clock has moved past requestedEndTime — so this case
+     * fails unless the clock bound is actually present.
+     */
+    @Test
+    void setPlayerRequest_upcomingButSessionAlreadyEnded_throwsSessionAlreadyEnded() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        booking.setRequestedStartTime(Instant.now().minusSeconds(10800));
+        booking.setRequestedEndTime(Instant.now().minusSeconds(7200));
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "after the fact"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SESSION_ALREADY_ENDED));
+        assertThat(booking.getPlayerRequest()).isNull();
+    }
+
+    /**
+     * The clock bound is on requestedEndTime, not requestedStartTime, deliberately: a parent who
+     * submits while the session is under way must still succeed, so an edit landing between start and
+     * end is allowed rather than rejected.
+     */
+    @Test
+    void setPlayerRequest_sessionUnderWayButNotYetEnded_isStillEditable() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        booking.setRequestedStartTime(Instant.now().minusSeconds(600));
+        booking.setRequestedEndTime(Instant.now().plusSeconds(600));
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "Work on crossing");
+
+        assertThat(booking.getPlayerRequest()).isEqualTo("Work on crossing");
+    }
+
+    @Test
+    void setPlayerRequest_completedBooking_throwsBookingNotEditable() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "COMPLETED");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "too late"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.BOOKING_NOT_EDITABLE));
+    }
+
+    @Test
+    void setPlayerRequest_concurrentModification_throwsRetryableException() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
+
+        assertThatThrownBy(() -> bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "race"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
+    }
+
+    @Test
+    void setPlayerRequest_sanitizerInvoked_persistsSanitizedResult() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(contactDetailSanitizer.sanitize("call me at 555-123-4567"))
+            .thenReturn(new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.SanitizerResult(
+                "call me at [contact details removed]", true));
+
+        bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "call me at 555-123-4567");
+
+        assertThat(booking.getPlayerRequest()).isEqualTo("call me at [contact details removed]");
+    }
+
+    // skillars-deferred-155 AC4: REDACTION's replacement text is longer than most of what it
+    // matches, so sanitized output can exceed a @Size(max=500)-validated input's length — truncate
+    // after sanitizing so a save can never fail on this path.
+    @Test
+    void setPlayerRequest_sanitizerExpandsPastColumnLimit_truncatesTo500Chars() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        String oversized = "x".repeat(600);
+        when(contactDetailSanitizer.sanitize(anyString()))
+            .thenReturn(new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.SanitizerResult(
+                oversized, true));
+
+        bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "short input that expands");
+
+        assertThat(booking.getPlayerRequest()).hasSize(500);
     }
 
     // ---- helpers ----

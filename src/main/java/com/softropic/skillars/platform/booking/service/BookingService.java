@@ -51,6 +51,7 @@ import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
+import org.apache.commons.lang3.StringUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -131,6 +132,15 @@ public class BookingService {
     private final BookingPaymentRepository bookingPaymentRepository;
     private final EntityManager entityManager;
     private final PessimisticLockRetryer lockRetryer;
+    private final com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer contactDetailSanitizer;
+
+    // skillars-deferred-155 AC5: the two statuses representing "this session is genuinely still
+    // going to happen" — the only window in which a player/parent's session-prep request can be
+    // meaningfully set or edited. Deliberately NOT ACTIVE_SLOT_STATUSES above (that set also
+    // includes REQUESTED/ACCEPTED/PAYMENT_PENDING, not yet locked in, and PAUSED/IN_PROGRESS, where
+    // editing "what to work on next" no longer makes sense).
+    private static final Set<String> PLAYER_REQUEST_EDITABLE_STATUSES = Set.of(
+        BookingStatus.CONFIRMED.name(), BookingStatus.UPCOMING.name());
 
     // Package-private, not private: AvailabilityService reuses this exact status set to exclude
     // already-booked slots from the availability calendar (Deferred-18 AC1) — same rationale as
@@ -716,6 +726,66 @@ public class BookingService {
             .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking"));
     }
 
+    /**
+     * skillars-deferred-155 AC5: sets or clears the player/parent-initiated "work on X next time"
+     * session-prep request. {@code callerId} is checked against {@link Booking#getParentId()}
+     * exactly as {@link #recordNoShowCoach} checks it — that field already stores the requesting
+     * party's own userId for both a parent-created and a self-registered-player-created booking
+     * (see {@link #createBookingRequest}), so this one check is already correct for both roles.
+     */
+    @Transactional
+    public BookingResponse setPlayerRequest(UUID bookingId, Long callerId, String playerRequest) {
+        Booking booking = getBookingOrThrow(bookingId);
+        if (!Objects.equals(booking.getParentId(), callerId)) {
+            throw new OperationNotAllowedException("Caller does not own this booking", SecurityError.MISSING_RIGHTS);
+        }
+        rejectIfNotEditablePlayerRequest(booking);
+
+        String sanitized = null;
+        if (playerRequest != null && !playerRequest.isBlank()) {
+            // skillars-deferred-155 AC4: REDACTION's replacement text is longer than most of what it
+            // matches, so sanitizing a @Size(max=500)-validated input can produce a longer string —
+            // truncate after sanitizing so a save can never fail on this path.
+            sanitized = StringUtils.truncate(contactDetailSanitizer.sanitize(playerRequest).sanitized(), 500);
+        }
+        booking.setPlayerRequest(sanitized);
+        try {
+            bookingRepository.save(booking);
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
+        }
+        return toBookingResponse(booking);
+    }
+
+    /**
+     * skillars-deferred-155 AC5: deliberately NOT {@link #rejectIfPostCompletion} — that guard blocks
+     * only {@code COMPLETED} with a cancellation-flavoured message, which would misdescribe a
+     * rejected text edit here.
+     *
+     * <p>skillars-deferred-155 code review, Decision 4(a): the status allow-list alone was not
+     * sufficient. {@code UPCOMING} is entered ~24h out by {@code BookingReminderScheduler} and leaves
+     * only via the coach's wrap-up or an admin force-complete — and nothing sweeps it
+     * ({@code StuckCompletionSweeperService} only handles {@code COMPLETED_PENDING_CONFIRMATION},
+     * {@code BookingExpiryScheduler} only stale pre-confirmation requests). So a session the coach never
+     * completes stayed editable forever, and the coach's Session Prep Card would serve a "work on X next
+     * time" request authored after the session had already happened. Bounded on
+     * {@code requestedEndTime}, not {@code requestedStartTime}, so a parent submitting as the session
+     * begins is not rejected; the two no-show siblings in this class carry their own
+     * {@code requestedStartTime} bounds for their own different reasons. Separate error code from the
+     * status rejection so the UI can say "this session has already taken place" rather than inviting a
+     * retry that can never succeed.
+     */
+    private void rejectIfNotEditablePlayerRequest(Booking booking) {
+        if (!PLAYER_REQUEST_EDITABLE_STATUSES.contains(booking.getStatus())) {
+            throw new OperationNotAllowedException(
+                "This booking cannot be edited right now", BookingError.BOOKING_NOT_EDITABLE);
+        }
+        if (booking.getRequestedEndTime() != null && !Instant.now().isBefore(booking.getRequestedEndTime())) {
+            throw new OperationNotAllowedException(
+                "This session has already taken place", BookingError.SESSION_ALREADY_ENDED);
+        }
+    }
+
     private void validateActorAuthorization(BookingEvent event, TransitionContext context) {
         Set<ActorRole> allowed = EVENT_ROLES.getOrDefault(event, Set.of());
         if (!allowed.contains(context.actorRole())) {
@@ -1079,7 +1149,8 @@ public class BookingService {
             parentName,
             pendingReschedule,
             batchId,
-            batchSize
+            batchSize,
+            b.getPlayerRequest()
         );
     }
 }

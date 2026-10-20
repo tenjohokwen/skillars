@@ -18,5 +18,6 @@ public record BookingResponse(
     String parentName,
     RescheduleRequestResponse pendingReschedule,
     UUID batchId,
-    Integer batchSize
+    Integer batchSize,
+    String playerRequest
 ) {}

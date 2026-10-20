@@ -25,6 +25,8 @@ import com.softropic.skillars.platform.development.repo.PerformanceReport;
 import com.softropic.skillars.platform.development.repo.PerformanceReportRepository;
 import com.softropic.skillars.platform.development.repo.PlayerRadarBaselineRepository;
 import com.softropic.skillars.platform.development.repo.PlayerRadarCompositeRepository;
+import com.softropic.skillars.platform.development.repo.PlayerTimelineEvent;
+import com.softropic.skillars.platform.development.repo.PlayerTimelineRepository;
 import com.softropic.skillars.platform.development.repo.SkillDefinitionRepository;
 import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
@@ -97,6 +99,7 @@ public class ReportGenerationService {
     private final ConfigService configService;
     private final SecurityUtil securityUtil;
     private final PlayerProfileRepository playerProfileRepository;
+    private final PlayerTimelineRepository playerTimelineRepository;
 
     @Value("${baseurl}")
     private String baseUrl;
@@ -120,6 +123,19 @@ public class ReportGenerationService {
      * <p>Both limits apply. The per-coach one is the meaningful bound; the IP one stays as the
      * anti-abuse floor for unauthenticated flooding.
      */
+    /**
+     * skillars-deferred-155 code review, Decision 3(a): caps the "Session Notes" section. AC1 originally
+     * specified full history with no bound, which reintroduced the unbounded-{@code List} shape
+     * {@code skillars-deferred-153} AC4 had just removed from {@link PlayerTimelineRepository}'s sibling
+     * query — one row per completed session, up to 2x500 chars each, hydrated as entities and rendered
+     * into a single in-memory PDF {@code byte[]} carried through a Spring event, behind a 10/min
+     * per-coach rate limit. 20 is a purpose-named constant rather than a reuse of
+     * {@code SessionRepository.SESSION_WINDOW} (10): that constant means "session-builder sessions for
+     * focus-thread ranking" and coupling report content to it would tie two unrelated semantics
+     * together. The PDF heading states the cap so the truncation is visible rather than silent.
+     */
+    static final int REPORT_SESSION_NOTES_LIMIT = 20;
+
     private static final long PER_COACH_REPORTS = 10;
     private static final long PER_COACH_WINDOW_MINUTES = 1;
     /** Bucket name, kept distinct from the aspect's {@code report_generate} so the two cannot merge. */
@@ -187,13 +203,21 @@ public class ReportGenerationService {
         BigDecimal totalSlu = sluRepository.sumTotalSluByPlayerId(playerId);
         Long sessionCount = sluRepository.countDistinctSessions(playerId);
 
+        // skillars-deferred-155 AC1: verbatim, this-coach-scoped, full-history recap tie-in. Filtered
+        // on metadata->>'coachId' inside the repository query, NOT the entity's attendance-gated
+        // coachId column — see PlayerTimelineRepository.findSessionNotesForReport's own Javadoc.
+        List<SessionNoteEntry> sessionNotes = playerTimelineRepository
+            .findSessionNotesForReport(playerId, coachId, REPORT_SESSION_NOTES_LIMIT).stream()
+            .map(this::toSessionNoteEntry)
+            .toList();
+
         Optional<CoachBranding> branding = tier == CoachSubscriptionTier.ACADEMY
             ? brandingRepository.findById(coachId)
             : Optional.empty();
 
         Instant generatedAt = Instant.now();
         byte[] pdfBytes = buildPdf(coach, coachName, playerName, playerAge, skills,
-            totalSlu, sessionCount, nextSteps, branding, generatedAt);
+            totalSlu, sessionCount, nextSteps, sessionNotes, branding, generatedAt);
 
         if (pdfBytes == null || pdfBytes.length == 0) {
             throw new RuntimeException("PDF generation produced empty output");
@@ -407,9 +431,23 @@ public class ReportGenerationService {
         }
     }
 
+    /** skillars-deferred-155 AC1: one coach-authored recap, extracted for report rendering. */
+    private record SessionNoteEntry(Instant occurredAt, String whatWeDid, String whatsNext) {
+    }
+
+    private SessionNoteEntry toSessionNoteEntry(PlayerTimelineEvent event) {
+        Map<String, Object> metadata = event.getMetadata();
+        Object whatWeDid = metadata.get(TimelineEventListener.METADATA_KEY_WHAT_WE_DID);
+        Object whatsNext = metadata.get(TimelineEventListener.METADATA_KEY_WHATS_NEXT);
+        return new SessionNoteEntry(
+            event.getOccurredAt(),
+            whatWeDid != null ? whatWeDid.toString() : null,
+            whatsNext != null ? whatsNext.toString() : null);
+    }
+
     private byte[] buildPdf(CoachProfileDto coach, String coachName, String playerName,
                              int playerAge, List<SkillRadarEntry> skills, BigDecimal totalSlu,
-                             Long sessionCount, String nextSteps,
+                             Long sessionCount, String nextSteps, List<SessionNoteEntry> sessionNotes,
                              Optional<CoachBranding> branding, Instant generatedAt) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         Document doc = new Document(PageSize.A4);
@@ -517,6 +555,36 @@ public class ReportGenerationService {
             doc.add(new Paragraph("Next Steps", sectionFont));
             doc.add(new Paragraph(nextSteps, normalFont));
             doc.add(new Paragraph(" "));
+
+            // skillars-deferred-155 AC2/AC3: omitted entirely when empty — no heading with nothing
+            // beneath it (skillars-12-5 AC4's "no empty wrapper" discipline, applied here too).
+            if (!sessionNotes.isEmpty()) {
+                // skillars-deferred-155 code review, Decision 3(a): name the cap in the heading so the
+                // truncation is visible to the parent reading the report rather than silent — but only
+                // when the query actually came back full, so a player with three sessions is not told
+                // they are seeing "the most recent 20". Hardcoded English like the rest of this PDF
+                // body (AC2: no i18n reaches buildPdf).
+                String sessionNotesHeading = sessionNotes.size() == REPORT_SESSION_NOTES_LIMIT
+                    ? "Session Notes (most recent " + REPORT_SESSION_NOTES_LIMIT + " sessions)"
+                    : "Session Notes";
+                doc.add(new Paragraph(sessionNotesHeading, sectionFont));
+                for (SessionNoteEntry note : sessionNotes) {
+                    String noteDate = DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG)
+                        .withLocale(Locale.ENGLISH)
+                        .format(note.occurredAt().atZone(ZoneOffset.UTC).toLocalDate());
+                    doc.add(new Paragraph(noteDate, normalFont));
+                    // Each field rendered independently — never concatenated. buildPdf has no null
+                    // handling anywhere else, and Java string concatenation with a null reference
+                    // renders the literal text "null" (caught by review, AC2/AC3).
+                    if (note.whatWeDid() != null) {
+                        doc.add(new Paragraph(note.whatWeDid(), normalFont));
+                    }
+                    if (note.whatsNext() != null) {
+                        doc.add(new Paragraph(note.whatsNext(), normalFont));
+                    }
+                    doc.add(new Paragraph(" "));
+                }
+            }
 
             String verificationNote = coach.verificationTier() != null && !coach.verificationTier().isBlank()
                 ? " ✓ Verified" : "";

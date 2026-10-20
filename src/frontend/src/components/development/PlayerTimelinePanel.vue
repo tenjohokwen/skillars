@@ -43,26 +43,26 @@
             }}
           </template>
 
-          <div
+          <dl
             v-if="
               event.eventType === 'SESSION_COMPLETED' &&
-              (event.metadata?.whatWeDid || event.metadata?.whatsNext)
+              (event.metadata?.whatWeDid?.trim() || event.metadata?.whatsNext?.trim())
             "
             class="q-mt-sm"
           >
-            <div v-if="event.metadata?.whatWeDid">
-              <div class="text-caption text-weight-bold">
+            <div v-if="event.metadata?.whatWeDid?.trim()">
+              <dt class="text-caption text-weight-bold">
                 {{ $t('development.timeline.whatWeDidLabel') }}
-              </div>
-              <div class="text-body2 recap-text">{{ event.metadata.whatWeDid }}</div>
+              </dt>
+              <dd class="text-body2 recap-text">{{ event.metadata.whatWeDid }}</dd>
             </div>
-            <div v-if="event.metadata?.whatsNext">
-              <div class="text-caption text-weight-bold q-mt-xs">
+            <div v-if="event.metadata?.whatsNext?.trim()">
+              <dt class="text-caption text-weight-bold q-mt-xs">
                 {{ $t('development.timeline.whatsNextLabel') }}
-              </div>
-              <div class="text-body2 recap-text">{{ event.metadata.whatsNext }}</div>
+              </dt>
+              <dd class="text-body2 recap-text">{{ event.metadata.whatsNext }}</dd>
             </div>
-          </div>
+          </dl>
         </q-timeline-entry>
       </q-timeline>
 
@@ -160,5 +160,17 @@ onMounted(() => {
 .recap-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* skillars-deferred-155 AC11: UA default margins on dl/dt/dd (dd: margin-inline-start: 40px;
+   dl: margin-block: 1em) would otherwise indent every recap value and add unwanted vertical
+   space — this codebase has no dl/dt/dd reset anywhere, including Quasar's own normalize sheet. */
+/* skillars-deferred-155 code review: :where() so the reset carries ZERO specificity. Written as a
+   bare `dl, dt, dd` selector it compiled to `dl[data-v-hash]` — specificity (0,1,1) — which beats
+   Quasar's own `.q-mt-sm` / `.q-mt-xs` utilities at (0,1,0) regardless of source order, silently
+   killing the 8px and 4px spacing still declared on this very markup. :where() keeps the UA margins
+   off while leaving the utility classes authoritative. */
+:where(dl, dt, dd) {
+  margin: 0;
 }
 </style>

@@ -115,6 +115,8 @@ export default {
       'Clé de réinitialisation invalide ou manquante. Veuillez demander une nouvelle réinitialisation.',
     verifyTokenMissing:
       'Aucun jeton de vérification trouvé. Veuillez vérifier le lien reçu par e-mail.',
+    emailVerifiedPleaseLogin:
+      'Votre adresse e-mail a été vérifiée. Vous pouvez maintenant vous connecter.',
     phoneHintFormat: "Indiquez l'indicatif du pays, par ex. +1 555 0100",
     accountNotVerified:
       "Votre compte n'est pas encore vérifié. Veuillez d'abord finaliser la vérification téléphonique.",
@@ -708,6 +710,7 @@ export default {
     leave: 'Quitter',
     stay: 'Rester',
     errorGeneric: "Une erreur s'est produite. Veuillez réessayer.",
+    edit: 'Modifier',
   },
   profile: {
     subtitle: 'Gérez les informations et les préférences de votre compte.',
@@ -1334,6 +1337,9 @@ export default {
       bookingsLoadError: 'Impossible de charger vos réservations. Veuillez actualiser la page.',
       selectPack: 'Utiliser un pack de séances',
       packOptionLabel: '{remaining} séances restantes sur {total}',
+      playerRequestLabel: 'Demande pour le coach',
+      playerRequestUpdateSuccess: 'Votre demande a été enregistrée.',
+      playerRequestUpdateError: "Impossible d'enregistrer votre demande. Veuillez réessayer.",
     },
     availability: {
       title: 'Gérer la disponibilité',
@@ -1511,6 +1517,9 @@ export default {
       listMayBeStale:
         'Cette liste n’est peut-être plus à jour. Rechargez la page pour voir les dernières données.',
       requestNotAllowed: 'Vous n’avez pas la permission d’effectuer cette action.',
+      notEditable: 'Cette réservation ne peut plus être modifiée.',
+      sessionAlreadyEnded:
+        'Cette séance a déjà eu lieu ; votre demande ne peut plus être modifiée.',
       invalidSessionDuration:
         'La durée de séance demandée ne correspond pas à la durée de séance de ce coach.',
       batchSizeExceeded: 'Vous pouvez demander jusqu’à {max} séances dans un même lot.',

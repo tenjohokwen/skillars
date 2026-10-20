@@ -31,4 +31,38 @@ public interface PerformanceReportRepository extends JpaRepository<PerformanceRe
     @Query("UPDATE PerformanceReport p SET p.status = :status, p.storageKey = :storageKey WHERE p.id = :id")
     int updateStatusAndStorageKey(@Param("id") UUID id, @Param("status") ReportStatus status,
                                    @Param("storageKey") String storageKey);
+
+    // skillars-deferred-155 AC9: mirrors findStorageKeysByPlayerId above, keyed on coachId instead —
+    // this story's own AC1/AC2 put the coach's verbatim recap text into generated PDFs, enlarging
+    // the pre-existing gap that performance_reports was purged only on the PLAYER erasure path,
+    // never the coach's. coachId is a plain indexed column here (unlike the JSONB metadata filters
+    // above) so a derived query is fine.
+    @Query("SELECT p.storageKey FROM PerformanceReport p WHERE p.coachId = :coachId AND p.storageKey IS NOT NULL")
+    List<String> findStorageKeysByCoachId(@Param("coachId") UUID coachId);
+
+    // skillars-deferred-155 code review, Decision 2(a): scrub-and-keep, NOT delete. performance_reports
+    // is a JOINT artifact — coach_id NOT NULL *and* player_id NOT NULL (V138__baseline_schema.sql:326-327)
+    // — so deleting by coachId destroys the player's own development record because a third party asked
+    // for erasure. The two sibling scrubs in the same erasure block (SessionCompletionDataRepository
+    // .anonymizeByCoachId, PlayerTimelineRepository.anonymizeMetadataByCoachId) both scrub-and-keep; the
+    // original implementation here borrowed the PLAYER branch's delete semantics, where deleting is
+    // correct only because the data subject owns the row.
+    //
+    // next_steps is NOT NULL, so it takes a placeholder rather than NULL — the same convention
+    // GdprErasureService already uses for the "Deleted"/"User"/"deleted.<id>@erased.io" writes on
+    // main.user. storage_key is nulled because the PDF itself embeds the coach's verbatim recap text
+    // (AC1/AC2's "Session Notes" section) and cannot be scrubbed in place; the caller enqueues the blob
+    // for deletion. A null storage_key is already a representable read state — ReportGenerationService
+    // .listReports leaves `url` null for PENDING_UPLOAD rows via the same path. `status` is deliberately
+    // left alone: ReportStatus has no "erased" value and adding one would need a Postgres enum migration.
+    //
+    // nativeQuery because next_steps is mapped `updatable = false` (PerformanceReport.java:42), which
+    // makes a JPQL bulk UPDATE on it ambiguous; native SQL bypasses the persister entirely. Idempotent
+    // on the retry path: findStorageKeysByCoachId above already filters `storage_key IS NOT NULL`, so a
+    // re-run enqueues nothing a second time.
+    @Modifying
+    @Query(value = "UPDATE development.performance_reports "
+        + "SET next_steps = :placeholder, storage_key = NULL "
+        + "WHERE coach_id = :coachId", nativeQuery = true)
+    int anonymizeByCoachId(@Param("coachId") UUID coachId, @Param("placeholder") String placeholder);
 }

@@ -3202,12 +3202,6 @@ does — silently discarding `application-test.yaml`'s own already-tuned `maximu
   Deferred reason: no browser available in the implementation session (same constraint as
   `skillars-deferred-139`'s own AC4.3 before it).
 
-## Deferred from: code review of skillars-deferred-141 (2026-10-03)
-
-**[CLOSED by skillars-deferred-142: `OtpPage.vue`'s post-OTP fallback now uses `routeForRole(authStore.role)` (verified at `OtpPage.vue:162`), and `VideoManagementPage.vue`'s 403 handler now retargets to `/player/dashboard` (verified at `VideoManagementPage.vue:108`) — both of the two items this section originally listed.]**
-
----
-
 ## Deferred from: code review of skillars-deferred-143 (2026-10-05)
 
 `/bmad-code-review` (three parallel layers — Blind Hunter diff-only, Edge Case Hunter diff+project,
@@ -3276,6 +3270,8 @@ Also found but explicitly out of scope for this pass (not coach-specific, or lik
   unwraps `response.data` and `CommonConfig.java:48` serialises `Long` via `ToStringSerializer`, so a 200
   always yields a digit string.
 
+  **[CLOSED by skillars-deferred-155 AC16: `PlayerProfileBuilderPage.vue` now guards `profile?.id` before navigating, falling back to `/player/home` (the `PlayerHomeRedirectPage` route, which independently re-resolves the id), mirroring the three sibling call sites.]**
+
 - **The widened `/dashboard` nav condition is negative-space, so it briefly fires for COACH/PARENT/PLAYER
   during `logout()`.** `MainLayout.vue:126` is
   `v-if="authStore.isAdmin || (!authStore.isCoach && !authStore.isParent && !authStore.isPlayer)"`.
@@ -3289,6 +3285,8 @@ Also found but explicitly out of scope for this pass (not coach-specific, or lik
   window at startup. An allow-list (`isAdmin || isAnonymousRole`) would express skillars-deferred-154 AC5's
   stated intent without the negative-space side effect, and would also stop silently opting in any future
   `SkillarsRole` value that this condition currently captures by default.
+
+  **[CLOSED AS INVALID by skillars-deferred-155's `/mto-story-review`: the premise does not hold. The entire `<q-drawer>` containing the Dashboard link (and every other nav section) is already gated on `v-if="authStore.isAuthenticated"` (`MainLayout.vue:109-110`), and `clearUser()` clears `userId` and `role` in the same synchronous call before any `await` — so `isAuthenticated` and the role computeds flip together in one reactive tick. There is no render tick in which a logged-out user sees any part of the drawer, including this link. No fix applied; this bullet is closed as not-a-bug rather than fixed.]**
 
 - **A wrap-up submitted after a coach's GDPR erasure survives it permanently — the coach side has no
   erased-at tombstone.** `BookingCompletionService.submitWrapUp` (`BookingCompletionService.java:129-174`)
@@ -3311,9 +3309,92 @@ Also found but explicitly out of scope for this pass (not coach-specific, or lik
   `anonymizeByCoachId` from an `AFTER_COMMIT` sweep (narrows but does not close the window, and adds a
   second unindexed sequential-scan UPDATE).
 
+  **[CLOSED by skillars-deferred-155 AC9 — corrected design, not the tombstone described above.** Research during that story found `anonymizeByCoachId` already exists and already runs synchronously inside the coach-erasure transaction (it was added by this same AC2, immediately above) — a tombstone would have protected a call that was never missing. The actual gap was a second, independent copy of the recap in `development.player_timeline_events.metadata`, written by a different listener at a different time. Closed with one new native-query repository method (`anonymizeMetadataByCoachId`) wired into the same `requiresNewTemplate` lambda right after `anonymizeByCoachId` — no migration, no new column, no `submitWrapUp` guard. The same story also closed a second, related gap its own new content created: `development.performance_reports` is now purged on coach erasure too (previously player-only).]**
+
 ## Deferred from: code review of skillars-12-5-coach-recap-on-player-timeline (2026-10-19)
 
 - **Recap guards test truthiness, not blankness** (`src/frontend/src/components/development/PlayerTimelinePanel.vue:52,58`; same gap at `src/frontend/src/components/booking/SessionPrepCard.vue:84`). `v-if="event.metadata?.whatWeDid"` is true for `" "` / `"\n"`, which renders a bold "What we worked on" label over a visually empty `pre-wrap` line. Not reachable through the product: `WrapUpRequest.java:21-22` is `@NotBlank @Size(max = 500)` enforced by `@Valid` at `SessionCompletionResource.java:81`, and `WrapUpSequence.vue:257-260,389-390` trims twice client-side; `TimelineEventListener.java:56-57` only null-checks on write, so a blank value requires a direct DB write (pre-V159 rows have the keys absent, not blank). Deferred because the shipped precedent uses the identical plain-truthiness guard — fix both surfaces together (`?.trim()` on both guard sites) or neither.
+
+  **[CLOSED by skillars-deferred-155 AC12: `?.trim()` added to all three `PlayerTimelinePanel.vue` guards and `SessionPrepCard.vue`'s `hasRecap`, in the same edit as the AC11 `<dl>/<dt>/<dd>` restructure below.]**
 - **No i18n key-parity or key-resolution test anywhere in the frontend** (`src/frontend/test/vitest/setup-file.js:34-35`). The global `$t` mock echoes the key back, so every raw-key assertion in the suite pins only the template spelling — a typo'd or mis-nested key in any of the three locale files stays green while production renders the literal key string to users. Already recorded as a manual check in skillars-12-5 Task 1.4 ("There is no automated key-parity test anywhere under `src/frontend/src/i18n/`"). Worth a single spec that walks `en-US` and asserts `de-DE`/`fr-FR` have a structurally identical key set, plus resolution of every key a template references.
+
+  **[PARTIALLY CLOSED by skillars-deferred-155 AC14: the structural key-set-parity half is done (`src/frontend/src/i18n/__tests__/localeKeyParitySpec.js`, plus a real backfill of one locale gap it immediately surfaced — `auth.emailVerifiedPleaseLogin` was missing from `de-DE`/`fr-FR`). The template-key-resolution half (verifying every `$t()`/`$te()` call in every `.vue` file resolves against a real key) was explicitly scoped OUT as a separate, larger static-analysis effort — still open.]**
 - **Recap label/value pairs have no semantic association for assistive tech** (`src/frontend/src/components/development/PlayerTimelinePanel.vue:52-63` and `src/frontend/src/components/booking/SessionPrepCard.vue:20-32`). Label and value are sibling unassociated divs and boldness is a class rather than `<strong>`, so a screen reader announces unrelated text runs. A `<dl>/<dt>/<dd>` or `aria-labelledby` pairing fixes it at no visual cost. Deferred from 12-5 because its AC6 mandates mirroring the `SessionPrepCard` idiom exactly — the change belongs to both surfaces in one pass.
+
+  **[CLOSED by skillars-deferred-155 AC11: both files restructured to `<dl>/<dt>/<dd>`, plus a `margin: 0` CSS reset in each (neither file nor Quasar's own normalize sheet had one, so the UA default `dl`/`dd` margins would otherwise have shipped as a visible layout regression).]**
 - **Offset pagination can repeat a timeline event across pages; the store appends without an id-keyed merge** (`src/frontend/src/stores/development.store.js:255`). `PlayerTimelineRepository.java:21-29` added an `IdDesc` tie-break because a row can appear on two consecutive pages, but that addresses ties only, not the offset shift from a row inserted at the head between two requests (`PageRequest.of(page, size)`, `TimelineQueryService.java:61`). With 51 events, a wrap-up submitted in another tab between page 0 and "Load more" re-serves the old event 50 and the store concatenates it, rendering a duplicate entry under a duplicate `:key` plus a Vue duplicate-key warning. Pre-existing from skillars-deferred-153; skillars-12-5's recap text is what makes it visually obvious. Fix is an id-keyed merge in the append branch.
+
+  **[CLOSED by skillars-deferred-155 AC15: `fetchTimeline`'s page-append branch now filters `response.events` against a `Set` of already-loaded ids before concatenating.]**
+
+## Deferred from: `/mto-story-review` of skillars-deferred-155 (2026-10-19)
+
+- **`Booking.notes` is persisted unsanitized despite reaching the coach exactly like `playerRequest` (sanitized by this story) does.** `BookingService.java:336`, `booking.setNotes(req.notes())` — no `ContactDetailSanitizer` call anywhere in the write path, confirmed by grep. `notes` is player/parent-authored free text (`CreateBookingRequest.java:16`, `@Size(max = 500)`), reaches the coach on `CoachBookingRequestsPage.vue:101-102` and in their email (`BookingEmailListener.java:72`). Surfaced while scoping `skillars-deferred-155`'s AC5 (which does sanitize the new, adjacent `playerRequest` column) — not fixed there, since `notes` is write-once at booking-creation time and changing its validation/persistence behavior is a separate, independently-scopable fix, not a drive-by in a story about a different column. When picked up: add the same `contactDetailSanitizer.sanitize(...)` call at `createBookingRequest`'s `setNotes` call site, plus the same post-sanitize truncation guard `skillars-deferred-155` AC4 adds for `playerRequest` (sanitizer output can exceed a bounded column's length).
+
+## Deferred from: code review of skillars-deferred-155 (2026-10-20)
+
+Five pre-existing or low-impact items surfaced by `/bmad-code-review` (3 parallel layers, 39 raw findings
+→ 22 actionable). The four decisions and thirteen patches from that review are tracked in the story file's
+own `### Review Findings` section, not here.
+
+- **`booking.bookings.player_request` is not covered by player/parent GDPR erasure.** `Booking.java:54-56`
+  adds a new 500-char player/parent-authored free-text column; `GdprErasureService` injects
+  `BookingRepository` (`:91`) but never calls it (grepped `bookingRepository\.` in that file → 0
+  occurrences), so booking rows and all free text on them survive erasure untouched. The identical gap
+  already exists for the adjacent `notes` column (logged as its own entry above by `skillars-deferred-155`),
+  so this is consistent with precedent rather than a regression — but the same story's coach-side work
+  (`GdprErasureService:348-352`) establishes the opposite principle for authored free text, so the
+  inconsistency is now explicit. DSAR *export* is already covered for free: `GdprExportService.java:117-135`
+  serialises whole `Booking` entities into `bookings.json`. When picked up, fix `notes` and `player_request`
+  together in one pass.
+
+- **Non-WinAnsi characters are silently dropped from generated performance-report PDFs.**
+  `ReportGenerationService.java:446` uses `FontFactory.getFont(FontFactory.HELVETICA, 10)` — a base-14 Type1
+  font with WinAnsi (cp1252) encoding, which drops rather than substitutes out-of-range characters. Already
+  live and already visible: the `" ✓ Verified"` note at `:521-523` uses U+2713 and is silently missing from
+  every PDF generated today, and `nextSteps`/`playerName` already render through the same font. Not a
+  divergence introduced by any story — logged because `skillars-deferred-155` AC1/AC2 multiplied the volume
+  of coach-authored free text on this surface (up to 2×500 chars per completed session), so Polish, Turkish,
+  Czech or Cyrillic recap text now mangles at scale in a product shipping de-DE and fr-FR. German umlauts and
+  French accents are inside cp1252 and unaffected. Fix is `BaseFont.createFont(..., BaseFont.IDENTITY_H,
+  EMBEDDED)` with a real TTF; note the project is pinned to openpdf 2.0.5 on Java 17
+  (`pom.xml:525-532`) — see the openpdf/Java-21 constraint recorded elsewhere before bumping anything.
+
+- **`StringUtils.truncate` can split a UTF-16 surrogate pair.** `BookingService.java:749` truncates the
+  sanitizer's output at code-unit index 500. A ≤500-char input containing a redactable phone/email (`REDACTION`
+  is 25 chars, longer than much of what it matches — `ContactDetailSanitizer.java:21`) plus an astral-plane
+  character straddling index 500 leaves a lone surrogate. Verified low impact rather than a 500: the Postgres
+  driver's `Encoding.encode(String)` is `String.getBytes(Charset)`, which substitutes the replacement byte
+  instead of throwing, so the result is one corrupted trailing character with no exception and no log. Fix is
+  to drop a trailing unpaired `Character.isHighSurrogate` char after truncating.
+
+- **[CLOSED by skillars-deferred-155 code-review Decision 2(a): resolved, not deferred.** The chosen remedy scrubs `performance_reports` and keeps the row rather than deleting it, so the `reference_id` these timeline events point at still exists and the orphaning cannot occur. Retained below as the original finding text for history.] **Coach erasure leaves orphan `PERFORMANCE_REPORT` timeline events.** `GdprErasureService:349-350` deletes
+  `performance_reports` rows by `coach_id` but does not touch the `player_timeline_events` rows whose
+  `reference_id` is one of those report ids and whose metadata carries the erased coach's `coachName`
+  (written at `ReportGenerationService.java:255-261`). A non-erased player's timeline keeps a "Performance
+  Report" entry pointing at a row that no longer exists. The PLAYER branch never had this inconsistency
+  because it deletes both (`:1233`, `:1261`). Cosmetic: the frontend has no download link off the entry (the
+  only two `PERFORMANCE_REPORT` hits are icon/colour maps, `PlayerTimelinePanel.vue:118,129`), though the
+  coach's display name does survive. **This item disappears entirely if the story-file decision on
+  scrub-instead-of-delete for `performance_reports` is resolved in favour of scrubbing** — do not action it
+  independently until that decision lands.
+
+- **The player-request PATCH returns a `BookingResponse` that is known-incorrect for four of its sixteen
+  fields.** `PlayerRequestResource.java:42` returns `BookingService.toBookingResponse` (`:488-493`), which
+  passes null for `parentName`, `pendingReschedule`, `batchId` and `batchSize`, whereas `getParentBookings`
+  (`:496-497`) populates all four. `skillars-deferred-155` AC5 prescribed this mapper, and the frontend is
+  safe today only because `booking.store.js:542-546` does a full `loadParentBookings()` refetch instead of
+  splicing the response in — the mitigation lives in one caller plus a comment, not in the contract. A future
+  mobile client, or a later refactor that drops the refetch, would read `pendingReschedule: null` on a booking
+  that has one and hide the Accept/Decline affordance. Consider `204 No Content` or a narrow
+  `{bookingId, playerRequest}` record when this endpoint is next touched.
+
+- **Split the coach-erasure scrub block into one `REQUIRES_NEW` transaction per table, with a per-table alert
+  reason code.** Deferred option (b) from `skillars-deferred-155`'s code-review Decision 1; option (a) (set the
+  `skipped` flag so the terminal status becomes `FAILED` and the daily retry re-drives the block) was taken
+  instead and fixes the correctness problem on its own. This item is the remaining *blast-radius* improvement:
+  `GdprErasureService.java:345-353` now runs four lock-taking statements plus N outbox INSERTs inside a single
+  `requiresNewTemplate` block under one transaction-scoped `lock_timeout`, so a trip on the last statement rolls
+  back the scrubs that already succeeded, and the two existing reason codes (`COACH_RECAP_CONTENDED` /
+  `COACH_RECAP_LOCK_TIMEOUT`) cannot tell an operator which table failed. The PLAYER branch already models the
+  alternative: explicit statement groups with `nextGroupLockTimeoutSecondsOrThrow`/`spendDownLockBudget`
+  cumulative budget arithmetic (`:1248-1290`). When picked up, mirror that shape rather than inventing a new one.

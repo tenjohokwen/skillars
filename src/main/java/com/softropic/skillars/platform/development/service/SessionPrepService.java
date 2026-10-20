@@ -85,6 +85,7 @@ public class SessionPrepService {
             lastWhatWeDid,
             lastWhatsNext,
             focusThreadSkillCodes,
-            openNeglectedSkillCount);
+            openNeglectedSkillCount,
+            booking.getPlayerRequest());
     }
 }

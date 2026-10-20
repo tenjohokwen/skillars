@@ -193,6 +193,31 @@ describe('development.store — fetchTimeline pagination (deferred-153 AC4)', ()
     expect(store.timelinePage).toBe(1)
   })
 
+  // skillars-deferred-155 AC15: a row inserted at the head between page 0 and "Load more" can
+  // shift the offset and re-serve an already-rendered event — the merge must dedupe by id.
+  it('page > 0 does not duplicate an event id already present from an earlier page', async () => {
+    getTimeline.mockResolvedValueOnce({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [{ id: 'e1' }, { id: 'e2' }],
+      hasMore: true,
+    })
+    const store = useDevelopmentStore()
+    await store.fetchTimeline('p1')
+
+    // A new event was inserted at the head between requests, shifting the offset — the backend
+    // re-serves e2 (already loaded) alongside the genuinely new e3.
+    getTimeline.mockResolvedValueOnce({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [{ id: 'e2' }, { id: 'e3' }],
+      hasMore: false,
+    })
+    await store.fetchTimeline('p1', 1)
+
+    expect(store.timeline.events).toEqual([{ id: 'e1' }, { id: 'e2' }, { id: 'e3' }])
+  })
+
   it('page > 0 uses timelineLoadingMore, not timelineLoading, and never hides the panel', async () => {
     getTimeline.mockResolvedValueOnce({
       accessExpired: false,

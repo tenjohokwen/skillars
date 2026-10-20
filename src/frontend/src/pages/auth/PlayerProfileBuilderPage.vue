@@ -63,7 +63,14 @@ async function handleSubmit() {
   isSubmitting.value = true
   try {
     const profile = await playerRegistrationApi.createProfile({ position: position.value })
-    router.push(`/player/locker-room/${profile.id}`)
+    // skillars-deferred-155 AC16: the three sibling call sites (MainLayout.vue,
+    // BookingRequestPage.vue, CoachPublicProfilePage.vue) all truthiness-guard a player id before
+    // navigating; this one didn't. Defence-in-depth — PlayerProfileResponse does carry id today.
+    if (profile?.id) {
+      router.push(`/player/locker-room/${profile.id}`)
+    } else {
+      router.push('/player/home')
+    }
   } catch (err) {
     setError(err)
   } finally {

@@ -151,6 +151,28 @@ describe('PlayerTimelinePanel — session recap (skillars-12-5 AC8)', () => {
     expect(wrapper.text()).not.toContain('development.timeline.whatsNextLabel')
   })
 
+  // skillars-deferred-155 AC12: a whitespace-only value must hide the block entirely — all three
+  // guards (outer wrapper + two inner) test blankness via ?.trim(), not plain truthiness.
+  it('renders neither label, and no empty wrapper, when both recap fields are whitespace-only', () => {
+    const { wrapper } = mountPanel({
+      accessExpired: false,
+      accessExpiryDays: null,
+      events: [
+        {
+          id: 'e1',
+          eventType: 'SESSION_COMPLETED',
+          occurredAt: new Date().toISOString(),
+          metadata: { coachId: 'c1', whatWeDid: '   ', whatsNext: '\n' },
+        },
+      ],
+      hasMore: false,
+    })
+
+    expect(wrapper.text()).not.toContain('development.timeline.whatWeDidLabel')
+    expect(wrapper.text()).not.toContain('development.timeline.whatsNextLabel')
+    expect(wrapper.find('dl').exists()).toBe(false)
+  })
+
   it('renders neither label for a redacted event (metadata has coachId only)', () => {
     const { wrapper } = mountPanel({
       accessExpired: false,

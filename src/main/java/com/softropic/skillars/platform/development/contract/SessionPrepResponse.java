@@ -20,6 +20,9 @@ import java.util.List;
  *                              ranked by frequency across the last
  *                              {@code SessionRepository.SESSION_WINDOW} session-builder sessions
  * @param openNeglectedSkillCount player-level, reused read-only exactly as story 12-1 does
+ * @param playerRequest the player/parent-initiated "work on X next time" session-prep request
+ *                        (skillars-deferred-155 AC6), read directly off the booking; null if never
+ *                        set or cleared
  */
 public record SessionPrepResponse(
     Long playerId,
@@ -27,5 +30,6 @@ public record SessionPrepResponse(
     String lastWhatWeDid,
     String lastWhatsNext,
     List<String> focusThreadSkillCodes,
-    int openNeglectedSkillCount
+    int openNeglectedSkillCount,
+    String playerRequest
 ) {}
