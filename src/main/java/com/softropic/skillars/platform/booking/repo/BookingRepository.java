@@ -327,13 +327,16 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // the coach), so a single playerId-keyed method correctly covers both the self-registered-PLAYER
     // erasure path and the per-child path inside PARENT erasure; there is no coach-authored half to
     // also scrub, unlike SessionCompletionDataRepository's anonymizeByPlayerId/anonymizeByCoachId
-    // pair. "UPDATE VERSIONED" (not a plain UPDATE) bumps Booking's own @Version column for every
-    // row this touches — Booking is not @DynamicUpdate, so a booking loaded concurrently
-    // (e.g. setPlayerRequest/save, setCancelReason/save) would otherwise rewrite every column,
+    // pair. The explicit `b.version = b.version + 1` (the codebase convention, see
+    // RefreshTokenRepository/VideoRepository, and what NativeModifyingVersionAuditTest enforces —
+    // it does not recognise Hibernate's equivalent "UPDATE VERSIONED") bumps Booking's own
+    // @Version column for every row this touches — Booking is not @DynamicUpdate, so a booking
+    // loaded concurrently (e.g. setPlayerRequest/save, setCancelReason/save) would otherwise rewrite every column,
     // including these two, from its stale in-memory snapshot and silently resurrect just-erased
     // text with no optimistic-lock failure at all. The bump makes that race surface as the same
     // OptimisticLockingFailureException/CONCURRENT_MODIFICATION path those writers already handle.
     @Modifying
-    @Query("UPDATE VERSIONED Booking b SET b.notes = NULL, b.playerRequest = NULL WHERE b.playerId = :playerId")
+    @Query("UPDATE Booking b SET b.notes = NULL, b.playerRequest = NULL, b.version = b.version + 1 "
+        + "WHERE b.playerId = :playerId")
     void anonymizeNotesAndPlayerRequestByPlayerId(@Param("playerId") Long playerId);
 }
