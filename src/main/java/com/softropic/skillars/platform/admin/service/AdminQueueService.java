@@ -171,12 +171,21 @@ public class AdminQueueService {
             }
             case STRIKE_THRESHOLD -> "";
             // skillars-deferred-128 story review (Decision 2): reason distinguishes the
-            // GdprErasureService causes (DEADLINE_EXCEEDED / CHILD_VANISHED / CHILD_CONTENDED /
-            // CHILD_DELETE_LOCK_TIMEOUT, the last added by skillars-deferred-129 AC1, plus
-            // UNCLASSIFIED_FAILURE added by skillars-deferred-133 AC1 for markFailed's own
-            // catch-all — an accepted, disclosed semantic widening: this bucket now also counts
-            // non-deadline failures, pool saturation and missing-row cases, not deadline exceedances
-            // alone) — same reason-prefix pattern MODERATION_UNRESOLVED already uses above.
+            // GdprErasureService causes — same reason-prefix pattern MODERATION_UNRESOLVED already
+            // uses above. Complete list (skillars-deferred-157 AC2; keep in step with
+            // GdprErasureService.raiseErasureAlert's Javadoc):
+            //   * DEADLINE_EXCEEDED — PARENT loop budget exhausted;
+            //   * CHILD_VANISHED / CHILD_CONTENDED / CHILD_DELETE_LOCK_TIMEOUT (skillars-deferred-129
+            //     AC1) / CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED (skillars-deferred-137 AC1) — a child
+            //     player's development.* deletion;
+            //   * CHILD_BOOKING_LOCK_TIMEOUT / CHILD_BOOKING_CONTENDED (skillars-deferred-157 AC1) —
+            //     the same deletion's booking.* statements;
+            //   * COACH_RECAP_{SCD,TIMELINE,REPORT}_{LOCK_TIMEOUT,CONTENDED} (skillars-deferred-156
+            //     AC7) and COACH_AVAILABILITY_BLOCK_{LOCK_TIMEOUT,CONTENDED} (skillars-deferred-157
+            //     AC4) — the coach-erasure scrub groups;
+            //   * UNCLASSIFIED_FAILURE (skillars-deferred-133 AC1) — markFailed's own catch-all, an
+            //     accepted, disclosed semantic widening: this bucket also counts non-deadline
+            //     failures, pool saturation and missing-row cases, not deadline exceedances alone.
             case GDPR_ERASURE_DEADLINE -> {
                 String prefix = reason != null ? reason + ": " : "";
                 yield prefix + "GDPR erasure request " + referenceId;

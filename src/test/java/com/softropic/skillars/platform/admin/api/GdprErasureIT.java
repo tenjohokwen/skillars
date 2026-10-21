@@ -45,6 +45,7 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -879,6 +880,56 @@ class GdprErasureIT extends AbstractIntegrationTest {
         assertThat(otherRow.get("voice_note_text")).isEqualTo("Unrelated coach voice note");
         assertThat(otherRow.get("what_we_did")).isEqualTo("Unrelated coach recap");
         assertThat(otherRow.get("whats_next")).isEqualTo("Unrelated coach next step");
+    }
+
+    /**
+     * skillars-deferred-157 AC3/AC4: booking.coach_availability_blocks.reason is coach-authored free
+     * text. A coach's erasure nulls it on their own blocks — keeping the rows and their times — and
+     * leaves a second, real coach's block untouched. coach_id carries no FK, so nothing but this
+     * fixture ties the block to the erased coach's real coach_profiles.id.
+     */
+    @Test
+    void erase_coachUser_scrubsOwnAvailabilityBlockReasonsButNotAnotherCoachs() {
+        UUID ownBlockId = UUID.randomUUID();
+        UUID otherBlockId = UUID.randomUUID();
+        UUID otherCoachProfileId = UUID.randomUUID();
+        long otherCoachUserId = 9210_000_904L;
+        // One Instant base for start/end, so chk_block_end_after_start cannot flake.
+        Instant blockStart = Instant.now().plus(3, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS);
+        Instant blockEnd = blockStart.plus(2, ChronoUnit.HOURS);
+        transactionTemplate.execute(status -> {
+            insertUser(otherCoachUserId, "gdpr.erasure.othercoach.blocks.9210@skillars-test.com",
+                passwordEncoder.encode(TEST_PASSWORD), "COACH");
+            grantAuthority(otherCoachUserId, "ROLE_COACH");
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_profiles "
+                    + "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) "
+                    + "VALUES (?, ?, 'Unrelated Coach', 'Unrelated bio', 'Munich', "
+                    + "ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
+                otherCoachProfileId, otherCoachUserId);
+            jdbcTemplate.update(
+                "INSERT INTO booking.coach_availability_blocks (id, coach_id, start_datetime, end_datetime, reason) "
+                    + "VALUES (?, ?, ?, ?, 'Hospital appointment')",
+                ownBlockId, coachProfileId, Timestamp.from(blockStart), Timestamp.from(blockEnd));
+            jdbcTemplate.update(
+                "INSERT INTO booking.coach_availability_blocks (id, coach_id, start_datetime, end_datetime, reason) "
+                    + "VALUES (?, ?, ?, ?, 'Unrelated coach holiday')",
+                otherBlockId, otherCoachProfileId, Timestamp.from(blockStart), Timestamp.from(blockEnd));
+            return null;
+        });
+
+        erase(COACH_USER_ID);
+
+        Map<String, Object> ownRow = jdbcTemplate.queryForMap(
+            "SELECT reason, start_datetime, end_datetime FROM booking.coach_availability_blocks WHERE id = ?",
+            ownBlockId);
+        assertThat(ownRow.get("reason")).isNull();
+        assertThat(((Timestamp) ownRow.get("start_datetime")).toInstant()).isEqualTo(blockStart);
+        assertThat(((Timestamp) ownRow.get("end_datetime")).toInstant()).isEqualTo(blockEnd);
+
+        String otherReason = jdbcTemplate.queryForObject(
+            "SELECT reason FROM booking.coach_availability_blocks WHERE id = ?", String.class, otherBlockId);
+        assertThat(otherReason).isEqualTo("Unrelated coach holiday");
     }
 
     /**
@@ -1895,6 +1946,84 @@ class GdprErasureIT extends AbstractIntegrationTest {
             requestId.toString());
         assertThat(alert.get("status")).isEqualTo("OPEN");
         assertThat(alert.get("reason")).isEqualTo("CHILD_DELETE_LOCK_TIMEOUT");
+    }
+
+    /**
+     * skillars-deferred-157 AC1/AC2: a real lock_timeout trip on the booking.bookings erasure UPDATE
+     * (a JPQL bulk UPDATE, not a mock) must map through BookingSchemaLockException to
+     * CHILD_BOOKING_LOCK_TIMEOUT — not the development-schema CHILD_DELETE_LOCK_TIMEOUT the test above
+     * pins — so an operator investigates booking.*.
+     */
+    @Test
+    void erase_selfRegisteredPlayer_bookingStatementLockTimeout_marksFailedWithChildBookingLockTimeoutAlert() throws Exception {
+        setGdprEraseStatementLockTimeoutSecondsConfig(2);
+        UUID bookingId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            insertBookingForCompletionData(bookingId, SELF_PLAYER_PROFILE_ID);
+            return null;
+        });
+
+        CountDownLatch lockHeld = new CountDownLatch(1);
+        CountDownLatch releaseLock = new CountDownLatch(1);
+        AtomicReference<Throwable> lockerFailure = new AtomicReference<>();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        Future<?> locker = executor.submit(() -> {
+            try {
+                transactionTemplate.execute(status -> {
+                    jdbcTemplate.queryForObject(
+                        "SELECT id FROM booking.bookings WHERE id = ? AND player_id = ? FOR UPDATE",
+                        UUID.class, bookingId, SELF_PLAYER_PROFILE_ID);
+                    lockHeld.countDown();
+                    try {
+                        releaseLock.await(30, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                });
+            } catch (Throwable t) {
+                lockerFailure.set(t);
+            }
+        });
+
+        AtomicReference<Throwable> eraseFailure = new AtomicReference<>();
+        AtomicReference<UUID> requestIdRef = new AtomicReference<>();
+        try {
+            assertThat(lockHeld.await(10, TimeUnit.SECONDS))
+                .as("competing lock on the booking row must be acquired before erase() starts")
+                .isTrue();
+            Future<?> eraser = executor.submit(() -> {
+                try {
+                    requestIdRef.set(erase(SELF_PLAYER_USER_ID));
+                } catch (Throwable t) {
+                    eraseFailure.set(t);
+                }
+            });
+            eraser.get(20, TimeUnit.SECONDS);
+        } finally {
+            releaseLock.countDown();
+            locker.get(10, TimeUnit.SECONDS);
+            executor.shutdown();
+        }
+
+        assertThat(lockerFailure.get()).isNull();
+        assertThat(eraseFailure.get()).isNull();
+        UUID requestId = requestIdRef.get();
+        assertThat(requestId).isNotNull();
+        String finalStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.gdpr_requests WHERE id = ?", String.class, requestId);
+        assertThat(finalStatus).isEqualTo("FAILED");
+
+        Map<String, Object> alert = jdbcTemplate.queryForMap(
+            "SELECT status, reason FROM admin.admin_alerts "
+                + "WHERE reference_id = ? AND type = 'GDPR_ERASURE_DEADLINE'",
+            requestId.toString());
+        assertThat(alert.get("status")).isEqualTo("OPEN");
+        assertThat(alert.get("reason")).isEqualTo("CHILD_BOOKING_LOCK_TIMEOUT");
+        // Development groups 1-3 ran before the booking statement tripped; they share its one
+        // REQUIRES_NEW transaction, so the tombstone (and everything before it) must have rolled back.
+        assertThat(childTombstoned(SELF_PLAYER_PROFILE_ID)).isFalse();
     }
 
     /**

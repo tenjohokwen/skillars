@@ -1,0 +1,12 @@
+# skillars-deferred-157 AC6: mark binary assets explicitly so no diff/merge/EOL handling ever
+# touches them. Deliberately no `* text=auto` / `eol=` rule — that would renormalise every text file.
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
