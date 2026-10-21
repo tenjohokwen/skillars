@@ -35,7 +35,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
 import enUS from '../en-US/index.js'
-import { collectKeyPaths } from '../collectKeyPaths.js'
+import { collectKeyPaths } from '../../../test/vitest/collectKeyPaths.js'
 
 const FRONTEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const SRC_ROOT = path.join(FRONTEND_ROOT, 'src')
@@ -156,12 +156,53 @@ const DYNAMIC_KEY_CALL_SITES = [
 
 const EN_KEY_SET = new Set(collectKeyPaths(enUS))
 
+// skillars-deferred-157 AC11(c): an order-of-magnitude "the scan found something" guard against
+// the scan silently matching zero files/calls (e.g. a SRC_ROOT path typo) and every other assertion
+// passing vacuously — NOT a precise count. Measured at skillars-deferred-157: 1571 statically-
+// resolvable CALL SITES (what literalCalls.length counts — not distinct keys). If a legitimate i18n
+// consolidation ever trips this, lower the constant and note why here. Deliberately no upper bound:
+// that would make every new translated string a spec edit.
+const MIN_LITERAL_CALL_SITES = 500
+
 // Matches a call whose first argument is a quoted (or backtick) string: captures the quote
 // character and the literal content between the (possibly escaped) delimiters.
 const QUOTED_CALL_RE = /(\$te?|i18n\.global\.t|(?<![.\w$])t)\(\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g
 // Matches a call whose first argument does NOT start with a quote/backtick at all — a bare
 // variable or property-access expression (e.g. `t(messageKey)`, `t(badge.labelKey)`).
 const BARE_VAR_CALL_RE = /(\$te?|i18n\.global\.t|(?<![.\w$])t)\(\s*([^'"`\s)])/g
+
+// skillars-deferred-157 AC11(b): comment spans are blanked before the line split, so a translation
+// call inside a block comment is not scanned as live code. Blanking replaces every non-newline
+// character with a space, so line numbers (which DYNAMIC_KEY_CALL_SITES is keyed by) never move.
+//
+// Scoped by language region, deliberately NOT a whole-file `/\/\*[\s\S]*?\*\//g`: a template
+// attribute such as `accept="video/*"` (DrillDetailPanel.vue, VideoManagementPage.vue) would open a
+// fake "comment" that runs to the first real `*/` anywhere later in the file, blanking every call
+// in between — and the spec would not fail, those keys would just silently stop being guarded.
+//   * `.vue`: `/* … */` only inside <script>/<style> blocks; `<!-- … -->` only outside them (the
+//     template, plus the SFC's top level, which is HTML-comment syntax too).
+//   * `.js`: `/* … */` only.
+const BLOCK_COMMENT_RE = /\/\*[\s\S]*?\*\//g
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g
+const SFC_CODE_BLOCK_RE = /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/g
+
+function blankPreservingNewlines(span) {
+  return span.replace(/[^\n]/g, ' ')
+}
+
+function blankCommentSpans(content, file) {
+  if (!file.endsWith('.vue')) {
+    return content.replace(BLOCK_COMMENT_RE, blankPreservingNewlines)
+  }
+  let out = ''
+  let last = 0
+  for (const m of content.matchAll(SFC_CODE_BLOCK_RE)) {
+    out += content.slice(last, m.index).replace(HTML_COMMENT_RE, blankPreservingNewlines)
+    out += m[0].replace(BLOCK_COMMENT_RE, blankPreservingNewlines)
+    last = m.index + m[0].length
+  }
+  return out + content.slice(last).replace(HTML_COMMENT_RE, blankPreservingNewlines)
+}
 
 function stripLineComment(line) {
   // Naive, line-based: only strips `// …` preceded by whitespace or at line start, so it does not
@@ -204,7 +245,7 @@ function scanCallSites() {
   const wrappedCalls = []
 
   for (const file of listSourceFiles()) {
-    const content = fs.readFileSync(path.join(FRONTEND_ROOT, file), 'utf8')
+    const content = blankCommentSpans(fs.readFileSync(path.join(FRONTEND_ROOT, file), 'utf8'), file)
     const lines = content.split('\n')
     for (let i = 0; i < lines.length; i++) {
       const raw = lines[i]
@@ -244,10 +285,44 @@ describe('i18n template-key resolution (skillars-deferred-156 AC6)', () => {
   const { literalCalls, dynamicCalls, wrappedCalls } = scanCallSites()
 
   it('found a non-trivial number of statically-resolvable call sites (scan is not silently finding nothing)', () => {
-    // A sanity floor, not a precise count — guards against the scan itself silently matching
-    // zero files/calls (e.g. a SRC_ROOT path typo) and every other assertion below passing
-    // vacuously.
-    expect(literalCalls.length).toBeGreaterThan(500)
+    // See MIN_LITERAL_CALL_SITES.
+    expect(
+      literalCalls.length,
+      `only ${literalCalls.length} statically-resolvable call sites found (floor ${MIN_LITERAL_CALL_SITES}) — ` +
+        'is the scan broken (SRC_ROOT, globs, regexes), or did a real consolidation shrink the count?',
+    ).toBeGreaterThan(MIN_LITERAL_CALL_SITES)
+  })
+
+  it('every exception-list entry carries a non-empty reason and a unique location (skillars-deferred-157 AC11a)', () => {
+    // The module doc promises "with a one-line reason, or this spec fails" — this is what enforces it.
+    const missingReason = DYNAMIC_KEY_CALL_SITES.filter(
+      (e) => typeof e.reason !== 'string' || e.reason.trim() === '',
+    ).map((e) => e.at)
+    expect(missingReason).toEqual([])
+    // List hygiene only.
+    const ats = DYNAMIC_KEY_CALL_SITES.map((e) => e.at)
+    expect(ats.filter((at, i) => ats.indexOf(at) !== i)).toEqual([])
+  })
+
+  it('comment blanking is region-scoped: a template glob attribute cannot open a fake block comment (skillars-deferred-157 AC11b)', () => {
+    const fixture = [
+      '<template>',
+      '  <input type="file" accept="video/*" />',
+      "  <span>{{ $t('fixture.key') }}</span>",
+      "  <!-- {{ $t('fixture.commentedOut') }} -->",
+      '</template>',
+      '<script setup>',
+      '/* c */',
+      "const label = t('fixture.scriptKey') /* trailing */",
+      '</script>',
+    ].join('\n')
+    const blanked = blankCommentSpans(fixture, 'Fixture.vue')
+    const lines = blanked.split('\n')
+    expect(lines).toHaveLength(fixture.split('\n').length)
+    expect(lines[2]).toBe("  <span>{{ $t('fixture.key') }}</span>")
+    expect(lines[3].trim()).toBe('')
+    expect(lines[6].trim()).toBe('')
+    expect(lines[7].trimEnd()).toBe("const label = t('fixture.scriptKey')")
   })
 
   it('every statically-resolved $t()/$te()/t()/i18n.global.t() key exists as a real en-US leaf', () => {

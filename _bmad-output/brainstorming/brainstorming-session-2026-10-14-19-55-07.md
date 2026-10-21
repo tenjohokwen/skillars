@@ -166,7 +166,7 @@ _Novelty:_ Reuses data already captured for drill suggestion; no new capture bur
 
 > **Covered by `skillars-12-2-session-close-recap-capture`** (created 2026-10-15). Converge #15 (the capture itself) and the write-side half of Converge #16 (threading the recap onto `BookingCompletedEvent` into `PlayerTimelineEvent.SESSION_COMPLETED` metadata) below are implemented by that story; Converge #16's report-generation-consumption half remains open as that story's own Fast-Follow. Do not re-pick Converge #15 in a future brainstorm-mining pass.
 
-> **Converge #15's READ surface is covered by `skillars-12-5-coach-recap-on-player-timeline`** (created 2026-10-19). `skillars-12-2` captured and server-side-gated the recap but explicitly deferred rendering it (its AC8), and `skillars-12-4` then required `PlayerTimelinePanel.vue` **unchanged** (its AC4) — so Converge #15's own success indicator, *"visible back to the coach on that player's timeline"*, went unmet by both. `skillars-12-5` closes it as a frontend-only change (no backend work: the recap is already on the wire for the authoring coach). With that story, Converge #15 is fully covered end-to-end. **Converge #16's report-generation half remains the one open Fast-Follow.**
+> **Converge #15's READ surface is covered by `skillars-12-5-coach-recap-on-player-timeline`** (created 2026-10-19). `skillars-12-2` captured and server-side-gated the recap but explicitly deferred rendering it (its AC8), and `skillars-12-4` then required `PlayerTimelinePanel.vue` **unchanged** (its AC4) — so Converge #15's own success indicator, *"visible back to the coach on that player's timeline"*, went unmet by both. `skillars-12-5` closes it as a frontend-only change (no backend work: the recap is already on the wire for the authoring coach). With that story, Converge #15 is fully covered end-to-end. ~~**Converge #16's report-generation half remains the one open Fast-Follow.**~~ ✅ **Since covered by `skillars-deferred-155-recap-report-tie-in-player-session-request-gdpr-metadata-scrub-and-hardening-sweep` (created 2026-10-19); annotated by skillars-deferred-157 code review.**
 
 **[Converge #15]: Session-Close Recap**
 _Concept:_ A small structured note captured when a coach closes out a session, surfaced both forward (next session's prep) and backward (this player's history view).
@@ -199,7 +199,7 @@ _Novelty:_ Reverses the single-direction authorship assumption running through e
 
 **Theme 4: Multi-Coach Data Boundaries** -- Siloed Per-Coach History (raw notes/recaps stay private per coach) and Cross-Coach Contribution Visible to Coach (aggregate skill-contribution % stays shared, confirmed visible to coaches too). Pattern insight: the boundary is qualitative-private vs. quantitative-shared, matching what the system already does today.
 
-**Deferred / Parked:** Player/Parent-Initiated Flag -- reverses authorship direction; kept on the list but explicitly tagged deferred, adjacent to already-deferred homework/messaging stories.
+**Deferred / Parked:** Player/Parent-Initiated Flag -- reverses authorship direction; kept on the list but explicitly tagged deferred, adjacent to already-deferred homework/messaging stories. ✅ **Later covered by `skillars-deferred-155-recap-report-tie-in-player-session-request-gdpr-metadata-scrub-and-hardening-sweep` (created 2026-10-19); annotated by skillars-deferred-157 AC10.**
 
 **Breakthrough Concept:** The real breakthrough was discovering mid-session that most of the "roster + history" picture already exists in the `development` module with no coach-facing surface -- turning an invent-a-data-model problem into an assemble-plus-one-small-capture problem.
 
@@ -210,8 +210,8 @@ _Novelty:_ Reverses the single-direction authorship assumption running through e
 3. Session Prep Card inside the booking view — **covered by `skillars-12-3-session-prep-card-and-timeline-access-clock-fix` (created 2026-10-15)**
 4. Coach-facing player-detail page (reused panels) — **covered by `skillars-12-4-coach-facing-player-detail-page` (created 2026-10-15)**
 4b. Render the captured recap on that page's timeline (the read half of item 2) — **covered by `skillars-12-5-coach-recap-on-player-timeline` (created 2026-10-19)**
-5. Fast-follow: recap -> report-generation tie-in — **still open, no story yet**
-6. Deferred: player/parent-initiated flag — **still parked**
+5. Fast-follow: recap -> report-generation tie-in — ~~**still open, no story yet**~~ ✅ **Covered by `skillars-deferred-155-recap-report-tie-in-player-session-request-gdpr-metadata-scrub-and-hardening-sweep` (created 2026-10-19); annotated by skillars-deferred-157 AC10.**
+6. Deferred: player/parent-initiated flag — ~~**still parked**~~ ✅ **Covered by `skillars-deferred-155-recap-report-tie-in-player-session-request-gdpr-metadata-scrub-and-hardening-sweep` (created 2026-10-19); annotated by skillars-deferred-157 AC10.**
 
 ## Action Planning
 
@@ -249,10 +249,10 @@ _Next steps:_
 _Resources needed:_ one new Vue page; no new backend.
 _Success indicator:_ clicking a player on the roster shows the same richness of history a parent already sees today, from the coach's side.
 
-**Fast-Follow: Recap -> Report Generation**
+**Fast-Follow: Recap -> Report Generation** — ✅ **Covered by `skillars-deferred-155-recap-report-tie-in-player-session-request-gdpr-metadata-scrub-and-hardening-sweep` (created 2026-10-19); annotated by skillars-deferred-157 AC10.**
 _Next steps:_ feed accumulated session-close recaps into `ReportGenerationService`/`PerformanceReportResource` as additional narrative material once Priority 2 has real data flowing.
 
-**Deferred: Player/Parent-Initiated Flag**
+**Deferred: Player/Parent-Initiated Flag** — ✅ **Covered by `skillars-deferred-155-recap-report-tie-in-player-session-request-gdpr-metadata-scrub-and-hardening-sweep` (created 2026-10-19); annotated by skillars-deferred-157 AC10.**
 _Next steps:_ revisit once homework/messaging-adjacent stories are scheduled; not part of this build.
 
 ## Session Summary and Insights
@@ -270,4 +270,4 @@ The session's defining moment was the user redirecting the facilitator mid-Role-
 1. Review this session document
 2. Start with Priority 1 (roster-summary endpoint + roster page) -- likely the next story/epic slice
 3. Treat the flagged `/development` authorization gap as a separate follow-up, not part of this feature
-4. Revisit the deferred player/parent-initiated flag alongside homework/messaging work later
+4. Revisit the deferred player/parent-initiated flag alongside homework/messaging work later — ✅ **Done: covered by `skillars-deferred-155-recap-report-tie-in-player-session-request-gdpr-metadata-scrub-and-hardening-sweep` (created 2026-10-19); annotated by skillars-deferred-157 AC10.**

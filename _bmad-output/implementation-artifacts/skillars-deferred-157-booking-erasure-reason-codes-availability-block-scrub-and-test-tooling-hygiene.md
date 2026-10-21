@@ -1,6 +1,6 @@
 # Story deferred-157: Booking-Schema Erasure Reason Codes, Availability-Block Reason Scrub & Test-Tooling Hygiene Sweep
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -215,45 +215,64 @@ Only the doc's own summary list (lines 213–214) is stale: it still says "still
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: booking-schema reason codes, PLAYER/PARENT** (AC1, AC2)
-  - [ ] 1.1 Add the `CHILD_BOOKING_LOCK_TIMEOUT` / `CHILD_BOOKING_CONTENDED` constants and the `BookingSchemaLockException` nested class (non-PLFE `RuntimeException`, `contended` flag).
-  - [ ] 1.2 Wrap the two booking-schema calls (`:1411-1418`, including their `setStatementLockTimeout` lines) in the inner try. `CannotAcquireLockException` is caught before `PessimisticLockingFailureException`.
-  - [ ] 1.3 Add the catch at the PLAYER call site (`:575`) and the PARENT call site (`:936`), with identical skip/alert/`FAILED` semantics and WARNs that name `booking.*`.
-  - [ ] 1.4 Update the reason lists in `raiseErasureAlert`'s Javadoc and the `AdminQueueService.buildSummary` comment.
-  - [ ] 1.5 `GdprErasureServiceTest` unit tests (deterministic, mocked):
+- [x] **Task 1: booking-schema reason codes, PLAYER/PARENT** (AC1, AC2)
+  - [x] 1.1 Add the `CHILD_BOOKING_LOCK_TIMEOUT` / `CHILD_BOOKING_CONTENDED` constants and the `BookingSchemaLockException` nested class (non-PLFE `RuntimeException`, `contended` flag).
+  - [x] 1.2 Wrap the two booking-schema calls (`:1411-1418`, including their `setStatementLockTimeout` lines) in the inner try. `CannotAcquireLockException` is caught before `PessimisticLockingFailureException`.
+  - [x] 1.3 Add the catch at the PLAYER call site (`:575`) and the PARENT call site (`:936`), with identical skip/alert/`FAILED` semantics and WARNs that name `booking.*`.
+  - [x] 1.4 Update the reason lists in `raiseErasureAlert`'s Javadoc and the `AdminQueueService.buildSummary` comment.
+  - [x] 1.5 `GdprErasureServiceTest` unit tests (deterministic, mocked):
     - PLAYER, `PessimisticLockingFailureException` from `bookingRepository.anonymizeNotesAndPlayerRequestByPlayerId` → `CHILD_BOOKING_LOCK_TIMEOUT`, `FAILED`, tombstone **not** saved (`verify(playerProfileRepository, never()).save(...)`);
     - PLAYER, `CannotAcquireLockException` from `sessionCompletionDataRepository.anonymizeByPlayerId` → `CHILD_BOOKING_CONTENDED`;
     - PARENT with one child, `PessimisticLockingFailureException` from the booking statement → `CHILD_BOOKING_LOCK_TIMEOUT`, `FAILED`;
     - **regression pin:** PLAYER, `PessimisticLockingFailureException` from a development-schema statement (e.g. `playerTimelineRepository.deleteByPlayerId`) → still `CHILD_DELETE_LOCK_TIMEOUT`.
 
     Use `stubParentErasurePreamble()` (`:655-667`) for PARENT. It is already used by the `erase_parentUser_*` tests (`:342-437`).
-  - [ ] 1.6 `GdprErasureIT`: one real-lock IT mirroring `erase_selfRegisteredPlayer_downstreamDeleteStatementLockTimeout_boundedNotHanging_marksFailedWithDistinguishedAlert` (`:1795`).
+  - [x] 1.6 `GdprErasureIT`: one real-lock IT mirroring `erase_selfRegisteredPlayer_downstreamDeleteStatementLockTimeout_boundedNotHanging_marksFailedWithDistinguishedAlert` (`:1795`).
     - Hold a raw `SELECT id FROM booking.bookings WHERE player_id = ? FOR UPDATE` on a booking row owned by `SELF_PLAYER_PROFILE_ID`. Use the existing `insertBookingForCompletionData` fixture. Use `setGdprEraseStatementLockTimeoutSecondsConfig(2)`.
     - Assert the alert reason is `CHILD_BOOKING_LOCK_TIMEOUT` and the request is `FAILED`.
 
     This proves the real JPQL bulk-UPDATE lock-timeout exception type maps through the new wrapper, not just a mock. Same class, same context, so it adds no Spring-context fork (see Testing).
-- [ ] **Task 2: availability-block reason scrub** (AC3, AC4)
-  - [ ] 2.1 `CoachAvailabilityBlockRepository.anonymizeReasonByCoachId` (plain bulk `UPDATE`, no version bump).
-  - [ ] 2.2 Inject `CoachAvailabilityBlockRepository` into `GdprErasureService` (constructor). Add the `AVAILABILITY_BLOCK` enum value, the reason-code pair, the fourth group after `REPORT`, the switch case, and the comment/WARN text updates.
-  - [ ] 2.3 Update `GdprErasureServiceTest.setUp()`'s constructor call and add the `@Mock`.
-  - [ ] 2.4 `GdprErasureIT`: `erase_coachUser_scrubsOwnAvailabilityBlockReasonsButNotAnotherCoachs`.
+- [x] **Task 2: availability-block reason scrub** (AC3, AC4)
+  - [x] 2.1 `CoachAvailabilityBlockRepository.anonymizeReasonByCoachId` (plain bulk `UPDATE`, no version bump).
+  - [x] 2.2 Inject `CoachAvailabilityBlockRepository` into `GdprErasureService` (constructor). Add the `AVAILABILITY_BLOCK` enum value, the reason-code pair, the fourth group after `REPORT`, the switch case, and the comment/WARN text updates.
+  - [x] 2.3 Update `GdprErasureServiceTest.setUp()`'s constructor call and add the `@Mock`.
+  - [x] 2.4 `GdprErasureIT`: `erase_coachUser_scrubsOwnAvailabilityBlockReasonsButNotAnotherCoachs`.
     - Mirror `erase_coachUser_anonymizesOwnSessionCompletionRecapForThatCoachOnly` (`:829`): a second real `marketplace.coach_profiles` + `main.user` fixture for the unrelated coach.
     - Insert one block per coach with a non-null `reason`. The nearest existing fixture is `AvailabilityResourceIT.java:320`, `INSERT INTO booking.coach_availability_blocks (id, coach_id, start_datetime, end_datetime)` with **no `reason` column**. No test in `src/test` inserts `reason` today, so add it (story review F8). The table has **no FK** on `coach_id`. The fixture's `coach_id` must equal the erased coach's real `coach_profiles.id` for the scrub to match, but nothing enforces that. Obey `chk_block_end_after_start`, and use **one** `Instant` base for start/end (see the `chk_bkg_end_after_start` CI-flake precedent).
     - Wrap fixture writes in `transactionTemplate` (bare `jdbcTemplate` writes in an IT body never commit under this project's Hikari `auto-commit=false`).
     - Assert: own `reason` IS NULL **and** the row still exists with unchanged start/end; the other coach's `reason` is intact.
-- [ ] **Task 3: frontend dead computed** (AC5)
-  - [ ] 3.1 Delete `PlayerDevelopmentDashboardPage.vue:192` and the `:106` binding. Run `PlayerDevelopmentDashboardPageSpec.js` plus `npm run lint`.
-- [ ] **Task 4: `.gitattributes`** (AC6)
-  - [ ] 4.1 Create it and verify with `git ls-files --eol` + `git status`, per AC6.
-- [ ] **Task 5: coach CONTENDED test coverage** (AC7). The four tests are listed in AC7. Task 2's AVAILABILITY_BLOCK tests may be written here.
-- [ ] **Task 6: move `collectKeyPaths.js`** (AC8)
-  - [ ] 6.1 `git mv`, then fix the two imports and rewrite the header.
-  - [ ] 6.2 Run both i18n specs.
-- [ ] **Task 7: comment fix** (AC9)
-- [ ] **Task 8: i18n spec hardening** (AC11)
-  - [ ] 8.1 Capture the pre-change counts/sets, apply (a)/(b)/(c), and re-run.
-  - [ ] 8.2 Record the before/after numbers in Completion Notes.
-- [ ] **Task 9: ledger + brainstorm-doc annotations** (AC10). Do this last, so the CLOSED markers describe what actually shipped.
+- [x] **Task 3: frontend dead computed** (AC5)
+  - [x] 3.1 Delete `PlayerDevelopmentDashboardPage.vue:192` and the `:106` binding. Run `PlayerDevelopmentDashboardPageSpec.js` plus `npm run lint`.
+- [x] **Task 4: `.gitattributes`** (AC6)
+  - [x] 4.1 Create it and verify with `git ls-files --eol` + `git status`, per AC6.
+- [x] **Task 5: coach CONTENDED test coverage** (AC7). The four tests are listed in AC7. Task 2's AVAILABILITY_BLOCK tests may be written here.
+- [x] **Task 6: move `collectKeyPaths.js`** (AC8)
+  - [x] 6.1 `git mv`, then fix the two imports and rewrite the header.
+  - [x] 6.2 Run both i18n specs.
+- [x] **Task 7: comment fix** (AC9)
+- [x] **Task 8: i18n spec hardening** (AC11)
+  - [x] 8.1 Capture the pre-change counts/sets, apply (a)/(b)/(c), and re-run.
+  - [x] 8.2 Record the before/after numbers in Completion Notes.
+- [x] **Task 9: ledger + brainstorm-doc annotations** (AC10). Do this last, so the CLOSED markers describe what actually shipped.
+
+### Review Findings
+
+Code review 2026-10-21 (Blind Hunter + Edge Case Hunter + Acceptance Auditor). 0 decision-needed, 0 patch, 4 defer, 20+ dismissed. Acceptance Auditor: AC1–AC11 all satisfied.
+
+- [x] [Review][Defer] i18n spec comment-blanking is still a heuristic: a `/*` or `</script>` inside a string literal, or `<!--` inside an attribute, can blank live `t()`/`$t()` calls [src/frontend/src/i18n/__tests__/i18nTemplateKeyResolutionSpec.js] — deferred, pre-existing (AC11 deliberately chose region-scoped regex blanking, not a tokenizer)
+- [x] [Review][Defer] `DYNAMIC_KEY_CALL_SITES` hygiene check asserts `reason` non-empty and `at` unique but not that each `at` still matches a live dynamic call site, so stale exemptions can accumulate [src/frontend/src/i18n/__tests__/i18nTemplateKeyResolutionSpec.js] — deferred, pre-existing (beyond AC11's scope)
+- [x] [Review][Defer] No unit/IT coverage for the PARENT-branch `BookingSchemaLockException` contended (`CHILD_BOOKING_CONTENDED`) path; AC7 only lists PARENT lock-timeout [src/test/java/com/softropic/skillars/platform/admin/service/GdprErasureServiceTest.java] — deferred, outside AC7's test list
+- [x] [Review][Defer] Booking-statement catch labels only `PessimisticLockingFailureException`; a commit-time lock trip from the REQUIRES_NEW commit or a non-lock `DataAccessException` gets no `CHILD_BOOKING_*` label (corrected in the second pass: a non-lock exception escapes to `markFailed` as `UNCLASSIFIED_FAILURE`; only a near-unreachable commit-time PLFE would read `CHILD_CONTENDED`) [src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java:1504] — deferred, same shape as the existing delete-statement handling
+
+#### Review Findings — second pass (2026-10-21)
+
+Code review 2026-10-21, second pass (Blind Hunter + Edge Case Hunter + Acceptance Auditor, re-run over the uncommitted tree vs `09d9f048`). 0 decision-needed, 5 patch, 0 new defer (overlaps with the four first-pass deferrals above were deduplicated into them), 22 dismissed. Acceptance Auditor again found AC1–AC11 satisfied in code; `GdprErasureServiceTest` 27/27 and `npx vitest run src/i18n` 11/11 re-run green by the Edge Case Hunter.
+
+- [x] [Review][Patch] Booking lock-timeout IT asserts status + reason but not the rollback its own constant comment promises. Dev groups 1–3 run *before* the booking statement here (unlike the sibling dev-schema IT), so this is the one IT that can prove they roll back. Add `assertThat(childTombstoned(SELF_PLAYER_PROFILE_ID)).isFalse()` [src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java:2022]
+- [x] [Review][Patch] `UNCLASSIFIED_FAILURE`'s comment still says "not one of the three typed reasons above". There are now six `CHILD_*` constants above it, and the L1 CLOSED marker claims every prose reason list was made complete [src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java:207-209]
+- [x] [Review][Patch] The first-pass fourth deferral misdescribes the fall-through, both in this file (line 265) and in `deferred-work.md` ("gets the generic `CHILD_*` handling"). A non-lock `DataAccessException` (e.g. `QueryTimeoutException`, not a PLFE) is caught at neither call site, so it escapes to `markFailed` as `UNCLASSIFIED_FAILURE` with the whole erasure rolled back. Only a commit-time PLFE would read as `CHILD_CONTENDED`, and with both booking statements being immediate bulk UPDATEs plus the explicit pre-commit flush, nothing is pending at commit [_bmad-output/implementation-artifacts/deferred-work.md:3439]
+- [x] [Review][Patch] AC10 said to *replace* the stale brainstorm text, but items 5/6 append ✅ after the still-bold "**still open, no story yet**" / "**still parked**", so the doc contradicts itself. Strike the stale phrase (`~~…~~`). Line 169's "remains the one open Fast-Follow" is also still unannotated [_bmad-output/brainstorming/brainstorming-session-2026-10-14-19-55-07.md:169,213-214]
+- [x] [Review][Patch] Status bookkeeping. Story and `development_status` were set to `done` at dev-complete, while the Change Log and `last_updated` say "in-progress → review", and the first review pass left no Change Log entry. Record both review passes in the Change Log and `last_updated`; final status is set by this review's outcome [_bmad-output/implementation-artifacts/sprint-status.yaml:2]
 
 ## Dev Notes
 
@@ -319,14 +338,89 @@ This is the standing "do not create small stories" instruction for ledger mining
 
 ### Agent Model Used
 
+Claude Opus 5.5 (1M context) — `claude-opus-5-5[1m]`, via `/bmad-dev-story`.
+
 ### Debug Log References
+
+- `mvn -o test -Dtest='GdprErasureServiceTest,NativeModifyingVersionAuditTest'` → 27/27 + 2/2 green.
+- Mutation check: replacing both `throw new BookingSchemaLockException(...)` with `throw e` fails exactly the 3 new booking-schema unit tests (the regression pin still passes, as it should). Restored.
+- `mvn -o test-compile failsafe:integration-test failsafe:verify -Dit.test=GdprErasureIT` → 42/42 green, including both new methods. The booking lock-timeout IT ran in 2.7 s, consistent with a real 2 s `lock_timeout` trip.
+- Frontend: `npx vitest run` (full suite) → 52 files / 410 tests green. `npx eslint` and `npx prettier --check` are clean on every touched frontend file. `npx eslint test/vitest/collectKeyPaths.js` is clean.
+- During editing, a few Python string replacements cut at a line boundary and joined two comment lines in `GdprErasureService.java`. They were caught by a `length > 120` scan of the diff and rewrapped. No code effect.
+- `mvn verify` was **not** run locally (project convention; GitHub CI is the full-suite gate).
 
 ### Completion Notes List
 
+- **AC1/AC2 (L1).** Added `CHILD_BOOKING_LOCK_TIMEOUT` / `CHILD_BOOKING_CONTENDED`. Their comment states that a trip rolls back the child's *whole* development-data deletion, not just booking data.
+  - Added the nested `BookingSchemaLockException`. It extends `RuntimeException`, deliberately **not** PLFE, and carries `contended`.
+  - Wrapped only the two booking statements and their `setStatementLockTimeout` calls in an inner try. `CannotAcquireLockException` is caught before `PessimisticLockingFailureException`.
+  - Both call sites have a new catch: the PLAYER branch does `skipped.set(true)`; the PARENT loop does `skipped++` and `anyUnrecoverableSkip = true`. Both raise the alert, and the WARN names `booking.*` and the full rollback.
+  - Every reason-code / skip-cause prose list was rewritten to be complete, not appended to: the `raiseErasureAlert` Javadoc, `AdminQueueService.buildSummary`, the `skipped` comment, the terminal-status comment, and `eraseParentChildren`'s `@return`.
+- **AC3/AC4 (L2).** Added `CoachAvailabilityBlockRepository.anonymizeReasonByCoachId`, a plain JPQL bulk UPDATE with no version bump. `NativeModifyingVersionAuditTest` is green.
+  - It runs as a fourth `CoachRecapGroup.AVAILABILITY_BLOCK` group after `REPORT`, with an exhaustive switch case and the `COACH_AVAILABILITY_BLOCK_*` pair.
+  - Comment updates: "three groups" became "four" (constants Javadoc, `AtomicReference` comment); the enum Javadoc notes the kept name; the WARN text now says `session-recap/report/availability-block`; and `eraseTransactional`'s Javadoc gained a separate clause, not a changed count.
+  - **Known residual (recorded, not fixed, story review F10):** an erased coach's still-valid access JWT can create a new block with a `reason` after erasure commits. The window is bounded at about 5 minutes: every `DB_REFRESH_TOKEN_INTERVAL` (5 min, `SecurityConstants.java:120`), `JWTAuthorizationFilter` re-runs `daoAuthProvider.authorize`, which rejects the now-locked account. This is the same class as the owner-accepted deferred-154 residual.
+- **AC5 (L3).** Deleted the computed and the binding. Prettier then collapsed the `<PerformanceReportsPanel>` props onto one line.
+- **AC6 (L4).** Added a root `.gitattributes` with `binary` for ttf/otf/woff/woff2/png/jpg/jpeg/gif/ico/pdf, and no `text=auto`/`eol=` rule.
+  - `git ls-files --eol src/main/resources/fonts/` shows `attr/-text` on both TTFs.
+  - `git check-attr` prints `binary: set`, `text: unset`, `diff: unset`, `merge: unset`.
+  - `git status` shows no renormalised files.
+- **AC7 (L5).** Added 4 coach tests: `TIMELINE_CONTENDED`, `REPORT_CONTENDED`, `AVAILABILITY_BLOCK_LOCK_TIMEOUT` and `AVAILABILITY_BLOCK_CONTENDED`. The last two verify groups 1–3 ran.
+  - Renamed the happy-path test to `allFourGroupsSucceed` and made it verify the new scrub call.
+  - `setUp()`'s constructor call gained the new `@Mock`. It is the only `new GdprErasureService(` in the repo (grepped).
+- **Task 1.5 / 1.6.** Added 4 booking unit tests (PLAYER lock-timeout with no tombstone saved, PLAYER SCD-contended, PARENT lock-timeout, and the development-schema regression pin) plus 2 real-Postgres ITs. Both ITs live in the existing `GdprErasureIT` class, so there is no new Spring-context fork. The availability-block IT fixture inserts `reason` explicitly and uses one `Instant` base.
+- **AC8 (L6).** Moved the file with `git mv` to `src/frontend/test/vitest/collectKeyPaths.js`. Updated both imports and rewrote the header. It isn't collected as a spec (both i18n specs ran green, and the total file count is unchanged).
+- **AC9 (L7).** Comment-only rewording. The conclusion (correct grouping, `REPORT` label) is kept.
+- **AC10.** Added `[CLOSED by skillars-deferred-157 …]` markers under L1–L8 in `deferred-work.md`. The "Unknown Player" `[Decided]` bullet and the PDF-glyph `[DECIDED]` bullet are untouched. In the brainstorm doc, all six stale lines (202, 213, 214, 252, 255, 273) are annotated ✅ as covered by skillars-deferred-155. The historical text is kept.
+- **AC11 (L8).**
+  - (a) A new test asserts that every reason is non-empty and every `at` value is unique.
+  - (b) Comment blanking is region-scoped (`.vue`: `/* */` only in `<script>`/`<style>`, `<!-- -->` only outside them; `.js`: `/* */` only). Newlines are preserved and `stripLineComment` is kept. A new regression test runs the extracted pure function on an inline fixture (`accept="video/*"` plus `$t('fixture.key')` in the template, then `/* c */` in the script).
+  - (c) The floor is now the named constant `MIN_LITERAL_CALL_SITES = 500`, documented, with a failure message and no upper bound.
+- **Task 8.2: before/after numbers.** Captured with a temporary dump hook, which has been removed.
+  - Before: `literalCalls` 1571, `dynamicCalls` 26, `wrappedCalls` 0.
+  - After: identical, element-for-element, for all three lists. Zero collateral, so there were no deltas to investigate.
+  - 1571 is the measured call-site count at this story's HEAD, recorded in the constant's comment.
+
 ### File List
+
+- `.gitattributes` (new)
+- `src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java`
+- `src/main/java/com/softropic/skillars/platform/admin/service/AdminQueueService.java` (comment only)
+- `src/main/java/com/softropic/skillars/platform/booking/repo/CoachAvailabilityBlockRepository.java`
+- `src/test/java/com/softropic/skillars/platform/admin/service/GdprErasureServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java`
+- `src/frontend/src/pages/player/PlayerDevelopmentDashboardPage.vue`
+- `src/frontend/src/i18n/__tests__/i18nTemplateKeyResolutionSpec.js`
+- `src/frontend/src/i18n/__tests__/localeKeyParitySpec.js`
+- `src/frontend/src/i18n/collectKeyPaths.js` → `src/frontend/test/vitest/collectKeyPaths.js` (moved)
+- `_bmad-output/implementation-artifacts/deferred-work.md`
+- `_bmad-output/brainstorming/brainstorming-session-2026-10-14-19-55-07.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/skillars-deferred-157-booking-erasure-reason-codes-availability-block-scrub-and-test-tooling-hygiene.md`
 
 ## Change Log
 
+- 2026-10-21: Code review (`/bmad-code-review`), two passes; status review → done.
+  - The first pass found 4 items to defer, which are recorded in `deferred-work.md`.
+  - The second pass found 5 patches, all applied:
+    - the booking lock-timeout IT now asserts the tombstone rolled back;
+    - the `UNCLASSIFIED_FAILURE` comment's stale "three typed reasons";
+    - the fourth deferral's fall-through description is corrected in both the ledger and this file;
+    - the stale brainstorm phrases are struck through and line 169 is annotated;
+    - this bookkeeping.
+  - The story and `development_status` had been set to `done` at dev-complete, ahead of review. That is now backed by this entry.
+- 2026-10-21: Implemented via `/bmad-dev-story`. All 9 tasks and 11 ACs are done:
+  - booking-schema `CHILD_BOOKING_*` reason codes (PLAYER and PARENT);
+  - `coach_availability_blocks.reason` scrub as a 4th coach group;
+  - dead `playerName` computed removed;
+  - `.gitattributes`;
+  - 4 coach + 4 booking unit tests and 2 ITs;
+  - `collectKeyPaths.js` moved to `test/vitest`;
+  - lock-comment correction;
+  - i18n spec hardening;
+  - ledger and brainstorm annotations.
+
+  Status in-progress → review.
 - 2026-10-21: Amended per `story-review.md` (four-layer audit at `b8c81fc5`→`5d89ce82`). All 13 findings were re-verified against source and all were real, so none was rejected as a false positive:
   - F1: AC11(b) comment blanking is now scoped by region, plus a regression fixture;
   - F2: AC8's ESLint/Prettier claims corrected (CI runs `npx eslint .`);

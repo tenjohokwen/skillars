@@ -101,11 +101,7 @@
       <!-- Performance Reports -->
       <q-card v-if="tierLoaded" class="q-mt-md">
         <q-card-section>
-          <PerformanceReportsPanel
-            :player-id="playerId"
-            :player-name="playerName"
-            :is-coach="isCoach"
-          />
+          <PerformanceReportsPanel :player-id="playerId" :is-coach="isCoach" />
         </q-card-section>
       </q-card>
 
@@ -189,7 +185,6 @@ const store = useDevelopmentStore()
 // converting it back to a Number here silently corrupts it (e.g. …173564 becomes …173600),
 // so every API call below was hitting a player id that does not exist. skillars-deferred-147.
 const playerId = computed(() => route.params.playerId)
-const playerName = computed(() => route.query.playerName ?? '')
 const isCoach = computed(() => authStore.isCoach)
 const isParent = computed(() => authStore.isParent)
 const RADAR_ALLOWED_TIERS = ['INSTRUCTOR', 'ACADEMY']

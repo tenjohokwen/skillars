@@ -13,6 +13,7 @@ import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.admin.repo.GdprRequest;
 import com.softropic.skillars.platform.admin.repo.GdprRequestRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlockRepository;
 import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -91,6 +92,7 @@ public class GdprErasureService {
     private final PlayerProfileRepository playerProfileRepository;
     private final BookingRepository bookingRepository;
     private final SessionCompletionDataRepository sessionCompletionDataRepository;
+    private final CoachAvailabilityBlockRepository coachAvailabilityBlockRepository;
     private final MessageRepository messageRepository;
     private final CoachReviewRepository coachReviewRepository;
     private final SluRepository sluRepository;
@@ -190,9 +192,21 @@ public class GdprErasureService {
     // even started, which is a materially different signal for an operator triaging the alert queue
     // (single hot statement vs. broad, sustained contention across this child's whole delete sequence).
     private static final String CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED = "CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED";
+    // skillars-deferred-157 AC1: the two `booking`-schema statements in
+    // deletePlayerDevelopmentDataInDedicatedPool (session_completion_data, bookings) get their own pair
+    // so an operator triaging the alert investigates booking.*, not development.*. Same lock_timeout vs.
+    // genuine-deadlock split as CHILD_DELETE_LOCK_TIMEOUT/CHILD_CONTENDED, distinguished by
+    // BookingSchemaLockException's `contended` flag. Still CHILD_*: these mean "one of N child player
+    // profiles", exactly like their siblings.
+    //
+    // NOT "only booking data survived": the booking statements share ONE requiresNewTemplate
+    // transaction with the development-schema groups, the outbox enqueue and the tombstone, so a trip
+    // here rolls back ALL of that child's development-data deletion for this run.
+    private static final String CHILD_BOOKING_LOCK_TIMEOUT = "CHILD_BOOKING_LOCK_TIMEOUT";
+    private static final String CHILD_BOOKING_CONTENDED = "CHILD_BOOKING_CONTENDED";
     // skillars-deferred-133 AC1: markFailed's own catch-all reason — covers erase()'s pre-transaction
-    // assertConnectionPoolNotSaturated throw and any other exception not one of the three typed
-    // reasons above (a GdprRequest/User "not found" RuntimeException, or anything unforeseen).
+    // assertConnectionPoolNotSaturated throw and any other exception not one of the typed reasons
+    // above (a GdprRequest/User "not found" RuntimeException, or anything unforeseen).
     private static final String UNCLASSIFIED_FAILURE = "UNCLASSIFIED_FAILURE";
     // (code review 2026-10-17, skillars-deferred-154 AC2): the COACH branch's own session-recap
     // anonymisation now has the same two-way classification the PLAYER branch has carried since
@@ -201,22 +215,23 @@ public class GdprErasureService {
     // coach branch rather than reusing the CHILD_* reasons above, which mean "one of N child player
     // profiles" and would misdescribe this statement in the admin alert queue.
     //
-    // skillars-deferred-156 AC7: split from one shared pair into three per-group pairs, taking the
+    // skillars-deferred-156 AC7: split from one shared pair into three per-group pairs (four since
+    // skillars-deferred-157 AC4 added AVAILABILITY_BLOCK below), taking the
     // LABELING half (only) of the PLAYER branch's statement-group pattern
     // (deletePlayerDevelopmentDataInDedicatedPool). Deliberately observability-only, and
     // deliberately NOT a full mirror of that precedent:
-    //   * No durability. All three groups below share ONE requiresNewTemplate transaction, so a
+    //   * No durability. All four groups below share ONE requiresNewTemplate transaction, so a
     //     failure on a later group still rolls back an earlier group's already-succeeded scrub.
     //     That matches the PLAYER branch, whose groups get zero durability from grouping either
     //     (see its own Javadoc) — grouping buys labels there too, not independent commits.
     //   * No per-group timeout budgeting. The PLAYER branch additionally threads
     //     nextGroupLockTimeoutSecondsOrThrow/spendDownLockBudget cumulative-budget arithmetic
-    //     through its groups; this branch does not, because its three statements are a fixed,
+    //     through its groups; this branch does not, because its statements are a fixed,
     //     small set with no N-child multiplier to budget against. One transaction-scoped
-    //     lock_timeout (set once below) therefore bounds all three groups — calling
+    //     lock_timeout (set once below) therefore bounds all four groups — calling
     //     setStatementLockTimeout per group would be a no-op, since set_config's is_local=true
     //     makes the bound transaction-scoped rather than statement-scoped.
-    // (code review of skillars-deferred-156) What this buys, precisely: knowing WHICH of the three
+    // (code review of skillars-deferred-156) What this buys, precisely: knowing WHICH of the four
     // groups tripped. Nothing more. Do not read the group split as granting per-group commits or
     // per-group time bounds — it grants neither.
     private static final String COACH_RECAP_SCD_LOCK_TIMEOUT = "COACH_RECAP_SCD_LOCK_TIMEOUT";
@@ -226,21 +241,30 @@ public class GdprErasureService {
     // skillars-deferred-156 AC7: group 3 bundles performance_reports' scrub together with the
     // blob-deletion outbox enqueue — BlobDeletionOutboxSupport's own Javadoc requires enqueue to run
     // inside the SAME transaction as the write that nulls storage_key, or a later retry finds no
-    // key to delete and the S3 blob is orphaned permanently. findStorageKeysByCoachId itself is a
-    // plain SELECT (no FOR UPDATE) and the outbox enqueue is plain INSERTs with no unique index
-    // beyond the PK — neither can actually trip a lock_timeout/contention error on its own; only
-    // the anonymizeByCoachId UPDATE in this group can.
+    // key to delete and the S3 blob is orphaned permanently. Under normal DML-only contention only
+    // the anonymizeByCoachId UPDATE in this group takes row locks that can conflict:
+    // findStorageKeysByCoachId is a plain SELECT (no FOR UPDATE) and the outbox enqueue is plain
+    // INSERTs with no unique index beyond the PK. (skillars-deferred-157 AC9) That is not absolute —
+    // the SELECT still takes ACCESS SHARE, which conflicts with a concurrent ACCESS EXCLUSIVE lock
+    // (ALTER TABLE, VACUUM FULL, REINDEX, …) and so can trip lock_timeout. The grouping is correct
+    // either way: the SELECT must share the UPDATE's transaction for BlobDeletionOutboxSupport's
+    // reasons above, and a trip in it is correctly labelled REPORT.
     /**
      * (code review of skillars-deferred-156) Which statement group the coach-recap scrub is currently
      * executing, so the shared catch block can pick the matching reason-code pair. An enum rather than
      * the three magic strings this replaced: the switch over it is compiler-checked exhaustive, so a
-     * fourth group cannot be silently absorbed into another group's codes, and a typo is a build error
-     * instead of a mislabelled admin alert.
+     * new group cannot be silently absorbed into another group's codes, and a typo is a build error
+     * instead of a mislabelled admin alert. {@code AVAILABILITY_BLOCK} (skillars-deferred-157 AC4) is
+     * not a session recap — the name is kept to minimise diff; read it as "coach-scrub group".
      */
-    private enum CoachRecapGroup { SCD, TIMELINE, REPORT }
+    private enum CoachRecapGroup { SCD, TIMELINE, REPORT, AVAILABILITY_BLOCK }
 
     private static final String COACH_RECAP_REPORT_LOCK_TIMEOUT = "COACH_RECAP_REPORT_LOCK_TIMEOUT";
     private static final String COACH_RECAP_REPORT_CONTENDED = "COACH_RECAP_REPORT_CONTENDED";
+    // skillars-deferred-157 AC4: group 4 nulls booking.coach_availability_blocks.reason — free text
+    // the coach typed when blocking out time, not session narrative, hence no COACH_RECAP_ prefix.
+    private static final String COACH_AVAILABILITY_BLOCK_LOCK_TIMEOUT = "COACH_AVAILABILITY_BLOCK_LOCK_TIMEOUT";
+    private static final String COACH_AVAILABILITY_BLOCK_CONTENDED = "COACH_AVAILABILITY_BLOCK_CONTENDED";
 
     // skillars-deferred-155 code review, Decision 2(a): performance_reports.next_steps is NOT NULL, so
     // the coach-erasure scrub overwrites it with this placeholder rather than nulling it — same
@@ -323,7 +347,9 @@ public class GdprErasureService {
      *       whose {@code next_steps} is replaced and whose PDF blob is enqueued for deletion. That last
      *       one SCRUBS and keeps the row rather than deleting it: the table is a joint coach+player
      *       artifact, so a delete would destroy the player's own record (skillars-deferred-155 code
-     *       review, Decision 2(a)).</li>
+     *       review, Decision 2(a)). Separately, the same block also nulls
+     *       {@code booking.coach_availability_blocks.reason} — free text the coach typed when blocking
+     *       out time, not narrative — keeping the rows themselves (skillars-deferred-157 AC3).</li>
      *   <li><b>PLAYER / PARENT:</b> the player's development data wholesale via
      *       {@link #deletePlayerDevelopmentData}, including {@code player_timeline_events} row deletes
      *       and {@code performance_reports} deletes — deletion is correct there because the data
@@ -435,9 +461,9 @@ public class GdprErasureService {
             // (skillars-deferred-135 AC1) for why catching inside it defeats the isolation entirely.
             long coachRecapLockTimeoutSeconds = configService.getBoundedLong(
                 ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
-            // skillars-deferred-156 AC7: identifies which of the three groups below was executing
+            // skillars-deferred-156 AC7: identifies which of the four groups below was executing
             // when a PessimisticLockingFailureException propagated out of the transaction, so the
-            // catch block can pick that group's own reason-code pair. All three groups still run
+            // catch block can pick that group's own reason-code pair. All four groups still run
             // inside ONE requiresNewTemplate transaction (see the constants' own Javadoc above) —
             // Postgres aborts the whole transaction on the first statement error regardless, so
             // there is never a question of "did group 1 already commit when group 2 failed."
@@ -463,6 +489,15 @@ public class GdprErasureService {
                     if (!coachReportBlobKeys.isEmpty()) {
                         blobDeletionOutboxSupport.enqueue(coachReportBlobKeys);
                     }
+
+                    // skillars-deferred-157 AC4: inside this block rather than inline, so it inherits
+                    // the lock_timeout bound and its own alert label. coach_id holds the
+                    // coach_profiles.id (AvailabilityService.addBlock). No lock-order cycle with
+                    // AvailabilityService's writers: they lock coach_profiles FOR UPDATE first, and this
+                    // transaction holds no coach_profiles lock (the outer save(cp) above is flushed
+                    // only at the outer commit).
+                    coachRecapCurrentGroup.set(CoachRecapGroup.AVAILABILITY_BLOCK);
+                    coachAvailabilityBlockRepository.anonymizeReasonByCoachId(cp.getId());
                 });
             } catch (PessimisticLockingFailureException e) {
                 // CannotAcquireLockException (SQLSTATE 40P01, a genuine deadlock) is a SUBCLASS of
@@ -485,10 +520,12 @@ public class GdprErasureService {
                     case SCD -> contended ? COACH_RECAP_SCD_CONTENDED : COACH_RECAP_SCD_LOCK_TIMEOUT;
                     case TIMELINE -> contended ? COACH_RECAP_TIMELINE_CONTENDED : COACH_RECAP_TIMELINE_LOCK_TIMEOUT;
                     case REPORT -> contended ? COACH_RECAP_REPORT_CONTENDED : COACH_RECAP_REPORT_LOCK_TIMEOUT;
+                    case AVAILABILITY_BLOCK -> contended
+                        ? COACH_AVAILABILITY_BLOCK_CONTENDED : COACH_AVAILABILITY_BLOCK_LOCK_TIMEOUT;
                 };
-                log.warn("[GDPR_ERASURE] COACH-branch coachId={} session-recap/report scrub failed "
-                        + "in group={} (reason={}) — skipping it; the rest of the erasure still commits, "
-                        + "the request is reported FAILED, and the daily retry scheduler re-runs it. "
+                log.warn("[GDPR_ERASURE] COACH-branch coachId={} session-recap/report/availability-block "
+                        + "scrub failed in group={} (reason={}) — skipping it; the rest of the erasure still "
+                        + "commits, the request is reported FAILED, and the daily retry scheduler re-runs it. "
                         + "requestId={} userId={}",
                     cp.getId(), coachRecapCurrentGroup.get(), reason, requestId, userId);
                 raiseErasureAlert(requestId, reason);
@@ -530,11 +567,13 @@ public class GdprErasureService {
         // equals a user id) or, worse, coincidentally lock and touch an unrelated profile. A PLAYER-role
         // account with no profile row yet has nothing to erase here — orElse-skip, not orElseThrow; a
         // missing profile is a legitimate "nothing to erase" case on a GDPR path, not an error.
-        // (code review 2026-09-23, Decision 1) true only for CHILD_CONTENDED/CHILD_DELETE_LOCK_TIMEOUT
-        // skips — never for CHILD_VANISHED, whose data genuinely was already erased by a concurrent
-        // request. Gates the terminal status below: a skip here means development data survives
-        // this run, so the request must not be reported COMPLETED. An AtomicBoolean, not a plain
-        // local, because the PLAYER branch's catch runs inside the ifPresentOrElse lambda below.
+        // (code review 2026-09-23, Decision 1) true only for CHILD_CONTENDED/CHILD_DELETE_LOCK_TIMEOUT/
+        // CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED/CHILD_BOOKING_LOCK_TIMEOUT/CHILD_BOOKING_CONTENDED skips
+        // and the COACH block's COACH_RECAP_*/COACH_AVAILABILITY_BLOCK_* skips — never for
+        // CHILD_VANISHED, whose data genuinely was already erased by a concurrent request. Gates the
+        // terminal status below: a skip here means data survives this run, so the request must not be
+        // reported COMPLETED. An AtomicBoolean, not a plain local, because the PLAYER branch's catch
+        // runs inside the ifPresentOrElse lambda below.
         // (skillars-deferred-155 code review, Decision 1(a)) Now declared above the COACH block rather
         // than here, so that branch's catch can gate the terminal status too — see its comment there.
         if (role == SkillarsRole.PLAYER) {
@@ -607,6 +646,18 @@ public class GdprErasureService {
                                     + "requestId={} userId={}", pp.getId(), requestId, userId, e);
                             raiseErasureAlert(requestId, CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED);
                             skipped.set(true);
+                        } catch (BookingSchemaLockException e) {
+                            // skillars-deferred-157 AC2: one of the two booking-schema statements
+                            // tripped — labelled CHILD_BOOKING_* so triage looks at booking.*, with the
+                            // same skip-and-alert semantics as the catches above.
+                            String reason = e.contended ? CHILD_BOOKING_CONTENDED : CHILD_BOOKING_LOCK_TIMEOUT;
+                            log.warn("[GDPR_ERASURE] PLAYER-branch playerId={} booking.* anonymisation "
+                                    + "(session_completion_data/bookings) failed (reason={}) — the whole "
+                                    + "development-data deletion for this player was rolled back with it "
+                                    + "(one shared transaction), skipping, requestId={} userId={}",
+                                pp.getId(), reason, requestId, userId, e);
+                            raiseErasureAlert(requestId, reason);
+                            skipped.set(true);
                         }
                     },
                     // code review 2026-09-21: distinguishable from the intended "never built a
@@ -637,9 +688,11 @@ public class GdprErasureService {
         blobDeletionOutboxSupport.requestDrainAfterCommit();
 
         // Mark erasure complete — (code review 2026-09-23, Decision 1) FAILED, not COMPLETED, if any
-        // child's development data was skipped for a CHILD_CONTENDED/CHILD_DELETE_LOCK_TIMEOUT
-        // reason: that data survives with developmentDataErasedAt still NULL, so COMPLETED would be
-        // an Article 17 correctness regression (machine-readably claiming "done" when it is not). The
+        // child's development data was skipped for a CHILD_CONTENDED/CHILD_DELETE_LOCK_TIMEOUT/
+        // CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED/CHILD_BOOKING_LOCK_TIMEOUT/CHILD_BOOKING_CONTENDED
+        // reason, or the COACH block skipped for a COACH_RECAP_*/COACH_AVAILABILITY_BLOCK_* reason:
+        // that data survives (for a child, with developmentDataErasedAt still NULL), so COMPLETED
+        // would be an Article 17 correctness regression (machine-readably claiming "done" when it is not). The
         // OPEN AdminAlert this file already raises for that reason is preserved either way; only the
         // request's own terminal status changes. CHILD_VANISHED never sets `skipped` — that data was
         // genuinely already erased by a concurrent request, so COMPLETED there remains correct.
@@ -858,7 +911,9 @@ public class GdprErasureService {
      * they are not the lock-holding concern this budget targets.
      *
      * @return {@code true} if any child was skipped for a {@link #CHILD_CONTENDED}/
-     *     {@link #CHILD_DELETE_LOCK_TIMEOUT} reason (code review 2026-09-23, Decision 1) — signals
+     *     {@link #CHILD_DELETE_LOCK_TIMEOUT}/{@link #CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED}/
+     *     {@link #CHILD_BOOKING_LOCK_TIMEOUT}/{@link #CHILD_BOOKING_CONTENDED} reason (code review
+     *     2026-09-23, Decision 1) — signals
      *     {@link #eraseTransactional} to mark the request {@code FAILED} rather than {@code COMPLETED}, since that
      *     child's development data survives this run. {@code false} when every child either
      *     succeeded or only vanished ({@code CHILD_VANISHED}, whose data was genuinely already erased
@@ -966,6 +1021,17 @@ public class GdprErasureService {
                         + "(retryable on a later re-drive), requestId={} userId={}",
                     child.getId(), requestId, userId, e);
                 raiseErasureAlert(requestId, CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED);
+            } catch (BookingSchemaLockException e) {
+                // skillars-deferred-157 AC2: see the PLAYER branch's identical catch.
+                skipped++;
+                anyUnrecoverableSkip = true;
+                String reason = e.contended ? CHILD_BOOKING_CONTENDED : CHILD_BOOKING_LOCK_TIMEOUT;
+                log.warn("[GDPR_ERASURE] PARENT-branch child playerId={} booking.* anonymisation "
+                        + "(session_completion_data/bookings) failed (reason={}) — the child's whole "
+                        + "development-data deletion was rolled back with it (one shared transaction), "
+                        + "skipping (retryable on a later re-drive), requestId={} userId={}",
+                    child.getId(), reason, requestId, userId, e);
+                raiseErasureAlert(requestId, reason);
             } finally {
                 // skillars-deferred-128 AC1 (M9): deletePlayerDevelopmentData's tombstone write now
                 // commits in an INNER transaction/EntityManager, while this outer persistence context
@@ -990,8 +1056,21 @@ public class GdprErasureService {
      * alert type/reference-type pair V152 already shipped rather than adding new ones for this
      * narrower follow-up; {@code reason} (mirroring {@code MODERATION_UNRESOLVED}'s own established
      * pattern) is what lets {@code AdminQueueService.buildSummary} distinguish the cases in the
-     * queue UI — {@code DEADLINE_EXCEEDED}, {@code CHILD_VANISHED}, {@code CHILD_CONTENDED}, and (as
-     * of skillars-deferred-129 AC1) {@link #CHILD_DELETE_LOCK_TIMEOUT}.
+     * queue UI. The complete set of reasons (skillars-deferred-157 AC2 — keep in step with the
+     * comment in {@code AdminQueueService.buildSummary}):
+     * <ul>
+     *   <li>{@code DEADLINE_EXCEEDED} — {@link #eraseParentChildren}'s loop budget exhausted;</li>
+     *   <li>{@link #CHILD_VANISHED}, {@link #CHILD_CONTENDED}, {@link #CHILD_DELETE_LOCK_TIMEOUT}
+     *       (skillars-deferred-129 AC1), {@link #CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED}
+     *       (skillars-deferred-137 AC1) — a child player's {@code development.*} deletion;</li>
+     *   <li>{@link #CHILD_BOOKING_LOCK_TIMEOUT}, {@link #CHILD_BOOKING_CONTENDED}
+     *       (skillars-deferred-157 AC1) — the same deletion's {@code booking.*} statements;</li>
+     *   <li>{@code COACH_RECAP_SCD_*}, {@code COACH_RECAP_TIMELINE_*}, {@code COACH_RECAP_REPORT_*}
+     *       (skillars-deferred-156 AC7) and {@code COACH_AVAILABILITY_BLOCK_*} (skillars-deferred-157
+     *       AC4), each a {@code _LOCK_TIMEOUT}/{@code _CONTENDED} pair — the coach-erasure scrub;</li>
+     *   <li>{@link #UNCLASSIFIED_FAILURE} (skillars-deferred-133 AC1) — {@link #markFailed}'s
+     *       catch-all.</li>
+     * </ul>
      *
      * <p><strong>Corrected by skillars-deferred-133 AC1 — dedup is reason-BLIND again</strong> (any
      * {@code OPEN} {@code GDPR_ERASURE_DEADLINE} alert for this {@code requestId}), not per-{@code
@@ -1408,14 +1487,26 @@ public class GdprErasureService {
                 // cumulativeLockWaitBudget — a CumulativeLockBudgetExhaustedException from an
                 // earlier group already distinguishes "development data genuinely survives this
                 // run" from this statement's own, separate (and much smaller) contention risk.
-                setStatementLockTimeout(lockTimeoutSeconds);
-                sessionCompletionDataRepository.anonymizeByPlayerId(playerId);
+                //
+                // skillars-deferred-157 AC1: wrapped in their own inner try so a trip here is labelled
+                // CHILD_BOOKING_* rather than the development-schema CHILD_* reasons. The wrapper is
+                // not a PessimisticLockingFailureException, so it passes untouched through this
+                // method's own outer catches below.
+                try {
+                    setStatementLockTimeout(lockTimeoutSeconds);
+                    sessionCompletionDataRepository.anonymizeByPlayerId(playerId);
 
-                // skillars-deferred-156 AC1: booking.bookings is the same `booking` schema as
-                // session_completion_data above, for the same reason — independently-bounded, not
-                // folded into this method's own development-schema cumulative-lock-budget groups.
-                setStatementLockTimeout(lockTimeoutSeconds);
-                bookingRepository.anonymizeNotesAndPlayerRequestByPlayerId(playerId);
+                    // skillars-deferred-156 AC1: booking.bookings is the same `booking` schema as
+                    // session_completion_data above, for the same reason — independently-bounded, not
+                    // folded into this method's own development-schema cumulative-lock-budget groups.
+                    setStatementLockTimeout(lockTimeoutSeconds);
+                    bookingRepository.anonymizeNotesAndPlayerRequestByPlayerId(playerId);
+                } catch (CannotAcquireLockException e) {
+                    // Subclass of PessimisticLockingFailureException — must be caught first.
+                    throw new BookingSchemaLockException(e, true);
+                } catch (PessimisticLockingFailureException e) {
+                    throw new BookingSchemaLockException(e, false);
+                }
 
                 // Group 4 (M statements, M = childBlobKeys.size()): the blob-deletion outbox INSERTs.
                 // Skipped entirely when M is zero — nothing to bound, and dividing by zero statements
@@ -1566,6 +1657,28 @@ public class GdprErasureService {
     private static final class DeleteStatementLockTimeoutException extends RuntimeException {
         DeleteStatementLockTimeoutException(PessimisticLockingFailureException cause) {
             super(cause);
+        }
+    }
+
+    /**
+     * skillars-deferred-157 AC1: thrown only by the inner try around the two {@code booking}-schema
+     * statements in {@link #deletePlayerDevelopmentDataInDedicatedPool}, so the call sites can report
+     * {@link #CHILD_BOOKING_LOCK_TIMEOUT}/{@link #CHILD_BOOKING_CONTENDED} instead of the
+     * development-schema reasons. {@code contended} is {@code true} for a genuine deadlock
+     * ({@link CannotAcquireLockException}), {@code false} for a {@code lock_timeout} trip.
+     *
+     * <p>Deliberately NOT a {@link PessimisticLockingFailureException}: it must pass untouched through
+     * that method's own outer {@code CannotAcquireLockException}/{@code PessimisticLockingFailureException}
+     * catches (which would otherwise rethrow or rewrap it as a development-schema failure) and through
+     * the {@code requiresNewTemplate} boundary, which rolls the whole inner transaction back on any
+     * {@code RuntimeException}.
+     */
+    private static final class BookingSchemaLockException extends RuntimeException {
+        private final boolean contended;
+
+        BookingSchemaLockException(PessimisticLockingFailureException cause, boolean contended) {
+            super(cause);
+            this.contended = contended;
         }
     }
 }

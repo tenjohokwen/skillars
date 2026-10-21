@@ -13,7 +13,7 @@ import { describe, it, expect } from 'vitest'
 import enUS from '../en-US/index.js'
 import deDE from '../de-DE/index.js'
 import frFR from '../fr-FR/index.js'
-import { collectKeyPaths } from '../collectKeyPaths.js'
+import { collectKeyPaths } from '../../../test/vitest/collectKeyPaths.js'
 
 function diff(a, b) {
   const bSet = new Set(b)
