@@ -713,6 +713,92 @@ class GdprErasureIT extends AbstractIntegrationTest {
         assertThat(otherRow.get("whats_next")).isEqualTo("Unrelated next step");
     }
 
+    /**
+     * skillars-deferred-156 AC1: {@code booking.bookings.notes}/{@code player_request} are purely
+     * player/parent-authored free text — never written by the coach — so one playerId-keyed method
+     * ({@code anonymizeNotesAndPlayerRequestByPlayerId}) correctly covers both the self-registered-
+     * PLAYER erasure path (this test) and the PARENT-cascaded-child path (the test below). Reuses
+     * {@link #insertBookingForCompletionData} for the booking row itself, then backfills the two
+     * free-text columns it doesn't set.
+     */
+    @Test
+    void erase_selfRegisteredPlayer_anonymizesBookingNotesAndPlayerRequestForThatPlayerOnly() {
+        UUID erasedBookingId = UUID.randomUUID();
+        UUID otherBookingId = UUID.randomUUID();
+        long otherPlayerId = 9210_777_952_001L;
+        transactionTemplate.execute(status -> {
+            insertBookingForCompletionData(erasedBookingId, SELF_PLAYER_PROFILE_ID);
+            insertBookingForCompletionData(otherBookingId, otherPlayerId);
+            jdbcTemplate.update("UPDATE booking.bookings SET notes = ?, player_request = ? WHERE id = ?",
+                "Erased player's notes", "Erased player's request", erasedBookingId);
+            jdbcTemplate.update("UPDATE booking.bookings SET notes = ?, player_request = ? WHERE id = ?",
+                "Unrelated notes", "Unrelated request", otherBookingId);
+            return null;
+        });
+
+        erase(SELF_PLAYER_USER_ID);
+
+        Map<String, Object> erasedRow = jdbcTemplate.queryForMap(
+            "SELECT notes, player_request FROM booking.bookings WHERE id = ?", erasedBookingId);
+        assertThat(erasedRow.get("notes")).isNull();
+        assertThat(erasedRow.get("player_request")).isNull();
+
+        Map<String, Object> otherRow = jdbcTemplate.queryForMap(
+            "SELECT notes, player_request FROM booking.bookings WHERE id = ?", otherBookingId);
+        assertThat(otherRow.get("notes")).isEqualTo("Unrelated notes");
+        assertThat(otherRow.get("player_request")).isEqualTo("Unrelated request");
+    }
+
+    /**
+     * skillars-deferred-156 AC1: the PARENT-cascaded-child path ({@code eraseParentChildren}) funnels
+     * through the exact same shared method as the self-registered-PLAYER path above — this proves
+     * that funneling actually happens for a child erased via its parent's own request, not only for
+     * a self-registered player erasing themselves.
+     */
+    @Test
+    void erase_parentUser_anonymizesChildBookingNotesAndPlayerRequestForThatChildOnly() {
+        seedParentChildren();
+        UUID childABookingId = UUID.randomUUID();
+        UUID childBBookingId = UUID.randomUUID();
+        // (code review of skillars-deferred-156) Control row: a booking this same parent booked, but
+        // for a player who is NOT one of their children. insertBookingForCompletionData hardcodes
+        // parent_id = PARENT_ID, so this row differs from the two above ONLY in player_id — which is
+        // exactly what makes it a control. Without it this test asserts "all children are scrubbed"
+        // and would pass just as happily against a parentId-keyed (or WHERE 1=1) query, despite the
+        // name saying "ForThatChildOnly". With it, the test actually pins the playerId keying.
+        UUID unrelatedPlayerBookingId = UUID.randomUUID();
+        long unrelatedPlayerId = 9210_777_952_002L;
+        transactionTemplate.execute(status -> {
+            insertBookingForCompletionData(childABookingId, PARENT_CHILD_A_ID);
+            insertBookingForCompletionData(childBBookingId, PARENT_CHILD_B_ID);
+            insertBookingForCompletionData(unrelatedPlayerBookingId, unrelatedPlayerId);
+            jdbcTemplate.update("UPDATE booking.bookings SET notes = ?, player_request = ? WHERE id = ?",
+                "Child A notes", "Child A request", childABookingId);
+            jdbcTemplate.update("UPDATE booking.bookings SET notes = ?, player_request = ? WHERE id = ?",
+                "Child B notes", "Child B request", childBBookingId);
+            jdbcTemplate.update("UPDATE booking.bookings SET notes = ?, player_request = ? WHERE id = ?",
+                "Unrelated player notes", "Unrelated player request", unrelatedPlayerBookingId);
+            return null;
+        });
+
+        erase(PARENT_ID);
+
+        Map<String, Object> childARow = jdbcTemplate.queryForMap(
+            "SELECT notes, player_request FROM booking.bookings WHERE id = ?", childABookingId);
+        assertThat(childARow.get("notes")).isNull();
+        assertThat(childARow.get("player_request")).isNull();
+
+        Map<String, Object> childBRow = jdbcTemplate.queryForMap(
+            "SELECT notes, player_request FROM booking.bookings WHERE id = ?", childBBookingId);
+        assertThat(childBRow.get("notes")).isNull();
+        assertThat(childBRow.get("player_request")).isNull();
+
+        Map<String, Object> unrelatedRow = jdbcTemplate.queryForMap(
+            "SELECT notes, player_request FROM booking.bookings WHERE id = ?", unrelatedPlayerBookingId);
+        assertThat(unrelatedRow.get("notes")).isEqualTo("Unrelated player notes");
+        assertThat(unrelatedRow.get("player_request")).isEqualTo("Unrelated player request");
+    }
+
     private void insertBookingForCompletionData(UUID bookingId, long playerId) {
         insertBookingForCompletionData(bookingId, coachProfileId, playerId);
     }

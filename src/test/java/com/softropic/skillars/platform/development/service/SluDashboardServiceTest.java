@@ -8,6 +8,8 @@ import com.softropic.skillars.platform.development.contract.SkillTrendResponse;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PlayerSluWeeklySnapshot;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,6 +39,7 @@ class SluDashboardServiceTest {
     @Mock private NeglectedSkillFlagRepository flagRepository;
     @Mock private SluNarrativeService narrativeService;
     @Mock private CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    @Mock private PlayerProfileRepository playerProfileRepository;
 
     private SluDashboardService service;
 
@@ -44,8 +47,8 @@ class SluDashboardServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new SluDashboardService(
-            snapshotRepository, flagRepository, narrativeService, coachPlayerAuthorizationService);
+        service = new SluDashboardService(snapshotRepository, flagRepository, narrativeService,
+            coachPlayerAuthorizationService, playerProfileRepository);
     }
 
     @AfterEach
@@ -145,6 +148,37 @@ class SluDashboardServiceTest {
 
         assertThat(response.currentWeek()).isEmpty();
         assertThat(response.trend()).isEmpty();
+    }
+
+    // skillars-deferred-156 AC5: resolved the same way BookingService.resolvePlayerName already
+    // does, via the shared PlayerProfileRepository, so CoachPlayerDetailPage.vue can read the name
+    // off this response instead of the route's own query string.
+    @Test
+    void getWeeklyExposure_playerProfileExists_populatesPlayerName() {
+        TestClockProvider.setClock(Clock.fixed(Instant.parse("2027-01-06T10:00:00Z"), ZoneOffset.UTC));
+        when(snapshotRepository.findByPlayerIdFromWeek(eq(PLAYER_ID), anyShort(), anyShort(), anyShort(), anyShort()))
+            .thenReturn(List.of());
+        when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(List.of());
+        PlayerProfile profile = new PlayerProfile();
+        profile.setName("Alex Kane");
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(java.util.Optional.of(profile));
+
+        SkillExposureResponse response = service.getWeeklyExposure(PLAYER_ID, 8);
+
+        assertThat(response.playerName()).isEqualTo("Alex Kane");
+    }
+
+    @Test
+    void getWeeklyExposure_playerProfileMissing_fallsBackToUnknownPlayer() {
+        TestClockProvider.setClock(Clock.fixed(Instant.parse("2027-01-06T10:00:00Z"), ZoneOffset.UTC));
+        when(snapshotRepository.findByPlayerIdFromWeek(eq(PLAYER_ID), anyShort(), anyShort(), anyShort(), anyShort()))
+            .thenReturn(List.of());
+        when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(List.of());
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(java.util.Optional.empty());
+
+        SkillExposureResponse response = service.getWeeklyExposure(PLAYER_ID, 8);
+
+        assertThat(response.playerName()).isEqualTo("Unknown Player");
     }
 
     @Test

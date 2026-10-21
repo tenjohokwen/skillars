@@ -1,342 +1,241 @@
-# Story Review: skillars-deferred-155
+# Story Review — skillars-deferred-156
 
-**Story:** `skillars-deferred-155-recap-report-tie-in-player-session-request-gdpr-metadata-scrub-and-hardening-sweep`
+**Story:** `skillars-deferred-156-booking-notes-gdpr-coverage-pdf-font-encoding-player-privacy-and-hardening-sweep`
+**Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-156-booking-notes-gdpr-coverage-pdf-font-encoding-player-privacy-and-hardening-sweep.md`
 **Status at review:** `ready-for-dev`
-**Audit date:** 2026-10-19
-**Real HEAD at review time:** `c71320641ec6a084d5b5dfd6ec1561d61eb80ddb` (`c7132064`) — `feat(development): render coach session recap on player timeline (skillars-12-5) (#280)`
+**Audit date:** 2026-10-20
+**Real HEAD at audit:** `890f5c67` — `feat(development,booking,admin): recap-to-report tie-in, player session-request flag, coach-erasure metadata scrub (skillars-deferred-155) (#281)`
 
-Every citation below was checked against the working tree at **this** HEAD, obtained by running `git rev-parse HEAD` directly — not against any SHA the story claims. For the record, the story's self-described baseline is **accurate**: it claims `c71320641ec6a084d5b5dfd6ec1561d61eb80ddb` and that is the real HEAD. `master` points at the same commit; the working branch is `story/skillars-deferred-155-recap-hardening`, so the story's "branch `master`" is loosely worded but content-identical (`git diff HEAD master` is empty). The stale-commit defect that motivated this skill is **not** present here.
+Every citation below was checked against the **working tree at `890f5c67`**, not against any SHA, line number, or "Master is at …" claim written inside the story. The story's own self-description (`890f5c67`, branch `master`) happens to be accurate for the commit — `master` and `story/skillars-deferred-156-hardening-sweep` both point at `890f5c67`, and the story file's mtime (12:04) precedes the branch checkout (12:05) — so no citation could have drifted between drafting and audit. The drifts found below were already present at drafting time.
 
-Working tree at review time carried uncommitted edits to `deferred-work.md` (−6 lines) and `brainstorming-session-2026-10-14-19-55-07.md` (+7/−1), plus the untracked story file.
-
-**Scope checked:** 56 code citations, 18 ledger/precedent attributions, 20 mechanistic claims, 8 corner-case areas across all 17 ACs. Four parallel read-only layers, then a mandatory self-performed adversarial re-verification (Step 4b) of every finding.
+**Coverage:** 33 code citations, 17 ledger/precedent attributions, 20 mechanistic claims, and full AC-coverage walking across 7 ACs. **24 findings survived adversarial re-verification; 13 candidate findings were killed by it.**
 
 ---
 
-## 1. Verdict summary
+## 1. Citation verification (Layer 1)
 
-The story is unusually well-researched — its hardest technical claim (the attendance-gating trap) is correct and survived deliberate attempts to break it, its GDPR transaction reasoning is sound, and the known `REQUIRES_NEW` self-deadlock trap in this project does **not** apply. It is not a story built on invented citations: nothing was fabricated.
-
-The defects are concentrated in three places: **AC1 contradicts itself**, **AC5 describes code shapes that do not exist**, and **three ACs rest on premises that are false** (AC17's bug, AC14's clean baseline, AC11's "no CSS change").
-
-| Severity | Count | Blocking? |
+| Citation | Verdict | Evidence / corrected location |
 |---|---|---|
-| Blocking (wrong as specified — would ship a bug or not compile) | 6 | Yes |
-| Significant (missing flow / false premise / incomplete instruction) | 11 | Should fix before dev |
-| Minor (citation drift, cosmetic, narrative) | 12 | Fix opportunistically |
+| `GdprErasureService:91` BookingRepository injected | MATCH | `private final BookingRepository bookingRepository;` |
+| `:1337-1339` / `:1339` `anonymizeByPlayerId` after comment block | MATCH | comment `:1327-1337`, `setStatementLockTimeout(lockTimeoutSeconds)` `:1338`, call `:1339` |
+| `:1267-1349` `deletePlayerDevelopmentDataInDedicatedPool` | **DRIFTED (end off by 32)** | Signature correct at `:1267`; method actually ends `:1381`. See finding 15. |
+| `:396-408` / `:396-421` coach scrub block | MATCH (two granularities) | `requiresNewTemplate` block is `:399-408`; `:396` adds the lock-timeout read + `try`; `:421` extends through the catch/alert. Neither range is wrong. |
+| `:202-203` `COACH_RECAP_LOCK_TIMEOUT` / `COACH_RECAP_CONTENDED` | MATCH | both `private static final String` |
+| `:341-344` player- vs coach-authored comment | MATCH (content contradicts the use made of it) | Real text is about `anonymizeByPlayerId` being keyed on playerId so a coach's own erasure missed the table. See finding 9. |
+| `:480` PLAYER call site in `eraseTransactional` | MATCH | `deletePlayerDevelopmentData(pp.getId(), playerBranchLockTimeoutSeconds);` |
+| `:851` PARENT per-child call | MATCH | `deletePlayerDevelopmentData(child.getId(), lockTimeoutSeconds);` |
+| `BookingService:346` `setNotes(req.notes())` | MATCH (exact) | |
+| `:737-756` `setPlayerRequest` | MATCH (end off by 2) | method is `:737-758` |
+| `:744-749` sanitize+truncate; `:749` exact | MATCH (exact) | `StringUtils.truncate(contactDetailSanitizer.sanitize(playerRequest).sanitized(), 500)` |
+| `:756` `return toBookingResponse(booking)` | DRIFTED (off by 1) | actual `:757` |
+| `:485-492` `toBookingResponse` → `toResponse(…,null×4)` | MATCH on the key line; range starts 3 early | method is `:488-493`; the `toResponse(...)` call is `:492` |
+| `:495-532` `getParentBookings` "populates all four" | **DRIFTED + SUBSTANTIVELY WRONG** | method is `:495-537`; it passes `parentName = null`. See finding 10. |
+| `:1024-1026` `resolvePlayerName` | MATCH (exact) | |
+| `:1046-1053` `resolvePlayerNames`/`resolveParentNames` | MATCH (end off by 1) | second helper ends `:1054` |
+| `Booking.java:51-52` notes, `:57-58` playerRequest | MATCH (exact) | both `@Column(length = 500)`; notes unnamed, playerRequest `name = "player_request"` |
+| `BookingRepository:18-115` existing `@Query` methods | MATCH (story wrote "etc.") | interface is 323 lines with further `@Query` at 163, 181, 205, 213, 234, 282, 306 |
+| `ContactDetailSanitizer:21` REDACTION | MATCH (exact) | `"[contact details removed]"` — 25 chars |
+| `ReportGenerationService:457-460` four fonts | DRIFTED (off by 1) | fonts are `:458-461`; `:457` is blank |
+| `:460` `normalFont` | MATCH (exact) | `FontFactory.getFont(FontFactory.HELVETICA, 10)` |
+| `:589-590` `" ✓ Verified"` | MATCH (exact) | U+2713, only occurrence in the file |
+| `SkillExposureResponse` 3 components, no playerName | MATCH | `currentWeek`, `trend`, `neglectedSkillCodes` |
+| `SluDashboardService:37-79` `getWeeklyExposure` | MATCH (exact) | |
+| `pom.xml:525-532` openpdf 2.0.5 pin | MATCH (exact) | comment `:525-529`, `<version>` `:532` |
+| `Dockerfile:50` alpine runtime | MATCH | `FROM eclipse-temurin:17-jre-alpine` |
+| `ReportGenerationServiceTest:298-309` `extractPdfText` | MATCH (end off by 1) | ends `:310`; built on `PdfReader`/`PdfTextExtractor` as claimed |
+| `booking.store.js:542-544` `handleSetPlayerRequest` | MATCH | function `:542-545`, comment `:537-541`; response discarded, `loadParentBookings()` refetch |
+| `CoachPlayerDetailPage.vue:92-93` playerName computed | MATCH (exact) | |
+| `:141-145` `fetchExposure` on mount | MATCH (nuance) | that is the `Promise.all` inside `loadPlayerDetail`; the `onMounted` hook is `:150` |
+| `MyPlayersPage.vue:110-116` / `:115` | MATCH (`:110` blank; `:115` exact) | `query: { playerName: player.playerName },` |
+| `development.store.js:25,80` exposure ref | MATCH (exact) | `ref(null)` / `exposure.value = response` |
+| `localeKeyParitySpec.js:17-29` `collectKeyPaths` | MATCH (off by 1) | function is `:18-29`; **not exported** — the file has no export statements |
+| `setup-file.js:34-35` global `$t` mock | MATCH (nuance) | not a pure echo: special-cases `params.date`. See finding 18. |
+| `CoachPlayerDetailPageSpec.js:37,50` + mocks `:84,108,129,147,160,181,202-229` | MATCH (all) | every cited line hits |
+| `MyPlayersPageSpec.js:155,181` | MATCH (exact) | both assert `query: { playerName: 'Alex Kane' }` |
+
+Every pinpoint single-line citation (`:460`, `:749`, `:115`, `:155`, `:181`, `:25`, `:80`, `:50`, `:21`, `:91`, `:1339`, `:202-203`, `:346`, `:1024-1026`) landed exactly. Drifts are ≤3 lines except the two flagged above.
 
 ---
 
-## 2. Citation verification (Layer 1 — 56 items)
+## 2. Ledger & precedent attribution (Layer 2)
 
-48 of 56 verified **MATCH**, including every line range in `ReportGenerationService`, `GdprErasureService`, `SessionPrepService`, the migration set, and the docs. Sub-3-line offsets (immaterial, noted for accuracy): sessionCount/totalSlu is `:187-188` not `:186-188`; `clearUser` is `:27` and `isAuthenticated` is `:15`, not `:29`/`:14`.
+Method: each claim checked against **(a)** `deferred-work.md` and sibling artifacts, **(b)** in-code comments/Javadoc near the symbol, **(c)** `git log --grep` / `git show` / `git blame`. A zero-hit grep was never treated as proof of fabrication.
 
-The 8 that did not match:
+| Claim | Sources checked | Verdict |
+|---|---|---|
+| GDPR gap on `notes` + `player_request` → "code review of skillars-deferred-155 (2026-10-20)" | (a) `deferred-work.md:3333` heading + bullet; (b) `GdprErasureService` comments; (c) `git show --stat 890f5c67` | **SUPPORTED** — ledger bullet explicitly says "fix `notes` and `player_request` together in one pass" |
+| `Booking.notes` unsanitized → "`/mto-story-review` of skillars-deferred-155 (2026-10-19)" | (a) `deferred-work.md:3329`; (b) deferred-155 Dev Notes; (c) n/a | **SUPPORTED** — ledger says `:336`, story says `:346`; the story is right at HEAD |
+| `StringUtils.truncate` surrogate split → 2026-10-20 review | (a) ledger 2026-10-20 §; (b) `BookingService:746-748` comment; (c) n/a | **SUPPORTED as an attribution** — the ledger does say this. The underlying technical claim is false; see finding 1. |
+| PATCH returns 4 null fields → 2026-10-20 review | (a) ledger; (b) `booking.store.js` comment; (c) `git show --stat 890f5c67` | **SUPPORTED** — the story's `PlayerRequestResponse(UUID, String)` is the ledger's own suggested remedy. The ledger also carries the `getParentBookings` error the story inherited (finding 10). |
+| Non-WinAnsi chars dropped → 2026-10-20 review | (a) ledger; (b) deferred-155 §Post-draft corrections; (c) `git show --stat` | **SUPPORTED** (two independent records) |
+| `playerName` in URL → "code review of skillars-12-4… (2026-10-16)" + revisit condition | (a) `deferred-work.md:3243` | **SUPPORTED** — the story's paraphrase of the revisit condition is word-for-word. Remedy diverges; see finding 19. |
+| No i18n template-key test → "code review of skillars-12-5… (2026-10-19)" | (a) `deferred-work.md:3314`; (b) `localeKeyParitySpec.js:1-10` header; (c) `git log --diff-filter=A` | **SUPPORTED** (ledger + the spec's own header both scope it out) |
+| Coach-erasure option (b) deferred, option (a) shipped | (a) ledger 2026-10-20 last bullet; (b) `GdprErasureService:420-427` load-bearing comment + `:573`; (c) `890f5c67` (+86 in that file) | **SUPPORTED, both halves** |
+| deferred-155 AC14 left template-key-resolution open | (a) deferred-155 story `:138`; (b) spec header | **SUPPORTED** — AC14's own words: "a separate, larger static-analysis effort explicitly left for a future story" |
+| `localeKeyParitySpec.js` added by deferred-155 AC14 | (a) ledger PARTIALLY-CLOSED tag; (b) file header "skillars-deferred-155 AC14:"; (c) single-commit history = `890f5c67` | **SUPPORTED** |
+| Brainstorming companion "fully covered already" | (a) `_bmad-output/brainstorming/brainstorming-session-2026-10-14-19-55-07.md` + `sprint-status.yaml`; (b) inline annotations; (c) `git show 890f5c67` | **PARTIALLY SUPPORTED** — conclusion correct, cited doc stale. See finding 20. |
+| `/api/disputes` zero frontend usage + own ledger entry | (a) `deferred-work.md:3238`; (b) `DisputeResource:29`; (c) n/a | **SUPPORTED** — 8 frontend hits, all i18n/chip labels, zero API calls |
+| deferred-155 documented the metadata-key vs column trap | (a) deferred-155 `:225-227`; (b) `TimelineEventListener:55,61` | **SUPPORTED** — and the story's conclusion that it doesn't apply to AC1 is sound |
+| `notes` vs `playerRequest` functional distinction | (a) deferred-155 `:233-237`; (b) `BookingService:142-143`, `:778-787`, `CoachBookingRequestsPage.vue:101-102`, `SessionPrepCard.vue:59-63` | **SUPPORTED** in both ledger and live code |
+| `docs/validation-strategy.md`: frontend suite outside `mvn verify` | (a) `docs/validation-strategy.md:45-51` | **SUPPORTED** (verbatim) |
+| `pom.xml` openpdf comment rationale | (b) `pom.xml:525-529` | **SUPPORTED** — and it adds a fact AC4 needs: 2.x keeps the `com.lowagie.text.*` package |
+| "re-verified against real HEAD 890f5c67 / branch master" | (c) `git log`, `git branch --contains`, `git reflog`, file mtime | **SUPPORTED for the moment described** |
 
-| # | Citation | Verdict | Reality |
+**No fabricated citation and no misattribution was found anywhere in the story.**
+
+---
+
+## 3. Mechanistic claims (Layer 3)
+
+| Claim | Verdict | Deciding evidence |
+|---|---|---|
+| `GdprErasureService` injects `BookingRepository` with **zero** call sites | **CONFIRMED** | `grep -c "bookingRepository\." → 0`; only `:15` import and `:91` field. Confusable `sessionCompletionDataRepository` (`:92`) *is* used, at `:401` and `:1339`. |
+| No erasure path touches `booking.bookings` at all | **CONFIRMED** | All booking-schema hits in the file are comments or `session_completion_data`. Only native query is `:1385` `set_config`. No `JdbcTemplate` in `platform/admin/`. `BookingRepository` has **no** `delete*`/`@Modifying` anywhere — nothing hard-deletes a booking row, so the anonymize-UPDATE is neither moot nor conflicting. |
+| Both call sites funnel through one shared method | **CONFIRMED** (one hop the story omits) | `:480` and `:851` both call `deletePlayerDevelopmentData` (`:1230`), which calls `deletePlayerDevelopmentDataInDedicatedPool` (`:1239`). Confusable pair ruled out: the two near-identical private methods differ only by the `InDedicatedPool` suffix and share a signature. |
+| **ID space: AC1's playerId-keyed query matches the right rows** | **CONFIRMED — the story got this right** | `:1105-1109` Javadoc: "`playerId` here is always an already-resolved `player_profiles.id` (a TSID) — never a `main.user.id`". Callers pass `pp.getId()`/`child.getId()`. `Booking.playerId` is set only from a validated `PlayerProfile` PK (`BookingService:190,341`; `BookingBatchService:117,241`) and `BookingRepository:151-152` states it outright. `SessionCompletionData.playerId` is copied from `Booking.playerId` (`BookingCompletionService:155,258`). Confusable `Booking.parentId` (also `Long`, but a **User** id, `BookingService:739`) correctly not used. |
+| PLAYER branch uses per-group `nextGroupLockTimeoutSecondsOrThrow`/`spendDownLockBudget` against `cumulativeLockWaitBudget` | **PARTIALLY CONFIRMED** | Structure confirmed for groups 1-3 (`:1291-1325`); group 4 (`:1347-1352`) has the timeout call but **no** spend-down. Harmless (last group) and pre-existing. |
+| PLAYER branch groups share ONE transaction | **CONFIRMED** | `:1259-1265` Javadoc: "rolls back the ENTIRE `requiresNewTemplate` transaction … including every earlier group's already-executed statements in THIS SAME call — because they all share the one REQUIRES_NEW transaction below; there is no partial-commit risk to reason about". Boundary: `:1268` `requiresNewTemplate.executeWithoutResult` wraps every group; `:224-226` sets `PROPAGATION_REQUIRES_NEW`. The "dedicated pool" is thread-local datasource routing (`:1237`), not a transaction mechanism. **This is the basis of findings 3 and 4.** |
+| `anonymizeByPlayerId` sits outside the budget groups under its own `setStatementLockTimeout`, same convention | **CONFIRMED, with a material qualification** | Comment `:1327-1337` says exactly that. But the call is *inside* the same `requiresNewTemplate` transaction opened at `:1268`: it is independently **bounded**, not independently **durable**, and its elapsed wait is never spent down (today's worst case is `cumulativeLockWaitBudget + 1 × lockTimeoutSeconds`; AC1 makes it `+ 2 ×`). |
+| Coach branch: one block, one `lock_timeout`, two reason codes, later failure rolls back earlier scrubs | **CONFIRMED** | Block `:399-408`; `set_config(..., true)` is transaction-scoped; catch at `:409` is *outside* the template so the whole REQUIRES_NEW transaction rolls back; codes used only at `:414-415`. |
+| Coach branch has "four lock-taking statements" | **REFUTED** | Three lock-taking UPDATEs. `findStorageKeysByCoachId` (`PerformanceReportRepository:40-41`) is a plain `SELECT`, no `FOR UPDATE`. `blobDeletionOutboxSupport.enqueue` is conditional and 0..N INSERTs, and `main.outbox_messages` has no unique index beyond its PK (`V138:688`, `:3406`) so it cannot block on a concurrent uncommitted insert. See finding 14. |
+| **`StringUtils.truncate` truncates at a raw code-unit index with no surrogate awareness** | **REFUTED** | See finding 1 — executed proof. |
+| `truncate` throws on short input / null behavior | PARTIALLY CONFIRMED | Throws only on negative `offset`/`maxWidth`; clamps (never throws) for short input; returns `null` for `null`. |
+| `setNotes` write path has no sanitizer | **CONFIRMED** | Exactly two `setNotes(` sites repo-wide: `BookingService:346` and `RadarAssessmentService:82` (a different entity). No `@PrePersist` logic on notes (`Booking:85-90` sets only timestamps/status). |
+| `notes` max length is 500 | **CONFIRMED** | `Booking:51 @Column(length = 500)`; `V138:236 notes character varying(500)`; `CreateBookingRequest:16 @Size(max = 500)`. Confusable `V138:443` is `development.radar_assessment_entries.notes` — same width, different table. |
+| Sanitizing can grow a string | **CONFIRMED** | `REDACTION` is 25 chars; min EMAIL match 6 chars (`a@b.cc`), min PHONE match 8 — growth up to ~19 chars per match, unbounded in aggregate. |
+| Postgres driver substitutes rather than throws | **UNVERIFIABLE FROM REPO (mechanism sound, scenario unreachable)** | Driver pinned `pom.xml:90` 42.7.12; no charset configured anywhere. `Encoding.encode` is literally `String.getBytes(Charset)`, whose JDK contract is replacement-not-throw. But per finding 1 the lone-high-surrogate input can't arise. |
+| `toBookingResponse` leaves 4 fields null | **CONFIRMED** | `:488-493` → `toResponse(booking, coachName, playerName, null, null, null, null)`; `:1134` confirms param 4 is `parentName`. Callers: exactly three (`:485` `getBooking`, `:757` `setPlayerRequest`, `BookingEventResource:70`) — only the middle one is touched by AC3. |
+| `getParentBookings` populates all four | **REFUTED** | See finding 10. |
+| `Booking.getId()` returns `UUID` | **CONFIRMED** | `Booking:26-28` `@Id @GeneratedValue(strategy = GenerationType.UUID) private UUID id`. Confusable: `Booking` does **not** extend `BaseEntity` (whose `getId()` is `Long`), unlike `PlayerProfile`. |
+| `GdprExportService` serializes whole `Booking` entities | **CONFIRMED** | `:117-136` returns `List<Booking>`, serialized at `:73`. DSAR needs no change. |
+| openpdf base-14 drops out-of-range glyphs; ✓ already invisible | **PARTIALLY CONFIRMED** | Repo facts exact: all four fonts are `FontFactory` two-arg calls (`:458-461`), zero `BaseFont` anywhere, no encoding argument passed; ✓ exists at `:589-590`; **no test asserts the ✓ or "Verified"** (zero hits in either test class), so nothing contradicts "already dropped". The glyph-dropping behavior itself is openpdf-internal and unverifiable from repo source. |
+| `resolvePlayerName` shape, `PlayerProfileRepository` location, no new cross-module dep | **CONFIRMED** | `:1024-1026` exact; `platform.security.repo` confirmed; four `development` classes already inject it (incl. `CoachPlayerAuthorizationService:42`, same package as `SluDashboardService`); **no ArchUnit dependency exists** (`EmailTransportArchitectureTest:21-26` documents this). Confusable plural `resolvePlayerNames` (`:1046-1049`) correctly not cited. |
+| `getWeeklyExposure` id space = `PlayerProfile` PK; one construction site | **CONFIRMED** | `:38` `requireCoachPlayerRelationshipIfCoach` → `existsByIdAndParentId`/`existsByIdAndUserId` on `PlayerProfileRepository`. `SkillExposureResponse` built in exactly one place (`:78`), zero in tests. Confusable `getSkillTrends` (`:92-120`) is near-identical for its first eleven lines but returns `SkillTrendResponse`. |
+| Frontend discards the PATCH response; sole consumer | **CONFIRMED** | `booking.api.js:92-93` is the only HTTP caller; `booking.store.js:543` is the only call, return value dropped. AC3 is a zero-frontend-change narrowing. |
+| `exposure` ref holds the raw response | **CONFIRMED (with a caveat that becomes finding 6)** | `:25` `ref(null)`, `:80` `exposure.value = response`; but `:74` nulls it at the start of every fetch and the catch leaves it null. |
+| Global `$t` mock echoes keys, so typos stay green | **PARTIALLY CONFIRMED** | Conclusion holds. Mechanism mis-stated (finding 18) and "every other spec" is one spec off: `CoachProfileBuilderPlaceholderPageSpec.js` deliberately installs the real catalogs. `$te` is not mocked at all and therefore always returns `false` in specs — a second, unflagged blind spot. |
+
+---
+
+## 4. Corner cases, false assumptions, missed flows
+
+### HIGH — fix before implementation starts
+
+**1. AC2's entire surrogate-pair premise is false against the pinned dependency; the proposed guard is dead code.**
+`BookingService:54` imports `org.apache.commons.lang3.StringUtils`, pinned at `pom.xml:368-371` to **3.21.0**, whose `truncate` **is** surrogate-aware — it calls a private `splitsSurrogatePair(String,int)` and adjusts the end index backward by one when the cut would split a pair. Executed against the real jar with an astral char (U+1F600) straddling index 500:
+
+```
+input len=505
+truncated len=499
+last char high surrogate? false
+```
+
+The scenario AC2 exists to fix ("can leave a lone trailing high surrogate") **cannot occur**. The proposed guard
+`if (truncated.length() == maxLength && Character.isHighSurrogate(truncated.charAt(maxLength - 1)))`
+can only ever fire on input that already contained an *unpaired* high surrogate. AC2's consolidation value (one helper, two call sites) and the genuine `notes` gap are both real — but ledger item 3, AC2's stated rationale, and Task 2.4's "astral-plane character straddling the truncation boundary is dropped whole, not split" test must be rewritten. That test as specified will pass against unmodified code.
+
+**2. AC7 Task 7.3 instructs the dev to update tests that do not exist.**
+AC7: *"Update `GdprErasureIT`'s existing coach-branch contention/timeout tests to assert the new, more specific reason codes."* `COACH_RECAP_CONTENDED`/`COACH_RECAP_LOCK_TIMEOUT` have **zero references in `src/test`** (repo-wide grep returns only `GdprErasureService.java:202,203,415`). `GdprErasureIT`'s coach tests are happy-path only (`:240`, `:743`, `:808`, `:896`); every contention/timeout IT (`:1608`, `:1709`, `:1826`, `:1916`, `:2004`) is PLAYER or PARENT branch. This is net-new lock-choreography test authoring — and the same file records at `:1989-1993` that a comparable contention IT was *deliberately skipped* as "unreasonably long test or exact-timing choreography across several simultaneous held locks." AC7 is materially larger than "update assertions."
+
+**3. The PLAYER-branch precedent AC7 says to mirror provably cannot deliver AC7's stated goal.**
+AC7 asks the dev to "read `deletePlayerDevelopmentDataInDedicatedPool`'s own Javadoc on why its groups share one transaction before deciding." That Javadoc (`GdprErasureService:1259-1265`) says the opposite of what the AC hopes: a bail-out "rolls back the **ENTIRE** `requiresNewTemplate` transaction … including every earlier group's already-executed statements in THIS SAME call … there is no partial-commit risk to reason about." Mirroring its shape buys per-group timeout budgeting and per-group labels and **zero** durability. AC7's goal ("durability of earlier successful scrubs when a later one fails") is reachable only via genuinely separate `REQUIRES_NEW` transactions — which collides with finding 4. The AC's hedge sentence asks the right question; the answer is that its named precedent is not one.
+
+**4. AC7 lists the blob-deletion outbox enqueue as a splittable fourth group; splitting it permanently orphans S3 blobs.**
+`BlobDeletionOutboxSupport:21-23,37-38`: *"Producers call `enqueue` **inside** their business transaction (so the rows commit atomically with the work that decided they should be deleted) … **MUST be called inside the producing business transaction.**"* `performanceReportRepository.anonymizeByCoachId` sets `storage_key = NULL` (`PerformanceReportRepository:64-66`), and `findStorageKeysByCoachId` filters `storage_key IS NOT NULL` (`:61`). If the scrub commits and the enqueue's separate transaction does not, the keys are gone from the only place that recorded them and the retry finds nothing. The PLAYER branch's own Javadoc already names this hazard: "permanently orphaning those S3 blobs (a real Article 17 violation)" (`GdprErasureService:1143-1149`). **The enqueue must stay in the same transaction as the `performance_reports` scrub — it is not a splittable table.**
+
+**5. AC2 misses the email flow: the coach's booking-requested notification still carries raw, unsanitized notes.**
+AC2 rewrites only `BookingService:346`. Five lines later, `:351-354` publishes `new BookingRequestedEvent(…, req.notes(), …)` — the **raw** request value — which `BookingEmailListener:72` puts into the template and `mails/bookingRequested.html:11` renders as `Player notes: <em th:text="${map.notes}">`. Since `ContactDetailSanitizer` exists specifically to block off-platform contact exchange, and email is the most direct such channel, sanitizing only the DB copy leaves the more exposed path open. Fix: sanitize once into a local and use it at both `:346` and `:353`.
+
+**6. AC5 regresses the page heading during load and permanently on error.**
+`CoachPlayerDetailPage.vue:16` renders `$t('coach.playerDetailTitle', { playerName })` **above** the `v-if="!loading && !pageError"` guard at `:22` and above the error banner at `:18`. `development.store.js:74` nulls `exposure.value` at the start of every fetch and the catch at `:85-88` leaves it null. So `store.exposure?.playerName` yields the fallback — `'this player'` (`en-US/index.js:266`) — while loading, and *forever* on a 403/500, where `route.query.playerName` supplies the real name today. Note `CoachPlayerDetailPageSpec.js:108` mocks `exposure: { reject: … }`: the story's instruction to "add a `playerName` field to each mocked `/exposure` response" is impossible for precisely the uncovered case. Needs a resilient fallback (router `state`, or retain last-known name) or an explicit accept-and-document decision.
+
+### MEDIUM
+
+**7. AC7's eight new reason codes are mostly unobservable.** `V138:3166` `CREATE UNIQUE INDEX admin_alerts_unique_open_per_ref … (reference_id, type) WHERE status = 'OPEN'`, and the dedup check (`GdprErasureService:1014-1020`) is **reason-blind** — it keys on `(referenceId, GDPR_ERASURE_DEADLINE, OPEN)` and returns early, logging at `debug` only (`:966-968`). Today only one failure can occur per request, so two codes suffice. With four independent groups, groups 2-4 can also fail and every subsequent alert is silently swallowed. The observability gain materializes only for the *first* failing group.
+
+**8. AC1: `Booking` is `@Version`-managed but its cited precedent entity is not — erased notes can be resurrected with no optimistic-lock failure.** `Booking:60-62` has `@Version`; `SessionCompletionData` has **none**, which is why the precedent JPQL is safe. Hibernate does not bump `version` on a bulk HQL `UPDATE` (that needs `UPDATE VERSIONED`), and `Booking` is not `@DynamicUpdate`, so a concurrently-loaded `Booking` rewrites every column from its stale snapshot — including `notes`/`player_request` — and the version check passes. Live paths that do exactly this: `BookingService:893-894` (`setCancelReason` + `save`), `:751-753` (`setPlayerRequest` + `save`). Not bumping `updated_at` is *desirable* (four queries key on it), so `UPDATE VERSIONED` is the targeted fix rather than an entity loop. Pre-existing pattern elsewhere (`UserRepository:75-80`, also `@Version`), but it is a real deviation from the precedent AC1 names and should be decided explicitly.
+
+**9. AC1 cites its governing precedent backwards.** AC1 justifies playerId-only keying by "the existing precedent that already governs this distinction (`session_completion_data`'s player-authored vs. coach-authored halves, documented inline at `:341-344`)". **There is no such split.** `GdprErasureService:341-344` and `SessionCompletionDataRepository:36-50` both state the three columns are **coach-authored**, and the two queries null the *same three columns*, differing only in key:
+```java
+… SET s.voiceNoteText = NULL, s.whatWeDid = NULL, s.whatsNext = NULL WHERE s.playerId = :playerId   // :42
+… SET s.voiceNoteText = NULL, s.whatWeDid = NULL, s.whatsNext = NULL WHERE s.coachId  = :coachId    // :49
+```
+Read correctly, the precedent argues *for* a second coachId-keyed arm — the opposite of AC1's conclusion. The conclusion is still right on the merits (both booking columns are player/parent-authored, so a coach's erasure should not null them), but the citation will mislead whoever implements or reviews it, and the real precedent is that `session_completion_data` got **both** arms.
+
+**10. "whereas `getParentBookings` populates all four from real lookups" is wrong — it populates three.** `BookingService:534-535` passes `parentName = null` just like `toBookingResponse` does; it populates only `pendingReschedule` (`:507-514`), `batchId`, and `batchSize` (`:520-526`). `parentName` is populated by `getCoachBookingRequests` (`:558` `resolveParentNames`, used at `:567`/`:591`). The error originates in the ledger bullet and was carried into the story unchanged. It does not change what AC3 does, but anyone "fixing" `getParentBookings` by copying it would copy the same null.
+
+**11. AC4's suggested proof string would pass against unfixed code.** AC4 offers `"Session went well — très bien ✓"`. Verified against cp1252: `è` ✅ encodable, `—` ✅ encodable, `é`/`à` ✅ encodable; only `✓` and `Ł` are out of range. A test asserting `contains("très bien")` is green pre-fix. The assertion must target `✓` or `Ł` specifically — and should be written to fail against current code before the fix lands, since it is also the first real proof of the premise (which is otherwise unverifiable from the repo).
+
+**12. AC6's specified glob + regex covers a small minority of real call sites and produces bogus failures.** Measured across `src/frontend/src`: ~1600 `t`-ish call sites, of which only **218** use `$t(`/`$te(` in `.vue` — the dominant form is the bare composition-API `t('…')` in `<script setup>`. A further **34** `i18n.global.t(` sites live in `.js` (`development.store.js`, `utils/errorHandler.js`), invisible to a `.vue`-only glob. Non-literal keys are **16**, not "maybe zero" (2 of them in `.js`). And AC6's own suggested regex puts the backtick *inside* the opening character class, so it matches template literals and extracts 9 unique bogus keys, e.g. `development.timeline.eventType.${event.eventType}` (`PlayerTimelinePanel.vue:40`), plus two string-concatenation prefixes (`DevelopmentCorrelationPanel.vue:72`, `ParentDashboardPlaceholderPage.vue:28`). Task 6.3 ("treat a failure as a real bug to fix") would send the dev chasing nine non-bugs. No genuinely missing key exists in `en-US` today (1258 leaves), so the spec's first green run requires getting the extraction right, not fixing the catalog.
+
+**13. AC4: a single Regular weight makes 3 of the 4 fonts faux bold.** `ReportGenerationService:458-461` uses `HELVETICA_BOLD` for `headerFont`/`sectionFont`/`tableHeaderFont`. With `new Font(baseFont, 18, Font.BOLD)` over a Regular `BaseFont`, openpdf 2.0.5 emits `2 Tr` + `0.6 w` (fill-stroke render mode with a 0.6pt stroke) instead of selecting a real bold face — visible on every report header, section heading, and table header, worst at 10pt. *(Verdict: PLAUSIBLE — from a content-stream dump against the real jar; I did not independently re-run the dump.)* Either vendor a Bold weight too, or state the tradeoff in the AC.
+
+**14. AC7's "four lock-taking statements" is three.** `findStorageKeysByCoachId` is a plain `SELECT` (MVCC read, no `FOR UPDATE`) and the outbox enqueue is conditional 0..N INSERTs that cannot block (no unique index beyond the PK on `main.outbox_messages`). Giving each of those its own contended/timeout code pair buys nothing. The real split candidates are three UPDATEs — and per finding 4 the third must keep the enqueue with it.
+
+### LOW
+
+**15. `deletePlayerDevelopmentDataInDedicatedPool` is `:1267-1381`, not `:1267-1349`.** The cited range stops before group 4 (blob-deletion outbox, `:1341-1352`), the sticky tombstone write + `entityManager.flush()` (`:1354-1368`), and both catch clauses (`CannotAcquireLockException` → rethrow; `PessimisticLockingFailureException` → `DeleteStatementLockTimeoutException`, `:1369-1379`). AC1 and AC7 both plan against this method; a change made against the truncated view would miss its exception-classification contract.
+
+**16. AC5 breaks `SluDashboardServiceTest` compilation, not just its assertions.** `SluDashboardServiceTest:46-48` constructs the service manually with four args: `new SluDashboardService(snapshotRepository, flagRepository, narrativeService, coachPlayerAuthorizationService)`. Adding a fifth `@RequiredArgsConstructor` field is a compile break. Task 5.6's "whichever exists" → **both** `SluDashboardServiceTest` and `SkillExposureResourceIT` exist.
+
+**17. AC3 leaves a now-wrong comment behind and omits its file.** `booking.store.js:537-541` justifies the refetch with "the single-booking mapper leaves parentName/pendingReschedule/batchId/batchSize null (toBookingResponse:482)". After AC3 the PATCH returns no such fields at all, so the rationale needs rewording; the file is absent from the story's "Likely files touched". (The refetch itself stays correct.) That comment's own `toBookingResponse:482` citation is independently stale — actual `:488`.
+
+**18. AC6 mis-cites the mechanism it depends on.** AC6 attributes key-echoing to "the global `$t` test mock (`setup-file.js:34-35`)". That mock covers only the ~218 `$t(` sites and is not a pure echo (it special-cases `params.date`). What makes the dominant bare `t()` form echo is the **real** `createI18n({ messages: { 'en-US': {} }, missingWarn: false, fallbackWarn: false })` installed at `setup-file.js:18-27`. Premise sound, citation wrong. Related: `$te` is not stubbed at all and always returns `false` in specs, so `PlayerTimelinePanel.vue:40` renders raw enum names under test — worth naming in the new spec's rationale.
+
+**19. AC5's remedy is stricter than the ledger's recorded end-state, without acknowledging it.** The ledger's revisit condition (quoted faithfully) continues: "at which point the query param can become a **presentational hint** rather than the only source." AC5 removes the param outright. Defensible on privacy grounds — and finding 6 is the cost of that choice — but the story presents the ledger as having prescribed the remedy it picked.
+
+**20. The brainstorming doc's build order still marks two shipped items open.** Lines 5-6 of its "Agreed Build Order" read "still open, no story yet" / "still parked" for the recap→report tie-in and the player/parent-initiated flag, both shipped by deferred-155 (the per-idea annotations further down the same file, added by `890f5c67`, say so). The story's conclusion ("fully covered") is correct, but the stale list is exactly what a future mining pass would re-pick — and this file already caused one such correction during deferred-155's creation.
+
+**21. One adjacent free-text column is scrubbed by no erasure branch.** `booking.coach_availability_blocks.reason varchar(500)` (`CoachAvailabilityBlock:37-38`) is coach-authored free text touched by neither branch. Out of AC1's playerId scope (no `player_id` column), but it belongs in the ledger. By contrast `bookings.cancel_reason varchar(50)` is correctly out of scope — it is validated against `VALID_CANCEL_REASONS` (`BookingService:862-865,875-878`), not free text.
+
+**22. A second reader of the same anti-pattern survives AC5.** `PlayerDevelopmentDashboardPage.vue:192` `route.query.playerName ?? ''`, fed to `PerformanceReportsPanel` at `:106`. Nothing pushes `playerName` onto that route today (`routes.js:285`), so the prop is always `''` — inert, but the same shape the story claims to close.
+
+**23. No `.gitattributes` exists**, so the repo's first binary `*.ttf` has no `binary` marker. Git's NUL-byte heuristic handles it and `core.autocrlf` is unset, so this is insurance, not a defect — but `*.ttf binary` is cheap to add alongside the font.
+
+**24. AC4 needs one fact the story omits:** openpdf 2.x keeps the `com.lowagie.text.*` package (the rename to `org.openpdf.text.*` landed in 3.x only) — per `pom.xml:527-529`. The `BaseFont`/`Font` imports AC4 writes are `com.lowagie.text.pdf.BaseFont` / `com.lowagie.text.Font`, matching the existing `:4-5` imports.
+
+Minor citation drifts to correct in place: fonts `:458-461` (not `:457-460`); `toBookingResponse` `:488-493` (not `:485-492`); `setPlayerRequest`'s return `:757` (not `:756`); `getParentBookings` `:495-537`; `collectKeyPaths` `:18-29` and **not exported** — AC6 must export it first; `setPlayerRequest` `:737-758`; `extractPdfText` `:298-310`.
+
+---
+
+## 5. What did not survive re-verification
+
+These were raised by a layer and **killed or downgraded** in Step 4b. Listing them is the point of this section.
+
+1. **The ID-space trap on AC1 — KILLED.** This was the single most likely defect going in (this codebase has a documented history of `Booking.playerId` being a `PlayerProfile` PK rather than a `User` id, and an earlier story was bitten by exactly that). Re-checked from both ends: `deletePlayerDevelopmentData`'s Javadoc (`:1105-1109`) states its `playerId` is "always an already-resolved `player_profiles.id` … never a `main.user.id`", both callers pass `PlayerProfile#getId()`, and `Booking.playerId` is populated only from a validated `PlayerProfile` PK. **The story got this right**, and it correctly avoided the confusable `Booking.parentId` (a User id). (Collateral, out of scope: `GdprExportService:122` *does* commit this trap — `findAllByPlayerId(userId)` — harmless today only because the `parentId` arm at `:119` already catches those rows. Ledger candidate.)
+2. **Maven resource filtering corrupting the vendored TTF — KILLED.** The highest-value "silent build breakage" hypothesis. `pom.xml` has no project-level `<resources>` override; `spring-boot-starter-parent:3.5.16` filters only `**/application*.{yml,yaml,properties}` and copies everything else unfiltered; the one filtered execution (`copy-resources` over `src/frontend/dist/spa`, `:653-681`) *already* declares `<nonFilteredFileExtension>ttf</nonFilteredFileExtension>`. `.gitignore` has no `*.ttf` rule. No corruption.
+3. **AC5 as a privacy regression on authorization — KILLED.** I expected adding a minor's name to `/exposure` to widen exposure. It does not: `getWeeklyExposure`'s first statement is `requireCoachPlayerRelationshipIfCoach` (`:38`), which uses `READ_RELATIONSHIP_STATUSES` — and `CoachRosterService:59-60` sets the roster's own `ROSTER_MEMBERSHIP_STATUSES = CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES`, i.e. identical width to the endpoint that supplies the name today. Resource guard `SkillExposureResource:30` is `hasRole('ROLE_COACH') or @playerOwnershipGuard.check(...)`. Only sliver: the roster's extra 730-day recency floor and `maxPlayers` cap, for a coach already authorized to read that player's full exposure payload. Not a meaningful leak.
+4. **"`BookingRepository:18-115` understates the interface" — DOWNGRADED to non-finding.** The story wrote ":18-115 **etc.**", which acknowledges incompleteness. The further `@Query` methods at 163-306 are real but the story never claimed otherwise.
+5. **"`:480` is not a call to `eraseTransactional`" — KILLED as a false positive.** The story says "the self-registered-PLAYER-erasure **call site** (`eraseTransactional`, `:480`)" — i.e. the call site *inside* `eraseTransactional`, which is exactly what `:480` is.
+6. **"`notes` truncated to 500 is a silent data-loss regression" — KILLED.** The column, the entity, and the request record all cap at 500; 500 is the right bound.
+7. **AC1's `SET … = NULL` failing on NOT NULL columns — KILLED.** Both columns are nullable (`V138` bookings DDL; `V163__booking_bookings_player_request.sql`).
+8. **AC1 deviating from the repo's anonymize idiom — KILLED.** No `@Modifying` method in any of the three comparable repositories uses `clearAutomatically`/`flushAutomatically`; the proposed JPQL-not-native, unqualified-entity-name shape matches `SessionCompletionDataRepository:41-43` exactly. Native + schema-qualified is used only where JSONB forces it. And `idx_bkg_player_coach_status` (`V138:3256`) leads on `player_id`, so the UPDATE is an index scan.
+9. **AC1 being unable to use a JPA repository on the dedicated pool — KILLED.** The pool is a `RoutingDataSource` selected via thread-local (`:1234-1242`), not a separate `EntityManagerFactory`; the neighboring anonymize calls are ordinary JPA repositories running there already.
+10. **AC7 requiring a Flyway migration for new reason codes — KILLED.** `admin.admin_alerts.reason` is `character varying(64)` with **no** CHECK constraint (only `type`, `status`, `reference_type` have them). The story's "no new Flyway migration anywhere" holds for all seven ACs. One real constraint to respect: new code names must be ≤64 chars.
+11. **AC6 needing a new glob devDependency — KILLED.** `engines.node` allows `^20+`, so `fs.readdirSync(dir, { recursive: true })` is available; the story's own fallback works with no new dep.
+12. **AC5 needing a new i18n key — KILLED.** `coach.playerDetailUnknownPlayerName` already exists in all three catalogs (`en-US:266`, `de-DE:300`, `fr-FR:30`).
+13. **AC4's `BaseFont.createFont("fonts/X.ttf", IDENTITY_H, EMBEDDED)` classpath idiom and `PdfTextExtractor` round-trip — both CLEARED empirically** against the real openpdf 2.0.5 jar (classpath-relative load works; `CMapAwareDocumentFont` is present and extracts embedded-TTF text correctly; the 3-arg overload caches, so per-call cost is a map lookup). AC4's "confirm the exact loading idiom this openpdf version expects" is satisfied. Also cleared: `ReportGenerationService` is the repo's only PDF producer, and `ReportGenerationServiceIT` has no font-sensitive assertions.
+14. **AC2's blank→null behavior change — KILLED as inert.** Only two `setNotes` sites exist; the sole frontend reader guards with `v-if="booking.notes"` (falsy for both `""` and `null`); no test asserts `""`; `BookingBatchService`/`BookingDuplicationService` never set notes.
+15. **AC3 breaking a contract consumer — KILLED.** No `@PostAuthorize`, no `ResponseBodyAdvice`, no `@JsonView` anywhere in `src/main/java`; no OpenAPI snapshot pins the shape; `PlayerRequestResourceIT` reads the body as a `Map` keyed on `"playerRequest"` (`:142`) and survives unchanged; only `BookingServiceTest:1611`'s declared variable type needs editing (its `:1613` assertion compiles against the new record as-is). AC3's claim that test fallout is wider than that is an overestimate, not an error.
+
+---
+
+## 6. Recommendation
+
+**Do not start implementation on AC2 or AC7 as written.** The rest of the story is sound and unusually well-cited.
+
+Per-AC confidence, with what was and was not independently re-checked:
+
+| AC | Verdict | Confidence | Basis |
 |---|---|---|---|
-| C1 | "`ReportGenerationServiceTest.java` (630 lines… **no corresponding IT exists**)" | **FALSE** | Line count right; `ReportGenerationServiceIT.java` **does exist** (313 lines, `extends BaseStorageIT`, Deferred-77 AC2). |
-| C2 | "`notesLabel: 'Notes (optional)'` at `en-US/index.js:827`" as the **`booking.*`** precedent | **WRONG NAMESPACE** | `:827` is `development.radar.notesLabel` (`development:` opens `:803`, `radar:` `:818`; `booking:` doesn't open until `:994`). Real booking analogue: `booking.requests.notes` at **`:1017`**. |
-| C3 | "the **six**-argument private `toResponse` at `:1064`" | **WRONG ARITY** | 7 parameters (`b, coachName, playerName, parentName, pendingReschedule, batchId, batchSize`). Both call sites pass 7. |
-| C4 | "`TimelineEventListener.java:56`-area" in `development/listener/` | **PATH + LINE DRIFT** | No `listener/` package exists. Real: `development/service/TimelineEventListener.java`, and `coachIdForClock` is at **`:61`**. |
-| C5 | "every existing mutate-path (`acceptBooking`, `declineBooking`) is coach-only" | **FALSE** | `createBookingRequest` (`@PostMapping`, `:36-38`) is a mutating endpoint guarded by `HAS_PARENT_OR_PLAYER_ROLE`. Only *post-creation* mutations are coach-only. |
-| C6 | AC13: "any existing `SessionPrepCard` spec — check for one; if none exists, this is the first" | **DEAD BRANCH** | Both specs exist: `PlayerTimelinePanelSpec.js` and `SessionPrepCardSpec.js`. Instruction should be "extend both". |
-| C7 | AC5's quoted ownership snippet: `callerId` / `"Caller does not own this booking"` | **INEXACT QUOTE** | Real code (`:875-876`): `parentUserId` / `"Parent does not own this booking"`. Copying the snippet silently changes a user-facing message. |
-| C8 | "`GdprErasureIT…ForThatCoachOnly` (`:731-761`)" | **RANGE WRONG** | Javadoc `:732-740`, `@Test` `:741`, method `:742`, body runs to **`:795`**. Cited end cuts off mid-fixture. |
-
----
-
-## 3. Ledger & precedent attribution (Layer 2 — 18 items)
-
-Method: every claim checked against **all three** of the ledger file (working tree *and* `git show HEAD:`), source comments/Javadoc at the cited location, and `git log --grep`/`git blame`. **No fabricated citation was found** — every attributed item genuinely exists in at least one source, most verbatim. The defects are attribution *precision*.
-
-| # | Claim | Sources | Verdict |
-|---|---|---|---|
-| L1 | "its own story, not a review patch" describes the metadata gap | ledger `:3303`, code `:299-331`, deferred-154 AC2 | **MISATTRIBUTED QUOTE.** Phrase is verbatim, but its full sentence is *"Closing it properly means a coach-side erased-at tombstone + Flyway migration + a `submitWrapUp` guard — its own story, not a review patch"* — i.e. it describes the tombstone work this story explicitly **rejected**. The metadata gap is real but appears one sentence earlier, as one of three enumerated side-gaps. |
-| L2 | "the four findings deferred by `skillars-12-5`'s code review" | ledger `:3308-3313` | **CONFIRMED (4 exist, all covered) — but Task 6.4 mis-maps them.** They map to AC11–AC15, not "AC12/13's items" as Task 6.4 says. Following 6.4 literally leaves two ledger bullets open. Also finding ② asks for key-parity **plus** template-key resolution; AC14 scopes the second half out (disclosed), so that bullet can't be fully closed. |
-| L3 | "Three older, unrelated items (404 guard, nav flicker, pagination dedup)" | full-file grep | **WRONG THREE WAYS.** Only *two* items, neither older nor unrelated: the 404 guard (`:3263`) and nav flicker (`:3273`) both sit **inside** the `skillars-deferred-154 (2026-10-17)` section the story already mines for AC9. The pagination bug is **not a third item** — it is finding ④ of "the four", at `:3313`, so it is **double-counted**. Correct arithmetic: 4 + 3 = 7 ledger items. |
-| L4a | ledger: "the change belongs to both surfaces in one pass" | ledger `:3312` | **CONFIRMED verbatim.** |
-| L4b | ledger: "fix both or neither" | zero-match grep in WT **and** HEAD | **PARAPHRASE IN QUOTE MARKS.** Real text (`:3310`): *"fix both surfaces together (`?.trim()` on both guard sites) **or neither**."* Semantically identical; not fabricated. A verifier grepping the quoted phrase gets nothing. |
-| L5 | `anonymizeByCoachId` exists, runs in the coach txn, added by deferred-154 **AC2** | code `:337`, comment `:299`, commit `d35d146d`, story AC2 | **FULLY CONFIRMED.** One nit: AC9 says "update the surrounding **Javadoc** (`:299-331`)" — that range is `//` line comments; the method Javadoc is `:260-265`. |
-| L6 | "no empty wrapper" = 12-5 **AC4** | 12-5 source | **CONFIRMED verbatim.** |
-| L7 | independent-field discipline = 12-5 **AC3** | 12-5 source | **CONFIRMED verbatim.** |
-| L8 | `metadata.coachId` out of scope = 12-5 **AC9** | 12-5 source + `TimelineQueryService` | **CONFIRMED verbatim.** |
-| L9 | AC6 "matching how `skillars-12-5` added fields to existing structures without reordering" | 12-5 AC7/AC9/AC10 | **NO SUCH PRECEDENT.** 12-5 added **zero** fields to any structure — AC10 makes *"no file under `src/main/java`, `src/main/resources` or `src/test/java` is touched"* a completion condition, and AC9 forbids "a DTO field". Its only additions were i18n keys, placed deliberately **not last** (*"after `accessExpired` and before the `eventType:` sub-object"*). AC6's append-last design is fine on its own merits; the attribution is backwards. |
-| L10 | `coachId` surviving redaction is asserted-correct | IT `:326-327` + service + comment | **CONFIRMED.** |
-| L11 | the prune deleted exactly `:3205-3210`, a pure tombstone, nothing else | `git diff`, `git show HEAD:`, both cited .vue files | **CONFIRMED.** One hunk, exactly −6 lines, genuinely pure `[CLOSED by deferred-142]` tombstone, **no undisclosed deletion elsewhere**. Citation drift: `OtpPage.vue:162` → `routeForRole` is at **`:160`** (so the claim of having "independently re-read both citations" missed a 2-line drift). |
-| L12 | `developmentDataErasedAt` guards a resurrection race, checked by `RadarCompositeCalculationService` | field, both services' comments, git log | **CONFIRMED.** "Resurrection" is the codebase's own word (`ShadowAccountService:158`, `GdprErasureService:727,1069`). The story's "wrong precedent to mirror" reasoning holds. |
-| L13 | Epic 12 `12-1`…`12-5` all done | `sprint-status.yaml:376-380` | **CONFIRMED.** |
-| L14 | brainstorm citations for Converge #16 / Deferred #17 | file at HEAD + WT + `git diff` | **PARTIALLY WRONG.** Deferred #17: 4/4 exact. Converge #16: 3/4 — cited `:221` is actually Converge **#15**. **All line numbers are now stale against the file a dev will open** (the story's own edit shifted #16 to `:175-177`, #17 to `:181-183`). **Undisclosed third edit:** the diff also rewrote `:141` and inserted a Converge #14 coverage annotation at `:165` — self-documented inside the brainstorm but mentioned nowhere in the story or sprint-status, which disclose only the `deferred-work.md` prune. The #17 precondition claim itself checks out (`4-6`, `8-1`, `8-2`, `8-4` all done). |
-| L15 | "`ContactDetailSanitizer`… already used at `CoachProfileService:216`"; playerRequest is "the **first** player/parent-authored free text reaching a coach" | full grep of all call sites + `notes` write path | **FALSE — self-contradiction.** See §5 Finding 7. |
-| L16 | `notes` is surfaced to the coach on `CoachBookingRequestsPage.vue` | file `:101-102` | **CONFIRMED.** |
-| L17 | `migration-conventions.md` rule 1 = additive-first; V160/V161 `allow-*` establish the posture | doc `:54`, both migrations | **CITATIONS CONFIRMED; INFERENCE MISAPPLIED.** AC9 invokes them to justify *"no new index needed"*, but those markers waive **lock-acquisition** safety, not index necessity. The real justification already exists in-source at `GdprErasureService:319-321`. |
-| L18 | "re-verified against real HEAD `c7132064…`, branch `master`" | `git rev-parse` | **SHA EXACT; branch name wrong, harmless** (content-identical). |
-
----
-
-## 4. Mechanistic claims (Layer 3 — 20 items)
-
-**Confirmed correct (the story's strong core):** M1 (no date-range concept anywhere in the report path — correction accepted), M2 (ID spaces match exactly; `PlayerTimelineEvent.playerId` is `Long` PlayerProfile-PK, `coachId` is `UUID` CoachProfile-PK — the project's known `Booking.playerId` trap explicitly checked and **clear**), M4, M6 (JPQL genuinely cannot filter a JSONB key — 77 native queries in the repo, none does), M9 (`setNotes` has exactly one `Booking` call site; the `RadarAssessmentService:82` same-name trap ruled out), M10, M12, M14, M16, M17, M20.
-
-**M3 — the story's strongest claim, and it holds.** This is the load-bearing premise for both AC1 and AC9, so it was attacked from three angles: whether `coachIdForClock` is a decoy variable, whether recaps are even written for unattended sessions, and whether `@NotBlank` makes the case unreachable. It survived all three.
-
-```java
-// TimelineEventListener.java:61  — the gate
-UUID coachIdForClock = event.isPlayerAttended() ? event.getCoachId() : null;
-// :68 passed through → :113 evt.setCoachId(coachId) — the ONLY setCoachId in the file
-// :55  metadata.put(METADATA_KEY_COACH_ID, …) — unconditional, outside every branch
-// :56-57 recap keys written on a NULL-check only, NOT an attendance check
-```
-`WrapUpRequest.java:21-22` marks both recap fields `@NotBlank` **regardless of `playerAttended`**, so "unattended + real recap text" is not an edge case — it is the guaranteed shape of every wrap-up where the coach unchecks attendance. An in-source comment (`:58-60`, skillars-12-3 AC1) confirms the gate is deliberate.
-
-**M15 — GDPR transaction reasoning sound; the project's known trap does not apply.** `requiresNewTemplate` is genuinely `PROPAGATION_REQUIRES_NEW` (`:217-221`); the `catch` is outside the template (`try` `:334`, template `:335-338`, `catch` `:339`), so both statements commit or roll back together — "one unit" is accurate. The memory-flagged *"REQUIRES_NEW self-deadlocks if the caller already wrote the same row"* trap was investigated specifically and is **clear** for three independent reasons: the only `player_timeline_events` write (`:1217 deleteByPlayerId`) is ordered *after* the coach block, is *itself* `REQUIRES_NEW` (`:1190`), and nothing in `:268-352` touches that table. `@Modifying` without `clearAutomatically` is moot (REQUIRES_NEW binds a fresh persistence context; `metadata` is `updatable = false`) and matches the sibling's annotation. SQL is valid: column is genuinely `jsonb` (`V138`), so `-` works; `metadata->>'coachId'` skips NULL rows safely; the UUID→text format matches because `:55` writes `UUID.toString()`.
-
-**The four that did not hold:**
-
-### M7 — AC1 contradicts itself (BLOCKING, highest severity)
-
-AC1's headline: *"**Filter on `metadata.get("coachId")`, not the entity's `coachId` column**… A query against the column would silently exclude recaps from completed-but-unattended sessions."*
-
-AC1, three clauses later: *"fetch by `playerId` + the new method's `coachId` parameter (**bound against the entity column is fine for the *initial* filter**…) and then, in Java, extract… keeping only events where at least one is non-null."*
-
-Traced mechanically: the prescribed method `findByPlayerIdAndCoachIdAndEventTypeOrderByOccurredAtDesc` derives `WHERE player_id = ? AND coach_id = ? AND event_type = ?`. For every unattended session `coach_id IS NULL` (M3), and `NULL = ?` is never true — **those rows never leave the database**. The Java step filters only on recap presence; it *narrows* an already-returned set and has no mechanism to recover SQL-excluded rows. It never reads `metadata.get("coachId")` at all, despite that being the AC's headline.
-
-A dev following AC1 to the letter ships **exactly the bug AC1 was written to prevent**, while believing the Dev Notes warning — which calls column-pattern-matching *"the single most likely wrong turn in this story"* — has been honoured. AC3's test list contains no unattended case, so it ships untested.
-
-AC9 solves the identical trap **correctly** (`WHERE metadata->>'coachId' = …`). AC1 and AC9 are internally inconsistent about the same problem. Fix: use AC9's native-query approach in AC1 too. (Dropping `AndCoachId` and filtering in Java also works but abandons `idx_player_timeline_events_coach_lookup` and re-introduces the unbounded fetch `skillars-deferred-153 AC4` just fixed.)
-
-Aggravating nuance: `V160`'s backfill set `coach_id` from metadata *unconditionally*, so **pre-**V160 unattended rows *do* have the column populated. The dataset is inconsistent and the bug bites only post-V160 rows — which makes it harder to notice in testing.
-
-### M13 — AC5 describes a code shape that does not exist (BLOCKING)
-
-AC5: *"wire it into **both** existing construction sites: the private `toResponse` at `:1067-1083`… and the public `toBookingResponse` at `:478` (read its body first… and add the same field in the matching position)."*
-
-There is exactly **one** `BookingResponse` construction site in the entire repo (main *and* test):
-```
-BookingService.java:1067:        return new BookingResponse(
-```
-`toBookingResponse` **delegates** — it constructs nothing (`:478-483`, ending `return toResponse(booking, coachName, playerName, null, null, null, null);`). There is no "matching position" to add anything at. Adding `b.getPlayerRequest()` to `toResponse` alone covers every path automatically. A dev following AC5 literally finds nothing to add, or adds an 8th `toResponse` parameter — a worse change than intended. Compounded by C3 (7 args, not 6).
-
-### M11 — `rejectIfPostCompletion` is far narrower than AC5 claims (SIGNIFICANT)
-
-AC5's intent: *"a request can only be set/edited while the booking has not yet completed."* The helper (`:706-712`) rejects on **one exact string match**:
-```java
-if (BookingStatus.COMPLETED.name().equals(booking.getStatus())) { throw … }
-```
-`BookingStatus` has **18** values. This blocks exactly **1**. Writes are permitted on `COMPLETED_PENDING_CONFIRMATION` (session physically over, wrap-up already submitted), `DECLINED`, `CANCELLED`, `CANCELLED_PARENT`, `CANCELLED_COACH`, `NO_SHOW_PLAYER`, `NO_SHOW_COACH`, `DISPUTED`, `REFUND_PENDING`, `REFUNDED`, and `IN_PROGRESS`. AC5's "Do not add a second, bespoke time-based guard" forecloses the fix without acknowledging the gap.
-
-Separately, the helper's message is **wrong for this use**: `"A completed booking cannot be cancelled — raise a dispute instead"` / `BOOKING_ALREADY_COMPLETED` will be shown to a parent who merely tried to edit a text field.
-
-### M5 — "every existing boundary uses the metadata key" is false (SIGNIFICANT)
-
-The named boundary does (`TimelineQueryService:81-82`). But the `coach_id` **column** feeds three live boundaries via `findTopByPlayerIdAndCoachIdAndEventType…`: the coach access-expiry gate (`TimelineQueryService:49-54`), recap sourcing (`SessionPrepService:54-59`), and report generation's own `AccessDeniedException` gate (`ReportGenerationService:158-161`).
-
-This is not cosmetic: **AC1 instructs mirroring `SessionPrepService.java:60-68`, whose recap arrives via the column-filtered query** — the story holds up as precedent a code path that does the exact thing the story warns against. That is the root of M7.
-
----
-
-## 5. Corner cases, false assumptions & missed flows (Layer 4, post-Step-4b)
-
-### Finding 1 — AC17 fixes a bug that cannot occur (BLOCKING: the AC is invalid)
-
-AC17's premise: the Dashboard nav link *"briefly shows to every role during logout"*. The enclosing element:
-```html
-MainLayout.vue:109-110    <q-drawer
-                            v-if="authStore.isAuthenticated"
-```
-The Dashboard `q-item` is at `:126-140`, **inside** that drawer. `clearUser()` (`auth.store.js:27-32`) nulls `userId` (`:28`) and `role` (`:29`) in the same synchronous call before any `await` (`logout()` `:49`, then `:51`), so `isAuthenticated` and the role computeds flip in one reactive tick. There is no tick in which a logged-out user renders the item — the whole drawer is gone.
-
-The proposed `authStore.isAuthenticated && (…)` gate is a **no-op**, and no test or manual check can reproduce the stated symptom. The fallback clause's actual live effect — unchanged by AC17 — is "authenticated with a role outside {COACH, PARENT, PLAYER, ADMIN}" (e.g. a malformed `skp` cookie, `:58-60`). If that is worth guarding, the AC should say so; the logout-flicker rationale is wrong.
-
-> **Note on layer disagreement:** Layer 3 independently concluded the fix *works*. It verified the condition logic and the `auth.store.js` timing correctly but never checked the enclosing element. Step 4b resolved this in Layer 4's favour by reading `MainLayout.vue:105-142` directly. This is precisely the failure mode this skill exists to catch.
-
-### Finding 2 — AC1 pushes coach recap text into PDFs that coach erasure never scrubs (BLOCKING: new GDPR hole)
-
-The coach-erasure branch (`:293-350`) scrubs `coach_profiles.{bio,city,district}` + `session_completion_data` + (AC9) the JSONB copy. `performance_reports` is purged **only** in the player path:
-```
-GdprErasureService.java:1244-1245   performanceReportRepository.findStorageKeysByPlayerId(playerId);
-                                    performanceReportRepository.deleteAllByPlayerId(playerId);
-```
-`deferred-154`'s own AC2 listed **three** gaps left for a future pass: the metadata copy, **`PerformanceReport.nextSteps`**, and `CoachProfile.displayName`. This story closes the first and **enlarges the second without noticing**.
-
-Failure scenario: a coach generates reports for 20 players, each now containing verbatim recap text under "Session Notes". The coach requests Article-17 erasure. AC9 scrubs the JSONB copy; the same text survives indefinitely in 20 downloadable S3 PDFs plus `performance_reports.next_steps`, readable by every parent via `listReports`. AC9's new Javadoc ("two tables being scrubbed") becomes actively misleading about completeness.
-
-### Finding 3 — AC5's endpoint path does not exist on this resource (BLOCKING)
-
-AC5: *"`PATCH /api/booking/bookings/{id}/player-request` endpoint in `BookingResource.java`"*. The real base:
-```java
-BookingResource.java:29   @RequestMapping("/api/bookings/requests")
-```
-A `@PatchMapping("/{id}/player-request")` there resolves to `/api/bookings/requests/{id}/player-request`. `/api/booking/…` (singular) appears nowhere in the codebase. Every sibling booking-mutation resource (`CancellationResource:21`, `RescheduleResource:24`, `SessionCompletionResource:35`) is `@RequestMapping("/api/bookings")` with `/{id}/<verb>`. A dev writing the Pinia action against the AC's literal path gets a 404; one writing it against the resource gets a path inconsistent with every sibling. AC5 and AC7 need the path decided explicitly.
-
-### Finding 4 — AC14's parity spec fails on day one (BLOCKING for AC14)
-
-Independently reproduced (not taken from the layer):
-```
-counts en=1252 de=1251 fr=1251
-de missing: [ 'auth.emailVerifiedPleaseLogin' ]
-fr missing: [ 'auth.emailVerifiedPleaseLogin' ]
-```
-`en-US/index.js:25` is live, rendered at `LoginPage.vue:29`. Two consequences: (a) a German or French user who verifies their email **today** sees the raw key string — a real shipped bug; (b) AC14's spec goes red the moment it is written, with no instruction anywhere in the story to fix the divergence. Add "backfill `auth.emailVerifiedPleaseLogin` in de-DE and fr-FR" to AC14. (Locale set verified complete: exactly `en-US`, `fr-FR`, `de-DE`.)
-
-### Finding 5 — AC11's "no new CSS, no behavior change" is false (BLOCKING for AC11)
-
-`<dd>` carries a UA default `margin-inline-start: 40px` and `<dl>` a `margin-block: 1em`. Verified there is **no** reset: zero `dl`/`dt`/`dd` rules in `src/frontend/src/css/` (all six partials), and Quasar's `normalize.sass` has no `dl`/`dd` rule at all.
-
-Failure scenario: every recap value in `PlayerTimelinePanel.vue:57,63` and `SessionPrepCard.vue:25,29` becomes indented 40px relative to its label, and the former `<div class="q-mt-sm">` wrapper gains ~16px above *and* below on top of its 8px — inside a `q-timeline-entry` slot and a `q-card-section`. AC11 budgets no CSS, so this ships as a visual regression.
-
-### Finding 6 — AC12 undercounts the guards: three, not two (SIGNIFICANT)
-
-AC12 says *"both `PlayerTimelinePanel.vue` conditions"*. There are **three** (verified at `:46-65`): the outer OR-wrapper (`:47-50`), plus the inner `whatWeDid` (`:53`) and `whatsNext` (`:59`). Fixing only the two inner ones leaves a whitespace-only value rendering an **empty wrapper** — which, post-AC11, is a `<dl>` carrying `q-mt-sm` *plus* 1em UA margins. That is exactly the "no empty wrapper `div`" rule `skillars-12-5` AC4 established. State "all three".
-
-### Finding 7 — "First player/parent-authored free text reaching a coach" is false, inverting AC5's rationale (SIGNIFICANT)
-
-`ContactDetailSanitizer` has **six** production call sites, three of which already sanitize player/parent-authored input:
-```
-PlayerRegistrationService.java:95-96    ParentRegistrationService.java:80-81
-CoachRegistrationService.java:80-81     ShadowAccountService.java:56,101
-CoachProfileService.java:216 (coach's own bio — the one AC5 cites)
-SanitizePreviewResource.java:32
-```
-AC5 cites the single *coach*-authored example as "the existing precedent for **player/parent**-authored free text". Meanwhile `Booking.notes` — player/parent-authored, `varchar(500)`, persisted **unsanitized** (`BookingService:336`; `BookingService` contains no sanitizer at all) — reaches the coach at `CoachBookingRequestsPage.vue:101-102` **and** in their email at `BookingEmailListener.java:72`. AC4's own text says so two sentences earlier.
-
-Consequence: AC5's *"a deliberate consistency choice, not optional hardening"* is **inverted**. Sanitizing `playerRequest` while the adjacent, identically-shaped, same-author, same-audience `notes` column stays unsanitized creates an inconsistency, and the real pre-existing hole in `notes` goes unrecorded. (Sanitizing is still the right call — the justification is wrong.)
-
-> **Step 4b note:** I initially challenged the "six call sites" count with a grep for `contactDetailSanitizer.sanitize` that returned only two. That grep was wrong — those classes name the field `sanitizer`. The layer's count stands.
-
-### Finding 8 — sanitizer output can exceed the 500-char column (SIGNIFICANT)
-
-`REDACTION` is a 25-char string that **replaces** each match (`ContactDetailSanitizer:21,25-27`), so sanitization can grow the input. AC4 prescribes `@Column(length = 500)` and AC5 `@Size(max = 500)`.
-
-Failure scenario: a parent pastes 45 × `"1234567890 "` (495 chars, passes `@Size`) → each 10-digit run matches → ~1125+ chars → insert fails SQLSTATE 22001 → `DataIntegrityViolationException` → opaque **400 `generic.dataError`** on input the UI called valid. The cited precedent is safe only by accident: `coach_profiles.bio` is `text` (`V138:1574`), not varchar; `notes` is `varchar(500)` (`V138:236`) but never sanitized.
-
-### Finding 9 — AC5 omits the project's optimistic-lock pattern → 500 (SIGNIFICANT)
-
-`Booking` carries `@Version` (`:54-56`). `BookingService` wraps **six** mutate paths in `catch (OptimisticLockingFailureException e)` → `BookingError.CONCURRENT_MODIFICATION` (`:396, 461, 674, 825, 862, 899`). AC5 prescribes load → set → save with no such catch, and there is **no global handler** (`ApiAdvice` has none; falls to `@ExceptionHandler(Throwable.class)`). Two tabs saving → **500** instead of the established 4xx.
-
-### Finding 10 — AC9 doubles the lock budget and makes the alert ambiguous (SIGNIFICANT)
-
-The block's own comment (`:306-310`) stresses `set_config('lock_timeout', ?, true)` is **transaction**-scoped, not per-statement. Adding a second statement means worst-case wait 2 × 5s, and a trip on the **new** statement now rolls back the **already-succeeding** `anonymizeByCoachId` that previously committed independently. The two reason codes (`COACH_RECAP_CONTENDED`/`COACH_RECAP_LOCK_TIMEOUT`) can no longer tell an operator which table failed. The daily retry makes it eventually consistent, so this is acceptable — but AC9 asserts "no new transaction boundary… no new alert reason code" while presenting the change as pure benefit. Also: the new `metadata->>'coachId'` predicate **cannot** use `idx_player_timeline_events_coach_lookup` (V161 indexes the *column*), so it is a guaranteed sequential scan — which is why the doubled budget matters.
-
-### Finding 11 — a parented child PLAYER cannot use the page AC7 targets (SIGNIFICANT)
-
-`getParentBookings` reads `findAllByParentIdOrderByRequestedStartTimeAsc(parentId)`, and `parentId` is always the *requesting* party. For a parent-created booking that is the parent's userId. AC7 frames `ParentBookingsPage.vue` as *"the single shared list view for both parent and player roles"* — true, but a logged-in child PLAYER gets an **empty list** and a **403** from the new ownership check on their own parent-created bookings. The player half works only for self-registered players. AC8's matrix encodes the same blind spot. Decide and state it: either the child is intentionally excluded, or the check needs the `PlayerProfile.userId` arm `createBookingRequest:181-189` already has.
-
-### Finding 12 — returning `toBookingResponse` wipes list-view state (SIGNIFICANT)
-
-`toBookingResponse` passes **null** for `parentName`, `pendingReschedule`, `batchId`, `batchSize` (`:482`), whereas `getParentBookings` populates all four. `booking.store.js` has no per-booking update action (`parentBookings` only ever assigned wholesale, `:353`). Failure scenario: a parent with a pending coach reschedule edits their request; the implementer splices the response in; `pendingReschedule` → null, so the banner (`ParentBookingsPage.vue:59-74`) and Accept/Decline buttons (`:78-90`) vanish until a full reload. AC7 says only "refreshes… in the Pinia booking store" with no mechanism.
-
-### Finding 13 — AC2's "concatenated" + AC3's single-field test print literal `"null"` (SIGNIFICANT)
-
-AC1 keeps entries where *at least one* key is non-null; AC3 explicitly requires a test for *"only one of the two fields non-null"*. Java concatenation with a null reference yields `"null"`, and `buildPdf` has no null handling anywhere (`:517-518`). A pre-V159 entry with `whatWeDid` set and `whatsNext` absent renders `"Worked on first touch null"` in a parent-facing PDF. AC2 never says to skip an absent field — and AC3's own new test case is the trigger.
-
-### Finding 14 — AC7 needs i18n keys the story never lists, against a hard lint error (SIGNIFICANT)
-
-Task 2.5 specifies one key. The edit affordance needs a field label, Save, Cancel, and success/error notifications. `eslint.config.js` sets `'vue/no-bare-strings-in-template': ['error', …]`, so any literal fails the lint Task 6.3 requires — and each key must land in all three locales or AC14's own new spec fails.
-
-### Finding 15 — three test classes named in the ACs do not exist (MINOR but will stall dev)
-
-- AC8 names **`BookingResourceIT`** — does not exist. Real siblings: `BookingRequestResourceIT`, `PlayerBookingRequestIT`, `BookingBatchResourceIT`, `SessionCompletionResourceIT`, `RescheduleResourceIT`, `ScheduleResourceIT`, `AvailabilityResourceIT`, `BookingEventResourceIT`, `BookingSseIT`.
-- AC8 names **`SessionPrepServiceTest`** — does not exist; only `development/api/SessionPrepResourceIT.java`.
-- AC10's `GdprErasureIT:731-761` → see C8.
-
-### Finding 16 — openpdf 2.0.5 + base-14 Helvetica silently drops non-cp1252 characters (MINOR, pre-existing)
-
-`buildPdf` uses `FontFactory.getFont(FontFactory.HELVETICA, 10)` — WinAnsiEncoding. Live proof in the same method: the `" ✓ Verified"` note (`:521-523`) uses U+2713, already silently missing from every PDF generated today. AC2 now routes up to 500 chars × N entries of coach free text through the same font in a product shipping de-DE and fr-FR. "Worked on Łukasz's weak foot" → "Worked on ukasz's weak foot". Worth an explicit acknowledgement in AC2 rather than a surprise.
-
-### Finding 17 — a fourth unguarded player-id navigation, in a file cited as clean precedent (MINOR)
-
-AC16 says the three siblings *"all truthiness-guard the value"*. `BookingRequestPage.vue` guards its submit paths (`:297, 550, 651`) but not:
-```js
-BookingRequestPage.vue:480-481   function goToPurchase() {
-  router.push(`/parent/coaches/${coachId}/purchase-sessions?playerId=${playerId.value}`)
-```
-`playerId.value` is nullable (`:250`). Milder than AC16's case — a query param, not a path segment, so no 404 — but structurally the same defect in a file held up as already-clean.
-
-### Finding 18 — AC16's fallback can bounce the user back to the form they just submitted (MINOR)
-
-AC16 sends a falsy `profile?.id` to `/player/home`, whose own missing-id handling is `router.replace('/player/profile-builder')` (`:29, :40, :46`). So: submit → `/player/home` → id unresolved → back on the form, no error shown. AC16 calls that route one that "has its own null-handling" without noting the handling is "return where you came from". It also says "mirror `:39-42`'s **exact** guard shape" while prescribing a different destination *and* `push` instead of `replace` (with `push`, Back returns to the dead form). The premise also has no live trigger today — `PlayerProfileResponse` does carry `id` — so this is defence-in-depth, not a reproducible fix.
-
-### Finding 19 — AC11 leaves the two intermediate group wrappers unspecified (MINOR)
-
-Structure is `outer div > [div v-if=whatWeDid > label + value], [div v-if=whatsNext > …]`. AC11 maps outer→`<dl>` and label/value→`<dt>`/`<dd>` but never mentions the two `v-if` **group** wrappers (`:53`, `:59`). Keeping them as `<div>` inside the `<dl>` is valid HTML (`dl > div > dt + dd`); deleting them to "clean up" collapses 12-5 AC3's independent-field guards. No lint will catch either choice (no `eslint-plugin-vuejs-accessibility` in the project). Say which.
-
-### Finding 20 — `:coachId::text` has no precedent in this repo (MINOR)
-
-Zero `:<param>::` hits across `src/main/java`; the established idiom is JPQL `CAST(:type AS text)` (`AdminAlertRepository:32,38`), and no existing native query uses `->>` or a postfix `::` cast. Hibernate 6 does handle it, and the cast is *necessary* (`text = uuid` has no Postgres operator), so this probably works — but it is an untested idiom in a GDPR path. `CAST(:coachId AS text)` matches house style. Confirm in the IT rather than assume. Also minor: no `AND (metadata ? 'whatWeDid' OR metadata ? 'whatsNext')` guard, so every one of the coach's rows gets a no-op rewrite on a statement that is already a seq scan.
-
-### Finding 21 — `playerRequest` gets no GDPR erasure coverage (MINOR, consistent with existing behaviour)
-
-Nothing in `GdprErasureService` scrubs `booking.bookings.notes` (no `notes = NULL`, no `setNotes(null)`, no `UPDATE Booking`; booking rows are never deleted). AC4 adds a second player/parent-authored PII-capable column with the same Article-17 gap. DSAR *export* is automatic (`GdprExportService.buildBookings:117-137` serializes the whole entity). Not a new regression — but an unacknowledged new erasure surface in a story whose own AC9 exists to close exactly this class of gap.
-
----
-
-## 6. Verified clean (checked, no finding)
-
-Recorded so the report's coverage is auditable:
-
-- **AC2's date formatting is fulfillable** — `buildPdf` already formats one (`:463-467`, `FormatStyle.LONG`/`Locale.ENGLISH`).
-- **`buildPdf` signature change breaks nothing** — one caller (`:195`); the 630-line unit test only calls `generateReport`.
-- **No N+1 / lazy-load risk on `metadata`** — `@Type(JsonType.class)` `jsonb` on the same row, not an `@ElementCollection`; `generateReport` is `@Transactional` (`:128`).
-- **`generateReport`'s authorization is real** — `requireCoachPlayerRelationship` (`:139`) + recency gate (`:177-181`), so a coach who no longer coaches is refused entirely.
-- **`Objects.equals(null, null)` auth bypass is unreachable** — `parent_id` is `nullable = false`; `SecurityUtil.requireCurrentUserId` throws rather than returning null. All three `setParentId` sites write a real id; neither batch nor duplication copies `notes`, so `playerRequest` correctly starts null.
-- **AC5's dual parent/player `parentId` claim is correct** — `createBookingRequest:181-189` branches but stores the same resolved id either way (independently corroborated by `GdprExportService:128-131`).
-- **`SessionPrepService.getPrep` is coach-scoped** (`:48-50`), and `SessionPrepResponse` has exactly one construction site, so AC6's 7th field breaks nothing.
-- **No read path NPEs on absent metadata keys** — no `metadata.get(…).toString()` anywhere; post-scrub the DTO carries nulls and both guards hide the block.
-- **Player erasure needs no metadata scrub** — `deleteByPlayerId` (`:1217`) removes the rows outright. Nothing earlier in the coach branch deletes them, so AC9's UPDATE is not a no-op. AC10's unattended fixture is constructible.
-- **No rate-limit or audit-log inconsistency** — no sibling player/parent booking write is rate-limited or audit-logged.
-- **Migration is correct** — V162 is latest, table is `booking.bookings`, `V163__booking_bookings_player_request.sql` is the right name, and `MigrationLint` needs no `allow-*` marker for a plain nullable `ADD COLUMN IF NOT EXISTS` behind `SET LOCAL lock_timeout = '5s'`. V159/V151/V160/V161 style precedents all verified.
-- **AC15 does not under-solve** — `:255` is the only append site; `TimelineEventResponse` leads with `id`. For the stated trigger (head insertion) dedup is complete; the skip direction needs a head *deletion*, and the only deleter removes the whole timeline.
-- **AC13's selector concern is a non-issue** — `PlayerTimelinePanelSpec.js` uses only `find('button')`/`findAll('button')`, nothing structure-keyed.
-- **AC12's "not reachable in production" is correct** — both `WrapUpRequest` fields are `@NotBlank` and publishers pass them as a pair.
-- **Task 6.2/6.3 commands are real** — `npm run test:unit` → `vitest run`; CI prettier gate at `.github/actions/frontend-quality/action.yml:36`.
-- **`playerTimelineRepository` is already injected** into `GdprErasureService` (`:104`), so AC9's snippet is complete; `coachRecapLockTimeoutSeconds` exists as a **local** (`:332-333`) so the snippet compiles only at the exact insertion point AC9 specifies — which is where AC9 puts it.
-
----
-
-## 7. What did **not** survive re-verification
-
-This section is the point of the exercise — these were raised by a layer and then killed or downgraded by my own Step 4b pass.
-
-1. **KILLED — Layer 3's M18 conclusion that AC17's fix works.** Layer 3 correctly verified the nav condition and all of `auth.store.js`'s timing, then concluded the `isAuthenticated` gate "eliminates the flicker". It never read the enclosing element. `MainLayout.vue:109-110` already gates the whole drawer on `isAuthenticated`, so there is no flicker to eliminate. Layer 4's Finding #7 is correct and Layer 3's was not. Resolved by reading `MainLayout.vue:105-142` myself.
-2. **KILLED — my own challenge to Layer 2's "six sanitizer call sites".** My grep for `contactDetailSanitizer.sanitize` returned two, and I nearly reported the layer as wrong. The registration services name the field `sanitizer`; the layer's count of six was right. Finding 7 stands as the layer reported it.
-3. **KILLED — my own `BookingStatus` count of 17.** My `grep -c` missed the comma-less final enum constant. There are 18; Layer 3's figure was right. `rejectIfPostCompletion` blocks 1 of 18.
-4. **DOWNGRADED — Layer 2's L3 ("three older, unrelated items").** Confirmed wrong on all three counts, but it is a sourcing/narrative error in the Source section, not something that changes what a dev builds. Moved from "significant" to "minor".
-5. **DOWNGRADED — Layer 1's C7 (inexact ownership-check quote).** Real, but the only consequence of copying the snippet verbatim is a changed error-message string. Minor.
-6. **DOWNGRADED — Layer 4's #19 (AC16 bounce) and Layer 3's M19 (fourth unguarded site).** Both confirmed, both low-impact: AC16's premise has no live trigger, and `goToPurchase` interpolates into a query param rather than a path segment, so no 404 results. Minor.
-7. **NOT UPHELD as a defect — Layer 2's L17 inference complaint.** The observation is right (the `allow-*` markers waive lock-safety, not index necessity), but AC9's actual conclusion ("no new index needed") is still correct for a rare admin-driven path, and the better in-source justification exists at `:319-321`. Recorded as a citation-precision note, not a defect.
-8. **CONFIRMED-CORRECT, not a finding — M3.** Listed here because it was attacked hardest and could easily have been reported as a defect. Three independent attempts to break it (decoy variable, recap-not-written-for-unattended, `@NotBlank`-makes-it-unreachable) all failed. The story's hardest claim is sound; the irony is that AC9 acts on it correctly and AC1 does not.
-
----
-
-## 8. Recommendation
-
-**Per-claim confidence, not a blanket score.**
-
-**HIGH confidence, independently re-verified by me after the layers reported (quoted the deciding lines myself):**
-- M7 / AC1 self-contradiction — *the single most important finding; fix before any implementation*
-- M13 / AC5's non-existent construction site + 7-arg `toResponse`
-- Finding 3 / AC5's endpoint path vs `@RequestMapping("/api/bookings/requests")`
-- Finding 1 / AC17 fixes an unreachable bug (resolved against a dissenting layer)
-- Finding 4 / AC14 fails day one (reproduced the parity run myself)
-- Finding 5 / `<dl>`/`<dd>` UA margins with no reset
-- Finding 6 / three guards, not two
-- Finding 7 / sanitizer "first" claim false
-- Finding 2 / `performance_reports` never scrubbed on coach erasure
-- Finding 9 / missing optimistic-lock catch
-- Finding 15 / three named test classes don't exist
-- C1–C6, C8 (citation defects)
-
-**MEDIUM confidence — mechanism verified, consequence reasoned rather than executed:**
-- Finding 8 (sanitizer expansion: regex and column types verified; the specific 495-char payload not run)
-- Finding 13 (`"null"` concatenation: no null handling confirmed; not rendered)
-- Finding 10 (lock-budget doubling: transaction scope confirmed from the code's own comment; not load-tested)
-- Finding 11 (parented-player 403: query and ownership logic read; not exercised against a fixture)
-- Finding 12 (store-state wipe: null args and store shape confirmed; depends on how the dev wires the refresh)
-- Finding 16 (openpdf encoding: the existing dropped `✓` is strong corroboration; no PDF generated to confirm)
-
-**LOW confidence / advisory only:** Findings 17–21, L4b, L17, L18.
-
-**Not independently re-checked by me** (accepted as the layers reported, since nothing hinged on them): the bulk of the 48 MATCH citations in §2, the "verified clean" items in §6 beyond those I quote lines for, and the precise line numbers inside `skillars-12-5`/`deferred-154` story files.
-
-**Suggested disposition:** send back for revision rather than starting implementation. Six blocking items need author decisions — AC1's query strategy (adopt AC9's native-query approach), AC5's endpoint path and response mapper instruction, AC17's justification or removal, AC14's baseline backfill, AC11's CSS budget, and whether Finding 2's `performance_reports` hole is in scope or explicitly deferred with a ledger entry. AC6, AC13 and AC15 are clean as written. The story's research quality is high and its central technical insight is correct; the problem is that AC1 does not implement the insight the story's own Dev Notes defend.
+| **AC1** (booking free-text GDPR) | Proceed after deciding findings 8-9 | **High** on the core design — the ID-space question that would have invalidated it was re-traced from both ends and the story is right. The `@Version` interaction (8) and the backwards precedent citation (9) are both re-verified directly and need an explicit decision, not a rewrite. |
+| **AC2** (shared sanitize/truncate) | **Rewrite the rationale; keep the consolidation** | **High** — refutation established by *executing* `truncate` against the pinned 3.21.0 jar, not by reading docs. The missed email path (5) was traced end-to-end (service → event → listener → template). |
+| **AC3** (narrow PATCH response) | Proceed as written | **High** — sole consumer verified, no contract/advice/snapshot consumers exist, test fallout is one declared type. Only the stale store comment (17) needs adding to scope. |
+| **AC4** (PDF font) | Proceed; fix the test string and decide on bold | **Medium-high** — repo facts exact and the classpath/extraction mechanics were cleared empirically. The cp1252 coverage behind finding 11 I verified myself; the faux-bold content-stream evidence (13) I did **not** re-run and it is marked PLAUSIBLE. The base-14 glyph-drop premise itself remains unverifiable from the repo — AC4's own round-trip test is the right proof, and should be written to fail first. |
+| **AC5** (playerName off the URL) | Proceed after resolving finding 6 | **High** — the privacy-regression hypothesis was checked and cleared; the load/error-state regression was confirmed by reading the template's guard order and the store's null-on-fetch. Finding 6 is a design decision the story must make, not a detail. |
+| **AC6** (i18n key resolution) | Proceed; re-specify extraction before writing it | **Medium-high** — the call-site counts and 9 bogus matches come from an actual extraction run against the real catalog, which I did not independently repeat; the mechanism mis-citation (18) and the unstubbed `$te` I did verify. Task 6.1 already asks for the survey; it must happen before the regex is written, not after. |
+| **AC7** (coach-erasure split) | **Re-scope before implementation** | **High** on all three blockers — the shared-transaction Javadoc, the zero test references, and the outbox "MUST be inside the producing transaction" contract were each re-read directly in Step 4b. The AC's goal and its named precedent are incompatible, and one of its four "tables" must not be split at all. |
+
+Concretely, the smallest set of story edits that unblocks dev: rewrite AC2's rationale around the real `notes` gap and add the event/email call site; correct AC1's precedent citation and decide the `@Version` question; fix AC4's test character and the bold decision; resolve AC5's loading/error fallback; re-specify AC6's extraction; and re-scope AC7 to three groups (with the outbox staying attached to the `performance_reports` scrub) plus an explicit choice between real durability and observability-only — acknowledging that its coach-branch tests are new work.
+
+What was **not** independently re-checked, and should be treated as single-source: the openpdf content-stream dump behind finding 13, the AC6 extraction counts in finding 12, and the openpdf base-14 glyph-dropping behavior underpinning AC4's premise (unverifiable from the repo by design).

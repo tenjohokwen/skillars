@@ -157,6 +157,9 @@ class SkillExposureResourceIT extends AbstractIntegrationTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> currentWeek = (Map<String, Object>) response.getBody().get("currentWeek");
         assertThat(currentWeek).containsKey("PAC");
+        // skillars-deferred-156 AC5: CoachPlayerDetailPage.vue reads the player's name off this
+        // field now instead of the route's own query string.
+        assertThat(response.getBody().get("playerName")).isEqualTo("Exposure Player");
     }
 
     @Test

@@ -17,6 +17,7 @@ import com.softropic.skillars.platform.booking.contract.CoachInboxResponse;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleItem;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleResponse;
+import com.softropic.skillars.platform.booking.contract.PlayerRequestResponse;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
@@ -155,6 +156,46 @@ class BookingServiceTest {
         assertThat(response).isNotNull();
         verify(bookingRepository).save(any(Booking.class));
         verify(eventPublisher).publishEvent(any(BookingRequestedEvent.class));
+    }
+
+    // skillars-deferred-156 AC2: notes previously reached both the DB write AND the coach's
+    // booking-request email completely unsanitized, unlike the sibling playerRequest column —
+    // assert the sanitized value (not the raw input) reaches both the saved Booking and the
+    // published BookingRequestedEvent.
+    @Test
+    void createBookingRequest_notesContainsContactDetails_persistsAndPublishesSanitizedNotes() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+        Booking savedBooking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+        when(bookingRepository.save(any(Booking.class))).thenReturn(savedBooking);
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(contactDetailSanitizer.sanitize("call me at 555-123-4567"))
+            .thenReturn(new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.SanitizerResult(
+                "call me at [contact details removed]", true));
+
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
+        CreateBookingRequest req = new CreateBookingRequest(COACH_ID, PLAYER_ID, slotStart.toInstant(),
+            slotStart.plusHours(1).toInstant(), "call me at 555-123-4567", null, null);
+
+        bookingService.createBookingRequest(PARENT_ID, req);
+
+        ArgumentCaptor<Booking> bookingCaptor = ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepository).save(bookingCaptor.capture());
+        assertThat(bookingCaptor.getValue().getNotes()).isEqualTo("call me at [contact details removed]");
+
+        ArgumentCaptor<BookingRequestedEvent> eventCaptor = ArgumentCaptor.forClass(BookingRequestedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getNotes()).isEqualTo("call me at [contact details removed]");
     }
 
     @Test
@@ -1608,8 +1649,9 @@ class BookingServiceTest {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
 
-        BookingResponse response = bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "Work on free kicks");
+        PlayerRequestResponse response = bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "Work on free kicks");
 
+        assertThat(response.bookingId()).isEqualTo(booking.getId());
         assertThat(response.playerRequest()).isEqualTo("Work on free kicks");
         assertThat(booking.getPlayerRequest()).isEqualTo("Work on free kicks");
     }
@@ -1747,6 +1789,40 @@ class BookingServiceTest {
         bookingService.setPlayerRequest(booking.getId(), PARENT_ID, "short input that expands");
 
         assertThat(booking.getPlayerRequest()).hasSize(500);
+    }
+
+    // ---- sanitizeAndTruncate tests (skillars-deferred-156 AC2) ----
+
+    @Test
+    void sanitizeAndTruncate_blankInput_returnsNull() {
+        assertThat(BookingService.sanitizeAndTruncate(contactDetailSanitizer, "   ", 500)).isNull();
+    }
+
+    @Test
+    void sanitizeAndTruncate_nullInput_returnsNull() {
+        assertThat(BookingService.sanitizeAndTruncate(contactDetailSanitizer, null, 500)).isNull();
+    }
+
+    // commons-lang3 3.21.0's StringUtils.truncate is already surrogate-pair-aware — this documents
+    // that guarantee (no new guard code backs it): a sanitized value with an astral-plane character
+    // straddling the truncation boundary truncates to maxLength - 1, not a dangling high surrogate.
+    // (code review of skillars-deferred-156) Assert on isHighSurrogate, not isLowSurrogate: cutting a
+    // surrogate pair at maxLength keeps the pair's FIRST unit, so a split leaves a dangling HIGH
+    // surrogate at the tail and can never leave a low one. The original isLowSurrogate assertion was
+    // therefore vacuous — it checked the half that cannot occur, and would have passed against a
+    // genuinely broken truncate.
+    @Test
+    void sanitizeAndTruncate_astralCharacterStraddlesBoundary_backsOffRatherThanSplittingSurrogatePair() {
+        String prefix = "a".repeat(499);
+        String withAstralAtBoundary = prefix + "😀"; // U+1F600, a surrogate pair
+        when(contactDetailSanitizer.sanitize(withAstralAtBoundary))
+            .thenReturn(new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.SanitizerResult(
+                withAstralAtBoundary, false));
+
+        String result = BookingService.sanitizeAndTruncate(contactDetailSanitizer, withAstralAtBoundary, 500);
+
+        assertThat(result).hasSize(499).isEqualTo(prefix);
+        assertThat(Character.isHighSurrogate(result.charAt(result.length() - 1))).isFalse();
     }
 
     // ---- helpers ----

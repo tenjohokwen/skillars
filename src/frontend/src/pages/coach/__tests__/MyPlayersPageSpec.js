@@ -138,7 +138,7 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
     expect(wrapper.text()).toContain('coach.myPlayersNeverTrainedTogether')
   })
 
-  it('navigates to coach-player-detail with playerId param and playerName query on row click', async () => {
+  it('navigates to coach-player-detail with only the playerId param, no playerName query, on row click', async () => {
     getCoachRoster.mockResolvedValue({
       players: [PLAYER({ playerId: LARGE_PLAYER_ID, playerName: 'Alex Kane' })],
     })
@@ -149,10 +149,12 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
 
     await wrapper.find('.player-item').trigger('click')
 
+    // skillars-deferred-156 AC5: playerName no longer travels through the route's query string —
+    // a minor's name in the URL reaches browser history/bookmarks/referrers. The exact object
+    // (no query key at all) proves it, not just that the key's value changed.
     expect(pushSpy).toHaveBeenCalledWith({
       name: 'coach-player-detail',
       params: { playerId: LARGE_PLAYER_ID },
-      query: { playerName: 'Alex Kane' },
     })
   })
 
@@ -175,10 +177,12 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
     await row.trigger('keyup.space')
 
     expect(pushSpy).toHaveBeenCalledTimes(2)
+    // skillars-deferred-156 AC5: playerName no longer travels through the route's query string —
+    // a minor's name in the URL reaches browser history/bookmarks/referrers. The exact object
+    // (no query key at all) proves it, not just that the key's value changed.
     expect(pushSpy).toHaveBeenCalledWith({
       name: 'coach-player-detail',
       params: { playerId: LARGE_PLAYER_ID },
-      query: { playerName: 'Alex Kane' },
     })
   })
 })

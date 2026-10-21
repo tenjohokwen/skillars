@@ -23,6 +23,7 @@ import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
 import com.softropic.skillars.platform.filestorage.service.BlobDeletionOutboxSupport;
+import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
@@ -43,6 +44,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -538,6 +541,115 @@ class GdprErasureServiceTest {
         ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
         verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
         assertThat(alertCaptor.getValue().getReason()).isEqualTo("UNCLASSIFIED_FAILURE");
+    }
+
+    // ---- skillars-deferred-156 AC7: coach-erasure per-group transaction blast radius ----
+    //
+    // Net-new test authoring — no existing test in this class references these codes, and the
+    // coach-recap scrub block had zero coverage here at all before this story (every pre-existing
+    // test stubs coachProfileRepository.findByUserId to return empty). Deterministic unit-level
+    // bail-out/reason-code assertions only, matching the PLAYER branch's own documented reason for
+    // never writing a real multi-lock-contention IT for this shape (GdprErasureIT:1989-1993's own
+    // rationale: "an unreasonably long test or exact-timing choreography across several
+    // simultaneous held locks").
+
+    private static final UUID COACH_PROFILE_ID = UUID.randomUUID();
+
+    private GdprRequest stubCoachErasurePreamble() {
+        GdprRequest request = new GdprRequest();
+        request.setId(REQUEST_ID);
+        request.setUserId(USER_ID);
+        when(gdprRequestRepository.findById(REQUEST_ID)).thenReturn(Optional.of(request));
+
+        User user = new User();
+        user.setSkillarsRole(SkillarsRole.COACH);
+        when(userRepository.findOneById(USER_ID)).thenReturn(Optional.of(user));
+
+        CoachProfile coachProfile = new CoachProfile();
+        coachProfile.setId(COACH_PROFILE_ID);
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(coachProfile));
+        // lenient: only the failure-path tests below ever reach raiseErasureAlert's dedup check —
+        // the happy-path test never calls this stub at all.
+        lenient().when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
+            REQUEST_ID.toString(), AdminAlertType.GDPR_ERASURE_DEADLINE, AdminAlertStatus.OPEN))
+            .thenReturn(Optional.empty());
+        return request;
+    }
+
+    @Test
+    void erase_coachUser_allThreeGroupsSucceed_completesWithNoAlert() {
+        GdprRequest request = stubCoachErasurePreamble();
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        assertThat(request.getStatus()).isEqualTo("COMPLETED");
+        verify(adminAlertRepository, never()).saveAndFlush(any(AdminAlert.class));
+    }
+
+    @Test
+    void erase_coachUser_sessionCompletionDataGroupLockTimeout_raisesScdLockTimeoutReason_marksFailed() {
+        GdprRequest request = stubCoachErasurePreamble();
+        org.mockito.Mockito.doThrow(new PessimisticLockingFailureException("lock_timeout"))
+            .when(sessionCompletionDataRepository).anonymizeByCoachId(COACH_PROFILE_ID);
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        // Groups after the one that failed never ran — Postgres aborts the whole transaction on
+        // the first statement error, so there is nothing partial to reason about.
+        verify(playerTimelineRepository, never()).anonymizeMetadataByCoachId(any());
+        verify(performanceReportRepository, never()).anonymizeByCoachId(any(), anyString());
+        assertThat(request.getStatus()).isEqualTo("FAILED");
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        assertThat(alertCaptor.getValue().getReason()).isEqualTo("COACH_RECAP_SCD_LOCK_TIMEOUT");
+    }
+
+    @Test
+    void erase_coachUser_sessionCompletionDataGroupContended_raisesScdContendedReason() {
+        GdprRequest request = stubCoachErasurePreamble();
+        org.mockito.Mockito.doThrow(new CannotAcquireLockException("deadlock"))
+            .when(sessionCompletionDataRepository).anonymizeByCoachId(COACH_PROFILE_ID);
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        assertThat(request.getStatus()).isEqualTo("FAILED");
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        assertThat(alertCaptor.getValue().getReason()).isEqualTo("COACH_RECAP_SCD_CONTENDED");
+    }
+
+    @Test
+    void erase_coachUser_timelineMetadataGroupLockTimeout_raisesTimelineLockTimeoutReason() {
+        GdprRequest request = stubCoachErasurePreamble();
+        org.mockito.Mockito.doThrow(new PessimisticLockingFailureException("lock_timeout"))
+            .when(playerTimelineRepository).anonymizeMetadataByCoachId(COACH_PROFILE_ID);
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        // Group 1 (session_completion_data) genuinely ran before group 2 tripped.
+        verify(sessionCompletionDataRepository).anonymizeByCoachId(COACH_PROFILE_ID);
+        verify(performanceReportRepository, never()).anonymizeByCoachId(any(), anyString());
+        assertThat(request.getStatus()).isEqualTo("FAILED");
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        assertThat(alertCaptor.getValue().getReason()).isEqualTo("COACH_RECAP_TIMELINE_LOCK_TIMEOUT");
+    }
+
+    @Test
+    void erase_coachUser_performanceReportGroupLockTimeout_raisesReportLockTimeoutReason() {
+        GdprRequest request = stubCoachErasurePreamble();
+        when(performanceReportRepository.anonymizeByCoachId(eq(COACH_PROFILE_ID), anyString()))
+            .thenThrow(new PessimisticLockingFailureException("lock_timeout"));
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        // Groups 1-2 genuinely ran before group 3 tripped.
+        verify(sessionCompletionDataRepository).anonymizeByCoachId(COACH_PROFILE_ID);
+        verify(playerTimelineRepository).anonymizeMetadataByCoachId(COACH_PROFILE_ID);
+        assertThat(request.getStatus()).isEqualTo("FAILED");
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        assertThat(alertCaptor.getValue().getReason()).isEqualTo("COACH_RECAP_REPORT_LOCK_TIMEOUT");
     }
 
     private GdprRequest stubParentErasurePreamble() {

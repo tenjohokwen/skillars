@@ -76,6 +76,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 @Service
@@ -199,8 +200,47 @@ public class GdprErasureService {
     // deadlock — distinguished by catch TYPE at the call site, not by cause inspection. Named for the
     // coach branch rather than reusing the CHILD_* reasons above, which mean "one of N child player
     // profiles" and would misdescribe this statement in the admin alert queue.
-    private static final String COACH_RECAP_LOCK_TIMEOUT = "COACH_RECAP_LOCK_TIMEOUT";
-    private static final String COACH_RECAP_CONTENDED = "COACH_RECAP_CONTENDED";
+    //
+    // skillars-deferred-156 AC7: split from one shared pair into three per-group pairs, taking the
+    // LABELING half (only) of the PLAYER branch's statement-group pattern
+    // (deletePlayerDevelopmentDataInDedicatedPool). Deliberately observability-only, and
+    // deliberately NOT a full mirror of that precedent:
+    //   * No durability. All three groups below share ONE requiresNewTemplate transaction, so a
+    //     failure on a later group still rolls back an earlier group's already-succeeded scrub.
+    //     That matches the PLAYER branch, whose groups get zero durability from grouping either
+    //     (see its own Javadoc) — grouping buys labels there too, not independent commits.
+    //   * No per-group timeout budgeting. The PLAYER branch additionally threads
+    //     nextGroupLockTimeoutSecondsOrThrow/spendDownLockBudget cumulative-budget arithmetic
+    //     through its groups; this branch does not, because its three statements are a fixed,
+    //     small set with no N-child multiplier to budget against. One transaction-scoped
+    //     lock_timeout (set once below) therefore bounds all three groups — calling
+    //     setStatementLockTimeout per group would be a no-op, since set_config's is_local=true
+    //     makes the bound transaction-scoped rather than statement-scoped.
+    // (code review of skillars-deferred-156) What this buys, precisely: knowing WHICH of the three
+    // groups tripped. Nothing more. Do not read the group split as granting per-group commits or
+    // per-group time bounds — it grants neither.
+    private static final String COACH_RECAP_SCD_LOCK_TIMEOUT = "COACH_RECAP_SCD_LOCK_TIMEOUT";
+    private static final String COACH_RECAP_SCD_CONTENDED = "COACH_RECAP_SCD_CONTENDED";
+    private static final String COACH_RECAP_TIMELINE_LOCK_TIMEOUT = "COACH_RECAP_TIMELINE_LOCK_TIMEOUT";
+    private static final String COACH_RECAP_TIMELINE_CONTENDED = "COACH_RECAP_TIMELINE_CONTENDED";
+    // skillars-deferred-156 AC7: group 3 bundles performance_reports' scrub together with the
+    // blob-deletion outbox enqueue — BlobDeletionOutboxSupport's own Javadoc requires enqueue to run
+    // inside the SAME transaction as the write that nulls storage_key, or a later retry finds no
+    // key to delete and the S3 blob is orphaned permanently. findStorageKeysByCoachId itself is a
+    // plain SELECT (no FOR UPDATE) and the outbox enqueue is plain INSERTs with no unique index
+    // beyond the PK — neither can actually trip a lock_timeout/contention error on its own; only
+    // the anonymizeByCoachId UPDATE in this group can.
+    /**
+     * (code review of skillars-deferred-156) Which statement group the coach-recap scrub is currently
+     * executing, so the shared catch block can pick the matching reason-code pair. An enum rather than
+     * the three magic strings this replaced: the switch over it is compiler-checked exhaustive, so a
+     * fourth group cannot be silently absorbed into another group's codes, and a typo is a build error
+     * instead of a mislabelled admin alert.
+     */
+    private enum CoachRecapGroup { SCD, TIMELINE, REPORT }
+
+    private static final String COACH_RECAP_REPORT_LOCK_TIMEOUT = "COACH_RECAP_REPORT_LOCK_TIMEOUT";
+    private static final String COACH_RECAP_REPORT_CONTENDED = "COACH_RECAP_REPORT_CONTENDED";
 
     // skillars-deferred-155 code review, Decision 2(a): performance_reports.next_steps is NOT NULL, so
     // the coach-erasure scrub overwrites it with this placeholder rather than nulling it — same
@@ -395,11 +435,29 @@ public class GdprErasureService {
             // (skillars-deferred-135 AC1) for why catching inside it defeats the isolation entirely.
             long coachRecapLockTimeoutSeconds = configService.getBoundedLong(
                 ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
+            // skillars-deferred-156 AC7: identifies which of the three groups below was executing
+            // when a PessimisticLockingFailureException propagated out of the transaction, so the
+            // catch block can pick that group's own reason-code pair. All three groups still run
+            // inside ONE requiresNewTemplate transaction (see the constants' own Javadoc above) —
+            // Postgres aborts the whole transaction on the first statement error regardless, so
+            // there is never a question of "did group 1 already commit when group 2 failed."
+            AtomicReference<CoachRecapGroup> coachRecapCurrentGroup = new AtomicReference<>();
             try {
                 requiresNewTemplate.executeWithoutResult(status -> {
+                    // (code review of skillars-deferred-156) Label FIRST, then set the bound ONCE for
+                    // the whole transaction rather than once per group: set_config's is_local=true
+                    // bound is transaction-scoped, so the per-group calls this replaced were provable
+                    // no-ops (same value, already in effect). Keeping the set("SCD") ahead of it
+                    // preserves the property that even a failure inside set_config itself attributes
+                    // to a real group rather than leaving the label null.
+                    coachRecapCurrentGroup.set(CoachRecapGroup.SCD);
                     setStatementLockTimeout(coachRecapLockTimeoutSeconds);
                     sessionCompletionDataRepository.anonymizeByCoachId(cp.getId());
+
+                    coachRecapCurrentGroup.set(CoachRecapGroup.TIMELINE);
                     playerTimelineRepository.anonymizeMetadataByCoachId(cp.getId());
+
+                    coachRecapCurrentGroup.set(CoachRecapGroup.REPORT);
                     List<String> coachReportBlobKeys = performanceReportRepository.findStorageKeysByCoachId(cp.getId());
                     performanceReportRepository.anonymizeByCoachId(cp.getId(), ERASED_REPORT_NEXT_STEPS);
                     if (!coachReportBlobKeys.isEmpty()) {
@@ -410,14 +468,29 @@ public class GdprErasureService {
                 // CannotAcquireLockException (SQLSTATE 40P01, a genuine deadlock) is a SUBCLASS of
                 // PessimisticLockingFailureException and is not a lock_timeout trip — classify the two
                 // apart by catch type, exactly as the PLAYER branch does, so an operator triaging the
-                // alert queue can tell one hot statement from a real deadlock.
-                String reason = e instanceof CannotAcquireLockException
-                    ? COACH_RECAP_CONTENDED : COACH_RECAP_LOCK_TIMEOUT;
+                // alert queue can tell one hot statement from a real deadlock. The group identifies
+                // WHICH statement; the catch type identifies WHY.
+                boolean contended = e instanceof CannotAcquireLockException;
+                // (code review of skillars-deferred-156) The null-coalesce is load-bearing, not
+                // defensive noise: a switch over a null selector throws NPE, and `default` does NOT
+                // catch null (`case null` is not available on this project's Java 17 toolchain). The
+                // label is null only if the template raises PessimisticLockingFailureException before
+                // the lambda body runs at all — transaction acquisition from the dedicated pool.
+                // Without this guard that NPE would be thrown from INSIDE this catch block, skipping
+                // raiseErasureAlert and skipped.set(true) below, i.e. producing exactly the
+                // unalerted-silent-failure outcome this block exists to prevent. Attributed to SCD
+                // because nothing in any group ran; SCD is the first thing that would have.
+                CoachRecapGroup group = coachRecapCurrentGroup.get();
+                String reason = switch (group == null ? CoachRecapGroup.SCD : group) {
+                    case SCD -> contended ? COACH_RECAP_SCD_CONTENDED : COACH_RECAP_SCD_LOCK_TIMEOUT;
+                    case TIMELINE -> contended ? COACH_RECAP_TIMELINE_CONTENDED : COACH_RECAP_TIMELINE_LOCK_TIMEOUT;
+                    case REPORT -> contended ? COACH_RECAP_REPORT_CONTENDED : COACH_RECAP_REPORT_LOCK_TIMEOUT;
+                };
                 log.warn("[GDPR_ERASURE] COACH-branch coachId={} session-recap/report scrub failed "
-                        + "(reason={}) — skipping it; the rest of the erasure still commits, the request "
-                        + "is reported FAILED, and the daily retry scheduler re-runs it. "
+                        + "in group={} (reason={}) — skipping it; the rest of the erasure still commits, "
+                        + "the request is reported FAILED, and the daily retry scheduler re-runs it. "
                         + "requestId={} userId={}",
-                    cp.getId(), reason, requestId, userId);
+                    cp.getId(), coachRecapCurrentGroup.get(), reason, requestId, userId);
                 raiseErasureAlert(requestId, reason);
                 // skillars-deferred-155 code review, Decision 1(a): gate the terminal status. Without
                 // this the request is written COMPLETED below even though the coach's recap text,
@@ -1337,6 +1410,12 @@ public class GdprErasureService {
                 // run" from this statement's own, separate (and much smaller) contention risk.
                 setStatementLockTimeout(lockTimeoutSeconds);
                 sessionCompletionDataRepository.anonymizeByPlayerId(playerId);
+
+                // skillars-deferred-156 AC1: booking.bookings is the same `booking` schema as
+                // session_completion_data above, for the same reason — independently-bounded, not
+                // folded into this method's own development-schema cumulative-lock-budget groups.
+                setStatementLockTimeout(lockTimeoutSeconds);
+                bookingRepository.anonymizeNotesAndPlayerRequestByPlayerId(playerId);
 
                 // Group 4 (M statements, M = childBlobKeys.size()): the blob-deletion outbox INSERTs.
                 // Skipped entirely when M is zero — nothing to bound, and dividing by zero statements

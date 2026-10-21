@@ -9,6 +9,8 @@ import com.softropic.skillars.platform.development.contract.WeeklySkillTotals;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PlayerSluWeeklySnapshot;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +35,10 @@ public class SluDashboardService {
     private final NeglectedSkillFlagRepository flagRepository;
     private final SluNarrativeService narrativeService;
     private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    // skillars-deferred-156 AC5: a shared, non-booking-specific repository — resolved locally here
+    // the same way BookingService.resolvePlayerName already does, rather than creating a
+    // cross-module dependency on the booking package or duplicating that private helper.
+    private final PlayerProfileRepository playerProfileRepository;
 
     public SkillExposureResponse getWeeklyExposure(Long playerId, int weeksBack) {
         coachPlayerAuthorizationService.requireCoachPlayerRelationshipIfCoach(playerId);
@@ -75,7 +81,11 @@ public class SluDashboardService {
             .map(f -> f.getSkillCode())
             .collect(Collectors.toList());
 
-        return new SkillExposureResponse(currentWeekMap, trend, neglectedCodes);
+        String playerName = playerProfileRepository.findById(playerId)
+            .map(PlayerProfile::getName)
+            .orElse("Unknown Player");
+
+        return new SkillExposureResponse(currentWeekMap, trend, neglectedCodes, playerName);
     }
 
     /**

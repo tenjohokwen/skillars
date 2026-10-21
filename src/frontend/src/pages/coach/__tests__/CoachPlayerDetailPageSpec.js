@@ -23,6 +23,7 @@ import { api } from 'src/boot/axios'
 import CoachPlayerDetailPage from 'src/pages/coach/CoachPlayerDetailPage.vue'
 import CoachContributionSection from 'src/components/development/CoachContributionSection.vue'
 import PlayerTimelinePanel from 'src/components/development/PlayerTimelinePanel.vue'
+import { useDevelopmentStore } from 'src/stores/development.store.js'
 
 const LARGE_PLAYER_ID = '893573203704173564'
 const CORRUPTED_PLAYER_ID = '893573203704173600'
@@ -34,7 +35,11 @@ const SKILL_DEFINITIONS = [
 
 const mounted = []
 
-async function mountPage(playerId = LARGE_PLAYER_ID, playerName = 'Alex Kane') {
+// skillars-deferred-156 AC5: playerName no longer travels through the route's query string — the
+// page now reads it off the /exposure fetch response instead, so mountPage no longer accepts or
+// pushes a playerName query param. Callers that care about the rendered name set it on their own
+// exposure mock's resolve object.
+async function mountPage(playerId = LARGE_PLAYER_ID) {
   const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false })
   const router = createRouter({
     history: createMemoryHistory(),
@@ -47,7 +52,7 @@ async function mountPage(playerId = LARGE_PLAYER_ID, playerName = 'Alex Kane') {
       },
     ],
   })
-  router.push({ name: 'coach-player-detail', params: { playerId }, query: { playerName } })
+  router.push({ name: 'coach-player-detail', params: { playerId } })
   await router.isReady()
 
   // Not shallow: @vue/test-utils stubs render no slot content by default
@@ -57,7 +62,25 @@ async function mountPage(playerId = LARGE_PLAYER_ID, playerName = 'Alex Kane') {
   // spec isn't about, and its own internal rendering (store.timeline.events.length etc.) assumes
   // a real timeline response this spec's generic axios mock doesn't model.
   const wrapper = mount(CoachPlayerDetailPage, {
-    global: { plugins: [pinia, router], stubs: { PlayerTimelinePanel: true } },
+    global: {
+      plugins: [pinia, router],
+      stubs: { PlayerTimelinePanel: true },
+      // skillars-deferred-156 AC5: setup-file.js's global $t mock only special-cases
+      // params.date (for SkillsRadarChart's tooltip) — every other call, including this page's
+      // own `$t('coach.playerDetailTitle', { playerName })`, returns the bare key with no
+      // interpolation at all, so the rendered heading text never contains the player's name
+      // under the shared default mock. Mirrors that same date-param convention for playerName,
+      // scoped to this spec only, so AC5's "reads the name from the fetch response, not the
+      // route query" behavior is actually observable in wrapper.text().
+      mocks: {
+        $t: (key, params) =>
+          params && params.playerName
+            ? params.playerName
+            : params && params.date
+              ? `Last assessed: ${params.date}`
+              : key,
+      },
+    },
   })
   mounted.push(wrapper)
   return { wrapper, pinia, router }
@@ -81,7 +104,9 @@ describe('CoachPlayerDetailPage.vue (skillars-12-4)', () => {
   it('fetches with the exact route-param id, never a Number-corrupted one', async () => {
     mockApiGetByUrl({
       'skill-definitions': { resolve: SKILL_DEFINITIONS },
-      exposure: { resolve: { currentWeek: {}, trend: [], neglectedSkillCodes: [] } },
+      exposure: {
+        resolve: { currentWeek: {}, trend: [], neglectedSkillCodes: [], playerName: 'Alex Kane' },
+      },
       'coach-contributions': { resolve: [] },
     })
 
@@ -126,7 +151,14 @@ describe('CoachPlayerDetailPage.vue (skillars-12-4)', () => {
   it('renders all three sections on a populated load', async () => {
     mockApiGetByUrl({
       'skill-definitions': { resolve: SKILL_DEFINITIONS },
-      exposure: { resolve: { currentWeek: {}, trend: [], neglectedSkillCodes: ['PAC'] } },
+      exposure: {
+        resolve: {
+          currentWeek: {},
+          trend: [],
+          neglectedSkillCodes: ['PAC'],
+          playerName: 'Alex Kane',
+        },
+      },
       'coach-contributions': {
         resolve: [{ coachDisplayName: 'Coach A', skillCode: 'PAC', percentageContribution: 60 }],
       },
@@ -144,7 +176,9 @@ describe('CoachPlayerDetailPage.vue (skillars-12-4)', () => {
   it('shows the empty-neglected-skills state when none are open', async () => {
     mockApiGetByUrl({
       'skill-definitions': { resolve: SKILL_DEFINITIONS },
-      exposure: { resolve: { currentWeek: {}, trend: [], neglectedSkillCodes: [] } },
+      exposure: {
+        resolve: { currentWeek: {}, trend: [], neglectedSkillCodes: [], playerName: 'Alex Kane' },
+      },
       'coach-contributions': { resolve: [] },
     })
 
@@ -157,7 +191,9 @@ describe('CoachPlayerDetailPage.vue (skillars-12-4)', () => {
   it('shows the AC9 empty-contributions state when topAttributions filters to empty', async () => {
     mockApiGetByUrl({
       'skill-definitions': { resolve: SKILL_DEFINITIONS },
-      exposure: { resolve: { currentWeek: {}, trend: [], neglectedSkillCodes: [] } },
+      exposure: {
+        resolve: { currentWeek: {}, trend: [], neglectedSkillCodes: [], playerName: 'Alex Kane' },
+      },
       // Below the component's own 30% top-attribution threshold.
       'coach-contributions': {
         resolve: [{ coachDisplayName: 'Coach A', skillCode: 'PAC', percentageContribution: 10 }],
@@ -178,7 +214,9 @@ describe('CoachPlayerDetailPage.vue (skillars-12-4)', () => {
   it('shows the genuinely-no-data empty-contributions state when there is no contribution data at all (deferred-152 AC2)', async () => {
     mockApiGetByUrl({
       'skill-definitions': { resolve: SKILL_DEFINITIONS },
-      exposure: { resolve: { currentWeek: {}, trend: [], neglectedSkillCodes: [] } },
+      exposure: {
+        resolve: { currentWeek: {}, trend: [], neglectedSkillCodes: [], playerName: 'Alex Kane' },
+      },
       'coach-contributions': { resolve: [] },
     })
 
@@ -204,29 +242,110 @@ describe('CoachPlayerDetailPage.vue (skillars-12-4)', () => {
           currentWeek: {},
           trend: [],
           neglectedSkillCodes: url.includes(PLAYER_A) ? ['PAC'] : [],
+          playerName: url.includes(PLAYER_A) ? 'Player A' : 'Player B',
         })
       }
       if (url.includes('coach-contributions')) return Promise.resolve([])
       return Promise.resolve([])
     })
 
-    const { wrapper, router } = await mountPage(PLAYER_A, 'Player A')
+    const { wrapper, router } = await mountPage(PLAYER_A)
     await flushPromises()
     expect(wrapper.text()).toContain('Pace')
+    expect(wrapper.text()).toContain('Player A')
 
-    await router.push({
-      name: 'coach-player-detail',
-      params: { playerId: PLAYER_B },
-      query: { playerName: 'Player B' },
-    })
+    await router.push({ name: 'coach-player-detail', params: { playerId: PLAYER_B } })
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('Pace')
     expect(wrapper.text()).toContain('coach.playerDetailNoNeglectedSkills')
+    expect(wrapper.text()).toContain('Player B')
     const exposureCallForB = api.get.mock.calls.find(
       ([url]) => url.includes('/exposure') && url.includes(PLAYER_B),
     )
     expect(exposureCallForB).toBeDefined()
     expect(wrapper.findComponent(PlayerTimelinePanel).props('playerId')).toBe(PLAYER_B)
+  })
+
+  // skillars-deferred-156 AC5: the regression this fix introduced and the AC explicitly calls out
+  // to resolve — the heading renders above both the pageError guard and the loading content guard,
+  // so it is always visible. On a fetch error with no prior successful load for THIS player, there
+  // is no last-known name to fall back to, so the honest answer is the translated placeholder, not
+  // the stale route-query value the old implementation would have shown forever.
+  it('falls back to the translated placeholder in the heading when the exposure fetch fails with no prior name known (AC5)', async () => {
+    mockApiGetByUrl({
+      'skill-definitions': { resolve: SKILL_DEFINITIONS },
+      exposure: { reject: { response: { data: {} } } },
+      'coach-contributions': { resolve: [] },
+    })
+
+    const { wrapper } = await mountPage()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('coach.playerDetailUnknownPlayerName')
+  })
+
+  // (code review of skillars-deferred-156) The cache-HIT path — the entire reason
+  // lastKnownPlayerNames exists, and previously the one link in the three-link fallback chain with
+  // no test at all. The two sibling tests cover only the ends of the chain: one asserts the head
+  // (store.exposure.playerName present) and one asserts the tail (nothing cached -> translated
+  // placeholder). Both of those pass with the cache and its watcher deleted outright, so AC5's
+  // actual resolution mechanism was unverified. This pins the middle: a successful load caches the
+  // name, a later FAILED refetch for that same player nulls store.exposure, and the heading must
+  // still show the real cached name rather than regressing to the placeholder.
+  it('keeps showing the last known playerName in the heading when a later refetch for that same player fails (AC5)', async () => {
+    let exposureCallCount = 0
+    api.get.mockImplementation((url) => {
+      if (url.includes('skill-definitions')) return Promise.resolve(SKILL_DEFINITIONS)
+      if (url.includes('/exposure')) {
+        exposureCallCount += 1
+        // First load succeeds and seeds the cache; every later call fails.
+        return exposureCallCount === 1
+          ? Promise.resolve({
+              currentWeek: {},
+              trend: [],
+              neglectedSkillCodes: [],
+              playerName: 'Alex Kane',
+            })
+          : Promise.reject({ response: { data: {} } })
+      }
+      if (url.includes('coach-contributions')) return Promise.resolve([])
+      return Promise.resolve([])
+    })
+
+    const { wrapper } = await mountPage()
+    await flushPromises()
+    expect(wrapper.text()).toContain('Alex Kane')
+
+    // Refetch the SAME player and let it fail. Driven through the real store action (stubActions is
+    // false) rather than a route change, because re-pushing an identical route param would not
+    // retrigger the page's own watcher — and it is specifically the same-player refetch that must
+    // fall back to the cache instead of the placeholder.
+    const store = useDevelopmentStore()
+    await store.fetchExposure(LARGE_PLAYER_ID)
+    await flushPromises()
+
+    expect(store.exposure).toBeNull()
+    expect(exposureCallCount).toBeGreaterThan(1)
+    expect(wrapper.text()).toContain('Alex Kane')
+    expect(wrapper.text()).not.toContain('coach.playerDetailUnknownPlayerName')
+  })
+
+  // skillars-deferred-156 AC5: proves the heading reads playerName off the /exposure response
+  // itself, not the route's own query string (which no longer carries it at all per mountPage's
+  // own comment above).
+  it('renders the heading using the playerName from the exposure response, not the route query', async () => {
+    mockApiGetByUrl({
+      'skill-definitions': { resolve: SKILL_DEFINITIONS },
+      exposure: {
+        resolve: { currentWeek: {}, trend: [], neglectedSkillCodes: [], playerName: 'Alex Kane' },
+      },
+      'coach-contributions': { resolve: [] },
+    })
+
+    const { wrapper } = await mountPage()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Alex Kane')
   })
 })
