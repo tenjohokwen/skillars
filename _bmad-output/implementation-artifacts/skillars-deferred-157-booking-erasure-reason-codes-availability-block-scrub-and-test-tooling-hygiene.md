@@ -38,11 +38,14 @@ Only the doc's own summary list (lines 213–214) is stale: it still says "still
 
 - **"The backend's `"Unknown Player"` fallback …"**: owner-`Decided 2026-10-20: accept, do not change`. Not re-litigated.
 - **"PDF reports still silently drop glyphs outside Noto Sans latin-greek-cyrillic coverage"**: owner-**decided 2026-10-21: out of scope**. Non-Latin/Greek/Cyrillic scripts are not supported in PDF reports, and the existing unrenderable-code-point warning log is the accepted end state. The ledger bullet now carries a `[DECIDED]` marker. Do not touch the font code or that bullet in this story.
-- **Everything older in the ledger that is still open** was re-checked and is one of three kinds:
+- **Everything older in the ledger that is still open** was re-checked and is one of these kinds:
   - owner-blocked on production evidence: the `main."user"` cleanup-sweep index, re-confirmed deferred by `skillars-deferred-125`;
-  - investigation-led: the `VideoModerationEmailListener` `persisted == null` root cause, the `MailManager` circuit breaker;
   - human-only: fr/de native review, the deferred-140 browser walkthrough;
   - deliberately scoped "revisit only if it reaches production" (the deferred-154 route-constraint specs), or a distinct feature (the `/api/disputes` UI).
+- *(Corrected 2026-10-21 per story review F7.)* An earlier draft listed `VideoModerationEmailListener`'s `persisted == null` bullet and the `MailManager.isRetryable`/circuit-breaker bullet as "investigation-led, still open". **Both are already closed.**
+  - `persisted == null`: closed by `skillars-deferred-113` Option B (the branch throws `IllegalStateException`), `deferred-work.md:146-155`.
+  - The circuit-breaker bullet was deleted as factually wrong (`:56-77`) and re-closed at `:162-166`.
+  - The stale "confirmed still open" wording at `deferred-work.md:2031-2033` (2026-09-14 audit) is what misled the draft. Do not re-pick either item.
 
   None is a bundleable mechanical fix.
 
@@ -50,14 +53,14 @@ Only the doc's own summary list (lines 213–214) is stale: it still says "still
 
 ### Player-branch GDPR alerts name the `booking` schema when that is what failed (L1)
 
-1. **The two `booking`-schema statements in `deletePlayerDevelopmentDataInDedicatedPool` get their own reason-code pair.** Today `sessionCompletionDataRepository.anonymizeByPlayerId` (`GdprErasureService.java:1411-1412`) and `bookingRepository.anonymizeNotesAndPlayerRequestByPlayerId` (`:1417-1418`) sit inside the same try (`:1361`) as the development-schema groups, so a trip on either is reported as:
+1. **The two `booking`-schema statements in `deletePlayerDevelopmentDataInDedicatedPool` get their own reason-code pair.** Today `sessionCompletionDataRepository.anonymizeByPlayerId` (`GdprErasureService.java:1411-1412`) and `bookingRepository.anonymizeNotesAndPlayerRequestByPlayerId` (`:1417-1418`) sit inside the same try (`:1357`) as the development-schema groups, so a trip on either is reported as:
    - `CHILD_DELETE_LOCK_TIMEOUT` when it is a `lock_timeout`, wrapped at `:1456-1457`;
    - `CHILD_CONTENDED` when it is a deadlock, rethrown raw at `:1448-1455`.
 
    An operator then investigates `development.*` while the failing statement was in `booking.*`.
 
    Fix:
-   - Add two constants next to the existing `CHILD_*` reasons (`:182-194`): `CHILD_BOOKING_LOCK_TIMEOUT = "CHILD_BOOKING_LOCK_TIMEOUT"` and `CHILD_BOOKING_CONTENDED = "CHILD_BOOKING_CONTENDED"`. Keep the `CHILD_` prefix: these still mean "one of N child player profiles", exactly like their siblings.
+   - Add two constants next to the existing `CHILD_*` reasons (`:182-192`): `CHILD_BOOKING_LOCK_TIMEOUT = "CHILD_BOOKING_LOCK_TIMEOUT"` and `CHILD_BOOKING_CONTENDED = "CHILD_BOOKING_CONTENDED"`. Keep the `CHILD_` prefix: these still mean "one of N child player profiles", exactly like their siblings.
    - Add a new private static nested exception beside `DeleteStatementLockTimeoutException` (`:1566`), e.g. `BookingSchemaLockException extends RuntimeException`. It carries a `boolean contended` and the cause.
      - It must **NOT** extend `PessimisticLockingFailureException`. That way it passes untouched through the method's own outer `catch (CannotAcquireLockException)` / `catch (PessimisticLockingFailureException)` (`:1448-1458`), and through the `requiresNewTemplate` boundary, which rolls the inner transaction back on any `RuntimeException`.
    - Wrap **only** the two `booking`-schema calls (including their `setStatementLockTimeout` calls) in an inner try:
@@ -69,16 +72,19 @@ Only the doc's own summary list (lines 213–214) is stale: it still says "still
 
 2. **Both call sites classify the new exception with the same skip semantics as their existing lock catches.**
    - **PLAYER branch** (`:575-598`): add `catch (BookingSchemaLockException e)`. Pick `CHILD_BOOKING_CONTENDED` if `e.contended`, else `CHILD_BOOKING_LOCK_TIMEOUT`, then:
-     - log a WARN that names `booking.*` (not "development-data deletion");
+     - log a WARN that names `booking.*` as the failing statement **and** says that the child's whole development-data deletion was rolled back with it (story review F4). Per M3 in the review, one REQUIRES_NEW transaction covers the dev-schema groups, the booking statements, the outbox enqueue and the tombstone, so a booking trip means *all* of the child's development data survives this run, not just booking text. Say the same in the new constants' comment, so an operator reading `CHILD_BOOKING_LOCK_TIMEOUT` does not infer "only booking data survived";
      - `raiseErasureAlert(requestId, reason)`;
      - `skipped.set(true)`.
 
      Data survives this run, so the request must read `FAILED` and the daily retry must re-drive it. Same Article 17 reasoning as the existing catch (`:592-597`).
    - **PARENT loop** (`:936-957`): add the equivalent catch. It does `skipped++`, `anyUnrecoverableSkip = true`, a WARN naming `booking.*`, and `raiseErasureAlert(requestId, reason)`.
    - `CHILD_VANISHED` semantics are untouched.
-   - Update the reason-code lists in prose so they stay accurate:
-     - `raiseErasureAlert`'s Javadoc (`:990-994`);
-     - the comment in `AdminQueueService.buildSummary` (`AdminQueueService.java:173-179`).
+   - **Make every reason-code / skip-cause list in prose complete, not just appended to** (story review F3). These lists are already stale today: they omit `CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED` and all six `COACH_RECAP_*` codes. Each must end up listing every current code, including the new `CHILD_BOOKING_*` and AC4's `COACH_AVAILABILITY_BLOCK_*`:
+     - `raiseErasureAlert`'s Javadoc (`:989-994`);
+     - the comment in `AdminQueueService.buildSummary` (`AdminQueueService.java:173-178`);
+     - the `skipped` comment at `:533` ("true only for CHILD_CONTENDED/CHILD_DELETE_LOCK_TIMEOUT skips");
+     - the terminal-status comment at `:639-640`;
+     - `eraseParentChildren`'s `@return` Javadoc (`:860-861`).
 
      `AdminQueueService` only prefixes `reason` verbatim, so no code change is needed there. Grepped: no frontend or docs file maps these codes.
 
@@ -107,14 +113,16 @@ Only the doc's own summary list (lines 213–214) is stale: it still says "still
    - Add the group **after** `REPORT` in the lambda (`:446-466`): `coachRecapCurrentGroup.set(CoachRecapGroup.AVAILABILITY_BLOCK); coachAvailabilityBlockRepository.anonymizeReasonByCoachId(cp.getId());`.
    - Extend the exhaustive switch (`:484-488`) with its case. Adding the enum value without the case is a compile error, which is the point of that enum.
    - Update the block's comments to match:
-     - the constants' Javadoc (`:196-221`) says "three groups";
-     - the WARN at `:489-493` says "session-recap/report scrub".
+     - the constants' Javadoc (`:197-221`) says "three groups";
+     - the `AtomicReference` comment at `:438-440` ("which of the three groups below … All three groups still run");
+     - the WARN at `:489-493` says "session-recap/report scrub";
+     - the `eraseTransactional` Javadoc (`:318-321`) enumerates the coach's authored-narrative copies. Availability-block reasons are not narrative, so add a separate clause there rather than changing a count (story review F9).
 
    **Why not inline?** An inline statement would run with no `lock_timeout` bound. That is the exact hazard the comment at `:408-431` documents for this block. A trip would also roll back the *entire* erasure into `markFailed`'s generic `UNCLASSIFIED_FAILURE`. Inside the block, a trip is bounded by the already-set transaction-scoped `lock_timeout`, alerted with its own label, and gates `skipped` so the daily retry re-drives it. The UPDATE is idempotent.
 
-   **Lock ordering (checked).** The new statement takes row locks on `coach_availability_blocks` in a `REQUIRES_NEW` transaction, while the outer `eraseTransactional` has not flushed its own `coach_profiles` UPDATE (`coachProfileRepository.save(cp)`, `:379`, is flushed at outer commit). `AvailabilityService.createBlock`/`deleteBlock` lock `coach_profiles` `FOR UPDATE` first, then touch blocks (`:300-301`, `:327-329`). The inner transaction holds no `coach_profiles` lock, so it cannot form a cycle with those writers. It commits before the outer transaction ever flushes `coach_profiles`. This also does not trip `REQUIRES_NEW` self-deadlock: the outer transaction never wrote a `coach_availability_blocks` row.
+   **Lock ordering (checked).** The new statement takes row locks on `coach_availability_blocks` in a `REQUIRES_NEW` transaction, while the outer `eraseTransactional` has not flushed its own `coach_profiles` UPDATE (`coachProfileRepository.save(cp)`, `:379`, is flushed at outer commit). `AvailabilityService.addBlock`/`deleteBlock` lock `coach_profiles` `FOR UPDATE` first, then touch blocks (`:300-301`, `:327-329`). The inner transaction holds no `coach_profiles` lock, so it cannot form a cycle with those writers. It commits before the outer transaction ever flushes `coach_profiles`. This also does not trip `REQUIRES_NEW` self-deadlock: the outer transaction never wrote a `coach_availability_blocks` row.
 
-   **Known residual, same class as the owner-accepted one.** An erased coach's still-valid access JWT can create a *new* block with a reason after erasure commits. This is the residual recorded under "code review of skillars-deferred-154" and accepted there (`markAllUsedByUserId` revokes refresh tokens only). Record it in Completion Notes; do not fix it here.
+   **Known residual, same class as the owner-accepted one.** An erased coach's still-valid access JWT can create a *new* block with a reason after erasure commits. This is the residual recorded under "code review of skillars-deferred-154" and accepted there (`markAllUsedByUserId` revokes refresh tokens only). The window is **bounded at about 5 minutes**, not the JWT lifetime: every `DB_REFRESH_TOKEN_INTERVAL` (5 min, `SecurityConstants.java:120`), `JWTAuthorizationFilter` re-runs `daoAuthProvider.authorize`, which rejects the now-`locked` account (Javadoc `:78-86`, code `:205-207`). Record it with that bound in Completion Notes; do not fix it here (story review F10).
 
 ### Frontend: delete the dead `playerName`-from-query computed (L3)
 
@@ -132,14 +140,18 @@ Only the doc's own summary list (lines 213–214) is stale: it still says "still
 
 6. **Add a root `.gitattributes` that marks the tracked binary types as `binary`.** Minimum lines: `*.ttf binary`, `*.png binary`, `*.ico binary`. Preemptive `*.otf`, `*.woff`, `*.woff2`, `*.jpg`, `*.jpeg`, `*.gif`, `*.pdf` lines are fine.
    - **Do NOT add `* text=auto`** or any `eol=` rule. That would mark every text file for renormalisation and turn this one-line change into a repo-wide diff.
-   - Verify with `git ls-files --eol src/main/resources/fonts/`: the `.ttf` rows must show `attr/-text -diff -merge` (or `attr/binary`), and no tracked file shows as modified afterwards (`git status`).
+   - Verify, then confirm nothing shows as modified afterwards (`git status`):
+     - `git ls-files --eol src/main/resources/fonts/`: the `.ttf` rows must show `attr/-text`. The attr column reports only text/eol attributes, so it never prints `binary`;
+     - `git check-attr binary text diff merge -- src/main/resources/fonts/NotoSans-Bold.ttf` must print `binary: set`, `text: unset`, `diff: unset` and `merge: unset`.
+
+     Both outputs were verified at story-review time with a scratch `core.attributesFile` (story review F5).
    - Note for the record: local `core.autocrlf` is `input` on this machine (the ledger said "unset"). Git's NUL-byte heuristic already classifies the TTFs as `-text`, so this remains insurance, not a live-defect fix.
 
 ### Test coverage for two untested coach-erasure reason codes (L5)
 
-7. **Add `GdprErasureServiceTest` cases for `COACH_RECAP_TIMELINE_CONTENDED` and `COACH_RECAP_REPORT_CONTENDED`,** mirroring `erase_coachUser_sessionCompletionDataGroupContended_raisesScdContendedReason` (`:607-619`):
+7. **Add `GdprErasureServiceTest` cases for `COACH_RECAP_TIMELINE_CONTENDED` and `COACH_RECAP_REPORT_CONTENDED`,** mirroring `erase_coachUser_sessionCompletionDataGroupContended_raisesScdContendedReason` (`:608-620`):
    - throw `new CannotAcquireLockException("deadlock")` from `playerTimelineRepository.anonymizeMetadataByCoachId(COACH_PROFILE_ID)`;
-   - then, separately, throw it from `performanceReportRepository.anonymizeByCoachId(eq(COACH_PROFILE_ID), anyString())` (a `when(...).thenThrow`, as `:640-641` does, because that method is not `void`);
+   - then, separately, throw it from `performanceReportRepository.anonymizeByCoachId(eq(COACH_PROFILE_ID), anyString())` (a `when(...).thenThrow`, as `:641-642` does, because that method is not `void`);
    - each test asserts the request is `FAILED` and the single alert's reason.
 
    Also add the AC3/AC4 equivalents:
@@ -155,7 +167,7 @@ Only the doc's own summary list (lines 213–214) is stale: it still says "still
 8. **Move `src/frontend/src/i18n/collectKeyPaths.js` to `src/frontend/test/vitest/collectKeyPaths.js`**, next to `setup-file.js`.
    - Update both imports: `localeKeyParitySpec.js:16` and `i18nTemplateKeyResolutionSpec.js:38` become `../../../test/vitest/collectKeyPaths.js`.
    - Rewrite the file's header comment for its new location. `vitest.config.mjs:49-55`'s two `include` globs (`src/**/*.{spec,test}.{js,mjs}` and `src/**/__tests__/**/*.{js,mjs}`) match nothing under `test/`, so it will not be collected as a spec.
-   - **Accepted, disclosed tradeoff:** `npm run lint`'s glob is `./src*/**/*.{js,cjs,mjs,vue}` (`package.json:10`), so the moved file falls out of ESLint coverage. That is exactly `setup-file.js`'s existing status. Prettier (`**/*`) still covers it, and so does the CI Prettier gate (`.github/actions/`). Record this in Completion Notes; do not widen the lint glob in this story.
+   - **Lint/format coverage is preserved in CI** (corrected per story review F2). CI's frontend-quality action runs `npx eslint .` (`.github/actions/frontend-quality/action.yml:52`), not `npm run lint`, and Quasar's ignore list doesn't exclude `test/`, so the moved file **is still linted in CI**. CI's Prettier step, `npx prettier --check "**/*.{js,vue,scss,json}" --ignore-path ../../.gitignore` (`:36`), also covers it. Only the *local* `npm run lint` glob (`./src*/**/*.{js,cjs,mjs,vue}`, `package.json:10`) misses `test/`, the same as `setup-file.js` today. Run `npx eslint test/vitest/collectKeyPaths.js` locally once. Do not widen the `npm run lint` glob in this story.
    - Use `git mv` so history follows the file.
 
 ### Comment accuracy (L7)
@@ -170,19 +182,32 @@ Only the doc's own summary list (lines 213–214) is stale: it still says "still
 10. **Annotate both source documents so future mining passes skip these items.**
     - In `deferred-work.md`, append a `**[CLOSED by skillars-deferred-157 ACn: …]**` marker to each of L1–L8, following the established in-place style (e.g. the `[CLOSED by skillars-deferred-156 AC2 …]` markers in the "code review of skillars-deferred-155" section). Do not delete the bullets.
     - Do **not** touch the "Unknown Player" `[Decided]` bullet or the PDF-glyph `[DECIDED 2026-10-21]` bullet.
-    - In `brainstorming-session-2026-10-14-19-55-07.md`, replace the stale "still open, no story yet" (item 5, line 213) and "still parked" (item 6, line 214) with `covered by skillars-deferred-155-recap-report-tie-in-player-session-request-gdpr-metadata-scrub-and-hardening-sweep (created 2026-10-19)`, matching the format of items 1–4b above them.
+    - In `brainstorming-session-2026-10-14-19-55-07.md`, mark **every** stale status line covered by `skillars-deferred-155-recap-report-tie-in-player-session-request-gdpr-metadata-scrub-and-hardening-sweep (created 2026-10-19)`, matching the ✅ format Priorities 1–4 already use. Story review F6 found these beyond the two originally listed:
+      - `:202` "Deferred / Parked: Player/Parent-Initiated Flag";
+      - `:213` item 5 "still open, no story yet";
+      - `:214` item 6 "still parked";
+      - `:252` the "Fast-Follow: Recap -> Report Generation" heading and its next steps;
+      - `:255` the "Deferred: Player/Parent-Initiated Flag" heading and its next steps;
+      - `:273` "4. Revisit the deferred player/parent-initiated flag…".
+
+      Append the annotation; don't rewrite the historical text.
 
 ### i18n template-key spec hardening (L8)
 
 11. **`i18nTemplateKeyResolutionSpec.js` enforces what its own module doc promises.**
-    - **(a) Reasons are asserted.** Add an `it(...)` asserting every `DYNAMIC_KEY_CALL_SITES` entry has a `reason` that is a non-empty string after `.trim()`. The module doc (`:24-26`) says "with a one-line reason, or this spec fails", and today nothing checks it. Also assert `at` values are unique. A duplicate entry would silently mask a stale one in the inverse check (`:275-283`).
-    - **(b) Block comments are not scanned as live code.** Before splitting into lines, blank out the contents of `/* … */` and `<!-- … -->` spans **while preserving every `\n`**. For example: `content.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))`, and the same for `<!--[\s\S]*?-->`.
+    - **(a) Reasons are asserted.** Add an `it(...)` asserting every `DYNAMIC_KEY_CALL_SITES` entry has a `reason` that is a non-empty string after `.trim()`. The module doc (`:24-26`) says "with a one-line reason, or this spec fails", and today nothing checks it. Also assert `at` values are unique, as list hygiene only. Do **not** justify it in a comment as "a duplicate would mask a stale entry". It wouldn't: the inverse check (`:275-283`) maps every entry, so both copies of a stale duplicate are reported (story review F12).
+    - **(b) Block comments are not scanned as live code.** Before splitting into lines, blank out the contents of comment spans **while preserving every `\n`** (blank each non-newline character to a space).
+      - **Scope the blanking by language region; do NOT run a whole-file `/\/\*[\s\S]*?\*\//g`** (story review F1, verified). `accept="video/*"` appears in `DrillDetailPanel.vue:128,299` and `VideoManagementPage.vue:38`. Neither file contains a `*/` today, so a whole-file regex passes the before/after check below. But the first `/* */` comment anyone later adds to either file would open a fake "comment" at `video/*"`. That would blank every translation call in between, about 30 in `DrillDetailPanel`, and the spec would **not fail**: those keys would silently stop being guarded.
+      - The required shape:
+        - in `.vue` files, blank `/* … */` only inside `<script …>…</script>` and `<style …>…</style>` blocks, and `<!-- … -->` only inside `<template>`;
+        - in `.js` files, blank `/* … */` only.
+      - **Add a regression `it(...)`** that runs the same blanking function on an inline fixture string with a `<template>` containing `accept="video/*"` and a `$t('fixture.key')`, followed by a `<script>` containing `/* c */`. Assert the `$t('fixture.key')` line survives un-blanked. This needs the blanking logic extracted into a small pure function the spec can call directly.
       - Line numbers must not move: `DYNAMIC_KEY_CALL_SITES` is keyed by `file:line`.
       - **Verify there is no collateral:** run the spec before and after and confirm `literalCalls.length`, the `dynamicCalls` set and the `wrappedCalls` set are unchanged. A `/*` inside a string literal or a glob such as `'src/**/*.vue'` would otherwise eat real code. If any set changes, investigate each delta rather than accepting it.
       - Keep `stripLineComment` for `//`.
     - **(c) The `> 500` floor is documented, not magic.**
       - Replace the bare `500` with a named constant whose comment records:
-        - the measured count at HEAD: 1571 statically-resolvable keys, per skillars-deferred-156's Completion Notes. Re-measure and record the real number;
+        - the measured count at HEAD: 1571 statically-resolvable **call sites** (what `literalCalls.length` counts; not distinct keys), per skillars-deferred-156's Completion Notes. Re-measure and record the real number;
         - that it is an order-of-magnitude "scan found something" guard, not a precise count;
         - what to do if a legitimate i18n consolidation trips it: lower the constant, with a note.
       - Pass a failure message to `expect` so a trip explains itself.
@@ -213,7 +238,7 @@ Only the doc's own summary list (lines 213–214) is stale: it still says "still
   - [ ] 2.3 Update `GdprErasureServiceTest.setUp()`'s constructor call and add the `@Mock`.
   - [ ] 2.4 `GdprErasureIT`: `erase_coachUser_scrubsOwnAvailabilityBlockReasonsButNotAnotherCoachs`.
     - Mirror `erase_coachUser_anonymizesOwnSessionCompletionRecapForThatCoachOnly` (`:829`): a second real `marketplace.coach_profiles` + `main.user` fixture for the unrelated coach.
-    - Insert one block per coach with a non-null `reason`. The `INSERT INTO booking.coach_availability_blocks (id, coach_id, start_datetime, end_datetime, reason)` shape is in `AvailabilityResourceIT.java:320`. Obey `chk_block_end_after_start`, and use **one** `Instant` base for start/end (see the `chk_bkg_end_after_start` CI-flake precedent).
+    - Insert one block per coach with a non-null `reason`. The nearest existing fixture is `AvailabilityResourceIT.java:320`, `INSERT INTO booking.coach_availability_blocks (id, coach_id, start_datetime, end_datetime)` with **no `reason` column**. No test in `src/test` inserts `reason` today, so add it (story review F8). The table has **no FK** on `coach_id`. The fixture's `coach_id` must equal the erased coach's real `coach_profiles.id` for the scrub to match, but nothing enforces that. Obey `chk_block_end_after_start`, and use **one** `Instant` base for start/end (see the `chk_bkg_end_after_start` CI-flake precedent).
     - Wrap fixture writes in `transactionTemplate` (bare `jdbcTemplate` writes in an IT body never commit under this project's Hikari `auto-commit=false`).
     - Assert: own `reason` IS NULL **and** the row still exists with unchanged start/end; the other coach's `reason` is intact.
 - [ ] **Task 3: frontend dead computed** (AC5)
@@ -302,4 +327,18 @@ This is the standing "do not create small stories" instruction for ledger mining
 
 ## Change Log
 
+- 2026-10-21: Amended per `story-review.md` (four-layer audit at `b8c81fc5`→`5d89ce82`). All 13 findings were re-verified against source and all were real, so none was rejected as a false positive:
+  - F1: AC11(b) comment blanking is now scoped by region, plus a regression fixture;
+  - F2: AC8's ESLint/Prettier claims corrected (CI runs `npx eslint .`);
+  - F3: reason lists must be made complete;
+  - F4: the booking WARN states the full rollback;
+  - F5: AC6 expected git output corrected;
+  - F6: all stale brainstorm lines listed;
+  - F7: two closed items removed from the "still open" exclusion list;
+  - F8: the fixture has no `reason` column;
+  - F9: extra "three groups" comment sites;
+  - F10: the residual window is bounded at about 5 min;
+  - F11: citation drift;
+  - F12: the uniqueness rationale is dropped;
+  - F13: the floor counts call sites, not keys.
 - 2026-10-21: Created via `/bmad-create-story`, mined from `deferred-work.md`'s newest section (deferred-156 code review). Companion brainstorm doc re-verified exhausted. All citations re-verified against `master` @ `56803337`. One ledger nuance corrected (L3: the `playerName` prop is not fully inert, but the only consumer is unreachable on that route). Status backlog → ready-for-dev.
