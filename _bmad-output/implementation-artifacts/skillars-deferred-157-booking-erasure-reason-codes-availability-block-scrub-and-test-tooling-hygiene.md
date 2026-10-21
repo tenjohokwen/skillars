@@ -37,7 +37,7 @@ Only the doc's own summary list (lines 213–214) is stale: it still says "still
 ### Explicitly NOT in this story (and why)
 
 - **"The backend's `"Unknown Player"` fallback …"**: owner-`Decided 2026-10-20: accept, do not change`. Not re-litigated.
-- **"PDF reports still silently drop glyphs outside Noto Sans latin-greek-cyrillic coverage"**: the ledger itself says closing it needs *either* real per-character font-fallback work (openpdf 2.0.5 has no built-in support) *or* a product decision that non-Latin/Greek/Cyrillic names are out of scope for PDFs. That is a product call, not a mechanical fix, so it stays open until the owner decides.
+- **"PDF reports still silently drop glyphs outside Noto Sans latin-greek-cyrillic coverage"**: owner-**decided 2026-10-21: out of scope**. Non-Latin/Greek/Cyrillic scripts are not supported in PDF reports, and the existing unrenderable-code-point warning log is the accepted end state. The ledger bullet now carries a `[DECIDED]` marker. Do not touch the font code or that bullet in this story.
 - **Everything older in the ledger that is still open** was re-checked and is one of three kinds:
   - owner-blocked on production evidence: the `main."user"` cleanup-sweep index, re-confirmed deferred by `skillars-deferred-125`;
   - investigation-led: the `VideoModerationEmailListener` `persisted == null` root cause, the `MailManager` circuit breaker;
@@ -169,7 +169,7 @@ Only the doc's own summary list (lines 213–214) is stale: it still says "still
 
 10. **Annotate both source documents so future mining passes skip these items.**
     - In `deferred-work.md`, append a `**[CLOSED by skillars-deferred-157 ACn: …]**` marker to each of L1–L8, following the established in-place style (e.g. the `[CLOSED by skillars-deferred-156 AC2 …]` markers in the "code review of skillars-deferred-155" section). Do not delete the bullets.
-    - Do **not** touch the "Unknown Player" `[Decided]` bullet or the PDF-glyph bullet.
+    - Do **not** touch the "Unknown Player" `[Decided]` bullet or the PDF-glyph `[DECIDED 2026-10-21]` bullet.
     - In `brainstorming-session-2026-10-14-19-55-07.md`, replace the stale "still open, no story yet" (item 5, line 213) and "still parked" (item 6, line 214) with `covered by skillars-deferred-155-recap-report-tie-in-player-session-request-gdpr-metadata-scrub-and-hardening-sweep (created 2026-10-19)`, matching the format of items 1–4b above them.
 
 ### i18n template-key spec hardening (L8)
