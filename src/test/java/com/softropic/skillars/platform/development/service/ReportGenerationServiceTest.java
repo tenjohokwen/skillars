@@ -405,6 +405,34 @@ class ReportGenerationServiceTest {
         assertThat(text).doesNotContain("null");
     }
 
+    /**
+     * skillars-deferred-156 AC4: openpdf's base-14 Type1 fonts are WinAnsi (cp1252)-only and silently
+     * DROP (not substitute) any out-of-range glyph. {@code è}/{@code —}/{@code é}/{@code à} are all
+     * cp1252-encodable and would pass against the unfixed code, proving nothing. {@code Ł} (U+0141,
+     * Latin Extended-A) and {@code Д} (U+0414, Cyrillic) are both genuinely outside cp1252 AND inside
+     * the vendored Noto Sans (latin-greek-cyrillic) TTF's real glyph coverage (confirmed against the
+     * font's own cmap) — unlike {@code ✓} (U+2713, a Dingbat), which this specific font does not
+     * cover either; see {@code ReportGenerationService}'s verification-badge comment for why that
+     * one case is fixed differently. Against the pre-fix
+     * {@code FontFactory.getFont(FontFactory.HELVETICA, ...)} base-14 fonts, this assertion fails
+     * (both characters silently vanish from the extracted text); the vendored, embedded Noto Sans
+     * TTF renders them for real.
+     */
+    @Test
+    void generateReport_recapContainsNonCp1252Characters_rendersRealCharactersNotDropped() throws Exception {
+        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+        when(playerTimelineRepository.findSessionNotesForReport(PLAYER_ID, COACH_ID, ReportGenerationService.REPORT_SESSION_NOTES_LIMIT)).thenReturn(List.of(
+            sessionNoteEvent(Instant.now().minus(1, java.time.temporal.ChronoUnit.DAYS), "Great session with Łukasz", "Next time work with Дмитрий")
+        ));
+
+        service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling.");
+
+        ArgumentCaptor<ReportGeneratedEvent> eventCaptor = ArgumentCaptor.forClass(ReportGeneratedEvent.class);
+        verify(publisher).publishEvent(eventCaptor.capture());
+        String text = extractPdfText(eventCaptor.getValue().pdfBytes());
+        assertThat(text).contains("Łukasz", "Дмитрий");
+    }
+
     @Test
     void generateReport_academyWithBranding_logoFetchAttempted() {
         stubGenerateReport(CoachSubscriptionTier.ACADEMY);

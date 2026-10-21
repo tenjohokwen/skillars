@@ -2,11 +2,11 @@ package com.softropic.skillars.platform.development.service;
 
 import com.lowagie.text.Document;
 import com.lowagie.text.Font;
-import com.lowagie.text.FontFactory;
 import com.lowagie.text.Image;
 import com.lowagie.text.PageSize;
 import com.lowagie.text.Paragraph;
 import com.lowagie.text.Phrase;
+import com.lowagie.text.pdf.BaseFont;
 import com.lowagie.text.pdf.PdfPCell;
 import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
@@ -140,6 +140,17 @@ public class ReportGenerationService {
     private static final long PER_COACH_WINDOW_MINUTES = 1;
     /** Bucket name, kept distinct from the aspect's {@code report_generate} so the two cannot merge. */
     static final String PER_COACH_BUCKET = "report_generate_user";
+
+    // skillars-deferred-156 AC4: classpath-relative, resolved by openpdf's own
+    // RandomAccessFileOrArray(String,...) -> BaseFont.getResourceStream(...) fallback (no leading
+    // slash — ClassLoader.getResourceAsStream semantics) once the plain `new File(name)` check
+    // fails, which it always does here since no such path exists on disk. SIL Open Font License
+    // 1.1 (src/main/resources/fonts/NotoSans-OFL.txt), not Apache-2.0 — corrected from this story's
+    // AC4 text during implementation: Noto Sans ships OFL, and OFL explicitly permits embedding in
+    // generated documents (the embedding restriction applies to redistributing the font software
+    // itself under a different license, not to documents a tool produces with it).
+    private static final String NOTO_SANS_REGULAR_PATH = "fonts/NotoSans-Regular.ttf";
+    private static final String NOTO_SANS_BOLD_PATH = "fonts/NotoSans-Bold.ttf";
 
     @Transactional
     @RateLimited(key = "report_generate", capacity = 10, duration = 1, unit = TimeUnit.MINUTES)
@@ -435,6 +446,43 @@ public class ReportGenerationService {
     private record SessionNoteEntry(Instant occurredAt, String whatWeDid, String whatsNext) {
     }
 
+    /**
+     * (code review of skillars-deferred-156) Makes an unrenderable-glyph drop OBSERVABLE rather than
+     * silent. The vendored Noto Sans (latin-greek-cyrillic build) closes the originally-reported
+     * cp1252 bug for Latin Extended-A / Cyrillic / Greek, but it does not cover CJK, Arabic, Hebrew,
+     * Devanagari or emoji — and openpdf drops an uncovered code point with no exception and no log, so
+     * a coach or player whose own name is in one of those scripts loses it from every report with
+     * nothing anywhere recording that it happened. {@code CreatePlayerProfileRequest.name} is
+     * {@code @NotBlank @Size(max = 100)} with no charset restriction, so this is reachable with
+     * ordinary user input, not just adversarial input.
+     *
+     * <p>This does NOT fix the rendering — closing that properly needs additional vendored faces plus
+     * per-character font fallback, which openpdf 2.0.5 has no built-in support for (ledgered as
+     * deferred work). It converts a silent, invisible data loss into a warning an operator can
+     * actually find, which is the cheap half of the fix and the half that stops the failure being
+     * undetectable.
+     *
+     * <p>Iterates by code point, not {@code char}, so an astral-plane character (emoji, rarer CJK) is
+     * tested as the single code point it is rather than as two unpaired surrogates that would both
+     * report as missing.
+     */
+    private void warnOnUnrenderableGlyphs(BaseFont font, String label, String text) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        String unrenderable = text.codePoints()
+            .distinct()
+            .filter(cp -> !Character.isWhitespace(cp))
+            .filter(cp -> !font.charExists(cp))
+            .mapToObj(cp -> "U+%04X (%s)".formatted(cp, new String(Character.toChars(cp))))
+            .collect(Collectors.joining(", "));
+        if (!unrenderable.isEmpty()) {
+            log.warn("[REPORT_PDF] {} contains {} code point(s) the embedded font cannot render — "
+                    + "they will be DROPPED from the generated PDF: {}",
+                label, unrenderable.split(", ").length, unrenderable);
+        }
+    }
+
     private SessionNoteEntry toSessionNoteEntry(PlayerTimelineEvent event) {
         Map<String, Object> metadata = event.getMetadata();
         Object whatWeDid = metadata.get(TimelineEventListener.METADATA_KEY_WHAT_WE_DID);
@@ -455,10 +503,40 @@ public class ReportGenerationService {
             PdfWriter.getInstance(doc, out);
             doc.open();
 
-            Font headerFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 18);
-            Font sectionFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 12);
-            Font normalFont = FontFactory.getFont(FontFactory.HELVETICA, 10);
-            Font tableHeaderFont = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 10);
+            // skillars-deferred-156 AC4: the base-14 Type1 fonts FontFactory built here are WinAnsi
+            // (cp1252)-only and silently DROP any out-of-range glyph rather than substituting one —
+            // the names/recap text a coach or player enters are not bounded to cp1252 (Polish,
+            // Scandinavian, Cyrillic, Greek characters all fall outside it). A vendored, classpath-
+            // embedded Noto Sans TTF (IDENTITY_H encoding, EMBEDDED) covers Latin Extended-A, Cyrillic
+            // and Greek instead. (The originally-cited proof of this bug, a literal "✓" U+2713
+            // Dingbat in the verification badge below, is a narrower, separate case this font does
+            // NOT cover either — see that badge's own comment for why the fix there is different.)
+            // BaseFont.createFont caches by
+            // (name, encoding, embedded) — callers across this @Async("reportExecutor") pool share
+            // one parsed BaseFont per weight; per-document glyph-subset tracking lives in openpdf's
+            // own per-PdfWriter FontDetails wrapper, not on the shared BaseFont, so concurrent report
+            // generation against the same cached BaseFont is safe. Real bold weight (not a
+            // synthetic Font.BOLD over the Regular face), to avoid faux-bold on every header/section/
+            // table heading.
+            BaseFont regularBase = BaseFont.createFont(NOTO_SANS_REGULAR_PATH, BaseFont.IDENTITY_H, BaseFont.EMBEDDED);
+            BaseFont boldBase = BaseFont.createFont(NOTO_SANS_BOLD_PATH, BaseFont.IDENTITY_H, BaseFont.EMBEDDED);
+            Font headerFont = new Font(boldBase, 18, Font.NORMAL);
+            Font sectionFont = new Font(boldBase, 12, Font.NORMAL);
+            Font normalFont = new Font(regularBase, 10, Font.NORMAL);
+            Font tableHeaderFont = new Font(boldBase, 10, Font.NORMAL);
+
+            // (code review of skillars-deferred-156) Scan every user-authored string that reaches this
+            // PDF, so a glyph this font cannot render is logged instead of vanishing silently. Checked
+            // against regularBase only: both weights are the same Noto Sans latin-greek-cyrillic
+            // family with identical coverage, and every user-authored string below renders in
+            // normalFont. Report-chrome literals are not scanned — they are ASCII by construction.
+            warnOnUnrenderableGlyphs(regularBase, "playerName", playerName);
+            warnOnUnrenderableGlyphs(regularBase, "coachName", coachName);
+            warnOnUnrenderableGlyphs(regularBase, "nextSteps", nextSteps);
+            for (SessionNoteEntry note : sessionNotes) {
+                warnOnUnrenderableGlyphs(regularBase, "sessionNote.whatWeDid", note.whatWeDid());
+                warnOnUnrenderableGlyphs(regularBase, "sessionNote.whatsNext", note.whatsNext());
+            }
 
             // Header — Academy branding or Skillars default
             boolean hasLogo = branding.isPresent() && branding.get().getLogoKey() != null;
@@ -586,8 +664,17 @@ public class ReportGenerationService {
                 }
             }
 
+            // skillars-deferred-156 AC4 (implementation correction): U+2713 is a Dingbat, not Latin
+            // Extended/Cyrillic/Greek — the vendored Noto Sans (latin-greek-cyrillic) TTF this AC adds
+            // does NOT cover it either (verified against the real font's cmap), so swapping fonts
+            // alone does not fix this specific glyph; it would still silently vanish. The actual fix
+            // for this one, app-authored badge is to stop depending on a glyph outside this font's
+            // (or any reasonably-sized single font's) coverage, not to chase it with a second font —
+            // openpdf has no built-in per-character font-fallback, and introducing one for a single
+            // decorative badge is not worth the complexity this AC's real target (user-authored names
+            // and recap text in Latin Extended/Cyrillic/Greek scripts) does not need.
             String verificationNote = coach.verificationTier() != null && !coach.verificationTier().isBlank()
-                ? " ✓ Verified" : "";
+                ? " (Verified)" : "";
             doc.add(new Paragraph("Prepared by: " + coachName + verificationNote, normalFont));
 
         } catch (Exception e) {

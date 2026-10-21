@@ -108,11 +108,13 @@ function lastSessionLabel(player) {
   })
 }
 
+// skillars-deferred-156 AC5: playerName no longer travels in the route's query string — a minor's
+// name in the URL reaches browser history/bookmarks/referrers. CoachPlayerDetailPage.vue now reads
+// it off the /exposure fetch response instead.
 function goToPlayerDetail(player) {
   router.push({
     name: 'coach-player-detail',
     params: { playerId: player.playerId },
-    query: { playerName: player.playerName },
   })
 }
 </script>

@@ -89,8 +89,28 @@ const { t } = useI18n()
 // Number.MAX_SAFE_INTEGER, and Number(route.params.playerId) has already shipped and been
 // fixed twice on this page's own model pages (skillars-deferred-147/-148).
 const playerId = computed(() => route.params.playerId)
+
+// skillars-deferred-156 AC5: playerName now comes from the exposure fetch response, not the
+// route's own query string (which put a minor's name in browser history/bookmarks/referrers).
+// development.store.js's fetchExposure nulls exposure.value at the START of every fetch and
+// never repopulates it on error — without this cache, the always-visible heading above (it
+// renders outside both the pageError and loading content guards) would fall back to the
+// translated placeholder for the full duration of every load AND permanently on any fetch
+// error, where the route-query version used to keep showing the real name throughout. Keyed by
+// playerId (not a single stale slot) so switching to a player whose name isn't cached yet shows
+// the honest placeholder rather than the PREVIOUS player's name.
+const lastKnownPlayerNames = ref({})
+watch(
+  () => store.exposure?.playerName,
+  (name) => {
+    if (name && playerId.value) lastKnownPlayerNames.value[playerId.value] = name
+  },
+)
 const playerName = computed(
-  () => route.query.playerName || t('coach.playerDetailUnknownPlayerName'),
+  () =>
+    store.exposure?.playerName ??
+    lastKnownPlayerNames.value[playerId.value] ??
+    t('coach.playerDetailUnknownPlayerName'),
 )
 
 const neglectedSkillNames = computed(() =>

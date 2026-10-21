@@ -1,7 +1,7 @@
 package com.softropic.skillars.platform.booking.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
-import com.softropic.skillars.platform.booking.contract.BookingResponse;
+import com.softropic.skillars.platform.booking.contract.PlayerRequestResponse;
 import com.softropic.skillars.platform.booking.contract.UpdatePlayerRequestRequest;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
@@ -37,7 +37,7 @@ public class PlayerRequestResource {
 
     @PatchMapping("/{id}/player-request")
     @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
-    public ResponseEntity<BookingResponse> setPlayerRequest(
+    public ResponseEntity<PlayerRequestResponse> setPlayerRequest(
             @PathVariable UUID id, @RequestBody @Valid UpdatePlayerRequestRequest req) {
         return ResponseEntity.ok(bookingService.setPlayerRequest(id, currentCallerId(), req.playerRequest()));
     }

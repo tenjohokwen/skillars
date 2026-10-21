@@ -4,6 +4,7 @@ import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.QueryHints;
@@ -320,4 +321,19 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // several ticks instead of one. (The sibling findPendingQuickCompletes is uncapped but carries an
     // explicit sizing rationale and does strictly less work per row.)
     List<Booking> findStuckCompletionsWithNoSessionData(@Param("cutoff") Instant cutoff, Pageable pageable);
+
+    // skillars-deferred-156 AC1: GdprErasureService injected this repository with zero call sites
+    // until now — notes/playerRequest are purely player/parent-authored free text (never written by
+    // the coach), so a single playerId-keyed method correctly covers both the self-registered-PLAYER
+    // erasure path and the per-child path inside PARENT erasure; there is no coach-authored half to
+    // also scrub, unlike SessionCompletionDataRepository's anonymizeByPlayerId/anonymizeByCoachId
+    // pair. "UPDATE VERSIONED" (not a plain UPDATE) bumps Booking's own @Version column for every
+    // row this touches — Booking is not @DynamicUpdate, so a booking loaded concurrently
+    // (e.g. setPlayerRequest/save, setCancelReason/save) would otherwise rewrite every column,
+    // including these two, from its stale in-memory snapshot and silently resurrect just-erased
+    // text with no optimistic-lock failure at all. The bump makes that race surface as the same
+    // OptimisticLockingFailureException/CONCURRENT_MODIFICATION path those writers already handle.
+    @Modifying
+    @Query("UPDATE VERSIONED Booking b SET b.notes = NULL, b.playerRequest = NULL WHERE b.playerId = :playerId")
+    void anonymizeNotesAndPlayerRequestByPlayerId(@Param("playerId") Long playerId);
 }

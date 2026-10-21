@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BookingError;
@@ -22,6 +23,7 @@ import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
 import com.softropic.skillars.platform.booking.contract.PlayerNoShowEvent;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleItem;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleResponse;
+import com.softropic.skillars.platform.booking.contract.PlayerRequestResponse;
 import com.softropic.skillars.platform.booking.contract.RescheduleRequestResponse;
 import com.softropic.skillars.platform.booking.contract.ScheduleBookingItem;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
@@ -132,7 +134,7 @@ public class BookingService {
     private final BookingPaymentRepository bookingPaymentRepository;
     private final EntityManager entityManager;
     private final PessimisticLockRetryer lockRetryer;
-    private final com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer contactDetailSanitizer;
+    private final ContactDetailSanitizer contactDetailSanitizer;
 
     // skillars-deferred-155 AC5: the two statuses representing "this session is genuinely still
     // going to happen" — the only window in which a player/parent's session-prep request can be
@@ -343,14 +345,19 @@ public class BookingService {
         booking.setRequestedStartTime(req.requestedStartTime());
         booking.setRequestedEndTime(req.requestedEndTime());
         booking.setCanonicalTimezone(canonicalTimezone);
-        booking.setNotes(req.notes());
+        // skillars-deferred-156 AC2: notes previously reached the DB column AND the coach's
+        // booking-request email (below) completely unsanitized, unlike the sibling playerRequest
+        // column — sanitize once here and reuse the result for both, so the off-platform-contact
+        // channel (email) is covered, not just the write.
+        String sanitizedNotes = sanitizeAndTruncate(contactDetailSanitizer, req.notes(), 500);
+        booking.setNotes(sanitizedNotes);
         booking.setSessionPackPurchaseId(req.sessionPackPurchaseId());
         bookingRepository.save(booking);
 
         String coachEmail = resolveEmail(coach.getUserId(), booking.getId());
         eventPublisher.publishEvent(new BookingRequestedEvent(
             this, booking.getId(), parentId, req.playerId(), req.coachId(),
-            coach.getDisplayName(), coachEmail, req.notes(),
+            coach.getDisplayName(), coachEmail, sanitizedNotes,
             req.requestedStartTime(), canonicalTimezone
         ));
 
@@ -734,27 +741,24 @@ public class BookingService {
      * (see {@link #createBookingRequest}), so this one check is already correct for both roles.
      */
     @Transactional
-    public BookingResponse setPlayerRequest(UUID bookingId, Long callerId, String playerRequest) {
+    public PlayerRequestResponse setPlayerRequest(UUID bookingId, Long callerId, String playerRequest) {
         Booking booking = getBookingOrThrow(bookingId);
         if (!Objects.equals(booking.getParentId(), callerId)) {
             throw new OperationNotAllowedException("Caller does not own this booking", SecurityError.MISSING_RIGHTS);
         }
         rejectIfNotEditablePlayerRequest(booking);
 
-        String sanitized = null;
-        if (playerRequest != null && !playerRequest.isBlank()) {
-            // skillars-deferred-155 AC4: REDACTION's replacement text is longer than most of what it
-            // matches, so sanitizing a @Size(max=500)-validated input can produce a longer string —
-            // truncate after sanitizing so a save can never fail on this path.
-            sanitized = StringUtils.truncate(contactDetailSanitizer.sanitize(playerRequest).sanitized(), 500);
-        }
+        // skillars-deferred-155 AC4: REDACTION's replacement text is longer than most of what it
+        // matches, so sanitizing a @Size(max=500)-validated input can produce a longer string —
+        // truncate after sanitizing so a save can never fail on this path.
+        String sanitized = sanitizeAndTruncate(contactDetailSanitizer, playerRequest, 500);
         booking.setPlayerRequest(sanitized);
         try {
             bookingRepository.save(booking);
         } catch (OptimisticLockingFailureException e) {
             throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
-        return toBookingResponse(booking);
+        return new PlayerRequestResponse(booking.getId(), booking.getPlayerRequest());
     }
 
     /**
@@ -1051,6 +1055,20 @@ public class BookingService {
     private Map<Long, String> resolveParentNames(Collection<Long> parentIds) {
         return userRepository.findAllById(parentIds).stream()
             .collect(Collectors.toMap(User::getId, this::formatParentName));
+    }
+
+    // skillars-deferred-156 AC2: shared by createBookingRequest's notes write and setPlayerRequest's
+    // playerRequest write, which previously sanitized inconsistently (notes not at all). commons-lang3
+    // is pinned at 3.21.0 (pom.xml), whose StringUtils.truncate is already surrogate-pair-aware — it
+    // backs the cut index off by one rather than splitting an astral character straddling the
+    // boundary — so no extra guard is needed here beyond sanitize-then-truncate in that order.
+    // Package-private, not private — mirrors GdprErasureService.spendDownLockBudget's own rationale:
+    // a pure static helper with no Spring/mocking dependency, so BookingServiceTest (same package)
+    // can assert the surrogate-pair guarantee directly instead of only indirectly through a call site.
+    static String sanitizeAndTruncate(ContactDetailSanitizer sanitizer, String input, int maxLength) {
+        if (input == null || input.isBlank()) return null;
+        String sanitized = sanitizer.sanitize(input).sanitized();
+        return StringUtils.truncate(sanitized, maxLength);
     }
 
     /**

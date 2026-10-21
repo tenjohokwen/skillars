@@ -534,10 +534,11 @@ export const useBookingStore = defineStore('booking', () => {
     await loadParentBookings()
   }
 
-  // skillars-deferred-155 AC5/AC7: a full loadParentBookings() refetch rather than splicing the
-  // PATCH response in — the single-booking mapper leaves parentName/pendingReschedule/batchId/
-  // batchSize null (toBookingResponse:482), so a manual splice here would wipe the in-progress
-  // reschedule banner/Accept-Decline affordance until the next reload. Mirrors
+  // skillars-deferred-155 AC5/AC7, reworded by skillars-deferred-156 AC3: a full
+  // loadParentBookings() refetch rather than splicing the PATCH response in. The PATCH response is
+  // now a narrow PlayerRequestResponse (bookingId, playerRequest only) — it never carries
+  // parentName/pendingReschedule/batchId/batchSize at all, so a manual splice here would still wipe
+  // the in-progress reschedule banner/Accept-Decline affordance until the next reload. Mirrors
   // handleCancelBooking/handleRequestReschedule's own established refetch-after-mutate pattern.
   async function handleSetPlayerRequest(bookingId, playerRequest) {
     await setPlayerRequest(bookingId, playerRequest)

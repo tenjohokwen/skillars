@@ -13,20 +13,7 @@ import { describe, it, expect } from 'vitest'
 import enUS from '../en-US/index.js'
 import deDE from '../de-DE/index.js'
 import frFR from '../fr-FR/index.js'
-
-/** Recursively collects every leaf key path, e.g. "booking.requests.playerRequestLabel". */
-function collectKeyPaths(obj, prefix = '') {
-  const paths = []
-  for (const [key, value] of Object.entries(obj)) {
-    const path = prefix ? `${prefix}.${key}` : key
-    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-      paths.push(...collectKeyPaths(value, path))
-    } else {
-      paths.push(path)
-    }
-  }
-  return paths
-}
+import { collectKeyPaths } from '../collectKeyPaths.js'
 
 function diff(a, b) {
   const bSet = new Set(b)
