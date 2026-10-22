@@ -92,6 +92,12 @@ public class Booking {
     @Column(name = "cancel_reason", length = 50)
     private String cancelReason;
 
+    // skillars-12-7 code review (Decision 2): set by BookingCompletionService.startSession. LIVE and QUICK
+    // both pass through COMPLETED_PENDING_CONFIRMATION, so this is the only record of which mode an
+    // abandoned wrap-up must be resumed in (null = quick-complete, or a row from before V167).
+    @Column(name = "live_started_at")
+    private Instant liveStartedAt;
+
     @PrePersist
     void onCreate() {
         if (createdAt == null) createdAt = Instant.now();
@@ -102,6 +108,24 @@ public class Booking {
     @PreUpdate
     void onUpdate() {
         updatedAt = Instant.now();
+    }
+
+    /**
+     * skillars-12-7 AC3: the pure half of "the coach may still add/correct this session's recap" --
+     * status {@code COMPLETED} and {@code now} strictly before {@code requestedEndTime + windowDays}.
+     * A null {@code requestedEndTime} is treated as CLOSED (unlike {@link #isPrepNoteEditable}, which
+     * treats it as open): with no end there is no anchor to measure the window from. The erasure
+     * checks live in {@code BookingCompletionService.recapEditability}, which both the read and the
+     * write path call, so the two can never disagree.
+     */
+    public boolean isRecapEditable(Instant now, long windowDays) {
+        return BookingStatus.COMPLETED.name().equals(status) && recapEditableUntil(windowDays) != null
+            && now.isBefore(recapEditableUntil(windowDays));
+    }
+
+    /** End of the recap edit window, or null when there is no {@code requestedEndTime} to anchor on. */
+    public Instant recapEditableUntil(long windowDays) {
+        return requestedEndTime == null ? null : requestedEndTime.plus(java.time.Duration.ofDays(windowDays));
     }
 
     /**

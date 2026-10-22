@@ -131,6 +131,34 @@ describe('PlayerTimelinePanel — session recap (skillars-12-5 AC8)', () => {
     expect(wrapper.text()).toContain('Shooting drills')
   })
 
+  // skillars-12-7 AC11: the third optional recap field renders inside the same guarded block.
+  it('renders the what-went-well label and value when present, and not when absent or blank', () => {
+    const mk = (metadata) =>
+      mountPanel({
+        accessExpired: false,
+        accessExpiryDays: null,
+        events: [
+          {
+            id: 'e1',
+            eventType: 'SESSION_COMPLETED',
+            occurredAt: new Date().toISOString(),
+            metadata,
+          },
+        ],
+        hasMore: false,
+      }).wrapper
+
+    const present = mk({ coachId: 'c1', whatWeDid: 'Passing', whatWentWell: 'Great tempo' })
+    expect(present.text()).toContain('development.timeline.whatWentWellLabel')
+    expect(present.text()).toContain('Great tempo')
+
+    const absent = mk({ coachId: 'c1', whatWeDid: 'Passing' })
+    expect(absent.text()).not.toContain('development.timeline.whatWentWellLabel')
+
+    const blankOnly = mk({ coachId: 'c1', whatWentWell: '   ' })
+    expect(blankOnly.find('dl').exists()).toBe(false)
+  })
+
   it('renders only the whatWeDid label and value when whatsNext is absent', () => {
     const { wrapper } = mountPanel({
       accessExpired: false,

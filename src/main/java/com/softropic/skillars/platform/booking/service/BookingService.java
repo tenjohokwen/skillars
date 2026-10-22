@@ -34,6 +34,8 @@ import com.softropic.skillars.platform.booking.repo.BookingBatch;
 import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
 import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlockRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.repo.SessionCompletionData;
+import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequest;
 import com.softropic.skillars.platform.booking.repo.BookingRescheduleRequestRepository;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
@@ -116,6 +118,7 @@ public class BookingService {
     );
 
     private final BookingRepository bookingRepository;
+    private final SessionCompletionDataRepository sessionCompletionDataRepository;
     private final BookingStateMachine bookingStateMachine;
     private final CoachProfileRepository coachProfileRepository;
     private final PaymentGateway paymentGateway;
@@ -627,16 +630,28 @@ public class BookingService {
                         r.getProposedStartTime(), r.getProposedEndTime(), r.getStatus()),
                     (a, b2) -> a));
 
+        // skillars-12-7 AC7: ONE batched lookup for whether each booking's wrap-up row exists / has recap text.
+        Map<UUID, SessionCompletionData> completionByBooking = bookingIds.isEmpty()
+            ? Map.of()
+            : sessionCompletionDataRepository.findByBookingIdIn(bookingIds).stream()
+                .collect(Collectors.toMap(SessionCompletionData::getBookingId, s -> s, (a, b2) -> a));
+
         return bookings.stream()
-            .map(b -> new ScheduleBookingItem(
-                b.getId(),
-                b.getPlayerId(),
-                resolvePlayerName(b.getPlayerId()),
-                b.getRequestedStartTime(),
-                b.getRequestedEndTime(),
-                b.getStatus(),
-                b.getCanonicalTimezone(),
-                pendingReschedules.get(b.getId())))
+            .map(b -> {
+                SessionCompletionData scd = completionByBooking.get(b.getId());
+                return new ScheduleBookingItem(
+                    b.getId(),
+                    b.getPlayerId(),
+                    resolvePlayerName(b.getPlayerId()),
+                    b.getRequestedStartTime(),
+                    b.getRequestedEndTime(),
+                    b.getStatus(),
+                    b.getCanonicalTimezone(),
+                    pendingReschedules.get(b.getId()),
+                    scd != null,
+                    scd != null && (scd.getWhatWeDid() != null || scd.getWhatsNext() != null),
+                    b.getLiveStartedAt() != null);
+            })
             .toList();
     }
 
@@ -1088,7 +1103,7 @@ public class BookingService {
     // single-row call sites (createBookingRequest, acceptBooking, etc.) keep calling the
     // per-id methods above unchanged — only getParentBookings/getCoachBookingRequests/
     // getParentPlayerSchedule iterate a list of rows and need a pre-built map.
-    private Map<Long, String> resolvePlayerNames(Collection<Long> playerIds) {
+    Map<Long, String> resolvePlayerNames(Collection<Long> playerIds) {
         return playerProfileRepository.findAllById(playerIds).stream()
             .collect(Collectors.toMap(PlayerProfile::getId, PlayerProfile::getName));
     }

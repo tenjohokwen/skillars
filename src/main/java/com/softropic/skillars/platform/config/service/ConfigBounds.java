@@ -122,6 +122,22 @@ public final class ConfigBounds {
         new BoundedKey("booking.stuck_completion_timeout_hours", 6L, 720L, false,
             "0/neg → every unconfirmed, row-less Quick Complete is force-completed near-instantly", 72L);
 
+    /**
+     * skillars-12-7 AC3: how long after a booking's {@code requestedEndTime} the owning coach may still
+     * add or correct the session recap. Registered in {@link #HAS_CODE_DEFAULT} and {@link #ALL}, read
+     * via the 4-arg {@code getBoundedLong} (out of range falls back to the default). The floor is 7, not
+     * 1, because of {@link #BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS}: the stuck-completion sweeper can
+     * create the placeholder recap row up to that many hours after the booking was last updated (default
+     * 72h), and a window shorter than that would make a swept session born un-editable and un-nudged.
+     * The floor only covers the DEFAULT timeout: that key's own max is 720h (30 days), and the window is
+     * anchored on {@code requestedEndTime} rather than the sweep time, so an operator raising the timeout
+     * must keep this window comfortably above it (code review, skillars-12-7) -- the two bounds are
+     * independent and nothing cross-checks them at startup.
+     */
+    public static final BoundedKey BOOKING_RECAP_EDIT_WINDOW_DAYS =
+        new BoundedKey("booking.recap.editWindowDays", 7L, 365L, false,
+            "below the stuck-completion timeout → swept sessions are born un-editable; absurd → recaps editable forever", 30L);
+
     /** {@code ModerationSlaMonitorService} — 0/neg → everything instantly SLA-breached. */
     public static final BoundedKey MODERATION_SLA_MINUTES =
         new BoundedKey("platform.moderation_sla_minutes", 1L, 10080L, true,
@@ -437,7 +453,8 @@ public final class ConfigBounds {
         RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS.key(),
         GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(),
         BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS.key(),
-        DEVELOPMENT_ROSTER_MAX_PLAYERS.key());
+        DEVELOPMENT_ROSTER_MAX_PLAYERS.key(),
+        BOOKING_RECAP_EDIT_WINDOW_DAYS.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -475,7 +492,8 @@ public final class ConfigBounds {
             RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS,
             GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS,
             BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS,
-            DEVELOPMENT_ROSTER_MAX_PLAYERS));
+            DEVELOPMENT_ROSTER_MAX_PLAYERS,
+            BOOKING_RECAP_EDIT_WINDOW_DAYS));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

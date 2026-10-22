@@ -351,4 +351,28 @@ describe('SessionPrepCard.vue (skillars-12-6)', () => {
     expect(setCoachPlanNote).toHaveBeenCalledWith('booking-1', 'typed value')
     expect(wrapper.find('textarea').element.value).toBe('stored value')
   })
+
+  // skillars-12-7 AC11: the optional "what went well" recap field.
+  it('renders the what-went-well line when present, and nothing for it when absent', async () => {
+    getSessionPrep.mockResolvedValue(
+      PREP({
+        lastSessionDate: '2026-03-01T10:00:00Z',
+        lastWhatWeDid: 'Passing',
+        lastWhatWentWell: 'Great tempo',
+      }),
+    )
+    const withIt = await mountCard()
+    expect(withIt.text()).toContain('coach.sessionPrepWhatWentWellLabel')
+    expect(withIt.text()).toContain('Great tempo')
+
+    getSessionPrep.mockResolvedValue(
+      PREP({
+        lastSessionDate: '2026-03-01T10:00:00Z',
+        lastWhatWeDid: 'Passing',
+        lastWhatWentWell: null,
+      }),
+    )
+    const without = await mountCard()
+    expect(without.text()).not.toContain('coach.sessionPrepWhatWentWellLabel')
+  })
 })

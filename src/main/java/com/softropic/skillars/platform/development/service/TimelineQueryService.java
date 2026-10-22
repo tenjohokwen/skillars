@@ -86,6 +86,7 @@ public class TimelineQueryService {
         Map<String, Object> redacted = new HashMap<>(metadata);
         redacted.remove(TimelineEventListener.METADATA_KEY_WHAT_WE_DID);
         redacted.remove(TimelineEventListener.METADATA_KEY_WHATS_NEXT);
+        redacted.remove(TimelineEventListener.METADATA_KEY_WHAT_WENT_WELL);
         return redacted;
     }
 }

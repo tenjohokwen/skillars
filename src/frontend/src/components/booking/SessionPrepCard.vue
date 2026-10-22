@@ -49,6 +49,12 @@
               </dt>
               <dd class="text-body2">{{ prep.lastWhatsNext }}</dd>
             </template>
+            <template v-if="prep.lastWhatWentWell?.trim()">
+              <dt class="text-caption text-weight-bold q-mt-xs">
+                {{ t('coach.sessionPrepWhatWentWellLabel') }}
+              </dt>
+              <dd class="text-body2">{{ prep.lastWhatWentWell }}</dd>
+            </template>
           </dl>
           <div v-else class="text-body2 q-mt-sm">{{ t('coach.sessionPrepNoRecapYet') }}</div>
         </template>
@@ -134,7 +140,12 @@ const error = ref(false)
 const prep = ref(null)
 
 const hasRecap = computed(
-  () => !!(prep.value?.lastWhatWeDid?.trim() || prep.value?.lastWhatsNext?.trim()),
+  () =>
+    !!(
+      prep.value?.lastWhatWeDid?.trim() ||
+      prep.value?.lastWhatsNext?.trim() ||
+      prep.value?.lastWhatWentWell?.trim()
+    ),
 )
 
 // skillars-12-6 AC8: Long values are serialised as JSON strings project-wide, so coerce. null stays

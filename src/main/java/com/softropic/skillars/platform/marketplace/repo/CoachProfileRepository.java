@@ -60,6 +60,20 @@ public interface CoachProfileRepository
                                @Param("avgRating") Double avgRating,
                                @Param("reviewCount") int reviewCount);
 
+    // skillars-12-7 code review (Decision 1(a)): the coach-side recap erasure tombstone (V166). Native and
+    // unmapped on purpose -- see V166's header: the entity's own flush would otherwise null it again.
+    // COALESCE keeps the first erasure time when the retry scheduler re-runs the scrub.
+    @Modifying
+    @Query(value = "UPDATE marketplace.coach_profiles SET recap_data_erased_at = COALESCE(recap_data_erased_at, now()) "
+                   + "WHERE id = :coachId", nativeQuery = true)
+    void markRecapDataErased(@Param("coachId") UUID coachId);
+
+    // A scalar query, never the cached entity: callers read it after taking a row lock and need the
+    // committed value as of now, not the snapshot loaded at the start of the request.
+    @Query(value = "SELECT recap_data_erased_at IS NOT NULL FROM marketplace.coach_profiles WHERE id = :coachId",
+           nativeQuery = true)
+    boolean isRecapDataErased(@Param("coachId") UUID coachId);
+
     /**
      * The public profile and its pricing row in one round trip (skillars-deferred-91 AC11 / code
      * review D9). {@code coach_pricing} is one-to-one on {@code coach_id}, so an ad-hoc

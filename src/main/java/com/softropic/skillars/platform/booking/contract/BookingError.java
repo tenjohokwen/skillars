@@ -123,7 +123,19 @@ public enum BookingError implements ErrorCode {
      * split-a-purpose-specific-code precedent as {@code SESSION_NOT_YET_STARTED} above, which exists for
      * exactly the mirror-image reason on the no-show path.
      */
-    SESSION_ALREADY_ENDED;
+    SESSION_ALREADY_ENDED,
+    /**
+     * skillars-12-7 AC3: the recap edit window ({@code booking.recap.editWindowDays} after the
+     * session's end) has closed. Its own code because the exception message never reaches the client
+     * ({@code ApiAdvice} returns a fixed default plus the error key), so the UI needs the key to say
+     * "this session is too old to edit".
+     */
+    RECAP_EDIT_WINDOW_CLOSED,
+    /**
+     * skillars-12-7 AC2/AC4: the recap cannot be written because the coach or the player has been
+     * erased (GDPR) — writing would resurrect scrubbed text.
+     */
+    RECAP_NOT_EDITABLE_ERASED;
 
     @Override
     public String getErrorCode() {
@@ -151,6 +163,8 @@ public enum BookingError implements ErrorCode {
             case SESSION_NOT_YET_STARTED   -> "booking.sessionNotYetStarted";
             case BOOKING_NOT_EDITABLE      -> "booking.notEditable";
             case SESSION_ALREADY_ENDED     -> "booking.sessionAlreadyEnded";
+            case RECAP_EDIT_WINDOW_CLOSED  -> "booking.recapEditWindowClosed";
+            case RECAP_NOT_EDITABLE_ERASED -> "booking.recapNotEditableErased";
         };
     }
 

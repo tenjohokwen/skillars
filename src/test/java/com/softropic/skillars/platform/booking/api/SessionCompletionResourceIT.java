@@ -147,6 +147,9 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
         String status = jdbcTemplate.queryForObject(
             "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId);
         assertThat(status).isEqualTo("IN_PROGRESS");
+        // skillars-12-7 code review (Decision 2): recorded so "Resume wrap-up" can reopen the wizard LIVE.
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT live_started_at IS NOT NULL FROM booking.bookings WHERE id = ?", Boolean.class, bookingId)).isTrue();
     }
 
     @Test
@@ -216,6 +219,68 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
             "SELECT what_we_did, whats_next FROM booking.session_completion_data WHERE booking_id = ?", bookingId);
         assertThat(recap.get("what_we_did")).isEqualTo("Worked on first touch");
         assertThat(recap.get("whats_next")).isEqualTo("Continue weak-foot drills");
+    }
+
+    // skillars-12-7 AC10/AC13: what went well is stored; a deployed client still sending the removed
+    // voiceNoteText field is ignored (204), and that text is NOT persisted any more.
+    @Test
+    void submitWrapUp_withWhatWentWellAndLegacyVoiceNoteField_returns204_storesWellIgnoresVoiceNote() {
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/complete",
+            HttpMethod.POST,
+            Map.of(
+                "playerAttended", true,
+                "effortRating", 4,
+                "focusRating", 3,
+                "techniqueRating", 5,
+                "mode", "LIVE",
+                "voiceNoteText", "legacy client still sends this",
+                "recapWhatWeDid", "Worked on first touch",
+                "recapWhatsNext", "Continue weak-foot drills",
+                "recapWhatWentWell", "  Great tempo  "
+            ),
+            authenticatedHeaders(coachCookies), Void.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        Map<String, Object> row = jdbcTemplate.queryForMap(
+            "SELECT what_went_well, voice_note_text FROM booking.session_completion_data WHERE booking_id = ?", bookingId);
+        assertThat(row.get("what_went_well")).isEqualTo("Great tempo");
+        assertThat(row.get("voice_note_text")).isNull();
+    }
+
+    // skillars-12-7 AC7a: the resume path for an abandoned quick-complete -- the booking sits in
+    // COMPLETED_PENDING_CONFIRMATION with no SCD row, and a later submitWrapUp must succeed.
+    @Test
+    void submitWrapUp_afterAbandonedQuickComplete_succeedsAndWritesTheRow() {
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM booking.session_completion_data WHERE booking_id = ?", Integer.class, bookingId))
+            .isZero();
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/complete",
+            HttpMethod.POST,
+            Map.of(
+                "playerAttended", true,
+                "mode", "QUICK",
+                "recapWhatWeDid", "Resumed recap",
+                "recapWhatsNext", "Resumed next"
+            ),
+            authenticatedHeaders(coachCookies), Void.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT what_we_did FROM booking.session_completion_data WHERE booking_id = ?", String.class, bookingId))
+            .isEqualTo("Resumed recap");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId))
+            .isEqualTo("COMPLETED_PENDING_CONFIRMATION");
     }
 
     @Test
@@ -394,7 +459,8 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
                 "techniqueRating", 3,
                 "mode", "QUICK",
                 "recapWhatWeDid", "Quick-complete recap: dribbling drills",
-                "recapWhatsNext", "Quick-complete recap: ball control next"
+                "recapWhatsNext", "Quick-complete recap: ball control next",
+                "recapWhatWentWell", "Quick-complete recap: sharp first touch"
             ),
             authenticatedHeaders(coachCookies), Void.class
         );
@@ -415,11 +481,14 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
                 "WHERE reference_id = ? AND event_type = 'SESSION_COMPLETED'", Integer.class, bookingId) > 0);
 
         Map<String, Object> metadata = jdbcTemplate.queryForMap(
-            "SELECT metadata->>'whatWeDid' AS what_we_did, metadata->>'whatsNext' AS whats_next " +
+            "SELECT metadata->>'whatWeDid' AS what_we_did, metadata->>'whatsNext' AS whats_next, " +
+            "metadata->>'whatWentWell' AS what_went_well " +
             "FROM development.player_timeline_events " +
             "WHERE reference_id = ? AND event_type = 'SESSION_COMPLETED'", bookingId);
         assertThat(metadata.get("what_we_did")).isEqualTo("Quick-complete recap: dribbling drills");
         assertThat(metadata.get("whats_next")).isEqualTo("Quick-complete recap: ball control next");
+        // skillars-12-7 AC11: the third recap key reaches the timeline through confirmCompletion too.
+        assertThat(metadata.get("what_went_well")).isEqualTo("Quick-complete recap: sharp first touch");
     }
 
     @Test

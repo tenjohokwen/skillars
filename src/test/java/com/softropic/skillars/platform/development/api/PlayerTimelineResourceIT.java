@@ -291,6 +291,8 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         Map<String, Object> metadata = (Map<String, Object>) events.get(0).get("metadata");
         assertThat(metadata.get("whatWeDid")).isEqualTo("Worked on first touch");
         assertThat(metadata.get("whatsNext")).isEqualTo("Continue weak-foot drills");
+        // skillars-12-7 AC11: the third recap field is visible to the authoring coach...
+        assertThat(metadata.get("whatWentWell")).isEqualTo("Great tempo");
     }
 
     // A second coach with otherwise-valid (non-expired) access must not see the recap — but
@@ -324,7 +326,7 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         assertThat(event.get("eventType")).isEqualTo("SESSION_COMPLETED");
         Map<String, Object> metadata = (Map<String, Object>) event.get("metadata");
         assertThat(metadata.get("coachId")).isEqualTo(coachProfileId.toString());
-        assertThat(metadata).doesNotContainKeys("whatWeDid", "whatsNext");
+        assertThat(metadata).doesNotContainKeys("whatWeDid", "whatsNext", "whatWentWell");
     }
 
     @Test
@@ -343,7 +345,7 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         List<Map<String, Object>> events = (List<Map<String, Object>>) response.getBody().get("events");
         Map<String, Object> metadata = (Map<String, Object>) events.get(0).get("metadata");
-        assertThat(metadata).doesNotContainKeys("whatWeDid", "whatsNext");
+        assertThat(metadata).doesNotContainKeys("whatWeDid", "whatsNext", "whatWentWell");
     }
 
     @Test
@@ -838,7 +840,7 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
     private void insertSessionCompletedEventWithRecap(
             long playerId, UUID coachId, String whatWeDid, String whatsNext, boolean attended) {
         String metadataJson = String.format(
-            "{\"coachId\":\"%s\",\"whatWeDid\":\"%s\",\"whatsNext\":\"%s\"}",
+            "{\"coachId\":\"%s\",\"whatWeDid\":\"%s\",\"whatsNext\":\"%s\",\"whatWentWell\":\"Great tempo\"}",
             coachId, whatWeDid, whatsNext);
         // skillars-deferred-153 AC4 code review (2026-10-17): shares insertTimelineEvent's
         // distinct-timestamp sequence instead of the transaction-constant NOW(), so two recap events

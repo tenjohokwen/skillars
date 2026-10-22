@@ -10,6 +10,10 @@
       </q-card-section>
 
       <q-card-section>
+        <!-- skillars-12-7 AC15 (D1a): recaps reach the player and parent through this report. -->
+        <q-banner dense rounded class="q-mb-md" data-testid="recap-visibility-notice">
+          {{ $t('development.report.recapNotice') }}
+        </q-banner>
         <q-input
           v-model="nextSteps"
           type="textarea"

@@ -295,6 +295,12 @@ class ReportGenerationServiceTest {
         return event;
     }
 
+    private PlayerTimelineEvent sessionNoteEventWithWell(Instant occurredAt, String did, String next, String well) {
+        PlayerTimelineEvent event = sessionNoteEvent(occurredAt, did, next);
+        event.getMetadata().put(TimelineEventListener.METADATA_KEY_WHAT_WENT_WELL, well);
+        return event;
+    }
+
     private String extractPdfText(byte[] pdfBytes) throws Exception {
         PdfReader reader = new PdfReader(pdfBytes);
         try {
@@ -403,6 +409,40 @@ class ReportGenerationServiceTest {
         String text = extractPdfText(eventCaptor.getValue().pdfBytes());
         assertThat(text).contains("Session Notes", "Worked on first touch");
         assertThat(text).doesNotContain("null");
+    }
+
+    // skillars-12-7 AC14 (G11): each present field is labelled separately in the Session Notes.
+    @Test
+    void generateReport_recapFieldsAreLabelledSeparately_includingWhatWentWell() throws Exception {
+        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+        when(playerTimelineRepository.findSessionNotesForReport(PLAYER_ID, COACH_ID, ReportGenerationService.REPORT_SESSION_NOTES_LIMIT)).thenReturn(List.of(
+            sessionNoteEventWithWell(Instant.now().minus(1, java.time.temporal.ChronoUnit.DAYS),
+                "Worked on first touch", "Shooting drills next", "Great tempo")
+        ));
+
+        service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling.");
+
+        ArgumentCaptor<ReportGeneratedEvent> eventCaptor = ArgumentCaptor.forClass(ReportGeneratedEvent.class);
+        verify(publisher).publishEvent(eventCaptor.capture());
+        String text = extractPdfText(eventCaptor.getValue().pdfBytes());
+        assertThat(text).contains("What we did: Worked on first touch", "What's next: Shooting drills next",
+            "What went well: Great tempo");
+    }
+
+    @Test
+    void generateReport_absentRecapFields_haveNoLabelAndNoLiteralNull() throws Exception {
+        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+        when(playerTimelineRepository.findSessionNotesForReport(PLAYER_ID, COACH_ID, ReportGenerationService.REPORT_SESSION_NOTES_LIMIT)).thenReturn(List.of(
+            sessionNoteEvent(Instant.now().minus(2, java.time.temporal.ChronoUnit.DAYS), "Worked on first touch", null)
+        ));
+
+        service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling.");
+
+        ArgumentCaptor<ReportGeneratedEvent> eventCaptor = ArgumentCaptor.forClass(ReportGeneratedEvent.class);
+        verify(publisher).publishEvent(eventCaptor.capture());
+        String text = extractPdfText(eventCaptor.getValue().pdfBytes());
+        assertThat(text).contains("What we did: Worked on first touch");
+        assertThat(text).doesNotContain("What's next", "What went well", "null");
     }
 
     /**

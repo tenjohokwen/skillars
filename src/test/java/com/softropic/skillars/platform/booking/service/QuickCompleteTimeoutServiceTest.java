@@ -73,6 +73,7 @@ class QuickCompleteTimeoutServiceTest {
         scd.setTechniqueRating(5);
         scd.setWhatWeDid("Worked on first touch");
         scd.setWhatsNext("Continue weak-foot drills");
+        scd.setWhatWentWell("Great first touch");
         when(completionDataRepository.findPendingQuickCompletes(any(Instant.class))).thenReturn(List.of(scd));
 
         Booking booking = new Booking();
@@ -92,6 +93,8 @@ class QuickCompleteTimeoutServiceTest {
         // scd row — assert both land on the right getter, not transposed.
         assertThat(event.getWhatWeDid()).isEqualTo("Worked on first touch");
         assertThat(event.getWhatsNext()).isEqualTo("Continue weak-foot drills");
+        // skillars-12-7 AC11: the optional third recap field rides along on the auto-confirm path too.
+        assertThat(event.getWhatWentWell()).isEqualTo("Great first touch");
     }
 
     @Test

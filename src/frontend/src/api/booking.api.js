@@ -95,3 +95,9 @@ export const setPlayerRequest = (bookingId, playerRequest) =>
 // skillars-12-6 AC6: the coach's private per-booking plan note.
 export const setCoachPlanNote = (bookingId, planNote) =>
   api.patch(`/api/bookings/${bookingId}/coach-plan-note`, { planNote })
+
+// skillars-12-7: the coach's session recap lifecycle (read / correct) and the missing-recap nudge.
+export const getSessionRecap = (bookingId) => api.get(`/api/bookings/${bookingId}/recap`)
+export const updateSessionRecap = (bookingId, recap) =>
+  api.put(`/api/bookings/${bookingId}/recap`, recap)
+export const getMissingRecaps = () => api.get('/api/bookings/coaches/me/recaps-missing')

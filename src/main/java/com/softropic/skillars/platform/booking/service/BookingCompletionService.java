@@ -12,7 +12,18 @@ import com.softropic.skillars.platform.booking.contract.ForceCompleteOutcome;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.contract.QuickCompleteConfirmationRequiredEvent;
 import com.softropic.skillars.platform.booking.contract.TransitionContext;
+import com.softropic.skillars.platform.booking.contract.MissingRecapItem;
+import com.softropic.skillars.platform.booking.contract.MissingRecapsResponse;
+import com.softropic.skillars.platform.booking.contract.SessionRecapResponse;
+import com.softropic.skillars.platform.booking.contract.SessionRecapUpdatedEvent;
+import com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest;
 import com.softropic.skillars.platform.booking.contract.WrapUpRequest;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.infrastructure.util.ClockProvider;
+import com.softropic.skillars.platform.security.repo.User;
+import org.springframework.data.domain.PageRequest;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.SessionCompletionData;
 import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
@@ -43,12 +54,14 @@ import java.util.UUID;
 public class BookingCompletionService {
 
     private final BookingService bookingService;
+    private final BookingRepository bookingRepository;
     private final SessionCompletionDataRepository completionDataRepository;
     private final CoachProfileRepository coachProfileRepository;
     private final UserRepository userRepository;
     private final PlayerProfileRepository playerProfileRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
+    private final ConfigService configService;
 
     @Transactional
     public void startSession(UUID bookingId, Long coachUserId) {
@@ -62,6 +75,10 @@ public class BookingCompletionService {
         } catch (OptimisticLockingFailureException e) {
             throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
+        // skillars-12-7 code review (Decision 2): lets "Resume wrap-up" reopen the wizard in LIVE mode.
+        // transition() refreshed this same managed instance under its row lock, so the write is flushed
+        // with the status change at commit.
+        booking.setLiveStartedAt(Instant.now(ClockProvider.getClock()));
     }
 
     @Transactional
@@ -137,8 +154,9 @@ public class BookingCompletionService {
         // case where the coach is about to lose recap text they just typed, and verifyStatus's raw
         // "Booking is in status COMPLETED, expected COMPLETED_PENDING_CONFIRMATION" tells them nothing
         // actionable. The transition is one-way (BookingStateMachine has no path back to
-        // COMPLETED_PENDING_CONFIRMATION) and there is no update path for an existing row, so the
-        // honest message is that the session is closed — not that something went wrong.
+        // COMPLETED_PENDING_CONFIRMATION) and the only update path for an existing row is the
+        // separate, windowed updateRecap (skillars-12-7), so the honest message here is that the wrap-up
+        // can no longer be SUBMITTED -- the coach can still add the recap afterwards.
         if (BookingStatus.valueOf(booking.getStatus()) == BookingStatus.COMPLETED) {
             Optional<SessionCompletionData> existing = completionDataRepository.findByBookingId(bookingId);
             if (existing.isPresent() && isSweeperPlaceholder(existing.get())) {
@@ -157,10 +175,10 @@ public class BookingCompletionService {
         scd.setEffortRating(req.effortRating());
         scd.setFocusRating(req.focusRating());
         scd.setTechniqueRating(req.techniqueRating());
-        scd.setVoiceNoteText(req.voiceNoteText());
         scd.setCompletionMode(req.mode());
         scd.setWhatWeDid(req.recapWhatWeDid());
         scd.setWhatsNext(req.recapWhatsNext());
+        scd.setWhatWentWell(blankToNull(req.recapWhatWentWell()));
 
         if (req.homeworkDrillIds() != null && !req.homeworkDrillIds().isEmpty()) {
             try {
@@ -187,7 +205,7 @@ public class BookingCompletionService {
                 this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
                 scd.isPlayerAttended(), req.effortRating(), req.focusRating(), req.techniqueRating(),
                 req.homeworkDrillIds() != null ? req.homeworkDrillIds() : List.of(),
-                req.recapWhatWeDid(), req.recapWhatsNext()
+                req.recapWhatWeDid(), req.recapWhatsNext(), scd.getWhatWentWell()
             ));
         } else {
             String parentEmail = userRepository.findById(booking.getParentId())
@@ -269,6 +287,109 @@ public class BookingCompletionService {
         return ForceCompleteOutcome.FORCE_COMPLETED;
     }
 
+    // ---- skillars-12-7: recap lifecycle (edit / resume / nudge) -----------------------------------
+
+    /** Upper bound on the missing-recap list; {@code count} still reports the true total. */
+    static final int MISSING_RECAP_LIST_CAP = 50;
+
+    private record Editability(boolean editable, BookingError reason) {}
+
+    private long recapEditWindowDays() {
+        return configService.getBoundedLong(
+            ConfigBounds.BOOKING_RECAP_EDIT_WINDOW_DAYS.key(), 30L, 7L, 365L);
+    }
+
+    /**
+     * The single "may this coach write this recap right now" verdict, called by BOTH the GET (for the
+     * {@code editable} flag) and the PUT, so the two can never disagree. Adds the erasure checks that the
+     * pure {@link Booking#isRecapEditable} cannot know: GdprErasureService keeps the coach_profiles row
+     * and only locks the user, so a profile that still resolves says nothing about erasure.
+     */
+    private Editability recapEditability(Booking booking, CoachProfile coach, Instant now) {
+        // Two signals, both needed (skillars-12-7 code review, Decision 1(a)): the erasure's user lock
+        // commits LAST (outer transaction) while its recap scrub commits first, so between the two only
+        // the recap_data_erased_at tombstone -- written inside the scrub transaction -- is visible. Read
+        // as a fresh scalar query AFTER updateRecap's SCD row lock, never from the cached entity.
+        boolean coachErased = coachProfileRepository.isRecapDataErased(coach.getId())
+            || (coach.getUserId() != null
+                && userRepository.findById(coach.getUserId()).map(User::isLocked).orElse(true));
+        if (coachErased) {
+            return new Editability(false, BookingError.RECAP_NOT_EDITABLE_ERASED);
+        }
+        boolean playerErased = playerProfileRepository.findById(booking.getPlayerId())
+            .map(p -> p.getDevelopmentDataErasedAt() != null).orElse(true);
+        if (playerErased) {
+            return new Editability(false, BookingError.RECAP_NOT_EDITABLE_ERASED);
+        }
+        if (!booking.isRecapEditable(now, recapEditWindowDays())) {
+            return new Editability(false, BookingError.RECAP_EDIT_WINDOW_CLOSED);
+        }
+        return new Editability(true, null);
+    }
+
+    @Transactional(readOnly = true)
+    public SessionRecapResponse getRecap(UUID bookingId, Long coachUserId) {
+        CoachProfile coach = resolveCoach(coachUserId);
+        Booking booking = bookingService.getBookingOrThrow(bookingId);
+        verifyCoachOwnership(booking, coach);
+        SessionCompletionData scd = completionDataRepository.findByBookingId(bookingId)
+            .orElseThrow(() -> new ResourceNotFoundException("Session completion data not found", "session_completion_data"));
+        Instant now = Instant.now(ClockProvider.getClock());
+        return toRecapResponse(booking, scd, recapEditability(booking, coach, now));
+    }
+
+    @Transactional
+    public SessionRecapResponse updateRecap(UUID bookingId, Long coachUserId, UpdateSessionRecapRequest req) {
+        CoachProfile coach = resolveCoach(coachUserId);
+        Booking booking = bookingService.getBookingOrThrow(bookingId);
+        verifyCoachOwnership(booking, coach);
+        verifyStatus(booking, BookingStatus.COMPLETED);
+        // Lock the row BEFORE the erasure checks: a concurrent player erasure (anonymizeByPlayerId) then
+        // either finishes first (we see its tombstone below) or waits for us. Writes only this row, so
+        // the REQUIRES_NEW same-row self-deadlock trap does not apply.
+        SessionCompletionData scd = completionDataRepository.findForUpdateByBookingId(bookingId)
+            .orElseThrow(() -> new ResourceNotFoundException("Session completion data not found", "session_completion_data"));
+        Instant now = Instant.now(ClockProvider.getClock());
+        Editability verdict = recapEditability(booking, coach, now);
+        if (!verdict.editable()) {
+            throw new OperationNotAllowedException("Recap cannot be edited", verdict.reason());
+        }
+        scd.setWhatWeDid(req.whatWeDid().trim());
+        scd.setWhatsNext(req.whatsNext().trim());
+        scd.setWhatWentWell(blankToNull(req.whatWentWell()));
+        completionDataRepository.save(scd);
+        eventPublisher.publishEvent(new SessionRecapUpdatedEvent(this, bookingId, booking.getCoachId(), booking.getPlayerId()));
+        return toRecapResponse(booking, scd, verdict);
+    }
+
+    private SessionRecapResponse toRecapResponse(Booking booking, SessionCompletionData scd, Editability verdict) {
+        return new SessionRecapResponse(booking.getId(), scd.getWhatWeDid(), scd.getWhatsNext(),
+            scd.getWhatWentWell(), verdict.editable(), booking.recapEditableUntil(recapEditWindowDays()),
+            verdict.reason() == null ? null : verdict.reason().getErrorCode());
+    }
+
+    @Transactional(readOnly = true)
+    public MissingRecapsResponse getMissingRecaps(Long coachUserId) {
+        CoachProfile coach = resolveCoach(coachUserId);
+        Instant cutoff = Instant.now(ClockProvider.getClock()).minus(java.time.Duration.ofDays(recapEditWindowDays()));
+        long total = bookingRepository.countBookingsMissingRecap(coach.getId(), cutoff);
+        if (total == 0) {
+            return new MissingRecapsResponse(0, List.of());
+        }
+        List<Booking> bookings = bookingRepository.findBookingsMissingRecap(
+            coach.getId(), cutoff, PageRequest.of(0, MISSING_RECAP_LIST_CAP));
+        Map<Long, String> names = bookingService.resolvePlayerNames(
+            bookings.stream().map(Booking::getPlayerId).distinct().toList());
+        List<MissingRecapItem> items = bookings.stream()
+            .map(b -> new MissingRecapItem(b.getId(), b.getPlayerId(), names.get(b.getPlayerId()), b.getRequestedEndTime()))
+            .toList();
+        return new MissingRecapsResponse((int) total, items);
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
     @Transactional
     public void confirmCompletion(UUID bookingId, Long parentUserId) {
         Booking booking = bookingService.getBookingOrThrow(bookingId);
@@ -289,7 +410,7 @@ public class BookingCompletionService {
         eventPublisher.publishEvent(new BookingCompletedEvent(
             this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
             scd.isPlayerAttended(), scd.getEffortRating(), scd.getFocusRating(), scd.getTechniqueRating(),
-            homeworkDrillIds, scd.getWhatWeDid(), scd.getWhatsNext()
+            homeworkDrillIds, scd.getWhatWeDid(), scd.getWhatsNext(), scd.getWhatWentWell()
         ));
     }
 

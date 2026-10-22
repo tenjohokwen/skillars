@@ -66,7 +66,7 @@ public class QuickCompleteTimeoutService {
                         this, scd.getBookingId(), scd.getCoachId(), scd.getPlayerId(),
                         booking.getParentId(), scd.isPlayerAttended(), scd.getEffortRating(),
                         scd.getFocusRating(), scd.getTechniqueRating(), List.of(),
-                        scd.getWhatWeDid(), scd.getWhatsNext()
+                        scd.getWhatWeDid(), scd.getWhatsNext(), scd.getWhatWentWell()
                     ));
                 });
                 log.info("Auto-confirmed Quick Complete for booking {}", scd.getBookingId());

@@ -61,7 +61,7 @@ function mountComponent() {
 
 async function goToRecapStep(wrapper) {
   await flushPromises()
-  wrapper.vm.$.setupState.step = 5
+  wrapper.vm.$.setupState.step = 4
   await flushPromises()
 }
 
@@ -79,13 +79,15 @@ describe('WrapUpSequence.vue — session recap step (skillars-12-2)', () => {
   // assignment, so a typo'd `@click="step = 5"` on step 4's Next button — or a wrong pip count —
   // would leave every other spec in this file green while the recap step was actually
   // unreachable through the real UI. This test drives the transition through the real button.
-  it('advances from step 4 to step 5 via the Next button, and renders 5 pips', async () => {
+  // skillars-12-7 AC12: the voice-note step is gone, so the wizard is 4 steps (attendance, ratings,
+  // homework, recap) and the homework Next button leads straight to the recap.
+  it('advances from the homework step to the recap step via the Next button, and renders 4 pips', async () => {
     const wrapper = mountComponent()
     await flushPromises()
-    wrapper.vm.$.setupState.step = 4
+    wrapper.vm.$.setupState.step = 3
     await flushPromises()
 
-    expect(wrapper.findAll('.wrap-up__pip')).toHaveLength(5)
+    expect(wrapper.findAll('.wrap-up__pip')).toHaveLength(4)
     expect(wrapper.text()).toContain('booking.wrapUp.step4Title')
 
     const step4NextBtn = wrapper.findAll('button').find((b) => b.text() === 'common.next')
@@ -94,6 +96,52 @@ describe('WrapUpSequence.vue — session recap step (skillars-12-2)', () => {
 
     expect(wrapper.text()).toContain('booking.wrapUp.step5Title')
     expect(findStep5SubmitBtn(wrapper)).toBeTruthy()
+  })
+
+  it('has no voice-note step, recorder or upload any more', async () => {
+    const wrapper = mountComponent()
+    await flushPromises()
+    for (const n of [1, 2, 3, 4]) {
+      wrapper.vm.$.setupState.step = n
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('booking.wrapUp.step3')
+    }
+    expect(wrapper.vm.$.setupState.startRecording).toBeUndefined()
+    expect(wrapper.vm.$.setupState.voiceNoteText).toBeUndefined()
+  })
+
+  it('treats "what went well" as optional and sends it (trimmed) only when filled', async () => {
+    const wrapper = mountComponent()
+    const store = storeOf(wrapper)
+    await goToRecapStep(wrapper)
+
+    const textareas = wrapper.findAll('textarea')
+    expect(textareas).toHaveLength(3)
+    await textareas[0].setValue('Worked on first touch')
+    await textareas[1].setValue('Continue weak-foot drills')
+    expect(findStep5SubmitBtn(wrapper).element.disabled).toBe(false)
+
+    await findStep5SubmitBtn(wrapper).trigger('click')
+    await flushPromises()
+    expect(store.handleSubmitWrapUp.mock.calls[0][1].recapWhatWentWell).toBeNull()
+    expect(store.handleSubmitWrapUp.mock.calls[0][1]).not.toHaveProperty('voiceNoteText')
+
+    store.handleSubmitWrapUp.mockClear()
+    await textareas[2].setValue('  Great tempo  ')
+    await findStep5SubmitBtn(wrapper).trigger('click')
+    await flushPromises()
+    expect(store.handleSubmitWrapUp.mock.calls[0][1].recapWhatWentWell).toBe('Great tempo')
+  })
+
+  it('blocks submit when "what went well" exceeds 500 characters', async () => {
+    const wrapper = mountComponent()
+    await goToRecapStep(wrapper)
+    const textareas = wrapper.findAll('textarea')
+    await textareas[0].setValue('a')
+    await textareas[1].setValue('b')
+    wrapper.vm.$.setupState.recapWhatWentWell = 'x'.repeat(501)
+    await flushPromises()
+    expect(findStep5SubmitBtn(wrapper).element.disabled).toBe(true)
   })
 
   it('disables the submit button until both recap fields are non-blank and within 500 characters', async () => {

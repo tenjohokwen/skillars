@@ -36,6 +36,8 @@ import java.util.List;
  *                        than {@link #lastWhatsNext} (AC12). Null when none exists
  * @param suggestedWhatsNextSessionDate when the session that produced {@link #suggestedWhatsNext}
  *                        took place; null exactly when that is null
+ * @param lastWhatWentWell the optional "what went well" recap field (skillars-12-7 AC11); same
+ *                        recap-source rules as {@link #lastWhatWeDid}
  */
 public record SessionPrepResponse(
     Long playerId,
@@ -50,5 +52,6 @@ public record SessionPrepResponse(
     Long daysSinceLastSession,
     List<String> openNeglectedSkillCodes,
     String suggestedWhatsNext,
-    Instant suggestedWhatsNextSessionDate
+    Instant suggestedWhatsNextSessionDate,
+    String lastWhatWentWell
 ) {}

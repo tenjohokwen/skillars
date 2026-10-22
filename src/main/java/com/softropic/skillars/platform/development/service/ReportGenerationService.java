@@ -443,7 +443,7 @@ public class ReportGenerationService {
     }
 
     /** skillars-deferred-155 AC1: one coach-authored recap, extracted for report rendering. */
-    private record SessionNoteEntry(Instant occurredAt, String whatWeDid, String whatsNext) {
+    private record SessionNoteEntry(Instant occurredAt, String whatWeDid, String whatsNext, String whatWentWell) {
     }
 
     /**
@@ -487,10 +487,12 @@ public class ReportGenerationService {
         Map<String, Object> metadata = event.getMetadata();
         Object whatWeDid = metadata.get(TimelineEventListener.METADATA_KEY_WHAT_WE_DID);
         Object whatsNext = metadata.get(TimelineEventListener.METADATA_KEY_WHATS_NEXT);
+        Object whatWentWell = metadata.get(TimelineEventListener.METADATA_KEY_WHAT_WENT_WELL);
         return new SessionNoteEntry(
             event.getOccurredAt(),
             whatWeDid != null ? whatWeDid.toString() : null,
-            whatsNext != null ? whatsNext.toString() : null);
+            whatsNext != null ? whatsNext.toString() : null,
+            whatWentWell != null ? whatWentWell.toString() : null);
     }
 
     private byte[] buildPdf(CoachProfileDto coach, String coachName, String playerName,
@@ -536,6 +538,7 @@ public class ReportGenerationService {
             for (SessionNoteEntry note : sessionNotes) {
                 warnOnUnrenderableGlyphs(regularBase, "sessionNote.whatWeDid", note.whatWeDid());
                 warnOnUnrenderableGlyphs(regularBase, "sessionNote.whatsNext", note.whatsNext());
+                warnOnUnrenderableGlyphs(regularBase, "sessionNote.whatWentWell", note.whatWentWell());
             }
 
             // Header — Academy branding or Skillars default
@@ -655,10 +658,13 @@ public class ReportGenerationService {
                     // handling anywhere else, and Java string concatenation with a null reference
                     // renders the literal text "null" (caught by review, AC2/AC3).
                     if (note.whatWeDid() != null) {
-                        doc.add(new Paragraph(note.whatWeDid(), normalFont));
+                        doc.add(new Paragraph("What we did: " + note.whatWeDid(), normalFont));
                     }
                     if (note.whatsNext() != null) {
-                        doc.add(new Paragraph(note.whatsNext(), normalFont));
+                        doc.add(new Paragraph("What's next: " + note.whatsNext(), normalFont));
+                    }
+                    if (note.whatWentWell() != null) {
+                        doc.add(new Paragraph("What went well: " + note.whatWentWell(), normalFont));
                     }
                     doc.add(new Paragraph(" "));
                 }

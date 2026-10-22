@@ -210,6 +210,8 @@ class SessionPrepResourceIT extends AbstractIntegrationTest {
         assertThat(body.get("lastSessionDate")).isNotNull();
         assertThat(body.get("lastWhatWeDid")).isEqualTo("Worked on first touch");
         assertThat(body.get("lastWhatsNext")).isEqualTo("Continue weak-foot drills");
+        // skillars-12-7 AC11: same recap-source rules as lastWhatWeDid
+        assertThat(body.get("lastWhatWentWell")).isEqualTo("Great tempo");
         assertThat((List<String>) body.get("focusThreadSkillCodes")).containsExactly("PAC", "DRI");
         assertThat((Integer) body.get("openNeglectedSkillCount")).isEqualTo(1);
     }
@@ -403,7 +405,7 @@ class SessionPrepResourceIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void getPrep_suggestionIgnoresUnattendedRecapAndOtherCoachesAndOwnBooking() {
+    void getPrep_suggestionIgnoresOtherCoachesAndOwnBooking() {
         long playerId = 9800000037L;
         UUID bookingId = seedBooking(playerId, "Filtered Player", "CONFIRMED");
         transactionTemplate.execute(txStatus -> {
@@ -413,6 +415,23 @@ class SessionPrepResourceIT extends AbstractIntegrationTest {
             // An event belonging to the booking being prepped itself.
             insertSessionCompletedEventWithRecapForBooking(bookingId, playerId, coachProfileId, "y", "OWN BOOKING NEXT",
                 Instant.now().minus(4, ChronoUnit.DAYS));
+            return null;
+        });
+
+        assertThat(getPrepBody(bookingId).get("suggestedWhatsNext")).isNull();
+    }
+
+    /**
+     * skillars-12-7 AC16 (G13): one inclusion rule for the suggestion and the report -- a recap the coach
+     * authored counts regardless of the player's attendance (metadata->>'coachId', not the attendance-gated
+     * coach_id column). The prep card's LAST-SESSION pairing and the coach-access clock stay attended-gated:
+     * with only an unattended event there is still no lastSessionDate / lastWhatsNext.
+     */
+    @Test
+    void getPrep_suggestionIncludesUnattendedRecap_butLastSessionAndClockStayAttendanceGated() {
+        long playerId = 9800000039L;
+        UUID bookingId = seedBooking(playerId, "Unattended Player", "CONFIRMED");
+        transactionTemplate.execute(txStatus -> {
             // Unattended recap: metadata carries this coach but the coach_id column is null.
             jdbcTemplate.update(
                 "INSERT INTO development.player_timeline_events " +
@@ -423,7 +442,11 @@ class SessionPrepResourceIT extends AbstractIntegrationTest {
             return null;
         });
 
-        assertThat(getPrepBody(bookingId).get("suggestedWhatsNext")).isNull();
+        Map<String, Object> body = getPrepBody(bookingId);
+
+        assertThat(body.get("suggestedWhatsNext")).isEqualTo("UNATTENDED NEXT");
+        assertThat(body.get("lastSessionDate")).isNull();
+        assertThat(body.get("lastWhatsNext")).isNull();
     }
 
     @Test
@@ -580,7 +603,7 @@ class SessionPrepResourceIT extends AbstractIntegrationTest {
     private void insertSessionCompletedEventWithRecap(
             long playerId, UUID coachId, String whatWeDid, String whatsNext, Instant occurredAt) {
         String metadataJson = String.format(
-            "{\"coachId\":\"%s\",\"whatWeDid\":\"%s\",\"whatsNext\":\"%s\"}",
+            "{\"coachId\":\"%s\",\"whatWeDid\":\"%s\",\"whatsNext\":\"%s\",\"whatWentWell\":\"Great tempo\"}",
             coachId, whatWeDid, whatsNext);
         jdbcTemplate.update(
             "INSERT INTO development.player_timeline_events " +
