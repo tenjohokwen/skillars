@@ -293,6 +293,9 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         assertThat(metadata.get("whatsNext")).isEqualTo("Continue weak-foot drills");
         // skillars-12-7 AC11: the third recap field is visible to the authoring coach...
         assertThat(metadata.get("whatWentWell")).isEqualTo("Great tempo");
+        // skillars-12-8 AC2: ...and so are the ratings and the drills.
+        assertThat(metadata).containsEntry("effortRating", 4).containsEntry("focusRating", 3)
+            .containsEntry("techniqueRating", 5).containsKey("drills");
     }
 
     // A second coach with otherwise-valid (non-expired) access must not see the recap — but
@@ -327,6 +330,8 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         Map<String, Object> metadata = (Map<String, Object>) event.get("metadata");
         assertThat(metadata.get("coachId")).isEqualTo(coachProfileId.toString());
         assertThat(metadata).doesNotContainKeys("whatWeDid", "whatsNext", "whatWentWell");
+        // skillars-12-8 AC2: ratings are authoring-coach only; drills stay visible (owner decision 2026-10-23).
+        assertThat(metadata).doesNotContainKeys("effortRating", "focusRating", "techniqueRating").containsKey("drills");
     }
 
     @Test
@@ -346,6 +351,8 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         List<Map<String, Object>> events = (List<Map<String, Object>>) response.getBody().get("events");
         Map<String, Object> metadata = (Map<String, Object>) events.get(0).get("metadata");
         assertThat(metadata).doesNotContainKeys("whatWeDid", "whatsNext", "whatWentWell");
+        // skillars-12-8 AC2: no ratings for the parent; drills are visible.
+        assertThat(metadata).doesNotContainKeys("effortRating", "focusRating", "techniqueRating").containsKey("drills");
     }
 
     @Test
@@ -490,6 +497,9 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
                 selfPlayerUserId, Timestamp.from(Instant.now())
             );
             insertTimelineEvent(selfPlayerProfileId, "SESSION_COMPLETED", "booking");
+            // skillars-12-8 AC2: a recap+ratings event so the player-viewer leak check below is not vacuous.
+            insertSessionCompletedEventWithRecap(selfPlayerProfileId, coachProfileId,
+                "Worked on first touch", "Continue weak-foot drills");
             return null;
         });
         try {
@@ -501,6 +511,13 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
             assertThat((Boolean) response.getBody().get("accessExpired")).isFalse();
             assertThat((List<?>) response.getBody().get("events")).isNotEmpty();
+            // skillars-12-8 AC2: the player sees drills but neither the recap nor the ratings.
+            Map<String, Object> recapEvent = eventsOf(response).stream()
+                .filter(e -> e.get("metadata") != null).findFirst().orElseThrow();
+            assertThat((Map<String, Object>) recapEvent.get("metadata"))
+                .doesNotContainKeys("whatWeDid", "whatsNext", "whatWentWell",
+                    "effortRating", "focusRating", "techniqueRating")
+                .containsKey("drills");
             // Mutation: drop PlayerOwnershipGuard's `|| existsByIdAndUserId(...)` disjunct → this
             // reproduces the exact 403 security.unauthorized the manual test hit.
         } finally {
@@ -840,7 +857,11 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
     private void insertSessionCompletedEventWithRecap(
             long playerId, UUID coachId, String whatWeDid, String whatsNext, boolean attended) {
         String metadataJson = String.format(
-            "{\"coachId\":\"%s\",\"whatWeDid\":\"%s\",\"whatsNext\":\"%s\",\"whatWentWell\":\"Great tempo\"}",
+            // skillars-12-8: also carries the drills snapshot (every viewer) and the three ratings (authoring
+            // coach only) so the redaction tests below cover the full coach-private denylist.
+            "{\"coachId\":\"%s\",\"whatWeDid\":\"%s\",\"whatsNext\":\"%s\",\"whatWentWell\":\"Great tempo\","
+                + "\"drills\":[{\"drillId\":\"00000000-0000-0000-0000-000000000128\",\"name\":\"Rondo\"}],"
+                + "\"effortRating\":4,\"focusRating\":3,\"techniqueRating\":5}",
             coachId, whatWeDid, whatsNext);
         // skillars-deferred-153 AC4 code review (2026-10-17): shares insertTimelineEvent's
         // distinct-timestamp sequence instead of the transaction-constant NOW(), so two recap events

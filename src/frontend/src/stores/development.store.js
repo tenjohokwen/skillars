@@ -260,7 +260,7 @@ export const useDevelopmentStore = defineStore('development', () => {
           // skillars-deferred-155 code review: merged via a Map so the SERVER's copy of a re-served
           // event wins, rather than filtering the server's copy out and keeping the one already on
           // screen. The payload can legitimately differ between the two requests — a coach can edit a
-          // wrap-up, and TimelineQueryService.redactRecapIfNotAuthoringCoach's decision flips the
+          // wrap-up, and TimelineQueryService.redactCoachPrivateFieldsIfNotAuthoringCoach's decision flips the
           // moment coach access expires — so keeping the stale copy could go on rendering recap text
           // the backend has just decided to withhold, which is the same hazard the accessExpired
           // branch above exists to close. Insertion order is preserved (already-loaded first, new

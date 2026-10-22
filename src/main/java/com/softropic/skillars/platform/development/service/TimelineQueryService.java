@@ -63,17 +63,19 @@ public class TimelineQueryService {
             .map(e -> new TimelineEventResponse(
                 e.getId(), e.getEventType(), e.getReferenceId(),
                 e.getReferenceModule(), e.getOccurredAt(),
-                redactRecapIfNotAuthoringCoach(e, isCoach, coachId)))
+                redactCoachPrivateFieldsIfNotAuthoringCoach(e, isCoach, coachId)))
             .toList();
         return new TimelineResponse(false, null, events, slice.hasNext());
     }
 
-    // skillars-12-2 AC4: the recap ("whatWeDid"/"whatsNext") written into a SESSION_COMPLETED
-    // event's metadata is visible only to the coach who authored it — stripped for every other
-    // viewer (another coach, or the player/parent). metadata is a nullable JSONB column, and the
+    // skillars-12-2 AC4 / skillars-12-8 AC2: the coach-private fields of a SESSION_COMPLETED event's
+    // metadata -- the recap ("whatWeDid"/"whatsNext"/"whatWentWell") and the three session ratings
+    // (effort/focus/technique) -- are visible only to the coach who authored it, stripped for every other
+    // viewer (another coach, or the player/parent). This is a DENYLIST: any new coach-private key must be
+    // added below or it leaks. `drills` is deliberately not removed. metadata is a nullable JSONB column, and the
     // existing PlayerTimelineResourceIT seeding helper never sets one at all, so this method must
     // not assume it is non-null.
-    private Map<String, Object> redactRecapIfNotAuthoringCoach(PlayerTimelineEvent event, boolean isCoach, UUID coachId) {
+    private Map<String, Object> redactCoachPrivateFieldsIfNotAuthoringCoach(PlayerTimelineEvent event, boolean isCoach, UUID coachId) {
         Map<String, Object> metadata = event.getMetadata();
         if (metadata == null || event.getEventType() != PlayerTimelineEventType.SESSION_COMPLETED) {
             return metadata;
@@ -87,6 +89,11 @@ public class TimelineQueryService {
         redacted.remove(TimelineEventListener.METADATA_KEY_WHAT_WE_DID);
         redacted.remove(TimelineEventListener.METADATA_KEY_WHATS_NEXT);
         redacted.remove(TimelineEventListener.METADATA_KEY_WHAT_WENT_WELL);
+        // skillars-12-8 AC2: ratings are authoring-coach only. `drills` is plan content and stays visible
+        // to every viewer (owner decision 2026-10-23, including other coaches).
+        redacted.remove(TimelineEventListener.METADATA_KEY_EFFORT_RATING);
+        redacted.remove(TimelineEventListener.METADATA_KEY_FOCUS_RATING);
+        redacted.remove(TimelineEventListener.METADATA_KEY_TECHNIQUE_RATING);
         return redacted;
     }
 }

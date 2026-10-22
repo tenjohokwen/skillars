@@ -353,6 +353,34 @@ class SessionPrepResourceIT extends AbstractIntegrationTest {
         assertThat(notEditable.get("coachPlanNoteEditable")).isEqualTo(false);
     }
 
+    // skillars-12-8 AC12: a NEWER HOMEWORK_ASSIGNED row (coach_id NULL, metadata.coachId set, exactly the shape
+    // TimelineEventListener.onHomeworkAssigned writes) must not move lastSessionDate or unpair the recap.
+    @Test
+    void getPrep_newerHomeworkAssignedRow_doesNotChangeLastSessionOrRecap() {
+        long playerId = 9800000099L;
+        UUID bookingId = seedBooking(playerId, "Homework Player", "CONFIRMED");
+        Instant sessionTime = Instant.now().minus(53, ChronoUnit.HOURS);
+        transactionTemplate.execute(txStatus -> {
+            insertSessionCompletedEventWithRecap(playerId, coachProfileId, "Worked on first touch",
+                "Continue weak-foot drills", sessionTime);
+            jdbcTemplate.update(
+                "INSERT INTO development.player_timeline_events "
+                    + "(id, player_id, event_type, reference_id, reference_module, occurred_at, metadata, coach_id) "
+                    + "VALUES (gen_random_uuid(), ?, 'HOMEWORK_ASSIGNED', gen_random_uuid(), 'booking', ?, "
+                    + "jsonb_build_object('coachId', ?, 'drills', jsonb_build_array(jsonb_build_object('drillId', gen_random_uuid()::text, 'name', 'Juggling'))), NULL)",
+                playerId, Timestamp.from(Instant.now()), coachProfileId.toString());
+            return null;
+        });
+
+        Map<String, Object> body = getPrepBody(bookingId);
+
+        assertThat(Instant.parse((String) body.get("lastSessionDate")))
+            .isCloseTo(sessionTime, org.assertj.core.api.Assertions.within(1, ChronoUnit.SECONDS));
+        assertThat(Long.parseLong(String.valueOf(body.get("daysSinceLastSession")))).isEqualTo(2L);
+        assertThat(body.get("lastWhatWeDid")).isEqualTo("Worked on first touch");
+        assertThat(body.get("lastWhatsNext")).isEqualTo("Continue weak-foot drills");
+    }
+
     @Test
     void getPrep_attendedSessionTwoDaysAgo_exposesDaysSinceLastSession() {
         long playerId = 9800000034L;

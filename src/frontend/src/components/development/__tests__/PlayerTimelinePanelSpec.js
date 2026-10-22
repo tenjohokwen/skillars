@@ -299,3 +299,120 @@ describe('PlayerTimelinePanel — session recap (skillars-12-5 AC8)', () => {
     expect(text.split('Shooting drills').length - 1).toBe(1)
   })
 })
+
+describe('PlayerTimelinePanel — session content (12-8 AC5/AC8)', () => {
+  const base = { accessExpired: false, accessExpiryDays: null, hasMore: false }
+  const at = new Date().toISOString()
+  const drills = [
+    { drillId: 'd1', name: 'Warm-up Rondo' },
+    { drillId: 'd2', name: 'Passing Square' },
+  ]
+
+  it('renders drills and the present ratings with no recap at all', () => {
+    const { wrapper } = mountPanel({
+      ...base,
+      events: [
+        {
+          id: 'e1',
+          eventType: 'SESSION_COMPLETED',
+          occurredAt: at,
+          metadata: { drills, effortRating: 4, techniqueRating: 3 },
+        },
+      ],
+    })
+
+    expect(wrapper.text()).toContain('Warm-up Rondo, Passing Square')
+    expect(wrapper.text()).toContain('development.timeline.effortLabel: 4')
+    expect(wrapper.text()).toContain('development.timeline.techniqueLabel: 3')
+    expect(wrapper.text()).not.toContain('development.timeline.focusLabel')
+  })
+
+  it('redacted view (drills, no ratings, no recap) shows drills and no ratings row', () => {
+    const { wrapper } = mountPanel({
+      ...base,
+      events: [{ id: 'e1', eventType: 'SESSION_COMPLETED', occurredAt: at, metadata: { drills } }],
+    })
+
+    expect(wrapper.text()).toContain('development.timeline.drillsLabel')
+    expect(wrapper.text()).not.toContain('development.timeline.ratingsLabel')
+  })
+
+  it('renders no empty wrapper when there are no drills, ratings or recap', () => {
+    const { wrapper } = mountPanel({
+      ...base,
+      events: [{ id: 'e1', eventType: 'SESSION_COMPLETED', occurredAt: at, metadata: {} }],
+    })
+
+    expect(wrapper.find('dl').exists()).toBe(false)
+  })
+
+  it('still gates the recap block on recap keys', () => {
+    const { wrapper } = mountPanel({
+      ...base,
+      events: [
+        {
+          id: 'e1',
+          eventType: 'SESSION_COMPLETED',
+          occurredAt: at,
+          metadata: { drills, whatWeDid: 'We did X' },
+        },
+      ],
+    })
+
+    expect(wrapper.text()).toContain('We did X')
+    expect(wrapper.text()).toContain('Warm-up Rondo')
+  })
+
+  it('renders no recap labels when drills are present but no recap key is', () => {
+    const { wrapper } = mountPanel({
+      ...base,
+      events: [
+        {
+          id: 'e1',
+          eventType: 'SESSION_COMPLETED',
+          occurredAt: at,
+          metadata: { drills, effortRating: 4 },
+        },
+      ],
+    })
+
+    expect(wrapper.text()).toContain('Warm-up Rondo')
+    expect(wrapper.text()).not.toContain('development.timeline.whatWeDidLabel')
+    expect(wrapper.text()).not.toContain('development.timeline.whatsNextLabel')
+    expect(wrapper.text()).not.toContain('development.timeline.whatWentWellLabel')
+  })
+
+  it('renders a HOMEWORK_ASSIGNED entry with its drills and never ratings', () => {
+    const { wrapper } = mountPanel({
+      ...base,
+      events: [
+        {
+          id: 'h1',
+          eventType: 'HOMEWORK_ASSIGNED',
+          occurredAt: at,
+          metadata: { drills, effortRating: 5 },
+        },
+      ],
+    })
+
+    expect(wrapper.text()).toContain('Warm-up Rondo, Passing Square')
+    expect(wrapper.text()).not.toContain('development.timeline.ratingsLabel')
+  })
+
+  it('renders drill names as text, never as HTML', () => {
+    const { wrapper } = mountPanel({
+      ...base,
+      events: [
+        {
+          id: 'e1',
+          eventType: 'SESSION_COMPLETED',
+          occurredAt: at,
+          metadata: { drills: [{ drillId: 'x', name: '<img src=x onerror=alert(1)>' }] },
+        },
+      ],
+    })
+
+    expect(wrapper.find('img').exists()).toBe(false)
+    expect(wrapper.text()).toContain('<img src=x onerror=alert(1)>')
+  })
+})

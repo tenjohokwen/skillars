@@ -2133,7 +2133,10 @@ class GdprErasureIT extends AbstractIntegrationTest {
             try {
                 transactionTemplate.execute(status -> {
                     jdbcTemplate.queryForObject(
-                        "SELECT id FROM development.player_timeline_events WHERE player_id = ? FOR UPDATE",
+                        // event_type filter: seedChildProfile also seeds a HOMEWORK_ASSIGNED row (skillars-12-8),
+                        // and queryForObject needs exactly one row. Locking the one row is enough to block the delete.
+                        "SELECT id FROM development.player_timeline_events WHERE player_id = ? "
+                            + "AND event_type = 'SESSION_COMPLETED' FOR UPDATE",
                         UUID.class, PARENT_CHILD_A_ID);
                     lockHeld.countDown();
                     try {
@@ -2453,6 +2456,14 @@ class GdprErasureIT extends AbstractIntegrationTest {
             "INSERT INTO development.player_timeline_events (id, player_id, event_type, occurred_at) "
                 + "VALUES (?, ?, 'SESSION_COMPLETED', ?)",
             UUID.randomUUID(), profileId, Timestamp.from(Instant.now()));
+        // skillars-12-8 AC11: a HOMEWORK_ASSIGNED row (drill-name snapshot, coachId in metadata, coach_id NULL)
+        // must go with the player's timeline -- the PARENT-branch happy path asserts the per-child count is zero.
+        jdbcTemplate.update(
+            "INSERT INTO development.player_timeline_events (id, player_id, event_type, reference_id, reference_module, occurred_at, metadata) "
+                + "VALUES (?, ?, 'HOMEWORK_ASSIGNED', ?, 'booking', ?, "
+                + "jsonb_build_object('coachId', ?, 'drills', jsonb_build_array(jsonb_build_object('drillId', ?, 'name', 'Juggling'))))",
+            UUID.randomUUID(), profileId, UUID.randomUUID(), Timestamp.from(Instant.now()),
+            coachProfileId.toString(), UUID.randomUUID().toString());
 
         return storageKey;
     }

@@ -43,6 +43,34 @@
             }}
           </template>
 
+          <!-- skillars-12-8: what was trained + (authoring coach only) ratings. Independent of the recap
+               block below so a session with drills but no recap, and the redacted parent view, still render. -->
+          <dl v-if="drillNames(event).length || ratingEntries(event).length" class="q-mt-sm">
+            <div v-if="drillNames(event).length">
+              <dt class="text-caption text-weight-bold">
+                {{ $t('development.timeline.drillsLabel') }}
+              </dt>
+              <dd class="text-body2 recap-text">{{ drillNames(event).join(', ') }}</dd>
+            </div>
+            <div v-if="ratingEntries(event).length">
+              <dt class="text-caption text-weight-bold q-mt-xs">
+                {{ $t('development.timeline.ratingsLabel') }}
+              </dt>
+              <dd class="text-body2">
+                <span v-if="event.metadata?.effortRating != null" class="q-mr-md">
+                  {{ $t('development.timeline.effortLabel') }}: {{ event.metadata.effortRating }}
+                </span>
+                <span v-if="event.metadata?.focusRating != null" class="q-mr-md">
+                  {{ $t('development.timeline.focusLabel') }}: {{ event.metadata.focusRating }}
+                </span>
+                <span v-if="event.metadata?.techniqueRating != null" class="q-mr-md">
+                  {{ $t('development.timeline.techniqueLabel') }}:
+                  {{ event.metadata.techniqueRating }}
+                </span>
+              </dd>
+            </div>
+          </dl>
+
           <dl
             v-if="
               event.eventType === 'SESSION_COMPLETED' &&
@@ -148,6 +176,24 @@ function eventIcon(type) {
 
 function eventColour(type) {
   return COLOUR_MAP[type] ?? 'grey'
+}
+
+// skillars-12-8: drills come from SESSION_COMPLETED (trained) and HOMEWORK_ASSIGNED (assigned); both share
+// the {drillId, name} snapshot shape. Rendered as text only (never v-html).
+function drillNames(event) {
+  if (event.eventType !== 'SESSION_COMPLETED' && event.eventType !== 'HOMEWORK_ASSIGNED') return []
+  const drills = event.metadata?.drills
+  if (!Array.isArray(drills)) return []
+  return drills.map((d) => d?.name).filter((n) => typeof n === 'string' && n.trim())
+}
+
+// Ratings are stripped server-side for everyone except the authoring coach; absent keys render nothing.
+// Literal $t keys in the template (not a key-from-data lookup) keep the i18n key-resolution spec static.
+function ratingEntries(event) {
+  if (event.eventType !== 'SESSION_COMPLETED') return []
+  return ['effortRating', 'focusRating', 'techniqueRating'].filter(
+    (k) => event.metadata?.[k] != null,
+  )
 }
 
 function formatDate(isoString) {

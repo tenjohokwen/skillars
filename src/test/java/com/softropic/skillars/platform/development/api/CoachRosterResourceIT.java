@@ -276,6 +276,35 @@ class CoachRosterResourceIT extends AbstractIntegrationTest {
         assertThat((Double) declining.get("attentionScore")).isGreaterThan((Double) flat.get("attentionScore"));
     }
 
+    // skillars-12-8 AC12: a newer HOMEWORK_ASSIGNED row (coach_id NULL) must not advance lastSessionDate,
+    // and so cannot change the attention score's recency input.
+    @Test
+    @SuppressWarnings("unchecked")
+    void getRoster_newerHomeworkAssignedRow_doesNotChangeLastSessionDate() {
+        long playerId = 9700000099L;
+        Instant sessionDate = Instant.now().minusSeconds(2L * 24 * 3600);
+        transactionTemplate.execute(status -> {
+            insertPlayer(playerId, "Homework Roster Player");
+            insertBooking(coachProfileId, playerId, "COMPLETED", sessionDate);
+            insertSluRecord(playerId, coachProfileId, "PAC", sessionDate);
+            jdbcTemplate.update(
+                "INSERT INTO development.player_timeline_events "
+                    + "(id, player_id, event_type, reference_id, reference_module, occurred_at, metadata, coach_id) "
+                    + "VALUES (gen_random_uuid(), ?, 'HOMEWORK_ASSIGNED', gen_random_uuid(), 'booking', ?, "
+                    + "jsonb_build_object('coachId', ?), NULL)",
+                playerId, Timestamp.from(Instant.now()), coachProfileId.toString());
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            rosterUrl(), HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+
+        Map<String, Object> entry = entryFor(response, playerId);
+        assertThat(Instant.parse((String) entry.get("lastSessionDate")))
+            .isCloseTo(sessionDate, org.assertj.core.api.Assertions.within(1, java.time.temporal.ChronoUnit.SECONDS));
+    }
+
     // skillars-12-1 code review (2026-10-15) Patch: AC1's ten-status breadth (now twelve, see the
     // DISPUTED/REFUND_PENDING decision below) had no coverage beyond COMPLETED/ACCEPTED, both of
     // which are also in the forbidden ACTIVE_RELATIONSHIP_STATUSES — a regression narrowing the list

@@ -909,6 +909,11 @@ export default {
       whatWeDidLabel: 'Ce sur quoi nous avons travaillé',
       whatsNextLabel: 'La prochaine étape',
       whatWentWellLabel: "Ce qui s'est bien passé",
+      drillsLabel: 'Exercices',
+      ratingsLabel: 'Évaluations',
+      effortLabel: 'Effort',
+      focusLabel: 'Concentration',
+      techniqueLabel: 'Technique',
       eventType: {
         SESSION_COMPLETED: 'Séance terminée',
         RADAR_ASSESSMENT: 'Évaluation radar',

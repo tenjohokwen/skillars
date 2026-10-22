@@ -8,7 +8,10 @@ import com.softropic.skillars.platform.security.SecurityIT;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
+import com.softropic.skillars.platform.session.contract.HomeworkAssignedEvent;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -52,6 +55,7 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private ApplicationEventPublisher eventPublisher;
 
     @LocalServerPort private int randomServerPort;
 
@@ -653,7 +657,205 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 
+    // ---- skillars-12-8: session content + HOMEWORK_ASSIGNED on the timeline ----
+
+    @Test
+    void quickCompleteThenConfirm_putsDrillsAndRatingsOnTimeline_andHomeworkAssignedLandsOnce() throws Exception {
+        UUID warmup = insertDrill("Warm-up Rondo");
+        UUID passing = insertDrill("Passing Square");
+        UUID homework1 = insertDrill("Juggling");
+        UUID homework2 = insertDrill("Wall Passes");
+        insertPlannedSession(
+            "[{\"blockType\":\"WARMUP\",\"blockName\":\"Warm\",\"durationMinutes\":10,\"drills\":[{\"drillId\":\"" + warmup + "\",\"order\":1}]},"
+          + "{\"blockType\":\"MAIN\",\"blockName\":\"Main\",\"durationMinutes\":30,\"drills\":[{\"drillId\":\"" + passing + "\",\"order\":1},{\"drillId\":\"" + warmup + "\",\"order\":2}]}]",
+            "DRAFT");
+        completeViaQuickWrapUp(List.of(homework1, homework2));
+
+        Awaitility.await("SESSION_COMPLETED and HOMEWORK_ASSIGNED written asynchronously")
+            .atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("SESSION_COMPLETED") == 1 && countTimeline("HOMEWORK_ASSIGNED") == 1);
+
+        Map<String, Object> done = jdbcTemplate.queryForMap(
+            "SELECT reference_id, reference_module, coach_id, metadata::text AS md FROM development.player_timeline_events "
+          + "WHERE reference_id = ? AND event_type = 'SESSION_COMPLETED'", bookingId);
+        assertThat(done.get("reference_module")).isEqualTo("booking");
+        assertThat(done.get("coach_id")).isNotNull();
+        // DRAFT plan accepted (no race with the DRAFT->COMPLETED flip), order = block then ref, de-duplicated.
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT d->>'name' FROM development.player_timeline_events e, jsonb_array_elements(e.metadata->'drills') d "
+          + "WHERE e.reference_id = ? AND e.event_type = 'SESSION_COMPLETED'", String.class, bookingId))
+            .containsExactly("Warm-up Rondo", "Passing Square");
+        assertThat(done.get("md").toString()).contains("\"effortRating\": 4").contains("\"techniqueRating\": 3");
+
+        Map<String, Object> hw = jdbcTemplate.queryForMap(
+            "SELECT coach_id, reference_module, metadata->>'coachId' AS md_coach FROM development.player_timeline_events "
+          + "WHERE reference_id = ? AND event_type = 'HOMEWORK_ASSIGNED'", bookingId);
+        assertThat(hw.get("coach_id")).as("homework must never feed the coach-access clock").isNull();
+        assertThat(hw.get("reference_module")).isEqualTo("booking");
+        assertThat(hw.get("md_coach")).isEqualTo(coachProfileId.toString());
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT d->>'name' FROM development.player_timeline_events e, jsonb_array_elements(e.metadata->'drills') d "
+          + "WHERE e.reference_id = ? AND e.event_type = 'HOMEWORK_ASSIGNED'", String.class, bookingId))
+            .containsExactlyInAnyOrder("Juggling", "Wall Passes");
+
+        // Visibility: parent sees drills but not ratings; the authoring coach sees both.
+        Map<String, Object> parentView = sessionCompletedMetadataViaApi(loginAndGetCookies(PARENT_EMAIL));
+        assertThat(parentView).containsKey("drills").doesNotContainKeys("effortRating", "focusRating", "techniqueRating");
+        Map<String, Object> coachView = sessionCompletedMetadataViaApi(loginAndGetCookies(COACH_EMAIL));
+        assertThat(coachView).containsKeys("drills", "effortRating", "focusRating", "techniqueRating");
+
+        // A recap edit (12-7) must not drop the 12-8 keys.
+        ResponseEntity<Void> edit = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/recap", HttpMethod.PUT,
+            Map.of("whatWeDid", "Edited what we did", "whatsNext", "Edited next"),
+            authenticatedHeaders(loginAndGetCookies(COACH_EMAIL)), Void.class);
+        assertThat(edit.getStatusCode().is2xxSuccessful()).isTrue();
+        Awaitility.await("recap edit propagated to the timeline row")
+            .atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(100))
+            .until(() -> "Edited what we did".equals(jdbcTemplate.queryForObject(
+                "SELECT metadata->>'whatWeDid' FROM development.player_timeline_events "
+              + "WHERE reference_id = ? AND event_type = 'SESSION_COMPLETED'", String.class, bookingId)));
+        Map<String, Object> afterEdit = jdbcTemplate.queryForMap(
+            "SELECT jsonb_array_length(metadata->'drills') AS n, metadata->>'effortRating' AS e, "
+          + "metadata->>'focusRating' AS f, metadata->>'techniqueRating' AS t FROM development.player_timeline_events "
+          + "WHERE reference_id = ? AND event_type = 'SESSION_COMPLETED'", bookingId);
+        assertThat(afterEdit.get("n")).isEqualTo(2);
+        assertThat(afterEdit.get("e")).isEqualTo("4");
+        assertThat(afterEdit.get("f")).isEqualTo("4");
+        assertThat(afterEdit.get("t")).isEqualTo("3");
+
+        // Last on purpose: onBookingCompleted is not idempotent, so the replay writes a second SESSION_COMPLETED row.
+        // Replay of the SAME BookingCompletedEvent, published inside a transaction: AFTER_COMMIT listeners are
+        // silently dropped without one, which would make the assertion below pass vacuously. The assignment
+        // guard stops it upstream, so no second HOMEWORK_ASSIGNED may appear.
+        transactionTemplate.executeWithoutResult(t -> eventPublisher.publishEvent(new BookingCompletedEvent(
+            this, bookingId, coachProfileId, PLAYER_ID, PARENT_ID, true, 4, 4, 3, List.of(homework1, homework2))));
+        // The replay's own visible effect (a second SESSION_COMPLETED) proves it was actually delivered, so the
+        // HOMEWORK assertion that follows cannot pass vacuously.
+        Awaitility.await("replayed BookingCompletedEvent delivered")
+            .atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("SESSION_COMPLETED") == 2);
+        Awaitility.await("no second HOMEWORK_ASSIGNED row appears")
+            .during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("HOMEWORK_ASSIGNED") == 1);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM session.homework_assignments WHERE booking_id = ?", Integer.class, bookingId)).isEqualTo(2);
+    }
+
+    @Test
+    void quickCompleteWithoutHomeworkOrSession_writesNoHomeworkEntryAndNoDrills() throws Exception {
+        completeViaQuickWrapUp(List.of());
+
+        Awaitility.await("SESSION_COMPLETED written")
+            .atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("SESSION_COMPLETED") == 1);
+        Awaitility.await("no HOMEWORK_ASSIGNED row appears")
+            .during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(3)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("HOMEWORK_ASSIGNED") == 0);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT jsonb_exists(metadata, 'drills') FROM development.player_timeline_events "
+          + "WHERE reference_id = ? AND event_type = 'SESSION_COMPLETED'", Boolean.class, bookingId)).isFalse();
+    }
+
+    @Test
+    void homeworkAssignedEvent_deliveredTwice_landsOnce_andALaterEventMergesIntoTheSameRow() {
+        UUID drill = insertDrill("Dup Drill");
+        UUID laterDrill = insertDrill("Later Drill");
+        HomeworkAssignedEvent event = new HomeworkAssignedEvent(bookingId, PLAYER_ID, coachProfileId, List.of(drill));
+        transactionTemplate.executeWithoutResult(t -> eventPublisher.publishEvent(event));
+        Awaitility.await("first delivery written")
+            .atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("HOMEWORK_ASSIGNED") == 1);
+
+        // Duplicate delivery: must neither add a row nor duplicate the drill entry. Held for a window rather
+        // than keyed on an unrelated event, which could finish first on another pool thread.
+        transactionTemplate.executeWithoutResult(t -> eventPublisher.publishEvent(event));
+        Awaitility.await("duplicate delivery adds nothing")
+            .during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("HOMEWORK_ASSIGNED") == 1 && homeworkDrillNames().equals(List.of("Dup Drill")));
+
+        // A second event for the same booking (publisher announces only newly-persisted ids, e.g. after a
+        // mid-loop failure and a replay) is merged into the existing row, never dropped.
+        transactionTemplate.executeWithoutResult(t -> eventPublisher.publishEvent(
+            new HomeworkAssignedEvent(bookingId, PLAYER_ID, coachProfileId, List.of(laterDrill, drill))));
+        Awaitility.await("later event merged into the same row")
+            .atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(100))
+            .until(() -> homeworkDrillNames().equals(List.of("Dup Drill", "Later Drill")));
+        assertThat(countTimeline("HOMEWORK_ASSIGNED")).isEqualTo(1);
+
+        // fallbackExecution = true: an event published with NO transaction must also be consumed.
+        UUID otherBooking = UUID.randomUUID();
+        eventPublisher.publishEvent(new HomeworkAssignedEvent(otherBooking, PLAYER_ID, coachProfileId, List.of(drill)));
+        Awaitility.await("non-transactional publish consumed (fallbackExecution)")
+            .atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(100))
+            .until(() -> jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM development.player_timeline_events WHERE reference_id = ? AND event_type = 'HOMEWORK_ASSIGNED'",
+                Integer.class, otherBooking) == 1);
+    }
+
+    private List<String> homeworkDrillNames() {
+        return jdbcTemplate.queryForList(
+            "SELECT d->>'name' FROM development.player_timeline_events e, jsonb_array_elements(e.metadata->'drills') d "
+          + "WHERE e.reference_id = ? AND e.event_type = 'HOMEWORK_ASSIGNED'", String.class, bookingId);
+    }
+
     // ---- helpers ----
+
+    private UUID insertDrill(String name) {
+        UUID id = UUID.randomUUID();
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update(
+                "INSERT INTO session.drills (id, name, library_type, owner_coach_id, status, metadata, version) "
+              + "VALUES (?, ?, 'PLATFORM', NULL, 'ACTIVE', '{}'::jsonb, 0)", id, name);
+            return null;
+        });
+        return id;
+    }
+
+    private void insertPlannedSession(String blocksJson, String status) {
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update(
+                "INSERT INTO session.sessions (id, booking_id, coach_id, player_id, blocks, equipment_list, "
+              + "development_focus, status, created_at, updated_at) "
+              + "VALUES (gen_random_uuid(), ?, ?, ?, ?::jsonb, '[]'::jsonb, '[]'::jsonb, ?, NOW(), NOW())",
+                bookingId, coachProfileId, PLAYER_ID, blocksJson, status);
+            return null;
+        });
+    }
+
+    private void completeViaQuickWrapUp(List<UUID> homeworkDrillIds) {
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        ResponseEntity<Void> wrapUp = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/complete", HttpMethod.POST,
+            Map.of("playerAttended", true, "effortRating", 4, "focusRating", 4, "techniqueRating", 3,
+                "mode", "QUICK", "homeworkDrillIds", homeworkDrillIds,
+                "recapWhatWeDid", "Recap did", "recapWhatsNext", "Recap next"),
+            authenticatedHeaders(loginAndGetCookies(COACH_EMAIL)), Void.class);
+        assertThat(wrapUp.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        ResponseEntity<Void> confirm = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/confirm-completion", HttpMethod.PUT, null,
+            authenticatedHeaders(loginAndGetCookies(PARENT_EMAIL)), Void.class);
+        assertThat(confirm.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+    }
+
+    private int countTimeline(String eventType) {
+        return jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM development.player_timeline_events WHERE reference_id = ? AND event_type = ?",
+            Integer.class, bookingId, eventType);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> sessionCompletedMetadataViaApi(String cookies) {
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/development/players/" + PLAYER_ID + "/timeline?page=0&size=20",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<String, Object>> events = (List<Map<String, Object>>) resp.getBody().get("events");
+        return events.stream()
+            .filter(e -> "SESSION_COMPLETED".equals(e.get("eventType")))
+            .map(e -> (Map<String, Object>) e.get("metadata"))
+            .findFirst().orElseThrow();
+    }
 
     private void insertUpcomingBooking(UUID id) {
         // skillars-deferred-151 AC6: was Instant.now().plusSeconds(86400) (24h in the future) — the

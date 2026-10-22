@@ -3500,8 +3500,8 @@ Gives a coach a relationship-centric view of "his" players: a derived roster ran
 | G11 | PDF Session Notes renders `whatWeDid`/`whatsNext` unlabelled | Converge #16 | 12.7 |
 | G12 | Recaps reach parents verbatim via PDF despite "coach-private" | Decision #8, Priority 2 | 12.7 (D1) |
 | G13 | Unattended-session recaps: excluded from prep card (`PlayerTimelineRepository.java:35-36`) but included in report (`:66-73`) | Converge #15/#16 | 12.7 |
-| G14 | Drills/exercises and session ratings not on the timeline (`BookingCompletedEvent` carries `homeworkDrillIds` + ratings; `TimelineEventListener.java:54-57` drops them); booking `referenceId` not linked | Pattern #7 | 12.8 |
-| G15 | Five timeline event types are enum/UI stubs with no producer | Codebase Grounding | 12.8 (D4) |
+| G14 | Drills/exercises and session ratings not on the timeline (`BookingCompletedEvent` carries `homeworkDrillIds` + ratings; `TimelineEventListener.java:54-57` drops them); booking `referenceId` not linked | Pattern #7 | 12.8 — done (drills + ratings on SESSION_COMPLETED; referenceId asserted) |
+| G15 | Five timeline event types are enum/UI stubs with no producer | Codebase Grounding | 12.8 (D4) — closed by D4 decision: HOMEWORK_ASSIGNED producer shipped; other four formally out of scope |
 | G16 | Coach player-detail page lacks parent-parity panels: radar, narrative, exposure chart, trend chart, reports list | Converge #12 success indicator | 12.9 |
 | G17 | Coach-only tools (radar assessment entry, target editor, correlation panel, radar history, report generation entry) live only on `PlayerDevelopmentDashboardPage.vue`, whose route is PLAYER-only (`routes.js:284-287`) — unreachable for coaches | Converge #12 | 12.9 |
 | G18 | `/neglected-skills` endpoint has no frontend caller (page derives from exposure) | Converge #12 | 12.9 |
