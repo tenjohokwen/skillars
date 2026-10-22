@@ -185,6 +185,70 @@ class CoachRosterServiceTest {
         assertThat(entry.attentionScore()).isCloseTo(0.0, offset(1e-9));
     }
 
+    // skillars-12-6 AC8/AC9: the three caption inputs. Rule 1 — an attended session exists.
+    @Test
+    void getRoster_attendedSession_exposesDaysSinceLastSession() {
+        Instant sessionDate = NOW.minus(Duration.ofHours(53)); // 2 whole days
+        stubActivity(NOW.minus(Duration.ofDays(10)));
+        when(coachPlayerLastSessionResolver.resolve(PLAYER_ID, COACH_ID))
+            .thenReturn(new CoachPlayerLastSessionResolver.LastCoachSessionSignal(sessionDate, null));
+        stubPlayerName("Trained");
+        stubNoNeglectedFlags();
+        stubNoTrendData();
+        stubDormantAfterDays(30);
+
+        RosterEntryResponse entry = singleEntry(service.getRoster(COACH_ID));
+
+        assertThat(entry.daysSinceLastSession()).isEqualTo(2L);
+        assertThat(entry.hasUpcomingBooking()).isFalse();
+    }
+
+    // Rule 2 — no attended session and the latest booking is in the past: "booked, but no attended
+    // session yet" (the case where the dormant badge could fire next to a "never trained" caption).
+    @Test
+    void getRoster_noAttendedSessionAndPastBooking_hasNullDaysAndNoUpcomingBooking() {
+        stubActivity(NOW.minus(Duration.ofDays(60)));
+        stubPlayerName("Booked Never Attended");
+        stubNoNeglectedFlags();
+        stubNoTrendData();
+        stubDormantAfterDays(30);
+
+        RosterEntryResponse entry = singleEntry(service.getRoster(COACH_ID));
+
+        assertThat(entry.daysSinceLastSession()).isNull();
+        assertThat(entry.hasUpcomingBooking()).isFalse();
+        assertThat(entry.dormant()).isTrue();
+    }
+
+    // Rule 3 — no attended session, upcoming booking: genuinely "haven't trained together yet".
+    @Test
+    void getRoster_noAttendedSessionAndUpcomingBooking_hasNullDaysAndUpcomingBooking() {
+        stubActivity(NOW.plus(Duration.ofDays(3)));
+        stubPlayerName("First Session Ahead");
+        stubNoNeglectedFlags();
+        stubNoTrendData();
+        stubDormantAfterDays(30);
+
+        RosterEntryResponse entry = singleEntry(service.getRoster(COACH_ID));
+
+        assertThat(entry.daysSinceLastSession()).isNull();
+        assertThat(entry.hasUpcomingBooking()).isTrue();
+        assertThat(entry.dormant()).isFalse();
+    }
+
+    @Test
+    void getRoster_lastSessionDateMarginallyAfterNow_clampsDaysToZero() {
+        stubActivity(NOW.minus(Duration.ofDays(2)));
+        when(coachPlayerLastSessionResolver.resolve(PLAYER_ID, COACH_ID))
+            .thenReturn(new CoachPlayerLastSessionResolver.LastCoachSessionSignal(NOW.plusSeconds(30), null));
+        stubPlayerName("Clock Skew");
+        stubNoNeglectedFlags();
+        stubNoTrendData();
+        stubDormantAfterDays(30);
+
+        assertThat(singleEntry(service.getRoster(COACH_ID)).daysSinceLastSession()).isZero();
+    }
+
     @Test
     void getRoster_countsOnlyDecliningSkills_ignoringImprovingAndInsufficientData() {
         stubActivity(NOW.minusSeconds(3600));

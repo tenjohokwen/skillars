@@ -169,7 +169,9 @@ public class CoachRosterService {
             lastSessionDate,
             neglectedCount,
             result.dormant(),
-            result.attentionScore());
+            result.attentionScore(),
+            SessionRecency.daysSinceOrNull(lastSessionDate, now),
+            hasUpcomingBooking);
     }
 
     // Task 2.3: calls the same two public pieces SluDashboardService.getSkillTrends does, one layer

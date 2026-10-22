@@ -17,6 +17,16 @@
         <div class="text-caption" style="color: var(--text-secondary)">
           {{ lastSessionLabel }}
         </div>
+        <!-- skillars-12-6 AC10: the server-computed days-ago is primary; the absolute date stays as
+             secondary text. -->
+        <div
+          v-if="daysSinceLastSession !== null"
+          class="text-caption"
+          style="color: var(--text-secondary)"
+          data-testid="last-session-date"
+        >
+          {{ t('coach.myPlayersLastSessionLabel', { date: lastSessionDateLabel }) }}
+        </div>
         <template v-if="prep.lastSessionDate">
           <!-- skillars-deferred-155 code review: each field behind its own guard, mirroring
                PlayerTimelinePanel.vue's own recap block. hasRecap is an OR, so with only one of the two
@@ -68,6 +78,28 @@
           {{ t('coach.myPlayersNeglectedSkillCount', { count: prep.openNeglectedSkillCount }) }}
         </q-badge>
         <div v-else class="text-body2">{{ t('coach.sessionPrepNoNeglectedSkills') }}</div>
+        <!-- skillars-12-6 AC11: the neglected skills by name, beside the unchanged count badge. -->
+        <div v-if="neglectedSkillCodes.length" class="row q-gutter-xs q-mt-xs">
+          <q-badge
+            v-for="code in neglectedSkillCodes"
+            :key="code"
+            outline
+            color="negative"
+            data-testid="neglected-skill-badge"
+          >
+            {{ skillDisplayName(code) }}
+          </q-badge>
+        </div>
+      </q-card-section>
+
+      <!-- skillars-12-6 AC6: the coach's own private plan note. -->
+      <q-card-section>
+        <CoachPlanNotePanel
+          :booking-id="props.bookingId"
+          :note="prep.coachPlanNote"
+          :editable="prep.coachPlanNoteEditable"
+          @saved="onPlanNoteSaved"
+        />
       </q-card-section>
 
       <q-card-actions align="right">
@@ -86,6 +118,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getSessionPrep } from 'src/api/development.api'
+import CoachPlanNotePanel from 'src/components/booking/CoachPlanNotePanel.vue'
 import { useDevelopmentStore } from 'src/stores/development.store'
 
 const props = defineProps({
@@ -104,12 +137,31 @@ const hasRecap = computed(
   () => !!(prep.value?.lastWhatWeDid?.trim() || prep.value?.lastWhatsNext?.trim()),
 )
 
-const lastSessionLabel = computed(() => {
-  if (!prep.value?.lastSessionDate) return t('coach.myPlayersNeverTrainedTogether')
-  return t('coach.myPlayersLastSessionLabel', {
-    date: new Date(prep.value.lastSessionDate).toLocaleDateString(locale.value),
-  })
+// skillars-12-6 AC8: Long values are serialised as JSON strings project-wide, so coerce. null stays
+// null (no attended session yet).
+const daysSinceLastSession = computed(() => {
+  const raw = prep.value?.daysSinceLastSession
+  return raw === null || raw === undefined ? null : Number(raw)
 })
+
+const lastSessionDateLabel = computed(() =>
+  prep.value?.lastSessionDate
+    ? new Date(prep.value.lastSessionDate).toLocaleDateString(locale.value)
+    : '',
+)
+
+// skillars-12-6 AC10: same strings and server value as the roster caption. A prep card is always for an
+// existing booking, so a null lastSessionDate stays "haven't trained together yet" here.
+const lastSessionLabel = computed(() => {
+  if (daysSinceLastSession.value === null) return t('coach.myPlayersNeverTrainedTogether')
+  return t('coach.myPlayersLastTrainedDaysAgo', { count: daysSinceLastSession.value })
+})
+
+const neglectedSkillCodes = computed(() => prep.value?.openNeglectedSkillCodes ?? [])
+
+function onPlanNoteSaved(note) {
+  prep.value = { ...prep.value, coachPlanNote: note }
+}
 
 // skillars-12-3 code review (2026-10-15) Patch, AC7: focus-thread badges were rendering raw
 // internal skill codes (e.g. "PAC") untranslated in all three locales — resolve to the shared

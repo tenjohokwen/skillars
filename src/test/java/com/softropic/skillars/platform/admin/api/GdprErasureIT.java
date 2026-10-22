@@ -800,6 +800,74 @@ class GdprErasureIT extends AbstractIntegrationTest {
         assertThat(unrelatedRow.get("player_request")).isEqualTo("Unrelated player request");
     }
 
+    /**
+     * skillars-12-6 AC5 (player direction): the coach's plan note describes the player, so the
+     * playerId-keyed booking scrub nulls {@code coach_plan_note} too, and only for that player.
+     */
+    @Test
+    void erase_selfRegisteredPlayer_anonymizesCoachPlanNoteForThatPlayerOnly() {
+        UUID erasedBookingId = UUID.randomUUID();
+        UUID otherBookingId = UUID.randomUUID();
+        long otherPlayerId = 9210_777_952_011L;
+        transactionTemplate.execute(status -> {
+            insertBookingForCompletionData(erasedBookingId, SELF_PLAYER_PROFILE_ID);
+            insertBookingForCompletionData(otherBookingId, otherPlayerId);
+            jdbcTemplate.update("UPDATE booking.bookings SET coach_plan_note = ? WHERE id = ?",
+                "Plan note about the erased player", erasedBookingId);
+            jdbcTemplate.update("UPDATE booking.bookings SET coach_plan_note = ? WHERE id = ?",
+                "Unrelated plan note", otherBookingId);
+            return null;
+        });
+
+        erase(SELF_PLAYER_USER_ID);
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT coach_plan_note FROM booking.bookings WHERE id = ?", String.class, erasedBookingId)).isNull();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT coach_plan_note FROM booking.bookings WHERE id = ?", String.class, otherBookingId))
+            .isEqualTo("Unrelated plan note");
+    }
+
+    /**
+     * skillars-12-6 AC5 (coach direction): a coach's erasure nulls the plan note on their own bookings
+     * (bumping version), keeps the rows, and leaves a second real coach's note untouched.
+     */
+    @Test
+    void erase_coachUser_scrubsOwnCoachPlanNotesButNotAnotherCoachs() {
+        UUID ownBookingId = UUID.randomUUID();
+        UUID otherBookingId = UUID.randomUUID();
+        UUID otherCoachProfileId = UUID.randomUUID();
+        long otherCoachUserId = 9210_000_905L;
+        transactionTemplate.execute(status -> {
+            insertUser(otherCoachUserId, "gdpr.erasure.othercoach.plannote.9210@skillars-test.com",
+                passwordEncoder.encode(TEST_PASSWORD), "COACH");
+            grantAuthority(otherCoachUserId, "ROLE_COACH");
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_profiles "
+                    + "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) "
+                    + "VALUES (?, ?, 'Unrelated Coach', 'Unrelated bio', 'Munich', "
+                    + "ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
+                otherCoachProfileId, otherCoachUserId);
+            insertBookingForCompletionData(ownBookingId, coachProfileId, 9210_777_952_012L);
+            insertBookingForCompletionData(otherBookingId, otherCoachProfileId, 9210_777_952_013L);
+            jdbcTemplate.update("UPDATE booking.bookings SET coach_plan_note = ? WHERE id = ?",
+                "Erased coach's plan", ownBookingId);
+            jdbcTemplate.update("UPDATE booking.bookings SET coach_plan_note = ? WHERE id = ?",
+                "Unrelated coach's plan", otherBookingId);
+            return null;
+        });
+
+        erase(COACH_USER_ID);
+
+        Map<String, Object> own = jdbcTemplate.queryForMap(
+            "SELECT coach_plan_note, version FROM booking.bookings WHERE id = ?", ownBookingId);
+        assertThat(own.get("coach_plan_note")).isNull();
+        assertThat(((Number) own.get("version")).intValue()).isGreaterThan(0);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT coach_plan_note FROM booking.bookings WHERE id = ?", String.class, otherBookingId))
+            .isEqualTo("Unrelated coach's plan");
+    }
+
     private void insertBookingForCompletionData(UUID bookingId, long playerId) {
         insertBookingForCompletionData(bookingId, coachProfileId, playerId);
     }

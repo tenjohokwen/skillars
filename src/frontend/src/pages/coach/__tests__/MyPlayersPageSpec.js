@@ -24,6 +24,8 @@ const PLAYER = (overrides = {}) => ({
   openNeglectedSkillCount: 0,
   dormant: false,
   attentionScore: 0.1,
+  daysSinceLastSession: 5,
+  hasUpcomingBooking: false,
   ...overrides,
 })
 
@@ -100,7 +102,13 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
           lastSessionDate: '2026-01-01T00:00:00Z',
           openNeglectedSkillCount: 2,
         }),
-        PLAYER({ playerId: 2, playerName: 'Sam Rivera', dormant: true, lastSessionDate: null }),
+        PLAYER({
+          playerId: 2,
+          playerName: 'Sam Rivera',
+          dormant: true,
+          lastSessionDate: null,
+          daysSinceLastSession: null,
+        }),
       ],
     })
     const { wrapper } = mountPage()
@@ -109,7 +117,7 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
     expect(wrapper.text()).toContain('Alex Kane')
     expect(wrapper.text()).toContain('Sam Rivera')
     expect(wrapper.findAll('.player-item')).toHaveLength(2)
-    expect(wrapper.text()).toContain('coach.myPlayersLastSessionLabel')
+    expect(wrapper.text()).toContain('coach.myPlayersLastTrainedDaysAgo')
     expect(wrapper.text()).toContain('coach.myPlayersNeglectedSkillCount')
   })
 
@@ -125,12 +133,70 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('coach.myPlayersDormantBadge')
-    expect(wrapper.text()).toContain('coach.myPlayersLastSessionLabel')
+    expect(wrapper.text()).toContain('coach.myPlayersLastTrainedDaysAgo')
   })
 
-  it("shows 'never trained together' when lastSessionDate is null and not dormant", async () => {
+  // skillars-12-6 AC9: the three caption rules, each asserted separately and exclusively.
+  it('rule 1: an attended session shows the days-ago caption only', async () => {
+    getCoachRoster.mockResolvedValue({ players: [PLAYER({ daysSinceLastSession: '3' })] })
+    const { wrapper } = mountPage()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('coach.myPlayersLastTrainedDaysAgo')
+    expect(wrapper.text()).not.toContain('coach.myPlayersBookedNoSessionYet')
+    expect(wrapper.text()).not.toContain('coach.myPlayersNeverTrainedTogether')
+  })
+
+  it('rule 2: no attended session and no upcoming booking shows "booked, but no attended session yet" beside the dormant badge', async () => {
     getCoachRoster.mockResolvedValue({
-      players: [PLAYER({ dormant: false, lastSessionDate: null })],
+      players: [
+        PLAYER({
+          dormant: true,
+          lastSessionDate: null,
+          daysSinceLastSession: null,
+          hasUpcomingBooking: false,
+        }),
+      ],
+    })
+    const { wrapper } = mountPage()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('coach.myPlayersDormantBadge')
+    expect(wrapper.text()).toContain('coach.myPlayersBookedNoSessionYet')
+    expect(wrapper.text()).not.toContain('coach.myPlayersNeverTrainedTogether')
+  })
+
+  it('rule 3: no attended session but an upcoming booking shows "haven\'t trained together yet"', async () => {
+    getCoachRoster.mockResolvedValue({
+      players: [
+        PLAYER({ lastSessionDate: null, daysSinceLastSession: null, hasUpcomingBooking: true }),
+      ],
+    })
+    const { wrapper } = mountPage()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('coach.myPlayersNeverTrainedTogether')
+    expect(wrapper.text()).not.toContain('coach.myPlayersBookedNoSessionYet')
+  })
+
+  it('treats a zero days value as an attended session, not as missing', async () => {
+    getCoachRoster.mockResolvedValue({ players: [PLAYER({ daysSinceLastSession: 0 })] })
+    const { wrapper } = mountPage()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('coach.myPlayersLastTrainedDaysAgo')
+  })
+
+  it("shows 'never trained together' when lastSessionDate is null, not dormant, and a session is upcoming", async () => {
+    getCoachRoster.mockResolvedValue({
+      players: [
+        PLAYER({
+          dormant: false,
+          lastSessionDate: null,
+          daysSinceLastSession: null,
+          hasUpcomingBooking: true,
+        }),
+      ],
     })
     const { wrapper } = mountPage()
     await flushPromises()

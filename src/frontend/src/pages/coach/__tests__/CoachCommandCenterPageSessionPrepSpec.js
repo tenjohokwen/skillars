@@ -23,6 +23,24 @@ const UPCOMING_BOOKING = {
   requestedEndTime: '2026-03-02T11:00:00Z',
 }
 
+const CONFIRMED_BOOKING = {
+  bookingId: 'b-confirmed',
+  playerId: 44,
+  playerName: 'Jo Marsh',
+  status: 'CONFIRMED',
+  requestedStartTime: '2026-03-04T10:00:00Z',
+  requestedEndTime: '2026-03-04T11:00:00Z',
+}
+
+const REQUESTED_BOOKING = {
+  bookingId: 'b-requested',
+  playerId: 45,
+  playerName: 'Lee Park',
+  status: 'REQUESTED',
+  requestedStartTime: '2026-03-05T10:00:00Z',
+  requestedEndTime: '2026-03-05T11:00:00Z',
+}
+
 const COMPLETED_BOOKING = {
   bookingId: 'b-completed',
   playerId: 43,
@@ -71,13 +89,20 @@ describe('CoachCommandCenterPage.vue — Session Prep button (skillars-12-3 AC5)
     vi.clearAllMocks()
   })
 
-  it('renders the Prep button only for UPCOMING-status booking cards', () => {
-    const wrapper = mountPage([UPCOMING_BOOKING, COMPLETED_BOOKING])
+  // skillars-12-6 AC14 (G6): CONFIRMED joins UPCOMING (the idiom the cancel button already uses);
+  // COMPLETED and REQUESTED stay negative.
+  it('renders the Prep button for CONFIRMED and UPCOMING booking cards only', () => {
+    const wrapper = mountPage([
+      UPCOMING_BOOKING,
+      CONFIRMED_BOOKING,
+      COMPLETED_BOOKING,
+      REQUESTED_BOOKING,
+    ])
 
     const prepButtons = wrapper
       .findAll('button')
       .filter((b) => b.text() === 'coach.sessionPrepButton')
-    expect(prepButtons).toHaveLength(1)
+    expect(prepButtons).toHaveLength(2)
   })
 
   // skillars-12-3 code review (2026-10-15) Patch: previously asserted only the page's own refs,

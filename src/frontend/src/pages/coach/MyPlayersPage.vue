@@ -74,7 +74,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { getCoachRoster } from 'src/api/development.api'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const router = useRouter()
 
 const loading = ref(true)
@@ -101,11 +101,21 @@ onMounted(async () => {
 // last-session date (or "never trained together") — the dormant q-badge alone carries the dormancy
 // indicator. Previously this returned the same dormant-badge string as the caption, hiding the one
 // fact (how overdue the player is) a coach needs most for a dormant row.
+//
+// skillars-12-6 AC9 (G3): the caption is now derived from the same server inputs the dormant badge is,
+// so the two can no longer contradict each other. Rules, in order:
+//   1. an attended session exists -> "Last trained N days ago" (server-computed, plural-aware);
+//   2. no attended session and no upcoming booking -> the latest booking is in the past, so a booking
+//      happened but no attended session was recorded ("Booked, but no attended session yet") - exactly
+//      the case where the dormant badge could fire beside a "never trained" caption;
+//   3. otherwise (upcoming booking, nothing attended) -> "You haven't trained together yet".
+// Long values are serialised as JSON strings project-wide, hence the Number() coercion.
 function lastSessionLabel(player) {
-  if (!player.lastSessionDate) return t('coach.myPlayersNeverTrainedTogether')
-  return t('coach.myPlayersLastSessionLabel', {
-    date: new Date(player.lastSessionDate).toLocaleDateString(locale.value),
-  })
+  if (player.daysSinceLastSession !== null && player.daysSinceLastSession !== undefined) {
+    return t('coach.myPlayersLastTrainedDaysAgo', { count: Number(player.daysSinceLastSession) })
+  }
+  if (!player.hasUpcomingBooking) return t('coach.myPlayersBookedNoSessionYet')
+  return t('coach.myPlayersNeverTrainedTogether')
 }
 
 // skillars-deferred-156 AC5: playerName no longer travels in the route's query string — a minor's

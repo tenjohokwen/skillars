@@ -227,6 +227,9 @@ class CoachRosterResourceIT extends AbstractIntegrationTest {
         Map<String, Object> fresh = entryFor(response, FRESH_PLAYER_ID);
         assertThat(fresh.get("dormant")).isEqualTo(false);
         assertThat(fresh.get("lastSessionDate")).isNull();
+        // skillars-12-6 AC8/AC9: the two caption inputs are serialised.
+        assertThat(fresh.get("daysSinceLastSession")).isNull();
+        assertThat(fresh).containsKey("hasUpcomingBooking");
         assertThat(fresh.get("openNeglectedSkillCount")).isEqualTo(0);
         // AC6: must not be pinned to the top from null-as-maximum-urgency treatment — it should
         // rank below the dormant/neglected player, not above.

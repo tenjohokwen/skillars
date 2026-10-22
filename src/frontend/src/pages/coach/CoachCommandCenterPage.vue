@@ -120,7 +120,7 @@
                 @click="handleQuickComplete(booking)"
               />
               <q-btn
-                v-if="booking.status === 'UPCOMING'"
+                v-if="['CONFIRMED', 'UPCOMING'].includes(booking.status)"
                 flat
                 dense
                 size="sm"

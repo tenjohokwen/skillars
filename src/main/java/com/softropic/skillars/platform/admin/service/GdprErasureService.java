@@ -216,11 +216,12 @@ public class GdprErasureService {
     // profiles" and would misdescribe this statement in the admin alert queue.
     //
     // skillars-deferred-156 AC7: split from one shared pair into three per-group pairs (four since
-    // skillars-deferred-157 AC4 added AVAILABILITY_BLOCK below), taking the
+    // skillars-deferred-157 AC4 added AVAILABILITY_BLOCK below, five since skillars-12-6 AC5 added
+    // BOOKING_PLAN_NOTE), taking the
     // LABELING half (only) of the PLAYER branch's statement-group pattern
     // (deletePlayerDevelopmentDataInDedicatedPool). Deliberately observability-only, and
     // deliberately NOT a full mirror of that precedent:
-    //   * No durability. All four groups below share ONE requiresNewTemplate transaction, so a
+    //   * No durability. All five groups below share ONE requiresNewTemplate transaction, so a
     //     failure on a later group still rolls back an earlier group's already-succeeded scrub.
     //     That matches the PLAYER branch, whose groups get zero durability from grouping either
     //     (see its own Javadoc) — grouping buys labels there too, not independent commits.
@@ -228,10 +229,10 @@ public class GdprErasureService {
     //     nextGroupLockTimeoutSecondsOrThrow/spendDownLockBudget cumulative-budget arithmetic
     //     through its groups; this branch does not, because its statements are a fixed,
     //     small set with no N-child multiplier to budget against. One transaction-scoped
-    //     lock_timeout (set once below) therefore bounds all four groups — calling
+    //     lock_timeout (set once below) therefore bounds all five groups — calling
     //     setStatementLockTimeout per group would be a no-op, since set_config's is_local=true
     //     makes the bound transaction-scoped rather than statement-scoped.
-    // (code review of skillars-deferred-156) What this buys, precisely: knowing WHICH of the four
+    // (code review of skillars-deferred-156) What this buys, precisely: knowing WHICH of the five
     // groups tripped. Nothing more. Do not read the group split as granting per-group commits or
     // per-group time bounds — it grants neither.
     private static final String COACH_RECAP_SCD_LOCK_TIMEOUT = "COACH_RECAP_SCD_LOCK_TIMEOUT";
@@ -254,10 +255,10 @@ public class GdprErasureService {
      * executing, so the shared catch block can pick the matching reason-code pair. An enum rather than
      * the three magic strings this replaced: the switch over it is compiler-checked exhaustive, so a
      * new group cannot be silently absorbed into another group's codes, and a typo is a build error
-     * instead of a mislabelled admin alert. {@code AVAILABILITY_BLOCK} (skillars-deferred-157 AC4) is
-     * not a session recap — the name is kept to minimise diff; read it as "coach-scrub group".
+     * instead of a mislabelled admin alert. {@code AVAILABILITY_BLOCK} (skillars-deferred-157 AC4) and
+     * {@code BOOKING_PLAN_NOTE} (skillars-12-6 AC5) are not session recaps — the name is kept to minimise diff; read it as "coach-scrub group".
      */
-    private enum CoachRecapGroup { SCD, TIMELINE, REPORT, AVAILABILITY_BLOCK }
+    private enum CoachRecapGroup { SCD, TIMELINE, REPORT, AVAILABILITY_BLOCK, BOOKING_PLAN_NOTE }
 
     private static final String COACH_RECAP_REPORT_LOCK_TIMEOUT = "COACH_RECAP_REPORT_LOCK_TIMEOUT";
     private static final String COACH_RECAP_REPORT_CONTENDED = "COACH_RECAP_REPORT_CONTENDED";
@@ -265,6 +266,11 @@ public class GdprErasureService {
     // the coach typed when blocking out time, not session narrative, hence no COACH_RECAP_ prefix.
     private static final String COACH_AVAILABILITY_BLOCK_LOCK_TIMEOUT = "COACH_AVAILABILITY_BLOCK_LOCK_TIMEOUT";
     private static final String COACH_AVAILABILITY_BLOCK_CONTENDED = "COACH_AVAILABILITY_BLOCK_CONTENDED";
+    // skillars-12-6 AC5: group 5 nulls booking.bookings.coach_plan_note — the coach's private plan
+    // note. Shares the one transaction: a trip here also rolls back the other four groups' scrubs
+    // (labels only, no per-group durability — the documented design above).
+    private static final String COACH_PLAN_NOTE_LOCK_TIMEOUT = "COACH_PLAN_NOTE_LOCK_TIMEOUT";
+    private static final String COACH_PLAN_NOTE_CONTENDED = "COACH_PLAN_NOTE_CONTENDED";
 
     // skillars-deferred-155 code review, Decision 2(a): performance_reports.next_steps is NOT NULL, so
     // the coach-erasure scrub overwrites it with this placeholder rather than nulling it — same
@@ -461,9 +467,9 @@ public class GdprErasureService {
             // (skillars-deferred-135 AC1) for why catching inside it defeats the isolation entirely.
             long coachRecapLockTimeoutSeconds = configService.getBoundedLong(
                 ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
-            // skillars-deferred-156 AC7: identifies which of the four groups below was executing
+            // skillars-deferred-156 AC7: identifies which of the five groups below was executing
             // when a PessimisticLockingFailureException propagated out of the transaction, so the
-            // catch block can pick that group's own reason-code pair. All four groups still run
+            // catch block can pick that group's own reason-code pair. All five groups still run
             // inside ONE requiresNewTemplate transaction (see the constants' own Javadoc above) —
             // Postgres aborts the whole transaction on the first statement error regardless, so
             // there is never a question of "did group 1 already commit when group 2 failed."
@@ -498,6 +504,12 @@ public class GdprErasureService {
                     // only at the outer commit).
                     coachRecapCurrentGroup.set(CoachRecapGroup.AVAILABILITY_BLOCK);
                     coachAvailabilityBlockRepository.anonymizeReasonByCoachId(cp.getId());
+
+                    // skillars-12-6 AC5: the coach's private per-booking plan note. Bulk UPDATE bumps
+                    // version (see the repository method) so a concurrently loaded Booking cannot
+                    // resurrect the erased text.
+                    coachRecapCurrentGroup.set(CoachRecapGroup.BOOKING_PLAN_NOTE);
+                    bookingRepository.anonymizeCoachPlanNoteByCoachId(cp.getId());
                 });
             } catch (PessimisticLockingFailureException e) {
                 // CannotAcquireLockException (SQLSTATE 40P01, a genuine deadlock) is a SUBCLASS of
@@ -522,8 +534,10 @@ public class GdprErasureService {
                     case REPORT -> contended ? COACH_RECAP_REPORT_CONTENDED : COACH_RECAP_REPORT_LOCK_TIMEOUT;
                     case AVAILABILITY_BLOCK -> contended
                         ? COACH_AVAILABILITY_BLOCK_CONTENDED : COACH_AVAILABILITY_BLOCK_LOCK_TIMEOUT;
+                    case BOOKING_PLAN_NOTE -> contended
+                        ? COACH_PLAN_NOTE_CONTENDED : COACH_PLAN_NOTE_LOCK_TIMEOUT;
                 };
-                log.warn("[GDPR_ERASURE] COACH-branch coachId={} session-recap/report/availability-block "
+                log.warn("[GDPR_ERASURE] COACH-branch coachId={} session-recap/report/availability-block/plan-note "
                         + "scrub failed in group={} (reason={}) — skipping it; the rest of the erasure still "
                         + "commits, the request is reported FAILED, and the daily retry scheduler re-runs it. "
                         + "requestId={} userId={}",
@@ -1066,8 +1080,8 @@ public class GdprErasureService {
      *   <li>{@link #CHILD_BOOKING_LOCK_TIMEOUT}, {@link #CHILD_BOOKING_CONTENDED}
      *       (skillars-deferred-157 AC1) — the same deletion's {@code booking.*} statements;</li>
      *   <li>{@code COACH_RECAP_SCD_*}, {@code COACH_RECAP_TIMELINE_*}, {@code COACH_RECAP_REPORT_*}
-     *       (skillars-deferred-156 AC7) and {@code COACH_AVAILABILITY_BLOCK_*} (skillars-deferred-157
-     *       AC4), each a {@code _LOCK_TIMEOUT}/{@code _CONTENDED} pair — the coach-erasure scrub;</li>
+     *       (skillars-deferred-156 AC7) {@code COACH_AVAILABILITY_BLOCK_*} (skillars-deferred-157
+     *       AC4) and {@code COACH_PLAN_NOTE_*} (skillars-12-6 AC5), each a {@code _LOCK_TIMEOUT}/{@code _CONTENDED} pair — the coach-erasure scrub;</li>
      *   <li>{@link #UNCLASSIFIED_FAILURE} (skillars-deferred-133 AC1) — {@link #markFailed}'s
      *       catch-all.</li>
      * </ul>

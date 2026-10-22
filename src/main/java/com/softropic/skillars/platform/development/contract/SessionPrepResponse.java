@@ -23,6 +23,19 @@ import java.util.List;
  * @param playerRequest the player/parent-initiated "work on X next time" session-prep request
  *                        (skillars-deferred-155 AC6), read directly off the booking; null if never
  *                        set or cleared
+ * @param coachPlanNote the calling coach's own private plan note for this booking
+ *                        (skillars-12-6 AC3); null if never set. Never leaves the coach
+ * @param coachPlanNoteEditable whether the note may still be written right now
+ *                        ({@code Booking.isPrepNoteEditable}, the same predicate the write path uses)
+ * @param daysSinceLastSession whole days since {@link #lastSessionDate} on the server clock, clamped
+ *                        at 0; null when {@code lastSessionDate} is null (AC8)
+ * @param openNeglectedSkillCodes the open neglected-flag skill codes, de-duplicated and sorted
+ *                        alphabetically; {@link #openNeglectedSkillCount} is its size (AC11)
+ * @param suggestedWhatsNext the most recent non-blank "what's next" from an older attended session
+ *                        with this coach, sanitised and capped at 500 chars; deliberately looser
+ *                        than {@link #lastWhatsNext} (AC12). Null when none exists
+ * @param suggestedWhatsNextSessionDate when the session that produced {@link #suggestedWhatsNext}
+ *                        took place; null exactly when that is null
  */
 public record SessionPrepResponse(
     Long playerId,
@@ -31,5 +44,11 @@ public record SessionPrepResponse(
     String lastWhatsNext,
     List<String> focusThreadSkillCodes,
     int openNeglectedSkillCount,
-    String playerRequest
+    String playerRequest,
+    String coachPlanNote,
+    boolean coachPlanNoteEditable,
+    Long daysSinceLastSession,
+    List<String> openNeglectedSkillCodes,
+    String suggestedWhatsNext,
+    Instant suggestedWhatsNextSessionDate
 ) {}

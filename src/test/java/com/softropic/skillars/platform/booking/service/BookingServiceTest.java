@@ -17,6 +17,7 @@ import com.softropic.skillars.platform.booking.contract.CoachInboxResponse;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleItem;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleResponse;
+import com.softropic.skillars.platform.booking.contract.CoachPlanNoteResponse;
 import com.softropic.skillars.platform.booking.contract.PlayerRequestResponse;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
@@ -1759,6 +1760,115 @@ class BookingServiceTest {
             .hasCauseInstanceOf(OptimisticLockingFailureException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
+    }
+
+    // ---- setCoachPlanNote tests (skillars-12-6 AC2/AC15) ----
+
+    private Booking planNoteBooking(String status) {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, status);
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID))
+            .thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        return booking;
+    }
+
+    @Test
+    void setCoachPlanNote_owningCoach_savesAndReturnsIt() {
+        Booking booking = planNoteBooking("CONFIRMED");
+
+        CoachPlanNoteResponse response = bookingService.setCoachPlanNote(booking.getId(), COACH_USER_ID, "Plan A");
+
+        assertThat(response.bookingId()).isEqualTo(booking.getId());
+        assertThat(response.planNote()).isEqualTo("Plan A");
+        assertThat(booking.getCoachPlanNote()).isEqualTo("Plan A");
+    }
+
+    @Test
+    void setCoachPlanNote_blankClearsExistingNote() {
+        Booking booking = planNoteBooking("UPCOMING");
+        booking.setCoachPlanNote("old");
+
+        bookingService.setCoachPlanNote(booking.getId(), COACH_USER_ID, "   ");
+
+        assertThat(booking.getCoachPlanNote()).isNull();
+    }
+
+    @Test
+    void setCoachPlanNote_otherCoach_throwsMissingRights() {
+        Booking booking = planNoteBooking("CONFIRMED");
+        booking.setCoachId(UUID.randomUUID());
+
+        assertThatThrownBy(() -> bookingService.setCoachPlanNote(booking.getId(), COACH_USER_ID, "x"))
+            .isInstanceOf(OperationNotAllowedException.class);
+        assertThat(booking.getCoachPlanNote()).isNull();
+    }
+
+    @Test
+    void setCoachPlanNote_unknownCoachProfile_throwsNotFound() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> bookingService.setCoachPlanNote(booking.getId(), COACH_USER_ID, "x"))
+            .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void setCoachPlanNote_statusNotEditable_throwsBookingNotEditable() {
+        Booking booking = planNoteBooking("IN_PROGRESS");
+
+        assertThatThrownBy(() -> bookingService.setCoachPlanNote(booking.getId(), COACH_USER_ID, "x"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.BOOKING_NOT_EDITABLE));
+    }
+
+    @Test
+    void setCoachPlanNote_sessionAlreadyEnded_throwsSessionAlreadyEnded() {
+        Booking booking = planNoteBooking("UPCOMING");
+        Instant start = Instant.now().minusSeconds(7200);
+        booking.setRequestedStartTime(start);
+        booking.setRequestedEndTime(start.plusSeconds(3600));
+
+        assertThatThrownBy(() -> bookingService.setCoachPlanNote(booking.getId(), COACH_USER_ID, "x"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SESSION_ALREADY_ENDED));
+    }
+
+    @Test
+    void setCoachPlanNote_concurrentModification_mapsToConcurrentModification() {
+        Booking booking = planNoteBooking("CONFIRMED");
+        when(bookingRepository.saveAndFlush(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
+
+        assertThatThrownBy(() -> bookingService.setCoachPlanNote(booking.getId(), COACH_USER_ID, "race"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasCauseInstanceOf(OptimisticLockingFailureException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
+    }
+
+    @Test
+    void setCoachPlanNote_sanitizerExpandsPastColumnLimit_truncatesTo500Chars() {
+        Booking booking = planNoteBooking("CONFIRMED");
+        when(contactDetailSanitizer.sanitize("expand"))
+            .thenReturn(new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.SanitizerResult(
+                "x".repeat(600), true));
+
+        bookingService.setCoachPlanNote(booking.getId(), COACH_USER_ID, "expand");
+
+        assertThat(booking.getCoachPlanNote()).hasSize(500);
+    }
+
+    @Test
+    void isPrepNoteEditable_matchesStatusAndEndTimeBound() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        Instant end = booking.getRequestedEndTime();
+
+        assertThat(booking.isPrepNoteEditable(end.minusSeconds(1))).isTrue();
+        assertThat(booking.isPrepNoteEditable(end)).isFalse();
+        booking.setStatus("IN_PROGRESS");
+        assertThat(booking.isPrepNoteEditable(end.minusSeconds(1))).isFalse();
     }
 
     @Test

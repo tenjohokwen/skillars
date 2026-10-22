@@ -147,6 +147,13 @@
             />
           </div>
 
+          <!-- skillars-12-6 AC13: last session's "what's next" + the coach plan note -->
+          <PrepFeedForwardCard
+            v-if="builderStore.prep"
+            :booking-id="bookingId"
+            :prep="builderStore.prep"
+          />
+
           <draggable v-model="builderStore.blocks" item-key="_uid" handle="[data-drag-handle]">
             <template #item="{ element, index }">
               <div
@@ -263,6 +270,7 @@ import DrillDetailPanel from 'src/components/session/DrillDetailPanel.vue'
 import DrillCard from 'src/components/session/DrillCard.vue'
 import DrillSuggestionPanel from 'src/components/session/DrillSuggestionPanel.vue'
 import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
+import PrepFeedForwardCard from 'src/components/session/PrepFeedForwardCard.vue'
 
 defineOptions({ name: 'SessionBuilderPage' })
 
@@ -299,7 +307,10 @@ const highlightAxes = computed(() => [
 onMounted(async () => {
   await builderStore.fetchExistingPlan(bookingId)
   if (!builderStore.isGated) {
-    await fetchDrills()
+    // skillars-12-6 AC13: sequential, never concurrent with fetchExistingPlan - its initForBooking
+    // reset (including the 404 "no plan yet" path) would wipe prep. A failure leaves prep null and
+    // the builder fully functional; the scout-gated state never fetches prep at all.
+    await Promise.all([builderStore.fetchPrep(bookingId), fetchDrills()])
   }
 })
 
