@@ -3451,3 +3451,206 @@ So that there is exactly one session-pack code path left in the codebase.
 **Then** `BookingServiceTest`, `BookingServiceConcurrencyIT`, and frontend booking/purchase tests all pass
 
 *Dev notes: `platform.booking`. This story is the actual completion of the consolidation — Epic 11 is not "done" until this story ships, since Stories 11.1/11.2 leave the legacy system physically present (unused but undeleted). Full technical detail to be produced when this story is created via create-story.*
+
+---
+
+## Epic 12: Coach Player Roster, Session History & Continuity
+
+Gives a coach a relationship-centric view of "his" players: a derived roster ranked by attention, a per-player history/timeline, a Session Prep Card at the moment of need, and one small new data capture (the session-close recap) that feeds prep, history and reports. Source: `_bmad-output/brainstorming/brainstorming-session-2026-10-14-19-55-07.md`. Stories 12.1–12.5 (plus `skillars-deferred-155` for Converge #16 and Deferred #17) were created directly from that brainstorm and never recorded here; this section was added 2026-10-22 after a code-level audit of that brainstorm against HEAD `7121ace5` found the gaps below still open. Stories 12.6–12.10 exist to close every one of them.
+
+**Epic completion gate:** Epic 12 is NOT done until every row of the "Gap → story map" below is either covered by a `done` story or carries an explicit, recorded owner decision marking it out of scope. Re-check the map at retrospective time.
+
+**Already shipped (summaries only — full detail lives in each story file):**
+- **12.1** `skillars-12-1-coach-player-roster-and-attention-summary` — derived roster, `GET /api/development/coaches/me/roster`, server-side attention score, `MyPlayersPage.vue`.
+- **12.2** `skillars-12-2-session-close-recap-capture` — wrap-up step 5 recap (`whatWeDid`/`whatsNext`) → `SESSION_COMPLETED.metadata`.
+- **12.3** `skillars-12-3-session-prep-card-and-timeline-access-clock-fix` — `SessionPrepCard.vue`, `SessionFocusThreadCalculator`, merged last-session clock.
+- **12.4** `skillars-12-4-coach-facing-player-detail-page` — `CoachPlayerDetailPage.vue` (timeline, neglected skills, coach contributions).
+- **12.5** `skillars-12-5-coach-recap-on-player-timeline` — recap rendered on `PlayerTimelinePanel.vue` for the authoring coach.
+- `skillars-deferred-155` — recap → PDF report tie-in; player/parent session request on the booking.
+
+**Owner decisions already made — do not re-litigate in 12.6–12.10:**
+- Siloed per-coach recaps; aggregate skill-contribution % stays cross-coach visible (brainstorm Decision #8 + SCAMPER refinement).
+- Lapsed state is computed, never stored (Converge #10/#3).
+- Abandoned wrap-up is swept to a placeholder completion row with `playerAttended=false` and null recap (`skillars-deferred-153` AC1). 12.7 adds a way to recover the recap; it does not undo the sweeper.
+- Roster per-player fan-out is bounded by a cap rather than a single aggregate query (`skillars-deferred-153` AC3; `BookingRepository.java:278-279`). 12.10 only re-confirms or revisits this; it is not assumed to be a defect.
+
+**Open decisions — resolve during `/bmad-create-story` of the named story, before drafting ACs:**
+- **D1 (12.7):** Should coach recaps reach parents/players verbatim via the PDF report (`ReportGenerationService.java:638-662`, parent emailed at `:410-430`)? Timeline redacts them from parents (`TimelineQueryService.java:71-90`); brainstorm Priority 2 said "keep it coach-private". Options: (a) accept and document that Decision #8 is coach↔coach only, plus a notice in `GenerateReportDialog.vue`; (b) per-report opt-in/out or per-recap selection; (c) remove recaps from the parent-facing PDF.
+- **D2 (12.7):** Add the brainstorm Pattern #4 "what went well" field, or formally drop it?
+- **D3 (12.7):** Wrap-up voice-note text is saved (`BookingCompletionService.java:160`) but never read and has no size cap (`WrapUpRequest.java:18`) — surface it (where?) or stop capturing it?
+- **D4 (12.8):** Which of the five stub timeline event types (MILESTONE_REACHED, HOMEWORK_ASSIGNED, VIDEO_UPLOADED, PAYMENT_RECEIVED, REVIEW_LEFT) get producers now, and which are formally out of scope?
+- **D5 (12.10):** One coherent coach-access window: today timeline = 90 days, roster = 730 days, every other detail-page read = unbounded. Pick the rule.
+- **D6 (12.10):** Should a player lapsed beyond the roster floor/cap still be findable (e.g. a "lapsed" filter/section), per Pattern #3's success indicator "every player he has an active or recently-lapsed relationship with"?
+- **D7 (12.10):** Roster N+1 (~4–5 queries per player, ~600–750 at the 150-player cap) — keep the cap-based bound (and add a query-count regression test) or move to batched/aggregate queries?
+
+**Gap → story map (audit 2026-10-22, HEAD `7121ace5`):**
+
+| # | Gap | Brainstorm ref | Story |
+|---|---|---|---|
+| G1 | No coach-writable plan note on the upcoming booking | Pattern #9 | 12.6 |
+| G2 | No "days since last session" on roster or prep card (computed at `CoachRosterService.java:151`, never returned) | Pattern #2, Priority 3 | 12.6 |
+| G3 | Roster caption "haven't trained together yet" disagrees with dormancy (booking-time based) | Pattern #2 | 12.6 |
+| G4 | Prep card shows neglected-skill count only, not which skills | Priority 3 | 12.6 |
+| G5 | "What's next" is display-only — never pre-fills/suggests next session focus; no fallback to an older recap when latest session has none | Pattern #5 | 12.6 |
+| G6 | Prep card only reachable for `UPCOMING` (~24h before); `CONFIRMED` bookings further out cannot be prepped | Pattern #9 | 12.6 |
+| G7 | Recap cannot be edited; no way back into an abandoned wrap-up; sweeper placeholder recap is permanently empty | Converge #15, Priority 2 | 12.7 |
+| G8 | No nudge/flag for completed sessions with no recap | Priority 2 success indicator | 12.7 |
+| G9 | "What went well" field missing | Pattern #4 | 12.7 (D2) |
+| G10 | Voice-note text captured but never used, unbounded | Priority 2 "optional note" | 12.7 (D3) |
+| G11 | PDF Session Notes renders `whatWeDid`/`whatsNext` unlabelled | Converge #16 | 12.7 |
+| G12 | Recaps reach parents verbatim via PDF despite "coach-private" | Decision #8, Priority 2 | 12.7 (D1) |
+| G13 | Unattended-session recaps: excluded from prep card (`PlayerTimelineRepository.java:35-36`) but included in report (`:66-73`) | Converge #15/#16 | 12.7 |
+| G14 | Drills/exercises and session ratings not on the timeline (`BookingCompletedEvent` carries `homeworkDrillIds` + ratings; `TimelineEventListener.java:54-57` drops them); booking `referenceId` not linked | Pattern #7 | 12.8 |
+| G15 | Five timeline event types are enum/UI stubs with no producer | Codebase Grounding | 12.8 (D4) |
+| G16 | Coach player-detail page lacks parent-parity panels: radar, narrative, exposure chart, trend chart, reports list | Converge #12 success indicator | 12.9 |
+| G17 | Coach-only tools (radar assessment entry, target editor, correlation panel, radar history, report generation entry) live only on `PlayerDevelopmentDashboardPage.vue`, whose route is PLAYER-only (`routes.js:284-287`) — unreachable for coaches | Converge #12 | 12.9 |
+| G18 | `/neglected-skills` endpoint has no frontend caller (page derives from exposure) | Converge #12 | 12.9 |
+| G19 | `GET`/`PUT /players/{id}/radar/preferences` gated by coach role only, no coach↔player relationship check (`RadarDisplayResource.java:43-61`) | Codebase Grounding side note | 12.10 |
+| G20 | Coach-access windows inconsistent (90 / 730 / unbounded) | Codebase Grounding (90-day rule) | 12.10 (D5) |
+| G21 | Access clock = processing time (`Instant.now()` in `TimelineEventListener.java:111`, SLU `calculated_at`), not session time | Codebase Grounding | 12.10 |
+| G22 | Lapsed players vanish from roster beyond 730-day floor or 150-player cap | Pattern #3 | 12.10 (D6) |
+| G23 | Roster N+1 fan-out; no query-count test | Converge #11 | 12.10 (D7) |
+| G24 | Roster membership and read-authorization predicates drift on time (roster 730-day floor vs. auth unbounded) | Converge #10 | 12.10 |
+| G25 | Timeline recap redaction is a denylist; other coach's id stays in metadata, PERFORMANCE_REPORT events carry other coach's name | Decision #8 | 12.10 |
+
+### Story 12.6: Session Prep Completeness and Feed-Forward
+
+As a coach,
+I want the Session Prep Card to tell me everything I need before a session — including my own plan note, how long it has been, which skills are neglected — and to carry last session's "what's next" into my planning,
+So that history actively shapes the next session instead of being a passive log.
+
+**Acceptance Criteria:**
+
+**Given** a coach viewing the prep card for one of their own upcoming bookings
+**When** they write a short plan note
+**Then** it is persisted on that booking (coach-private, length-capped, contact-info-sanitized like `playerRequest`), re-shown on reopen, editable until the session starts, never returned to player/parent/other coaches, and included in coach GDPR erasure (G1)
+
+**Given** the roster and the prep card
+**When** rendered
+**Then** each shows "last trained N days ago" from a server-provided value, and the roster caption and dormant badge derive from the same signal so they can no longer contradict each other (G2, G3)
+
+**Given** a player with open neglected-skill flags
+**When** the coach opens the prep card
+**Then** the card lists the neglected skills by translated name, not just a count (G4)
+
+**Given** the most recent recap with a non-empty `whatsNext` for this coach-player pair (falling back to the latest older recap when the most recent session has none)
+**When** the coach clicks "Plan this session" or opens Session Builder for this booking
+**Then** that `whatsNext` is shown as a suggestion inside Session Builder and can be applied to the session focus with one action — never silently overwriting a focus the coach already saved (G5)
+
+**Given** a `CONFIRMED` booking more than 24h out
+**When** the coach views it in the Command Center
+**Then** the Prep action is available, not only for `UPCOMING` (G6)
+
+*Dev notes: `platform.development`, `platform.booking`, frontend. Endpoint `GET /api/development/bookings/{id}/prep` (`SessionPrepResource.java:32-38`), `SessionPrepResponse.java`, `SessionPrepCard.vue`, `CoachCommandCenterPage.vue:121-130`, `sessionBuilder.store.js:101`. Gaps G1–G6.*
+
+---
+
+### Story 12.7: Recap Lifecycle — Edit, Resume, Nudge, and Report Visibility
+
+As a coach,
+I want to complete or correct a recap after the fact, be reminded when one is missing, and know exactly who will read it,
+So that "every completed session has a recap attached" becomes true and my notes are only seen by the people I expect.
+
+**Acceptance Criteria:**
+
+**Given** a completed booking of mine whose recap is missing (abandoned wizard, sweeper placeholder, or skipped) or that I want to correct
+**When** I open it within a bounded edit window
+**Then** I can add/edit `whatWeDid`/`whatsNext`, and the change propagates to `booking.session_completion_data` AND the existing `SESSION_COMPLETED` timeline event metadata (no second event), respecting siloing and GDPR erasure tombstones (G7)
+
+**Given** completed sessions without a recap
+**When** the coach views the Command Center or roster
+**Then** they are flagged with a count and a direct action to add the recap (G8)
+
+**Given** D2 and D3 are decided
+**When** this story ships
+**Then** "what went well" is either added end-to-end (migration, wrap-up step, timeline, prep, report) or recorded as dropped; voice-note text is either surfaced (with a size cap) or no longer captured (G9, G10)
+
+**Given** a generated PDF report
+**When** it includes session notes
+**Then** each entry labels "What we did" and "What's next" separately (G11)
+
+**Given** D1 is decided
+**When** a coach generates a report
+**Then** the report dialog states plainly whether recaps will be shared with the parent, and the behaviour matches the decision (G12)
+
+**Given** a recap from a session the player did not attend
+**When** the prep card and the report are built
+**Then** both apply the same inclusion rule (G13)
+
+*Dev notes: `platform.booking`, `platform.development`, frontend. `BookingCompletionService.java:140-178,255-268`, `SessionCompletionResource.java:79-84`, `WrapUpSequence.vue`, `TimelineEventListener.java:42-73`, `ReportGenerationService.java:220-223,638-662`, `GenerateReportDialog.vue`, `PlayerTimelineRepository.java:35-36,66-73`. Gaps G7–G13. Decisions D1–D3.*
+
+---
+
+### Story 12.8: Timeline Enrichment — Session Content and Event Producers
+
+As a coach (and parent/player),
+I want each completed session on the timeline to show what was actually trained, and other real milestones to appear too,
+So that the history is auto-assembled from data the platform already has (brainstorm Pattern #7).
+
+**Acceptance Criteria:**
+
+**Given** a booking completed via wrap-up
+**When** the `SESSION_COMPLETED` event is written
+**Then** its metadata includes the session's drills/exercises (and, per siloing rules, the coach's effort/focus/technique ratings for the authoring coach only), and `PlayerTimelinePanel.vue` renders them; the event links to its booking/session (G14)
+
+**Given** D4 is decided
+**When** this story ships
+**Then** each in-scope stub event type has a producer in its owning module (via domain events, no cross-module repository access) and an IT proving it lands on the timeline; each out-of-scope type is documented as such in `PlayerTimelineEventType.java` (G15)
+
+*Dev notes: `platform.development` plus producing modules (homework, video, reviews, payment). `PlayerTimelineEventType.java:3-12`, `BookingCompletedEvent.java:17-20`, `TimelineEventListener.java:54-57`. Gaps G14–G15. Decision D4. May split into 12.8a/12.8b if D4 keeps several producers in scope.*
+
+---
+
+### Story 12.9: Coach Player Workspace Parity
+
+As a coach,
+I want one player page where I can see everything a parent sees and use every coach tool for that player,
+So that clicking a player on my roster gives me the full relationship/history view the brainstorm promised.
+
+**Acceptance Criteria:**
+
+**Given** a coach with a relationship to a player
+**When** they open `coach/players/:playerId`
+**Then** the page also shows the radar, narrative summary, skill-exposure chart, skill-trend chart and the coach's own reports list, each through the existing relationship-checked endpoints (G16)
+
+**Given** the coach-only components currently mounted only on the PLAYER-only `PlayerDevelopmentDashboardPage.vue` (radar assessment entry, target editor, correlation panel, radar history) and report generation
+**When** this story ships
+**Then** they are reachable by the coach from the coach player page, and the dead `isCoach` branches on the player dashboard are removed or justified (G17)
+
+**Given** the `/neglected-skills` endpoint has no frontend caller
+**When** this story ships
+**Then** it is either used by the coach page or removed (G18)
+
+*Dev notes: frontend mostly; `CoachPlayerDetailPage.vue`, `ParentDevelopmentPortalPage.vue`, `PlayerDevelopmentDashboardPage.vue:36-126`, `router/routes.js:284-287`, `api/development.api.js`. Gaps G16–G18. Likely large; may split into "read parity" and "coach tools".*
+
+---
+
+### Story 12.10: Coach↔Player Access Consistency and Hardening
+
+As a platform engineer,
+I want one coherent coach-access rule across roster, timeline and every player read, and no endpoint without a relationship check,
+So that what a coach can see about a player is predictable, minimal and secure.
+
+**Acceptance Criteria:**
+
+**Given** `GET`/`PUT /players/{id}/radar/preferences`
+**When** called by a coach with no relationship to that player
+**Then** it returns 403, with ITs, matching every other development read (G19)
+
+**Given** D5 is decided
+**When** a coach reads any per-player development surface (timeline, exposure, narrative, trends, contributions, neglected skills, radar, reports) or the roster
+**Then** the same window applies everywhere, measured from the actual session time rather than processing time, with ITs for a player lapsed just inside/outside the window (G20, G21, G24)
+
+**Given** D6 is decided
+**When** a player falls outside the roster floor or cap
+**Then** the behaviour matches the decision (e.g. still findable under a lapsed view) (G22)
+
+**Given** D7 is decided
+**When** the roster is requested
+**Then** query count is either bounded by a regression test at the cap or reduced by batching (G23)
+
+**Given** the timeline response to a non-authoring coach or a parent/player
+**When** metadata is returned
+**Then** redaction is an allowlist, so new free-text metadata keys cannot leak by default; the other coach's identity is exposed only where intentionally decided (G25)
+
+*Dev notes: `platform.development`. `RadarDisplayResource.java:43-61`, `RadarDisplayService.java:67-91`, `CoachPlayerAuthorizationService.java:35-38,88-111`, `TimelineQueryService.java:38-90`, `CoachRosterService.java:59-80`, `CoachPlayerLastSessionResolver.java:27-60`. Gaps G19–G25. Decisions D5–D7.*
