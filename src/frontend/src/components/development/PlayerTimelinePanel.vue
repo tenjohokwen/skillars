@@ -46,7 +46,9 @@
           <dl
             v-if="
               event.eventType === 'SESSION_COMPLETED' &&
-              (event.metadata?.whatWeDid?.trim() || event.metadata?.whatsNext?.trim())
+              (event.metadata?.whatWeDid?.trim() ||
+                event.metadata?.whatsNext?.trim() ||
+                event.metadata?.whatWentWell?.trim())
             "
             class="q-mt-sm"
           >
@@ -61,6 +63,12 @@
                 {{ $t('development.timeline.whatsNextLabel') }}
               </dt>
               <dd class="text-body2 recap-text">{{ event.metadata.whatsNext }}</dd>
+            </div>
+            <div v-if="event.metadata?.whatWentWell?.trim()">
+              <dt class="text-caption text-weight-bold q-mt-xs">
+                {{ $t('development.timeline.whatWentWellLabel') }}
+              </dt>
+              <dd class="text-body2 recap-text">{{ event.metadata.whatWentWell }}</dd>
             </div>
           </dl>
         </q-timeline-entry>

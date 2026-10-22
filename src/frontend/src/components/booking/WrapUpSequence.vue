@@ -3,7 +3,7 @@
     <!-- Step pip indicator -->
     <div class="wrap-up__pips">
       <div
-        v-for="n in 5"
+        v-for="n in 4"
         :key="n"
         class="wrap-up__pip"
         :class="{ 'wrap-up__pip--active': n === step, 'wrap-up__pip--done': n < step }"
@@ -116,68 +116,8 @@
       </div>
     </div>
 
-    <!-- Step 3: Voice Note -->
+    <!-- Step 3: Homework (i18n keys keep their historical step4* names) -->
     <div v-else-if="step === 3" class="wrap-up__step">
-      <div class="text-h6 q-mb-lg">{{ t('booking.wrapUp.step3Title') }}</div>
-
-      <div v-if="!isRecording" class="wrap-up__voice-row">
-        <q-btn
-          unelevated
-          round
-          size="xl"
-          icon="mic"
-          color="primary"
-          :label="t('booking.wrapUp.step3RecordBtn')"
-          class="wrap-up__mic-btn"
-          @click="startRecording"
-        />
-        <q-btn
-          outline
-          round
-          size="xl"
-          icon="skip_next"
-          class="wrap-up__skip-btn"
-          :label="t('booking.wrapUp.step3SkipBtn')"
-          @click="step = 4"
-        />
-      </div>
-      <div v-else class="wrap-up__voice-row">
-        <q-btn
-          unelevated
-          round
-          size="xl"
-          icon="stop"
-          color="negative"
-          :label="t('booking.wrapUp.step3StopBtn')"
-          @click="stopRecording"
-        />
-        <div class="text-body2 q-mt-sm" style="color: var(--color-error)">
-          {{ t('booking.wrapUp.step3Recording') }}
-        </div>
-      </div>
-
-      <!-- Text fallback — always visible when not recording -->
-      <q-input
-        v-if="!isRecording"
-        v-model="voiceNoteText"
-        type="textarea"
-        :placeholder="t('booking.wrapUp.step3Placeholder')"
-        class="q-mt-lg"
-        outlined
-        autogrow
-      />
-
-      <q-btn
-        v-if="!isRecording"
-        unelevated
-        class="wrap-up__next-btn q-mt-md"
-        :label="t('common.next')"
-        @click="step = 4"
-      />
-    </div>
-
-    <!-- Step 4: Homework -->
-    <div v-else-if="step === 4" class="wrap-up__step">
       <div class="text-h6 q-mb-md">{{ t('booking.wrapUp.step4Title') }}</div>
 
       <div class="wrap-up__dna-chart-area q-mb-md">
@@ -218,11 +158,11 @@
         </q-card>
       </div>
 
-      <q-btn unelevated class="wrap-up__next-btn" :label="t('common.next')" @click="step = 5" />
+      <q-btn unelevated class="wrap-up__next-btn" :label="t('common.next')" @click="step = 4" />
     </div>
 
-    <!-- Step 5: Session Recap -->
-    <div v-else-if="step === 5" class="wrap-up__step">
+    <!-- Step 4: Session Recap (i18n keys keep their historical step5* names) -->
+    <div v-else-if="step === 4" class="wrap-up__step">
       <div class="text-h6 q-mb-lg">{{ t('booking.wrapUp.step5Title') }}</div>
 
       <q-input
@@ -247,6 +187,18 @@
         :label="t('booking.wrapUp.step5WhatsNextLabel')"
         :placeholder="t('booking.wrapUp.step5WhatsNextPlaceholder')"
       />
+      <q-input
+        v-model="recapWhatWentWell"
+        type="textarea"
+        outlined
+        autogrow
+        maxlength="500"
+        counter
+        class="q-mb-md full-width"
+        data-testid="recap-what-went-well"
+        :label="t('booking.wrapUp.step5WhatWentWellLabel')"
+        :placeholder="t('booking.wrapUp.step5WhatWentWellPlaceholder')"
+      />
 
       <q-btn
         unelevated
@@ -257,7 +209,8 @@
           !recapWhatWeDid.trim() ||
           !recapWhatsNext.trim() ||
           recapWhatWeDid.length > 500 ||
-          recapWhatsNext.length > 500
+          recapWhatsNext.length > 500 ||
+          recapWhatWentWell.length > 500
         "
         @click="handleSubmitWrapUp"
       />
@@ -271,7 +224,6 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
 import { getDrillSuggestions } from 'src/api/booking.api'
-import { signUpload, confirmUpload } from 'src/api/marketplace.api'
 import { sessionApi } from 'src/api/session.api'
 import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
 
@@ -295,12 +247,10 @@ const effortRating = ref(0)
 const focusRating = ref(0)
 const techniqueRating = ref(0)
 const currentRating = ref('effort')
-const voiceNoteText = ref('')
-const isRecording = ref(false)
-const recorder = ref(null)
 const homeworkDrillIds = ref([])
 const recapWhatWeDid = ref('')
 const recapWhatsNext = ref('')
+const recapWhatWentWell = ref('')
 const drillSuggestions = ref([])
 const submitting = ref(false)
 const sessionDnaData = ref(null)
@@ -316,53 +266,6 @@ function toggleDrill(drillId) {
   } else {
     homeworkDrillIds.value.splice(idx, 1)
   }
-}
-
-async function startRecording() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    const chunks = []
-    recorder.value = new MediaRecorder(stream)
-    recorder.value.ondataavailable = (e) => chunks.push(e.data)
-    recorder.value.onstop = async () => {
-      const blob = new Blob(chunks, { type: 'audio/webm' })
-      stream.getTracks().forEach((t) => t.stop())
-      try {
-        const signRes = await signUpload({
-          entity: 'booking',
-          entityId: props.bookingId,
-          contentType: 'audio/webm',
-          extension: 'webm',
-          fileSizeBytes: blob.size,
-          checksum: null,
-          tags: {},
-        })
-        const { key, uploadUrl } = signRes
-        await fetch(uploadUrl, {
-          method: 'PUT',
-          body: blob,
-          headers: { 'Content-Type': 'audio/webm' },
-        })
-        await confirmUpload(key, {})
-        voiceNoteText.value = '[Voice note recorded — transcription pending]'
-      } catch (e) {
-        console.warn('Voice note upload failed:', e)
-        voiceNoteText.value = '[Voice note recorded — transcription pending]'
-      }
-    }
-    recorder.value.start()
-    isRecording.value = true
-  } catch (e) {
-    console.warn('MediaRecorder not available:', e)
-  }
-}
-
-function stopRecording() {
-  if (recorder.value) {
-    recorder.value.stop()
-    recorder.value = null
-  }
-  isRecording.value = false
 }
 
 async function fetchDrillSuggestions() {
@@ -383,11 +286,11 @@ async function handleSubmitWrapUp() {
       effortRating: effortRating.value || null,
       focusRating: focusRating.value || null,
       techniqueRating: techniqueRating.value || null,
-      voiceNoteText: voiceNoteText.value || null,
       homeworkDrillIds: homeworkDrillIds.value,
       mode: props.isLiveMode ? 'LIVE' : 'QUICK',
       recapWhatWeDid: recapWhatWeDid.value.trim(),
       recapWhatsNext: recapWhatsNext.value.trim(),
+      recapWhatWentWell: recapWhatWentWell.value.trim() || null,
     })
     submitSucceeded = true
   } catch (err) {
@@ -489,18 +392,6 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   gap: 8px;
-}
-
-.wrap-up__voice-row {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  justify-content: center;
-}
-
-.wrap-up__mic-btn,
-.wrap-up__skip-btn {
-  flex: 1;
 }
 
 .wrap-up__next-btn {

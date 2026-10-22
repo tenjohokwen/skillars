@@ -20,6 +20,7 @@ public class BookingCompletedEvent extends ApplicationEvent {
     private final List<UUID> homeworkDrillIds;
     private final String whatWeDid;
     private final String whatsNext;
+    private final String whatWentWell;
 
     public BookingCompletedEvent(Object source, UUID bookingId, UUID coachId, Long playerId,
                                   Long parentId, boolean playerAttended, Integer effortRating,
@@ -33,6 +34,15 @@ public class BookingCompletedEvent extends ApplicationEvent {
                                   Long parentId, boolean playerAttended, Integer effortRating,
                                   Integer focusRating, Integer techniqueRating,
                                   List<UUID> homeworkDrillIds, String whatWeDid, String whatsNext) {
+        this(source, bookingId, coachId, playerId, parentId, playerAttended, effortRating,
+            focusRating, techniqueRating, homeworkDrillIds, whatWeDid, whatsNext, null);
+    }
+
+    public BookingCompletedEvent(Object source, UUID bookingId, UUID coachId, Long playerId,
+                                  Long parentId, boolean playerAttended, Integer effortRating,
+                                  Integer focusRating, Integer techniqueRating,
+                                  List<UUID> homeworkDrillIds, String whatWeDid, String whatsNext,
+                                  String whatWentWell) {
         super(source);
         this.bookingId = bookingId;
         this.coachId = coachId;
@@ -45,5 +55,6 @@ public class BookingCompletedEvent extends ApplicationEvent {
         this.homeworkDrillIds = homeworkDrillIds;
         this.whatWeDid = whatWeDid;
         this.whatsNext = whatsNext;
+        this.whatWentWell = whatWentWell;
     }
 }

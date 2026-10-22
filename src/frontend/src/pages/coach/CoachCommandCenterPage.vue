@@ -32,6 +32,63 @@
       :pitch-timezone="bookingStore.coachSchedule.coachTimezone"
     />
 
+    <!-- skillars-12-7 AC9: sessions that completed without a recap. Five-state convention: loading and
+         empty render nothing (a secondary nudge must not shift the page), error is a quiet inline line
+         (no toast: it would nag on every page load), data is the banner. -->
+    <div
+      v-if="missingRecapsError"
+      class="text-caption text-negative q-mb-md"
+      data-testid="missing-recaps-error"
+    >
+      {{ t('booking.recap.missingLoadError') }}
+    </div>
+    <q-banner
+      v-else-if="!missingRecapsLoading && missingRecaps.count > 0"
+      rounded
+      class="q-mb-md missing-recaps-banner"
+      data-testid="missing-recaps-banner"
+    >
+      <div class="text-subtitle2">
+        {{ t('booking.recap.missingBanner', { count: missingRecaps.count }, missingRecaps.count) }}
+      </div>
+      <template #action>
+        <q-btn
+          flat
+          dense
+          data-testid="missing-recaps-toggle"
+          :label="
+            showMissingRecaps ? t('booking.recap.missingHide') : t('booking.recap.missingToggle')
+          "
+          @click="showMissingRecaps = !showMissingRecaps"
+        />
+      </template>
+      <q-list v-if="showMissingRecaps" dense class="q-mt-sm">
+        <q-item-label header class="q-px-none" data-testid="missing-recaps-title">
+          {{ t('booking.recap.missingTitle') }}
+        </q-item-label>
+        <q-item
+          v-for="item in missingRecaps.items"
+          :key="item.bookingId"
+          data-testid="missing-recap-item"
+        >
+          <q-item-section>
+            <q-item-label>{{ item.playerName }}</q-item-label>
+            <q-item-label caption>{{ formatRecapDate(item.sessionDate) }}</q-item-label>
+          </q-item-section>
+          <q-item-section side>
+            <q-btn
+              flat
+              dense
+              color="primary"
+              data-testid="missing-recap-add"
+              :label="t('booking.recap.addAction')"
+              @click="openRecapDialog({ bookingId: item.bookingId, playerName: item.playerName })"
+            />
+          </q-item-section>
+        </q-item>
+      </q-list>
+    </q-banner>
+
     <div class="row items-center q-mb-md q-gutter-sm">
       <q-btn
         flat
@@ -127,6 +184,35 @@
                 :label="t('coach.sessionPrepButton')"
                 class="q-mt-xs"
                 @click="openSessionPrep(booking)"
+              />
+              <!-- wrapUpSubmitted guard: a COMPLETED booking with no session_completion_data row
+                   (e.g. completed before 12.7 without a wrap-up) would 404 on GET /recap. -->
+              <q-btn
+                v-if="booking.status === 'COMPLETED' && booking.wrapUpSubmitted === true"
+                flat
+                dense
+                size="sm"
+                data-testid="recap-btn"
+                :label="
+                  booking.hasRecap
+                    ? t('booking.schedule.editRecap')
+                    : t('booking.schedule.addRecap')
+                "
+                class="q-mt-xs"
+                @click="openRecapDialog(booking)"
+              />
+              <q-btn
+                v-if="
+                  booking.status === 'COMPLETED_PENDING_CONFIRMATION' &&
+                  booking.wrapUpSubmitted === false
+                "
+                flat
+                dense
+                size="sm"
+                data-testid="resume-wrap-up-btn"
+                :label="t('booking.schedule.resumeWrapUp')"
+                class="q-mt-xs"
+                @click="handleResumeWrapUp(booking)"
               />
               <q-btn
                 v-if="booking.status === 'COMPLETED'"
@@ -317,6 +403,14 @@
       </q-card>
     </q-dialog>
 
+    <!-- Session recap add/edit dialog (skillars-12-7 AC6) -->
+    <SessionRecapDialog
+      v-model="showRecapDialog"
+      :booking-id="recapBookingId"
+      :player-name="recapPlayerName"
+      @saved="onRecapSaved"
+    />
+
     <!-- Session Prep Card dialog (skillars-12-3 AC5/AC6) -->
     <q-dialog v-model="showSessionPrep">
       <SessionPrepCard :booking-id="activePrepBookingId" :player-name="activePrepPlayerName" />
@@ -337,6 +431,8 @@ import WrapUpSequence from 'src/components/booking/WrapUpSequence.vue'
 import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
 import CancelCoachModal from 'src/components/booking/CancelCoachModal.vue'
 import SessionPrepCard from 'src/components/booking/SessionPrepCard.vue'
+import SessionRecapDialog from 'src/components/booking/SessionRecapDialog.vue'
+import { getMissingRecaps } from 'src/api/booking.api'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()
@@ -375,6 +471,14 @@ const noShowPlayerRequestedStartTime = ref(null)
 const noShowActionId = ref(null)
 
 const showSessionPrep = ref(false)
+// skillars-12-7: recap dialog + missing-recap nudge
+const showRecapDialog = ref(false)
+const recapBookingId = ref(null)
+const recapPlayerName = ref('')
+const missingRecaps = ref({ count: 0, items: [] })
+const showMissingRecaps = ref(false)
+const missingRecapsLoading = ref(true)
+const missingRecapsError = ref(false)
 const activePrepBookingId = ref(null)
 const activePrepPlayerName = ref('')
 
@@ -439,6 +543,7 @@ const selectedWeek = ref(currentMonday())
 
 onMounted(() => {
   bookingStore.loadCoachSchedule(selectedWeek.value)
+  loadMissingRecaps()
 })
 
 function prevWeek() {
@@ -623,6 +728,7 @@ function onWrapUpComplete() {
   setTimeout(() => {
     showPostWrapUpSummary.value = false
     bookingStore.loadCoachSchedule(selectedWeek.value)
+    loadMissingRecaps()
   }, 3000)
 }
 
@@ -749,6 +855,51 @@ function openNoShowPlayerDialog(booking) {
   noShowPlayerBookingId.value = booking.bookingId
   noShowPlayerRequestedStartTime.value = booking.requestedStartTime
   noShowPlayerDialogOpen.value = true
+}
+
+function formatRecapDate(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium' }).format(date)
+}
+
+// A failed nudge lookup is non-fatal: it surfaces as a quiet inline line instead of a notify (which
+// would nag on every page load for a secondary feature). Only the first load counts as "loading" — a
+// refresh after a save keeps the current banner on screen until the new count arrives.
+async function loadMissingRecaps() {
+  missingRecapsError.value = false
+  try {
+    const res = await getMissingRecaps()
+    const data = res?.data ?? res
+    missingRecaps.value = { count: data?.count ?? 0, items: data?.items ?? [] }
+  } catch {
+    missingRecaps.value = { count: 0, items: [] }
+    missingRecapsError.value = true
+  } finally {
+    missingRecapsLoading.value = false
+  }
+}
+
+function openRecapDialog(booking) {
+  recapBookingId.value = String(booking.bookingId)
+  recapPlayerName.value = booking.playerName ?? ''
+  showRecapDialog.value = true
+}
+
+async function onRecapSaved() {
+  await Promise.all([loadMissingRecaps(), bookingStore.loadCoachSchedule(selectedWeek.value)])
+}
+
+// skillars-12-7 AC7a: re-open the wizard for a wrap-up the coach abandoned. submitWrapUp accepts
+// COMPLETED_PENDING_CONFIRMATION and the parent-confirmation flow carries on. Both a quick-complete AND a
+// session ended live land in that status, so the resume keeps the original mode from the schedule's
+// startedLive flag (null/false → quick-complete wizard).
+function handleResumeWrapUp(booking) {
+  activeBookingId.value = String(booking.bookingId)
+  activePlayerName.value = booking.playerName
+  activePlayerId.value = booking.playerId
+  isLiveMode.value = booking.startedLive === true
+  showWrapUp.value = true
 }
 
 function openSessionPrep(booking) {

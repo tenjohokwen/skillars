@@ -15,9 +15,10 @@ public record WrapUpRequest(
     @Min(1) @Max(5) Integer effortRating,
     @Min(1) @Max(5) Integer focusRating,
     @Min(1) @Max(5) Integer techniqueRating,
-    String voiceNoteText,
     @Size(max = 2) List<UUID> homeworkDrillIds,
     @NotBlank @Pattern(regexp = "LIVE|QUICK") String mode,
     @NotBlank @Size(max = 500) String recapWhatWeDid,
-    @NotBlank @Size(max = 500) String recapWhatsNext
+    @NotBlank @Size(max = 500) String recapWhatsNext,
+    // skillars-12-7 AC10: optional on purpose -- required would 400 every deployed client that omits it.
+    @Size(max = 500) String recapWhatWentWell
 ) {}

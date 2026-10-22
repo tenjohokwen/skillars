@@ -1,157 +1,231 @@
-# Story Review — skillars-12-6-session-prep-completeness-and-feed-forward
+# Story Review — skillars-12-7-recap-lifecycle-edit-resume-nudge-and-report-visibility
 
+- **Story file:** `_bmad-output/implementation-artifacts/skillars-12-7-recap-lifecycle-edit-resume-nudge-and-report-visibility.md` (status `ready-for-dev`)
 - **Audit date:** 2026-10-22
-- **Real HEAD:** `4cea321f feat(admin,frontend): parser-backed i18n comment blanking and GDPR booking-erasure label coverage (skillars-deferred-158) (#284)`
-- The story says "Citations verified against master @ 4cea321f". That matches the real HEAD, but several line numbers are still wrong (see §1). Every citation below was checked against the real HEAD, not against the story's own description of itself. No source files differ from HEAD; the only local changes are `sprint-status.yaml` and the untracked story file.
+- **Real HEAD (checked at audit time):** `d06a0b0e build(deps): bump actions/setup-java from 6.0.1 to 6.1.0 (#285)`
+- Every citation was checked against this HEAD. The story's own "Citations verified against master @ d06a0b0e" note was not trusted. In this case the SHA happens to be the same, but many line ranges still drifted (see §2).
+- **Method:**
+  - Four parallel read-only layers ran first: citations, ledger/precedents, mechanistic claims, and corner cases.
+  - The orchestrator then re-verified every HIGH/MED finding against source (Step 4b).
 
-## 1. Citation verification
+---
 
-| Citation (story) | Verdict | Evidence / corrected location |
+## 1. Summary of what must change before dev
+
+| # | Severity | Finding | Story location |
+|---|---|---|---|
+| F1 | HIGH | The coach-erasure guard rests on a false premise: an erased coach's profile still resolves. | AC4 (GDPR tombstones) |
+| F2 | HIGH | The epic's "no way back into an abandoned wrap-up" (G7) is not delivered. A cancelled quick-complete wizard leaves a `COMPLETED_PENDING_CONFIRMATION` booking with no Command Center action. | AC2, AC7, AC8 |
+| F3 | HIGH | Erased players' sessions match the missing-recap definition. They nag the coach, and the edit then always fails. | AC8 |
+| F4 | HIGH | The GET `editable` flag and the PUT guard disagree for an erased player. This breaks AC3's own "never disagree" rule. | AC1/AC3/AC4 |
+| F5 | MED | The batch player-name lookup is attributed to `getCoachWeekSchedule`, which is actually N+1. | AC8 |
+| F6 | MED | The `NativeModifyingVersionAuditTest` instruction is wrong: the test only covers `@Version` tables. | AC4 |
+| F7 | MED | The edit window can be shorter than the stuck-completion timeout, so a swept placeholder can be born un-editable and un-nudged. | AC3 / AC8 |
+| F8 | MED | The timeline UPDATE keyed on `reference_id` has no usable index. | AC4 |
+| F9 | MED | The "dedicated message" for a closed window is not achievable with `OperationNotAllowedException`'s message. It needs an `ErrorCode`. | AC3 |
+| F10 | MED | Two edits can be applied to the timeline out of order (async multi-thread listener, blind overwrite). | AC4/AC5 |
+| F11 | MED | Unattended/recovered recaps are ordered by `occurred_at`, which is the async-write time (sweep time for placeholders). | AC16 |
+| F12 | LOW | The `ConfigBounds` key must also be added to `ConfigBounds.ALL`, and `ConfigBoundsTest` does not exist. | AC3, Task 3.1 |
+| F13 | LOW | The voice step also has a free-text input, so "stores only the literal placeholder" is false. | AC12 |
+| F14 | LOW | The report also reaches the player, not only the parent, so the notice wording should cover both. | AC15 |
+| F15 | LOW | `ReportGenerationService` glyph-scan loop (`:536-539`) is missing from the checklist. | AC11 / AC14 |
+| F16 | LOW | GDPR has five groups, not four (`AVAILABILITY_BLOCK` is missing). The REPORT scrub needs no extension, so the story's hedge resolves to "nothing to do". | Dev Notes |
+| F17 | LOW | AC7 cannot choose the "Add" vs "Edit" label: `ScheduleBookingItem` has no recap flag. | AC7 |
+| F18 | LOW | There is no `GenerateReportDialog` spec, so "add to the dialog spec" means creating one. | AC15, testing |
+| F19 | LOW | Attribution fixes: the ordering bug came from 12-3's review (not 12-2's); `ClockProvider` is a 12-6 precedent (not project-context); the Jackson flag is false because of `CommonConfig`'s builder (not a "Spring Boot default"). | Dev Notes, AC13 |
+
+---
+
+## 2. Citation verification (Layer 1)
+
+| Citation | Verdict | Evidence / corrected location |
 |---|---|---|
-| `BookingService.java:912-918` (recordNoShowPlayer ownership) | MATCH | `findByUserId(...).orElseThrow(... "Coach profile not found")`; `!Objects.equals(booking.getCoachId(), coach.getId())` → `MISSING_RIGHTS` |
-| `BookingService.java:144-145` (`PLAYER_REQUEST_EDITABLE_STATUSES`) | MATCH | `Set.of(CONFIRMED.name(), UPCOMING.name())` |
-| `BookingService.java:782-791` (editable guard) | MATCH | `rejectIfNotEditablePlayerRequest`; uses **bare `Instant.now()`** (see §5 F3) |
-| `BookingService.java:1060-1066` (`sanitizeAndTruncate`) | DRIFTED (small) | 1060-1067 is the comment; the method is at **1068-1072** |
-| `BookingService.java:756-760` (optimistic-lock catch) | MATCH | Location is correct; the behaviour is not what the story assumes (§3 M6) |
-| `BookingService.java:744-762` (`setPlayerRequest`) | MATCH | |
-| `BookingService.java:1150-1173` (`toResponse`) | MATCH | The method runs 1152-1173 |
-| `GdprExportService:73`, `:117-140` | MATCH | `addEntry(zos,"bookings.json",mapper,buildBookings(...))`; `buildBookings` 117-137 returns `List<Booking>` |
-| `BookingRepository.java:326-341` | MATCH | The comment is a `//` block, not Javadoc (AC5 calls it "Javadoc") |
-| `GdprErasureService:470-505`, `:519-526`, `:519`, `:1516` | MATCH | Group tx at 472-501; switch at 519-525; caller at 1516 |
-| `GdprErasureService:528` (log.warn text) | DRIFTED (small) | The `log.warn` starts at **526** |
-| `AdminQueueService.java:175-190` | MATCH | The list runs 173-188 |
-| `booking.api.js:92-93` | MATCH | |
-| `en-US/index.js:254`, `:255-264` | MATCH | |
-| `CoachRosterService.java:81` (ClockProvider) | **DRIFTED** | Actually at **:73** (`Instant now = Instant.now(ClockProvider.getClock())`); `:81` is `configService.getBoundedLong(` |
-| `CoachRosterService.java:138-152` | MATCH | |
-| `CoachRosterService.java:147` (`hasUpcomingBooking`) | DRIFTED (off by 1) | Actually at **:146** |
-| `MyPlayersPage.vue:87-93` (caption) | **DRIFTED** | 87-93 is `onMounted`; `lastSessionLabel` is at **104-109** |
-| `SessionPrepCard.vue:100-106` (`lastSessionLabel`) | **DRIFTED** | Actually at **107-112** |
-| `SessionPrepCard.vue:109-111` (`skillDisplayName`) | **DRIFTED** | Actually at **118-120**; the raw-code fallback is confirmed |
-| `NeglectedSkillFlagRepository.java:12` | DRIFTED (off by 1) | Actually at **:11** |
-| `PlayerTimelineRepository.java:66-73` | MATCH on location; **substance wrong** | §3 M12 |
-| `PlayerTimelineRepository.java:70-73` (`?` parser comment) | **DRIFTED** | Actually at **62-65**; 70-73 is the ORDER BY / signature |
-| `sessionBuilder.store.js:117-150` (`fetchExistingPlan`) | **DRIFTED** | Actually at **111-144** |
-| `sessionBuilder.store.js:57-92` (`initForBooking`) | **DRIFTED** | Actually at **73-109** |
-| `sessionBuilder.store.js:155-165` (`savePlan` payload) | DRIFTED (small) | Actually at **152-161** |
-| `CoachCommandCenterPage.vue:121-130`, `:754-758` | MATCH | |
-| `CoachCommandCenterPage.vue:155` (cancel idiom) | DRIFTED (off by 2) | Actually at **:153** |
-| `CoachCommandCenterPageSessionPrepSpec.js:74-81` | MATCH | |
-| `SessionPlanService:240-250` | MATCH | 242-252 |
-| `SessionPrepService:~92`, `:48-52` | MATCH | Constructor call at 82-89 |
-| V163 shape; V161 index columns; V164 free | MATCH | The highest migration is V163 |
-| SessionPrepResponse has 7 fields; RosterEntryResponse has 6 fields | MATCH | Each record has exactly one constructor call site, and no test builds either |
+| `ConfigBounds.java:185` `DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS` | MATCH | `:185-187` `new BoundedKey("development.roster.dormantAfterDays", 1L, 3650L, false, …, 30L)`. It is registered in `HAS_CODE_DEFAULT` (`:435`) **and in `ALL` (`:459`)**. The story mentions only the former (F12). |
+| `Booking.java:116` `isPrepNoteEditable` | MATCH | `:116-119` `return statusOk && (requestedEndTime == null \|\| now.isBefore(requestedEndTime));`. Note the null-`requestedEndTime` arm: the new predicate must decide what null means. |
+| `TimelineEventListener.java:42-73` | MATCH | `:42` AFTER_COMMIT, `:43` `@Async("taskExecutor")`, `:70-72` `log.error`, self-proxy `:38-40`. |
+| `TimelineEventListener.java:46-54` (Map.of guard) | MATCH | `:46` "skillars-12-2 AC3: Map.of(...) rejects null values", `:54` `new HashMap<>()`. |
+| `PlayerTimelineEvent.java:48` | MATCH | `@Column(name = "metadata", columnDefinition = "jsonb", updatable = false)`. All columns are `updatable=false` (`:31,35,38,41,44,48,51`). There is no `@Version`. |
+| `PlayerTimelineRepository.java:57-61` (jsonb_exists comment) | DRIFTED | Actually at `:62-65`. `:54-61` is an unrelated ORDER BY/LIMIT review comment. |
+| `PlayerTimelineRepository.java:66-73` `findSessionNotesForReport` | MATCH | `:67` `metadata->>'coachId' = CAST(:coachId AS text)`. |
+| `PlayerTimelineRepository.java:88-100` `findLatestWhatsNextSuggestion` | DRIFTED | Query at `:84-92` (`:85` `coach_id = :coachId`); comment `:75-83`. |
+| `PlayerTimelineRepository.java:84-86` (stale G13 comment) | DRIFTED | Actually at `:80-81`: "the unattended-recap inconsistency is G13 / story 12.7, not touched here". |
+| `PlayerTimelineRepository.java:114-120` `anonymizeMetadataByCoachId` | MATCH | `:116` `metadata - 'whatWeDid' - 'whatsNext'`, `:118` jsonb_exists guard. |
+| `V138:3280` `idx_scd_booking_id` | MATCH | `V138__baseline_schema.sql:3280`. No `coach_id` index on SCD exists. |
+| `CoachCommandCenterPage.vue:131-140` | MATCH | `:132` `v-if="booking.status === 'COMPLETED'"`, `:136` repeatNextWeek. |
+| `CoachCommandCenterPage.vue:100-140` (per-status buttons) | DRIFTED (minor) | Buttons run `:102-162` (report no-show `:141-151`, cancel `:152-162`). |
+| `CoachCommandCenterPage.vue:320-322`; "977 lines" | MATCH | `:321` `<q-dialog v-model="showSessionPrep">`; `wc -l` = 977. |
+| `TimelineQueryService.java:71-90` | MATCH | `:76` method, `:87-88` the two `remove` calls. |
+| `SessionCompletionDataRepository.java:40-50` | MATCH | `:42` / `:49` are JPQL `SET s.voiceNoteText = NULL, s.whatWeDid = NULL, s.whatsNext = NULL`. |
+| `QuickCompleteTimeoutService:65-70` | MATCH | `:65` `new BookingCompletedEvent(`, `:69` recap args. |
+| `WrapUpSequence.vue:119-176` | MATCH | `:119` "Step 3: Voice Note"; the block closes at `:177`. |
+| `WrapUpSequence.vue:305-355` (recorder/upload) | DRIFTED | `startRecording` `:321-358` (`:325` MediaRecorder, `:331` `signUpload({ entity: 'booking'…`, `:346` confirmUpload). Also missed: the import `:274`, refs `:298-300`, payload `:386`. |
+| Step jumps `:32, :103, :114, :221`; `n in 5` | MATCH (incomplete) | Also `:141` and `:175` (`step = 4`), which are inside step 3 and get deleted with it. `n in 5` is at `:6`. |
+| "final-step check" | CANNOT_LOCATE | Searched `step === 5`, `step.value`, `watch`, `finalStep`. The only match is the render branch `v-else-if="step === 5"` (`:225`). |
+| `BookingCompletionService.java:325-330` `isSweeperPlaceholder` | MATCH | `:325-330` (re-checked by orchestrator). |
+| `BookingCompletionService.java:130-211` `submitWrapUp` | DRIFTED | Actually `:129-203`. |
+| `BookingCompletionService.java:142-153` ("no update path" comment) | DRIFTED | Comment is at `:135-141` ("there is no update path for an existing row", `:140`); the guard is at `:142-149`. |
+| `forceCompleteWithPlaceholderData :~215-260` | DRIFTED | Javadoc `:205-238`, method `:239-270`. |
+| `ReportGenerationService.java:638-662` / `:652-659` | DRIFTED (minor) | Block `:637-665`; field discipline `:654-662`. Glyph-scan loop `:536-539` was not cited (F15). |
+| `GdprErasureService :405-492` (groups SCD, TIMELINE, REPORT, BOOKING_PLAN_NOTE) | DRIFTED + FACT ERROR | Coach block `:407`, transaction `:478-513`. The enum at `:261` has **five** groups (adds `AVAILABILITY_BLOCK`, `:505-506`). |
+| V159 shape; V164 last; V165 free | MATCH | V159 `SET LOCAL lock_timeout = '5s'; ALTER TABLE … ADD COLUMN IF NOT EXISTS …`. The last migration is `V164__booking_bookings_coach_plan_note.sql`. |
+| `BookingCompletedEvent` 12-arg; 3+1 production callers | MATCH | `BookingCompletionService:186, :265, :289` and `QuickCompleteTimeoutService:65`. The test callers that also construct the event are SluCalculationServiceIT, SessionPlanServiceTest and HomeworkAssignmentServiceTest. |
+| `CoachPlanNoteResource` shape | MATCH | `@Observed(name = "booking.coachPlanNote")`, `@PreAuthorize(SecurityConstants.HAS_COACH_ROLE)`, `securityUtil.requireCurrentUserId()`. |
+| `verifyCoachOwnership` | MATCH (but see §4) | `:313-317`, private, throws `OperationNotAllowedException(… MISSING_RIGHTS)`, which is a **403**, not a not-found. |
+| Test classes named | Mostly exist | Missing: `ConfigBoundsTest` (closest equivalents are `ConfigBoundsEnumCoverageTest` and `ConfigStartupAssertionTest`) and any `GenerateReportDialog` spec. All others exist. |
+| Frontend files; `booking.wrapUp.step3*` keys | MATCH | The keys are in en-US `:1267-1272`, de-DE `:435-440` and fr-FR `:1559-1564`, and are referenced only from `WrapUpSequence.vue`. Do **not** remove the unrelated `step3*` pricing keys (en-US `:111-131`). |
 
-## 2. Ledger & precedent attribution
+---
+
+## 3. Ledger & precedent attribution (Layer 2)
 
 | Claim | Sources checked | Verdict |
 |---|---|---|
-| deferred-157 AC4 = AVAILABILITY_BLOCK group template | Story file, `deferred-work.md:3417`, `GdprErasureService:260-267,493-524` comments, commit `7121ace5` | CONFIRMED. Strictly it is AC3+AC4, and `GdprErasureIT` also references the reason codes |
-| deferred-156: `sanitizeAndTruncate`, `PlayerRequestResponse`, notes GDPR | Ledger `:3334,:3396`, code comments, `git log -S` → `56803337` | CONFIRMED |
-| deferred-158 "hardened GdprErasureService's booking statements" | `git show 4cea321f` | PARTIAL. The `GdprErasureService` change is **comment-only**; the hardening is in the tests. The dynamic-key exception list predates it (deferred-157 AC11a) |
-| deferred-156 AC5: no `playerName` in the URL | Story, `MyPlayersPage.vue:111` comment, commit | CONFIRMED |
-| deferred-152 AC6: roster name source and filtering | Story, `CoachRosterService:108` comment, `ec70ef4c` | CONFIRMED |
-| 12-3 AC3 "recap only from the signal's source event" | 12-3 story and its code review, `CoachPlayerLastSessionResolver.isRecapAttributable` | CONFIRMED in intent. The paraphrase is the pre-review wording (now booking-identity correlation); harmless because AC12 says not to touch the pair |
-| 12-5 is the latest Epic 12 story (`c7132064`) | git log, sprint-status | CONFIRMED |
-| V163 `playerRequest` precedent | V163 header, `890f5c67` | CONFIRMED. The attribution belongs to deferred-155 |
-| Epic gap map G1-G6 → 12.6; G13/G18/G23 owners; owner decisions | `skillars-epics.md:3471-3542` | CONFIRMED, with notes below |
-| G2/G3 "caption and badge derive from the same signal" | Epic text and story AC9 | PARTIAL. The story makes the caption share the badge's **inputs**, not one signal. That removes the reported contradiction but is weaker than the epic's wording |
-| G5 "applied to the session focus" | Epic text and AC13 | **CONTRADICTS the epic**, openly flagged as "author's call, owner veto". Needs explicit owner sign-off |
-| Brainstorm Pattern #2/#5/#9, Priority 3 | Brainstorm file `:68,:80,:112,:238` | CONFIRMED |
-| `NativeModifyingVersionAuditTest` covers JPQL bulk updates; `MigrationConventionLintTest` runs in the test phase | Test sources, `migration-conventions.md:12` | CONFIRMED |
+| Epic 12 gap map G7-G13 → 12.7; owner decisions | `skillars-epics.md:3471-3514, :3548-3582` | SUPPORTED. AC9's explicit roster scope-out matches the epic's "Command Center **or** roster". |
+| "Decision #8 is coach↔coach only" | epic `:3478`, brainstorm `:92-94, :234`, 12-2 M1 `:101` | PARTIALLY. This is the epic's option-(a) text. Earlier 12-2 / Priority 2 read #8 as also hiding recaps from parents. D1(a) is a real narrowing and is correctly flagged as a decision. |
+| G25 denylist; 12.10 owns allowlist / roster / resolver / fan-out cap | epic `:3484, :3514`, 12.10 AC | SUPPORTED |
+| 12-3 AC3 consistency rule | 12-3 story `:28`; `CoachPlayerLastSessionResolver.java:15-18` | SUPPORTED |
+| 12-5 triple-guarded recap block | 12-5 AC3 `:40`; `PlayerTimelinePanel.vue:46-64` | SUPPORTED. The outer guard is OR(whatWeDid, whatsNext), so a recap containing only whatWentWell would not render. That is safe while both fields stay required. |
+| 12-6 lessons and the 455/455 baseline | 12-6 `:117, :120-127, :206` | PARTIALLY. The ObjectMapper lesson is really "use the Spring-configured mapper (`objectMapper.copy()`)", not just "a real ObjectMapper". |
+| "12.2's review found ordering bugs → hence 12.3 booking correlation" | 12-2 and 12-3 stories; `CoachPlayerLastSessionResolver.java:43-45` | PARTIALLY / misattributed. The clock-skew/ordering finding is from **12-3's** own review (12-3 `:74`; resolver comment cites "skillars-12-3 code review"). The Map.of pitfall and redaction are correctly attributed to 12-2. |
+| deferred-155 AC2/AC3/AC9 | deferred-155 `:69, :71, :92`; `GdprErasureService.java:418-437` | SUPPORTED. AC9's REPORT scrub is not text-keyed (see §4 item 10). |
+| deferred-153/154/155 GDPR "standing obligation" | deferred-153 `:57`, -154 `:55`, -155 AC9 | SUPPORTED (paraphrase, not a quote) |
+| "Since 12-2 both fields required"; "pre-V159 legacy" | `WrapUpRequest` `@NotBlank`; V159 | SUPPORTED. Placeholders also come from admin manual force-complete (same method). |
+| Sweeper placeholder origin | deferred-153 AC1, commit 6b798c34; `StuckCompletionSweeperService.java:76` | SUPPORTED |
+| project-context rules | `project-context.md:75, :98, :123`; migration-conventions; frontend-unit-tests.md | PARTIALLY. **`ClockProvider` is not in project-context.md**. It is a 12-6 precedent, and `CommonConfig.java:20` even has `//TODO consider using clockProvider`. |
+| openpdf pinned 2.0.5 | `pom.xml:525-532` | SUPPORTED |
+| Brainstorm file, Pattern #4 / Priority 2 / Converge #15-16 | brainstorm `:76-77, :173, :177, :229-235, :285-294` | SUPPORTED |
+| "Spring Boot default FAIL_ON_UNKNOWN_PROPERTIES=false, no override in src/main/resources (verified)" | `application.yaml:131-134`; `CommonConfig.java:32-37`; `AbstractClient.java:86` | PARTIALLY. The conclusion holds, but the reason is the app's own `Jackson2ObjectMapperBuilder` bean (the framework builder disables the flag), not Boot's auto-config. HTTP uses Jackson 2 on Boot 3.5.16; Jackson 3 is only a transitive logging dependency. Keep the 204 IT. |
 
-## 3. Mechanistic claims
+---
 
-- **M1 — GDPR export serialises the `Booking` entity, and `@JsonIgnore` closes the leak.** TRUE. `GdprExportService:67` uses `objectMapper.copy()` of the Spring mapper (`CommonConfig:33-38`): no Hibernate module, no mixins, so annotations are honoured. `Booking` has no `@JsonIgnore` today. See §5 F7 for the test caveat.
-- **M2 — `toResponse` is positional, and no other non-coach path exposes entity fields.** TRUE. `getPlayerRequest()` has 3 call sites (`SessionPrepService:89`, `BookingService:761,1171`). No controller returns `Booking`. `BookingDuplicationService:126-134` copies fields one by one and does not copy notes or requests.
-- **M3 — `recordNoShowPlayer` ownership shape; `setPlayerRequest` uses the parentId check.** TRUE.
-- **M4 — Editable statuses, Start moves UPCOMING → IN_PROGRESS, both errors return 403.** TRUE. `BookingStateMachine:38-52` allows START only from UPCOMING. `OperationNotAllowedException` → `ApiAdvice:329-339` is a 403 unconditionally. The guard uses bare `Instant.now()` (`:787`).
-- **M6 — "Same `OptimisticLockingFailureException → CONCURRENT_MODIFICATION` mapping … a 409 here is a real, reachable outcome."** **FALSE as stated.** Re-verified:
-  - `getBookingOrThrow` is `findById` (`:731-733`), so the entity is managed. `bookingRepository.save(booking)` inside the try is a merge with no flush.
-  - The version-checked UPDATE therefore runs at commit, outside the try. It surfaces as `ObjectOptimisticLockingFailureException` → `ApiAdvice:656-662` → **409 `generic.conflict`**.
-  - If the catch ever did fire, it would return **403** with errorKey `booking.concurrentModification`. `BookingError.java:24-36` says so explicitly.
-  - The race itself is real: `BookingReminderScheduler` moves CONFIRMED→UPCOMING, and the parent's `setPlayerRequest` writes the same row.
-- **M7 — `@Version`, no `@DynamicUpdate`, the version-bump comment, "never written by the coach".** TRUE.
-- **M8 — Coach scrub is one REQUIRES_NEW tx with one transaction-scoped lock_timeout.** TRUE. Re-verified at `:218-236` and `:464-470`. The per-group constants are reason-code **labels only**, and any group failure rolls back all of them. Adding a 5th group (`BOOKING_PLAN_NOTE`, which locks booking rows) adds failure surface that rolls back the SCD/TIMELINE/REPORT/AVAILABILITY_BLOCK scrubs too. That is consistent with the documented design and acceptable, but the AC should say it.
-- **M9 — `SessionPrepService` is readOnly, checks ownership, has no status gate; `findByPlayerIdAndResolvedAtIsNull` exists; ID spaces match.** TRUE. The partial unique index `(player_id, skill_code) WHERE resolved_at IS NULL` makes de-duplication redundant (harmless).
-- **M10 — Roster uses ClockProvider; dormancy is booking-time based; projection carries `MAX(requestedStartTime)` only.** TRUE (line drift noted in §1).
-- **M11 — `lastSessionDate` can be after `now`, which justifies the clamp.** TRUE. `TimelineEventListener:111` uses bare `Instant.now()`, `SluCalculationService` runs async, and fixed-clock tests make this real.
-- **M12 — "same shape and rationale as `findSessionNotesForReport` … filter on the `coach_id` column".** **FALSE / backwards.** Re-verified at `PlayerTimelineRepository:47-53,67`. The precedent filters `metadata->>'coachId'` *precisely because* the column is attendance-gated. Choosing the column for this new query is a valid deliberate choice (it excludes unattended sessions and uses the V161 index), but the precedent claim is inverted. A developer copying the precedent would get the opposite filter.
-- **M13 — `developmentFocus` is a list of `@ValidFocusCode` skill codes.** TRUE (`UpdateSessionPlanRequest:14`).
-- **M14 — `isBookingPlannable` accepts CONFIRMED only; UPCOMING without a plan → `SESSION_BOOKING_NOT_OWNED`.** TRUE.
-- **M15 — "the prep fetch is independent of `checkSessionBuilderGate`".** PARTIAL. `checkSessionBuilderGate` is a **backend** method; there is no such call in `src/frontend`. The frontend signal is `isGated`, which is only known after `fetchExistingPlan` resolves (`SessionBuilderPage.vue:299-304`).
-- **M16 — The `$t` stub echoes keys; i18n spec files exist; pluralisation works.** TRUE.
-- **M17 — ID spaces.** TRUE.
-- **M18 — "Spring Boot 3.5.11".** **FALSE.** `pom.xml:8` is **3.5.16**. Java 17 and commons-lang3 3.21.0 are correct.
+## 4. Mechanistic claims (Layer 3)
 
-## 4. Corner cases / false assumptions / missed flows (survived Step 4b)
+1. **Listener shape (AFTER_COMMIT + `@Async("taskExecutor")`, failures logged, REQUIRES_NEW via `self`)**: TRUE. See `TimelineEventListener.java:38-44, :70-71, :91, :102`. `writeTimelineEvent` is overloaded and the 5-arg calls the 6-arg directly; any new method must go through `self`. The `taskExecutor` bean exists (`AsyncConfig.java:34-35`).
+2. **`PlayerTimelineEvent` is non-updatable, so `save()` is a silent no-op**: TRUE (§2).
+3. **`NativeModifyingVersionAuditTest` "version/audit hygiene… or the documented opt-out as the other timeline native updates do"**: FALSE (F6). The test only checks UPDATEs on tables backing an `@Version` entity: `if (entitySimple == null) continue; // not a versioned table` (`NativeModifyingVersionAuditTest.java:263-264`). `ALLOWED_WITHOUT_BUMP = Map.of()` (`:83`) is empty. `player_timeline_events` has no version column, so the new UPDATE needs nothing. A literal reading (`version = version + 1`) would fail at runtime. Re-verified by the orchestrator.
+4. **Redaction is a two-key denylist, authoring coach only**: TRUE. `TimelineQueryService.java:78, :81-82, :86-88`. The comparison is on the coach **profile** UUID.
+5. **`getPrep` sources**: TRUE. `SessionPrepService.java:71, :104, :108-117` (sanitise + truncate to 500).
+6. **Suggestion filters the `coach_id` column, report filters `metadata->>'coachId'`**: TRUE. `PlayerTimelineRepository.java:85` vs `:67`. The column is `event.isPlayerAttended() ? event.getCoachId() : null` (`TimelineEventListener.java:61`).
+7. **Sweeper placeholder → SESSION_COMPLETED row with column NULL and metadata `{coachId}` only**: TRUE. `BookingCompletionService.java:259-268` plus listener `:55-61`.
+8. **"Exactly COMPLETED" catches every completed path, including swept**: TRUE. `QUICK_COMPLETE` is an event, not a status, and all four paths end at `COMPLETED`. Caveat: `DISPUTED`/`REFUNDED` exist in the state machine but have no production transition callers today (re-verified: no `transition(…DISPUTE)` call), so a refunded session stays `COMPLETED` and stays editable/nudged (LOW).
+9. **No `completed_at`; `requestedEndTime` indexed; `isPrepNoteEditable` precedent**: TRUE/PARTIAL. `requestedEndTime` is the 4th column of `idx_bkg_coach_status_time` (`V138:3244`), which serves a coach+status-driven query. `BookingCompletionService` and `QuickCompleteTimeoutService` use bare `Instant.now()` today. `ClockProvider` is a static ThreadLocal driven by `TestClockProvider` in tests.
+10. **GDPR**:
+    - **"After erasure the coach profile no longer resolves"**: FALSE (F1). `GdprErasureService.java:407-411` keeps the profile (`cp.setBio(null); cp.setCity(null); cp.setDistrict(null); coachProfileRepository.save(cp);`). `resolveCoach` (`BookingCompletionService.java:308-311`) is `findByUserId(...).orElseThrow`, so it still succeeds. The only block is `user.setLocked(true)` (`:392`), and `JWTAuthorizationFilter.java:70-90` says the fast path does no DB check, so a lock is noticed only on the 5-minute re-auth cycle. Re-verified by the orchestrator.
+    - The group count is five, not four (F16). REPORT scrubs `next_steps` / `storage_key` and deletes the blob (`PerformanceReportRepository.java:64-66`); it does not match on recap text, so `whatWentWell` needs **no** REPORT extension.
+    - `PlayerProfile.developmentDataErasedAt` is real (`PlayerProfile.java:69-70`, set at `GdprErasureService.java:1556`). `PlayerProfileRepository` is already injected in `BookingCompletionService` (`:23`, `:49`).
+11. **`verifyCoachOwnership` "same not-found/forbidden shape"**: PARTIAL. It returns 403 with the fixed default message (`ApiAdvice.java:329-337`), not a not-found. A 404 only comes from `getBookingOrThrow` / `resolveCoach`.
+12. **Recap-source rules, `SessionNoteEntry`, limit**: TRUE. The resolver keys on the attended column plus an SLU same-booking check (`CoachPlayerLastSessionResolver.java:29-38, :53-60`). `SessionNoteEntry(Instant, String, String)` is at `:446`, `REPORT_SESSION_NOTES_LIMIT = 20` at `:137`.
+13. **`getCoachWeekSchedule` batch name lookup**: FALSE (F5). `BookingService.java:634` calls `resolvePlayerName(b.getPlayerId())` per row, and that does `findById` (`:1069-1070`). The batch helper is `resolvePlayerNames(Collection<Long>)` (`:1091-1094`, "Deferred-81 AC1"), used by `getParentBookings` / `getCoachBookingRequests`. Re-verified by the orchestrator.
+14. **`BoundedKey` constructor arity/order**: TRUE. `BoundedKey(String key, long min, long max, boolean failFast, String note, long defaultValue)` (`ConfigBounds.java:82`). The 4-arg `getBoundedLong` falls back to the default (it does not clamp) when out of range (`ConfigService.java:115`, consumer `CoachRosterService.java:102-106`). The key **must** also go into `ALL`, or `ConfigBoundsEnumCoverageTest.hasCodeDefaultKeysAreAllRealBoundedKeys` fails (F12).
+15. **`taskExecutor` bean**: TRUE.
+16. **`OperationNotAllowedException` "with a dedicated message"**: PARTIAL (F9). `ApiAdvice.operationDeniedHandler` (`:330-337`) always returns `defaultMsg = "The operation is not granted…"` plus the `ErrorCode`'s key, so the exception's message string never reaches the client. A dedicated message therefore needs a new `BookingError` code. Precedent: `SESSION_ALREADY_ENDED` / `BOOKING_NOT_EDITABLE` (`BookingService.java:786-793`). Re-verified by the orchestrator.
+17. **Voice step "otherwise stores only the literal placeholder"**: FALSE (F13). `WrapUpSequence.vue:159-168` has an always-visible free-text `q-input v-model="voiceNoteText"` (when not recording), and `:386` sends it. Real coach-typed text exists in legacy `voice_note_text` rows. That doesn't change the plan (column kept, GDPR scrubs kept), but the story's justification and the ledger note should say so.
 
-**F1 (MED) — AC2 / AC12 / AC15: the 409 / CONCURRENT_MODIFICATION contract is wrong.** See M6. Evidence: `BookingService.java:731-733,756-760`, `ApiAdvice.java:329-339,656-662`, `BookingError.java:24-36`.
-- *Fix:*
-  - Either call `saveAndFlush` inside the try, so the catch actually fires (→ 403 + `booking.concurrentModification`), or accept the commit-time 409 `generic.conflict`.
-  - State which one, and have the frontend handle both (precedent: `ParentBookingsPage.vue` branches on `errorKey`).
-  - The `CoachPlanNoteResourceIT` "409 concurrent modification" case is not reproducible with sequential HTTP calls (the request carries no version). Move it to a `BookingServiceTest` unit case, or an IT with truly interleaved transactions. `PlayerRequestResourceIT` has no 409 test either.
+---
 
-**F2 (MED) — AC2 / AC3: the "same two predicates" cannot be shared as specified.** `PLAYER_REQUEST_EDITABLE_STATUSES` and the guard are `private` in `booking.service.BookingService`. `SessionPrepService` (`development`) imports only `booking.repo.*`; nothing in `development` imports `booking.service`.
-- "Rename it, or share one private helper" does not make it reachable for `coachPlanNoteEditable`, which pushes the developer into the duplicate status list the story forbids.
-- *Fix:* a public predicate on the entity (e.g. `Booking.isPrepNoteEditable(Instant now)`), used by both services.
+## 5. Corner cases / false assumptions / missed flows (survived Step 4b)
 
-**F3 (MED) — AC2 vs AC8: two clocks.** The write guard uses bare `Instant.now()` (`BookingService:787`). AC8 mandates `ClockProvider` in `SessionPrepService`. With a fixed `ClockProvider` in tests, `coachPlanNoteEditable` can be `true` while the write is rejected (or the reverse).
-- *Fix:* pass `Instant.now(ClockProvider.getClock())` into the shared predicate from F2.
-- Changing the existing `setPlayerRequest` guard to ClockProvider needs a check that existing ITs don't rely on the wall clock.
+**F1 (HIGH): an erased coach can still edit (AC4).**
+- The profile persists (§4.10), and the access token stays valid up to about 5 minutes.
+- `anonymizeMetadataByCoachId` keeps `coachId` in metadata (`PlayerTimelineRepository.java:116` only removes the two text keys), so AC4's `metadata->>'coachId'` match still hits.
+- **Scenario:** the erasure completes, and within the fast-path window the erased coach's token issues `PUT /recap`. Text is rewritten into the scrubbed SCD row, the async listener re-adds the metadata keys, and the GDPR request is already `COMPLETED`.
+- The story's prescribed IT ("edit after coach erasure is rejected") will fail against the code AC4 describes.
+- **Fix:** an explicit guard in `updateRecap` (e.g. reject if the coach's `User` is locked/erased). The same guard should feed `editable` (see F4).
+- Related, narrower and downgraded to LOW: an in-flight async listener that runs after the erasure commit can re-add keys. The listener should re-check the tombstone, or the edit's SCD row should be locked `FOR UPDATE` before the tombstone check, which also closes the player-direction TOCTOU against `GdprErasureService.java:1524`.
 
-**F4 (MED) — AC13: prep fetch ordering vs `initForBooking` reset.** `fetchExistingPlan` calls `initForBooking(bId)` at entry (`store:112`) **and again on 404** (`:131-132`), and that is the common "no plan yet" path. If `prep` is reset in `initForBooking` (as AC13 asks) and `fetchPrep` runs concurrently or first, the prep is wiped. `isGated` is also only known after `fetchExistingPlan`.
-- *Fix:* specify `await fetchExistingPlan(bookingId); if (!isGated) await fetchPrep(bookingId)` in `SessionBuilderPage.onMounted`, and add a spec for the 404-then-prep path.
+**F2 (HIGH): the "resume an abandoned wrap-up" part of G7 is not covered.**
+- Epic `skillars-epics.md:3496`: "no way back into an abandoned wrap-up". The 12.7 AC lists "abandoned wizard" as a case.
+- `handleQuickComplete` calls `handleInitiateQuickComplete`, which moves the booking to `COMPLETED_PENDING_CONFIRMATION`, and then opens the wizard (`CoachCommandCenterPage.vue:583-596`). Cancel only does `showWrapUp = false` (`:22`).
+- The grid has no button for `COMPLETED_PENDING_CONFIRMATION` (only `UPCOMING`, `CONFIRMED/UPCOMING` and `COMPLETED`), and no coach-facing frontend file handles that status (it appears only in `BookingStateChip.vue` and `ParentBookingsPage.vue`).
+- AC2 and AC8 both require exactly `COMPLETED`. So the coach can't resume, edit or be nudged until the sweeper fires (default 72h, max 720h; `ConfigBounds.java:121-123`). After the sweep, attendance, ratings and homework are lost for good (placeholder, and `updateRecap` doesn't set them).
+- **The story title promises "Resume".** Either add a "Resume wrap-up" button on CPC blocks (it re-opens `WrapUpSequence` in non-LIVE mode; `submitWrapUp` already accepts CPC via `verifyStatus`), or explicitly scope resume out with owner sign-off and a ledger entry.
 
-**F5 (MED) — AC13: the suggestion card ignores editability and unsaved panel edits.**
-- The Apply buttons are not gated on `prep.coachPlanNoteEditable`. The builder is reachable for IN_PROGRESS/COMPLETED/past-end bookings, and `getPrep` has no status gate, so Apply would get a 403.
-- Apply builds from the *saved* `prep.coachPlanNote`. If the coach has unsaved text in the `CoachPlanNotePanel` on the same page, Apply silently discards it, which breaks the AC's own "never silently overwrite" rule.
-- *Fix:* hide or disable Apply when the note is not editable. Apply into the panel draft, or disable Apply while the panel is dirty.
+**F3 (HIGH): erased players pollute the nudge (AC8).**
+- Player erasure runs `anonymizeByPlayerId` (`SessionCompletionDataRepository.java:42`, called at `GdprErasureService.java:1524`), which nulls `what_we_did` / `whats_next`. The booking stays `COMPLETED`.
+- Those sessions therefore satisfy AC8's definition, and every "Add recap" is then rejected by AC4's `developmentDataErasedAt` check. The banner shows uncloseable items for up to the window length.
+- **Fix:** exclude `player_profiles.development_data_erased_at IS NOT NULL` in the missing-recaps query, and add an IT case.
 
-**F6 (LOW-MED) — AC13: sanitisation makes "already contains" and the 500-char check unreliable.**
-- The recap `whatsNext` is stored raw (`BookingCompletionService:163`, `WrapUpRequest:22` only `@NotBlank @Size(max=500)`).
-- The plan-note write runs `ContactDetailSanitizer`, which replaces emails and phone-like runs with `"[contact details removed]"`. If a suggestion contains contact details, the stored note never contains the raw suggestion, so "Add to plan note" reappears forever and re-appends.
-- Redaction can also lengthen the text past the client's 500 check, and then the server silently truncates.
-- This is rare (coach-authored text), but real.
-- *Fix:* sanitise `suggestedWhatsNext` server-side before returning it. Always render the note as the server returned it.
+**F4 (HIGH): `editable` and the write guard disagree (AC1/AC3 vs AC4).**
+- AC3 mandates one predicate `Booking.isRecapEditable(now, windowDays)` for both. But AC4 adds write-only rejections (player erased; F1's coach guard).
+- GET would return `editable=true` and the dialog would open in edit mode, then PUT fails.
+- **Fix:** the read side must compute `editable` from the same composite check (window ∧ status ∧ not-erased), not just the `Booking` predicate.
 
-**F7 (LOW) — AC12: precedent inverted.** See M12. *Fix:* reword to "unlike `findSessionNotesForReport` (which filters `metadata->>'coachId'`), filter on the `coach_id` column, deliberately, because it is attendance-gated."
-- Also consider `reference_id <> :bookingId`. Opening the builder or prep on a booking that already has its own SESSION_COMPLETED event would otherwise "suggest" that same session's `whatsNext`. This is low impact, because completed bookings are mostly outside the prep entry points.
+**F5 (MED): the name-lookup precedent is wrong (AC8).** See §4.13. Copying the cited method reintroduces the N+1 that AC8 forbids. Use `resolvePlayerNames` (Deferred-81 AC1).
 
-**F8 (LOW) — AC4: the export leak test must actually serialise.** `GdprExportServiceTest` is Mockito with `@InjectMocks` and only asserts the `List<Booking>` returned by `buildBookings()` (`:31-56`). A test at that level proves nothing about `@JsonIgnore`.
-- *Fix:* serialise through the real mapper (`objectMapper.copy()` as at `:67`), or generate the zip in an IT, and assert the text is absent.
+**F7 (MED): the window can close before the placeholder exists.**
+- The window is 1-365 days from `requestedEndTime`. The sweeper fires on `b.updatedAt < :cutoff` (`BookingRepository.java:310`) with a 6-720h timeout.
+- With `editWindowDays` < the stuck timeout plus a margin (e.g. window 1d with the 72h default, or 720h timeout with a 30d window minus slack), a swept session is born outside the window. It is uneditable, and because AC8 also filters on the window, it is never nudged.
+- **Fix:** raise the min bound, or validate the coupling, or at least document it with a test.
 
-**F9 (LOW) — Dev Notes table contradicts AC8.** The `RosterEntryResponse` row says "Expose it [daysSinceLastActivity] + `daysSinceLastSession` + `hasUpcomingBooking`". AC8 says "`daysSinceLastActivity` stays internal". Fix the table.
+**F8 (MED): no index for the AC4 update.**
+- There is no index on `player_timeline_events.reference_id` (only `(player_id, occurred_at)` at `V138:3334` and `(player_id, coach_id, event_type, occurred_at)` at `V161`; the orchestrator's grep confirmed no `reference_id` index).
+- **Fix:** add `playerId` to `SessionRecapUpdatedEvent` and `player_id = :playerId` to the WHERE clause to use the existing index.
 
-**F10 (LOW) — AC5 misses comment updates.** "four groups" wording at `GdprErasureService:218-236`, `:464-467` and the enum comment near `:252-259` also need updating for the 5th group, as well as the `log.warn` at `:526`.
+**F9 (MED): the dedicated closed-window error needs an `ErrorCode`.** See §4.16. Add e.g. `BookingError.RECAP_EDIT_WINDOW_CLOSED` (i18n x3 on the frontend error mapping). Note it still maps to HTTP 403 via `ApiAdvice`. Tests must assert the `errorKey`, per the 12-6 lesson.
 
-**F11 (LOW) — AC9 rule 2 copy.** `!hasUpcomingBooking` also covers a latest booking that is COMPLETED-but-unattended, NO_SHOW_* or IN_PROGRESS. For a COMPLETED-unattended booking, "no completed session yet" is literally false. Suggested copy: "Booked, but no attended session yet."
+**F10 (MED, lower probability): out-of-order timeline edits.**
+- Each `SessionRecapUpdatedEvent` carries full values. The listener does a blind overwrite on the multi-thread `taskExecutor`, and `SessionCompletionData` has no `@Version` or `updatedAt`.
+- Two saves seconds apart can leave the timeline, report and prep on the older text while the SCD row holds the newer one. AC5 only covers the missing-row case.
+- **Fix:** carry a monotonic marker (e.g. an SCD `updated_at`, or a re-read of the SCD row inside the listener) and apply only if newer. Alternatively, have the listener re-read the current SCD values instead of trusting event payload values.
 
-**F12 (LOW) — AC8: `Duration.toDays` is 24h-based, and `lastSessionDate` is processing time.** "today" can mean yesterday evening, and "1 day ago" can cover up to 47h. Quick-complete-timeout and sweeper events stamp later than the session. This is consistent with dormancy (`daysSinceLastActivity ≤ daysSinceLastSession` by construction, so no contradiction), but record it as an accepted imprecision or soften the "today" copy.
+**F11 (MED): AC16 ordering uses `occurred_at`, which is the write time.**
+- `TimelineEventListener.java:111` does `evt.setOccurredAt(Instant.now())`, so a swept session's event is stamped at sweep time (at least 72h after the session).
+- AC16 makes those events eligible for the suggestion (`ORDER BY occurred_at DESC`), and `SessionPrepService` shows `suggestion.getOccurredAt()` as the session date (`:120`).
+- **Scenario:** Monday's session is abandoned and swept Thursday, and Wednesday's session is completed normally. After recovery, Monday's "what's next" outranks Wednesday's and is labelled with Thursday's date. The report's Session Notes date has the same skew.
+- **Fix:** acknowledge it in the story, or order and label by the booking's session time (e.g. put `sessionEndTime` into metadata).
 
-**F13 (LOW) — stale facts.** Spring Boot 3.5.16 (not 3.5.11). The deferred-158 description is "comment-only in GdprErasureService; hardening in tests". The cited line numbers in §1 marked DRIFTED should be corrected before dev.
+**F12 (LOW):** add the key to `ConfigBounds.ALL` (`:443+`). The real tests are `ConfigBoundsEnumCoverageTest` and `ConfigStartupAssertionTest`.
 
-## 5. What did not survive re-verification
+**F13 (LOW):** correct AC12's rationale. Real typed voice-note text exists in legacy rows. The `deferred-work.md` entry should say the column may hold coach free text (relevant for the contract migration and GDPR).
 
-- **Multiple coach profiles per user / admin callers.** Refuted: `coach_profiles_user_id_key UNIQUE (user_id)`, and admins without ROLE_COACH get 403.
-- **"403 for not-editable / session-ended is wrong".** Refuted: `ApiAdvice:332` maps to 403, and `PlayerRequestResourceIT:179` asserts it.
-- **Other Booking serialisation leaks** (outbox, caches, toString, Spring Data REST, duplication). Refuted: none found, and `BookingDuplicationService` does not copy free text.
-- **Coach-erasure ordering** (coachId nulled before the new query). Refuted: the coach branch never nulls `coachId` or deletes bookings, and there is no prior booking write in the outer tx, so no REQUIRES_NEW self-deadlock.
-- **Roster rule 2 for players with zero bookings.** Refuted: roster membership comes from the bookings query.
-- **Command center doesn't list CONFIRMED bookings.** Refuted: the cancel button at `:153` already renders for CONFIRMED.
-- **Missing `SessionPrepResponse` constructor call sites.** Refuted: there is one call site.
-- **Appending `"\n"` can join digits across the boundary into one phone redaction** (raised by Layer 4). **Not re-verified.** `PHONE_PATTERN`'s exact regex was not read in Step 4b; the redaction also requires a 5+ digit run (`PHONE_DIGIT_RUN`). Dropped from the findings; it is subsumed by F6's "sanitise the suggestion server-side" fix.
-- **`GdprExportService:122` passes a User id to `findAllByPlayerId`** (ID-space mismatch). Pre-existing and out of this story's scope. **Not re-verified in Step 4b.** Worth a separate ledger check, not a 12-6 change.
-- **12-3 AC3 paraphrase out of date.** Downgraded to informational, because AC12 explicitly says not to touch the existing pair.
+**F14 (LOW):** reports are listable by parent **and player** (`ReportGenerationService.java:300-306` comment), and `notifyParent` skips players without a parent email (`:409-414`). The AC15 notice should say "the player and their parent", not only "the parent".
 
-## 6. Recommendation
+**F15 (LOW):** add `whatWentWell` to the glyph-scan loop at `ReportGenerationService.java:536-539`. It does not appear in a `METADATA_KEY_WHATS_NEXT` grep, so the story's own checklist method misses it.
 
-The story is well-researched and its central design calls hold up: the `@JsonIgnore` leak analysis, the coach-ownership shape, the 5th erasure group, server-side days-since, neglected-skill codes, and the G6 frontend-only change. Fix it before dev on these points, in priority order:
+**F16 (LOW):** five GDPR coach groups, not four. The REPORT group deletes the PDF and does not match on text, so the Dev Note's "verify… extend it if it keys on text fragments" resolves to "no change".
 
-1. **F1 (409 contract)** — rewrite the concurrency wording and test plan. *Confidence: high.* Re-read `getBookingOrThrow`, the catch, both `ApiAdvice` handlers and `BookingError`'s own Javadoc.
-2. **F2 + F3 (shared predicate across modules, one clock)** — specify a public entity-level predicate taking `now`. *High* for the visibility problem (grep re-run). *Medium* on how much existing-test fallout a ClockProvider switch causes (not checked).
-3. **F4 + F5 (Session Builder ordering, editability, unsaved draft)** — specify the `onMounted` sequence and the Apply gating. *High* for the ordering (store and page re-read). *Medium* for the unsaved-draft issue (depends on how the panel is built).
-4. **F6 (sanitised suggestion)** — *Medium.* Raw storage and sanitiser behaviour were verified; real-world frequency is low.
-5. **F7-F13** — wording and citation corrections. *High* for the line-number drift (each re-checked by the citation layer). The G5 deviation (apply → plan note instead of session focus) was **approved by the owner on 2026-10-22**, and the story file now records it as settled.
+**F17 (LOW):** `ScheduleBookingItem` (`booking/contract/ScheduleBookingItem.java`) has no recap flag, so AC7's "Add recap"/"Edit recap" label needs either a new field (`hasRecap`) or a neutral label.
 
-What was **not** independently re-checked in Step 4b: the exact `PHONE_PATTERN` regex, the GDPR export PLAYER-branch ID-space bug, and the small DRIFTED line numbers beyond the ones listed (accepted from Layer 1 with Layer 3/4 corroboration).
+**F18 (LOW):** no `GenerateReportDialog` spec exists today, so AC15 and the testing list need "create".
+
+**F19 (LOW):** attribution fixes, see §3 (12-3 vs 12-2, ClockProvider source, Jackson reason, ObjectMapper lesson wording).
+
+---
+
+## 6. What did not survive re-verification (killed / downgraded)
+
+- **"Recap text bypasses contact-detail sanitising" (Layer 4 L5).** This was downgraded to an out-of-scope note. Recaps were already stored raw before this story (`BookingCompletionService.java:162-163`), and D1(a) only documents an existing parent-facing channel. It is worth a ledger line, but it is not a defect introduced or missed by 12.7.
+- **In-flight async listener re-adding keys after coach erasure (Layer 4 M3).** This was downgraded from MED to a LOW sub-point of F1. It needs an edit committed in the milliseconds before erasure; F1's guard plus a listener-side re-check covers it.
+- **"Rolling-deploy reasoning contradicts 12-2's 'app not released' stance" (Layer 2 observation).** This was dropped. Being conservative about rolling deploys is not a defect.
+- **"`QuickCompleteTimeoutServiceTest` builds the event — update" is moot because the test uses an `ArgumentCaptor` (Layer 4 L7).** This is not independently re-verified by the orchestrator and is treated as PLAUSIBLE. At worst the dev finds the test needs only an extra assertion.
+- **`COMPLETED → DISPUTED` locking edits during a dispute (Layer 3).** This was killed: there are no production `transition(…DISPUTE…)` callers (orchestrator grep). It was replaced by the LOW note that refunded sessions stay `COMPLETED` (§4.8).
+- **Minor line-range drift in §2.** The drift is real, but none of it changes what a developer would edit. It is listed for correction only, not as a finding.
+
+---
+
+## 7. Recommendation
+
+The story should be **revised before dev**, but it doesn't need restructuring. Per-claim confidence:
+
+- **High confidence (re-read by the orchestrator against source):**
+  - F1 (coach profile survives erasure; JWT fast path)
+  - F2 (no CPC action on the grid; wizard cancel just closes; epic G7 text)
+  - F3 (player anonymize nulls both recap columns)
+  - F5 (per-row `resolvePlayerName`)
+  - F6 (audit test skips unversioned tables)
+  - F9 (`ApiAdvice` fixed default message)
+  - F11 (`setOccurredAt(Instant.now())`)
+  - F12 (`ALL` list)
+  - F13 (free-text input `:159-168`)
+  - F14 (`notifyParent` / player listing comment)
+  - F15 (glyph loop)
+  - F16 (five-group enum)
+  - absence of a `reference_id` index (F8)
+- **Medium confidence:**
+  - F4 is a logical consequence of F1/F3 plus AC3's wording, not a code defect today.
+  - F7 depends on how config is tuned; the default 30d/72h is safe.
+  - F10 is real in mechanism but has a low-probability timing window.
+- **Not independently re-checked by the orchestrator:** the per-key i18n line numbers, the test-file inventory beyond the spot checks, and the `QuickCompleteTimeoutServiceTest` captor detail. These rely on a single layer's report.
+- **Confirmed sound:** the overall architecture (event + AFTER_COMMIT async listener + native UPDATE, no second event, `updatable=false` reasoning), V165 being free, `BookingCompletedEvent` callers, the Jackson unknown-property outcome, the week grid including `COMPLETED`, precedents 12-3 AC3, 12-5 triple guard and deferred-155 AC2/AC3/AC9, and the `coach-private` grep being a no-op.
+
+**Owner decision needed:** F2 (implement "resume" for the `COMPLETED_PENDING_CONFIRMATION` state, or descope it from the title and AC with a ledger entry). Every other finding is a mechanical story correction.

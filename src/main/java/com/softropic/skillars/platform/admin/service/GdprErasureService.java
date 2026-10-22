@@ -484,6 +484,12 @@ public class GdprErasureService {
                     // to a real group rather than leaving the label null.
                     coachRecapCurrentGroup.set(CoachRecapGroup.SCD);
                     setStatementLockTimeout(coachRecapLockTimeoutSeconds);
+                    // skillars-12-7 code review (Decision 1(a)): the tombstone BookingCompletionService
+                    // .recapEditability checks. It must commit with the scrub below, not with the outer
+                    // user.setLocked(true) above, which only becomes visible at the outer commit -- a
+                    // recap edit landing between the two commits would otherwise write the text back.
+                    // Same SCD group: it is the first statement of the recap scrub.
+                    coachProfileRepository.markRecapDataErased(cp.getId());
                     sessionCompletionDataRepository.anonymizeByCoachId(cp.getId());
 
                     coachRecapCurrentGroup.set(CoachRecapGroup.TIMELINE);
@@ -499,9 +505,10 @@ public class GdprErasureService {
                     // skillars-deferred-157 AC4: inside this block rather than inline, so it inherits
                     // the lock_timeout bound and its own alert label. coach_id holds the
                     // coach_profiles.id (AvailabilityService.addBlock). No lock-order cycle with
-                    // AvailabilityService's writers: they lock coach_profiles FOR UPDATE first, and this
-                    // transaction holds no coach_profiles lock (the outer save(cp) above is flushed
-                    // only at the outer commit).
+                    // AvailabilityService's writers: they lock coach_profiles FOR UPDATE first, and since
+                    // skillars-12-7 so does this transaction (markRecapDataErased, its first statement)
+                    // -- same order. The outer save(cp) above is flushed only at the outer commit, so
+                    // that row lock is not held by the outer transaction while this one waits on it.
                     coachRecapCurrentGroup.set(CoachRecapGroup.AVAILABILITY_BLOCK);
                     coachAvailabilityBlockRepository.anonymizeReasonByCoachId(cp.getId());
 

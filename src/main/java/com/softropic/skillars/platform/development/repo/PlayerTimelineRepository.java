@@ -72,17 +72,17 @@ public interface PlayerTimelineRepository extends JpaRepository<PlayerTimelineEv
     List<PlayerTimelineEvent> findSessionNotesForReport(
         @Param("playerId") Long playerId, @Param("coachId") UUID coachId, @Param("limit") int limit);
 
-    // skillars-12-6 AC12: the most recent attended SESSION_COMPLETED event for this coach and player
-    // whose whatsNext is non-blank — the Session Builder's "carry last time's what's next forward"
-    // suggestion. Deliberately the OPPOSITE filter from findSessionNotesForReport above: that one
-    // filters metadata->>'coachId' precisely because the coach_id COLUMN is attendance-gated and it
-    // wants unattended recaps too; this one filters the coach_id COLUMN, consistent with the prep
-    // card's existing "unattended sessions are excluded" rule (the unattended-recap inconsistency is
-    // G13 / story 12.7, not touched here). reference_id <> :bookingId so a booking that already has
+    // skillars-12-6 AC12 / skillars-12-7 AC16: the most recent SESSION_COMPLETED event for this coach and
+    // player whose whatsNext is non-blank -- the Session Builder's "carry last time's what's next forward"
+    // suggestion. Filters metadata->>'coachId' EXACTLY like findSessionNotesForReport above: one inclusion
+    // rule for the suggestion and the report -- "a recap the coach authored counts regardless of the
+    // player's attendance" (the coach_id COLUMN is attendance-gated and would drop recovered/unattended
+    // recaps). The prep card's lastSessionDate/lastWhatWeDid/lastWhatsNext pairing and the coach-access
+    // clock deliberately stay attendance-gated (12-3 AC3). reference_id <> :bookingId so a booking that already has
     // its own SESSION_COMPLETED event cannot suggest its own whatsNext. jsonb_exists, not the bare `?`
     // operator (see findSessionNotesForReport's comment above).
     @Query(value = "SELECT * FROM development.player_timeline_events "
-        + "WHERE player_id = :playerId AND coach_id = :coachId "
+        + "WHERE player_id = :playerId AND metadata->>'coachId' = CAST(:coachId AS text) "
         + "AND event_type = 'SESSION_COMPLETED' "
         + "AND (reference_id IS NULL OR reference_id <> :bookingId) "
         + "AND jsonb_exists(metadata, 'whatsNext') AND btrim(metadata->>'whatsNext') <> '' "
@@ -90,6 +90,24 @@ public interface PlayerTimelineRepository extends JpaRepository<PlayerTimelineEv
         + "LIMIT 1", nativeQuery = true)
     Optional<PlayerTimelineEvent> findLatestWhatsNextSuggestion(
         @Param("playerId") Long playerId, @Param("coachId") UUID coachId, @Param("bookingId") UUID bookingId);
+
+    // skillars-12-7 AC4: applies an edited recap to the EXISTING SESSION_COMPLETED row for a booking -- never a
+    // second event (that would double-count the session in the timeline, roster and access clock).
+    // PlayerTimelineEvent.metadata is updatable = false on the entity, so a JPA save of a mutated entity is a
+    // silent no-op; this has to be a bulk statement. The three recap keys are removed first and the
+    // present ones re-added from :patch, so a blank whatWentWell REMOVES the key rather than storing "".
+    // player_id is in the WHERE so the (player_id, occurred_at) index serves it (no index on reference_id).
+    // coachId filter keeps another coach's event for the same booking untouchable (siloing, defence in
+    // depth). player_timeline_events has no @Version, so NativeModifyingVersionAuditTest does not apply.
+    @Modifying
+    @Query(value = "UPDATE development.player_timeline_events "
+        + "SET metadata = (COALESCE(metadata, CAST('{}' AS jsonb)) - 'whatWeDid' - 'whatsNext' - 'whatWentWell') "
+        + "|| CAST(:patch AS jsonb) "
+        + "WHERE player_id = :playerId AND reference_id = :bookingId AND event_type = 'SESSION_COMPLETED' "
+        + "AND metadata->>'coachId' = CAST(:coachId AS text)",
+        nativeQuery = true)
+    int updateSessionRecapMetadata(@Param("playerId") Long playerId, @Param("bookingId") UUID bookingId,
+                                   @Param("coachId") UUID coachId, @Param("patch") String patch);
 
     // skillars-deferred-155 AC9: closes the gap skillars-deferred-154's own code review recorded as
     // "its own story, not a review patch" — a coach's GDPR erasure already scrubs
@@ -113,9 +131,10 @@ public interface PlayerTimelineRepository extends JpaRepository<PlayerTimelineEv
     // sequential scan — which is exactly why the caller wraps it in the lock_timeout bound.
     @Modifying
     @Query(value = "UPDATE development.player_timeline_events "
-        + "SET metadata = metadata - 'whatWeDid' - 'whatsNext' "
+        + "SET metadata = metadata - 'whatWeDid' - 'whatsNext' - 'whatWentWell' "
         + "WHERE metadata->>'coachId' = CAST(:coachId AS text) "
-        + "AND (jsonb_exists(metadata, 'whatWeDid') OR jsonb_exists(metadata, 'whatsNext'))",
+        + "AND (jsonb_exists(metadata, 'whatWeDid') OR jsonb_exists(metadata, 'whatsNext') "
+        + "OR jsonb_exists(metadata, 'whatWentWell'))",
         nativeQuery = true)
     void anonymizeMetadataByCoachId(@Param("coachId") UUID coachId);
 }

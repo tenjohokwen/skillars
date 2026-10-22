@@ -681,17 +681,17 @@ class GdprErasureIT extends AbstractIntegrationTest {
             jdbcTemplate.update(
                 "INSERT INTO booking.session_completion_data "
                     + "(id, booking_id, coach_id, player_id, player_attended, voice_note_text, "
-                    + "what_we_did, whats_next, completion_mode, created_at) "
+                    + "what_we_did, whats_next, what_went_well, completion_mode, created_at) "
                     + "VALUES (?, ?, ?, ?, true, 'Voice note about first touch', "
-                    + "'Worked on first touch', 'Continue weak-foot drills', 'LIVE', ?)",
+                    + "'Worked on first touch', 'Continue weak-foot drills', 'Erased well', 'LIVE', ?)",
                 UUID.randomUUID(), erasedBookingId, coachProfileId, SELF_PLAYER_PROFILE_ID,
                 Timestamp.from(Instant.now()));
             jdbcTemplate.update(
                 "INSERT INTO booking.session_completion_data "
                     + "(id, booking_id, coach_id, player_id, player_attended, voice_note_text, "
-                    + "what_we_did, whats_next, completion_mode, created_at) "
+                    + "what_we_did, whats_next, what_went_well, completion_mode, created_at) "
                     + "VALUES (?, ?, ?, ?, true, 'Unrelated voice note', "
-                    + "'Unrelated recap', 'Unrelated next step', 'LIVE', ?)",
+                    + "'Unrelated recap', 'Unrelated next step', 'Unrelated well', 'LIVE', ?)",
                 UUID.randomUUID(), otherBookingId, coachProfileId, otherPlayerId,
                 Timestamp.from(Instant.now()));
             return null;
@@ -700,18 +700,20 @@ class GdprErasureIT extends AbstractIntegrationTest {
         erase(SELF_PLAYER_USER_ID);
 
         Map<String, Object> erasedRow = jdbcTemplate.queryForMap(
-            "SELECT voice_note_text, what_we_did, whats_next FROM booking.session_completion_data WHERE booking_id = ?",
+            "SELECT voice_note_text, what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
             erasedBookingId);
         assertThat(erasedRow.get("voice_note_text")).isNull();
         assertThat(erasedRow.get("what_we_did")).isNull();
         assertThat(erasedRow.get("whats_next")).isNull();
+        assertThat(erasedRow.get("what_went_well")).isNull();
 
         Map<String, Object> otherRow = jdbcTemplate.queryForMap(
-            "SELECT voice_note_text, what_we_did, whats_next FROM booking.session_completion_data WHERE booking_id = ?",
+            "SELECT voice_note_text, what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
             otherBookingId);
         assertThat(otherRow.get("voice_note_text")).isEqualTo("Unrelated voice note");
         assertThat(otherRow.get("what_we_did")).isEqualTo("Unrelated recap");
         assertThat(otherRow.get("whats_next")).isEqualTo("Unrelated next step");
+        assertThat(otherRow.get("what_went_well")).isEqualTo("Unrelated well");
     }
 
     /**
@@ -917,17 +919,17 @@ class GdprErasureIT extends AbstractIntegrationTest {
             jdbcTemplate.update(
                 "INSERT INTO booking.session_completion_data "
                     + "(id, booking_id, coach_id, player_id, player_attended, voice_note_text, "
-                    + "what_we_did, whats_next, completion_mode, created_at) "
+                    + "what_we_did, whats_next, what_went_well, completion_mode, created_at) "
                     + "VALUES (?, ?, ?, ?, true, 'Coach own voice note', "
-                    + "'Coach own recap', 'Coach own next step', 'LIVE', ?)",
+                    + "'Coach own recap', 'Coach own next step', 'Coach own well', 'LIVE', ?)",
                 UUID.randomUUID(), ownBookingId, coachProfileId, SELF_PLAYER_PROFILE_ID,
                 Timestamp.from(Instant.now()));
             jdbcTemplate.update(
                 "INSERT INTO booking.session_completion_data "
                     + "(id, booking_id, coach_id, player_id, player_attended, voice_note_text, "
-                    + "what_we_did, whats_next, completion_mode, created_at) "
+                    + "what_we_did, whats_next, what_went_well, completion_mode, created_at) "
                     + "VALUES (?, ?, ?, ?, true, 'Unrelated coach voice note', "
-                    + "'Unrelated coach recap', 'Unrelated coach next step', 'LIVE', ?)",
+                    + "'Unrelated coach recap', 'Unrelated coach next step', 'Unrelated coach well', 'LIVE', ?)",
                 UUID.randomUUID(), otherCoachBookingId, otherCoachProfileId, SELF_PLAYER_PROFILE_ID,
                 Timestamp.from(Instant.now()));
             return null;
@@ -936,18 +938,29 @@ class GdprErasureIT extends AbstractIntegrationTest {
         erase(COACH_USER_ID);
 
         Map<String, Object> ownRow = jdbcTemplate.queryForMap(
-            "SELECT voice_note_text, what_we_did, whats_next FROM booking.session_completion_data WHERE booking_id = ?",
+            "SELECT voice_note_text, what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
             ownBookingId);
         assertThat(ownRow.get("voice_note_text")).isNull();
         assertThat(ownRow.get("what_we_did")).isNull();
         assertThat(ownRow.get("whats_next")).isNull();
+        assertThat(ownRow.get("what_went_well")).isNull();
 
         Map<String, Object> otherRow = jdbcTemplate.queryForMap(
-            "SELECT voice_note_text, what_we_did, whats_next FROM booking.session_completion_data WHERE booking_id = ?",
+            "SELECT voice_note_text, what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
             otherCoachBookingId);
         assertThat(otherRow.get("voice_note_text")).isEqualTo("Unrelated coach voice note");
         assertThat(otherRow.get("what_we_did")).isEqualTo("Unrelated coach recap");
         assertThat(otherRow.get("whats_next")).isEqualTo("Unrelated coach next step");
+        assertThat(otherRow.get("what_went_well")).isEqualTo("Unrelated coach well");
+
+        // skillars-12-7 code review (Decision 1(a)): the recap tombstone is set for the erased coach only,
+        // and survives the outer transaction's later save(cp) flush (the column is deliberately unmapped).
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT recap_data_erased_at IS NOT NULL FROM marketplace.coach_profiles WHERE id = ?",
+            Boolean.class, coachProfileId)).isTrue();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT recap_data_erased_at IS NOT NULL FROM marketplace.coach_profiles WHERE id = ?",
+            Boolean.class, otherCoachProfileId)).isFalse();
     }
 
     /**
@@ -1032,7 +1045,7 @@ class GdprErasureIT extends AbstractIntegrationTest {
                 "INSERT INTO development.player_timeline_events "
                     + "(id, player_id, event_type, occurred_at, metadata, coach_id) "
                     + "VALUES (?, ?, 'SESSION_COMPLETED', ?, "
-                    + "jsonb_build_object('coachId', ?, 'whatWeDid', 'Coach own recap', 'whatsNext', 'Coach own next step'), ?)",
+                    + "jsonb_build_object('coachId', ?, 'whatWeDid', 'Coach own recap', 'whatsNext', 'Coach own next step', 'whatWentWell', 'Coach own well'), ?)",
                 attendedEventId, SELF_PLAYER_PROFILE_ID, Timestamp.from(Instant.now()),
                 coachProfileId.toString(), coachProfileId);
 
@@ -1042,7 +1055,7 @@ class GdprErasureIT extends AbstractIntegrationTest {
                 "INSERT INTO development.player_timeline_events "
                     + "(id, player_id, event_type, occurred_at, metadata, coach_id) "
                     + "VALUES (?, ?, 'SESSION_COMPLETED', ?, "
-                    + "jsonb_build_object('coachId', ?, 'whatWeDid', 'Coach own non-attended recap', 'whatsNext', 'Coach own non-attended next step'), NULL)",
+                    + "jsonb_build_object('coachId', ?, 'whatWeDid', 'Coach own non-attended recap', 'whatsNext', 'Coach own non-attended next step', 'whatWentWell', 'Coach own non-attended well'), NULL)",
                 nonAttendedEventId, SELF_PLAYER_PROFILE_ID, Timestamp.from(Instant.now()),
                 coachProfileId.toString());
 
@@ -1051,7 +1064,7 @@ class GdprErasureIT extends AbstractIntegrationTest {
                 "INSERT INTO development.player_timeline_events "
                     + "(id, player_id, event_type, occurred_at, metadata, coach_id) "
                     + "VALUES (?, ?, 'SESSION_COMPLETED', ?, "
-                    + "jsonb_build_object('coachId', ?, 'whatWeDid', 'Unrelated coach recap', 'whatsNext', 'Unrelated coach next step'), ?)",
+                    + "jsonb_build_object('coachId', ?, 'whatWeDid', 'Unrelated coach recap', 'whatsNext', 'Unrelated coach next step', 'whatWentWell', 'Unrelated coach well'), ?)",
                 otherCoachEventId, SELF_PLAYER_PROFILE_ID, Timestamp.from(Instant.now()),
                 otherCoachProfileId.toString(), otherCoachProfileId);
             return null;
@@ -1061,18 +1074,18 @@ class GdprErasureIT extends AbstractIntegrationTest {
 
         String attendedMetadata = jdbcTemplate.queryForObject(
             "SELECT metadata::text FROM development.player_timeline_events WHERE id = ?", String.class, attendedEventId);
-        assertThat(attendedMetadata).doesNotContain("whatWeDid", "whatsNext").contains("coachId");
+        assertThat(attendedMetadata).doesNotContain("whatWeDid", "whatsNext", "whatWentWell").contains("coachId");
 
         String nonAttendedMetadata = jdbcTemplate.queryForObject(
             "SELECT metadata::text FROM development.player_timeline_events WHERE id = ?", String.class, nonAttendedEventId);
         assertThat(nonAttendedMetadata)
             .as("the non-attended row has no entity coach_id column value — only metadata->>'coachId' "
                 + "identifies it, so a column-filtered scrub would have silently skipped this row")
-            .doesNotContain("whatWeDid", "whatsNext").contains("coachId");
+            .doesNotContain("whatWeDid", "whatsNext", "whatWentWell").contains("coachId");
 
         String otherMetadata = jdbcTemplate.queryForObject(
             "SELECT metadata::text FROM development.player_timeline_events WHERE id = ?", String.class, otherCoachEventId);
-        assertThat(otherMetadata).contains("Unrelated coach recap", "Unrelated coach next step");
+        assertThat(otherMetadata).contains("Unrelated coach recap", "Unrelated coach next step", "Unrelated coach well");
     }
 
     /**

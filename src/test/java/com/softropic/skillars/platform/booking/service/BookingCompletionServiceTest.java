@@ -46,6 +46,8 @@ import static org.mockito.Mockito.lenient;
 class BookingCompletionServiceTest {
 
     @Mock private BookingService bookingService;
+    @Mock private com.softropic.skillars.platform.booking.repo.BookingRepository bookingRepository;
+    @Mock private com.softropic.skillars.platform.config.service.ConfigService configService;
     @Mock private SessionCompletionDataRepository completionDataRepository;
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private UserRepository userRepository;
@@ -66,9 +68,9 @@ class BookingCompletionServiceTest {
     @BeforeEach
     void setUp() {
         service = new BookingCompletionService(
-            bookingService, completionDataRepository,
+            bookingService, bookingRepository, completionDataRepository,
             coachProfileRepository, userRepository, playerProfileRepository,
-            eventPublisher, new ObjectMapper()
+            eventPublisher, new ObjectMapper(), configService
         );
 
         coach = new CoachProfile();
@@ -97,8 +99,8 @@ class BookingCompletionServiceTest {
     @Test
     void submitWrapUp_liveMode_completesBookingAndDeductsCredit() {
         when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, null, List.of(), "LIVE",
-            "Worked on first touch", "Continue weak-foot drills");
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE",
+            "Worked on first touch", "Continue weak-foot drills", null);
 
         service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req);
 
@@ -135,8 +137,8 @@ class BookingCompletionServiceTest {
     @Test
     void submitWrapUp_quickMode_doesNotTransitionStatusAndPublishesConfirmationEvent() {
         when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-        WrapUpRequest req = new WrapUpRequest(true, 3, 4, 4, "Good session", List.of(), "QUICK",
-            "Worked on passing accuracy", "Focus on finishing next session");
+        WrapUpRequest req = new WrapUpRequest(true, 3, 4, 4, List.of(), "QUICK",
+            "Worked on passing accuracy", "Focus on finishing next session", null);
 
         User parent = new User();
         parent.setEmail("parent@test.com");
@@ -178,6 +180,17 @@ class BookingCompletionServiceTest {
         assertThat(event.getBookingId()).isEqualTo(BOOKING_ID);
         assertThat(event.getWhatWeDid()).isEqualTo("Worked on passing accuracy");
         assertThat(event.getWhatsNext()).isEqualTo("Focus on finishing next session");
+    }
+
+    /** Code review (Decision 2): the live start is recorded so an abandoned wrap-up resumes LIVE. */
+    @Test
+    void startSession_upcomingBooking_recordsLiveStartedAt() {
+        booking.setStatus(BookingStatus.UPCOMING.name());
+
+        service.startSession(BOOKING_ID, COACH_USER_ID);
+
+        verify(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.START), any(TransitionContext.class));
+        assertThat(booking.getLiveStartedAt()).isNotNull();
     }
 
     @Test
@@ -264,8 +277,8 @@ class BookingCompletionServiceTest {
     void submitWrapUp_liveMode_concurrentModification_throwsRetryableException() {
         booking.setStatus(BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
         when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, null, List.of(), "LIVE",
-            "Worked on first touch", "Continue weak-foot drills");
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE",
+            "Worked on first touch", "Continue weak-foot drills", null);
         doThrow(new OptimisticLockingFailureException("stale version"))
             .when(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.QUICK_COMPLETE), any(TransitionContext.class));
 
@@ -451,8 +464,8 @@ class BookingCompletionServiceTest {
         placeholder.setPlayerAttended(false);   // all four isSweeperPlaceholder conditions
         placeholder.setCompletionMode("QUICK"); // whatWeDid/whatsNext/voiceNoteText left null
         when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(placeholder));
-        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, null, List.of(), "LIVE",
-            "Worked on first touch", "Continue weak-foot drills");
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE",
+            "Worked on first touch", "Continue weak-foot drills", null);
 
         assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req))
             .isInstanceOf(OperationNotAllowedException.class)
@@ -472,13 +485,199 @@ class BookingCompletionServiceTest {
         real.setPlayerAttended(true);
         real.setWhatWeDid("Worked on first touch");
         when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(real));
-        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, null, List.of(), "LIVE",
-            "Worked on first touch", "Continue weak-foot drills");
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE",
+            "Worked on first touch", "Continue weak-foot drills", null);
 
         assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req))
             .isInstanceOf(OperationNotAllowedException.class)
             .hasMessageContaining("Booking is in status COMPLETED, expected COMPLETED_PENDING_CONFIRMATION");
 
         verify(completionDataRepository, never()).save(any());
+    }
+
+    // ---- skillars-12-7 ----
+
+    @Test
+    void submitWrapUp_storesWhatWentWellTrimmed_andEventCarriesIt() {
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE", "did", "next", "  Great tempo  ");
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req);
+
+        ArgumentCaptor<SessionCompletionData> scd = ArgumentCaptor.forClass(SessionCompletionData.class);
+        verify(completionDataRepository).save(scd.capture());
+        assertThat(scd.getValue().getWhatWentWell()).isEqualTo("Great tempo");
+        ArgumentCaptor<BookingCompletedEvent> ev = ArgumentCaptor.forClass(BookingCompletedEvent.class);
+        verify(eventPublisher).publishEvent(ev.capture());
+        assertThat(ev.getValue().getWhatWentWell()).isEqualTo("Great tempo");
+    }
+
+    @Test
+    void submitWrapUp_blankWhatWentWell_isStoredAsNull() {
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID,
+            new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE", "did", "next", "   "));
+
+        ArgumentCaptor<SessionCompletionData> scd = ArgumentCaptor.forClass(SessionCompletionData.class);
+        verify(completionDataRepository).save(scd.capture());
+        assertThat(scd.getValue().getWhatWentWell()).isNull();
+        assertThat(scd.getValue().getVoiceNoteText()).as("voice note is no longer captured").isNull();
+    }
+
+    @Test
+    void confirmCompletion_eventCarriesWhatWentWell() {
+        booking.setStatus(BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
+        SessionCompletionData scd = new SessionCompletionData();
+        scd.setWhatWeDid("did");
+        scd.setWhatsNext("next");
+        scd.setWhatWentWell("well");
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(scd));
+
+        service.confirmCompletion(BOOKING_ID, PARENT_ID);
+
+        ArgumentCaptor<BookingCompletedEvent> ev = ArgumentCaptor.forClass(BookingCompletedEvent.class);
+        verify(eventPublisher).publishEvent(ev.capture());
+        assertThat(ev.getValue().getWhatWentWell()).isEqualTo("well");
+    }
+
+    private void arrangeEditableRecap(Instant end) {
+        booking.setId(BOOKING_ID);
+        booking.setStatus(BookingStatus.COMPLETED.name());
+        booking.setRequestedEndTime(end);
+        User coachUser = new User();
+        coachUser.setLocked(false);
+        lenient().when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(coachUser));
+        PlayerProfile player = new PlayerProfile();
+        lenient().when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        lenient().when(configService.getBoundedLong(eq("booking.recap.editWindowDays"), eq(30L), eq(7L), eq(365L)))
+            .thenReturn(30L);
+        SessionCompletionData scd = new SessionCompletionData();
+        scd.setBookingId(BOOKING_ID);
+        lenient().when(completionDataRepository.findForUpdateByBookingId(BOOKING_ID)).thenReturn(Optional.of(scd));
+    }
+
+    @Test
+    void updateRecap_inWindow_writesRowLocksItFirstAndPublishesIdsOnlyEvent() {
+        arrangeEditableRecap(Instant.now().minusSeconds(3600));
+
+        var response = service.updateRecap(BOOKING_ID, COACH_USER_ID,
+            new com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest("  did ", " next ", " "));
+
+        assertThat(response.whatWeDid()).isEqualTo("did");
+        assertThat(response.whatWentWell()).isNull();
+        assertThat(response.editable()).isTrue();
+        verify(completionDataRepository).save(any(SessionCompletionData.class));
+        ArgumentCaptor<com.softropic.skillars.platform.booking.contract.SessionRecapUpdatedEvent> ev =
+            ArgumentCaptor.forClass(com.softropic.skillars.platform.booking.contract.SessionRecapUpdatedEvent.class);
+        verify(eventPublisher).publishEvent(ev.capture());
+        assertThat(ev.getValue().getBookingId()).isEqualTo(BOOKING_ID);
+        assertThat(ev.getValue().getCoachId()).isEqualTo(COACH_ID);
+        assertThat(ev.getValue().getPlayerId()).isEqualTo(PLAYER_ID);
+    }
+
+    @Test
+    void updateRecap_outsideWindow_throwsDedicatedCode_andGetReportsNotEditable() {
+        arrangeEditableRecap(Instant.now().minusSeconds(40L * 86_400));
+        var req = new com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest("d", "n", null);
+
+        assertThatThrownBy(() -> service.updateRecap(BOOKING_ID, COACH_USER_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.RECAP_EDIT_WINDOW_CLOSED);
+        verify(completionDataRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+        // the read side uses the SAME verdict
+        SessionCompletionData existing = new SessionCompletionData();
+        existing.setBookingId(BOOKING_ID);
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+        assertThat(service.getRecap(BOOKING_ID, COACH_USER_ID).editable()).isFalse();
+    }
+
+    /** Code review (Decision 1(a)): the scrub-transaction tombstone alone refuses the edit, user not yet locked. */
+    @Test
+    void updateRecap_coachRecapTombstone_isRejectedAsErased_evenWhileUserStillUnlocked() {
+        arrangeEditableRecap(Instant.now().minusSeconds(3600));
+        when(coachProfileRepository.isRecapDataErased(COACH_ID)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.updateRecap(BOOKING_ID, COACH_USER_ID,
+            new com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest("d", "n", null)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.RECAP_NOT_EDITABLE_ERASED);
+        verify(completionDataRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void updateRecap_lockedCoachUser_isRejectedAsErased_eventWhenProfileStillResolves() {
+        arrangeEditableRecap(Instant.now().minusSeconds(3600));
+        User locked = new User();
+        locked.setLocked(true);
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(locked));
+
+        assertThatThrownBy(() -> service.updateRecap(BOOKING_ID, COACH_USER_ID,
+            new com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest("d", "n", null)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.RECAP_NOT_EDITABLE_ERASED);
+        verify(completionDataRepository, never()).save(any());
+    }
+
+    @Test
+    void updateRecap_erasedPlayer_isRejected_nothingResurrected() {
+        arrangeEditableRecap(Instant.now().minusSeconds(3600));
+        PlayerProfile erased = new PlayerProfile();
+        erased.setDevelopmentDataErasedAt(Instant.now());
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(erased));
+
+        assertThatThrownBy(() -> service.updateRecap(BOOKING_ID, COACH_USER_ID,
+            new com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest("d", "n", null)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.RECAP_NOT_EDITABLE_ERASED);
+        verify(completionDataRepository, never()).save(any());
+    }
+
+    @Test
+    void updateRecap_wrongCoach_orNotCompleted_isRejectedBeforeAnyLock() {
+        arrangeEditableRecap(Instant.now().minusSeconds(3600));
+        booking.setCoachId(UUID.randomUUID());
+        var req = new com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest("d", "n", null);
+        assertThatThrownBy(() -> service.updateRecap(BOOKING_ID, COACH_USER_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class);
+
+        booking.setCoachId(COACH_ID);
+        booking.setStatus(BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
+        assertThatThrownBy(() -> service.updateRecap(BOOKING_ID, COACH_USER_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class);
+        verify(completionDataRepository, never()).findForUpdateByBookingId(any());
+    }
+
+    @Test
+    void getMissingRecaps_zeroCount_skipsTheListQuery() {
+        when(configService.getBoundedLong(eq("booking.recap.editWindowDays"), eq(30L), eq(7L), eq(365L))).thenReturn(30L);
+        when(bookingRepository.countBookingsMissingRecap(eq(COACH_ID), any())).thenReturn(0L);
+
+        var response = service.getMissingRecaps(COACH_USER_ID);
+
+        assertThat(response.count()).isZero();
+        assertThat(response.items()).isEmpty();
+        verify(bookingRepository, never()).findBookingsMissingRecap(any(), any(), any());
+    }
+
+    @Test
+    void getMissingRecaps_returnsItemsWithBatchedNames() {
+        when(configService.getBoundedLong(eq("booking.recap.editWindowDays"), eq(30L), eq(7L), eq(365L))).thenReturn(30L);
+        when(bookingRepository.countBookingsMissingRecap(eq(COACH_ID), any())).thenReturn(1L);
+        booking.setId(BOOKING_ID);
+        booking.setRequestedEndTime(Instant.now().minusSeconds(3600));
+        when(bookingRepository.findBookingsMissingRecap(eq(COACH_ID), any(), any())).thenReturn(List.of(booking));
+        when(bookingService.resolvePlayerNames(any())).thenReturn(java.util.Map.of(PLAYER_ID, "Alex"));
+
+        var response = service.getMissingRecaps(COACH_USER_ID);
+
+        assertThat(response.count()).isEqualTo(1);
+        assertThat(response.items().get(0).playerName()).isEqualTo("Alex");
+        assertThat(response.items().get(0).bookingId()).isEqualTo(BOOKING_ID);
     }
 }

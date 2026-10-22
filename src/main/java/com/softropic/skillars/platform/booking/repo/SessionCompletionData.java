@@ -55,6 +55,9 @@ public class SessionCompletionData {
     @Column(name = "whats_next", length = 500)
     private String whatsNext;
 
+    @Column(name = "what_went_well", length = 500)
+    private String whatWentWell;
+
     @Column(name = "homework_drill_ids")
     private String homeworkDrillIds;
 

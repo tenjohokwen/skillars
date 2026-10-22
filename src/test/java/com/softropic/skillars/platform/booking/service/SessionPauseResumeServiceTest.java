@@ -38,6 +38,8 @@ import static org.mockito.Mockito.verify;
 class SessionPauseResumeServiceTest {
 
     @Mock private BookingService bookingService;
+    @Mock private com.softropic.skillars.platform.booking.repo.BookingRepository bookingRepository;
+    @Mock private com.softropic.skillars.platform.config.service.ConfigService configService;
     @Mock private SessionCompletionDataRepository completionDataRepository;
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private UserRepository userRepository;
@@ -58,9 +60,9 @@ class SessionPauseResumeServiceTest {
     @BeforeEach
     void setUp() {
         service = new BookingCompletionService(
-            bookingService, completionDataRepository,
+            bookingService, bookingRepository, completionDataRepository,
             coachProfileRepository, userRepository, playerProfileRepository,
-            eventPublisher, new ObjectMapper()
+            eventPublisher, new ObjectMapper(), configService
         );
 
         coach = new CoachProfile();

@@ -68,6 +68,7 @@ public class SessionPrepService {
 
         String lastWhatWeDid = null;
         String lastWhatsNext = null;
+        String lastWhatWentWell = null;
         PlayerTimelineEvent recapSourceEvent = signal.recapSourceEventOrNull();
         if (recapSourceEvent != null) {
             Map<String, Object> metadata = recapSourceEvent.getMetadata();
@@ -76,6 +77,8 @@ public class SessionPrepService {
                 Object whatsNext = metadata.get(TimelineEventListener.METADATA_KEY_WHATS_NEXT);
                 lastWhatWeDid = whatWeDid != null ? whatWeDid.toString() : null;
                 lastWhatsNext = whatsNext != null ? whatsNext.toString() : null;
+                Object whatWentWell = metadata.get(TimelineEventListener.METADATA_KEY_WHAT_WENT_WELL);
+                lastWhatWentWell = whatWentWell != null ? whatWentWell.toString() : null;
             }
         }
 
@@ -135,6 +138,7 @@ public class SessionPrepService {
             SessionRecency.daysSinceOrNull(signal.lastSessionDate(), now),
             openNeglectedSkillCodes,
             suggestedWhatsNext,
-            suggestedWhatsNextSessionDate);
+            suggestedWhatsNextSessionDate,
+            lastWhatWentWell);
     }
 }

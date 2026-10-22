@@ -322,6 +322,34 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // explicit sizing rationale and does strictly less work per row.)
     List<Booking> findStuckCompletionsWithNoSessionData(@Param("cutoff") Instant cutoff, Pageable pageable);
 
+    // skillars-12-7 AC8: COMPLETED bookings of this coach, inside the recap edit window, whose
+    // session_completion_data row carries no recap text, and whose player has NOT been erased (player
+    // erasure also nulls both recap columns, which would otherwise make every erased player's session
+    // nag forever -- and every "Add recap" is rejected for them). Driven from Booking because
+    // session_completion_data has no coach_id index (only idx_scd_booking_id). `cutoff` = now - window,
+    // since "requestedEndTime + window > now" is "requestedEndTime > now - window". Deterministic order.
+    @Query("""
+        SELECT b FROM Booking b, SessionCompletionData s, PlayerProfile p
+        WHERE s.bookingId = b.id AND p.id = b.playerId
+          AND b.coachId = :coachId AND b.status = 'COMPLETED'
+          AND s.whatWeDid IS NULL AND s.whatsNext IS NULL
+          AND p.developmentDataErasedAt IS NULL
+          AND b.requestedEndTime > :cutoff
+        ORDER BY b.requestedEndTime DESC, b.id DESC
+        """)
+    List<Booking> findBookingsMissingRecap(@Param("coachId") UUID coachId, @Param("cutoff") Instant cutoff,
+                                           Pageable pageable);
+
+    @Query("""
+        SELECT COUNT(b) FROM Booking b, SessionCompletionData s, PlayerProfile p
+        WHERE s.bookingId = b.id AND p.id = b.playerId
+          AND b.coachId = :coachId AND b.status = 'COMPLETED'
+          AND s.whatWeDid IS NULL AND s.whatsNext IS NULL
+          AND p.developmentDataErasedAt IS NULL
+          AND b.requestedEndTime > :cutoff
+        """)
+    long countBookingsMissingRecap(@Param("coachId") UUID coachId, @Param("cutoff") Instant cutoff);
+
     // skillars-deferred-156 AC1: GdprErasureService injected this repository with zero call sites
     // until now — notes/playerRequest are player/parent-authored free text (coachPlanNote, added by
     // skillars-12-6, is coach-authored but describes the player), so a single playerId-keyed method covers both the self-registered-PLAYER

@@ -101,7 +101,7 @@
       <tr><td><code>BookingBatch</code></td><td><code>booking_batches</code></td><td>Groups several <code>Booking</code> rows requested together in one parent submission.</td></tr>
       <tr><td><code>BookingRescheduleRequest</code></td><td><code>booking_reschedule_requests</code></td><td>A pending/accepted/declined proposal to move a booking's time.</td></tr>
       <tr><td><code>CoachAvailabilityBlock</code></td><td><code>coach_availability_blocks</code></td><td>One-off blackout period on a coach's calendar (vacation, etc.) — recurring weekly windows live in <code>marketplace.CoachAvailabilityWindow</code>, not here.</td></tr>
-      <tr><td><code>SessionCompletionData</code></td><td><code>session_completion_data</code></td><td>Coach's post-session wrap-up: attendance, effort/focus/technique ratings, voice note, homework drill IDs.</td></tr>
+      <tr><td><code>SessionCompletionData</code></td><td><code>session_completion_data</code></td><td>Coach's post-session wrap-up: attendance, effort/focus/technique ratings, homework drill IDs, and the session recap (<code>what_we_did</code>, <code>whats_next</code>, optional <code>what_went_well</code>). <code>voice_note_text</code> is a legacy column that is no longer written.</td></tr>
     </table>
     <p>There is no pack entity in this schema any more. <code>Booking.sessionPackPurchaseId</code> is a plain
     <code>UUID</code> column pointing at <code>payment.session_pack_purchases</code> — deliberately not a JPA
@@ -161,6 +161,9 @@
       <tr><td>POST</td><td>/api/bookings/{id}/pause</td><td>Coach pauses the live session</td><td>Coach</td></tr>
       <tr><td>POST</td><td>/api/bookings/{id}/resume</td><td>Coach resumes a paused session</td><td>Coach</td></tr>
       <tr><td>POST</td><td>/api/bookings/{id}/complete</td><td>Coach submits wrap-up (LIVE = Quick Complete, or standard)</td><td>Coach</td></tr>
+      <tr><td>GET</td><td>/api/bookings/{id}/recap</td><td>Read the session recap and whether it is still editable</td><td>Coach</td></tr>
+      <tr><td>PUT</td><td>/api/bookings/{id}/recap</td><td>Add or correct a completed session's recap inside the edit window (<code>booking.recap.editWindowDays</code>, default 30). Updates the existing <code>SESSION_COMPLETED</code> timeline event via <code>SessionRecapUpdatedEvent</code>; never creates a second event</td><td>Coach</td></tr>
+      <tr><td>GET</td><td>/api/bookings/coaches/me/recaps-missing</td><td>Completed sessions in the edit window with no recap (count plus capped list)</td><td>Coach</td></tr>
       <tr><td>POST</td><td>/api/bookings/{id}/quick-complete</td><td>Coach initiates Quick Complete from UPCOMING</td><td>Coach</td></tr>
       <tr><td>PUT</td><td>/api/bookings/{id}/confirm-completion</td><td>Parent confirms a pending session completion</td><td>Parent</td></tr>
       <tr><td>GET</td><td>/api/bookings/session/{bookingId}/drills/suggestions</td><td>Get drill suggestions for the session's homework</td><td>Coach</td></tr>
@@ -394,7 +397,7 @@ sequenceDiagram
     <p>
       A live session moves <code>UPCOMING → IN_PROGRESS</code> (optionally through <code>PAUSED</code> and back)
       and ends in <code>COMPLETED_PENDING_CONFIRMATION</code> once the coach submits a wrap-up
-      (<code>SessionCompletionData</code>: attendance, ratings, voice note, homework drills). If the wrap-up
+      (<code>SessionCompletionData</code>: attendance, ratings, homework drills, recap). If the wrap-up
       mode is <code>LIVE</code> ("Quick Complete"), the booking is completed immediately. Otherwise the parent
       must explicitly confirm via <code>confirm-completion</code> before <code>BookingCompletedEvent</code>
       fires — and if the parent never confirms, <code>QuickCompleteTimeoutService</code> force-completes it

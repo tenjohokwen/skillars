@@ -43,9 +43,8 @@
 
     <h2>Business Overview</h2>
     <p>
-      Skillars accumulates files from almost every persona: a Coach's profile photo, a voice note recorded during a
-      Booking wrap-up, a GDPR data-export ZIP an Admin generates for a Parent, a branded session-report PDF a Coach
-      downloads. None of those modules know or care whether the bytes end up in S3, on local disk, or get mirrored to
+      Skillars accumulates files from almost every persona: a Coach's profile photo, a GDPR data-export ZIP an Admin
+      generates for a Parent, a branded session-report PDF a Coach downloads. None of those modules know or care whether the bytes end up in S3, on local disk, or get mirrored to
       a backup region — that's <code>filestorage</code>'s job. It exists to answer, once, for the whole platform: "how
       do we accept an upload safely, enforce a size/type/quota policy on it, know who owns it, let it be downloaded
       again without proxying the bytes through our own servers, and eventually delete it — including from a backup
@@ -55,9 +54,11 @@
     <ul>
       <li><strong>Coaches</strong> upload a profile photo during the Marketplace profile builder; the photo bytes go
         straight from the browser to S3 via a presigned URL that <code>filestorage</code> issues.</li>
-      <li><strong>Parents/Coaches</strong> record a voice note during a session wrap-up (Booking module); the
-        frontend calls <code>filestorage</code>'s generic <code>/api/storage</code> endpoints directly, tagging the
-        upload with <code>entity=booking</code>.</li>
+      <li><strong>Coaches</strong> no longer record a voice note during a session wrap-up: story 12.7 (D3) removed
+        that wizard step, so the Booking wrap-up stores nothing in <code>filestorage</code> today. Earlier wizard runs
+        did upload <code>audio/webm</code> blobs through the generic <code>/api/storage</code> endpoints tagged
+        <code>entity=booking</code>; those legacy objects may still exist, unread and unlinked to any row (clean-up is
+        tracked in the deferred-work ledger, <code>_bmad-output/implementation-artifacts/deferred-work.md</code>).</li>
       <li><strong>Admins</strong> trigger GDPR export/erasure jobs that store a generated ZIP bundle and later delete
         it, via <code>filestorage</code>'s programmatic Java API.</li>
       <li><strong>Coaches</strong> download generated session-report PDFs and branding logos (Development module),
@@ -315,9 +316,10 @@ sequenceDiagram
     <ul>
       <li><a href="../marketplace/index.html">Marketplace</a> — <code>CoachProfilePhotoEventListener</code> consumes
         <code>StorageObjectConfirmedEvent</code> to sync a confirmed coach profile photo upload onto <code>CoachProfile.photoUrl</code>.</li>
-      <li><a href="../booking/index.html">Booking</a> — the frontend wrap-up flow calls
-        <code>/api/storage/sign/upload</code> and <code>/confirm/**</code> directly (tagged <code>entity=booking</code>)
-        to store session voice-note recordings; no Java code in the booking module itself touches <code>filestorage</code>.</li>
+      <li><a href="../booking/index.html">Booking</a> — no live dependency: the wrap-up no longer captures voice notes
+        (story 12.7, D3). Before that, the frontend wrap-up flow called <code>/api/storage/sign/upload</code> and
+        <code>/confirm/**</code> directly (tagged <code>entity=booking</code>), so legacy voice-note audio uploads may
+        remain (see the deferred-work ledger); no Java code in the booking module itself touches <code>filestorage</code>.</li>
       <li><a href="../admin/index.html">Admin</a> — <code>GdprExportService</code>/<code>GdprErasureService</code> use
         <code>FileStorageService.storeBytes</code>/<code>signedDownloadUrl</code>/<code>deleteRawBytes</code> to
         store, share, and clean up generated GDPR export ZIPs.</li>
