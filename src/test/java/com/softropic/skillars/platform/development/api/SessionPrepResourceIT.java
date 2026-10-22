@@ -292,6 +292,156 @@ class SessionPrepResourceIT extends AbstractIntegrationTest {
         assertThat(response.getBody().get("playerRequest")).isNull();
     }
 
+    // ---- skillars-12-6: plan note, days-since, neglected names, feed-forward suggestion, CONFIRMED ----
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> getPrepBody(UUID bookingId) {
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            prepUrl(bookingId), HttpMethod.GET, null, authenticatedHeaders(loginAndGetCookies(COACH_EMAIL)), Map.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return response.getBody();
+    }
+
+    private UUID seedBooking(long playerId, String name, String status) {
+        return seedBooking(playerId, name, status, 0);
+    }
+
+    /** {@code slotOffsetHours} keeps two bookings of the same coach clear of excl_bkg_coach_slot_overlap. */
+    private UUID seedBooking(long playerId, String name, String status, int slotOffsetHours) {
+        UUID[] holder = new UUID[1];
+        transactionTemplate.execute(txStatus -> {
+            insertPlayer(playerId, name);
+            holder[0] = insertBooking(coachProfileId, playerId, status, Instant.now().plus(slotOffsetHours, ChronoUnit.HOURS));
+            return null;
+        });
+        return holder[0];
+    }
+
+    /** G6: prep has no status gate, so a CONFIRMED booking returns a full response. */
+    @Test
+    void getPrep_confirmedBooking_returns200WithNewFieldsAtDefaults() {
+        UUID bookingId = seedBooking(9800000031L, "Confirmed Player", "CONFIRMED");
+
+        Map<String, Object> body = getPrepBody(bookingId);
+
+        assertThat(body.get("coachPlanNote")).isNull();
+        assertThat(body.get("coachPlanNoteEditable")).isEqualTo(true);
+        assertThat(body.get("daysSinceLastSession")).isNull();
+        assertThat((List<?>) body.get("openNeglectedSkillCodes")).isEmpty();
+        assertThat(body.get("suggestedWhatsNext")).isNull();
+        assertThat(body.get("suggestedWhatsNextSessionDate")).isNull();
+    }
+
+    @Test
+    void getPrep_bookingHasCoachPlanNote_roundTripsAndIsEditableOnlyInEditableStatus() {
+        UUID confirmed = seedBooking(9800000032L, "Noted Player", "CONFIRMED");
+        UUID inProgress = seedBooking(9800000033L, "Started Player", "IN_PROGRESS", 5);
+        transactionTemplate.execute(txStatus -> {
+            jdbcTemplate.update("UPDATE booking.bookings SET coach_plan_note = ? WHERE id IN (?, ?)",
+                "Work on weak foot", confirmed, inProgress);
+            return null;
+        });
+
+        Map<String, Object> editable = getPrepBody(confirmed);
+        Map<String, Object> notEditable = getPrepBody(inProgress);
+
+        assertThat(editable.get("coachPlanNote")).isEqualTo("Work on weak foot");
+        assertThat(editable.get("coachPlanNoteEditable")).isEqualTo(true);
+        assertThat(notEditable.get("coachPlanNote")).isEqualTo("Work on weak foot");
+        assertThat(notEditable.get("coachPlanNoteEditable")).isEqualTo(false);
+    }
+
+    @Test
+    void getPrep_attendedSessionTwoDaysAgo_exposesDaysSinceLastSession() {
+        long playerId = 9800000034L;
+        UUID bookingId = seedBooking(playerId, "Recent Player", "CONFIRMED");
+        transactionTemplate.execute(txStatus -> {
+            insertSessionCompletedEventWithRecap(playerId, coachProfileId, "drills", "shooting",
+                Instant.now().minus(53, ChronoUnit.HOURS));
+            return null;
+        });
+
+        Map<String, Object> body = getPrepBody(bookingId);
+
+        // Long fields are serialised as JSON strings project-wide (like playerId).
+        assertThat(Long.parseLong(String.valueOf(body.get("daysSinceLastSession")))).isEqualTo(2L);
+    }
+
+    @Test
+    void getPrep_openNeglectedFlags_returnedByNameSortedAndCountKept() {
+        long playerId = 9800000035L;
+        UUID bookingId = seedBooking(playerId, "Neglect Player", "CONFIRMED");
+        transactionTemplate.execute(txStatus -> {
+            insertNeglectedSkillFlag(playerId, "SHO");
+            insertNeglectedSkillFlag(playerId, "PAS");
+            return null;
+        });
+
+        Map<String, Object> body = getPrepBody(bookingId);
+
+        assertThat((List<String>) body.get("openNeglectedSkillCodes")).containsExactly("PAS", "SHO");
+        assertThat(((Number) body.get("openNeglectedSkillCount")).intValue()).isEqualTo(2);
+    }
+
+    @Test
+    void getPrep_latestSessionHasNoWhatsNext_suggestionFallsBackToOlderSession() {
+        long playerId = 9800000036L;
+        UUID bookingId = seedBooking(playerId, "Feed Forward Player", "CONFIRMED");
+        Instant older = Instant.now().minus(20, ChronoUnit.DAYS);
+        transactionTemplate.execute(txStatus -> {
+            insertSessionCompletedEventWithRecap(playerId, coachProfileId, "old work", "Work on first touch", older);
+            // Newest session: attended, but whatsNext is blank.
+            insertSessionCompletedEventWithRecap(playerId, coachProfileId, "new work", "  ",
+                Instant.now().minus(3, ChronoUnit.DAYS));
+            return null;
+        });
+
+        Map<String, Object> body = getPrepBody(bookingId);
+
+        assertThat(body.get("suggestedWhatsNext")).isEqualTo("Work on first touch");
+        assertThat(body.get("suggestedWhatsNextSessionDate")).isNotNull();
+    }
+
+    @Test
+    void getPrep_suggestionIgnoresUnattendedRecapAndOtherCoachesAndOwnBooking() {
+        long playerId = 9800000037L;
+        UUID bookingId = seedBooking(playerId, "Filtered Player", "CONFIRMED");
+        transactionTemplate.execute(txStatus -> {
+            // Another coach's attended session with this player: must not leak into this coach's prep.
+            insertSessionCompletedEventWithRecap(playerId, otherCoachProfileId, "x", "OTHER COACH NEXT",
+                Instant.now().minus(5, ChronoUnit.DAYS));
+            // An event belonging to the booking being prepped itself.
+            insertSessionCompletedEventWithRecapForBooking(bookingId, playerId, coachProfileId, "y", "OWN BOOKING NEXT",
+                Instant.now().minus(4, ChronoUnit.DAYS));
+            // Unattended recap: metadata carries this coach but the coach_id column is null.
+            jdbcTemplate.update(
+                "INSERT INTO development.player_timeline_events " +
+                "(id, player_id, event_type, reference_module, occurred_at, metadata) " +
+                "VALUES (gen_random_uuid(), ?, 'SESSION_COMPLETED', 'booking', ?, ?::jsonb)",
+                playerId, Timestamp.from(Instant.now().minus(2, ChronoUnit.DAYS)),
+                String.format("{\"coachId\":\"%s\",\"whatsNext\":\"UNATTENDED NEXT\"}", coachProfileId));
+            return null;
+        });
+
+        assertThat(getPrepBody(bookingId).get("suggestedWhatsNext")).isNull();
+    }
+
+    @Test
+    void getPrep_suggestionIsSanitisedAndCappedAt500() {
+        long playerId = 9800000038L;
+        UUID bookingId = seedBooking(playerId, "Sanitised Player", "CONFIRMED");
+        transactionTemplate.execute(txStatus -> {
+            insertSessionCompletedEventWithRecap(playerId, coachProfileId, "w", "call test@example.com now",
+                Instant.now().minus(2, ChronoUnit.DAYS));
+            return null;
+        });
+
+        String suggestion = (String) getPrepBody(bookingId).get("suggestedWhatsNext");
+
+        assertThat(suggestion).doesNotContain("test@example.com").contains("[contact details removed]");
+        assertThat(suggestion.length()).isLessThanOrEqualTo(500);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private String prepUrl(UUID bookingId) {

@@ -1,180 +1,157 @@
-# Story Review — skillars-deferred-158-gdpr-booking-erasure-label-completeness-and-i18n-spec-guard-hardening
+# Story Review — skillars-12-6-session-prep-completeness-and-feed-forward
 
 - **Audit date:** 2026-10-22
-- **Real HEAD (checked at audit start):** `7121ace5` — feat(admin,booking): booking-erasure reason codes, availability-block scrub and test-tooling hygiene (skillars-deferred-157) (#283)
-- Every citation was checked against this HEAD, not against the SHA the story names. The story's own claim ("`master` @ `7121ace5`") happens to match, but it was not trusted.
-- **Method:**
-  - Four parallel read-only layers: citations, ledger/precedent, mechanistic, corner-case.
-  - Then a skeptical second pass by the orchestrator (Step 4b), re-reading the deciding lines for every surviving finding.
-  - Layers 3 and 4 also ran real code: the current blanking functions and `vue/compiler-sfc` 3.5.29 under Node and vitest, and a full scan of all 171 scanned files. Scratch only; no repo files touched.
-
-Files referenced below:
-- `I18N` = `src/frontend/src/i18n/__tests__/i18nTemplateKeyResolutionSpec.js`
-- `SVC` = `src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java`
-- `TEST` = `src/test/java/com/softropic/skillars/platform/admin/service/GdprErasureServiceTest.java`
-
----
+- **Real HEAD:** `4cea321f feat(admin,frontend): parser-backed i18n comment blanking and GDPR booking-erasure label coverage (skillars-deferred-158) (#284)`
+- The story says "Citations verified against master @ 4cea321f". That matches the real HEAD, but several line numbers are still wrong (see §1). Every citation below was checked against the real HEAD, not against the story's own description of itself. No source files differ from HEAD; the only local changes are `sprint-status.yaml` and the untracked story file.
 
 ## 1. Citation verification
 
-| # | Story citation | Verdict | Evidence / corrected location |
-|---|---|---|---|
-| C1 | `I18N:174-205`: `blankCommentSpans`, `BLOCK_COMMENT_RE`, `HTML_COMMENT_RE`, `SFC_CODE_BLOCK_RE` | MATCH | Comment block at :174. Regexes at :185-187. `function blankCommentSpans(content, file)` at :193-205. |
-| C2 | `I18N:207-211` `stripLineComment` | MATCH | `:210 return line.replace(/(^\|\s)\/\/.*$/, '')` |
-| C3 | `I18N:350-357` stale-entry `it(...)` | MATCH | `:355 const stale = …filter((at) => !detectedSites.has(at))`; `:356 expect(stale).toEqual([])` |
-| C4 | `TEST` PLAYER timeout `:750`, PLAYER contended `:766`, PARENT timeout `~:802` | MATCH (±2 lines) | PLAYER timeout method at :749: PLFE from `bookingRepository`. PLAYER contended at :766: `CannotAcquireLockException` from `sessionCompletionDataRepository` (stub :770). PARENT timeout at :800: PLFE from `bookingRepository`. There is no PARENT contended test. |
-| C5 | `SVC:1024-1036` PARENT catch | MATCH | :1024 `catch (BookingSchemaLockException e)`. :1028 `e.contended ? CHILD_BOOKING_CONTENDED : CHILD_BOOKING_LOCK_TIMEOUT`. The block ends ~:1034, `finally` at :1035. |
-| C6 | `SVC:~1496-1509` booking inner try | MATCH | `try` :1495, SCD stmt :1497, bookings stmt :1503. `CannotAcquireLockException` → `(e, true)` :1504-1506. PLFE → `(e, false)` :1507-1509. |
-| C7 | `SVC:~1663-1690` `BookingSchemaLockException` Javadoc | MATCH (range slightly off) | Javadoc :1663-1675, class :1676. The file ends at :1684, so "~1690" overshoots. |
-| C8 | `SVC:~560-680` PLAYER outer catches and the `UNCLASSIFIED_FAILURE` path | Location MATCH; the premise is wrong (see §5 F1) | Catches at :600/:614/:638/:649. There is no catch-all. `UNCLASSIFIED_FAILURE` is raised only in `markFailed` (:773-776), which `erase()` never calls. |
-| C9 | `I18N:307-326` `accept="video/*"` fixture | MATCH | :307 `it('comment blanking is region-scoped…')`; :310 fixture line |
-| C10 | `I18N:1-37` module header | MATCH (range slightly off) | :18 "a pragmatic regex-based static scan (not a real parser)". The header is :1-31; imports start at :33. |
-| C11 | `MIN_LITERAL_CALL_SITES = 500`, `blankPreservingNewlines`, `DYNAMIC_KEY_CALL_SITES` file:line keys, `toHaveLength` style | MATCH | :165, :189, :46-155 (26 entries), :321 |
-| C12 | `src/frontend/test/vitest/collectKeyPaths.js`, `localeKeyParitySpec.js` | MATCH | Both exist. |
-| C13 | `raiseErasureAlert` Javadoc and `AdminQueueService.buildSummary` reason lists | MATCH | `SVC:1058-1073`; `AdminQueueService.java:173-190` (`buildSummary` at :125) |
+| Citation (story) | Verdict | Evidence / corrected location |
+|---|---|---|
+| `BookingService.java:912-918` (recordNoShowPlayer ownership) | MATCH | `findByUserId(...).orElseThrow(... "Coach profile not found")`; `!Objects.equals(booking.getCoachId(), coach.getId())` → `MISSING_RIGHTS` |
+| `BookingService.java:144-145` (`PLAYER_REQUEST_EDITABLE_STATUSES`) | MATCH | `Set.of(CONFIRMED.name(), UPCOMING.name())` |
+| `BookingService.java:782-791` (editable guard) | MATCH | `rejectIfNotEditablePlayerRequest`; uses **bare `Instant.now()`** (see §5 F3) |
+| `BookingService.java:1060-1066` (`sanitizeAndTruncate`) | DRIFTED (small) | 1060-1067 is the comment; the method is at **1068-1072** |
+| `BookingService.java:756-760` (optimistic-lock catch) | MATCH | Location is correct; the behaviour is not what the story assumes (§3 M6) |
+| `BookingService.java:744-762` (`setPlayerRequest`) | MATCH | |
+| `BookingService.java:1150-1173` (`toResponse`) | MATCH | The method runs 1152-1173 |
+| `GdprExportService:73`, `:117-140` | MATCH | `addEntry(zos,"bookings.json",mapper,buildBookings(...))`; `buildBookings` 117-137 returns `List<Booking>` |
+| `BookingRepository.java:326-341` | MATCH | The comment is a `//` block, not Javadoc (AC5 calls it "Javadoc") |
+| `GdprErasureService:470-505`, `:519-526`, `:519`, `:1516` | MATCH | Group tx at 472-501; switch at 519-525; caller at 1516 |
+| `GdprErasureService:528` (log.warn text) | DRIFTED (small) | The `log.warn` starts at **526** |
+| `AdminQueueService.java:175-190` | MATCH | The list runs 173-188 |
+| `booking.api.js:92-93` | MATCH | |
+| `en-US/index.js:254`, `:255-264` | MATCH | |
+| `CoachRosterService.java:81` (ClockProvider) | **DRIFTED** | Actually at **:73** (`Instant now = Instant.now(ClockProvider.getClock())`); `:81` is `configService.getBoundedLong(` |
+| `CoachRosterService.java:138-152` | MATCH | |
+| `CoachRosterService.java:147` (`hasUpcomingBooking`) | DRIFTED (off by 1) | Actually at **:146** |
+| `MyPlayersPage.vue:87-93` (caption) | **DRIFTED** | 87-93 is `onMounted`; `lastSessionLabel` is at **104-109** |
+| `SessionPrepCard.vue:100-106` (`lastSessionLabel`) | **DRIFTED** | Actually at **107-112** |
+| `SessionPrepCard.vue:109-111` (`skillDisplayName`) | **DRIFTED** | Actually at **118-120**; the raw-code fallback is confirmed |
+| `NeglectedSkillFlagRepository.java:12` | DRIFTED (off by 1) | Actually at **:11** |
+| `PlayerTimelineRepository.java:66-73` | MATCH on location; **substance wrong** | §3 M12 |
+| `PlayerTimelineRepository.java:70-73` (`?` parser comment) | **DRIFTED** | Actually at **62-65**; 70-73 is the ORDER BY / signature |
+| `sessionBuilder.store.js:117-150` (`fetchExistingPlan`) | **DRIFTED** | Actually at **111-144** |
+| `sessionBuilder.store.js:57-92` (`initForBooking`) | **DRIFTED** | Actually at **73-109** |
+| `sessionBuilder.store.js:155-165` (`savePlan` payload) | DRIFTED (small) | Actually at **152-161** |
+| `CoachCommandCenterPage.vue:121-130`, `:754-758` | MATCH | |
+| `CoachCommandCenterPage.vue:155` (cancel idiom) | DRIFTED (off by 2) | Actually at **:153** |
+| `CoachCommandCenterPageSessionPrepSpec.js:74-81` | MATCH | |
+| `SessionPlanService:240-250` | MATCH | 242-252 |
+| `SessionPrepService:~92`, `:48-52` | MATCH | Constructor call at 82-89 |
+| V163 shape; V161 index columns; V164 free | MATCH | The highest migration is V163 |
+| SessionPrepResponse has 7 fields; RosterEntryResponse has 6 fields | MATCH | Each record has exactly one constructor call site, and no test builds either |
 
 ## 2. Ledger & precedent attribution
 
-Sources checked for each item: `deferred-work.md`, nearby code comments/Javadoc, and `git log -S` / `git blame`. Story files were checked where named.
-
-| # | Claim | Sources and findings | Verdict |
-|---|---|---|---|
-| L1 | The deferred-157 code-review section is the last in the ledger, with 4 bullets | Heading at `deferred-work.md:3434`, the last `##`. It has 4 top-level bullets, none closed. Added by 7121ace5. It mirrors the deferred-157 story's Review Findings at :262-266. | VERIFIED |
-| L2 | M1–M4 wording | All four bold lead phrases match verbatim. | VERIFIED |
-| L3 | M2 test "landed with deferred-157"; bullet "written against a pre-patch tree" | `git blame I18N:350-357` and `git log -S` both give **56803337 (skillars-deferred-156, #282)**. The deferred-156 story (:237) already describes the stale check. deferred-157's own AC11(a) (:198) cites "the inverse check". | **PARTIAL.** "Already implemented" is TRUE. The attribution is WRONG: the test came from deferred-156. The bullet was simply mistaken, not written against a pre-patch tree. Re-verified by orchestrator via `git blame`. |
-| L4 | "Unknown Player" `Decided 2026-10-20: accept`; PDF glyph `DECIDED 2026-10-21: out of scope` | `deferred-work.md:3430`, `:3432` | VERIFIED |
-| L5 | deferred-143 / deferred-154 / `main."user"` / `[deferred-19]` exclusions | `:3219-3225`, `:3262`, `:2264`/`:2418`, `:3231` | VERIFIED. "Watch-only" is a paraphrase; there is no formal DECIDED tag. |
-| L6 | deferred-157 second-pass facts (QueryTimeoutException → `markFailed`/`UNCLASSIFIED_FAILURE`; commit-time PLFE reads as `CHILD_CONTENDED`) | deferred-157 story :273; ledger :3438-3441 | VERIFIED as an attribution. The *content* is only partly right for PARENT; see §5 F5. |
-| L7a | "deferred-157 AC1 fixed mislabelling in the other direction" | deferred-157 AC1 (:54-60) fixed a wrong-*schema* label. The risk here is a wrong-*cause* label. | PARTIAL: loose wording, not false |
-| L7b | "deferred-157 F3: every reason-code prose list must stay complete" | deferred-157 story :82, :427 | VERIFIED |
-| L7c | "deferred-157 AC10 struck through stale brainstorm lines" | The strikes exist (brainstorm :169, :213, :214), but they came from the second-pass review patch under AC10, not from AC10's text. | PARTIAL, harmless |
-| L7d | `collectKeyPaths.js` moved by deferred-157 | 7121ace5 diffstat; deferred-157 AC8 | VERIFIED |
-| L8 | Baseline 1571 / 26 / 0 | deferred-157 story :380-382; `I18N:158-163`. Reproduced by running the scan at HEAD. | VERIFIED |
-| L9 | Brainstorm doc exhausted | Priorities 1–4/4b → 12-1…12-5; Converge #14 → 12-3; #16 and #17 → deferred-155 | VERIFIED. Pattern #5/#6 → 12-3 is inferred via Pattern #9 and is not written in the doc. |
-| L10 | No local `mvn verify`; the Prettier gate is in `.github/actions/` | Memory file; `.github/actions/frontend-quality/action.yml:33-36`; `ci.yml` `build-and-push needs: [test, frontend-quality]` | VERIFIED |
+| Claim | Sources checked | Verdict |
+|---|---|---|
+| deferred-157 AC4 = AVAILABILITY_BLOCK group template | Story file, `deferred-work.md:3417`, `GdprErasureService:260-267,493-524` comments, commit `7121ace5` | CONFIRMED. Strictly it is AC3+AC4, and `GdprErasureIT` also references the reason codes |
+| deferred-156: `sanitizeAndTruncate`, `PlayerRequestResponse`, notes GDPR | Ledger `:3334,:3396`, code comments, `git log -S` → `56803337` | CONFIRMED |
+| deferred-158 "hardened GdprErasureService's booking statements" | `git show 4cea321f` | PARTIAL. The `GdprErasureService` change is **comment-only**; the hardening is in the tests. The dynamic-key exception list predates it (deferred-157 AC11a) |
+| deferred-156 AC5: no `playerName` in the URL | Story, `MyPlayersPage.vue:111` comment, commit | CONFIRMED |
+| deferred-152 AC6: roster name source and filtering | Story, `CoachRosterService:108` comment, `ec70ef4c` | CONFIRMED |
+| 12-3 AC3 "recap only from the signal's source event" | 12-3 story and its code review, `CoachPlayerLastSessionResolver.isRecapAttributable` | CONFIRMED in intent. The paraphrase is the pre-review wording (now booking-identity correlation); harmless because AC12 says not to touch the pair |
+| 12-5 is the latest Epic 12 story (`c7132064`) | git log, sprint-status | CONFIRMED |
+| V163 `playerRequest` precedent | V163 header, `890f5c67` | CONFIRMED. The attribution belongs to deferred-155 |
+| Epic gap map G1-G6 → 12.6; G13/G18/G23 owners; owner decisions | `skillars-epics.md:3471-3542` | CONFIRMED, with notes below |
+| G2/G3 "caption and badge derive from the same signal" | Epic text and story AC9 | PARTIAL. The story makes the caption share the badge's **inputs**, not one signal. That removes the reported contradiction but is weaker than the epic's wording |
+| G5 "applied to the session focus" | Epic text and AC13 | **CONTRADICTS the epic**, openly flagged as "author's call, owner veto". Needs explicit owner sign-off |
+| Brainstorm Pattern #2/#5/#9, Priority 3 | Brainstorm file `:68,:80,:112,:238` | CONFIRMED |
+| `NativeModifyingVersionAuditTest` covers JPQL bulk updates; `MigrationConventionLintTest` runs in the test phase | Test sources, `migration-conventions.md:12` | CONFIRMED |
 
 ## 3. Mechanistic claims
 
-| # | Claim | Deciding evidence | Verdict |
-|---|---|---|---|
-| K1 | Booking inner try maps `CannotAcquireLockException` → `BookingSchemaLockException(contended)` and PLFE → `(timeout)` | `SVC:1504-1509`. Catch order is correct (CALE is a PLFE subclass, confirmed via `javap` on Spring 6.2.19). Both statements are `booking`-schema. The GdprErasureIT real 55P03 test pins `CHILD_BOOKING_LOCK_TIMEOUT`. | CORRECT. The mapping is not backwards. |
-| K2 | A non-lock `DataAccessException` (`QueryTimeoutException`) "escapes to `markFailed` as `UNCLASSIFIED_FAILURE` and rolls the whole erasure back" | `QueryTimeoutException extends TransientDataAccessException`, not a PLFE, so no catch in `SVC` matches it. It propagates out of `erase()` (:314-327 has only `try/finally`). `markFailed` is called only by `GdprEventListener:39` and `retryFailedErasures:868-869`. | **PARTIAL.** The propagation is right. "Whole erasure rolls back" is FALSE for PARENT (earlier children's REQUIRES_NEW work has committed, `SVC:1277-1287`). Whether `UNCLASSIFIED_FAILURE` is the label that surfaces is not guaranteed (F5). |
-| K3 | Both booking statements are immediate bulk UPDATEs; the tombstone is flushed explicitly | `BookingRepository:338-341` and `SessionCompletionDataRepository:41-43` are `@Modifying @Query UPDATE`. `entityManager.flush()` at `SVC:1538`. | CORRECT |
-| K4 | App sets `lock_timeout`, not `statement_timeout` | `setStatementLockTimeout` (`SVC:1554-1557`) uses `set_config('lock_timeout', ?, true)`. `statement_timeout` appears in `src/main` only in a Javadoc (`PessimisticLockRetryer.java:62`). | CORRECT |
-| K5 | `BookingSchemaLockException` is not a PLFE, so it passes through the outer catches and the `requiresNewTemplate` boundary | `SVC:1676 extends RuntimeException` | CORRECT |
-| K6 | The PARENT catch raises one alert, marks FAILED, and does not save the tombstone | Production: yes (:1024-1034, :699; tombstone save :1530 is after the inner try). The existing PARENT timeout test (:800-818) asserts one alert and FAILED but **not** tombstone-not-saved. | CORRECT for production. AC4's "mirror" test must add an assertion the template lacks. |
-| K7 | A commit-time PLFE would be labelled `CHILD_CONTENDED` | It lands at the call-site catch `DeleteStatementLockTimeoutException \| PLFE` (:614, :991) and is not a DSLTE. | CORRECT (near-unreachable per K3) |
-| K8 | The regex heuristic can blank live calls via `'/*'` in a string, `'</script>'` in a string, or `'<!--'` in an attribute | Ran the current `blankCommentSpans`. `'/*'` and `'<!--'` blank live calls **only if a genuine closing delimiter follows later**. `'</script>'` ends the script region early, so a later real `/* */` stays *unblanked*. That is a loud false positive, not blindness. | PARTIAL (see F2, F3) |
-| K9 | `vue/compiler-sfc` exports `parse` and `babelParse`, and babelParse ignores `"/*"` in strings | vue 3.5.29. Re-run by orchestrator: `.comments` returns only the real block and line comments. `descriptor.template.ast` keeps comment nodes (type 3, absolute offsets), **except under `NODE_ENV=production`** (re-run by orchestrator: 1 → 0 nodes). Script comment offsets are block-relative. | CORRECT, with caveats (F4) |
-| K10 | No vitest alias shadows `vue` | `vitest.config.mjs` aliases only `#q-app/wrappers` | CORRECT |
-| K11 | (Implicit) dropping `stripLineComment` is safe | Parser-backed blanking gives 1571/26/0 with or without `stripLineComment`. Its only live effect today is `CoachProfileBuilderPlaceholderPage.vue:107` (a `//` comment containing `te(key) ? t(key)`). It also currently strips `// …` in templates, which is semantically wrong there. | CORRECT; removing it is safe |
+- **M1 — GDPR export serialises the `Booking` entity, and `@JsonIgnore` closes the leak.** TRUE. `GdprExportService:67` uses `objectMapper.copy()` of the Spring mapper (`CommonConfig:33-38`): no Hibernate module, no mixins, so annotations are honoured. `Booking` has no `@JsonIgnore` today. See §5 F7 for the test caveat.
+- **M2 — `toResponse` is positional, and no other non-coach path exposes entity fields.** TRUE. `getPlayerRequest()` has 3 call sites (`SessionPrepService:89`, `BookingService:761,1171`). No controller returns `Booking`. `BookingDuplicationService:126-134` copies fields one by one and does not copy notes or requests.
+- **M3 — `recordNoShowPlayer` ownership shape; `setPlayerRequest` uses the parentId check.** TRUE.
+- **M4 — Editable statuses, Start moves UPCOMING → IN_PROGRESS, both errors return 403.** TRUE. `BookingStateMachine:38-52` allows START only from UPCOMING. `OperationNotAllowedException` → `ApiAdvice:329-339` is a 403 unconditionally. The guard uses bare `Instant.now()` (`:787`).
+- **M6 — "Same `OptimisticLockingFailureException → CONCURRENT_MODIFICATION` mapping … a 409 here is a real, reachable outcome."** **FALSE as stated.** Re-verified:
+  - `getBookingOrThrow` is `findById` (`:731-733`), so the entity is managed. `bookingRepository.save(booking)` inside the try is a merge with no flush.
+  - The version-checked UPDATE therefore runs at commit, outside the try. It surfaces as `ObjectOptimisticLockingFailureException` → `ApiAdvice:656-662` → **409 `generic.conflict`**.
+  - If the catch ever did fire, it would return **403** with errorKey `booking.concurrentModification`. `BookingError.java:24-36` says so explicitly.
+  - The race itself is real: `BookingReminderScheduler` moves CONFIRMED→UPCOMING, and the parent's `setPlayerRequest` writes the same row.
+- **M7 — `@Version`, no `@DynamicUpdate`, the version-bump comment, "never written by the coach".** TRUE.
+- **M8 — Coach scrub is one REQUIRES_NEW tx with one transaction-scoped lock_timeout.** TRUE. Re-verified at `:218-236` and `:464-470`. The per-group constants are reason-code **labels only**, and any group failure rolls back all of them. Adding a 5th group (`BOOKING_PLAN_NOTE`, which locks booking rows) adds failure surface that rolls back the SCD/TIMELINE/REPORT/AVAILABILITY_BLOCK scrubs too. That is consistent with the documented design and acceptable, but the AC should say it.
+- **M9 — `SessionPrepService` is readOnly, checks ownership, has no status gate; `findByPlayerIdAndResolvedAtIsNull` exists; ID spaces match.** TRUE. The partial unique index `(player_id, skill_code) WHERE resolved_at IS NULL` makes de-duplication redundant (harmless).
+- **M10 — Roster uses ClockProvider; dormancy is booking-time based; projection carries `MAX(requestedStartTime)` only.** TRUE (line drift noted in §1).
+- **M11 — `lastSessionDate` can be after `now`, which justifies the clamp.** TRUE. `TimelineEventListener:111` uses bare `Instant.now()`, `SluCalculationService` runs async, and fixed-clock tests make this real.
+- **M12 — "same shape and rationale as `findSessionNotesForReport` … filter on the `coach_id` column".** **FALSE / backwards.** Re-verified at `PlayerTimelineRepository:47-53,67`. The precedent filters `metadata->>'coachId'` *precisely because* the column is attendance-gated. Choosing the column for this new query is a valid deliberate choice (it excludes unattended sessions and uses the V161 index), but the precedent claim is inverted. A developer copying the precedent would get the opposite filter.
+- **M13 — `developmentFocus` is a list of `@ValidFocusCode` skill codes.** TRUE (`UpdateSessionPlanRequest:14`).
+- **M14 — `isBookingPlannable` accepts CONFIRMED only; UPCOMING without a plan → `SESSION_BOOKING_NOT_OWNED`.** TRUE.
+- **M15 — "the prep fetch is independent of `checkSessionBuilderGate`".** PARTIAL. `checkSessionBuilderGate` is a **backend** method; there is no such call in `src/frontend`. The frontend signal is `isGated`, which is only known after `fetchExistingPlan` resolves (`SessionBuilderPage.vue:299-304`).
+- **M16 — The `$t` stub echoes keys; i18n spec files exist; pluralisation works.** TRUE.
+- **M17 — ID spaces.** TRUE.
+- **M18 — "Spring Boot 3.5.11".** **FALSE.** `pom.xml:8` is **3.5.16**. Java 17 and commons-lang3 3.21.0 are correct.
 
 ## 4. Corner cases / false assumptions / missed flows (survived Step 4b)
 
-### F1 — HIGH: AC5(ii)'s expected assertion cannot be produced by `erase()`
+**F1 (MED) — AC2 / AC12 / AC15: the 409 / CONCURRENT_MODIFICATION contract is wrong.** See M6. Evidence: `BookingService.java:731-733,756-760`, `ApiAdvice.java:329-339,656-662`, `BookingError.java:24-36`.
+- *Fix:*
+  - Either call `saveAndFlush` inside the try, so the catch actually fires (→ 403 + `booking.concurrentModification`), or accept the commit-time 409 `generic.conflict`.
+  - State which one, and have the frontend handle both (precedent: `ParentBookingsPage.vue` branches on `errorKey`).
+  - The `CoachPlanNoteResourceIT` "409 concurrent modification" case is not reproducible with sequential HTTP calls (the request carries no version). Move it to a `BookingServiceTest` unit case, or an IT with truly interleaved transactions. `PlayerRequestResourceIT` has no 409 test either.
 
-AC5(ii) says "Option A: expect `UNCLASSIFIED_FAILURE` and `FAILED`" for a non-lock `DataAccessException`.
+**F2 (MED) — AC2 / AC3: the "same two predicates" cannot be shared as specified.** `PLAYER_REQUEST_EDITABLE_STATUSES` and the guard are `private` in `booking.service.BookingService`. `SessionPrepService` (`development`) imports only `booking.repo.*`; nothing in `development` imports `booking.service`.
+- "Rename it, or share one private helper" does not make it reachable for `coachPlanNoteEditable`, which pushes the developer into the duplicate status list the story forbids.
+- *Fix:* a public predicate on the entity (e.g. `Booking.isPrepNoteEditable(Instant now)`), used by both services.
 
-**What the code does:**
-- In a `GdprErasureServiceTest` that calls `service.erase(...)`, the `QueryTimeoutException` is **thrown out of `erase()`**. No alert is raised, and the request status stays `PROCESSING`.
-- `UNCLASSIFIED_FAILURE` is only added by `markFailed` (`SVC:773-776`). Only `GdprEventListener.java:39` and `retryFailedErasures` (`SVC:868-869`) call it.
-- If the dev reuses `stubPlayerErasurePreamble`, its strict `when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus…)` stub (`TEST:741-743`, `MockitoExtension` at :90) goes unused. That raises `UnnecessaryStubbingException`.
+**F3 (MED) — AC2 vs AC8: two clocks.** The write guard uses bare `Instant.now()` (`BookingService:787`). AC8 mandates `ClockProvider` in `SessionPrepService`. With a fixed `ClockProvider` in tests, `coachPlanNoteEditable` can be `true` while the write is rejected (or the reverse).
+- *Fix:* pass `Instant.now(ClockProvider.getClock())` into the shared predicate from F2.
+- Changing the existing `setPlayerRequest` guard to ClockProvider needs a check that existing ITs don't rely on the wall clock.
 
-**Mitigation:** the story does say "check what the real PLAYER-branch path does before asserting, do not assume". The expected outcome it names is still wrong.
+**F4 (MED) — AC13: prep fetch ordering vs `initForBooking` reset.** `fetchExistingPlan` calls `initForBooking(bId)` at entry (`store:112`) **and again on 404** (`:131-132`), and that is the common "no plan yet" path. If `prep` is reset in `initForBooking` (as AC13 asks) and `fetchPrep` runs concurrently or first, the prep is wiped. `isGated` is also only known after `fetchExistingPlan`.
+- *Fix:* specify `await fetchExistingPlan(bookingId); if (!isGated) await fetchPrep(bookingId)` in `SessionBuilderPage.onMounted`, and add a spec for the 404-then-prep path.
 
-**Fix:** pin (a) `assertThatThrownBy(() -> service.erase(...)).isInstanceOf(QueryTimeoutException.class)`, plus no `adminAlertRepository.saveAndFlush`, no tombstone save, and no downstream steps. The `markFailed` → `UNCLASSIFIED_FAILURE` half is already pinned by `markFailed_requestPresent_noExistingAlert_savesUnclassifiedFailureAlert` (`TEST:443`). Alternatively, (b) drive it end-to-end through `retryFailedErasures`.
+**F5 (MED) — AC13: the suggestion card ignores editability and unsaved panel edits.**
+- The Apply buttons are not gated on `prep.coachPlanNoteEditable`. The builder is reachable for IN_PROGRESS/COMPLETED/past-end bookings, and `getPrep` has no status gate, so Apply would get a 403.
+- Apply builds from the *saved* `prep.coachPlanNote`. If the coach has unsaved text in the `CoachPlanNotePanel` on the same page, Apply silently discards it, which breaks the AC's own "never silently overwrite" rule.
+- *Fix:* hide or disable Apply when the note is not editable. Apply into the panel draft, or disable Apply while the panel is dirty.
 
-### F2 — HIGH: AC1's `'</script>' inside a JS string literal` fixture is impossible in `.vue` and vacuous in `.js`
+**F6 (LOW-MED) — AC13: sanitisation makes "already contains" and the 500-char check unreliable.**
+- The recap `whatsNext` is stored raw (`BookingCompletionService:163`, `WrapUpRequest:22` only `@NotBlank @Size(max=500)`).
+- The plan-note write runs `ContactDetailSanitizer`, which replaces emails and phone-like runs with `"[contact details removed]"`. If a suggestion contains contact details, the stored note never contains the raw suggestion, so "Add to plan note" reappears forever and re-appends.
+- Redaction can also lengthen the text past the client's 500 check, and then the server silently truncates.
+- This is rare (coach-authored text), but real.
+- *Fix:* sanitise `suggestedWhatsNext` server-side before returning it. Always render the note as the server returned it.
 
-- **In `.vue`:** the real SFC parser also ends `<script>` at the first `</script>`. Re-run by orchestrator: `parse()` returns `errors: ['Invalid end tag.']`, script content is `"\nconst s='"`, and `babelParse` throws "Unterminated string constant". Under AC2's fail-loudly policy the fixture *throws*. It cannot "leave live t() calls scannable". Vue itself cannot compile such a file, so it is not a real-world hazard.
-- **In `.js`:** the old code never treats `</script>` specially (`I18N:194-196`), so the fixture passes on old and new code alike and proves nothing.
+**F7 (LOW) — AC12: precedent inverted.** See M12. *Fix:* reword to "unlike `findSessionNotesForReport` (which filters `metadata->>'coachId'`), filter on the `coach_id` column, deliberately, because it is attendance-gated."
+- Also consider `reference_id <> :bookingId`. Opening the builder or prep on a booking that already has its own SESSION_COMPLETED event would otherwise "suggest" that same session's `whatsNext`. This is low impact, because completed bookings are mostly outside the prep entry points.
 
-**Fix:** restate it as "an unparseable `.vue` file fails loudly, naming the file" (which also directly tests the AC2 policy), and drop the "live calls stay scannable" expectation for it.
+**F8 (LOW) — AC4: the export leak test must actually serialise.** `GdprExportServiceTest` is Mockito with `@InjectMocks` and only asserts the `List<Booking>` returned by `buildBookings()` (`:31-56`). A test at that level proves nothing about `@JsonIgnore`.
+- *Fix:* serialise through the real mapper (`objectMapper.copy()` as at `:67`), or generate the zip in an IT, and assert the text is absent.
 
-### F3 — MED: the `/*` and `<!--` fixtures only expose the old bug if a genuine closing delimiter appears later
+**F9 (LOW) — Dev Notes table contradicts AC8.** The `RosterEntryResponse` row says "Expose it [daysSinceLastActivity] + `daysSinceLastSession` + `hasUpcomingBooking`". AC8 says "`daysSinceLastActivity` stays internal". Fix the table.
 
-A `'/*'` string with no later `*/`, or `title="<!--"` with no later `-->`, leaves the live call intact under the *old* code. A fixture written that way passes before and after the change and does not prove the fix.
+**F10 (LOW) — AC5 misses comment updates.** "four groups" wording at `GdprErasureService:218-236`, `:464-467` and the enum comment near `:252-259` also need updating for the 5th group, as well as the `log.warn` at `:526`.
 
-AC1 should require each of these fixtures to contain a later genuine `/* … */` (resp. `<!-- … -->`) in the same input, with a live call between them.
+**F11 (LOW) — AC9 rule 2 copy.** `!hasUpcomingBooking` also covers a latest booking that is COMPLETED-but-unattended, NO_SHOW_* or IN_PROGRESS. For a COMPLETED-unattended booking, "no completed session yet" is literally false. Suggested copy: "Booked, but no attended session yet."
 
-### F4 — MED: AC2's equivalence proof cannot detect the regressions it is meant to catch, and the counts are not printed
+**F12 (LOW) — AC8: `Duration.toDays` is 24h-based, and `lastSessionDate` is processing time.** "today" can mean yesterday evening, and "1 day ago" can cover up to 47h. Quick-complete-timeout and sweeper events stamp later than the session. This is consistent with dormancy (`daysSinceLastActivity ≤ daysSinceLastSession` by construction, so no contradiction), but record it as an accepted imprecision or soften the "today" copy.
 
-- Scanning with **no comment blanking at all** also gives 1571 / 26 / 0. No current file has a translation call inside `/* */` or `<!-- -->`. So a parser implementation that silently blanks nothing (e.g. template comments lost under `NODE_ENV=production`, see K9) still "matches the baseline". Layer 4 ran this scan; the orchestrator did not re-run it.
-- The fixtures are the only real guard. The story should say so explicitly, and should name `parse(src, { templateParseOptions: { comments: true } })` so template comment nodes survive regardless of `NODE_ENV`. CI sets `NODE_ENV: production` only on the ESLint step (`frontend-quality/action.yml:51`), not on vitest, so today's CI risk is low. A dev shell could still hit it.
-- The spec does not log the counts. The dev needs a temporary `console.log` (or equivalent) to record them, and the story doesn't mention this. "Wrapped" is a real bucket (`wrappedCalls`, `I18N:~240, ~275`).
-
-### F5 — MED: Option A's rationale overstates what the operator sees
-
-AC5 says a non-lock exception "escapes to `markFailed` as `UNCLASSIFIED_FAILURE` and rolls the whole erasure back". Two problems:
-
-- **Rollback is per-child for PARENT.** Earlier children's deletes, tombstones and alerts committed in their own REQUIRES_NEW transactions (`SVC:1277-1287`, "tradeoff (a)"). Only the current child and the outer transaction roll back.
-- **Dedup is reason-blind.** `insertErasureAlertIfAbsent` Javadoc (`SVC:~1127-1140`; test `markFailed_priorAlertAlreadyOpenForRequest_doesNotRaiseSecondAlert`, `TEST:469`). Re-read by orchestrator. If an earlier child already raised e.g. `CHILD_VANISHED`/`CHILD_BOOKING_*`, or a previous run left an OPEN alert, `markFailed`'s `UNCLASSIFIED_FAILURE` is suppressed and the operator sees the older reason.
-
-This doesn't change the Option A recommendation. It does mean the AC5(i) code comment must not repeat either claim as stated.
-
-### F6 — MED: AC3's ledger marker would record the wrong history
-
-The stale-entry check landed with **skillars-deferred-156 (56803337)**, not deferred-157 (see L3). The marker and Completion Notes should say: "landed with skillars-deferred-156 (56803337); the deferred-157 review bullet was mistaken when written. deferred-157 AC11(a) itself cites the inverse check." Correct the Source table's M2 row too.
-
-### F7 — LOW-MED: HTML comments at the SFC top level lose coverage
-
-The old code blanks `<!-- -->` anywhere outside script/style, including the SFC top level (by design, per the `I18N:182-183` comment). `descriptor.template.ast` covers only the inside of `<template>`, and the story's regex fallback is also scoped to the template block. There are no instances today. The dev should either handle the top level (e.g. offset-scoped regex outside all descriptor blocks) or state the gap in the header comment.
-
-### F8 — LOW-MED: AC4's "whichever the PLAYER pair does not already cover" is muddled
-
-- The PLAYER tests already exercise both statements: bookings × PLFE and SCD × CALE.
-- The PARENT contended test should stub `bookingRepository.anonymizeNotesAndPlayerRequestByPlayerId(child.getId())` with `CannotAcquireLockException`. That covers bookings × contended for the first time.
-- SCD × lock-timeout remains untested on both branches. Optional, but worth naming.
-- AC4 asks to assert "not save the child's tombstone", which the mirrored PARENT timeout test does not do (K6). Fine to add; just be aware the template lacks it.
-
-### F9 — LOW: scope gaps to state precisely in the new header comment
-
-Neither the old nor the new design covers JS comments inside template expressions (`{{ /* $t('x') */ }}`, `@click="… // …"`). AC1 also doesn't mention `<style>` blocks, which the old code blanked `/* */` inside. No instances exist today. Dropping `stripLineComment` also stops treating `// …` in templates as a comment, which is more correct.
-
-### F10 — LOW: Option B is under-scoped
-
-The `BookingSchemaLockException` constructor takes a `PessimisticLockingFailureException` (`SVC:~1679`), so Option B needs a retype. Option B would also turn a non-lock failure from full rollback (PLAYER) into skip-and-commit-partial + `FAILED`, which is a behaviour change, not just a relabel. This doesn't matter if Option A is kept.
-
-### F11 — LOW: housekeeping
-
-- AC6 restates the M2/M4 markers already required by AC3/AC5(iii). There are four markers in total, consistent with Task 3.1, but there's a risk of writing duplicates.
-- The header range is `:1-31`, not `:1-37`; the Javadoc range is `:1663-1675`, not `~1690`.
-- The `typescript` babel plugin is harmless today: all 171 scanned files parse with 0 failures and 0 SFC errors, and none use `lang="ts"`. Gating it on `lang="ts"` would be slightly more faithful for plain JS.
+**F13 (LOW) — stale facts.** Spring Boot 3.5.16 (not 3.5.11). The deferred-158 description is "comment-only in GdprErasureService; hardening in tests". The cited line numbers in §1 marked DRIFTED should be corrected before dev.
 
 ## 5. What did not survive re-verification
 
-- **"The CannotAcquireLockException → CONTENDED mapping might be backwards"** (raised as a probe in Layer 4's brief). Killed. `SVC:1504-1506` maps CALE (deadlock, 40P01) to `contended=true` → `CHILD_BOOKING_CONTENDED`, and the real-lock IT pins 55P03 as `CHILD_BOOKING_LOCK_TIMEOUT`. The story's AC4 is correct.
-- **"Fail-loudly parse policy will break CI on existing files."** Killed. All 171 scanned files (121 `.vue`, 50 `.js`) parse with 0 babel throws and 0 `parse()` errors; there is no JSX, no `<script src>`, no non-JS `lang`.
-- **"`vue/compiler-sfc` may not resolve under vitest / may be shadowed by an alias."** Killed. It resolves under vitest 3.2.7 with happy-dom, and `vitest.config.mjs` has no `vue` alias.
-- **"`NODE_ENV=production` in CI will silently drop template comments."** Downgraded from HIGH to part of MED F4. The orchestrator re-read `frontend-quality/action.yml:43-52`: `NODE_ENV: production` is scoped to the ESLint step only, so vitest in CI runs with `NODE_ENV=test`. It remains a real local-shell and future-config hazard, so the explicit `comments: true` stays recommended.
-- **"The ledger section isn't actually the last / has more than four bullets."** Killed. It is the last `##` with exactly 4 top-level bullets; bullet 4 has 2 sub-bullets.
-- **L7a/L7c wording issues.** Kept as PARTIAL in §2 but not raised as findings: loose phrasing, no impact on implementation.
+- **Multiple coach profiles per user / admin callers.** Refuted: `coach_profiles_user_id_key UNIQUE (user_id)`, and admins without ROLE_COACH get 403.
+- **"403 for not-editable / session-ended is wrong".** Refuted: `ApiAdvice:332` maps to 403, and `PlayerRequestResourceIT:179` asserts it.
+- **Other Booking serialisation leaks** (outbox, caches, toString, Spring Data REST, duplication). Refuted: none found, and `BookingDuplicationService` does not copy free text.
+- **Coach-erasure ordering** (coachId nulled before the new query). Refuted: the coach branch never nulls `coachId` or deletes bookings, and there is no prior booking write in the outer tx, so no REQUIRES_NEW self-deadlock.
+- **Roster rule 2 for players with zero bookings.** Refuted: roster membership comes from the bookings query.
+- **Command center doesn't list CONFIRMED bookings.** Refuted: the cancel button at `:153` already renders for CONFIRMED.
+- **Missing `SessionPrepResponse` constructor call sites.** Refuted: there is one call site.
+- **Appending `"\n"` can join digits across the boundary into one phone redaction** (raised by Layer 4). **Not re-verified.** `PHONE_PATTERN`'s exact regex was not read in Step 4b; the redaction also requires a 5+ digit run (`PHONE_DIGIT_RUN`). Dropped from the findings; it is subsumed by F6's "sanitise the suggestion server-side" fix.
+- **`GdprExportService:122` passes a User id to `findAllByPlayerId`** (ID-space mismatch). Pre-existing and out of this story's scope. **Not re-verified in Step 4b.** Worth a separate ledger check, not a 12-6 change.
+- **12-3 AC3 paraphrase out of date.** Downgraded to informational, because AC12 explicitly says not to touch the existing pair.
 
 ## 6. Recommendation
 
-The story's diagnosis is sound. Every citation resolves at real HEAD within a few lines, and M1/M3/M4 are real open gaps. M2 really is already implemented, though by deferred-156, not deferred-157. **Amend before dev starts** on these points:
+The story is well-researched and its central design calls hold up: the `@JsonIgnore` leak analysis, the coach-ownership shape, the 5th erasure group, server-side days-since, neglected-skill codes, and the G6 frontend-only change. Fix it before dev on these points, in priority order:
 
-| Area | Confidence | Basis |
-|---|---|---|
-| F1 (AC5(ii) assertion is wrong) | High | Orchestrator re-read `erase()` (:314-327), `markFailed` (:773-776) and every `markFailed` caller |
-| F2 (`</script>` fixture impossible in `.vue`) | High | Orchestrator re-ran `parse()` and `babelParse` on a minimal SFC |
-| F6 (deferred-156, not 157) | High | Orchestrator re-ran `git blame` |
-| F5 (PARENT partial commit; reason-blind dedup) | High | Orchestrator re-read the dedup Javadoc; the PARENT tradeoff comes from Layer 3's read of `SVC:1277-1287` |
-| F3 (fixtures need a later real delimiter) | Medium-high | Layers 3 and 4 both ran the old function; not re-run by orchestrator |
-| F4 (equivalence proof is non-discriminating) | Medium-high | Layer 4's no-blanking scan; not re-run by orchestrator. The `NODE_ENV` part was re-run. |
-| F7–F11 | Medium | Single-layer findings, low impact; read but not independently executed |
+1. **F1 (409 contract)** — rewrite the concurrency wording and test plan. *Confidence: high.* Re-read `getBookingOrThrow`, the catch, both `ApiAdvice` handlers and `BookingError`'s own Javadoc.
+2. **F2 + F3 (shared predicate across modules, one clock)** — specify a public entity-level predicate taking `now`. *High* for the visibility problem (grep re-run). *Medium* on how much existing-test fallout a ClockProvider switch causes (not checked).
+3. **F4 + F5 (Session Builder ordering, editability, unsaved draft)** — specify the `onMounted` sequence and the Apply gating. *High* for the ordering (store and page re-read). *Medium* for the unsaved-draft issue (depends on how the panel is built).
+4. **F6 (sanitised suggestion)** — *Medium.* Raw storage and sanitiser behaviour were verified; real-world frequency is low.
+5. **F7-F13** — wording and citation corrections. *High* for the line-number drift (each re-checked by the citation layer). The G5 deviation (apply → plan note instead of session focus) was **approved by the owner on 2026-10-22**, and the story file now records it as settled.
 
-**Not independently re-checked by the orchestrator:**
-- The 171-file parse sweep.
-- The three-variant count table (1571/26/0 for regex, parser with strip, parser without strip).
-- Layer 2's brainstorm-doc line mapping.
-
-These rest on one layer's run each.
-
-**Suggested story edits:**
-1. AC5(ii): replace "expect `UNCLASSIFIED_FAILURE` and `FAILED`" with the `assertThatThrownBy` shape in F1. Warn about the strict `stubPlayerErasurePreamble` stub.
-2. AC5 Option A rationale and AC5(i) comment: drop "rolls the whole erasure back" for PARENT, and note reason-blind dedup.
-3. AC1 fixtures: the `/*` and `<!--` cases must include a later genuine closing delimiter. Replace the `</script>` case with "unparseable `.vue` fails loudly naming the file". Name `templateParseOptions: { comments: true }` and the block-offset addition for script comments. Decide top-level SFC HTML comments (F7).
-4. AC2: say the count match is necessary but not sufficient, and that the fixtures are the real guard. Mention a temporary count log.
-5. AC3 and the Source table M2 row: attribute the stale-entry check to skillars-deferred-156 (56803337).
-6. AC4: name `bookingRepository` + `CannotAcquireLockException` explicitly.
+What was **not** independently re-checked in Step 4b: the exact `PHONE_PATTERN` regex, the GDPR export PLAYER-branch ID-space bug, and the small DRIFTED line numbers beyond the ones listed (accepted from Layer 1 with Layer 3/4 corroboration).

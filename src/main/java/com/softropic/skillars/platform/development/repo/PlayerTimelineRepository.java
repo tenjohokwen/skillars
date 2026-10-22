@@ -72,6 +72,25 @@ public interface PlayerTimelineRepository extends JpaRepository<PlayerTimelineEv
     List<PlayerTimelineEvent> findSessionNotesForReport(
         @Param("playerId") Long playerId, @Param("coachId") UUID coachId, @Param("limit") int limit);
 
+    // skillars-12-6 AC12: the most recent attended SESSION_COMPLETED event for this coach and player
+    // whose whatsNext is non-blank — the Session Builder's "carry last time's what's next forward"
+    // suggestion. Deliberately the OPPOSITE filter from findSessionNotesForReport above: that one
+    // filters metadata->>'coachId' precisely because the coach_id COLUMN is attendance-gated and it
+    // wants unattended recaps too; this one filters the coach_id COLUMN, consistent with the prep
+    // card's existing "unattended sessions are excluded" rule (the unattended-recap inconsistency is
+    // G13 / story 12.7, not touched here). reference_id <> :bookingId so a booking that already has
+    // its own SESSION_COMPLETED event cannot suggest its own whatsNext. jsonb_exists, not the bare `?`
+    // operator (see findSessionNotesForReport's comment above).
+    @Query(value = "SELECT * FROM development.player_timeline_events "
+        + "WHERE player_id = :playerId AND coach_id = :coachId "
+        + "AND event_type = 'SESSION_COMPLETED' "
+        + "AND (reference_id IS NULL OR reference_id <> :bookingId) "
+        + "AND jsonb_exists(metadata, 'whatsNext') AND btrim(metadata->>'whatsNext') <> '' "
+        + "ORDER BY occurred_at DESC, id DESC "
+        + "LIMIT 1", nativeQuery = true)
+    Optional<PlayerTimelineEvent> findLatestWhatsNextSuggestion(
+        @Param("playerId") Long playerId, @Param("coachId") UUID coachId, @Param("bookingId") UUID bookingId);
+
     // skillars-deferred-155 AC9: closes the gap skillars-deferred-154's own code review recorded as
     // "its own story, not a review patch" — a coach's GDPR erasure already scrubs
     // booking.session_completion_data (anonymizeByCoachId) but never touched this second,

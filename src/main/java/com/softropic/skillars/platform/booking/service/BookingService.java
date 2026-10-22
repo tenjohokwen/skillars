@@ -13,7 +13,9 @@ import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingResponse;
+import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
+import com.softropic.skillars.platform.booking.contract.CoachPlanNoteResponse;
 import com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent;
 import com.softropic.skillars.platform.booking.contract.CoachInboxResponse;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
@@ -759,6 +761,45 @@ public class BookingService {
             throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
         return new PlayerRequestResponse(booking.getId(), booking.getPlayerRequest());
+    }
+
+    /**
+     * skillars-12-6 AC2: sets or clears the COACH's private plan note on a booking. Ownership is
+     * resolved exactly as {@link #recordNoShowPlayer} does (coach profile id vs {@code booking.coachId}),
+     * NOT the parent-id check {@link #setPlayerRequest} uses. Editability is the single
+     * {@link Booking#isPrepNoteEditable} predicate, shared with the prep response's
+     * {@code coachPlanNoteEditable} flag.
+     *
+     * <p>Concurrency: {@code saveAndFlush} (not {@code save}) so the version-checked UPDATE runs inside
+     * the {@code try} and a clash with a parent's player-request edit or the reminder scheduler's
+     * CONFIRMED to UPCOMING move maps to {@link BookingError#CONCURRENT_MODIFICATION} (the sibling
+     * setters' contract), instead of surfacing at commit as a generic 409. Callers still handle both.
+     */
+    @Transactional
+    public CoachPlanNoteResponse setCoachPlanNote(UUID bookingId, Long coachUserId, String planNote) {
+        Booking booking = getBookingOrThrow(bookingId);
+        CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        if (!Objects.equals(booking.getCoachId(), coach.getId())) {
+            throw new OperationNotAllowedException("Coach does not own this booking", SecurityError.MISSING_RIGHTS);
+        }
+        Instant now = Instant.now(ClockProvider.getClock());
+        if (!BookingStatus.CONFIRMED.name().equals(booking.getStatus())
+                && !BookingStatus.UPCOMING.name().equals(booking.getStatus())) {
+            throw new OperationNotAllowedException(
+                "This booking cannot be edited right now", BookingError.BOOKING_NOT_EDITABLE);
+        }
+        if (!booking.isPrepNoteEditable(now)) {
+            throw new OperationNotAllowedException(
+                "This session has already taken place", BookingError.SESSION_ALREADY_ENDED);
+        }
+        booking.setCoachPlanNote(sanitizeAndTruncate(contactDetailSanitizer, planNote, 500));
+        try {
+            bookingRepository.saveAndFlush(booking);
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
+        }
+        return new CoachPlanNoteResponse(booking.getId(), booking.getCoachPlanNote());
     }
 
     /**

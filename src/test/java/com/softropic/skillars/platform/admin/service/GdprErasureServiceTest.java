@@ -724,6 +724,40 @@ class GdprErasureServiceTest {
         assertThat(alertCaptor.getValue().getReason()).isEqualTo("COACH_AVAILABILITY_BLOCK_CONTENDED");
     }
 
+    @Test
+    void erase_coachUser_planNoteGroupLockTimeout_raisesPlanNoteLockTimeoutReason() {
+        GdprRequest request = stubCoachErasurePreamble();
+        org.mockito.Mockito.doThrow(new PessimisticLockingFailureException("lock_timeout"))
+            .when(bookingRepository).anonymizeCoachPlanNoteByCoachId(COACH_PROFILE_ID);
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        // skillars-12-6 AC5: groups 1-4 genuinely ran before group 5 tripped.
+        verify(sessionCompletionDataRepository).anonymizeByCoachId(COACH_PROFILE_ID);
+        verify(playerTimelineRepository).anonymizeMetadataByCoachId(COACH_PROFILE_ID);
+        verify(performanceReportRepository).anonymizeByCoachId(eq(COACH_PROFILE_ID), anyString());
+        verify(coachAvailabilityBlockRepository).anonymizeReasonByCoachId(COACH_PROFILE_ID);
+        assertThat(request.getStatus()).isEqualTo("FAILED");
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        assertThat(alertCaptor.getValue().getReason()).isEqualTo("COACH_PLAN_NOTE_LOCK_TIMEOUT");
+    }
+
+    @Test
+    void erase_coachUser_planNoteGroupContended_raisesPlanNoteContendedReason() {
+        GdprRequest request = stubCoachErasurePreamble();
+        org.mockito.Mockito.doThrow(new CannotAcquireLockException("deadlock"))
+            .when(bookingRepository).anonymizeCoachPlanNoteByCoachId(COACH_PROFILE_ID);
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        verify(coachAvailabilityBlockRepository).anonymizeReasonByCoachId(COACH_PROFILE_ID);
+        assertThat(request.getStatus()).isEqualTo("FAILED");
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        assertThat(alertCaptor.getValue().getReason()).isEqualTo("COACH_PLAN_NOTE_CONTENDED");
+    }
+
     // ---- skillars-deferred-157 AC1/AC2: booking-schema statements get their own reason codes ----
 
     private PlayerProfile stubPlayerErasurePreamble(GdprRequest request) {

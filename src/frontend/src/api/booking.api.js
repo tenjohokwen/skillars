@@ -91,3 +91,7 @@ export const recordNoShowCoach = (bookingId) => api.post(`/api/bookings/${bookin
 // skillars-deferred-155 AC5: player/parent-initiated session-prep request.
 export const setPlayerRequest = (bookingId, playerRequest) =>
   api.patch(`/api/bookings/${bookingId}/player-request`, { playerRequest })
+
+// skillars-12-6 AC6: the coach's private per-booking plan note.
+export const setCoachPlanNote = (bookingId, planNote) =>
+  api.patch(`/api/bookings/${bookingId}/coach-plan-note`, { planNote })

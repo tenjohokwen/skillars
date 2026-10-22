@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.booking.repo;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -57,6 +59,14 @@ public class Booking {
     @Column(name = "player_request", length = 500)
     private String playerRequest;
 
+    // skillars-12-6 AC1/AC4: the COACH's own private plan note for this session. @JsonIgnore is a
+    // security control, not a nicety: GdprExportService hands this entity straight to Jackson for
+    // PARENT/PLAYER/COACH exports, so without it a parent's export zip would carry the coach's
+    // private note. Never add this field to BookingResponse either.
+    @JsonIgnore
+    @Column(name = "coach_plan_note", length = 500)
+    private String coachPlanNote;
+
     @Version
     @Column(nullable = false)
     private Integer version;
@@ -92,5 +102,20 @@ public class Booking {
     @PreUpdate
     void onUpdate() {
         updatedAt = Instant.now();
+    }
+
+    /**
+     * skillars-12-6 AC2: single definition of "the coach may still write the plan note" — status
+     * CONFIRMED/UPCOMING and {@code now} strictly before {@code requestedEndTime}. Called by both
+     * {@code BookingService.setCoachPlanNote} (the write guard) and the development module's
+     * {@code SessionPrepService} (the {@code coachPlanNoteEditable} flag) with the same
+     * {@code ClockProvider}-derived instant, so the two can never disagree. {@code @JsonIgnore}d via
+     * the method name not being a bean getter ("is" + non-boolean-returning would be, but this takes
+     * an argument, so Jackson ignores it).
+     */
+    public boolean isPrepNoteEditable(Instant now) {
+        boolean statusOk = BookingStatus.CONFIRMED.name().equals(status)
+            || BookingStatus.UPCOMING.name().equals(status);
+        return statusOk && (requestedEndTime == null || now.isBefore(requestedEndTime));
     }
 }

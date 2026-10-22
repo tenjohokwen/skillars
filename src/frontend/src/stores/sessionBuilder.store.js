@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { sessionApi } from 'src/api/session.api'
+import { getSessionPrep } from 'src/api/development.api'
 
 export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
   const sessionId = ref(null)
@@ -18,6 +19,9 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
   const sourceTemplateId = ref(null)
   const sourceTemplateName = ref(null)
   const templateBannerDismissed = ref(false)
+  // skillars-12-6 AC13: the session-prep response for this booking (suggestedWhatsNext, plan note).
+  // Null until fetched, and null forever if the fetch fails - the builder works exactly as before.
+  const prep = ref(null)
 
   const sessionDna = computed(() => {
     const allDrills = blocks.value.flatMap((b) =>
@@ -106,6 +110,20 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
     sourceTemplateId.value = null
     sourceTemplateName.value = null
     templateBannerDismissed.value = false
+    prep.value = null
+  }
+
+  // skillars-12-6 AC13: must run AFTER fetchExistingPlan has resolved - that call (and its 404 path)
+  // goes through initForBooking, which resets prep. Never call concurrently with it.
+  // The store outlives the page: a late response for a booking the coach has already navigated away
+  // from must not land on the next booking's builder (its note would then be PATCHed to the wrong id).
+  async function fetchPrep(bId) {
+    try {
+      const res = await getSessionPrep(bId)
+      if (bookingId.value === bId) prep.value = res
+    } catch {
+      if (bookingId.value === bId) prep.value = null
+    }
   }
 
   async function fetchExistingPlan(bId) {
@@ -227,11 +245,13 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
     sourceTemplateId,
     sourceTemplateName,
     templateBannerDismissed,
+    prep,
     sessionDna,
     equipmentList,
     blockSlu,
     initForBooking,
     fetchExistingPlan,
+    fetchPrep,
     savePlan,
     fetchSuggestions,
     setActiveBlock,

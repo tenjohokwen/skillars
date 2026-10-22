@@ -12,10 +12,23 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 vi.mock('src/api/development.api', () => ({
   getSessionPrep: vi.fn(),
 }))
+vi.mock('src/api/booking.api', () => ({
+  setCoachPlanNote: vi.fn(),
+}))
+
+// Notify is not registered by installQuasarPlugin - stub useQuasar so $q.notify is callable.
+const notifySpy = vi.fn()
+vi.mock('quasar', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, useQuasar: () => ({ notify: notifySpy }) }
+})
 
 import { getSessionPrep } from 'src/api/development.api'
+import { setCoachPlanNote } from 'src/api/booking.api'
 import SessionPrepCard from 'src/components/booking/SessionPrepCard.vue'
 
+// skillars-12-6: the server always sends daysSinceLastSession alongside lastSessionDate (null exactly
+// when it is null), so the default is derived the same way. Long values are JSON strings on the wire.
 const PREP = (overrides = {}) => ({
   playerId: 1,
   lastSessionDate: null,
@@ -23,6 +36,12 @@ const PREP = (overrides = {}) => ({
   lastWhatsNext: null,
   focusThreadSkillCodes: [],
   openNeglectedSkillCount: 0,
+  openNeglectedSkillCodes: [],
+  coachPlanNote: null,
+  coachPlanNoteEditable: true,
+  daysSinceLastSession: overrides.lastSessionDate ? '3' : null,
+  suggestedWhatsNext: null,
+  suggestedWhatsNextSessionDate: null,
   ...overrides,
 })
 
@@ -263,5 +282,73 @@ describe('SessionPrepCard.vue (skillars-12-3)', () => {
 
     const planLink = wrapper.findAll('a').find((a) => a.text() === 'coach.sessionPrepPlanButton')
     expect(planLink.attributes('href')).toBe('/coach/session-builder/booking-xyz')
+  })
+})
+
+describe('SessionPrepCard.vue (skillars-12-6)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  it('shows the server-computed days-ago caption with the absolute date as secondary text', async () => {
+    getSessionPrep.mockResolvedValue(
+      PREP({ lastSessionDate: '2026-01-01T00:00:00Z', daysSinceLastSession: '3' }),
+    )
+    const wrapper = await mountCard()
+
+    expect(wrapper.text()).toContain('coach.myPlayersLastTrainedDaysAgo')
+    expect(wrapper.find('[data-testid="last-session-date"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('coach.myPlayersNeverTrainedTogether')
+  })
+
+  it('treats 0 days (today) as an attended session, not as never trained', async () => {
+    getSessionPrep.mockResolvedValue(
+      PREP({ lastSessionDate: '2026-01-01T00:00:00Z', daysSinceLastSession: 0 }),
+    )
+    const wrapper = await mountCard()
+
+    expect(wrapper.text()).toContain('coach.myPlayersLastTrainedDaysAgo')
+  })
+
+  it('renders one badge per neglected skill code by display name, keeping the count badge', async () => {
+    getSessionPrep.mockResolvedValue(
+      PREP({ openNeglectedSkillCount: 2, openNeglectedSkillCodes: ['DRI', 'ZZZ'] }),
+    )
+    const wrapper = await mountCard()
+
+    const badges = wrapper.findAll('[data-testid="neglected-skill-badge"]')
+    expect(badges.map((b) => b.text())).toEqual(['Dribbling', 'ZZZ'])
+    expect(wrapper.text()).toContain('coach.myPlayersNeglectedSkillCount')
+  })
+
+  it('renders the saved plan note in an editable textarea', async () => {
+    getSessionPrep.mockResolvedValue(PREP({ coachPlanNote: 'Work on first touch' }))
+    const wrapper = await mountCard()
+
+    expect(wrapper.find('textarea').element.value).toBe('Work on first touch')
+  })
+
+  it('shows the note read-only (no textarea) when it is no longer editable', async () => {
+    getSessionPrep.mockResolvedValue(
+      PREP({ coachPlanNote: 'Work on first touch', coachPlanNoteEditable: false }),
+    )
+    const wrapper = await mountCard()
+
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="plan-note-readonly"]').text()).toBe('Work on first touch')
+  })
+
+  it('saves the note through setCoachPlanNote and shows the server-stored value', async () => {
+    getSessionPrep.mockResolvedValue(PREP())
+    setCoachPlanNote.mockResolvedValue({ bookingId: 'booking-1', planNote: 'stored value' })
+    const wrapper = await mountCard()
+
+    await wrapper.find('textarea').setValue('typed value')
+    await wrapper.find('[data-testid="plan-note-save"]').trigger('click')
+    await flushPromises()
+
+    expect(setCoachPlanNote).toHaveBeenCalledWith('booking-1', 'typed value')
+    expect(wrapper.find('textarea').element.value).toBe('stored value')
   })
 })

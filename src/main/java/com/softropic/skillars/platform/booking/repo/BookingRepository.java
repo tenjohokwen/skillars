@@ -323,11 +323,11 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     List<Booking> findStuckCompletionsWithNoSessionData(@Param("cutoff") Instant cutoff, Pageable pageable);
 
     // skillars-deferred-156 AC1: GdprErasureService injected this repository with zero call sites
-    // until now — notes/playerRequest are purely player/parent-authored free text (never written by
-    // the coach), so a single playerId-keyed method correctly covers both the self-registered-PLAYER
-    // erasure path and the per-child path inside PARENT erasure; there is no coach-authored half to
-    // also scrub, unlike SessionCompletionDataRepository's anonymizeByPlayerId/anonymizeByCoachId
-    // pair. The explicit `b.version = b.version + 1` (the codebase convention, see
+    // until now — notes/playerRequest are player/parent-authored free text (coachPlanNote, added by
+    // skillars-12-6, is coach-authored but describes the player), so a single playerId-keyed method covers both the self-registered-PLAYER
+    // erasure path and the per-child path inside PARENT erasure. Since skillars-12-6 there IS a
+    // coach-keyed half as well — anonymizeCoachPlanNoteByCoachId below, mirroring
+    // SessionCompletionDataRepository's anonymizeByPlayerId/anonymizeByCoachId pair. The explicit `b.version = b.version + 1` (the codebase convention, see
     // RefreshTokenRepository/VideoRepository, and what NativeModifyingVersionAuditTest enforces —
     // it does not recognise Hibernate's equivalent "UPDATE VERSIONED") bumps Booking's own
     // @Version column for every row this touches — Booking is not @DynamicUpdate, so a booking
@@ -335,8 +335,17 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // including these two, from its stale in-memory snapshot and silently resurrect just-erased
     // text with no optimistic-lock failure at all. The bump makes that race surface as the same
     // OptimisticLockingFailureException/CONCURRENT_MODIFICATION path those writers already handle.
+    // skillars-12-6 AC5: also nulls coachPlanNote — the coach authored it but it describes the player,
+    // so player erasure scrubs it too (the coach-keyed counterpart is anonymizeCoachPlanNoteByCoachId).
     @Modifying
-    @Query("UPDATE Booking b SET b.notes = NULL, b.playerRequest = NULL, b.version = b.version + 1 "
-        + "WHERE b.playerId = :playerId")
+    @Query("UPDATE Booking b SET b.notes = NULL, b.playerRequest = NULL, b.coachPlanNote = NULL, "
+        + "b.version = b.version + 1 WHERE b.playerId = :playerId")
     void anonymizeNotesAndPlayerRequestByPlayerId(@Param("playerId") Long playerId);
+
+    // skillars-12-6 AC5: coach erasure — the plan note is coach-authored free text. The version bump
+    // is mandatory for the same stale-snapshot-resurrection reason documented above.
+    @Modifying
+    @Query("UPDATE Booking b SET b.coachPlanNote = NULL, b.version = b.version + 1 "
+        + "WHERE b.coachId = :coachId AND b.coachPlanNote IS NOT NULL")
+    void anonymizeCoachPlanNoteByCoachId(@Param("coachId") UUID coachId);
 }

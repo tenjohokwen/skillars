@@ -181,8 +181,9 @@ public class AdminQueueService {
             //   * CHILD_BOOKING_LOCK_TIMEOUT / CHILD_BOOKING_CONTENDED (skillars-deferred-157 AC1) —
             //     the same deletion's booking.* statements;
             //   * COACH_RECAP_{SCD,TIMELINE,REPORT}_{LOCK_TIMEOUT,CONTENDED} (skillars-deferred-156
-            //     AC7) and COACH_AVAILABILITY_BLOCK_{LOCK_TIMEOUT,CONTENDED} (skillars-deferred-157
-            //     AC4) — the coach-erasure scrub groups;
+            //     AC7), COACH_AVAILABILITY_BLOCK_{LOCK_TIMEOUT,CONTENDED} (skillars-deferred-157
+            //     AC4) and COACH_PLAN_NOTE_{LOCK_TIMEOUT,CONTENDED} (skillars-12-6 AC5) — the
+            //     coach-erasure scrub groups;
             //   * UNCLASSIFIED_FAILURE (skillars-deferred-133 AC1) — markFailed's own catch-all, an
             //     accepted, disclosed semantic widening: this bucket also counts non-deadline
             //     failures, pool saturation and missing-row cases, not deadline exceedances alone.
