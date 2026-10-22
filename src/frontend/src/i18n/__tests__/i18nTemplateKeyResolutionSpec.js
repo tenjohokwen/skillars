@@ -15,9 +15,11 @@
 // below names explicitly (e.g. PlayerTimelinePanel.vue:40 renders a raw enum name under test today
 // because of it, never a translated label).
 //
-// Approach: a pragmatic regex-based static scan (not a real parser) over every `.vue` file and
-// every `.js` file that calls `i18n.global.t(` directly (a `.vue`-only glob would miss
-// errorHandler.js/useErrorHandler.js), extracting every `$t(`/`$te(`/`t(`/`i18n.global.t(` call's
+// Approach: a pragmatic static scan (comment detection is parser-backed, see blankCommentSpans; call-site
+// extraction is still line-based regex) over every `.vue` file and
+// every `.js` file under `src/` (not just those that call `i18n.global.t(` directly — a `.vue`-only
+// glob would miss errorHandler.js/useErrorHandler.js; note every scanned `.js` must therefore parse
+// with plain `babelParse`, see blankCommentSpans), extracting every `$t(`/`$te(`/`t(`/`i18n.global.t(` call's
 // first argument. Every call whose key argument is a plain string literal is asserted to exist as
 // a real leaf in en-US's catalog. A call whose key cannot be statically resolved — a template
 // literal with `${…}` interpolation, string concatenation (`'prefix.' + variable`), or a bare
@@ -34,6 +36,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
+import { parse as parseSfc, babelParse } from 'vue/compiler-sfc'
 import enUS from '../en-US/index.js'
 import { collectKeyPaths } from '../../../test/vitest/collectKeyPaths.js'
 
@@ -171,43 +174,79 @@ const QUOTED_CALL_RE = /(\$te?|i18n\.global\.t|(?<![.\w$])t)\(\s*(['"`])((?:\\.|
 // variable or property-access expression (e.g. `t(messageKey)`, `t(badge.labelKey)`).
 const BARE_VAR_CALL_RE = /(\$te?|i18n\.global\.t|(?<![.\w$])t)\(\s*([^'"`\s)])/g
 
-// skillars-deferred-157 AC11(b): comment spans are blanked before the line split, so a translation
-// call inside a block comment is not scanned as live code. Blanking replaces every non-newline
-// character with a space, so line numbers (which DYNAMIC_KEY_CALL_SITES is keyed by) never move.
+// skillars-deferred-158 AC1/AC2: comment spans are located by a real parser, not by regex, and blanked
+// before the line split so a translation call inside a comment is not scanned as live code. Blanking
+// replaces every non-newline character with a space, so line numbers (which DYNAMIC_KEY_CALL_SITES is
+// keyed by) never move.
+//   * `.js`: `babelParse` over the whole file; its `.comments` carry exact ranges and ignore `/*`,
+//     `//` and `<!--` inside string literals.
+//   * `.vue`: `parse()` splits the SFC; comments in `<script>`/`<script setup>` come from `babelParse`
+//     (ranges are block-relative, so the block's content offset is added) and comments in `<template>`
+//     come from the template AST's comment nodes. `comments: true` is required: Vue drops template
+//     comment nodes under NODE_ENV=production, which would silently turn this blanking into a no-op.
+// A file that cannot be parsed throws, naming the file. It is never scanned raw: a silent fallback
+// would recreate the blindness this replaces.
 //
-// Scoped by language region, deliberately NOT a whole-file `/\/\*[\s\S]*?\*\//g`: a template
-// attribute such as `accept="video/*"` (DrillDetailPanel.vue, VideoManagementPage.vue) would open a
-// fake "comment" that runs to the first real `*/` anywhere later in the file, blanking every call
-// in between — and the spec would not fail, those keys would just silently stop being guarded.
-//   * `.vue`: `/* … */` only inside <script>/<style> blocks; `<!-- … -->` only outside them (the
-//     template, plus the SFC's top level, which is HTML-comment syntax too).
-//   * `.js`: `/* … */` only.
-const BLOCK_COMMENT_RE = /\/\*[\s\S]*?\*\//g
-const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g
-const SFC_CODE_BLOCK_RE = /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/g
-
+// Not blanked (no instances today; a translation call in any of these is scanned as live, which fails
+// loudly as a missing key or an unlisted dynamic site, never silently):
+//   * `/* */` inside template expressions (`{{ /* $t('x') */ }}`): never covered, old design included.
+//   * Deliberate coverage losses vs the previous regex design (code review of skillars-deferred-158,
+//     owner decision 2026-10-22: accept rather than re-add regex): `/* */` and `//` inside `<style>`,
+//     `<!-- -->` at the SFC top level outside every block, and `// …` outside script blocks (e.g. in an
+//     `@click` expression), which the old line-based `stripLineComment` used to strip.
 function blankPreservingNewlines(span) {
   return span.replace(/[^\n]/g, ' ')
 }
 
-function blankCommentSpans(content, file) {
-  if (!file.endsWith('.vue')) {
-    return content.replace(BLOCK_COMMENT_RE, blankPreservingNewlines)
+const BABEL_PLUGINS_BY_LANG = { ts: ['typescript'], tsx: ['typescript', 'jsx'], jsx: ['jsx'] }
+
+function scriptCommentRanges(code, offset, lang, file) {
+  let ast
+  try {
+    ast = babelParse(code, { sourceType: 'module', plugins: BABEL_PLUGINS_BY_LANG[lang] ?? [] })
+  } catch (e) {
+    throw new Error(`${file}: cannot parse script for comment detection: ${e.message}`)
   }
-  let out = ''
-  let last = 0
-  for (const m of content.matchAll(SFC_CODE_BLOCK_RE)) {
-    out += content.slice(last, m.index).replace(HTML_COMMENT_RE, blankPreservingNewlines)
-    out += m[0].replace(BLOCK_COMMENT_RE, blankPreservingNewlines)
-    last = m.index + m[0].length
-  }
-  return out + content.slice(last).replace(HTML_COMMENT_RE, blankPreservingNewlines)
+  return (ast.comments ?? []).map((c) => [offset + c.start, offset + c.end])
 }
 
-function stripLineComment(line) {
-  // Naive, line-based: only strips `// …` preceded by whitespace or at line start, so it does not
-  // also eat a `//` embedded mid-string (e.g. a URL) that has no preceding whitespace.
-  return line.replace(/(^|\s)\/\/.*$/, '')
+function templateCommentRanges(node, ranges) {
+  if (node.type === 3) ranges.push([node.loc.start.offset, node.loc.end.offset])
+  for (const child of node.children ?? []) {
+    if (typeof child === 'object') templateCommentRanges(child, ranges)
+  }
+  return ranges
+}
+
+function commentRanges(content, file) {
+  if (!file.endsWith('.vue')) return scriptCommentRanges(content, 0, undefined, file)
+  const { descriptor, errors } = parseSfc(content, {
+    filename: file,
+    templateParseOptions: { comments: true },
+  })
+  if (errors.length > 0) {
+    throw new Error(
+      `${file}: cannot parse SFC for comment detection: ${errors.map((e) => e.message).join('; ')}`,
+    )
+  }
+  const ranges = []
+  for (const block of [descriptor.script, descriptor.scriptSetup]) {
+    if (block && !block.src) {
+      ranges.push(...scriptCommentRanges(block.content, block.loc.start.offset, block.lang, file))
+    }
+  }
+  if (descriptor.template?.ast) templateCommentRanges(descriptor.template.ast, ranges)
+  return ranges
+}
+
+function blankCommentSpans(content, file) {
+  let out = ''
+  let last = 0
+  for (const [start, end] of commentRanges(content, file).sort((a, b) => a[0] - b[0])) {
+    out += content.slice(last, start) + blankPreservingNewlines(content.slice(start, end))
+    last = end
+  }
+  return out + content.slice(last)
 }
 
 function listSourceFiles() {
@@ -248,8 +287,7 @@ function scanCallSites() {
     const content = blankCommentSpans(fs.readFileSync(path.join(FRONTEND_ROOT, file), 'utf8'), file)
     const lines = content.split('\n')
     for (let i = 0; i < lines.length; i++) {
-      const raw = lines[i]
-      const line = stripLineComment(raw)
+      const line = lines[i]
       const lineNumber = i + 1
 
       const quotedRe = new RegExp(QUOTED_CALL_RE)
@@ -261,19 +299,19 @@ function scanCallSites() {
         const isTemplateInterpolation = quote === '`' && captured.includes('${')
         const isConcatenation = after.startsWith('+')
         if (isTemplateInterpolation || isConcatenation) {
-          dynamicCalls.push({ file, line: lineNumber, snippet: raw.trim() })
+          dynamicCalls.push({ file, line: lineNumber, snippet: line.trim() })
         } else {
-          literalCalls.push({ file, line: lineNumber, key: captured, snippet: raw.trim() })
+          literalCalls.push({ file, line: lineNumber, key: captured, snippet: line.trim() })
         }
       }
 
       const bareRe = new RegExp(BARE_VAR_CALL_RE)
       while ((m = bareRe.exec(line))) {
-        dynamicCalls.push({ file, line: lineNumber, snippet: raw.trim() })
+        dynamicCalls.push({ file, line: lineNumber, snippet: line.trim() })
       }
 
       if (WRAPPED_CALL_RE.test(line)) {
-        wrappedCalls.push({ file, line: lineNumber, snippet: raw.trim() })
+        wrappedCalls.push({ file, line: lineNumber, snippet: line.trim() })
       }
     }
   }
@@ -304,7 +342,7 @@ describe('i18n template-key resolution (skillars-deferred-156 AC6)', () => {
     expect(ats.filter((at, i) => ats.indexOf(at) !== i)).toEqual([])
   })
 
-  it('comment blanking is region-scoped: a template glob attribute cannot open a fake block comment (skillars-deferred-157 AC11b)', () => {
+  it('comment blanking: a template glob attribute cannot open a fake block comment (skillars-deferred-157 AC11b, parser-backed since skillars-deferred-158)', () => {
     const fixture = [
       '<template>',
       '  <input type="file" accept="video/*" />',
@@ -323,6 +361,76 @@ describe('i18n template-key resolution (skillars-deferred-156 AC6)', () => {
     expect(lines[3].trim()).toBe('')
     expect(lines[6].trim()).toBe('')
     expect(lines[7].trimEnd()).toBe("const label = t('fixture.scriptKey')")
+  })
+
+  // skillars-deferred-158 AC1/AC2: each "stays scannable" fixture deliberately contains a LATER genuine
+  // closing delimiter with a live call between it and the decoy. Without that delimiter the old regex
+  // heuristic would also pass, and the fixture would prove nothing.
+  it('parser-backed blanking: a "/*" inside a JS string literal does not blank the live call after it (skillars-deferred-158 AC1)', () => {
+    const fixture = [
+      "const a = '/*'",
+      "const k = t('fixture.live')",
+      '/* real */',
+      "const z = t('fixture.after')",
+    ].join('\n')
+    const lines = blankCommentSpans(fixture, 'Fixture.js').split('\n')
+    expect(lines).toHaveLength(fixture.split('\n').length)
+    expect(lines[0]).toBe("const a = '/*'")
+    expect(lines[1]).toBe("const k = t('fixture.live')")
+    expect(lines[2].trim()).toBe('')
+    expect(lines[3]).toBe("const z = t('fixture.after')")
+  })
+
+  it('parser-backed blanking: a "<!--" inside a template attribute does not blank the live call after it (skillars-deferred-158 AC1)', () => {
+    const fixture = [
+      '<template>',
+      '  <input title="<!--" />',
+      "  <span>{{ $t('fixture.live') }}</span>",
+      '  <!-- real -->',
+      '</template>',
+    ].join('\n')
+    const lines = blankCommentSpans(fixture, 'Fixture.vue').split('\n')
+    expect(lines).toHaveLength(fixture.split('\n').length)
+    expect(lines[1]).toBe('  <input title="<!--" />')
+    expect(lines[2]).toBe("  <span>{{ $t('fixture.live') }}</span>")
+    expect(lines[3].trim()).toBe('')
+  })
+
+  it('parser-backed blanking: genuine commented-out calls are blanked in .js, <script> and <template> (skillars-deferred-158 AC1)', () => {
+    const js = ["/* $t('fixture.old') */", "// t('fixture.old2')", "t('fixture.keep')"].join('\n')
+    const jsLines = blankCommentSpans(js, 'Fixture.js').split('\n')
+    expect(jsLines[0].trim()).toBe('')
+    expect(jsLines[1].trim()).toBe('')
+    expect(jsLines[2]).toBe("t('fixture.keep')")
+
+    const sfc = [
+      '<template>',
+      "  <!-- $t('fixture.old') -->",
+      "  <b>{{ $t('fixture.keep') }}</b>",
+      '</template>',
+      '<script setup>',
+      "/* t('fixture.old') */",
+      "const x = t('fixture.keep') // t('fixture.old2')",
+      '</script>',
+    ].join('\n')
+    const lines = blankCommentSpans(sfc, 'Fixture.vue').split('\n')
+    expect(lines).toHaveLength(sfc.split('\n').length)
+    expect(lines[1].trim()).toBe('')
+    expect(lines[2]).toBe("  <b>{{ $t('fixture.keep') }}</b>")
+    expect(lines[5].trim()).toBe('')
+    expect(lines[6].trimEnd()).toBe("const x = t('fixture.keep')")
+  })
+
+  it('parser-backed blanking: an unparseable file fails loudly naming the file, never falls back to a raw scan (skillars-deferred-158 AC2)', () => {
+    // "</script>" inside a JS string ends the SFC <script> block early (the real SFC parser does the same),
+    // so this is not a valid .vue file. It must throw, not be silently scanned unblanked.
+    const sfc = ['<script>', "const s = '</script>'", "t('fixture.live')", '</script>'].join('\n')
+    expect(() => blankCommentSpans(sfc, 'Broken.vue')).toThrow(/Broken\.vue/)
+    expect(() => blankCommentSpans('const = ;', 'Broken.js')).toThrow(/Broken\.js/)
+    // A well-formed SFC whose script Babel rejects reaches the script-parse throw, not the SFC errors one.
+    expect(() =>
+      blankCommentSpans('<script setup>\nconst = ;\n</script>', 'BrokenScript.vue'),
+    ).toThrow(/BrokenScript\.vue: cannot parse script/)
   })
 
   it('every statically-resolved $t()/$te()/t()/i18n.global.t() key exists as a real en-US leaf', () => {

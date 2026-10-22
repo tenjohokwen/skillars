@@ -47,6 +47,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -62,6 +63,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -816,6 +818,72 @@ class GdprErasureServiceTest {
         ArgumentCaptor<GdprRequest> requestCaptor = ArgumentCaptor.forClass(GdprRequest.class);
         verify(gdprRequestRepository, atLeastOnce()).save(requestCaptor.capture());
         assertThat(requestCaptor.getValue().getStatus()).isEqualTo("FAILED");
+    }
+
+    /**
+     * skillars-deferred-158 AC4: bookings x contended on the PARENT branch (the PLAYER pair covers
+     * bookings x lock-timeout and session_completion_data x contended). Unlike the lock-timeout
+     * sibling above this also pins that the child's tombstone is not saved.
+     */
+    @Test
+    void erase_parentUser_childBookingStatementContended_raisesChildBookingContendedReason_marksFailed() {
+        stubParentErasurePreamble();
+        PlayerProfile child = parentChild(9590_777_002L);
+        when(playerProfileRepository.findByParentIdOrderByIdAsc(USER_ID)).thenReturn(List.of(child));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
+            REQUEST_ID.toString(), AdminAlertType.GDPR_ERASURE_DEADLINE, AdminAlertStatus.OPEN))
+            .thenReturn(Optional.empty());
+        org.mockito.Mockito.doThrow(new CannotAcquireLockException("deadlock"))
+            .when(bookingRepository).anonymizeNotesAndPlayerRequestByPlayerId(child.getId());
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        assertThat(alertCaptor.getValue().getReason()).isEqualTo("CHILD_BOOKING_CONTENDED");
+        verify(playerProfileRepository, never()).save(any(PlayerProfile.class));
+        assertThat(child.getDevelopmentDataErasedAt()).isNull();
+
+        ArgumentCaptor<GdprRequest> requestCaptor = ArgumentCaptor.forClass(GdprRequest.class);
+        verify(gdprRequestRepository, atLeastOnce()).save(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getStatus()).isEqualTo("FAILED");
+    }
+
+    /**
+     * skillars-deferred-158 AC5 (Option A): a non-lock {@code DataAccessException} on a booking
+     * statement is deliberately NOT labelled CHILD_BOOKING_*. It is not a
+     * PessimisticLockingFailureException, so no catch in erase() matches and it propagates; the
+     * UNCLASSIFIED_FAILURE alert is raised later by markFailed (via GdprEventListener /
+     * retryFailedErasures), which erase() itself never calls and which is pinned separately by
+     * markFailed_requestPresent_noExistingAlert_savesUnclassifiedFailureAlert.
+     *
+     * <p>Stubs are inlined rather than reusing stubPlayerErasurePreamble: its strict
+     * adminAlertRepository stub is never reached on this path and would raise
+     * UnnecessaryStubbingException.
+     */
+    @Test
+    void erase_playerUser_bookingStatementNonLockDataAccessFailure_propagatesUnlabelled_noAlertNoTombstone() {
+        GdprRequest request = new GdprRequest();
+        request.setId(REQUEST_ID);
+        request.setUserId(USER_ID);
+        when(gdprRequestRepository.findById(REQUEST_ID)).thenReturn(Optional.of(request));
+        User user = new User();
+        user.setSkillarsRole(SkillarsRole.PLAYER);
+        when(userRepository.findOneById(USER_ID)).thenReturn(Optional.of(user));
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
+        PlayerProfile playerProfile = new PlayerProfile();
+        playerProfile.setId(PLAYER_PROFILE_ID);
+        when(playerProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(playerProfile));
+        when(playerProfileRepository.findByIdForUpdate(PLAYER_PROFILE_ID)).thenReturn(Optional.of(playerProfile));
+        org.mockito.Mockito.doThrow(new QueryTimeoutException("statement timeout"))
+            .when(bookingRepository).anonymizeNotesAndPlayerRequestByPlayerId(PLAYER_PROFILE_ID);
+
+        assertThatThrownBy(() -> service.erase(REQUEST_ID, USER_ID))
+            .isInstanceOf(QueryTimeoutException.class);
+
+        verify(adminAlertRepository, never()).saveAndFlush(any(AdminAlert.class));
+        verify(playerProfileRepository, never()).save(any(PlayerProfile.class));
+        assertThat(playerProfile.getDevelopmentDataErasedAt()).isNull();
     }
 
     private GdprRequest stubParentErasurePreamble() {

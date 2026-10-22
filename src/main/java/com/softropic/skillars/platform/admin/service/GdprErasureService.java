@@ -1492,6 +1492,19 @@ public class GdprErasureService {
                 // CHILD_BOOKING_* rather than the development-schema CHILD_* reasons. The wrapper is
                 // not a PessimisticLockingFailureException, so it passes untouched through this
                 // method's own outer catches below.
+                //
+                // skillars-deferred-158 AC5: only the two lock failures are labelled CHILD_BOOKING_*,
+                // deliberately. A non-lock DataAccessException (e.g. QueryTimeoutException) is not a
+                // PessimisticLockingFailureException, so nothing here or in the outer catches matches it
+                // and it propagates out of erase(); the request is then routed to markFailed (via
+                // GdprEventListener / retryFailedErasures), which reports UNCLASSIFIED_FAILURE. That is the
+                // honest label for an unpredicted failure; widening this catch would send an operator to
+                // booking-lock contention for, say, a bad-SQL or connection error. A commit-time lock trip
+                // would instead surface as CHILD_CONTENDED, but is close to unreachable (both statements
+                // are immediate bulk UPDATEs and the tombstone is flushed explicitly). Two caveats when
+                // reading the resulting alert: on the PARENT branch rollback is per child (earlier children
+                // committed in their own REQUIRES_NEW transactions), and alert dedup ignores the reason, so
+                // an already-OPEN alert for this request suppresses UNCLASSIFIED_FAILURE.
                 try {
                     setStatementLockTimeout(lockTimeoutSeconds);
                     sessionCompletionDataRepository.anonymizeByPlayerId(playerId);

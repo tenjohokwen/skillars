@@ -13,6 +13,8 @@ context_file: ''
 
 # Brainstorming Session Results
 
+> ⚠️ **AUDIT 2026-10-22 — NOT FULLY IMPLEMENTED.** A code-level audit of this document against HEAD `7121ace5` (source code and tests, not story files) found **25 open gaps (G1–G25)** behind the "covered" annotations below. "Covered" in this document means *a story was created for the item*, not *the item's concept or success indicator is fully met*. The authoritative gap list, the open owner decisions (D1–D7) and the stories closing them (`skillars-12-6` … `skillars-12-10`, all backlog) live in `_bmad-output/planning-artifacts/skillars-epics.md` → **Epic 12**. Every "Do not re-pick" note below applies only to the parts that shipped; the gaps listed in "Remaining Gaps" at the end of this document **must** be picked up.
+
 **Facilitator:** Mbah
 **Date:** 2026-10-14
 
@@ -117,7 +119,7 @@ _Novelty:_ History finds the coach at the moment he needs it (pre-session), inst
 - `NeglectedSkillDetectionService` (weekly batch) flags skills a player hasn't exercised recently; `DrillSuggestionService` already scores session-builder drill suggestions higher if they address a neglected skill, and `DrillCard.vue` already shows a "neglected skill" badge during session building.
 - `CoachContributionDto` / `/slu/coach-contributions` already exposes a **cross-coach**, per-skill percentage-contribution breakdown for a player -- this is in tension with the earlier Decision #8 (siloed-per-coach history) and needs reconciling: raw session notes can stay siloed while aggregate skill-development numbers are already, by design, shared across coaches.
 - **The actual gap is almost entirely frontend.** `PlayerTimelinePanel.vue` and the exposure/narrative/neglected-skill/coach-contribution endpoints are consumed only by the Player and Parent dashboards. No coach-facing page (Command Center, Session Builder, Drill Library, Revenue, Reviews, etc.) surfaces any of it, and there is no "my players" roster anywhere in the app today.
-- Side observation (not in scope for this session): `/exposure`, `/narrative`, `/neglected-skills`, `/coach-contributions` are gated only by `hasRole('ROLE_COACH')`, with no check that *this* coach has ever trained *that* player -- unlike the timeline endpoint, which does enforce the relationship via the 90-day rule. Worth a follow-up look outside this brainstorm. **[CORRECTED by `skillars-12-4-coach-facing-player-detail-page` (created 2026-10-15): re-verified against HEAD — this list is only half right.** `SluDashboardService.requireCoachPlayerRelationshipIfCoach` already gated `/exposure` and `/narrative` (and `/slu/skill-trends`, not named here) at the time of this brainstorm; only `/neglected-skills` and `/slu/coach-contributions` genuinely lacked the check. That story closes the gap for those two.]**
+- Side observation (not in scope for this session): `/exposure`, `/narrative`, `/neglected-skills`, `/coach-contributions` are gated only by `hasRole('ROLE_COACH')`, with no check that *this* coach has ever trained *that* player -- unlike the timeline endpoint, which does enforce the relationship via the 90-day rule. Worth a follow-up look outside this brainstorm. **[CORRECTED by `skillars-12-4-coach-facing-player-detail-page` (created 2026-10-15): re-verified against HEAD — this list is only half right.** `SluDashboardService.requireCoachPlayerRelationshipIfCoach` already gated `/exposure` and `/narrative` (and `/slu/skill-trends`, not named here) at the time of this brainstorm; only `/neglected-skills` and `/slu/coach-contributions` genuinely lacked the check. That story closes the gap for those two.]** **[AUDIT 2026-10-22: still not fully closed — `GET`/`PUT /players/{id}/radar/preferences` (`RadarDisplayResource.java:43-61`) remain gated by coach role only, with no coach↔player relationship check. Tracked as G19 → `skillars-12-10`.]**
 
 **User Creative Strengths:** Pulled the session back to ground truth at exactly the right moment -- recognizing that "the player already has this" was a signal the brainstorm was about to reinvent something, rather than letting the facilitator keep speculating.
 **Energy Level:** High -- the grounding sharpened rather than deflated the session; moving into SCAMPER with a much more concrete convergence target.
@@ -271,3 +273,26 @@ The session's defining moment was the user redirecting the facilitator mid-Role-
 2. Start with Priority 1 (roster-summary endpoint + roster page) -- likely the next story/epic slice
 3. Treat the flagged `/development` authorization gap as a separate follow-up, not part of this feature
 4. Revisit the deferred player/parent-initiated flag alongside homework/messaging work later — ✅ **Done: covered by `skillars-deferred-155-recap-report-tie-in-player-session-request-gdpr-metadata-scrub-and-hardening-sweep` (created 2026-10-19); annotated by skillars-deferred-157 AC10.**
+
+## Remaining Gaps (audit 2026-10-22, HEAD `7121ace5`)
+
+Full detail, file:line evidence and acceptance criteria: `_bmad-output/planning-artifacts/skillars-epics.md` → Epic 12 → "Gap → story map".
+
+| Brainstorm item | What is still missing | Gap(s) | Story |
+|---|---|---|---|
+| Pattern #2 Dormant/Active | No "last trained N days ago"; roster caption can contradict dormant badge | G2, G3 | 12-6 |
+| Pattern #3 Archive Don't Delete | Lapsed players vanish beyond 730-day floor / 150 cap | G22 | 12-10 |
+| Pattern #4 Micro-Recap | "What went well" never built; voice note captured but unused | G9, G10 | 12-7 |
+| Pattern #5 Feed-Forward | "What's next" display-only; no pre-fill/suggestion in Session Builder | G5 | 12-6 |
+| Pattern #7 Auto-Drafted History | Drills/ratings not on timeline; 5 event types are stubs | G14, G15 | 12-8 |
+| Decision #8 Siloed History | Recaps reach parents verbatim via PDF; denylist redaction | G12, G25 | 12-7, 12-10 |
+| Pattern #9 Session Prep Card | No plan note; no days-since; neglected count only; only for `UPCOMING` | G1, G2, G4, G6 | 12-6 |
+| Converge #10 Derived Roster | Roster vs. auth predicate drift on time | G24 | 12-10 |
+| Converge #11 Roster-Summary Endpoint | N+1 behind the single call | G23 | 12-10 |
+| Converge #12 Player-Detail Page | Missing parent-parity panels; coach-only tools unreachable (PLAYER-only route); unused `/neglected-skills` | G16, G17, G18 | 12-9 |
+| Converge #15 Session-Close Recap | No edit / resume; no missing-recap nudge; unattended-recap inconsistency | G7, G8, G13 | 12-7 |
+| Converge #16 Recap → Report | Fields unlabelled in PDF; parent visibility undecided | G11, G12 | 12-7 |
+| Codebase Grounding (90-day rule) | Windows inconsistent (90/730/unbounded); clock = processing time | G20, G21 | 12-10 |
+| Codebase Grounding (auth side note) | `radar/preferences` lacks relationship check | G19 | 12-10 |
+
+Fully met at audit time: Pattern #1, Pattern #6/Converge #14 (derived form), Converge #13, Theme 4 cross-coach contribution, Deferred #17.
