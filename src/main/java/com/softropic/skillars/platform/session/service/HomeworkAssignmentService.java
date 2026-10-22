@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.session.contract.DrillResponse;
+import com.softropic.skillars.platform.session.contract.HomeworkAssignedEvent;
 import com.softropic.skillars.platform.session.contract.HomeworkAssignmentResponse;
 import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
@@ -18,6 +19,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -25,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -47,6 +50,7 @@ public class HomeworkAssignmentService {
     private final CoachProfileService coachProfileService;
     private final PlayerProfileRepository playerProfileRepository;
     private final MeterRegistry meterRegistry;
+    private final ApplicationEventPublisher eventPublisher;
 
     private static final String LOCKER_ROOM_DRILLS_LATENCY = "session.homework.locker_room_drills.latency";
 
@@ -72,27 +76,41 @@ public class HomeworkAssignmentService {
             log.debug("No session found for booking {} — assigning homework with null sessionId (expected for QUICK-mode bookings)", event.getBookingId());
         }
         UUID packId = resolvePackId(event.getPlayerId(), event.getCoachId());
-        for (UUID drillId : drillIdsToAssign) {
-            // Idempotency: skip if assignment already exists for this booking+drill.
-            // Uses bookingId (never null) — not sessionId, which may be null for QUICK-mode bookings.
-            // PostgreSQL UNIQUE constraints treat NULL ≠ NULL, so a nullable-column constraint gives
-            // zero protection when that column is null; bookingId is the correct idempotency anchor.
-            if (homeworkAssignmentRepository.existsByBookingIdAndDrillId(event.getBookingId(), drillId)) {
-                log.debug("Homework assignment already exists for booking {} drill {} — skipping", event.getBookingId(), drillId);
-                continue;
+        // skillars-12-8 AC6: only rows actually inserted by THIS invocation are announced, so a replayed
+        // BookingCompletedEvent publishes nothing. Published from a finally so a non-duplicate-key failure
+        // on drill 2 cannot swallow the already-committed drill 1 (a replay would skip it as "exists").
+        List<UUID> newlyAssigned = new ArrayList<>();
+        try {
+            for (UUID drillId : drillIdsToAssign) {
+                // Idempotency: skip if assignment already exists for this booking+drill.
+                // Uses bookingId (never null) — not sessionId, which may be null for QUICK-mode bookings.
+                // PostgreSQL UNIQUE constraints treat NULL ≠ NULL, so a nullable-column constraint gives
+                // zero protection when that column is null; bookingId is the correct idempotency anchor.
+                if (homeworkAssignmentRepository.existsByBookingIdAndDrillId(event.getBookingId(), drillId)) {
+                    log.debug("Homework assignment already exists for booking {} drill {} — skipping", event.getBookingId(), drillId);
+                    continue;
+                }
+                HomeworkAssignment assignment = new HomeworkAssignment();
+                assignment.setBookingId(event.getBookingId());
+                assignment.setSessionId(sessionId);
+                assignment.setPlayerId(event.getPlayerId());
+                assignment.setCoachId(event.getCoachId());
+                assignment.setDrillId(drillId);
+                assignment.setPackId(packId);
+                try {
+                    homeworkAssignmentRepository.saveAndFlush(assignment);
+                    newlyAssigned.add(drillId);
+                } catch (DataIntegrityViolationException e) {
+                    // UNIQUE(booking_id, drill_id) constraint violation — race condition on concurrent event replay
+                    log.warn("Duplicate homework assignment for booking {} drill {} — ignored", event.getBookingId(), drillId);
+                }
             }
-            HomeworkAssignment assignment = new HomeworkAssignment();
-            assignment.setBookingId(event.getBookingId());
-            assignment.setSessionId(sessionId);
-            assignment.setPlayerId(event.getPlayerId());
-            assignment.setCoachId(event.getCoachId());
-            assignment.setDrillId(drillId);
-            assignment.setPackId(packId);
-            try {
-                homeworkAssignmentRepository.saveAndFlush(assignment);
-            } catch (DataIntegrityViolationException e) {
-                // UNIQUE(booking_id, drill_id) constraint violation — race condition on concurrent event replay
-                log.warn("Duplicate homework assignment for booking {} drill {} — ignored", event.getBookingId(), drillId);
+        } finally {
+            if (!newlyAssigned.isEmpty()) {
+                // No active transaction here (each saveAndFlush committed on its own); the timeline consumer
+                // therefore declares fallbackExecution = true.
+                eventPublisher.publishEvent(new HomeworkAssignedEvent(
+                    event.getBookingId(), event.getPlayerId(), event.getCoachId(), List.copyOf(newlyAssigned)));
             }
         }
     }

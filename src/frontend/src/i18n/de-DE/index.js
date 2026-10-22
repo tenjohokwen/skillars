@@ -1188,6 +1188,11 @@ export default {
       whatWeDidLabel: 'Was wir erarbeitet haben',
       whatsNextLabel: 'Was als Nächstes kommt',
       whatWentWellLabel: 'Was gut lief',
+      drillsLabel: 'Übungen',
+      ratingsLabel: 'Bewertungen',
+      effortLabel: 'Einsatz',
+      focusLabel: 'Fokus',
+      techniqueLabel: 'Technik',
       eventType: {
         SESSION_COMPLETED: 'Einheit abgeschlossen',
         RADAR_ASSESSMENT: 'Radar-Bewertung',

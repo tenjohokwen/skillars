@@ -32,6 +32,10 @@ public interface PlayerTimelineRepository extends JpaRepository<PlayerTimelineEv
     // skillars-12-3 Task 1.4: serves both the coach-access clock (CoachPlayerLastSessionResolver,
     // Task 2.1) and the Session Prep endpoint's recap fields (SessionPrepService, Task 3.4) — a
     // single query for "the most recent attended SESSION_COMPLETED this coach wrote for this player".
+    // skillars-12-8 AC7: one HOMEWORK_ASSIGNED row per (player, booking) -- insert vs appendHomeworkDrills.
+    // Player-scoped so the (player_id, occurred_at) index narrows it; nothing indexes reference_id.
+    boolean existsByPlayerIdAndEventTypeAndReferenceId(Long playerId, PlayerTimelineEventType eventType, UUID referenceId);
+
     Optional<PlayerTimelineEvent> findTopByPlayerIdAndCoachIdAndEventTypeOrderByOccurredAtDesc(
         Long playerId, UUID coachId, PlayerTimelineEventType eventType);
 
@@ -116,7 +120,7 @@ public interface PlayerTimelineRepository extends JpaRepository<PlayerTimelineEv
     // findSessionNotesForReport above, for the same attendance-gating reason — a column-based
     // filter would silently skip any non-attended session's real recap text. JPQL cannot express
     // JSONB key-removal (`-`), hence nativeQuery = true. coachId left in place: it is a structural
-    // reference key, not narrative PII (TimelineQueryService.redactRecapIfNotAuthoringCoach already
+    // reference key, not narrative PII (TimelineQueryService.redactCoachPrivateFieldsIfNotAuthoringCoach already
     // establishes it surviving redaction as deliberate, asserted-correct behavior).
     // (skillars-deferred-155 code review) The jsonb_exists guard is a provable no-op narrowing: a row
     // carrying neither key has nothing for `- 'whatWeDid' - 'whatsNext'` to strip, so skipping it cannot
@@ -137,4 +141,19 @@ public interface PlayerTimelineRepository extends JpaRepository<PlayerTimelineEv
         + "OR jsonb_exists(metadata, 'whatWentWell'))",
         nativeQuery = true)
     void anonymizeMetadataByCoachId(@Param("coachId") UUID coachId);
+
+    // skillars-12-8 code review: merges a later HomeworkAssignedEvent for the same booking into the existing
+    // HOMEWORK_ASSIGNED row (metadata is updatable = false, so a bulk statement). Appends only entries whose
+    // drillId is not already in metadata.drills, so a re-delivered event is a no-op. Player-scoped for the
+    // (player_id, occurred_at) index, like updateSessionRecapMetadata.
+    @Modifying
+    @Query(value = "UPDATE development.player_timeline_events "
+        + "SET metadata = jsonb_set(metadata, '{drills}', COALESCE(metadata->'drills', CAST('[]' AS jsonb)) || ("
+        + "SELECT COALESCE(jsonb_agg(n), CAST('[]' AS jsonb)) FROM jsonb_array_elements(CAST(:drills AS jsonb)) n "
+        + "WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(metadata->'drills', CAST('[]' AS jsonb))) o "
+        + "WHERE o->>'drillId' = n->>'drillId'))) "
+        + "WHERE player_id = :playerId AND reference_id = :bookingId AND event_type = 'HOMEWORK_ASSIGNED'",
+        nativeQuery = true)
+    int appendHomeworkDrills(@Param("playerId") Long playerId, @Param("bookingId") UUID bookingId,
+                             @Param("drills") String drills);
 }

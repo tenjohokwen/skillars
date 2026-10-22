@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.session.contract.HomeworkAssignedEvent;
 import com.softropic.skillars.platform.session.contract.HomeworkAssignmentResponse;
 import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
@@ -20,7 +21,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.List;
 import java.util.Map;
@@ -53,6 +57,7 @@ class HomeworkAssignmentServiceTest {
     @Mock private PackSessionService packSessionService;
     @Mock private CoachProfileService coachProfileService;
     @Mock private PlayerProfileRepository playerProfileRepository;
+    @Mock private ApplicationEventPublisher eventPublisher;
     @Spy private MeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     @InjectMocks private HomeworkAssignmentService service;
@@ -75,6 +80,83 @@ class HomeworkAssignmentServiceTest {
         service.handleBookingCompleted(event);
 
         verify(homeworkAssignmentRepository, times(2)).saveAndFlush(any(HomeworkAssignment.class));
+    }
+
+    // skillars-12-8 AC6
+    @Test
+    void handleBookingCompleted_publishesHomeworkAssignedWithOnlyNewlyPersistedDrills() {
+        UUID bookingId = UUID.randomUUID();
+        UUID coachId = UUID.randomUUID();
+        UUID d1 = UUID.randomUUID();
+        UUID d2 = UUID.randomUUID();
+        BookingCompletedEvent event = new BookingCompletedEvent(this, bookingId, coachId, 1001L,
+            2001L, true, null, null, null, List.of(d1, d2));
+        when(sessionRepository.findByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(packSessionService.getActivePackId(anyLong(), any())).thenReturn(null);
+        when(homeworkAssignmentRepository.existsByBookingIdAndDrillId(bookingId, d1)).thenReturn(true);
+        when(homeworkAssignmentRepository.existsByBookingIdAndDrillId(bookingId, d2)).thenReturn(false);
+
+        service.handleBookingCompleted(event);
+
+        ArgumentCaptor<HomeworkAssignedEvent> captor = ArgumentCaptor.forClass(HomeworkAssignedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().drillIds()).containsExactly(d2);
+        assertThat(captor.getValue().bookingId()).isEqualTo(bookingId);
+        assertThat(captor.getValue().coachId()).isEqualTo(coachId);
+        assertThat(captor.getValue().playerId()).isEqualTo(1001L);
+    }
+
+    @Test
+    void handleBookingCompleted_replay_publishesNothing() {
+        UUID bookingId = UUID.randomUUID();
+        UUID d1 = UUID.randomUUID();
+        BookingCompletedEvent event = new BookingCompletedEvent(this, bookingId, UUID.randomUUID(), 1001L,
+            2001L, true, null, null, null, List.of(d1));
+        when(sessionRepository.findByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(packSessionService.getActivePackId(anyLong(), any())).thenReturn(null);
+        when(homeworkAssignmentRepository.existsByBookingIdAndDrillId(bookingId, d1)).thenReturn(true);
+
+        service.handleBookingCompleted(event);
+
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void handleBookingCompleted_duplicateKeyRace_notAnnounced() {
+        UUID bookingId = UUID.randomUUID();
+        UUID d1 = UUID.randomUUID();
+        BookingCompletedEvent event = new BookingCompletedEvent(this, bookingId, UUID.randomUUID(), 1001L,
+            2001L, true, null, null, null, List.of(d1));
+        when(sessionRepository.findByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(packSessionService.getActivePackId(anyLong(), any())).thenReturn(null);
+        when(homeworkAssignmentRepository.existsByBookingIdAndDrillId(any(), any())).thenReturn(false);
+        when(homeworkAssignmentRepository.saveAndFlush(any(HomeworkAssignment.class)))
+            .thenThrow(new DataIntegrityViolationException("dup"));
+
+        service.handleBookingCompleted(event);
+
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void handleBookingCompleted_failureOnSecondDrill_stillAnnouncesFirst() {
+        UUID bookingId = UUID.randomUUID();
+        UUID d1 = UUID.randomUUID();
+        UUID d2 = UUID.randomUUID();
+        BookingCompletedEvent event = new BookingCompletedEvent(this, bookingId, UUID.randomUUID(), 1001L,
+            2001L, true, null, null, null, List.of(d1, d2));
+        when(sessionRepository.findByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(packSessionService.getActivePackId(anyLong(), any())).thenReturn(null);
+        when(homeworkAssignmentRepository.existsByBookingIdAndDrillId(any(), any())).thenReturn(false);
+        when(homeworkAssignmentRepository.saveAndFlush(any(HomeworkAssignment.class)))
+            .thenAnswer(inv -> inv.getArgument(0))
+            .thenThrow(new IllegalStateException("boom"));
+
+        assertThatThrownBy(() -> service.handleBookingCompleted(event)).isInstanceOf(IllegalStateException.class);
+
+        ArgumentCaptor<HomeworkAssignedEvent> captor = ArgumentCaptor.forClass(HomeworkAssignedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().drillIds()).containsExactly(d1);
     }
 
     @Test

@@ -913,6 +913,11 @@ export default {
       whatWeDidLabel: 'What we worked on',
       whatsNextLabel: "What's next",
       whatWentWellLabel: 'What went well',
+      drillsLabel: 'Drills',
+      ratingsLabel: 'Ratings',
+      effortLabel: 'Effort',
+      focusLabel: 'Focus',
+      techniqueLabel: 'Technique',
       eventType: {
         SESSION_COMPLETED: 'Session Completed',
         RADAR_ASSESSMENT: 'Radar Assessment',

@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.development.contract.PlayerTimelineEventT
 import com.softropic.skillars.platform.development.contract.RadarEntrySubmittedEvent;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineEvent;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineRepository;
+import com.softropic.skillars.platform.session.contract.HomeworkAssignedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +24,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -38,10 +40,17 @@ public class TimelineEventListener {
     public static final String METADATA_KEY_WHAT_WE_DID = "whatWeDid";
     public static final String METADATA_KEY_WHATS_NEXT = "whatsNext";
     public static final String METADATA_KEY_WHAT_WENT_WELL = "whatWentWell";
+    // skillars-12-8: drills is visible to every viewer; the three ratings are authoring-coach only and
+    // MUST stay in TimelineQueryService's redaction denylist (a new key not added there leaks).
+    public static final String METADATA_KEY_DRILLS = "drills";
+    public static final String METADATA_KEY_EFFORT_RATING = "effortRating";
+    public static final String METADATA_KEY_FOCUS_RATING = "focusRating";
+    public static final String METADATA_KEY_TECHNIQUE_RATING = "techniqueRating";
 
     private final PlayerTimelineRepository timelineRepository;
     private final SessionCompletionDataRepository completionDataRepository;
     private final ObjectMapper objectMapper;
+    private final TimelineDrillSnapshotResolver drillSnapshotResolver;
 
     @Autowired
     @Lazy
@@ -73,6 +82,23 @@ public class TimelineEventListener {
             if (whatWeDid != null) metadata.put(METADATA_KEY_WHAT_WE_DID, whatWeDid);
             if (whatsNext != null) metadata.put(METADATA_KEY_WHATS_NEXT, whatsNext);
             if (whatWentWell != null) metadata.put(METADATA_KEY_WHAT_WENT_WELL, whatWentWell);
+            // skillars-12-8 AC1/AC2: what was trained + the coach's ratings, attended sessions only (a no-show
+            // trained nothing and its ratings are not timeline content). Enrichment is best-effort: the
+            // resolver never throws, so the SESSION_COMPLETED row is always written.
+            if (event.isPlayerAttended()) {
+                // The resolver already never throws; this guard keeps that guarantee local, so a future resolver
+                // change cannot cost the SESSION_COMPLETED row (code review 2026-10-23).
+                try {
+                    List<Map<String, Object>> drills = drillSnapshotResolver.forBooking(event.getBookingId());
+                    if (!drills.isEmpty()) metadata.put(METADATA_KEY_DRILLS, drills);
+                } catch (Exception e) {
+                    log.warn("Drill enrichment failed for booking {} -- writing SESSION_COMPLETED without drills",
+                        event.getBookingId(), e);
+                }
+                if (event.getEffortRating() != null) metadata.put(METADATA_KEY_EFFORT_RATING, event.getEffortRating());
+                if (event.getFocusRating() != null) metadata.put(METADATA_KEY_FOCUS_RATING, event.getFocusRating());
+                if (event.getTechniqueRating() != null) metadata.put(METADATA_KEY_TECHNIQUE_RATING, event.getTechniqueRating());
+            }
             // skillars-12-3 AC1: a non-attended wrap-up must not earn coach timeline access any
             // more than it earns an SLU row today — mirrors SluCalculationService.onBookingCompleted's
             // own !event.isPlayerAttended() early return exactly.
@@ -137,6 +163,51 @@ public class TimelineEventListener {
         if (updated == 0) {
             log.warn("Recap edit for booking {} matched no SESSION_COMPLETED timeline event -- nothing to update", bookingId);
         }
+    }
+
+    /**
+     * skillars-12-8 AC7: HOMEWORK_ASSIGNED producer's consumer. fallbackExecution = true is REQUIRED: the
+     * publisher (HomeworkAssignmentService.handleBookingCompleted) has no active transaction, and an
+     * AFTER_COMMIT listener without fallback is silently dropped then. Written via the 5-arg overload so
+     * the coach_id column stays NULL -- that column is the attendance-gated coach-access-clock signal and a
+     * homework entry must never reset it. One row per (player, booking): the publisher announces only the
+     * drill ids it newly persisted, so a booking can legitimately produce a SECOND event (drill 2 failed
+     * mid-loop, a later replay inserts it). That event is merged into the existing row (drill ids already
+     * present are skipped), never dropped and never written as a second row (code review 2026-10-23).
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    @Async("taskExecutor")
+    public void onHomeworkAssigned(HomeworkAssignedEvent event) {
+        try {
+            List<Map<String, Object>> drills = drillSnapshotResolver.snapshot(event.drillIds());
+            if (drills.isEmpty()) {
+                return;
+            }
+            if (timelineRepository.existsByPlayerIdAndEventTypeAndReferenceId(
+                    event.playerId(), PlayerTimelineEventType.HOMEWORK_ASSIGNED, event.bookingId())) {
+                self.appendHomeworkDrills(event.playerId(), event.bookingId(), drills);
+                return;
+            }
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put(METADATA_KEY_DRILLS, drills);
+            metadata.put(METADATA_KEY_COACH_ID, event.coachId().toString());
+            self.writeTimelineEvent(event.playerId(), PlayerTimelineEventType.HOMEWORK_ASSIGNED,
+                event.bookingId(), "booking", metadata);
+        } catch (Exception e) {
+            log.error("Failed to write HOMEWORK_ASSIGNED timeline event: playerId={}", event.playerId(), e);
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void appendHomeworkDrills(Long playerId, UUID bookingId, List<Map<String, Object>> drills) {
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(drills);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Cannot serialise homework drills for booking " + bookingId, e);
+        }
+        int updated = timelineRepository.appendHomeworkDrills(playerId, bookingId, json);
+        log.debug("Merged homework drills into existing HOMEWORK_ASSIGNED row for booking {} ({} row(s))", bookingId, updated);
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
