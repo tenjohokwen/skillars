@@ -884,6 +884,36 @@ class GdprErasureServiceTest {
     }
 
     /**
+     * skillars-deferred-159 AC7: the PARENT loop must keep going past a {@code CHILD_BOOKING_*} skip. Child
+     * A (lowest id, processed first) trips the booking statement; child B must still be erased and
+     * tombstoned, and A must not be. Mutation-verified: a {@code break} inside the PARENT-branch
+     * {@code catch (BookingSchemaLockException)} makes this test fail.
+     */
+    @Test
+    void erase_parentUser_firstChildBookingLockTimeout_secondChildStillErased() {
+        stubParentErasurePreamble();
+        PlayerProfile childA = parentChild(9590_777_011L);
+        PlayerProfile childB = parentChild(9590_777_012L);
+        when(playerProfileRepository.findByParentIdOrderByIdAsc(USER_ID)).thenReturn(List.of(childA, childB));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
+            REQUEST_ID.toString(), AdminAlertType.GDPR_ERASURE_DEADLINE, AdminAlertStatus.OPEN))
+            .thenReturn(Optional.empty());
+        org.mockito.Mockito.doThrow(new PessimisticLockingFailureException("lock_timeout"))
+            .when(bookingRepository).anonymizeNotesAndPlayerRequestByPlayerId(childA.getId());
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        ArgumentCaptor<AdminAlert> alertCaptor = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(alertCaptor.capture());
+        assertThat(alertCaptor.getValue().getReason()).isEqualTo("CHILD_BOOKING_LOCK_TIMEOUT");
+        verify(bookingRepository).anonymizeNotesAndPlayerRequestByPlayerId(childB.getId());
+        verify(playerProfileRepository).save(childB);
+        verify(playerProfileRepository, never()).save(childA);
+        assertThat(childA.getDevelopmentDataErasedAt()).isNull();
+        assertThat(childB.getDevelopmentDataErasedAt()).isNotNull();
+    }
+
+    /**
      * skillars-deferred-158 AC5 (Option A): a non-lock {@code DataAccessException} on a booking
      * statement is deliberately NOT labelled CHILD_BOOKING_*. It is not a
      * PessimisticLockingFailureException, so no catch in erase() matches and it propagates; the

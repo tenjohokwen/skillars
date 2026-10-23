@@ -16,6 +16,7 @@ import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository
 import com.softropic.skillars.platform.admin.repo.DisputeRepository;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
 import com.softropic.skillars.platform.security.contract.SkillarsRole;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +43,7 @@ public class GdprExportService {
 
     private final GdprRequestRepository gdprRequestRepository;
     private final UserRepository userRepository;
+    private final PlayerProfileRepository playerProfileRepository;
     private final BookingRepository bookingRepository;
     private final CoachProfileRepository coachProfileRepository;
     private final ParentCreditLedgerRepository parentCreditLedgerRepository;
@@ -119,7 +121,9 @@ public class GdprExportService {
             bookingRepository.findAllByParentIdOrderByRequestedStartTimeAsc(userId));
 
         if (user.getSkillarsRole() == SkillarsRole.PLAYER) {
-            bookings.addAll(bookingRepository.findAllByPlayerId(userId));
+            // Booking.playerId is a PlayerProfile PK, not a User id: resolve the player's own profile first.
+            playerProfileRepository.findByUserId(userId).ifPresent(pp ->
+                bookings.addAll(bookingRepository.findAllByPlayerId(pp.getId())));
         }
 
         coachProfileRepository.findByUserId(userId).ifPresent(cp ->

@@ -56,7 +56,8 @@ class QuickCompleteTimeoutServiceTest {
             }
         };
         service = new QuickCompleteTimeoutService(
-            completionDataRepository, bookingService, eventPublisher, configService, txTemplate
+            completionDataRepository, bookingService, eventPublisher, configService, txTemplate,
+            new com.fasterxml.jackson.databind.ObjectMapper()
         );
         lenient().when(configService.getBoundedLong("booking.quick_complete_timeout_hours", 1L, 168L)).thenReturn(24L);
     }
@@ -95,6 +96,27 @@ class QuickCompleteTimeoutServiceTest {
         assertThat(event.getWhatsNext()).isEqualTo("Continue weak-foot drills");
         // skillars-12-7 AC11: the optional third recap field rides along on the auto-confirm path too.
         assertThat(event.getWhatWentWell()).isEqualTo("Great first touch");
+    }
+
+    @Test
+    void processExpiredQuickCompletes_carriesStoredHomeworkDrillIdsOnEvent() throws Exception {
+        // skillars-deferred-159 AC1: the timeout path used to publish List.of(), silently dropping homework.
+        java.util.List<java.util.UUID> drills = java.util.List.of(java.util.UUID.randomUUID(), java.util.UUID.randomUUID());
+        SessionCompletionData scd = new SessionCompletionData();
+        scd.setBookingId(BOOKING_ID);
+        scd.setCoachId(COACH_ID);
+        scd.setPlayerId(PLAYER_ID);
+        scd.setHomeworkDrillIds(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(drills));
+        when(completionDataRepository.findPendingQuickCompletes(any(Instant.class))).thenReturn(List.of(scd));
+        Booking booking = new Booking();
+        booking.setParentId(PARENT_ID);
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(booking);
+
+        service.processExpiredQuickCompletes();
+
+        ArgumentCaptor<BookingCompletedEvent> captor = ArgumentCaptor.forClass(BookingCompletedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().getHomeworkDrillIds()).isEqualTo(drills);
     }
 
     @Test

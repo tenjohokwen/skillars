@@ -56,6 +56,7 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private ApplicationEventPublisher eventPublisher;
+    @Autowired private com.softropic.skillars.platform.booking.service.QuickCompleteTimeoutService quickCompleteTimeoutService;
 
     @LocalServerPort private int randomServerPort;
 
@@ -799,14 +800,74 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
           + "WHERE e.reference_id = ? AND e.event_type = 'HOMEWORK_ASSIGNED'", String.class, bookingId);
     }
 
+    // ---- skillars-deferred-159: timeout path keeps homework; wrap-up validates drill ownership ----
+
+    @Test
+    void quickCompleteTimeout_withoutParentConfirm_stillAssignsHomeworkAndWritesTimelineRow() {
+        UUID homework = insertDrill("Timeout Juggling");
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        assertThat(postQuickWrapUp(List.of(homework), COACH_EMAIL).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        // created_at is updatable=false on the entity, so backdate it past the 24h seeded timeout via SQL.
+        transactionTemplate.executeWithoutResult(t -> jdbcTemplate.update(
+            "UPDATE booking.session_completion_data SET created_at = ? WHERE booking_id = ?",
+            Timestamp.from(Instant.now().minus(Duration.ofHours(30))), bookingId));
+
+        quickCompleteTimeoutService.processExpiredQuickCompletes();
+
+        Awaitility.await("homework assigned after the timeout auto-confirm")
+            .atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("HOMEWORK_ASSIGNED") == 1);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM session.homework_assignments WHERE booking_id = ? AND drill_id = ?",
+            Integer.class, bookingId, homework)).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId)).isEqualTo("COMPLETED");
+    }
+
+    @Test
+    void wrapUp_withAnotherCoachsPrivateDrill_isRejectedAndNothingIsSaved() {
+        UUID foreignPrivate = insertDrill("Foreign Secret", "PRIVATE", coachProfile2Id);
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+
+        assertThatThrownBy(() -> postQuickWrapUp(List.of(foreignPrivate), COACH_EMAIL))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM booking.session_completion_data WHERE booking_id = ?", Integer.class, bookingId)).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId))
+            .isEqualTo("COMPLETED_PENDING_CONFIRMATION");
+    }
+
+    @Test
+    void wrapUp_withOwnPrivateDrill_isAccepted() {
+        UUID own = insertDrill("Own Secret", "PRIVATE", coachProfileId);
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+
+        assertThat(postQuickWrapUp(List.of(own), COACH_EMAIL).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+    }
+
+    private ResponseEntity<Void> postQuickWrapUp(List<UUID> homeworkDrillIds, String coachEmail) {
+        return httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/complete", HttpMethod.POST,
+            Map.of("playerAttended", true, "effortRating", 4, "focusRating", 4, "techniqueRating", 3,
+                "mode", "QUICK", "homeworkDrillIds", homeworkDrillIds,
+                "recapWhatWeDid", "Recap did", "recapWhatsNext", "Recap next"),
+            authenticatedHeaders(loginAndGetCookies(coachEmail)), Void.class);
+    }
+
     // ---- helpers ----
 
     private UUID insertDrill(String name) {
+        return insertDrill(name, "PLATFORM", null);
+    }
+
+    private UUID insertDrill(String name, String libraryType, UUID ownerCoachId) {
         UUID id = UUID.randomUUID();
         transactionTemplate.execute(s -> {
             jdbcTemplate.update(
                 "INSERT INTO session.drills (id, name, library_type, owner_coach_id, status, metadata, version) "
-              + "VALUES (?, ?, 'PLATFORM', NULL, 'ACTIVE', '{}'::jsonb, 0)", id, name);
+              + "VALUES (?, ?, ?, ?, 'ACTIVE', '{}'::jsonb, 0)", id, name, libraryType, ownerCoachId);
             return null;
         });
         return id;

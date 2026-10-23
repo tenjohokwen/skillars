@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.booking.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
@@ -33,6 +34,7 @@ public class QuickCompleteTimeoutService {
     private final ApplicationEventPublisher eventPublisher;
     private final ConfigService configService;
     private final TransactionTemplate transactionTemplate;
+    private final ObjectMapper objectMapper;
 
     /**
      * skillars-deferred-118 AC3 sizing basis: {@code findPendingQuickCompletes} carries no
@@ -65,7 +67,8 @@ public class QuickCompleteTimeoutService {
                     eventPublisher.publishEvent(new BookingCompletedEvent(
                         this, scd.getBookingId(), scd.getCoachId(), scd.getPlayerId(),
                         booking.getParentId(), scd.isPlayerAttended(), scd.getEffortRating(),
-                        scd.getFocusRating(), scd.getTechniqueRating(), List.of(),
+                        scd.getFocusRating(), scd.getTechniqueRating(),
+                        HomeworkDrillIds.parse(objectMapper, scd.getHomeworkDrillIds()),
                         scd.getWhatWeDid(), scd.getWhatsNext(), scd.getWhatWentWell()
                     ));
                 });

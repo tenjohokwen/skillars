@@ -120,7 +120,13 @@ describe('sessionBuilder.store prep state (skillars-12-6)', () => {
   // SessionBuilderPage mount ordering").
   it('a scout-gated plan fetch sets isGated, which the page uses to skip fetchPrep', async () => {
     sessionApi.getSessionPlanByBooking.mockRejectedValue({
-      response: { status: 403, data: { helpCode: 'security.featureGated' } },
+      response: {
+        status: 403,
+        data: {
+          helpCode: 'ABC123',
+          errorMsg: { errorKey: 'security.featureGated', message: 'Feature gated' },
+        },
+      },
     })
     const store = useSessionBuilderStore()
 
@@ -128,5 +134,25 @@ describe('sessionBuilder.store prep state (skillars-12-6)', () => {
 
     expect(store.isGated).toBe(true)
     expect(store.prep).toBeNull()
+  })
+
+  // helpCode is a minted log reference, never the error key: a 403 that merely carries the string there
+  // must not be treated as the feature gate.
+  it('a 403 whose helpCode happens to equal the gate key but whose errorKey differs does not set isGated', async () => {
+    sessionApi.getSessionPlanByBooking.mockRejectedValue({
+      response: {
+        status: 403,
+        data: {
+          helpCode: 'security.featureGated',
+          errorMsg: { errorKey: 'security.accessDenied' },
+        },
+      },
+    })
+    const store = useSessionBuilderStore()
+
+    await store.fetchExistingPlan('b-1')
+
+    expect(store.isGated).toBe(false)
+    expect(store.error).not.toBeNull()
   })
 })

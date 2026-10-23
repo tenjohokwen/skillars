@@ -150,7 +150,7 @@ export const useSessionBuilderStore = defineStore('sessionBuilder', () => {
         initForBooking(bId)
       } else if (
         e?.response?.status === 403 &&
-        e?.response?.data?.helpCode === 'security.featureGated'
+        e?.response?.data?.errorMsg?.errorKey === 'security.featureGated'
       ) {
         isGated.value = true
       } else {
