@@ -45,6 +45,7 @@ import { ref, onUnmounted } from 'vue'
 import { useQuasar } from 'quasar'
 import { useI18n } from 'vue-i18n'
 import { useDevelopmentStore } from 'src/stores/development.store'
+import { getErrorMessage } from 'src/utils/errorHandler'
 
 const props = defineProps({
   modelValue: { type: Boolean, required: true },
@@ -78,8 +79,10 @@ async function submit() {
     emit('generated')
     close()
     $q.notify({ type: 'positive', message: t('development.report.generateSuccess') })
-  } catch {
-    $q.notify({ type: 'negative', message: store.error ?? t('common.errorGeneric') })
+  } catch (err) {
+    // The thrown error carries the real reason (e.g. a relationship 403); store.error is not set
+    // by generateReport and could hold a stale, unrelated message.
+    $q.notify({ type: 'negative', message: getErrorMessage(err) })
   } finally {
     loading.value = false
   }

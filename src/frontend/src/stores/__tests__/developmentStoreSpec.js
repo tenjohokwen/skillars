@@ -25,6 +25,7 @@ vi.mock('src/api/development.api', () => ({
   listReports: vi.fn(),
   getTimeline: vi.fn(),
   getCoachContributions: vi.fn(),
+  getNeglectedSkills: vi.fn(),
 }))
 
 import {
@@ -39,6 +40,9 @@ import {
   listReports,
   generateReport,
   getTimeline,
+  getNeglectedSkills,
+  getSkillExposure,
+  getRadarPreferences,
 } from 'src/api/development.api'
 import { useDevelopmentStore } from 'src/stores/development.store'
 
@@ -75,10 +79,12 @@ describe('development.store — error-message i18n sweep (deferred-152 AC1)', ()
   // skillars-deferred-152 code review (2026-10-17): error.badRequest, not
   // validation.badRequest -- the latter is developer-facing copy ("Check method argument
   // mismatch, missing parameters e.t.c.") that this sweep was surfacing to end users.
-  it('saveTargets surfaces the translated fallback', async () => {
+  // skillars-12-9 AC4: saveTargets now rethrows a failed save so the page can tell it from a
+  // failed post-save re-fetch (which lands in targetsError and never throws).
+  it('saveTargets surfaces the translated fallback and rethrows', async () => {
     setMyTargets.mockRejectedValue(rejection(400))
     const store = useDevelopmentStore()
-    await store.saveTargets('p1', [])
+    await expect(store.saveTargets('p1', [])).rejects.toBeTruthy()
     expect(store.error).toBe(i18n.global.t('error.badRequest'))
     expect(store.error).not.toBe(i18n.global.t('validation.badRequest'))
   })
@@ -108,7 +114,7 @@ describe('development.store — error-message i18n sweep (deferred-152 AC1)', ()
   it('saveRadarPreferences surfaces the translated fallback', async () => {
     putRadarPreferences.mockRejectedValue(rejection(404))
     const store = useDevelopmentStore()
-    await store.saveRadarPreferences('p1', ['SHOOTING'])
+    await expect(store.saveRadarPreferences('p1', ['SHOOTING'])).rejects.toBeTruthy()
     expect(store.error).toBe(i18n.global.t('error.notFound'))
   })
 
@@ -135,11 +141,222 @@ describe('development.store — error-message i18n sweep (deferred-152 AC1)', ()
     expect(store.reportsError).toBe(i18n.global.t('error.notFound'))
   })
 
-  it('generateReport surfaces the translated fallback and still rethrows', async () => {
+  // skillars-12-9 AC5: a failed generate rethrows (the dialog notifies) but must NOT write
+  // reportsError, which would replace the already-loaded reports list with a banner.
+  it('generateReport rethrows and leaves reportsError and reports untouched', async () => {
     generateReport.mockRejectedValue(rejection(500))
     const store = useDevelopmentStore()
+    store.reports = [{ id: 'r1' }]
     await expect(store.generateReport('p1', 'next steps')).rejects.toBeTruthy()
-    expect(store.reportsError).toBe(i18n.global.t('error.generic'))
+    expect(store.reportsError).toBeNull()
+    expect(store.reports).toEqual([{ id: 'r1' }])
+    expect(store.reportGenerating).toBe(false)
+  })
+})
+
+// skillars-12-9 Task 1: multi-section hardening — per-section error refs, clear-before-fetch and
+// out-of-order response guards on every player-scoped fetch the coach page issues.
+function deferred() {
+  let resolve, reject
+  const promise = new Promise((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+describe('development.store — multi-section hardening (skillars-12-9)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  const SEQ_CASES = [
+    ['fetchNarrative', getNarrativeSummary, 'narrative', [], [{ key: 'A' }]],
+    ['fetchTargets', getMyTargets, 'targets', [], [{ skillCode: 'PAC' }]],
+    ['fetchRadarEntries', getMyRadarEntries, 'radarEntries', null, { entries: [{ a: 1 }] }],
+    ['fetchRadarDisplay', getRadarDisplay, 'radarDisplay', null, { skills: [{ a: 1 }] }],
+    [
+      'fetchRadarPreferences',
+      getRadarPreferences,
+      'radarPreferences',
+      null,
+      { selectedSkillCodes: ['PAC'] },
+    ],
+    ['fetchCorrelationInsights', getCorrelationInsights, 'correlationInsights', null, { a: 1 }],
+    ['fetchReports', listReports, 'reports', [], [{ id: 'r1' }]],
+    ['fetchNeglectedSkills', getNeglectedSkills, 'neglectedSkills', [], [{ skillCode: 'PAC' }]],
+  ]
+
+  it.each(SEQ_CASES)(
+    "%s keeps only the latest player's response when responses arrive out of order",
+    async (action, apiFn, stateKey, empty, valueA) => {
+      const a = deferred()
+      const b = deferred()
+      apiFn.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise)
+      const store = useDevelopmentStore()
+
+      const pA = store[action]('A')
+      const pB = store[action]('B')
+      const valueB = Array.isArray(valueA) ? [{ ...valueA[0], who: 'B' }] : { ...valueA, who: 'B' }
+      b.resolve(valueB)
+      await pB
+      a.resolve(valueA)
+      await pA
+
+      expect(store[stateKey]).toEqual(valueB)
+    },
+  )
+
+  it.each(SEQ_CASES)(
+    '%s clears its data at fetch start',
+    async (action, apiFn, stateKey, empty, valueA) => {
+      apiFn.mockResolvedValueOnce(valueA)
+      const store = useDevelopmentStore()
+      await store[action]('A')
+      const pending = deferred()
+      apiFn.mockReturnValueOnce(pending.promise)
+
+      const p = store[action]('B')
+      expect(store[stateKey]).toEqual(empty)
+      pending.resolve(valueA)
+      await p
+    },
+  )
+
+  it('a failed secondary fetch sets only its own error ref (plus the legacy error where written today)', async () => {
+    getNarrativeSummary.mockRejectedValue(rejection(500))
+    const store = useDevelopmentStore()
+    await store.fetchNarrative('p1')
+    expect(store.narrativeError).toBe(i18n.global.t('error.generic'))
+    expect(store.error).toBe(i18n.global.t('error.generic'))
+    expect(store.targetsError).toBeNull()
+    expect(store.radarDisplayError).toBeNull()
+    expect(store.narrativeLoading).toBe(false)
+  })
+
+  it("a failed secondary fetch does not erase another section's error", async () => {
+    getNarrativeSummary.mockRejectedValue(rejection(500))
+    getMyTargets.mockResolvedValue([])
+    const store = useDevelopmentStore()
+    await store.fetchNarrative('p1')
+    await store.fetchTargets('p1')
+    expect(store.narrativeError).toBe(i18n.global.t('error.generic'))
+    expect(store.targetsError).toBeNull()
+  })
+
+  it('a stale failure for a superseded player does not set the error', async () => {
+    const a = deferred()
+    getRadarDisplay.mockReturnValueOnce(a.promise).mockResolvedValueOnce({ skills: [] })
+    const store = useDevelopmentStore()
+    const pA = store.fetchRadarDisplay('A')
+    await store.fetchRadarDisplay('B')
+    a.reject(rejection(500))
+    await pA
+    expect(store.radarDisplayError).toBeNull()
+    expect(store.radarDisplay).toEqual({ skills: [] })
+  })
+
+  it('fetchExposure sets exposureError alongside the legacy error', async () => {
+    getSkillExposure.mockRejectedValue({ response: { data: { errorMsg: { message: 'boom' } } } })
+    const store = useDevelopmentStore()
+    await store.fetchExposure('p1')
+    expect(store.exposureError).toBe('boom')
+    expect(store.error).toBe('boom')
+  })
+
+  it('fetchRadarPreferences returns the loaded value, null when superseded, fallback on error', async () => {
+    const a = deferred()
+    getRadarPreferences
+      .mockReturnValueOnce(a.promise)
+      .mockResolvedValueOnce({ selectedSkillCodes: ['SHO'] })
+    const store = useDevelopmentStore()
+    const pA = store.fetchRadarPreferences('A')
+    const rB = await store.fetchRadarPreferences('B')
+    a.resolve({ selectedSkillCodes: ['PAC'] })
+    expect(await pA).toBeNull()
+    expect(rB).toEqual({ selectedSkillCodes: ['SHO'] })
+    expect(store.radarPreferences).toEqual({ selectedSkillCodes: ['SHO'] })
+
+    getRadarPreferences.mockRejectedValueOnce(rejection(500))
+    const rErr = await store.fetchRadarPreferences('C')
+    expect(rErr).toEqual({ selectedSkillCodes: [] })
+    expect(store.radarPreferences).toEqual({ selectedSkillCodes: [] })
+    expect(store.radarPreferencesError).toBe(i18n.global.t('error.generic'))
+  })
+
+  it('saveRadarPreferences success leaves radarPreferences untouched', async () => {
+    putRadarPreferences.mockResolvedValue({})
+    const store = useDevelopmentStore()
+    store.radarPreferences = { selectedSkillCodes: ['B-pref'] }
+    await store.saveRadarPreferences('A', ['PAC'])
+    expect(store.radarPreferences).toEqual({ selectedSkillCodes: ['B-pref'] })
+  })
+
+  it('saveRadarPreferences failure rethrows so the caller can notify with the real message', async () => {
+    putRadarPreferences.mockRejectedValue(rejection(500))
+    const store = useDevelopmentStore()
+    await expect(store.saveRadarPreferences('A', ['PAC'])).rejects.toBeTruthy()
+  })
+
+  // 12-9 code review: a write's follow-up re-fetch must not replace a newer player's data.
+  it('saveTargets for A does not re-fetch once B has been loaded', async () => {
+    let resolvePut
+    setMyTargets.mockReturnValue(new Promise((r) => (resolvePut = r)))
+    getMyTargets.mockImplementation((id) =>
+      Promise.resolve([{ skillCode: 'PAC', weeklyTargetSlu: id }]),
+    )
+    const store = useDevelopmentStore()
+    await store.fetchTargets('A')
+    const saving = store.saveTargets('A', [])
+    await store.fetchTargets('B')
+    resolvePut({})
+    await saving
+    expect(getMyTargets).toHaveBeenLastCalledWith('B')
+    expect(store.targets).toEqual([{ skillCode: 'PAC', weeklyTargetSlu: 'B' }])
+  })
+
+  it('submitRadarAssessment for A does not re-fetch entries once B has been loaded', async () => {
+    let resolvePost
+    postRadarAssessment.mockReturnValue(new Promise((r) => (resolvePost = r)))
+    getMyRadarEntries.mockImplementation((id) => Promise.resolve({ entries: [{ skillCode: id }] }))
+    const store = useDevelopmentStore()
+    await store.fetchRadarEntries('A')
+    const submitting = store.submitRadarAssessment('A', {})
+    await store.fetchRadarEntries('B')
+    resolvePost({})
+    await submitting
+    expect(getMyRadarEntries).toHaveBeenLastCalledWith('B')
+    expect(store.radarEntries).toEqual({ entries: [{ skillCode: 'B' }] })
+  })
+
+  it('generateReport for A does not re-fetch reports once B has been loaded', async () => {
+    let resolveGen
+    generateReport.mockReturnValue(new Promise((r) => (resolveGen = r)))
+    listReports.mockImplementation((id) => Promise.resolve([{ id }]))
+    const store = useDevelopmentStore()
+    await store.fetchReports('A')
+    const generating = store.generateReport('A', 'next')
+    await store.fetchReports('B')
+    resolveGen({})
+    await generating
+    expect(listReports).toHaveBeenLastCalledWith('B')
+    expect(store.reports).toEqual([{ id: 'B' }])
+  })
+
+  it('saveTargets: a failed post-save re-fetch does not throw and lands in targetsError', async () => {
+    setMyTargets.mockResolvedValue({})
+    getMyTargets.mockRejectedValue(rejection(500))
+    const store = useDevelopmentStore()
+    await expect(store.saveTargets('p1', [])).resolves.toBeUndefined()
+    expect(store.targetsError).toBe(i18n.global.t('error.generic'))
+  })
+
+  it('fetchCorrelationInsights 403 leaves correlationError null', async () => {
+    getCorrelationInsights.mockRejectedValue(rejection(403))
+    const store = useDevelopmentStore()
+    await store.fetchCorrelationInsights('p1')
+    expect(store.correlationError).toBeNull()
   })
 })
 

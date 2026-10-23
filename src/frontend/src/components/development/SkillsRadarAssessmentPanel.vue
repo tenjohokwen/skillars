@@ -1,6 +1,6 @@
 <template>
   <q-dialog v-model="open" persistent>
-    <q-card style="min-width: 600px; max-width: 90vw">
+    <q-card style="width: 600px; max-width: 90vw">
       <q-card-section class="row items-center q-pb-none">
         <div class="text-h6">{{ $t('development.radar.assessmentPanelTitle') }}</div>
         <q-space />
@@ -90,6 +90,7 @@ import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useDevelopmentStore } from 'src/stores/development.store'
+import { getErrorMessage } from 'src/utils/errorHandler'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -97,7 +98,7 @@ const props = defineProps({
   skillDefinitions: { type: Array, default: () => [] },
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'submitted'])
 
 const { t } = useI18n()
 const $q = useQuasar()
@@ -167,14 +168,18 @@ async function submit() {
   try {
     await developmentStore.submitRadarAssessment(props.playerId, payload)
     $q.notify({ type: 'positive', message: t('development.radar.submitSuccess') })
+    emit('submitted')
     close()
   } catch (err) {
-    const is403 = err?.response?.status === 403
+    // Only a tier gate gets the upgrade message. A 403 can equally be a relationship denial (e.g.
+    // a DISPUTED booking on a write), and telling an Instructor coach to upgrade would be wrong.
+    // errorKey is the message key; helpCode is a minted log reference, not a key.
+    const isFeatureGated = err?.response?.data?.errorMsg?.errorKey === 'security.featureGated'
     $q.notify({
       type: 'negative',
-      message: is403
+      message: isFeatureGated
         ? t('development.radar.submitErrorFeatureGated')
-        : (err?.response?.data?.message ?? t('development.radar.submitError')),
+        : getErrorMessage(err),
     })
   } finally {
     submitting.value = false

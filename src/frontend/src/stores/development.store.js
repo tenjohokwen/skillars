@@ -18,6 +18,7 @@ import {
   listReports,
   getTimeline,
   getCoachContributions,
+  getNeglectedSkills,
 } from 'src/api/development.api'
 
 export const useDevelopmentStore = defineStore('development', () => {
@@ -52,10 +53,31 @@ export const useDevelopmentStore = defineStore('development', () => {
   const coachContributionsLoading = ref(false)
   const coachContributionsError = ref(null)
 
+  const skillDefinitionsError = ref(null)
+  const exposureError = ref(null)
+  const narrativeError = ref(null)
+  const narrativeLoading = ref(false)
+  const targetsError = ref(null)
+  const targetsLoading = ref(false)
+  const radarEntriesError = ref(null)
+  const radarDisplayError = ref(null)
+  const radarPreferencesError = ref(null)
+  const radarPreferencesLoading = ref(false)
+  const correlationError = ref(null)
+  const neglectedSkills = ref([])
+  const neglectedSkillsLoading = ref(false)
+  const neglectedSkillsError = ref(null)
+
   const neglectedCodes = computed(() => exposure.value?.neglectedSkillCodes ?? [])
 
+  // skillars-12-9 Task 1: the legacy shared `error` ref is kept (the parent portal and the
+  // existing specs read it) but multi-section pages (CoachPlayerDetailPage) read the per-section
+  // refs below instead, so one failing secondary section cannot blank the page or erase another
+  // section's error. Player-scoped fetches clear-before-fetch and drop out-of-order responses
+  // with a per-action sequence guard (pattern: fetchExposure).
   async function fetchSkillDefinitions() {
     error.value = null
+    skillDefinitionsError.value = null
     try {
       const response = await getSkillDefinitions()
       skillDefinitions.value = response
@@ -63,6 +85,7 @@ export const useDevelopmentStore = defineStore('development', () => {
       error.value =
         err?.response?.data?.errorMsg?.message ??
         i18n.global.t('development.portal.skillDefinitionsLoadError')
+      skillDefinitionsError.value = error.value
     }
   }
 
@@ -74,6 +97,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     exposure.value = null
     loading.value = true
     error.value = null
+    exposureError.value = null
     try {
       const response = await getSkillExposure(playerId, weeks)
       if (seq === _exposureSeq) {
@@ -84,6 +108,7 @@ export const useDevelopmentStore = defineStore('development', () => {
         error.value =
           err?.response?.data?.errorMsg?.message ??
           i18n.global.t('development.portal.exposureLoadError')
+        exposureError.value = error.value
       }
     } finally {
       if (seq === _exposureSeq) {
@@ -92,46 +117,87 @@ export const useDevelopmentStore = defineStore('development', () => {
     }
   }
 
+  let _narrativeSeq = 0
+
   async function fetchNarrative(playerId) {
+    const seq = ++_narrativeSeq
+    narrative.value = []
+    narrativeLoading.value = true
     error.value = null
+    narrativeError.value = null
     try {
       const response = await getNarrativeSummary(playerId)
-      narrative.value = response
+      if (seq === _narrativeSeq) narrative.value = response
     } catch (err) {
-      error.value = getErrorMessage(err)
+      if (seq === _narrativeSeq) {
+        error.value = getErrorMessage(err)
+        narrativeError.value = error.value
+      }
+    } finally {
+      if (seq === _narrativeSeq) narrativeLoading.value = false
     }
   }
+
+  let _targetsSeq = 0
+  // The player the LATEST fetchTargets was for. A write's follow-up re-fetch must not start for a
+  // player the page has already left: it would take the newest seq and replace the current
+  // player's targets with the old player's (12-9 code review).
+  let _targetsPlayerId = null
 
   async function fetchTargets(playerId) {
+    const seq = ++_targetsSeq
+    _targetsPlayerId = playerId
+    targets.value = []
+    targetsLoading.value = true
     error.value = null
+    targetsError.value = null
     try {
       const response = await getMyTargets(playerId)
-      targets.value = response
+      if (seq === _targetsSeq) targets.value = response
     } catch (err) {
-      error.value = getErrorMessage(err)
+      if (seq === _targetsSeq) {
+        error.value = getErrorMessage(err)
+        targetsError.value = error.value
+      }
+    } finally {
+      if (seq === _targetsSeq) targetsLoading.value = false
     }
   }
 
+  // Rethrows a failed SAVE so the caller can tell it from a failed post-save re-fetch: the
+  // re-fetch is fetchTargets, which reports through targetsError and never throws.
   async function saveTargets(playerId, newTargets) {
     error.value = null
     try {
       await setMyTargets(playerId, newTargets)
-      await fetchTargets(playerId)
     } catch (err) {
       error.value = getErrorMessage(err)
+      throw err
     }
+    if (_targetsPlayerId === null || _targetsPlayerId === playerId) await fetchTargets(playerId)
   }
 
+  let _radarEntriesSeq = 0
+  // See _targetsPlayerId.
+  let _radarEntriesPlayerId = null
+
   async function fetchRadarEntries(playerId) {
+    const seq = ++_radarEntriesSeq
+    _radarEntriesPlayerId = playerId
+    radarEntries.value = null
     radarLoading.value = true
     error.value = null
+    radarEntriesError.value = null
     try {
       const response = await getMyRadarEntries(playerId)
-      radarEntries.value = response
+      if (seq === _radarEntriesSeq) radarEntries.value = response
     } catch (err) {
-      error.value = getErrorMessage(err)
+      if (seq === _radarEntriesSeq) {
+        error.value = getErrorMessage(err)
+        radarEntriesError.value = error.value
+      }
     } finally {
-      radarLoading.value = false
+      if (seq === _radarEntriesSeq) radarLoading.value = false
     }
   }
 
@@ -139,84 +205,145 @@ export const useDevelopmentStore = defineStore('development', () => {
     error.value = null
     try {
       await postRadarAssessment(playerId, assessment)
+    } catch (err) {
+      error.value = getErrorMessage(err)
+      throw err
+    }
+    if (_radarEntriesPlayerId === null || _radarEntriesPlayerId === playerId)
       await fetchRadarEntries(playerId)
+  }
+
+  let _radarDisplaySeq = 0
+
+  async function fetchRadarDisplay(playerId) {
+    const seq = ++_radarDisplaySeq
+    radarDisplay.value = null
+    radarDisplayLoading.value = true
+    error.value = null
+    radarDisplayError.value = null
+    try {
+      const response = await getRadarDisplay(playerId)
+      if (seq === _radarDisplaySeq) radarDisplay.value = response
+    } catch (err) {
+      if (seq === _radarDisplaySeq) {
+        error.value = getErrorMessage(err)
+        radarDisplayError.value = error.value
+      }
+    } finally {
+      if (seq === _radarDisplaySeq) radarDisplayLoading.value = false
+    }
+  }
+
+  let _radarPreferencesSeq = 0
+
+  // Returns the loaded value, or null when a newer fetch superseded this one, so the caller can
+  // tell a stale response from a real one (skillars-12-9 AC12a). On error the store (and the
+  // return value) fall back to "all skills", and radarPreferencesError says so.
+  async function fetchRadarPreferences(playerId) {
+    const seq = ++_radarPreferencesSeq
+    radarPreferences.value = null
+    radarPreferencesLoading.value = true
+    radarPreferencesError.value = null
+    try {
+      const response = await getRadarPreferences(playerId)
+      if (seq !== _radarPreferencesSeq) return null
+      radarPreferences.value = response
+      return response
+    } catch (err) {
+      if (seq !== _radarPreferencesSeq) return null
+      radarPreferences.value = { selectedSkillCodes: [] }
+      radarPreferencesError.value = getErrorMessage(err)
+      return radarPreferences.value
+    } finally {
+      if (seq === _radarPreferencesSeq) radarPreferencesLoading.value = false
+    }
+  }
+
+  // Deliberately does NOT write radarPreferences: a flushed save for player A can resolve after
+  // player B's fetch has landed, and would overwrite B's preferences. The caller's local selection
+  // is the source of truth; radarPreferences is only the last LOADED value (skillars-12-9 AC12b).
+  // Rethrows so the caller can notify with getErrorMessage(err) (12-9 AC5).
+  async function saveRadarPreferences(playerId, selectedSkillCodes) {
+    try {
+      await putRadarPreferences(playerId, selectedSkillCodes)
     } catch (err) {
       error.value = getErrorMessage(err)
       throw err
     }
   }
 
-  async function fetchRadarDisplay(playerId) {
-    radarDisplayLoading.value = true
-    error.value = null
-    try {
-      const response = await getRadarDisplay(playerId)
-      radarDisplay.value = response
-    } catch (err) {
-      error.value = getErrorMessage(err)
-    } finally {
-      radarDisplayLoading.value = false
-    }
-  }
-
-  async function fetchRadarPreferences(playerId) {
-    try {
-      const response = await getRadarPreferences(playerId)
-      radarPreferences.value = response
-    } catch {
-      radarPreferences.value = { selectedSkillCodes: [] }
-    }
-  }
-
-  async function saveRadarPreferences(playerId, selectedSkillCodes) {
-    try {
-      await putRadarPreferences(playerId, selectedSkillCodes)
-      radarPreferences.value = { selectedSkillCodes }
-    } catch (err) {
-      error.value = getErrorMessage(err)
-    }
-  }
+  let _correlationSeq = 0
 
   async function fetchCorrelationInsights(playerId) {
+    const seq = ++_correlationSeq
+    correlationInsights.value = null
     correlationLoading.value = true
+    correlationError.value = null
     try {
       const response = await getCorrelationInsights(playerId)
-      correlationInsights.value = response
+      if (seq === _correlationSeq) correlationInsights.value = response
     } catch (err) {
       // Non-Academy coaches get 403 here — store null silently; UI shows teaser
-      if (err?.response?.status !== 403) {
+      if (seq === _correlationSeq && err?.response?.status !== 403) {
         error.value = getErrorMessage(err)
+        correlationError.value = error.value
       }
-      correlationInsights.value = null
     } finally {
-      correlationLoading.value = false
+      if (seq === _correlationSeq) correlationLoading.value = false
     }
   }
 
+  let _reportsSeq = 0
+  // See _targetsPlayerId.
+  let _reportsPlayerId = null
+
   async function fetchReports(playerId) {
+    const seq = ++_reportsSeq
+    _reportsPlayerId = playerId
+    reports.value = []
     reportsLoading.value = true
     reportsError.value = null
     try {
       const response = await listReports(playerId)
-      reports.value = response
+      if (seq === _reportsSeq) reports.value = response
     } catch (err) {
-      reportsError.value = getErrorMessage(err)
+      if (seq === _reportsSeq) reportsError.value = getErrorMessage(err)
     } finally {
-      reportsLoading.value = false
+      if (seq === _reportsSeq) reportsLoading.value = false
     }
   }
 
+  // reportsError belongs to the report LIST fetch only: a failed generate must not replace the
+  // already-loaded list with an error banner. The caller (GenerateReportDialog) notifies with the
+  // thrown error instead.
   async function generateReport(playerId, nextSteps) {
     reportGenerating.value = true
-    reportsError.value = null
     try {
       await apiGenerateReport(playerId, nextSteps)
-      await fetchReports(playerId)
-    } catch (err) {
-      reportsError.value = getErrorMessage(err)
-      throw err
+      if (_reportsPlayerId === null || _reportsPlayerId === playerId) await fetchReports(playerId)
     } finally {
       reportGenerating.value = false
+    }
+  }
+
+  let _neglectedSkillsSeq = 0
+
+  // skillars-12-9 AC7 (D12.9-A): per-skill "neglected since" flags, oldest-streak ordering is the
+  // page's job. The exposure endpoint's neglectedSkillCodes (neglectedCodes) stays the bar-chart
+  // highlight source.
+  async function fetchNeglectedSkills(playerId) {
+    if (!playerId) return
+    const seq = ++_neglectedSkillsSeq
+    neglectedSkills.value = []
+    neglectedSkillsLoading.value = true
+    neglectedSkillsError.value = null
+    try {
+      const response = await getNeglectedSkills(playerId)
+      if (seq === _neglectedSkillsSeq) neglectedSkills.value = response
+    } catch (err) {
+      if (seq === _neglectedSkillsSeq) neglectedSkillsError.value = getErrorMessage(err)
+    } finally {
+      if (seq === _neglectedSkillsSeq) neglectedSkillsLoading.value = false
     }
   }
 
@@ -362,5 +489,20 @@ export const useDevelopmentStore = defineStore('development', () => {
     coachContributionsLoading,
     coachContributionsError,
     fetchCoachContributions,
+    skillDefinitionsError,
+    exposureError,
+    narrativeError,
+    narrativeLoading,
+    targetsError,
+    targetsLoading,
+    radarEntriesError,
+    radarDisplayError,
+    radarPreferencesError,
+    radarPreferencesLoading,
+    correlationError,
+    neglectedSkills,
+    neglectedSkillsLoading,
+    neglectedSkillsError,
+    fetchNeglectedSkills,
   }
 })

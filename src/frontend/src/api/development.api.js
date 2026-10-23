@@ -57,3 +57,7 @@ export const getCoachRoster = () => api.get('/api/development/coaches/me/roster'
 
 // skillars-12-3 AC3: the Session Prep Card's backing endpoint.
 export const getSessionPrep = (bookingId) => api.get(`/api/development/bookings/${bookingId}/prep`)
+
+// skillars-12-9 AC7 (D12.9-A): open neglect flags (skillCode + detectedAt) for the coach page.
+export const getNeglectedSkills = (playerId) =>
+  api.get(`/api/development/players/${playerId}/neglected-skills`)

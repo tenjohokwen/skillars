@@ -144,7 +144,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'notify message keyed by a messageKey chosen earlier in the handler',
   },
   {
-    at: 'src/pages/coach/CoachPlayerDetailPage.vue:59',
+    at: 'src/pages/coach/CoachPlayerDetailPage.vue:172',
     reason: '$t on noContributionsKey, a computed that picks between two real i18n keys at runtime',
   },
   {

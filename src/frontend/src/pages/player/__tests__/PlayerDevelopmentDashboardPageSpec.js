@@ -20,6 +20,8 @@ vi.mock('src/boot/axios', () => ({
 }))
 
 import PlayerDevelopmentDashboardPage from 'src/pages/player/PlayerDevelopmentDashboardPage.vue'
+import PerformanceReportsPanel from 'src/components/development/PerformanceReportsPanel.vue'
+import { useAuthStore } from 'src/stores/auth.store'
 
 const mounted = []
 
@@ -27,7 +29,7 @@ const mounted = []
 // round/small test fixture number that would pass by accident).
 const LARGE_PLAYER_ID = '893573203704173564'
 
-async function mountPage(playerId = LARGE_PLAYER_ID) {
+async function mountPage(playerId = LARGE_PLAYER_ID, { renderSlots = false } = {}) {
   const pinia = createTestingPinia({ createSpy: vi.fn, initialState: { auth: { role: 'PLAYER' } } })
   const router = createRouter({
     history: createMemoryHistory(),
@@ -38,7 +40,7 @@ async function mountPage(playerId = LARGE_PLAYER_ID) {
 
   const wrapper = mount(PlayerDevelopmentDashboardPage, {
     shallow: true,
-    global: { plugins: [pinia, router] },
+    global: { plugins: [pinia, router], renderStubDefaultSlot: renderSlots },
   })
   mounted.push(wrapper)
   await flushPromises()
@@ -77,5 +79,33 @@ describe('PlayerDevelopmentDashboardPage.vue — playerId precision (deferred-14
     const store = useDevelopmentStore(pinia)
     const lastCall = store.fetchExposure.mock.calls.at(-1)
     expect(lastCall[0]).toBe(OTHER_LARGE_ID)
+  })
+})
+
+// skillars-12-9 AC6 / D12.9-B. This spec uses createTestingPinia with STUBBED actions and
+// shallow: true, so axios is never called and a URL assertion would pass vacuously — assert on the
+// action spies instead.
+describe('PlayerDevelopmentDashboardPage.vue — player-only view (skillars-12-9 AC6)', () => {
+  it('fetches the radar display and reads no coach/parent-only data', async () => {
+    const { pinia } = await mountPage()
+    const { useDevelopmentStore } = await import('src/stores/development.store')
+    const store = useDevelopmentStore(pinia)
+    const authStore = useAuthStore(pinia)
+
+    expect(store.fetchRadarDisplay).toHaveBeenCalledWith(LARGE_PLAYER_ID)
+    expect(store.fetchTargets).not.toHaveBeenCalled()
+    expect(store.fetchRadarEntries).not.toHaveBeenCalled()
+    expect(store.fetchRadarPreferences).not.toHaveBeenCalled()
+    expect(store.fetchCorrelationInsights).not.toHaveBeenCalled()
+    expect(store.fetchNarrative).not.toHaveBeenCalled()
+    expect(authStore.fetchCoachTier).not.toHaveBeenCalled()
+  })
+
+  it('renders the reports panel read-only (isCoach false) without waiting for a tier load', async () => {
+    // shallow stubs QPage, so its default slot (the whole body) only renders with this flag.
+    const { wrapper } = await mountPage(LARGE_PLAYER_ID, { renderSlots: true })
+    const panel = wrapper.findComponent(PerformanceReportsPanel)
+    expect(panel.exists()).toBe(true)
+    expect(panel.props('isCoach')).toBe(false)
   })
 })
