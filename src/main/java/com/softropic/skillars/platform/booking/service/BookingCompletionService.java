@@ -33,6 +33,8 @@ import com.softropic.skillars.platform.security.contract.exception.OperationNotA
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import com.softropic.skillars.platform.session.repo.Drill;
+import com.softropic.skillars.platform.session.repo.DrillRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -46,7 +48,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -62,6 +66,7 @@ public class BookingCompletionService {
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
     private final ConfigService configService;
+    private final DrillRepository drillRepository;
 
     @Transactional
     public void startSession(UUID bookingId, Long coachUserId) {
@@ -166,6 +171,7 @@ public class BookingCompletionService {
             }
         }
         verifyStatus(booking, BookingStatus.COMPLETED_PENDING_CONFIRMATION);
+        List<UUID> homeworkDrillIds = validateHomeworkDrills(req.homeworkDrillIds(), coach);
 
         SessionCompletionData scd = new SessionCompletionData();
         scd.setBookingId(bookingId);
@@ -180,9 +186,9 @@ public class BookingCompletionService {
         scd.setWhatsNext(req.recapWhatsNext());
         scd.setWhatWentWell(blankToNull(req.recapWhatWentWell()));
 
-        if (req.homeworkDrillIds() != null && !req.homeworkDrillIds().isEmpty()) {
+        if (!homeworkDrillIds.isEmpty()) {
             try {
-                scd.setHomeworkDrillIds(objectMapper.writeValueAsString(req.homeworkDrillIds()));
+                scd.setHomeworkDrillIds(objectMapper.writeValueAsString(homeworkDrillIds));
             } catch (JsonProcessingException e) {
                 log.warn("Failed to serialize homeworkDrillIds for booking {}", bookingId, e);
             }
@@ -204,7 +210,7 @@ public class BookingCompletionService {
             eventPublisher.publishEvent(new BookingCompletedEvent(
                 this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
                 scd.isPlayerAttended(), req.effortRating(), req.focusRating(), req.techniqueRating(),
-                req.homeworkDrillIds() != null ? req.homeworkDrillIds() : List.of(),
+                homeworkDrillIds,
                 req.recapWhatWeDid(), req.recapWhatsNext(), scd.getWhatWentWell()
             ));
         } else {
@@ -218,6 +224,34 @@ public class BookingCompletionService {
                 booking.getRequestedStartTime(), booking.getCanonicalTimezone(), playerName
             ));
         }
+    }
+
+    /**
+     * skillars-deferred-159 AC2: every homework drill must be an ACTIVE PLATFORM drill or one of this
+     * coach's own ACTIVE PRIVATE drills (the same rule {@code DrillSuggestionService.allCandidates}
+     * applies). Unknown, foreign-PRIVATE, archived and null ids all get the same 404 so the response
+     * never confirms that another coach's drill exists. Returns the de-duplicated list, order kept.
+     */
+    private List<UUID> validateHomeworkDrills(List<UUID> requested, CoachProfile coach) {
+        if (requested == null || requested.isEmpty()) return List.of();
+        if (requested.stream().anyMatch(Objects::isNull)) {
+            throw new ResourceNotFoundException("Homework drill not found", "drill");
+        }
+        List<UUID> distinct = requested.stream().distinct().toList();
+        Set<UUID> usable = drillRepository.findAllById(distinct).stream()
+            .filter(d -> isUsableHomeworkDrill(d, coach))
+            .map(Drill::getId)
+            .collect(Collectors.toSet());
+        if (!usable.containsAll(distinct)) {
+            throw new ResourceNotFoundException("Homework drill not found", "drill");
+        }
+        return distinct;
+    }
+
+    private static boolean isUsableHomeworkDrill(Drill d, CoachProfile coach) {
+        if (!"ACTIVE".equals(d.getStatus())) return false;
+        return "PLATFORM".equals(d.getLibraryType())
+            || ("PRIVATE".equals(d.getLibraryType()) && Objects.equals(d.getOwnerCoachId(), coach.getId()));
     }
 
     /**
@@ -406,24 +440,12 @@ public class BookingCompletionService {
         SessionCompletionData scd = completionDataRepository.findByBookingId(bookingId)
             .orElseThrow(() -> new ResourceNotFoundException("Session completion data not found", "session_completion_data"));
 
-        List<UUID> homeworkDrillIds = deserializeHomeworkDrillIds(scd.getHomeworkDrillIds());
+        List<UUID> homeworkDrillIds = HomeworkDrillIds.parse(objectMapper, scd.getHomeworkDrillIds());
         eventPublisher.publishEvent(new BookingCompletedEvent(
             this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
             scd.isPlayerAttended(), scd.getEffortRating(), scd.getFocusRating(), scd.getTechniqueRating(),
             homeworkDrillIds, scd.getWhatWeDid(), scd.getWhatsNext(), scd.getWhatWentWell()
         ));
-    }
-
-    @SuppressWarnings("unchecked")
-    private List<UUID> deserializeHomeworkDrillIds(String json) {
-        if (json == null || json.isBlank()) return List.of();
-        try {
-            List<String> ids = objectMapper.readValue(json, List.class);
-            return ids.stream().map(UUID::fromString).toList();
-        } catch (Exception e) {
-            log.warn("Failed to deserialize homeworkDrillIds from JSON '{}': {}", json, e.getMessage());
-            return List.of();
-        }
     }
 
     private CoachProfile resolveCoach(Long coachUserId) {

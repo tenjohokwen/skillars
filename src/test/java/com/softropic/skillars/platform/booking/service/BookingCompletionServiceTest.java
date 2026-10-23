@@ -53,6 +53,7 @@ class BookingCompletionServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private com.softropic.skillars.platform.session.repo.DrillRepository drillRepository;
 
     private BookingCompletionService service;
 
@@ -70,7 +71,7 @@ class BookingCompletionServiceTest {
         service = new BookingCompletionService(
             bookingService, bookingRepository, completionDataRepository,
             coachProfileRepository, userRepository, playerProfileRepository,
-            eventPublisher, new ObjectMapper(), configService
+            eventPublisher, new ObjectMapper(), configService, drillRepository
         );
 
         coach = new CoachProfile();
@@ -115,6 +116,95 @@ class BookingCompletionServiceTest {
         // the request's two trailing args — assert both land on the right getter, not transposed.
         assertThat(event.getWhatWeDid()).isEqualTo("Worked on first touch");
         assertThat(event.getWhatsNext()).isEqualTo("Continue weak-foot drills");
+    }
+
+    private static com.softropic.skillars.platform.session.repo.Drill drill(UUID id, String library, UUID owner, String status) {
+        var d = new com.softropic.skillars.platform.session.repo.Drill();
+        d.setId(id);
+        d.setLibraryType(library);
+        d.setOwnerCoachId(owner);
+        d.setStatus(status);
+        return d;
+    }
+
+    private WrapUpRequest wrapUpWithHomework(String mode, List<UUID> ids) {
+        return new WrapUpRequest(true, 4, 3, 5, ids, mode, "did", "next", null);
+    }
+
+    private void assertHomeworkRejected(List<UUID> ids) {
+        assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, wrapUpWithHomework("LIVE", ids)))
+            .isInstanceOf(ResourceNotFoundException.class);
+        verify(completionDataRepository, never()).save(any());
+        verify(bookingService, never()).transition(any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void submitWrapUp_homework_ownPrivateAndPlatformActive_accepted() {
+        UUID own = UUID.randomUUID();
+        UUID platform = UUID.randomUUID();
+        when(drillRepository.findAllById(List.of(own, platform))).thenReturn(List.of(
+            drill(own, "PRIVATE", COACH_ID, "ACTIVE"), drill(platform, "PLATFORM", null, "ACTIVE")));
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID, wrapUpWithHomework("LIVE", List.of(own, platform)));
+
+        ArgumentCaptor<BookingCompletedEvent> captor = ArgumentCaptor.forClass(BookingCompletedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().getHomeworkDrillIds()).containsExactly(own, platform);
+    }
+
+    @Test
+    void submitWrapUp_homework_otherCoachsPrivateDrill_rejectedWithNoSaveAndNoTransition() {
+        UUID foreign = UUID.randomUUID();
+        when(drillRepository.findAllById(List.of(foreign))).thenReturn(List.of(
+            drill(foreign, "PRIVATE", UUID.randomUUID(), "ACTIVE")));
+        assertHomeworkRejected(List.of(foreign));
+    }
+
+    @Test
+    void submitWrapUp_homework_validPlusForeignPrivate_wholeRequestRejected() {
+        UUID platform = UUID.randomUUID();
+        UUID foreign = UUID.randomUUID();
+        when(drillRepository.findAllById(List.of(platform, foreign))).thenReturn(List.of(
+            drill(platform, "PLATFORM", null, "ACTIVE"), drill(foreign, "PRIVATE", UUID.randomUUID(), "ACTIVE")));
+        assertHomeworkRejected(List.of(platform, foreign));
+    }
+
+    @Test
+    void submitWrapUp_homework_unknownId_rejected() {
+        UUID unknown = UUID.randomUUID();
+        when(drillRepository.findAllById(List.of(unknown))).thenReturn(List.of());
+        assertHomeworkRejected(List.of(unknown));
+    }
+
+    @Test
+    void submitWrapUp_homework_archivedDrill_rejected() {
+        UUID archived = UUID.randomUUID();
+        when(drillRepository.findAllById(List.of(archived))).thenReturn(List.of(
+            drill(archived, "PLATFORM", null, "ARCHIVED")));
+        assertHomeworkRejected(List.of(archived));
+    }
+
+    @Test
+    void submitWrapUp_homework_nullElement_rejected() {
+        assertHomeworkRejected(java.util.Collections.singletonList(null));
+    }
+
+    @Test
+    void submitWrapUp_homework_duplicateIds_acceptedAndPersistedOnce() {
+        UUID a = UUID.randomUUID();
+        when(drillRepository.findAllById(List.of(a))).thenReturn(List.of(drill(a, "PLATFORM", null, "ACTIVE")));
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID, wrapUpWithHomework("LIVE", List.of(a, a)));
+
+        ArgumentCaptor<SessionCompletionData> scdCaptor = ArgumentCaptor.forClass(SessionCompletionData.class);
+        verify(completionDataRepository).save(scdCaptor.capture());
+        assertThat(scdCaptor.getValue().getHomeworkDrillIds()).isEqualTo("[\"" + a + "\"]");
+        ArgumentCaptor<BookingCompletedEvent> captor = ArgumentCaptor.forClass(BookingCompletedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().getHomeworkDrillIds()).containsExactly(a);
     }
 
     @Test

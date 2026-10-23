@@ -45,6 +45,7 @@ class SessionPauseResumeServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private com.softropic.skillars.platform.session.repo.DrillRepository drillRepository;
 
     private BookingCompletionService service;
 
@@ -62,7 +63,7 @@ class SessionPauseResumeServiceTest {
         service = new BookingCompletionService(
             bookingService, bookingRepository, completionDataRepository,
             coachProfileRepository, userRepository, playerProfileRepository,
-            eventPublisher, new ObjectMapper(), configService
+            eventPublisher, new ObjectMapper(), configService, drillRepository
         );
 
         coach = new CoachProfile();

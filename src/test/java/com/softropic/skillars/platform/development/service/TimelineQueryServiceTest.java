@@ -200,4 +200,55 @@ class TimelineQueryServiceTest {
         event(PlayerTimelineEventType.SESSION_COMPLETED, null);
         assertThat(metadataFor(false, null)).isNull();
     }
+
+    // ── skillars-deferred-159 AC4: referenceId follows the metadata visibility rule ───────────────
+
+    private UUID referenceIdFor(boolean isCoach, UUID coachId) {
+        return service.getTimeline(1L, isCoach, coachId, 0, 10).events().get(0).referenceId();
+    }
+
+    private UUID eventWithReference(PlayerTimelineEventType type, Map<String, Object> md) {
+        UUID ref = UUID.randomUUID();
+        event(type, md).setReferenceId(ref);
+        coachWithOpenWindow();
+        return ref;
+    }
+
+    @Test
+    void referenceId_sessionCompletedAndHomework_hiddenFromOtherCoach_visibleToAuthorAndPlayerParent() {
+        for (PlayerTimelineEventType type : List.of(
+                PlayerTimelineEventType.SESSION_COMPLETED, PlayerTimelineEventType.HOMEWORK_ASSIGNED)) {
+            Map<String, Object> md = new HashMap<>(Map.of(
+                TimelineEventListener.METADATA_KEY_COACH_ID, authoringCoach.toString()));
+            UUID ref = eventWithReference(type, md);
+
+            assertThat(referenceIdFor(true, UUID.randomUUID())).as("other coach, %s", type).isNull();
+            assertThat(referenceIdFor(true, authoringCoach)).as("author, %s", type).isEqualTo(ref);
+            assertThat(referenceIdFor(false, null)).as("player/parent, %s", type).isEqualTo(ref);
+        }
+    }
+
+    @Test
+    void referenceId_performanceReport_hiddenFromEveryCoach_visibleToPlayerParent() {
+        UUID ref = eventWithReference(PlayerTimelineEventType.PERFORMANCE_REPORT,
+            new HashMap<>(Map.of("coachName", "C", "reportId", "r1")));
+
+        assertThat(referenceIdFor(true, UUID.randomUUID())).isNull();
+        assertThat(referenceIdFor(false, null)).isEqualTo(ref);
+    }
+
+    @Test
+    void referenceId_nullMetadataRow_hiddenFromEveryCoachButNotFromPlayerParent() {
+        UUID ref = eventWithReference(PlayerTimelineEventType.SESSION_COMPLETED, null);
+
+        assertThat(referenceIdFor(true, authoringCoach)).isNull();
+        assertThat(referenceIdFor(true, UUID.randomUUID())).isNull();
+        assertThat(referenceIdFor(false, null)).isEqualTo(ref);
+    }
+
+    @Test
+    void referenceId_stubTypes_hiddenFromCoach() {
+        eventWithReference(PlayerTimelineEventType.MILESTONE_REACHED, new HashMap<>(Map.of("anything", "x")));
+        assertThat(referenceIdFor(true, UUID.randomUUID())).isNull();
+    }
 }

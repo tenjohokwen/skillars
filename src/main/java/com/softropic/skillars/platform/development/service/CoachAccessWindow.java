@@ -20,6 +20,10 @@ import java.time.Instant;
  * The timeline and report generation pass the latest ATTENDED-session end instead and treat {@code null}
  * as closed (skillars-12-3: a non-attended wrap-up never earns history access) — they deliberately do
  * not get the open-booking behaviour.
+ *
+ * <p>An out-of-range stored value does not clamp: {@code ConfigService.getBoundedLong} falls back to the
+ * 90-day default with a WARN ({@code ConfigStartupAssertion} also logs ERROR + a metric at boot). The admin
+ * API rejects out-of-range writes with a 400, so {@code 0} cannot be set through it (skillars-deferred-159 AC5).
  */
 @Component
 @RequiredArgsConstructor

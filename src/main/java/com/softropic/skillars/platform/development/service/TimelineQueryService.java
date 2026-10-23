@@ -47,10 +47,7 @@ public class TimelineQueryService {
         Slice<PlayerTimelineEvent> slice = timelineRepository
             .findByPlayerIdOrderByOccurredAtDescIdDesc(playerId, PageRequest.of(page, size));
         List<TimelineEventResponse> events = slice.getContent().stream()
-            .map(e -> new TimelineEventResponse(
-                e.getId(), e.getEventType(), e.getReferenceId(),
-                e.getReferenceModule(), e.getOccurredAt(),
-                redactCoachPrivateFieldsIfNotAuthoringCoach(e, isCoach, coachId)))
+            .map(e -> toResponse(e, isCoach, coachId))
             .toList();
         return new TimelineResponse(false, null, events, slice.hasNext());
     }
@@ -67,16 +64,28 @@ public class TimelineQueryService {
         PlayerTimelineEventType.RADAR_ASSESSMENT, Set.of("skillCodes"));
     private static final Set<String> REPORT_KEYS_FOR_PLAYER_OR_PARENT = Set.of("coachName", "reportId");
 
-    private Map<String, Object> redactCoachPrivateFieldsIfNotAuthoringCoach(PlayerTimelineEvent event, boolean isCoach, UUID coachId) {
-        Map<String, Object> metadata = event.getMetadata();
+    // skillars-deferred-159 AC4: authorship is decided once per row, ahead of any null-metadata early return,
+    // and gates BOTH metadata and referenceId. A coach viewer gets referenceId only as the authoring coach
+    // (allowlist form: stub/unknown types and PERFORMANCE_REPORT expose nothing to a coach). A row with null
+    // metadata is never "authored", so its referenceId is hidden from every coach.
+    private TimelineEventResponse toResponse(PlayerTimelineEvent e, boolean isCoach, UUID coachId) {
+        Map<String, Object> metadata = e.getMetadata();
+        PlayerTimelineEventType type = e.getEventType();
+        boolean authorable = type == PlayerTimelineEventType.SESSION_COMPLETED
+            || type == PlayerTimelineEventType.HOMEWORK_ASSIGNED;
+        boolean isAuthoringCoach = authorable && isCoach && coachId != null && metadata != null
+            && coachId.toString().equals(metadata.get(TimelineEventListener.METADATA_KEY_COACH_ID));
+        UUID referenceId = isCoach && !isAuthoringCoach ? null : e.getReferenceId();
+        return new TimelineEventResponse(
+            e.getId(), type, referenceId, e.getReferenceModule(), e.getOccurredAt(),
+            redactCoachPrivateFields(metadata, type, isCoach, isAuthoringCoach));
+    }
+
+    private Map<String, Object> redactCoachPrivateFields(Map<String, Object> metadata, PlayerTimelineEventType type,
+                                                         boolean isCoach, boolean isAuthoringCoach) {
         if (metadata == null) {
             return null;
         }
-        PlayerTimelineEventType type = event.getEventType();
-        boolean authorable = type == PlayerTimelineEventType.SESSION_COMPLETED
-            || type == PlayerTimelineEventType.HOMEWORK_ASSIGNED;
-        boolean isAuthoringCoach = authorable && isCoach && coachId != null
-            && coachId.toString().equals(metadata.get(TimelineEventListener.METADATA_KEY_COACH_ID));
         if (isAuthoringCoach) {
             return metadata;
         }
