@@ -50,7 +50,10 @@
       </q-item>
     </q-list>
 
-    <div v-else-if="!store.reportsLoading && !store.error" class="text-body2 text-grey-6 q-pa-sm">
+    <div
+      v-else-if="!store.reportsLoading && !store.reportsError"
+      class="text-body2 text-grey-6 q-pa-sm"
+    >
       {{ $t('development.report.noReports') }}
     </div>
 

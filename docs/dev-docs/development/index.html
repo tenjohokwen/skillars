@@ -253,6 +253,10 @@ sequenceDiagram
       <p><strong>Native SQL enum casts need care.</strong> <code>RadarAssessmentRepository</code>'s native queries return the Postgres <code>development.assessment_type</code> enum as plain text (<code>rae.assessment_type::text</code>); callers must do <code>AssessmentType.valueOf((String) row[1])</code> rather than casting the row value directly, per the inline comment on the repository.</p>
     </div>
 
+    <div class="callout">
+      <p><strong>Where the coach tools live in the frontend.</strong> The coach's per-player workspace is <code>coach/players/:playerId</code> (<code>CoachPlayerDetailPage.vue</code>): radar (with saved skill-subset preferences), narrative, neglected skills (fed by <code>GET .../neglected-skills</code> for the "neglected since" date), exposure + trend, targets, contributions, correlation, assessments and reports. Each secondary section has its own loading/error state in <code>development.store.js</code>, so one failing endpoint never blanks the page. <code>PlayerDevelopmentDashboardPage.vue</code> is player-only (read-only radar, exposure, reports, timeline); it no longer carries any coach or parent branch. Reads use the wide relationship-status list but writes use the narrow <code>ACTIVE</code> one, so a coach can open the page and still get a 403 on save.</p>
+    </div>
+
     <h2>Related Modules</h2>
     <div class="card-grid">
       <div class="card"><h4><a href="../booking/index.html">Booking</a></h4><p>Publishes <code>BookingCompletedEvent</code>, the trigger for SLU calculation and the SESSION_COMPLETED timeline entry; also backs the coach-player relationship check.</p></div>

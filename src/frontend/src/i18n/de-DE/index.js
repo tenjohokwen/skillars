@@ -325,6 +325,19 @@ export default {
       'Kein Trainerbeitrag hat für eine Fähigkeit in den letzten 30 Tagen den Schwellenwert von 30 % erreicht',
     playerDetailError: 'Entwicklungsdaten des Spielers konnten nicht geladen werden',
     playerDetailBackToRoster: 'Zurück zu Meine Spieler',
+    playerDetailSectionError: 'Dieser Bereich konnte nicht geladen werden',
+    playerDetailRadarPrefsError:
+      'Ihre gespeicherte Fähigkeitenauswahl konnte nicht geladen werden. Alle Fähigkeiten werden angezeigt.',
+    playerDetailNarrativeTitle: 'Fortschrittsübersicht',
+    playerDetailNoNarrative: 'Noch keine nennenswerten Veränderungen',
+    playerDetailNoTrend: 'Noch keine wöchentlichen Trenddaten',
+    playerDetailNeglectedSince: 'Vernachlässigt seit {date}',
+    playerDetailTargetsError:
+      'Ihre Ziele konnten nicht geladen werden und lassen sich derzeit nicht bearbeiten',
+    playerDetailTargetsSaved: 'Ziele gespeichert',
+    playerDetailTierError:
+      'Ihr Trainer-Tarif konnte nicht ermittelt werden, daher sind einige Werkzeuge ausgeblendet',
+    playerDetailReportsHint: 'Zeigt die Berichte, die Sie für diesen Spieler erstellt haben.',
   },
   player: {
     nav: 'Spieler',

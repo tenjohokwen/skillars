@@ -56,6 +56,19 @@ export default {
       "Aucune contribution d'un coach n'a atteint le seuil de 30 % pour une compétence au cours des 30 derniers jours",
     playerDetailError: 'Impossible de charger les données de développement du joueur',
     playerDetailBackToRoster: 'Retour à Mes joueurs',
+    playerDetailSectionError: 'Impossible de charger cette section',
+    playerDetailRadarPrefsError:
+      'Impossible de charger votre sélection de compétences enregistrée. Toutes les compétences sont affichées.',
+    playerDetailNarrativeTitle: 'Résumé de la progression',
+    playerDetailNoNarrative: 'Aucun changement notable à signaler pour le moment',
+    playerDetailNoTrend: 'Pas encore de données de tendance hebdomadaire',
+    playerDetailNeglectedSince: 'Négligée depuis le {date}',
+    playerDetailTargetsError:
+      'Impossible de charger vos objectifs, ils ne peuvent pas être modifiés pour le moment',
+    playerDetailTargetsSaved: 'Objectifs enregistrés',
+    playerDetailTierError:
+      'Impossible de déterminer votre niveau de coach, certains outils sont donc masqués',
+    playerDetailReportsHint: 'Affiche les rapports que vous avez générés pour ce joueur.',
   },
   player: {
     nav: 'Joueur',

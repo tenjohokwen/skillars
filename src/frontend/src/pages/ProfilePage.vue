@@ -265,8 +265,9 @@
           <!-- skillars-deferred-151 AC3: coach report branding — role-gated, ACADEMY-tier gated.
                Three-state render: loading (coachTier not resolved yet) / locked (not ACADEMY) /
                unlocked. authStore.coachTier is only populated by fetchCoachTier(), whose one other
-               caller is an unrelated player page — a bare read here would be null on any cold
-               /profile load, hiding the feature from the coaches entitled to it. -->
+               caller is the coach player-detail page (CoachPlayerDetailPage.vue, skillars-12-9) —
+               a bare read here would be null on any cold /profile load, hiding the feature from
+               the coaches entitled to it. -->
           <div v-if="authStore.isCoach" class="glass-card profile-section">
             <div class="text-label q-mb-lg">{{ t('profile.sectionCoachBranding') }}</div>
 
@@ -579,9 +580,10 @@ async function loadCoachProfile() {
   }
 }
 
-// skillars-deferred-151 AC3: fetchCoachTier()'s only other caller is PlayerDevelopmentDashboardPage
-// — a page a coach has no reason to visit — so coachTier is still its initial null on any direct
-// visit to /profile without this call, reading as "not ACADEMY" for a genuine ACADEMY coach.
+// skillars-deferred-151 AC3: fetchCoachTier()'s only other caller is CoachPlayerDetailPage
+// (skillars-12-9; it used to be PlayerDevelopmentDashboardPage) — so coachTier is still its initial
+// null on any direct visit to /profile without this call, reading as "not ACADEMY" for a genuine
+// ACADEMY coach.
 //
 // skillars-deferred-151 review Patch: a failed branding GET must not leave coachBranding null while
 // still unlocking the edit card — EditCoachBrandingDialog reads the existing logoKey off

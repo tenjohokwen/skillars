@@ -53,4 +53,27 @@ describe('GenerateReportDialog.vue (skillars-12-7)', () => {
 
     expect(store.generateReport).toHaveBeenCalledWith(7, 'Work on weak foot')
   })
+
+  // skillars-12-9 AC5: generateReport never sets store.error, so notifying it showed a generic or a
+  // stale unrelated message. The thrown error carries the real reason (e.g. a relationship 403).
+  it("notifies the thrown error's message on failure, not a stale store.error", async () => {
+    const { wrapper, store } = mountDialog()
+    store.error = 'stale unrelated error'
+    store.generateReport = vi.fn().mockRejectedValue({
+      response: {
+        status: 403,
+        data: {
+          errorMsg: { errorKey: 'security.opForbidden', message: 'Relationship not active' },
+        },
+      },
+    })
+    await wrapper.find('textarea').setValue('Work on weak foot')
+    await wrapper
+      .findAll('button')
+      .find((b) => b.text() === 'development.report.generate')
+      .trigger('click')
+    await flushPromises()
+
+    expect(notifySpy).toHaveBeenCalledWith({ type: 'negative', message: 'Relationship not active' })
+  })
 })
