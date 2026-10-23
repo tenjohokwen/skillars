@@ -328,8 +328,8 @@ class PlayerTimelineResourceIT extends AbstractIntegrationTest {
         Map<String, Object> event = events.get(0);
         assertThat(event.get("eventType")).isEqualTo("SESSION_COMPLETED");
         Map<String, Object> metadata = (Map<String, Object>) event.get("metadata");
-        assertThat(metadata.get("coachId")).isEqualTo(coachProfileId.toString());
-        assertThat(metadata).doesNotContainKeys("whatWeDid", "whatsNext", "whatWentWell");
+        // skillars-12-10 AC9 (G25): allowlist -- another coach no longer learns who authored the session.
+        assertThat(metadata).doesNotContainKeys("coachId", "whatWeDid", "whatsNext", "whatWentWell");
         // skillars-12-8 AC2: ratings are authoring-coach only; drills stay visible (owner decision 2026-10-23).
         assertThat(metadata).doesNotContainKeys("effortRating", "focusRating", "techniqueRating").containsKey("drills");
     }

@@ -223,6 +223,21 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         @Param("playerId") Long playerId,
         @Param("statuses") List<String> statuses);
 
+    // skillars-12-10 AC2: the READ-clock for the coach-access window — the latest booking END for the pair
+    // over the given statuses (null = no relationship). A future end is returned as-is, which is what keeps
+    // an in-progress session and the wrap-up-to-completion gap inside the window.
+    @Query("""
+        SELECT MAX(b.requestedEndTime)
+        FROM Booking b
+        WHERE b.coachId = :coachId
+          AND b.playerId = :playerId
+          AND b.status IN :statuses
+        """)
+    Instant findLatestEndTimeByCoachIdAndPlayerIdAndStatusIn(
+        @Param("coachId") UUID coachId,
+        @Param("playerId") Long playerId,
+        @Param("statuses") List<String> statuses);
+
     // UAT.3 AC1/AC2: the capture reservation and the parent's cancel both read this row and write
     // much later, in separate transactions, so @Version cannot serialise them — a cancel could
     // commit inside the window between a Stripe capture and the row that records it. Both now take
@@ -281,7 +296,8 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // CASE rather than LEAST: CASE is standard JPQL, LEAST is Hibernate-specific. Roster MEMBERSHIP is
     // unchanged — a player whose only booking is future-dated still appears on the roster.
     @Query("""
-        SELECT b.playerId AS playerId, MAX(b.requestedStartTime) AS latestBookingTime
+        SELECT b.playerId AS playerId, MAX(b.requestedStartTime) AS latestBookingTime,
+               MAX(b.requestedEndTime) AS latestBookingEndTime
         FROM Booking b
         WHERE b.coachId = :coachId
           AND b.status IN :statuses

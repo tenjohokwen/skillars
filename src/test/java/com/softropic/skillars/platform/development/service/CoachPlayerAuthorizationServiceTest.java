@@ -13,6 +13,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -36,6 +38,7 @@ class CoachPlayerAuthorizationServiceTest {
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private SecurityUtil securityUtil;
     @Mock private PlayerProfileRepository playerProfileRepository;
+    @Mock private CoachAccessWindow coachAccessWindow;
 
     private CoachPlayerAuthorizationService service;
 
@@ -46,20 +49,18 @@ class CoachPlayerAuthorizationServiceTest {
     @BeforeEach
     void setUp() {
         service = new CoachPlayerAuthorizationService(
-            bookingRepository, coachProfileRepository, securityUtil, playerProfileRepository);
+            bookingRepository, coachProfileRepository, securityUtil, playerProfileRepository, coachAccessWindow);
     }
 
     @Test
     void requireCoachPlayerRelationshipForRead_statusInReadSet_succeeds() {
         when(coachProfileRepository.findByUserId(COACH_USER_ID))
             .thenReturn(Optional.of(coachProfile()));
-        when(bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(
-                COACH_PROFILE_ID, PLAYER_ID, CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES))
-            .thenReturn(true);
+        stubReadClock(true);
 
         service.requireCoachPlayerRelationshipForRead(COACH_USER_ID, PLAYER_ID);
 
-        verify(bookingRepository).existsByCoachIdAndPlayerIdAndStatusIn(
+        verify(bookingRepository).findLatestEndTimeByCoachIdAndPlayerIdAndStatusIn(
             COACH_PROFILE_ID, PLAYER_ID, CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES);
     }
 
@@ -77,10 +78,7 @@ class CoachPlayerAuthorizationServiceTest {
         // ACTIVE_RELATIONSHIP_STATUSES would have matched the stub identically and kept this green.
         // With eq() on the exact list, a narrowed call misses the stub, existsBy... returns Mockito's
         // default false, and the method throws.
-        when(bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(
-                eq(COACH_PROFILE_ID), eq(PLAYER_ID),
-                eq(CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES)))
-            .thenReturn(true);
+        stubReadClock(true);
 
         service.requireCoachPlayerRelationshipForRead(COACH_USER_ID, PLAYER_ID);
 
@@ -89,20 +87,8 @@ class CoachPlayerAuthorizationServiceTest {
         assertThat(CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES)
             .contains("PAYMENT_PENDING", "IN_PROGRESS", "PAUSED", "COMPLETED_PENDING_CONFIRMATION",
                       "NO_SHOW_PLAYER", "NO_SHOW_COACH", "DISPUTED", "REFUND_PENDING");
-        verify(bookingRepository).existsByCoachIdAndPlayerIdAndStatusIn(
+        verify(bookingRepository).findLatestEndTimeByCoachIdAndPlayerIdAndStatusIn(
             COACH_PROFILE_ID, PLAYER_ID, CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES);
-    }
-
-    @Test
-    void requireCoachPlayerRelationshipForRead_noRelationship_throws() {
-        when(coachProfileRepository.findByUserId(COACH_USER_ID))
-            .thenReturn(Optional.of(coachProfile()));
-        when(bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(
-                COACH_PROFILE_ID, PLAYER_ID, CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES))
-            .thenReturn(false);
-
-        assertThatThrownBy(() -> service.requireCoachPlayerRelationshipForRead(COACH_USER_ID, PLAYER_ID))
-            .isInstanceOf(OperationNotAllowedException.class);
     }
 
     // ── requireCoachPlayerRelationshipIfCoach — AC6 consolidation ──
@@ -149,13 +135,11 @@ class CoachPlayerAuthorizationServiceTest {
         when(playerProfileRepository.existsByIdAndUserId(PLAYER_ID, COACH_USER_ID)).thenReturn(false);
         when(securityUtil.getCurrentCoachUserId()).thenReturn(COACH_USER_ID);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coachProfile()));
-        when(bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(
-                COACH_PROFILE_ID, PLAYER_ID, CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES))
-            .thenReturn(true);
+        stubReadClock(true);
 
         service.requireCoachPlayerRelationshipIfCoach(PLAYER_ID);
 
-        verify(bookingRepository).existsByCoachIdAndPlayerIdAndStatusIn(
+        verify(bookingRepository).findLatestEndTimeByCoachIdAndPlayerIdAndStatusIn(
             COACH_PROFILE_ID, PLAYER_ID, CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES);
     }
 
@@ -167,9 +151,7 @@ class CoachPlayerAuthorizationServiceTest {
         when(playerProfileRepository.existsByIdAndUserId(PLAYER_ID, COACH_USER_ID)).thenReturn(false);
         when(securityUtil.getCurrentCoachUserId()).thenReturn(COACH_USER_ID);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coachProfile()));
-        when(bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(
-                COACH_PROFILE_ID, PLAYER_ID, CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES))
-            .thenReturn(false);
+        stubReadClock(false);
 
         assertThatThrownBy(() -> service.requireCoachPlayerRelationshipIfCoach(PLAYER_ID))
             .isInstanceOf(OperationNotAllowedException.class);
@@ -180,5 +162,90 @@ class CoachPlayerAuthorizationServiceTest {
         coach.setId(COACH_PROFILE_ID);
         coach.setUserId(COACH_USER_ID);
         return coach;
+    }
+
+    // ── skillars-12-10: window ──────────────────────────────────────────────────────────────────
+
+    private static final Instant LATEST_END = Instant.parse("2026-10-01T10:00:00Z");
+    private static final List<String> WRITE_STATUSES = List.of("ACCEPTED", "CONFIRMED", "COMPLETED", "UPCOMING");
+    private static final String NO_RELATIONSHIP = "Coach has no booking relationship with this player";
+    private static final String WINDOW_CLOSED = "Coach's access window for this player has closed";
+
+    /**
+     * true -> a READ-status booking exists and the window is open; false -> no relationship at all. The
+     * isOpen stub is strict (code review 2026-10-23), so every success path also proves the window was
+     * consulted: an unused stub fails the test.
+     */
+    private void stubReadClock(boolean related) {
+        stubClock(CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES, related);
+    }
+
+    private void stubClock(List<String> statuses, boolean related) {
+        when(bookingRepository.findLatestEndTimeByCoachIdAndPlayerIdAndStatusIn(COACH_PROFILE_ID, PLAYER_ID, statuses))
+            .thenReturn(related ? LATEST_END : null);
+        if (related) {
+            when(coachAccessWindow.isOpen(LATEST_END)).thenReturn(true);
+        }
+    }
+
+    @Test
+    void requireCoachPlayerRelationshipForRead_noRelationship_throwsNoRelationship_withoutConsultingWindow() {
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coachProfile()));
+        stubReadClock(false);
+
+        assertThatThrownBy(() -> service.requireCoachPlayerRelationshipForRead(COACH_USER_ID, PLAYER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining(NO_RELATIONSHIP);
+        verify(coachAccessWindow, never()).isOpen(any());
+    }
+
+    @Test
+    void requireCoachPlayerRelationshipForRead_relatedButWindowClosed_throws() {
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coachProfile()));
+        when(bookingRepository.findLatestEndTimeByCoachIdAndPlayerIdAndStatusIn(
+                COACH_PROFILE_ID, PLAYER_ID, CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES))
+            .thenReturn(LATEST_END);
+        when(coachAccessWindow.isOpen(LATEST_END)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.requireCoachPlayerRelationshipForRead(COACH_USER_ID, PLAYER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining(WINDOW_CLOSED);
+    }
+
+    // Code review 2026-10-23 (owner decision): the write window is measured over the NARROW write list, so the
+    // stub is keyed on exactly that list -- a regression back to READ_RELATIONSHIP_STATUSES misses it, the
+    // repository returns null and the test fails with NO_RELATIONSHIP instead.
+    @Test
+    void requireCoachPlayerRelationship_write_withNarrowRelationshipButClosedWindow_throws() {
+        when(bookingRepository.findLatestEndTimeByCoachIdAndPlayerIdAndStatusIn(
+                COACH_PROFILE_ID, PLAYER_ID, WRITE_STATUSES))
+            .thenReturn(LATEST_END);
+        when(coachAccessWindow.isOpen(LATEST_END)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.requireCoachPlayerRelationship(COACH_PROFILE_ID, PLAYER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining(WINDOW_CLOSED);
+    }
+
+    @Test
+    void requireCoachPlayerRelationship_write_withOpenWindow_succeeds() {
+        stubClock(WRITE_STATUSES, true);
+
+        service.requireCoachPlayerRelationship(COACH_PROFILE_ID, PLAYER_ID);
+
+        verify(bookingRepository, never()).findLatestEndTimeByCoachIdAndPlayerIdAndStatusIn(
+            COACH_PROFILE_ID, PLAYER_ID, CoachPlayerAuthorizationService.READ_RELATIONSHIP_STATUSES);
+        verify(bookingRepository, never()).existsByCoachIdAndPlayerIdAndStatusIn(any(), any(), any());
+    }
+
+    // The case the decision exists for: only read-only statuses (DISPUTED/NO_SHOW_COACH/PAYMENT_PENDING...) are
+    // recent, so the write-status clock is empty and the write is refused even though reads would pass.
+    @Test
+    void requireCoachPlayerRelationship_write_onlyReadOnlyStatusesRecent_throwsNoRelationship() {
+        stubClock(WRITE_STATUSES, false);
+
+        assertThatThrownBy(() -> service.requireCoachPlayerRelationship(COACH_PROFILE_ID, PLAYER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining(NO_RELATIONSHIP);
     }
 }

@@ -10,7 +10,6 @@ import com.lowagie.text.pdf.BaseFont;
 import com.lowagie.text.pdf.PdfPCell;
 import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
-import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.development.contract.CoachBrandingRequest;
 import com.softropic.skillars.platform.development.contract.CoachBrandingResponse;
@@ -96,7 +95,7 @@ public class ReportGenerationService {
     private final ApplicationEventPublisher publisher;
     private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
     private final com.softropic.skillars.infrastructure.security.RateLimitingService rateLimitingService;
-    private final ConfigService configService;
+    private final CoachAccessWindow coachAccessWindow;
     private final SecurityUtil securityUtil;
     private final PlayerProfileRepository playerProfileRepository;
     private final PlayerTimelineRepository playerTimelineRepository;
@@ -186,21 +185,9 @@ public class ReportGenerationService {
         if (lastSession == null) {
             throw new AccessDeniedException("Coach has no session history with this player");
         }
-        // skillars-deferred-153 AC7: report generation now shares TimelineQueryService's own
-        // recency policy — a coach whose last session with this player predates the same
-        // development.timeline.coachAccessExpiryDays window the timeline already refuses is
-        // refused a report the same way, instead of accepting an arbitrarily stale signal.
-        // Duplicated rather than extracted into a shared helper: TimelineQueryService still needs
-        // the raw expiryDays value to populate TimelineResponse.accessExpiryDays, so centralizing
-        // the read elsewhere would not remove a dependency from either call site.
-        long expiryDays;
-        try {
-            expiryDays = configService.getBoundedLong("development.timeline.coachAccessExpiryDays", 1L, 3650L);
-        } catch (Exception e) {
-            log.warn("Config key 'development.timeline.coachAccessExpiryDays' missing — defaulting to 90 days", e);
-            expiryDays = 90L;
-        }
-        if (lastSession.isBefore(Instant.now().minus(expiryDays, java.time.temporal.ChronoUnit.DAYS))) {
+        // skillars-deferred-153 AC7 / skillars-12-10 AC2: the shared coach-access window (attended-session
+        // clock, no open-booking arm -- a booked-but-never-attended player gets no report, as before).
+        if (!coachAccessWindow.isOpen(lastSession)) {
             throw new AccessDeniedException("Coach's last session with this player predates the access window");
         }
 

@@ -3505,13 +3505,13 @@ Gives a coach a relationship-centric view of "his" players: a derived roster ran
 | G16 | Coach player-detail page lacks parent-parity panels: radar, narrative, exposure chart, trend chart, reports list | Converge #12 success indicator | 12.9 |
 | G17 | Coach-only tools (radar assessment entry, target editor, correlation panel, radar history, report generation entry) live only on `PlayerDevelopmentDashboardPage.vue`, whose route is PLAYER-only (`routes.js:284-287`) — unreachable for coaches | Converge #12 | 12.9 |
 | G18 | `/neglected-skills` endpoint has no frontend caller (page derives from exposure) | Converge #12 | 12.9 |
-| G19 | `GET`/`PUT /players/{id}/radar/preferences` gated by coach role only, no coach↔player relationship check (`RadarDisplayResource.java:43-61`) | Codebase Grounding side note | 12.10 |
-| G20 | Coach-access windows inconsistent (90 / 730 / unbounded) | Codebase Grounding (90-day rule) | 12.10 (D5) |
-| G21 | Access clock = processing time (`Instant.now()` in `TimelineEventListener.java:111`, SLU `calculated_at`), not session time | Codebase Grounding | 12.10 |
-| G22 | Lapsed players vanish from roster beyond 730-day floor or 150-player cap | Pattern #3 | 12.10 (D6) |
-| G23 | Roster N+1 fan-out; no query-count test | Converge #11 | 12.10 (D7) |
-| G24 | Roster membership and read-authorization predicates drift on time (roster 730-day floor vs. auth unbounded) | Converge #10 | 12.10 |
-| G25 | Timeline recap redaction is a denylist; other coach's id stays in metadata, PERFORMANCE_REPORT events carry other coach's name | Decision #8 | 12.10 |
+| G19 | `GET`/`PUT /players/{id}/radar/preferences` gated by coach role only, no coach↔player relationship check (`RadarDisplayResource.java:43-61`) | Codebase Grounding side note | 12.10 — done (D5-D7 decided) |
+| G20 | Coach-access windows inconsistent (90 / 730 / unbounded) | Codebase Grounding (90-day rule) | 12.10 (D5) — done (D5-D7 decided) |
+| G21 | Access clock = processing time (`Instant.now()` in `TimelineEventListener.java:111`, SLU `calculated_at`), not session time | Codebase Grounding | 12.10 — done (D5-D7 decided) |
+| G22 | Lapsed players vanish from roster beyond 730-day floor or 150-player cap | Pattern #3 | 12.10 (D6) — done (D5-D7 decided) |
+| G23 | Roster N+1 fan-out; no query-count test | Converge #11 | 12.10 (D7) — done (D5-D7 decided) |
+| G24 | Roster membership and read-authorization predicates drift on time (roster 730-day floor vs. auth unbounded) | Converge #10 | 12.10 — done (D5-D7 decided) |
+| G25 | Timeline recap redaction is a denylist; other coach's id stays in metadata, PERFORMANCE_REPORT events carry other coach's name | Decision #8 | 12.10 — done (D5-D7 decided) |
 
 ### Story 12.6: Session Prep Completeness and Feed-Forward
 
@@ -3652,5 +3652,7 @@ So that what a coach can see about a player is predictable, minimal and secure.
 **Given** the timeline response to a non-authoring coach or a parent/player
 **When** metadata is returned
 **Then** redaction is an allowlist, so new free-text metadata keys cannot leak by default; the other coach's identity is exposed only where intentionally decided (G25)
+
+*Resolved 2026-10-23 (skillars-12-10): D5 = 90-day window everywhere (booking-end clock for reads, attended-session clock for timeline/reports); D6 = lapsed roster group, name only; D7 = keep the 150 cap, query-count IT pins the per-player budget per shape (4 booked-only, 7 attended, 2 lapsed). See the story file.*
 
 *Dev notes: `platform.development`. `RadarDisplayResource.java:43-61`, `RadarDisplayService.java:67-91`, `CoachPlayerAuthorizationService.java:35-38,88-111`, `TimelineQueryService.java:38-90`, `CoachRosterService.java:59-80`, `CoachPlayerLastSessionResolver.java:27-60`. Gaps G19–G25. Decisions D5–D7.*

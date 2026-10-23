@@ -181,6 +181,37 @@ describe('CoachPlayerDetailPage.vue (skillars-12-4)', () => {
     expect(wrapper.findComponent(PlayerTimelinePanel).exists()).toBe(false)
   })
 
+  // skillars-12-10 AC7: a 403 on a player-scoped core fetch (no relationship / access window closed) gets its
+  // own neutral message, not the generic load error.
+  it('shows the access-ended message on a 403 from a core player-scoped fetch', async () => {
+    mockApiGetByUrl({
+      'skill-definitions': { resolve: SKILL_DEFINITIONS },
+      exposure: { reject: { response: { status: 403, data: { errorMsg: { message: 'nope' } } } } },
+      'coach-contributions': { resolve: [] },
+    })
+
+    const { wrapper } = await mountPage()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('coach.playerDetailAccessEnded')
+    expect(wrapper.text()).not.toContain('coach.playerDetailError')
+    expect(wrapper.findComponent(PlayerTimelinePanel).exists()).toBe(false)
+  })
+
+  it('keeps the generic message for a non-403 core failure', async () => {
+    mockApiGetByUrl({
+      'skill-definitions': { resolve: SKILL_DEFINITIONS },
+      exposure: { reject: { response: { status: 500, data: {} } } },
+      'coach-contributions': { resolve: [] },
+    })
+
+    const { wrapper } = await mountPage()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('coach.playerDetailError')
+    expect(wrapper.text()).not.toContain('coach.playerDetailAccessEnded')
+  })
+
   it('renders all three sections on a populated load', async () => {
     mockApiGetByUrl({
       'skill-definitions': { resolve: SKILL_DEFINITIONS },

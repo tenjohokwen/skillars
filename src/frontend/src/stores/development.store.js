@@ -55,6 +55,11 @@ export const useDevelopmentStore = defineStore('development', () => {
 
   const skillDefinitionsError = ref(null)
   const exposureError = ref(null)
+  // skillars-12-10 AC7: the server answers "no relationship" and "access window closed" with the same 403, so
+  // the coach page only needs to know a PLAYER-scoped core fetch was forbidden (skill definitions are global).
+  const exposureForbidden = ref(false)
+  const coachContributionsForbidden = ref(false)
+  const coreForbidden = computed(() => exposureForbidden.value || coachContributionsForbidden.value)
   const narrativeError = ref(null)
   const narrativeLoading = ref(false)
   const targetsError = ref(null)
@@ -98,6 +103,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     loading.value = true
     error.value = null
     exposureError.value = null
+    exposureForbidden.value = false
     try {
       const response = await getSkillExposure(playerId, weeks)
       if (seq === _exposureSeq) {
@@ -109,6 +115,7 @@ export const useDevelopmentStore = defineStore('development', () => {
           err?.response?.data?.errorMsg?.message ??
           i18n.global.t('development.portal.exposureLoadError')
         exposureError.value = error.value
+        exposureForbidden.value = err?.response?.status === 403
       }
     } finally {
       if (seq === _exposureSeq) {
@@ -428,6 +435,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     coachContributions.value = []
     coachContributionsLoading.value = true
     coachContributionsError.value = null
+    coachContributionsForbidden.value = false
     try {
       const response = await getCoachContributions(playerId)
       if (seq === _coachContributionsSeq) {
@@ -438,6 +446,7 @@ export const useDevelopmentStore = defineStore('development', () => {
         coachContributionsError.value =
           err?.response?.data?.errorMsg?.message ??
           i18n.global.t('development.portal.contributionsLoadError')
+        coachContributionsForbidden.value = err?.response?.status === 403
       }
     } finally {
       if (seq === _coachContributionsSeq) {
@@ -491,6 +500,7 @@ export const useDevelopmentStore = defineStore('development', () => {
     fetchCoachContributions,
     skillDefinitionsError,
     exposureError,
+    coreForbidden,
     narrativeError,
     narrativeLoading,
     targetsError,

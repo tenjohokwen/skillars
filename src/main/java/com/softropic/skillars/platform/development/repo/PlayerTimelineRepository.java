@@ -36,6 +36,18 @@ public interface PlayerTimelineRepository extends JpaRepository<PlayerTimelineEv
     // Player-scoped so the (player_id, occurred_at) index narrows it; nothing indexes reference_id.
     boolean existsByPlayerIdAndEventTypeAndReferenceId(Long playerId, PlayerTimelineEventType eventType, UUID referenceId);
 
+    // skillars-12-10 AC4 (G21): the attended-session END clock for the coach-access window -- MAX over every
+    // coach-attributed SESSION_COMPLETED row of the referenced booking's end (capped at :now), falling back to
+    // occurred_at when the booking cannot be resolved. Deliberately an aggregate, not the latest-processed row.
+    @Query(nativeQuery = true, value = """
+        SELECT MAX(LEAST(COALESCE(b.requested_end_time, e.occurred_at), CAST(:now AS timestamptz)))
+        FROM development.player_timeline_events e
+        LEFT JOIN booking.bookings b ON b.id = e.reference_id
+        WHERE e.player_id = :playerId AND e.coach_id = :coachId AND e.event_type = 'SESSION_COMPLETED'
+        """)
+    java.time.Instant findLastSessionEnd(@Param("playerId") Long playerId, @Param("coachId") UUID coachId,
+                                         @Param("now") java.time.Instant now);
+
     Optional<PlayerTimelineEvent> findTopByPlayerIdAndCoachIdAndEventTypeOrderByOccurredAtDesc(
         Long playerId, UUID coachId, PlayerTimelineEventType eventType);
 

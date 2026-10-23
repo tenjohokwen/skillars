@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.development.contract.PlayerTimelineEventType;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineEvent;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineRepository;
@@ -25,13 +26,22 @@ public class CoachPlayerLastSessionResolver {
     private final PlayerTimelineRepository playerTimelineRepository;
 
     public LastCoachSessionSignal resolve(Long playerId, UUID coachId) {
+        // Raw processing-time signals: ONLY for the recap-attribution decision below (isRecapAttributable).
         Instant sluDate = sluRepository.findLastSessionDate(playerId, coachId);
         Optional<PlayerTimelineEvent> timelineEvent = playerTimelineRepository
             .findTopByPlayerIdAndCoachIdAndEventTypeOrderByOccurredAtDesc(
                 playerId, coachId, PlayerTimelineEventType.SESSION_COMPLETED);
 
-        Instant timelineDate = timelineEvent.map(PlayerTimelineEvent::getOccurredAt).orElse(null);
-        Instant lastSessionDate = laterOf(sluDate, timelineDate);
+        // skillars-12-10 AC4 (G21): the EXPOSED lastSessionDate is session time (the latest attended
+        // booking's end, capped at now), not processing time, so a delayed SLU/timeline write cannot
+        // shift the coach-access clock. Both are MAX aggregates over all attended rows -- never the
+        // latest-processed row mapped to its booking, which would let a delayed older session shadow a
+        // newer one. Skipped when the raw signal is absent (no attended row can exist then).
+        Instant now = Instant.now(ClockProvider.getClock());
+        Instant sluEnd = sluDate == null ? null : sluRepository.findLastSessionEnd(playerId, coachId, now);
+        Instant timelineEnd = timelineEvent.isEmpty() ? null
+            : playerTimelineRepository.findLastSessionEnd(playerId, coachId, now);
+        Instant lastSessionDate = laterOf(sluEnd, timelineEnd);
 
         PlayerTimelineEvent recapSourceEventOrNull = timelineEvent
             .filter(evt -> isRecapAttributable(evt, sluDate, playerId, coachId))

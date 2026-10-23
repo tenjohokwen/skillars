@@ -68,6 +68,7 @@ public class CoachRosterService {
     private final SluWeeklySnapshotRepository snapshotRepository;
     private final ConfigService configService;
     private final CoachPlayerLastSessionResolver coachPlayerLastSessionResolver;
+    private final CoachAccessWindow coachAccessWindow;
 
     public RosterResponse getRoster(UUID coachId) {
         Instant now = Instant.now(ClockProvider.getClock());
@@ -99,6 +100,7 @@ public class CoachRosterService {
             namesByPlayerId.put(profile.getId(), profile.getName());
         }
 
+        long accessWindowDays = coachAccessWindow.windowDays();
         long dormantAfterDays = configService.getBoundedLong(
             ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.key(),
             ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.defaultValue(),
@@ -112,8 +114,13 @@ public class CoachRosterService {
         // all, rather than shipping a bare "playerName": null into the response.
         List<RosterEntryResponse> entries = activities.stream()
             .filter(activity -> namesByPlayerId.containsKey(activity.getPlayerId()))
-            .map(activity -> buildEntry(activity, coachId, namesByPlayerId, dormantAfterDays, now))
-            .sorted(Comparator.comparingDouble(RosterEntryResponse::attentionScore).reversed())
+            .map(activity -> buildEntry(activity, coachId, namesByPlayerId, dormantAfterDays, accessWindowDays, now))
+            // skillars-12-10 AC7: open entries by attention score, then the lapsed group by last session
+            // (most recent first, never-trained last).
+            .sorted(Comparator.comparing(RosterEntryResponse::accessExpired)
+                .thenComparing(Comparator.comparingDouble(RosterEntryResponse::attentionScore).reversed())
+                .thenComparing(RosterEntryResponse::lastSessionDate,
+                    Comparator.nullsLast(Comparator.<Instant>reverseOrder())))
             .toList();
 
         return new RosterResponse(entries);
@@ -124,6 +131,7 @@ public class CoachRosterService {
         UUID coachId,
         Map<Long, String> namesByPlayerId,
         long dormantAfterDays,
+        long accessWindowDays,
         Instant now
     ) {
         Long playerId = activity.getPlayerId();
@@ -135,6 +143,17 @@ public class CoachRosterService {
         // with the same coach's Session Prep Card and timeline-access clock, instead of three
         // surfaces silently disagreeing about whether this coach and player have trained together.
         Instant lastSessionDate = coachPlayerLastSessionResolver.resolve(playerId, coachId).lastSessionDate();
+
+        // skillars-12-10 AC7 (G22/G24): the SAME window rule the read endpoints enforce, on the SAME booking-END
+        // clock (not hasUpcomingBooking below, which is start-based and drives dormancy/caption only).
+        boolean accessExpired = !CoachAccessWindow.isOpen(activity.getLatestBookingEndTime(), now, accessWindowDays);
+        if (accessExpired) {
+            // D6: a lapsed player stays findable but exposes only identity + last-session facts; the data the
+            // coach can no longer read (neglected skills, attention) is neither queried nor returned.
+            return new RosterEntryResponse(
+                playerId, namesByPlayerId.get(playerId), lastSessionDate, 0, false, 0.0,
+                SessionRecency.daysSinceOrNull(lastSessionDate, now), latestBookingTime.isAfter(now), true);
+        }
 
         // skillars-12-1 code review (2026-10-15) Patch, owner decision: the recency signal is
         // past-only — a roster-qualifying booking can be future-dated (ACCEPTED/PAYMENT_PENDING/
@@ -171,7 +190,8 @@ public class CoachRosterService {
             result.dormant(),
             result.attentionScore(),
             SessionRecency.daysSinceOrNull(lastSessionDate, now),
-            hasUpcomingBooking);
+            hasUpcomingBooking,
+            false);
     }
 
     // Task 2.3: calls the same two public pieces SluDashboardService.getSkillTrends does, one layer

@@ -17,6 +17,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -228,11 +230,24 @@ class CoachPlayerLastSessionResolverTest {
 
     private void stubSluDate(Instant sluDate) {
         when(sluRepository.findLastSessionDate(PLAYER_ID, COACH_ID)).thenReturn(sluDate);
+        // skillars-12-10: by default the session END mirrors the processing time; tests of the new clock
+        // override with stubSluSessionEnd / stubTimelineSessionEnd.
+        lenient().when(sluRepository.findLastSessionEnd(eq(PLAYER_ID), eq(COACH_ID), any())).thenReturn(sluDate);
+    }
+
+    private void stubSluSessionEnd(Instant end) {
+        when(sluRepository.findLastSessionEnd(eq(PLAYER_ID), eq(COACH_ID), any())).thenReturn(end);
+    }
+
+    private void stubTimelineSessionEnd(Instant end) {
+        when(playerTimelineRepository.findLastSessionEnd(eq(PLAYER_ID), eq(COACH_ID), any())).thenReturn(end);
     }
 
     private void stubTimelineEvent(Optional<PlayerTimelineEvent> event) {
         when(playerTimelineRepository.findTopByPlayerIdAndCoachIdAndEventTypeOrderByOccurredAtDesc(
             PLAYER_ID, COACH_ID, PlayerTimelineEventType.SESSION_COMPLETED)).thenReturn(event);
+        lenient().when(playerTimelineRepository.findLastSessionEnd(eq(PLAYER_ID), eq(COACH_ID), any()))
+            .thenReturn(event.map(PlayerTimelineEvent::getOccurredAt).orElse(null));
     }
 
     private PlayerTimelineEvent sessionCompletedEvent(Instant occurredAt, UUID referenceId) {
@@ -244,5 +259,38 @@ class CoachPlayerLastSessionResolverTest {
         event.setOccurredAt(occurredAt);
         event.setReferenceId(referenceId);
         return event;
+    }
+
+    // ── skillars-12-10 AC4 (G21): session time, not processing time ──────────────────────────────
+
+    @Test
+    void resolve_exposesSessionEndNotProcessingTime_butRecapAttributionStaysOnRawSignals() {
+        UUID bookingId = UUID.randomUUID();
+        Instant occurredAt = NOW.minusSeconds(60);          // processed a minute ago...
+        Instant sessionEnd = NOW.minusSeconds(100L * 86_400); // ...for a session that ended 100 days ago
+        PlayerTimelineEvent event = sessionCompletedEvent(occurredAt, bookingId);
+        stubSluDate(null);
+        stubTimelineEvent(Optional.of(event));
+        stubTimelineSessionEnd(sessionEnd);
+
+        CoachPlayerLastSessionResolver.LastCoachSessionSignal signal = resolver.resolve(PLAYER_ID, COACH_ID);
+
+        assertThat(signal.lastSessionDate()).isEqualTo(sessionEnd);
+        assertThat(signal.recapSourceEventOrNull()).isSameAs(event);
+    }
+
+    @Test
+    void resolve_laterOfTheTwoSessionEndsWins_evenWhenTheOlderSessionWasProcessedLast() {
+        Instant newerSessionEnd = NOW.minusSeconds(2L * 86_400);
+        Instant olderSessionEnd = NOW.minusSeconds(40L * 86_400);
+        // The older session's SLU row was written LATER (delayed retry) -- raw calculated_at is the max,
+        // but the MAX(session end) aggregate must still report the newer session.
+        stubSluDate(NOW.minusSeconds(30));
+        stubSluSessionEnd(newerSessionEnd);
+        stubTimelineEvent(Optional.of(sessionCompletedEvent(NOW.minusSeconds(40L * 86_400), UUID.randomUUID())));
+        stubTimelineSessionEnd(olderSessionEnd);
+        when(sluRepository.findLastSessionBookingId(PLAYER_ID, COACH_ID)).thenReturn(Optional.empty());
+
+        assertThat(resolver.resolve(PLAYER_ID, COACH_ID).lastSessionDate()).isEqualTo(newerSessionEnd);
     }
 }

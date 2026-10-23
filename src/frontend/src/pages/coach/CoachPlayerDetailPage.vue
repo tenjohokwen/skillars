@@ -359,11 +359,15 @@ const noContributionsKey = computed(() =>
 //
 // skillars-12-9: the gate reads the per-section refs, not store.error, and trips only on the core
 // trio (skill definitions, exposure, contributions); secondary sections degrade inside their card.
-const pageError = computed(() =>
-  store.skillDefinitionsError || store.exposureError || store.coachContributionsError
-    ? t('coach.playerDetailError')
-    : null,
-)
+// skillars-12-10 AC7: a 403 on a player-scoped core fetch (no relationship, or the coach-access window has
+// closed - the server uses one exception for both, so the copy must not claim which) gets its own neutral
+// message instead of the generic load error.
+const pageError = computed(() => {
+  if (!(store.skillDefinitionsError || store.exposureError || store.coachContributionsError)) {
+    return null
+  }
+  return store.coreForbidden ? t('coach.playerDetailAccessEnded') : t('coach.playerDetailError')
+})
 
 // Starts true (not false): the very first render happens before this component's own onMounted
 // runs, so a `false` initial value let `v-if="!loading"` mount PlayerTimelinePanel immediately,

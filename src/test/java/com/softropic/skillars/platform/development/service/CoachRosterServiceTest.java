@@ -80,7 +80,7 @@ class CoachRosterServiceTest {
         service = new CoachRosterService(
             bookingRepository, playerProfileRepository,
             neglectedSkillFlagRepository, snapshotRepository, configService,
-            coachPlayerLastSessionResolver);
+            coachPlayerLastSessionResolver, new CoachAccessWindow(configService));
         TestClockProvider.setClock(Clock.fixed(NOW, ZoneOffset.UTC));
         // Default: no merged signal at all — individual tests override via resolve(PLAYER_ID, COACH_ID)
         // stubs below. lenient() because the no-qualifying-activity test never reaches buildEntry.
@@ -98,6 +98,10 @@ class CoachRosterServiceTest {
         // every test that did not override it — and stubDormantAfterDays() had the mirror-image
         // problem, setting the effective maxPlayers to the dormancy threshold. Each key now gets its
         // own value and the coupling is gone.
+        // skillars-12-10: the shared coach-access window (default 90 days).
+        lenient().when(configService.getBoundedLong(
+                eq(ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS.key()), anyLong(), anyLong(), anyLong()))
+            .thenReturn(ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS.defaultValue());
         lenient().when(configService.getBoundedLong(
                 eq(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.key()), anyLong(), anyLong(), anyLong()))
             .thenReturn(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.defaultValue());
@@ -373,6 +377,88 @@ class CoachRosterServiceTest {
         assertThat(entry.playerName()).isEqualTo("Alex Kane");
     }
 
+    // ── skillars-12-10 AC7: lapsed group ─────────────────────────────────────────────────────────
+
+    @Test
+    void getRoster_bookingEndOutsideWindow_isListedAsExpiredWithDataMinimised() {
+        Instant start = NOW.minus(java.time.Duration.ofDays(100));
+        when(bookingRepository.findRosterPlayerActivityByCoachIdAndStatusIn(
+                eq(COACH_ID), any(Instant.class), anyList(), any(Instant.class), any(Pageable.class)))
+            .thenReturn(List.of(activity(PLAYER_ID, start, start.plusSeconds(3600))));
+        stubPlayerName("Lapsed Lou");
+        Instant lastSession = start.plusSeconds(3600);
+        when(coachPlayerLastSessionResolver.resolve(PLAYER_ID, COACH_ID)).thenReturn(
+            new CoachPlayerLastSessionResolver.LastCoachSessionSignal(lastSession, null));
+
+        RosterEntryResponse entry = singleEntry(service.getRoster(COACH_ID));
+
+        assertThat(entry.accessExpired()).isTrue();
+        assertThat(entry.playerName()).isEqualTo("Lapsed Lou");
+        assertThat(entry.lastSessionDate()).isEqualTo(lastSession);
+        assertThat(entry.openNeglectedSkillCount()).isZero();
+        assertThat(entry.attentionScore()).isZero();
+        assertThat(entry.dormant()).isFalse();
+        // The data the coach can no longer read is neither queried nor returned.
+        verifyNoInteractions(neglectedSkillFlagRepository, snapshotRepository);
+    }
+
+    @Test
+    void getRoster_bookingEndJustInsideWindow_isNotExpired() {
+        Instant end = NOW.minus(java.time.Duration.ofDays(90)).plusSeconds(120);
+        stubPlayerName("Edge Eve");
+        when(bookingRepository.findRosterPlayerActivityByCoachIdAndStatusIn(
+                eq(COACH_ID), any(Instant.class), anyList(), any(Instant.class), any(Pageable.class)))
+            .thenReturn(List.of(activity(PLAYER_ID, end.minusSeconds(3600), end)));
+        stubNoNeglectedFlags();
+        stubNoTrendData();
+
+        assertThat(singleEntry(service.getRoster(COACH_ID)).accessExpired()).isFalse();
+    }
+
+    @Test
+    void getRoster_futureBookingEnd_isNotExpired_evenWithNoAttendedSession() {
+        stubActivity(NOW.plusSeconds(86_400));
+        stubPlayerName("New Nia");
+        stubNoNeglectedFlags();
+        stubNoTrendData();
+
+        RosterEntryResponse entry = singleEntry(service.getRoster(COACH_ID));
+        assertThat(entry.accessExpired()).isFalse();
+        assertThat(entry.hasUpcomingBooking()).isTrue();
+    }
+
+    @Test
+    void getRoster_expiredEntriesSortAfterOpenOnes_byLastSessionDesc() {
+        Instant old1 = NOW.minus(java.time.Duration.ofDays(120));
+        Instant old2 = NOW.minus(java.time.Duration.ofDays(200));
+        Instant recent = NOW.minus(java.time.Duration.ofDays(5));
+        when(bookingRepository.findRosterPlayerActivityByCoachIdAndStatusIn(
+                eq(COACH_ID), any(Instant.class), anyList(), any(Instant.class), any(Pageable.class)))
+            .thenReturn(List.of(activity(1L, old2), activity(2L, old1), activity(3L, recent)));
+        PlayerProfile p1 = profile(1L, "Old2"), p2 = profile(2L, "Old1"), p3 = profile(3L, "Recent");
+        when(playerProfileRepository.findAllById(List.of(1L, 2L, 3L))).thenReturn(List.of(p1, p2, p3));
+        when(coachPlayerLastSessionResolver.resolve(1L, COACH_ID)).thenReturn(
+            new CoachPlayerLastSessionResolver.LastCoachSessionSignal(old2, null));
+        when(coachPlayerLastSessionResolver.resolve(2L, COACH_ID)).thenReturn(
+            new CoachPlayerLastSessionResolver.LastCoachSessionSignal(old1, null));
+        when(coachPlayerLastSessionResolver.resolve(3L, COACH_ID)).thenReturn(
+            new CoachPlayerLastSessionResolver.LastCoachSessionSignal(recent, null));
+        when(neglectedSkillFlagRepository.countByPlayerIdAndResolvedAtIsNull(3L)).thenReturn(0);
+        when(snapshotRepository.findByPlayerIdFromWeek(eq(3L), anyShort(), anyShort(), anyShort(), anyShort()))
+            .thenReturn(List.of());
+
+        List<String> names = service.getRoster(COACH_ID).players().stream().map(RosterEntryResponse::playerName).toList();
+
+        assertThat(names).containsExactly("Recent", "Old1", "Old2");
+    }
+
+    private static PlayerProfile profile(Long id, String name) {
+        PlayerProfile profile = new PlayerProfile();
+        profile.setId(id);
+        profile.setName(name);
+        return profile;
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private void stubActivity(Instant latestBookingTime) {
@@ -416,7 +502,17 @@ class CoachRosterServiceTest {
     }
 
     private static RosterPlayerActivityProjection activity(Long playerId, Instant latestBookingTime) {
+        return activity(playerId, latestBookingTime, latestBookingTime.plusSeconds(3600));
+    }
+
+    private static RosterPlayerActivityProjection activity(
+        Long playerId, Instant latestBookingTime, Instant latestBookingEndTime) {
         return new RosterPlayerActivityProjection() {
+            @Override
+            public Instant getLatestBookingEndTime() {
+                return latestBookingEndTime;
+            }
+
             @Override
             public Long getPlayerId() {
                 return playerId;
