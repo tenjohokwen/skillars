@@ -65,6 +65,8 @@ public class RadarDisplayService {
     }
 
     public CoachRadarPreferenceResponse getPreferences(UUID coachId, Long playerId) {
+        // skillars-12-10 AC1 (G19): was coach-role-only; same windowed read check as every other read.
+        coachPlayerAuthorizationService.requireCoachPlayerRelationshipForRead(coachId, playerId);
         return preferenceRepository.findByIdCoachIdAndIdPlayerId(coachId, playerId)
             .map(p -> new CoachRadarPreferenceResponse(p.getSelectedSkills()))
             .orElse(new CoachRadarPreferenceResponse(List.of()));
@@ -73,6 +75,8 @@ public class RadarDisplayService {
     @Transactional
     public CoachRadarPreferenceResponse savePreferences(
             UUID coachId, Long playerId, CoachRadarPreferenceRequest request) {
+        // skillars-12-10 AC1 (G19): checked BEFORE the upsert so an unrelated coach creates no row.
+        coachPlayerAuthorizationService.requireCoachPlayerRelationshipForRead(coachId, playerId);
         CoachRadarPreference pref = preferenceRepository
             .findByIdCoachIdAndIdPlayerId(coachId, playerId)
             .orElseGet(() -> {

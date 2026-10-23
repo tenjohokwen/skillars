@@ -58,14 +58,12 @@ public final class ConfigBounds {
      * @param note         one line: what a bad value actually does (surfaced in the startup ERROR log)
      * @param defaultValue skillars-deferred-133 AC2: for a key in {@link #HAS_CODE_DEFAULT}, the same
      *                     literal its call site actually falls back to on an absent/out-of-range
-     *                     value — 17 of the 18 via the 4-arg {@code getBoundedLong(key, default, min,
+     *                     value — all 18 via the 4-arg {@code getBoundedLong(key, default, min,
      *                     max)}/{@code getBoundedInt} overload (which does NOT clamp: out-of-range
      *                     falls back to this default, unlike the 3-arg overload's clamp-to-bound
-     *                     behavior), the one exception being {@link #TIMELINE_COACH_ACCESS_EXPIRY_DAYS}
-     *                     — its call site uses the 3-arg overload wrapped in a manual
-     *                     {@code catch (Exception e)} block, a missing/throwing-key fallback
-     *                     semantically distinct from the other 17 keys' embedded 4-arg default, not a
-     *                     range clamp either. For every key NOT in {@code HAS_CODE_DEFAULT} (a 1-arg,
+     *                     behavior). {@link #TIMELINE_COACH_ACCESS_EXPIRY_DAYS} was the one 3-arg
+     *                     exception until skillars-12-10 moved it onto the 4-arg overload via
+     *                     {@code CoachAccessWindow}. For every key NOT in {@code HAS_CODE_DEFAULT} (a 1-arg,
      *                     no-code-default call site — absent/blank there is an {@code
      *                     IllegalStateException}, not a fallback), this is the not-applicable sentinel
      *                     {@code 0L} — not a real default, since none exists to record.
@@ -184,10 +182,10 @@ public final class ConfigBounds {
         new BoundedKey("platform.video_reservation_timeout_minutes", 1L, 1440L, false,
             "0 → every upload reservation expires instantly", 0L);
 
-    /** {@code TimelineQueryService} — 0/neg → coach timeline access always expired. */
+    /** {@code CoachAccessWindow} (skillars-12-10) — out-of-range → falls back to the 90-day default. */
     public static final BoundedKey TIMELINE_COACH_ACCESS_EXPIRY_DAYS =
         new BoundedKey("development.timeline.coachAccessExpiryDays", 1L, 3650L, false,
-            "0/neg → coach development-timeline access reads as always expired", 90L);
+            "out-of-range → default 90 (skillars-12-10: the single coach-access window for every per-player development read)", 90L);
 
     /**
      * {@code CoachRosterService} — skillars-12-1 AC4/Task 2.4: registered in

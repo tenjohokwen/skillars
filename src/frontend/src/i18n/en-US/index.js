@@ -245,6 +245,10 @@ export default {
     commandCenterSchedule: 'Schedule',
     myPlayersTitle: 'My Players',
     myPlayersEmpty: 'No players on your roster yet',
+    myPlayersAllLapsed: 'All of your players are lapsed.',
+    myPlayersLapsedHeading: 'Lapsed players',
+    myPlayersLapsedHint:
+      'No session in the access window - their development data is no longer available to you.',
     myPlayersIncompleteProfile:
       'Finish setting up your coach profile to see your player roster here.',
     myPlayersCompleteProfile: 'Complete Profile',
@@ -290,6 +294,7 @@ export default {
     playerDetailContributionsBelowThreshold:
       "No coach's contribution reached the 30% threshold for any skill in the last 30 days",
     playerDetailError: 'Could not load player development data',
+    playerDetailAccessEnded: "You no longer have access to this player's development data",
     playerDetailBackToRoster: 'Back to My Players',
     playerDetailSectionError: 'Could not load this section',
     playerDetailRadarPrefsError: 'Could not load your saved skill selection. Showing all skills.',

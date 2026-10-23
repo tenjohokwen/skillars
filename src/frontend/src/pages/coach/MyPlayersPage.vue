@@ -32,8 +32,17 @@
       </div>
 
       <template v-else>
+        <!-- skillars-12-10 (D6): when EVERY player is lapsed there is nothing to open - say so, then the
+             lapsed group below still lists them (this is not the "empty roster" state). -->
         <div
-          v-for="player in players"
+          v-if="!openPlayers.length"
+          class="text-center q-pb-md text-body2 text-secondary"
+          data-testid="all-lapsed-hint"
+        >
+          {{ t('coach.myPlayersAllLapsed') }}
+        </div>
+        <div
+          v-for="player in openPlayers"
           :key="player.playerId"
           class="player-item clickable q-mb-md q-pb-md row items-center justify-between"
           role="button"
@@ -63,13 +72,37 @@
             </q-badge>
           </div>
         </div>
+
+        <!-- skillars-12-10 (D6): lapsed = the coach-access window has closed. Findable, but identity and
+             last-session facts only - deliberately not a button, no detail link, no badges. -->
+        <template v-if="lapsedPlayers.length">
+          <div class="text-subtitle2 q-mt-lg q-mb-sm" data-testid="lapsed-heading">
+            {{ t('coach.myPlayersLapsedHeading') }}
+          </div>
+          <div class="text-caption q-mb-md" style="color: var(--text-secondary)">
+            {{ t('coach.myPlayersLapsedHint') }}
+          </div>
+          <div
+            v-for="player in lapsedPlayers"
+            :key="player.playerId"
+            class="player-item lapsed q-mb-md q-pb-md"
+            data-testid="lapsed-player"
+          >
+            <div class="text-body1" style="color: var(--text-primary)">
+              {{ player.playerName }}
+            </div>
+            <div class="text-caption" style="color: var(--text-secondary)">
+              {{ lastSessionLabel(player) }}
+            </div>
+          </div>
+        </template>
       </template>
     </div>
   </q-page>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { getCoachRoster } from 'src/api/development.api'
@@ -81,6 +114,9 @@ const loading = ref(true)
 const loadError = ref(false)
 const incompleteProfile = ref(false)
 const players = ref([])
+// skillars-12-10 (D6): the server flags players whose coach-access window has closed.
+const openPlayers = computed(() => players.value.filter((p) => !p.accessExpired))
+const lapsedPlayers = computed(() => players.value.filter((p) => p.accessExpired))
 
 onMounted(async () => {
   try {
@@ -137,6 +173,10 @@ function goToPlayerDetail(player) {
 
 .player-item {
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.player-item.lapsed {
+  opacity: 0.8;
 }
 
 .player-item.clickable {

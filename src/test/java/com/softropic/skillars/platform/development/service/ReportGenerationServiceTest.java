@@ -101,7 +101,7 @@ class ReportGenerationServiceTest {
             skillDefinitionRepository, compositeRepository, baselineRepository,
             reportRepository, brandingRepository, fileStorageService,
             timelineEventListener, publisher, coachPlayerAuthorizationService,
-            rateLimitingService, configService, securityUtil, playerProfileRepository,
+            rateLimitingService, new CoachAccessWindow(configService), securityUtil, playerProfileRepository,
             playerTimelineRepository
         );
         ReflectionTestUtils.setField(service, "baseUrl", "http://app.test");
@@ -110,7 +110,7 @@ class ReportGenerationServiceTest {
         // generateReport test (lastSessionDate stubbed as "1 hour ago") start throwing
         // AccessDeniedException. lenient() — the stale-signal test below overrides with its own value.
         org.mockito.Mockito.lenient().when(configService.getBoundedLong(
-            "development.timeline.coachAccessExpiryDays", 1L, 3650L)).thenReturn(90L);
+            "development.timeline.coachAccessExpiryDays", 90L, 1L, 3650L)).thenReturn(90L);
     }
 
     private CoachProfileDto coachDto() {
@@ -227,7 +227,6 @@ class ReportGenerationServiceTest {
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
         when(coachPlayerLastSessionResolver.resolve(PLAYER_ID, COACH_ID)).thenReturn(
             new CoachPlayerLastSessionResolver.LastCoachSessionSignal(Instant.now().minus(200, java.time.temporal.ChronoUnit.DAYS), null));
-        when(configService.getBoundedLong("development.timeline.coachAccessExpiryDays", 1L, 3650L)).thenReturn(90L);
 
         assertThatThrownBy(() -> service.generateReport(COACH_USER_ID, PLAYER_ID, "stale"))
             .isInstanceOf(AccessDeniedException.class);
@@ -764,7 +763,7 @@ class ReportGenerationServiceTest {
             skillDefinitionRepository, compositeRepository, baselineRepository,
             reportRepository, brandingRepository, realFileStorageService,
             timelineEventListener, publisher, coachPlayerAuthorizationService,
-            rateLimitingService, configService, securityUtil, playerProfileRepository,
+            rateLimitingService, new CoachAccessWindow(configService), securityUtil, playerProfileRepository,
             playerTimelineRepository
         );
         ReflectionTestUtils.setField(realService, "baseUrl", "http://app.test");

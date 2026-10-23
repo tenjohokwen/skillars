@@ -26,6 +26,7 @@ const PLAYER = (overrides = {}) => ({
   attentionScore: 0.1,
   daysSinceLastSession: 5,
   hasUpcomingBooking: false,
+  accessExpired: false,
   ...overrides,
 })
 
@@ -250,5 +251,55 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
       name: 'coach-player-detail',
       params: { playerId: LARGE_PLAYER_ID },
     })
+  })
+
+  // skillars-12-10 (D6): lapsed players are findable but not openable.
+  it('lists expired players in a separate Lapsed group: not clickable, no badges, no detail link', async () => {
+    getCoachRoster.mockResolvedValue({
+      players: [
+        PLAYER({ playerId: 1, playerName: 'Open Olly' }),
+        PLAYER({
+          playerId: 2,
+          playerName: 'Lapsed Lou',
+          accessExpired: true,
+          openNeglectedSkillCount: 0,
+          daysSinceLastSession: 120,
+        }),
+      ],
+    })
+    const { wrapper, router } = mountPage()
+    const push = vi.spyOn(router, 'push')
+    await flushPromises()
+
+    expect(wrapper.findAll('.player-item.clickable')).toHaveLength(1)
+    const lapsed = wrapper.findAll('[data-testid="lapsed-player"]')
+    expect(lapsed).toHaveLength(1)
+    expect(lapsed[0].text()).toContain('Lapsed Lou')
+    expect(lapsed[0].attributes('role')).toBeUndefined()
+    expect(wrapper.find('[data-testid="lapsed-heading"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="all-lapsed-hint"]').exists()).toBe(false)
+
+    await lapsed[0].trigger('click')
+    expect(push).not.toHaveBeenCalled()
+  })
+
+  it('when every player is lapsed shows the all-lapsed hint and the group, not the empty state', async () => {
+    getCoachRoster.mockResolvedValue({
+      players: [PLAYER({ playerId: 2, playerName: 'Lapsed Lou', accessExpired: true })],
+    })
+    const { wrapper } = mountPage()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="all-lapsed-hint"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('coach.myPlayersEmpty')
+    expect(wrapper.find('[data-testid="lapsed-heading"]').exists()).toBe(true)
+  })
+
+  it('shows no Lapsed group when nobody is expired', async () => {
+    getCoachRoster.mockResolvedValue({ players: [PLAYER()] })
+    const { wrapper } = mountPage()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="lapsed-heading"]').exists()).toBe(false)
   })
 })

@@ -56,6 +56,21 @@ public interface SluRepository extends JpaRepository<PlayerSkillStat, UUID> {
         """)
     Instant findLastSessionDate(@Param("playerId") Long playerId, @Param("coachId") UUID coachId);
 
+    // skillars-12-10 AC4 (G21): the SESSION-time counterpart of findLastSessionDate -- the latest attended
+    // session's booking END (capped at :now, since wrap-up is gated on start, not end), not the processing
+    // time. MAX over ALL this coach's rows, never "the latest-processed row mapped to its booking": a delayed
+    // write for an older session must not shadow a newer one. Falls back to calculated_at only when the
+    // session/booking cannot be resolved (session_id is nullable).
+    @Query(nativeQuery = true, value = """
+        SELECT MAX(LEAST(COALESCE(b.requested_end_time, p.calculated_at), CAST(:now AS timestamptz)))
+        FROM development.player_skill_stats p
+        LEFT JOIN session.sessions s ON s.id = p.session_id
+        LEFT JOIN booking.bookings b ON b.id = s.booking_id
+        WHERE p.player_id = :playerId AND p.coach_id = :coachId
+        """)
+    Instant findLastSessionEnd(@Param("playerId") Long playerId, @Param("coachId") UUID coachId,
+                               @Param("now") Instant now);
+
     // skillars-12-3 code review (2026-10-15) Patch, owner decision: lets CoachPlayerLastSessionResolver
     // disambiguate "a genuinely newer, different SLU-only session exists" from "this is the SAME
     // session whose two independently-async-stamped signals just landed in the opposite order" by

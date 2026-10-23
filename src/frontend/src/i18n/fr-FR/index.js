@@ -9,6 +9,10 @@ export default {
     commandCenterSchedule: 'Planning',
     myPlayersTitle: 'Mes joueurs',
     myPlayersEmpty: "Aucun joueur dans votre effectif pour l'instant",
+    myPlayersAllLapsed: 'Tous vos joueurs sont inactifs.',
+    myPlayersLapsedHeading: 'Joueurs inactifs',
+    myPlayersLapsedHint:
+      "Aucune séance dans la période d'accès - leurs données de développement ne sont plus disponibles pour vous.",
     myPlayersIncompleteProfile:
       'Terminez la configuration de votre profil coach pour voir votre effectif ici.',
     myPlayersCompleteProfile: 'Compléter le profil',
@@ -55,6 +59,7 @@ export default {
     playerDetailContributionsBelowThreshold:
       "Aucune contribution d'un coach n'a atteint le seuil de 30 % pour une compétence au cours des 30 derniers jours",
     playerDetailError: 'Impossible de charger les données de développement du joueur',
+    playerDetailAccessEnded: "Vous n'avez plus accès aux données de développement de ce joueur",
     playerDetailBackToRoster: 'Retour à Mes joueurs',
     playerDetailSectionError: 'Impossible de charger cette section',
     playerDetailRadarPrefsError:

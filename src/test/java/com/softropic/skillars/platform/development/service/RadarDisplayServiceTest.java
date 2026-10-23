@@ -69,4 +69,30 @@ class RadarDisplayServiceTest {
             .isInstanceOf(OperationNotAllowedException.class);
         verify(compositeRepository, never()).findByIdPlayerId(PLAYER_ID);
     }
+
+    // ── skillars-12-10 AC1 (G19): preferences endpoints carry the relationship check ─────────────
+
+    private static final java.util.UUID COACH_ID = java.util.UUID.randomUUID();
+
+    @Test
+    void getPreferences_unrelatedCoach_throwsAndNeverReadsPreferences() {
+        doThrow(new OperationNotAllowedException("no relationship", SecurityError.MISSING_RIGHTS))
+            .when(coachPlayerAuthorizationService).requireCoachPlayerRelationshipForRead(COACH_ID, PLAYER_ID);
+
+        assertThatThrownBy(() -> service.getPreferences(COACH_ID, PLAYER_ID))
+            .isInstanceOf(OperationNotAllowedException.class);
+        verify(preferenceRepository, never()).findByIdCoachIdAndIdPlayerId(COACH_ID, PLAYER_ID);
+    }
+
+    @Test
+    void savePreferences_unrelatedCoach_throwsBeforeAnyUpsert() {
+        doThrow(new OperationNotAllowedException("no relationship", SecurityError.MISSING_RIGHTS))
+            .when(coachPlayerAuthorizationService).requireCoachPlayerRelationshipForRead(COACH_ID, PLAYER_ID);
+
+        assertThatThrownBy(() -> service.savePreferences(COACH_ID, PLAYER_ID,
+            new com.softropic.skillars.platform.development.contract.CoachRadarPreferenceRequest(List.of("PASS"))))
+            .isInstanceOf(OperationNotAllowedException.class);
+        verify(preferenceRepository, never()).findByIdCoachIdAndIdPlayerId(COACH_ID, PLAYER_ID);
+        verify(preferenceRepository, never()).save(org.mockito.ArgumentMatchers.any());
+    }
 }

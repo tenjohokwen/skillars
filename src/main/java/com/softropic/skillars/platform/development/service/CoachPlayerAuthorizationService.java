@@ -12,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -41,6 +42,7 @@ public class CoachPlayerAuthorizationService {
     private final CoachProfileRepository coachProfileRepository;
     private final SecurityUtil securityUtil;
     private final PlayerProfileRepository playerProfileRepository;
+    private final CoachAccessWindow coachAccessWindow;
 
     /**
      * Throws OperationNotAllowedException if the current coach has no booking
@@ -60,11 +62,11 @@ public class CoachPlayerAuthorizationService {
      * avoiding a redundant coachProfileRepository lookup.
      */
     public void requireCoachPlayerRelationship(UUID coachProfileId, Long playerId) {
-        if (!bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(
-                coachProfileId, playerId, ACTIVE_RELATIONSHIP_STATUSES)) {
-            throw new OperationNotAllowedException(
-                "Coach has no booking relationship with this player", SecurityError.MISSING_RIGHTS);
-        }
+        // skillars-12-10 D12.10-A: the narrow write list had no time dimension, so a years-old COMPLETED
+        // booking still authorised a write the coach can no longer read. The window is measured over the
+        // SAME narrow list (code review 2026-10-23, owner decision): a recent DISPUTED/NO_SHOW_COACH/
+        // PAYMENT_PENDING booking -- statuses deliberately excluded from writes -- must not re-open them.
+        requireWithinAccessWindow(coachProfileId, playerId, ACTIVE_RELATIONSHIP_STATUSES);
     }
 
     /**
@@ -85,10 +87,26 @@ public class CoachPlayerAuthorizationService {
      * Overload for call sites that already resolved the coach profile UUID.
      */
     public void requireCoachPlayerRelationshipForRead(UUID coachProfileId, Long playerId) {
-        if (!bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(
-                coachProfileId, playerId, READ_RELATIONSHIP_STATUSES)) {
+        requireWithinAccessWindow(coachProfileId, playerId, READ_RELATIONSHIP_STATUSES);
+    }
+
+    /**
+     * skillars-12-10 AC2/AC3: the booking-END clock. One aggregate query answers both "is there a
+     * relationship in these statuses at all" (null) and "is it inside the window" (a future end counts as
+     * open). Reads pass {@link #READ_RELATIONSHIP_STATUSES}, writes {@link #ACTIVE_RELATIONSHIP_STATUSES}.
+     * Both failures are the same exception on purpose -- the caller cannot tell "never related" from
+     * "lapsed", which is the minimal disclosure.
+     */
+    private void requireWithinAccessWindow(UUID coachProfileId, Long playerId, List<String> statuses) {
+        Instant latestEnd = bookingRepository.findLatestEndTimeByCoachIdAndPlayerIdAndStatusIn(
+            coachProfileId, playerId, statuses);
+        if (latestEnd == null) {
             throw new OperationNotAllowedException(
                 "Coach has no booking relationship with this player", SecurityError.MISSING_RIGHTS);
+        }
+        if (!coachAccessWindow.isOpen(latestEnd)) {
+            throw new OperationNotAllowedException(
+                "Coach's access window for this player has closed", SecurityError.MISSING_RIGHTS);
         }
     }
 

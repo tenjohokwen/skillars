@@ -278,6 +278,10 @@ export default {
     commandCenterSchedule: 'Zeitplan',
     myPlayersTitle: 'Meine Spieler',
     myPlayersEmpty: 'Noch keine Spieler in Ihrem Kader',
+    myPlayersAllLapsed: 'Alle Ihre Spieler sind inaktiv.',
+    myPlayersLapsedHeading: 'Inaktive Spieler',
+    myPlayersLapsedHint:
+      'Keine Einheit im Zugriffszeitraum - deren Entwicklungsdaten stehen Ihnen nicht mehr zur Verfügung.',
     myPlayersIncompleteProfile:
       'Schließen Sie Ihr Trainerprofil ab, um hier Ihren Spielerkader zu sehen.',
     myPlayersCompleteProfile: 'Profil vervollständigen',
@@ -324,6 +328,8 @@ export default {
     playerDetailContributionsBelowThreshold:
       'Kein Trainerbeitrag hat für eine Fähigkeit in den letzten 30 Tagen den Schwellenwert von 30 % erreicht',
     playerDetailError: 'Entwicklungsdaten des Spielers konnten nicht geladen werden',
+    playerDetailAccessEnded:
+      'Sie haben keinen Zugriff mehr auf die Entwicklungsdaten dieses Spielers',
     playerDetailBackToRoster: 'Zurück zu Meine Spieler',
     playerDetailSectionError: 'Dieser Bereich konnte nicht geladen werden',
     playerDetailRadarPrefsError:
