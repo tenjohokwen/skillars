@@ -404,6 +404,11 @@ public class ConfigService {
      *       already-cached (never empty) snapshot immediately instead of waiting;</li>
      *   <li>a reader after {@link #invalidate()}, or one on a cache that has never loaded, must see fresh data
      *       and so waits for the lock, then re-checks (a load that began before the invalidate does not count);</li>
+     *   <li>a load that fails while the staleness is TTL-only is logged at WARN and the cached snapshot is
+     *       served, exactly as the concurrent TTL-only readers are; {@code lastRefreshed} is left unchanged so
+     *       the next reader retries. A must-be-fresh load failure still propagates. (If the caller is inside a
+     *       transaction, the repository's own interceptor has already marked it rollback-only; this only
+     *       spares non-transactional callers.)</li>
      *   <li>the load is deliberately <em>not</em> run in {@code REQUIRES_NEW}: callers already inside a
      *       transaction would hold two connections each.</li>
      * </ul>
@@ -413,20 +418,32 @@ public class ConfigService {
             if (refreshLock.tryLock()) {
                 try {
                     if (isStale()) {
-                        load();
+                        boolean ttlOnly = !mustBeFresh();
+                        try {
+                            load();
+                        } catch (RuntimeException e) {
+                            if (!ttlOnly) {
+                                throw e;
+                            }
+                            log.warn("Platform config cache refresh failed; serving the cached snapshot", e);
+                        }
                     }
                 } finally {
                     refreshLock.unlock();
                 }
                 return;
             }
-            boolean mustBeFresh = loadedEpoch < invalidationEpoch.get() || lastRefreshed == Instant.MIN;
-            if (!mustBeFresh) {
+            if (!mustBeFresh()) {
                 return; // TTL-only staleness and a load is in flight: serve the cached snapshot
             }
             refreshLock.lock();
             refreshLock.unlock(); // wait for the in-flight load, then re-check staleness
         }
+    }
+
+    /** True after {@link #invalidate()} or before the first successful load: a cached snapshot is not acceptable. */
+    private boolean mustBeFresh() {
+        return loadedEpoch < invalidationEpoch.get() || lastRefreshed == Instant.MIN;
     }
 
     private void load() {

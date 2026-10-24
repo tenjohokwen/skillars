@@ -22,8 +22,9 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
  *
  * <p>This service is NOT @Transactional — it reads in-memory Micrometer counters only.
  * No DB call is made during evaluation itself (Pitfall 3 anti-pattern: reading DB in hot loop); the only
- * possible lookup is {@code AlertNotificationListener}'s cached {@code platform.admin_alert_email} read
- * when an EMAIL-channel rule fires.
+ * possible lookup is {@code AlertNotificationListener}'s {@code platform.admin_alert_email} read when an
+ * EMAIL-channel rule fires — served from {@code ConfigService}'s cache, but a stale cache (TTL expiry or
+ * after {@code invalidate()}) makes that read run a {@code findAll()} on this scheduler thread.
  *
  * <p>Pitfall 8 guard: metrics with total sample count below {@link #MINIMUM_SAMPLE_SIZE}
  * return -1.0 and are skipped, preventing false alarms at startup when counters are near zero.

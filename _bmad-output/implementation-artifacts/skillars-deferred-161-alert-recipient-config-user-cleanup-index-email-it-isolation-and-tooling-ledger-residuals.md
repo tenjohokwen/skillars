@@ -1,6 +1,6 @@
 # Story skillars-deferred-161: Alert recipient config, email-IT isolation, Quasar toolchain and ledger residuals
 
-Status: review
+Status: done
 
 <!-- REVISED 2026-10-25 after story-review.md (see "Review corrections"). Created 2026-10-24 (/bmad-create-story). User-requested bundle mined from deferred-work.md on the
      day of the full-file re-audit/prune. Every item below was re-verified against HEAD 4317b019
@@ -212,7 +212,7 @@ AE exists for app-vite 2.4.x.)
 - [x] Task 4 — Quasar toolchain (AC: 4), option D161-B(0)
   - [x] Bump vitest family to 4 + AE 2.0.0 in a throwaway state first; `quasar ext add`; fix `vite-tsconfig-paths`
   - [x] Verified locally: `npx quasar build` green (AE index runner executes), `npx vitest run` 567/567, `npm ci` without `--legacy-peer-deps` OK
-  - [ ] **Post-push:** trigger `frontend-unit-tests.yml` manually (workflow_dispatch) on the PR and confirm green — cannot be run before the branch is pushed
+  - [x] **Post-push:** `frontend-unit-tests.yml` green on the PR (run 40140976619, both TZ legs, `npm ci` without `--legacy-peer-deps`) — triggered by `pull_request` rather than a manual `workflow_dispatch`; same workflow and steps
 - [x] Task 5 — `BoundedKey` (AC: 5) — D161-C(1), no code; annotate within the D2 bullet
 - [x] Task 6 — `ConfigService` refresh (AC: 6) — D161-D(1)
   - [x] Read `ConfigService` + `ConfigServiceTest` + the invalidate-then-read ITs first
@@ -220,7 +220,31 @@ AE exists for app-vite 2.4.x.)
 - [x] Task 7 — Status trim (AC: 7) — D161-E(1)
   - [x] Scripted comment-preserving trim; parsed-YAML before/after equality check; header notes in both files
 - [ ] ~~Task 8~~ — dropped (phone operators)
-- [x] Task 9 — Ledger hygiene (AC: 9) incl. the deferred-56 duplicate bullet; sprint-status entry to `done` on completion
+- [x] Task 9 — Ledger hygiene (AC: 9) incl. the deferred-56 duplicate bullet; sprint-status entry to `review` on dev completion (→ `done` after code review)
+
+### Review Findings
+
+_Code review 2026-10-25 (/bmad-code-review) of commit `7c51747c`. Layers: Blind Hunter, Edge Case Hunter, Acceptance Auditor (no failed layers). 1 decision-needed, 8 patch, 6 defer, 6 dismissed._
+
+- [x] [Review][Patch] (resolved from Decision 2026-10-25: option (a) — serve cache + WARN on TTL-only failure) TTL-only refresh leader fails loud while its peers are served the cached snapshot — Today, if the thread that wins `refreshLock.tryLock()` for a TTL-only refresh gets an exception from `findAll()` (transient DB error / Hikari timeout), that exception propagates out of an unrelated `find()`/`getLong()`. Inside a caller's `@Transactional` this marks the transaction rollback-only. Concurrent TTL-only readers, meanwhile, are handed the cached snapshot. Options: (a) when staleness is TTL-only (`loadedEpoch >= invalidationEpoch && lastRefreshed != MIN`), catch, log WARN and serve the cache, leaving `lastRefreshed` unchanged so the next reader retries; must-be-fresh paths still throw. (b) Keep it fail-loud, as the old `synchronized` version was. [`ConfigService.java:413-421`]
+- [x] [Review][Patch] Config dev-doc still describes the removed `synchronized` / `lastRefreshed = Instant.MIN` mechanism [`docs/dev-docs/config/index.html:161,172,202`]
+- [x] [Review][Patch] `AlertEvaluationService` Javadoc calls the listener's lookup a "cached" read, but on TTL expiry or after `invalidate()` it does a DB `findAll()` on the scheduler thread [`AlertEvaluationService.java:24-26`]
+- [x] [Review][Patch] Completion Notes say all 3 new concurrency tests fail on the old implementation. `readersAfterInvalidate_allSeeFreshData_withASingleLoad` passes on the old `synchronized` + `Instant.MIN` code (readers queue on the monitor, the double-check skips, all see v2, 2 `findAll`). Only the TTL-stale and lost-invalidation tests are regression guards [story Completion Notes / `ConfigServiceTest.java:584`]
+- [x] [Review][Patch] No test exercises the second pass of the waiter loop: a must-be-fresh reader parks on `lock()` while a load that began *before* the latest `invalidate()` is in flight, then must load again. `invalidateDuringALoad_isNotLost` re-reads on the main thread after the leader finishes [`ConfigService.java:423-428`, `ConfigServiceTest.java:621`]
+- [x] [Review][Patch] Listener tests are weak: `emailChannel_mailManagerThrows_isContained` never verifies `sendEmailSync` was invoked (it would pass on an early return), and no test checks subject/body or case-insensitive `"email"` [`AlertNotificationListenerTest.java`]
+- [x] [Review][Patch] `@quasar/app-vite` range is still `^2.1.0`, but the now-registered AE 2.0.0 index runner enforces `^2.4.0` on every `quasar dev/build`. Raise the floor to `^2.4.0` [`src/frontend/package.json:39`]
+- [x] [Review][Patch] Story record is stale or overstated in places:
+  - Task 4 "Post-push" is unchecked and the Completion Notes say "Open", but `frontend-unit-tests.yml` run 40140976619 is green on both legs. It was triggered by `pull_request`, not `workflow_dispatch`.
+  - Task 9 says "`done` on completion" and is ticked while the status is `review`.
+  - The "69 prior lines dropped" count should be 70.
+  - "Parsed YAML identical" ignores the expected `last_updated` / own-status deltas. [story `:215`, `:223`, `:276-286`]
+- [x] [Review][Patch] AC7 deletion left the deferred-58 section heading with no bullets, while the deferred-56 one was removed [`deferred-work.md:1074`]
+- [x] [Review][Defer] Must-be-fresh waiters wait unbounded on `refreshLock.lock()`, and after a failed load each waiter retries `findAll()` serially. The same behaviour existed under the old `synchronized` monitor [`ConfigService.java:423-429`] — deferred, pre-existing
+- [x] [Review][Defer] `scheduledRefresh()` can park the shared scheduler thread in `lock()` while an invalidation is pending and a request thread is loading. It blocked on the monitor identically before [`ConfigService.java:73-75`] — deferred, pre-existing
+- [x] [Review][Defer] `invalidate()` before the writer's transaction commits (if a caller wraps `updateConfig` in a tx) can re-cache the old value under the new epoch; invalidation is per-JVM only [`ConfigService.java:228-249`] — deferred, pre-existing
+- [x] [Review][Defer] `putAll`+`retainAll` is not an atomic swap, so a reader can see a cross-key mix of old and new rows mid-load [`ConfigService.java:load()`] — deferred, pre-existing
+- [x] [Review][Defer] Alert listener hardening: blank-recipient ERROR every 30 s tick with no throttle; value not trimmed or validated (sibling `VideoModerationEmailListener` doesn't either); config-lookup failure logged as `EMAIL_ERROR`. The path is unreachable today (`computeMetricValue` returns -1) [`AlertNotificationListener.java:61-95`] — deferred, pre-existing
+- [x] [Review][Defer] Root `happy-dom` pin `^15.11.6` (pre-20, VM-escape advisory) is what Vitest resolves; AE 2.0.0 nests its own 20.14.6 [`src/frontend/package.json:49`] — deferred, pre-existing
 
 ## Dev Notes
 
@@ -273,16 +297,19 @@ Claude Sonnet 5.5 (claude-sonnet-5-5)
 - **AC4 (option 0):** `vitest`/`@vitest/coverage-v8`/`@vitest/ui` → 4.1.12, AE → 2.0.0, `vite-tsconfig-paths`
   declared explicitly, `quasar.extensions.json` registers the AE. The AE's install script was not run (it would
   scaffold a duplicate config and rewrite npm scripts); the index runner's compat check is what matters.
-  `vitest.config.mjs` header and `docs/testing/frontend-unit-tests.md` updated. **Open:** manual
-  `frontend-unit-tests.yml` run after push.
+  `vitest.config.mjs` header and `docs/testing/frontend-unit-tests.md` updated. `frontend-unit-tests.yml`
+  green on the PR (run 40140976619).
 - **AC5:** decision recorded in the D2 ledger bullet (`[DECIDED 2026-10-25 … permanent]`), no code.
 - **AC6:** `ConfigService.refreshCache()` is no longer `synchronized`. Single-flight `ReentrantLock.tryLock()`;
   TTL-only-stale readers serve the cached snapshot while a load is in flight; post-`invalidate()` / never-loaded
   readers wait and re-check; epoch counters (`invalidationEpoch`/`loadedEpoch`) make an `invalidate()` that lands
-  mid-load survive (previously lost for a TTL). Not `REQUIRES_NEW`. 3 new concurrency tests (they fail on the old
-  implementation: the follower would block on the monitor).
-- **AC7:** `sprint-status.yaml` 419,802 → ~285 KB (69 prior lines dropped, latest 5 kept), parsed YAML identical
-  before/after; convention note added there and in `deferred-work.md`'s header. Both growth bullets deleted
+  mid-load survive (previously lost for a TTL). Not `REQUIRES_NEW`. 3 new concurrency tests; 2 of them are regression
+  guards that fail on the old implementation (TTL-stale follower blocks on the monitor; mid-load invalidate is
+  lost). `readersAfterInvalidate_…` also passes on the old code and only pins the new path's read-after-invalidate
+  contract (corrected in code review).
+- **AC7:** `sprint-status.yaml` 419,802 → ~285 KB (70 original prior lines dropped; the 5 kept are the newest 3 originals + 2 new
+  deferred-161 lines), parsed `development_status` identical before/after apart from this story's own status and
+  `last_updated`; convention note added there and in `deferred-work.md`'s header. Both growth bullets deleted
   (incl. the deferred-56 duplicate and its now-empty section). The `last_updated` line was already short.
 - **AC9:** ledger bullets deleted/re-annotated: alert recipient, durability IT, Quasar AE, D5, growth ×2 deleted;
   D2 re-annotated. No `PICKED UP by skillars-deferred-161` tags remain.
@@ -295,9 +322,10 @@ Claude Sonnet 5.5 (claude-sonnet-5-5)
 - `src/main/java/com/softropic/skillars/platform/config/service/ConfigService.java`
 - `src/test/java/com/softropic/skillars/platform/config/service/ConfigServiceTest.java`
 - `src/frontend/package.json`, `src/frontend/package-lock.json`, `src/frontend/quasar.extensions.json` (new), `src/frontend/vitest.config.mjs`
-- `docs/testing/frontend-unit-tests.md`, `docs/dev-docs/notification/index.html`, `docs/deployment/runbook.md`
+- `docs/testing/frontend-unit-tests.md`, `docs/dev-docs/notification/index.html`, `docs/deployment/runbook.md`, `docs/dev-docs/config/index.html` (code review)
 - `_bmad-output/implementation-artifacts/deferred-work.md`, `sprint-status.yaml`, this story file
 
 ### Change Log
 
 - 2026-10-25: Implemented AC1, 2, 4, 5, 6, 7, 9 (AC3/AC8 dropped). Status → review.
+- 2026-10-25: Code review (/bmad-code-review): 1 decision (→ patch, option a), 8 patches applied, 6 deferred to the ledger, 6 dismissed. Status → done.

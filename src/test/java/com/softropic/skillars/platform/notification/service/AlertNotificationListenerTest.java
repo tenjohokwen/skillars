@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.notification.service;
 
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.notification.contract.AlertFiredEvent;
+import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 
 import org.junit.jupiter.api.DisplayName;
@@ -47,6 +48,21 @@ class AlertNotificationListenerTest {
         verify(mailManager).sendEmailSync(captor.capture());
         assertThat(captor.getValue().recipients()).singleElement()
             .satisfies(r -> assertThat(r.getEmail()).isEqualTo("ops@example.com"));
+        assertThat(captor.getValue().emailTemplate()).isEqualTo(EmailTemplate.NONE);
+        assertThat(captor.getValue().data())
+            .containsEntry("subject", "Skillars Alert: FAILURE_RATE threshold breached")
+            // same default-locale String.format as production, so the decimal separator matches either way
+            .containsEntry("body", String.format("Metric FAILURE_RATE actual value %.4f exceeded threshold %.4f", 0.9, 0.5));
+    }
+
+    @Test
+    @DisplayName("channel match is case-insensitive")
+    void lowercaseEmailChannel_stillSends() {
+        when(configService.find(KEY)).thenReturn(Optional.of("ops@example.com"));
+
+        listener.onAlertFired(new AlertFiredEvent("FAILURE_RATE", 0.9, 0.5, "email"));
+
+        verify(mailManager).sendEmailSync(any(Envelope.class));
     }
 
     @Test
@@ -86,6 +102,9 @@ class AlertNotificationListenerTest {
         doThrow(new IllegalStateException("smtp down")).when(mailManager).sendEmailSync(any(Envelope.class));
 
         assertThatCode(() -> listener.onAlertFired(emailEvent())).doesNotThrowAnyException();
+
+        // the send was actually attempted: an early return would also "not throw"
+        verify(mailManager).sendEmailSync(any(Envelope.class));
     }
 
     @Test

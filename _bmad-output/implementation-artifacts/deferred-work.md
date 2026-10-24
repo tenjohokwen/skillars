@@ -1071,8 +1071,6 @@ above rather than duplicated here. This section holds only what the story-creati
   `src/main/java/com/softropic/skillars/platform/video/service/WebhookEventProcessorScheduler.java:171-236`,
   `src/main/java/com/softropic/skillars/platform/video/service/UploadSessionExpiryScheduler.java:40-53`] `[DECIDED 2026-08-28 (skillars-deferred-81 story creation): leave as-is, no automatic retry infrastructure. All four call sites already fail gracefully with logging (AdminVideoService.deleteVideo's own comment documents manual retry-by-recall; the other three rely on their own scheduled re-run or accept the swallow); no live incident has been reported. Building retry infra now would be speculative engineering against a working, if imperfect, accepted pattern.]`
 
-## Deferred from: code review of skillars-deferred-58-coach-availability-write-lock-consistency-and-pack-deduction-failure-record-transactional-safety (2026-08-24)
-
 ## Deferred from: code review of skillars-deferred-62-postgres-lock-timeout-bounded-wait-fix (2026-08-24)
 
 - **A JDBC `setSavepoint`/rollback-to-savepoint call itself failing (e.g. genuine connection loss) propagates unretried as an opaque 500**, since `PessimisticLockRetryer` only catches `PessimisticLockingFailureException`. Arguably acceptable — this represents genuine infrastructure failure rather than lock contention — noted for awareness rather than as a defect. [`src/main/java/com/softropic/skillars/infrastructure/persistence/PessimisticLockRetryer.java:63-64,72`]
@@ -3257,3 +3255,17 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 ## Deferred from: code review of ses-1-5-ses-cutover (2026-10-24)
 
 - **No status enum ↔ CHECK parity guard.** `EnvelopeEntitySchemaIT` now pins `EmailTemplate` ↔ `envelope_entity_email_template_check` parity (ses-1.5), but `envelope_entity_status_check` (V138:614) is only asserted to exist. Adding an `EmailDeliveryStatus` value without a migration would fail at insert time exactly like `SES_CUTOVER_PREFLIGHT` did. Generalise the parity test to `(constraint, enum)` pairs.
+
+## Deferred from: code review of skillars-deferred-161-alert-recipient-config-user-cleanup-index-email-it-isolation-and-tooling-ledger-residuals (2026-10-25)
+
+- **`ConfigService` must-be-fresh waiters have no wait bound and retry serially on load failure.** After `invalidate()` (or on a never-loaded cache) a reader that loses `refreshLock.tryLock()` parks in an uninterruptible `lock()`. If the in-flight `findAll()` then fails, each queued waiter runs its own `findAll()` one after another, so with the DB down the Nth waiter waits ~N × `connection-timeout`. Same shape as the pre-161 `synchronized` monitor, not a regression. Fix shape: `tryLock(timeout)` + short failure backoff that rethrows the last failure. [`src/main/java/com/softropic/skillars/platform/config/service/ConfigService.java` `refreshCache()`]
+- **`ConfigService.scheduledRefresh()` can park the shared `@Scheduled` thread.** With an invalidation pending and a request thread mid-load, the scheduled tick takes the must-be-fresh path and blocks in `lock()`, delaying other scheduled jobs. It blocked on the monitor identically before. Fix shape: `scheduledRefresh` uses `tryLock()` only and skips if busy. [`ConfigService.java:73-75`]
+- **`ConfigService.invalidate()` is per-JVM and not deferred to after-commit.** If a caller ever wraps `updateConfig` in an outer transaction, a concurrent reader can reload before commit and stamp the old value with the new epoch for a full TTL. Other instances keep serving the old value until their TTL lapses. Pre-existing. [`ConfigService.java` `updateConfig` / `invalidate`]
+- **`ConfigService.load()` `putAll`+`retainAll` is not an atomic swap.** A reader can observe a cross-key mix of old and new rows mid-load. This was rarer before because TTL-stale readers queued on the monitor; now they read immediately. Fix shape: swap one immutable map via a `volatile` reference. [`ConfigService.java` `load()`]
+- **`AlertNotificationListener` hardening.** Three gaps, all moot while `AlertEvaluationService.computeMetricValue` returns -1 (no `AlertFiredEvent` is ever published); revisit when real metrics land:
+  - A blank `platform.admin_alert_email` logs ERROR on every 30 s tick per breaching EMAIL rule, with no throttle.
+  - The value is not trimmed or validated; sibling `VideoModerationEmailListener` doesn't either.
+  - A config-lookup failure is reported under the mail-failure `EMAIL_ERROR` status.
+
+  [`src/main/java/com/softropic/skillars/platform/notification/service/AlertNotificationListener.java`]
+- **Frontend root `happy-dom` is pinned `^15.11.6`, the version Vitest's `happy-dom` environment resolves (15.11.7, pre-20 VM-context-escape advisory).** AE 2.0.0 depends on `happy-dom ^20.11.6` and nests 20.14.6. Bump the root pin to `^20` and re-run the suite. Test-only dependency; pre-existing pin. [`src/frontend/package.json:49`]

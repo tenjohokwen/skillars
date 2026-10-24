@@ -24,11 +24,13 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.instancio.Select.field;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -653,5 +655,83 @@ class ConfigServiceTest {
             releaseLoad.countDown();
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    void mustBeFreshReaderParkedBehindAPreInvalidateLoad_reloadsAfterIt() throws Exception {
+        // Exercises the waiter loop's second pass: B must not accept A's load, which began before B's invalidate.
+        AtomicInteger findAllCalls = new AtomicInteger();
+        CountDownLatch loadEntered = new CountDownLatch(1);
+        CountDownLatch releaseLoad = new CountDownLatch(1);
+        when(configRepository.findAll()).thenAnswer(inv -> {
+            int call = findAllCalls.incrementAndGet();
+            if (call == 1) {
+                return List.of(entry("k", "v1", ConfigValueType.STRING));
+            }
+            if (call == 2) {
+                loadEntered.countDown();
+                assertThat(releaseLoad.await(10, TimeUnit.SECONDS)).isTrue();
+                return List.of(entry("k", "v1", ConfigValueType.STRING));
+            }
+            return List.of(entry("k", "v2", ConfigValueType.STRING));
+        });
+        configService.init();
+        configService.invalidate();
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        FutureTask<Optional<String>> waiter = new FutureTask<>(() -> configService.find("k"));
+        Thread waiterThread = new Thread(waiter, "config-waiter");
+        try {
+            Future<Optional<String>> leader = pool.submit(() -> configService.find("k"));
+            assertThat(loadEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            configService.invalidate(); // lands after the leader's load observed its epoch
+            waiterThread.start();
+            // the must-be-fresh waiter parks on refreshLock.lock() behind the in-flight load
+            await().atMost(5, TimeUnit.SECONDS).until(() -> waiterThread.getState() == Thread.State.WAITING);
+
+            releaseLoad.countDown();
+            leader.get(5, TimeUnit.SECONDS);
+            assertThat(waiter.get(5, TimeUnit.SECONDS)).contains("v2");
+            assertThat(findAllCalls.get()).isEqualTo(3);
+        } finally {
+            releaseLoad.countDown();
+            pool.shutdownNow();
+            waiterThread.interrupt();
+        }
+    }
+
+    @Test
+    void ttlOnlyRefreshFailure_servesTheCachedSnapshot_andRetriesNextRead() {
+        when(configProperties.getCacheTtlSeconds()).thenReturn(0L);
+        when(configRepository.findAll())
+                .thenReturn(List.of(entry("k", "v1", ConfigValueType.STRING)))
+                .thenThrow(new IllegalStateException("pool exhausted"))
+                .thenReturn(List.of(entry("k", "v2", ConfigValueType.STRING)));
+        configService.init();
+
+        assertThat(configService.find("k")).contains("v1");
+        assertThat(configService.find("k")).contains("v2");
+        verify(configRepository, times(3)).findAll();
+    }
+
+    @Test
+    void mustBeFreshRefreshFailure_stillPropagates() {
+        when(configRepository.findAll())
+                .thenReturn(List.of(entry("k", "v1", ConfigValueType.STRING)))
+                .thenThrow(new IllegalStateException("db down"));
+        configService.init();
+        configService.invalidate();
+
+        assertThatThrownBy(() -> configService.find("k"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("db down");
+    }
+
+    @Test
+    void firstLoadFailure_propagates() {
+        when(configRepository.findAll()).thenThrow(new IllegalStateException("db down"));
+
+        assertThatThrownBy(() -> configService.init()).isInstanceOf(IllegalStateException.class);
     }
 }
