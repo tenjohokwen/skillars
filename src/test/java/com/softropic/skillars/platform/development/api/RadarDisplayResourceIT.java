@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.api;
 
+import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
@@ -51,6 +52,10 @@ class RadarDisplayResourceIT extends AbstractIntegrationTest {
 
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
+
+    // skillars-deferred-160 AC8: present so this class shares the {VideoProviderAdapter, FileStorageService}
+    // mock set (and Spring context) with its peers. Keep this exact field name; it is part of the cache key.
+    @MockitoBean FileStorageService fileStorageService;
 
     private static final long COACH_USER_ID   = 9590000001L;
     private static final long ACADEMY_USER_ID = 9590000002L;

@@ -36,8 +36,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest({StripeOnboardingResource.class, PaymentApiAdvice.class})
-@Import(StripeOnboardingResourceIT.TestSecurityConfig.class)
-class StripeOnboardingResourceIT {
+@Import(StripeOnboardingResourceWebMvcTest.TestSecurityConfig.class)
+class StripeOnboardingResourceWebMvcTest {
 
     @TestConfiguration
     @EnableMethodSecurity

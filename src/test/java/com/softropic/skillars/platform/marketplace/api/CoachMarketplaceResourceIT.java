@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.marketplace.api;
 
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
@@ -63,6 +64,10 @@ class CoachMarketplaceResourceIT extends AbstractIntegrationTest {
     // FileStorageService.signedDownloadUrl — mocked here rather than exercised against the real
     // S3Presigner, mirroring PlayerTimelineResourceIT's own identical precedent for this bean.
     @MockitoBean private FileStorageService fileStorageService;
+
+    // skillars-deferred-160 AC8: present so this class shares the {VideoProviderAdapter, FileStorageService}
+    // mock set (and Spring context) with its peers. Keep this exact field name; it is part of the cache key.
+    @MockitoBean VideoProviderAdapter videoProviderAdapter;
 
     // UUID storage so we can reference them in assertions
     private UUID coachProfileId1;

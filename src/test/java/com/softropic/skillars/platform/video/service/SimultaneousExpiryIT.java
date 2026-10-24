@@ -13,7 +13,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Instant;
@@ -32,10 +31,10 @@ import static org.mockito.Mockito.when;
  * must handle them independently without cross-contamination.
  */
 @Disabled("Deferred from 6.4 — requires concurrent outbox processing validation")
-@TestPropertySource(properties = {
-    "platform.video.lifecycle.outbox_max_attempts=3",
-    "platform.video.lifecycle.batch_size=50",
-})
+// skillars-deferred-160 AC6: a @TestPropertySource setting platform.video.lifecycle.outbox_max_attempts
+// and batch_size was removed from here. Both keys are DB-backed (ConfigService reads
+// main.platform_config; nothing binds them from the Spring Environment), so the annotation changed no
+// behaviour and only forked a Spring context.
 class SimultaneousExpiryIT extends BaseVideoIT {
 
     @Autowired VideoSubscriptionLifecycleListener listener;

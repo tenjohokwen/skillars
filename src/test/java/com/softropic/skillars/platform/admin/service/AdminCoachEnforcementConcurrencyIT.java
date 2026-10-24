@@ -1,12 +1,12 @@
 package com.softropic.skillars.platform.admin.service;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
+import com.softropic.skillars.config.RecordedEvents;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.admin.contract.CoachReinstatedEvent;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
-import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeConfig;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.utils.CoachProfileTestFixtures;
@@ -15,17 +15,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Import;
-import org.springframework.context.event.EventListener;
 import org.springframework.dao.PessimisticLockingFailureException;
-import org.springframework.stereotype.Component;
 
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -84,13 +80,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * deleteStrike}'s test then observes a wrongful revert to {@code ACTIVE} on a stale, no-longer-valid
  * strike count.
  */
-@Import(AdminCoachEnforcementConcurrencyIT.ReinstateEventCapture.class)
 class AdminCoachEnforcementConcurrencyIT extends AbstractIntegrationTest {
 
     @Autowired AdminCoachEnforcementService enforcementService;
-    @Autowired CoachProfileRepository coachProfileRepository;
     @Autowired ConfigService configService;
-    @Autowired ReinstateEventCapture eventCapture;
+    @Autowired RecordedEvents recordedEvents;
 
     private static final long COACH_USER_ID = 96501L;
     private static final long ADMIN_ID = 96502L;
@@ -99,7 +93,7 @@ class AdminCoachEnforcementConcurrencyIT extends AbstractIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        eventCapture.clear();
+        recordedEvents.clear();
         transactionTemplate.execute(status -> {
             insertCoachUser(COACH_USER_ID, "enforcement.concurrency.coach@skillars-test.com");
 
@@ -199,7 +193,7 @@ class AdminCoachEnforcementConcurrencyIT extends AbstractIntegrationTest {
             "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
         assertThat(status).isEqualTo("ACTIVE");
 
-        assertThat(eventCapture.forCoach(coachProfileId))
+        assertThat(reinstatedEventsFor(coachProfileId))
             .as("reinstateCoach must not act on the stale pre-lock PENDING_REVIEW read once the "
                 + "holder has already committed ACTIVE")
             .isEmpty();
@@ -649,21 +643,9 @@ class AdminCoachEnforcementConcurrencyIT extends AbstractIntegrationTest {
             Timestamp.from(Instant.now().minusSeconds(3600)));
     }
 
-    @Component
-    static class ReinstateEventCapture {
-        private final List<CoachReinstatedEvent> events = new CopyOnWriteArrayList<>();
-
-        @EventListener
-        void on(CoachReinstatedEvent event) {
-            events.add(event);
-        }
-
-        List<CoachReinstatedEvent> forCoach(UUID coachId) {
-            return events.stream().filter(e -> coachId.equals(e.getCoachId())).toList();
-        }
-
-        void clear() {
-            events.clear();
-        }
+    private List<CoachReinstatedEvent> reinstatedEventsFor(UUID coachId) {
+        return recordedEvents.ofType(CoachReinstatedEvent.class).stream()
+            .filter(e -> coachId.equals(e.getCoachId()))
+            .toList();
     }
 }

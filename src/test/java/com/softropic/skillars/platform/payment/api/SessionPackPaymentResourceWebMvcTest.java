@@ -48,8 +48,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Deferred-11 AC 1 / AC 4: publishable-key config endpoint and saved-payment-method endpoint.
  */
 @WebMvcTest({SessionPackPaymentResource.class, PaymentApiAdvice.class})
-@Import(SessionPackPaymentResourceIT.TestSecurityConfig.class)
-class SessionPackPaymentResourceIT {
+@Import(SessionPackPaymentResourceWebMvcTest.TestSecurityConfig.class)
+class SessionPackPaymentResourceWebMvcTest {
 
     @TestConfiguration
     @EnableMethodSecurity

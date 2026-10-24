@@ -38,8 +38,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(SubscriptionResource.class)
-@Import({PlayerSubscriptionOwnershipIT.TestSecurityConfig.class, PlayerOwnershipGuard.class})
-class PlayerSubscriptionOwnershipIT {
+@Import({PlayerSubscriptionOwnershipWebMvcTest.TestSecurityConfig.class, PlayerOwnershipGuard.class})
+class PlayerSubscriptionOwnershipWebMvcTest {
 
     @TestConfiguration
     @EnableMethodSecurity

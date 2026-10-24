@@ -1,6 +1,6 @@
 # Story skillars-deferred-160: Spring test-context consolidation — get the failsafe JVM below the context cache cap
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- Created 2026-10-24 (/bmad-create-story). NOT mined from deferred-work.md: user-requested after a
      context-count investigation ("what makes up to 47 spring contexts?"). No ledger items consumed. -->
@@ -291,32 +291,51 @@ margin. If a lever's trap-check fails, record why and drop it rather than force 
 
 ## Tasks / Subtasks
 
-- [ ] T1 Baseline (AC1, AC13): record from the latest master `pr-build` log the last cache statistics
+- [x] T1 Baseline (AC1, AC13): record from the latest master `pr-build` log the last cache statistics
       line (`grep -aoE 'size = [0-9]+, maxSize = [0-9]+.*missCount = [0-9]+' build.log | tail -1`) and
       per-class test counts from `failsafe-reports`/`surefire-reports` artifacts.
-- [ ] T2 L1 rename slices to `*WebMvcTest` (AC2): `git mv`, class rename, fix the
+- [x] T2 L1 rename slices to `*WebMvcTest` (AC2): `git mv`, class rename, fix the
       PlayerSubscriptionOwnership cross-ref and the `SesCutoverPreflightResourceTest` javadoc link;
       `mvn -o test -DskipFrontend -Dtest='*WebMvcTest'`.
-- [ ] T3 L2 shared event captor (AC3).
-- [ ] T4 L3 E2ESecurityConfig (AC4).
-- [ ] T5 L4 `@AutoConfigureMockMvc` (AC5), in the same commit as the `isSlice` fix.
-- [ ] T6 L5 dead `@TestPropertySource` (AC6) + pinned count 7 → 4.
-- [ ] T7 L6 spy hoist with per-type trap-check (AC7).
-- [ ] T8 L7 provider mock-set unification with per-class trap-check (AC8).
-- [ ] T9 L8 MessageModerationSweeperIT (AC9).
-- [ ] T10 Guardrail tests (AC10) — pin `EXPECTED_DISTINCT_CONTEXT_KEYS` to the post-change number;
+- [x] T3 L2 shared event captor (AC3).
+- [x] T4 L3 E2ESecurityConfig (AC4).
+- [x] T5 L4 `@AutoConfigureMockMvc` (AC5), in the same commit as the `isSlice` fix.
+- [x] T6 L5 dead `@TestPropertySource` (AC6) + pinned count 7 → 4.
+- [x] T7 L6 spy hoist with per-type trap-check (AC7).
+- [x] T8 L7 provider mock-set unification with per-class trap-check (AC8).
+- [x] T9 L8 MessageModerationSweeperIT (AC9).
+- [x] T10 Guardrail tests (AC10) — pin `EXPECTED_DISTINCT_CONTEXT_KEYS` to the post-change number;
       cross-check it against CI. The model covers live AIT keys only, so the expected
       `missCount` = model + 3 (K48–K50, the sliced standalone classes), and `size` = `missCount` − 1
       (RateLimitingAspectIT dirtied). SmtpTransportBootIT is an AIT class, so it is already in the
       model. Document the arithmetic in Completion Notes.
-- [ ] T11 Gate (AC11) — after the first green CI run, set CEILING from the measured number; re-run
-      twice more for AC1's determinism evidence.
-- [ ] T12 Docs/comments (AC12).
-- [ ] T13 Scoped local runs of every touched IT class, e.g.
+- [ ] T11 Gate (AC11)
+  - [x] T11.1 Script: `size >= maxSize` and `missCount − size > 1` checks, the `ctxkeys.py` pointer
+        replaced, CEILING 47 → 17 (script default + `pr-build.yml`), all four outcomes exercised
+        locally against deferred-159's real CI log and synthetic lines.
+  - [ ] T11.2 Push and confirm the first green `pr-build` measures `missCount = 17` (size 16 or 17);
+        correct CEILING to the measured number if it differs.
+  - [ ] T11.3 Re-run `pr-build` twice more; record the three statistics lines here (AC1).
+- [x] T12 Docs/comments (AC12).
+- [x] T13 Scoped local runs of every touched IT class, e.g.
       `mvn -o verify -DskipFrontend -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false -Dit.test=<Class>`.
       These single-class failsafe runs follow the precedent of deferred-155/-156/-157 ("scoped
       failsafe"). **No full local `mvn verify`**: that is what the project rule forbids, and GitHub CI
       is the gate.
+
+### Review Findings
+
+Code review 2026-10-24 (`/bmad-code-review`, uncommitted changes vs HEAD `1b37d174`, Blind + Edge + Acceptance layers). 0 decision-needed, 7 patch, 2 defer, 19 dismissed.
+
+- [x] [Review][Patch] Gate derives `missCount` and `size` from two different greps; derive `last` from the same final statistics line and guard non-numeric [.github/scripts/assert-context-count.sh:~187-197] — **fixed**: `last`, `size` and `maxSize` now all come from the one final statistics line; `sed -n …p` yields empty, not the raw line, on a mismatch, so the existing empty-checks fire. Five gate scenarios re-run, all correct.
+- [x] [Review][Patch] Script header calls run 40016101569 "steady state: size = 6/missCount = 7 onwards" but that run's final line is `size = 32 … missCount = 47`; those were early lines — reword [.github/scripts/assert-context-count.sh:~29-30] — **fixed**: reworded as early lines before the cache filled, and the final 32/47 line is named as the state this story removes.
+- [x] [Review][Patch] Ceiling 17 / "took it to 17" is documented as measured while T11.2/T11.3 are open; mark as predicted until CI measures it, and fix stale tracking text (sprint-status says 48 keys / "CREATED") [assert-context-count.sh, pr-build.yml, docs/testing/readme.md, docs/deployment/baseline/github-build.md, sprint-status.yaml] — **fixed**: marked PREDICTED in the script header, `pr-build.yml`, `docs/testing/readme.md` and `github-build.md`; sprint-status entry corrected (47 live keys, status in-progress).
+- [x] [Review][Patch] `@Autowired CoachProfileRepository coachProfileRepository` hides the inherited hoisted spy of the same name; remove the local field or rename [ReliabilityStrikeConcurrencyIT.java:48, AdminCoachEnforcementConcurrencyIT.java:87] — **fixed, wider than flagged**: the hiding was harmless (the same spy bean was injected), but it was misleading, so all 9 such fields were removed, not just the 2 named: AuthResourceIT, AuthServiceSessionInvalidationIT, RefreshTokenRepositoryIT (refreshTokenRepository); ReliabilityStrikeConcurrencyIT, CoachVisibilitySuppressionIT, AdminCoachEnforcementConcurrencyIT, SessionPackPurchaseRepositoryIT (coachProfileRepository); SessionPackPurchaseRepositoryIT (sessionPackPurchaseRepository); MessageRetentionRepositoryIT (messageRepository). 47 tests green, one context.
+- [x] [Review][Patch] Unused `SpringBootTest` import [VideoWebhookResourceIT.java:13] — **fixed**. Note: pre-existing (present and unused at HEAD), not introduced by this story.
+- [x] [Review][Patch] AC12 doc gaps: `docs/testing/readme.md` still presents "34", "ceiling 36", the `E2ESecurityConfig` row and two sliced classes as current (:106, :216-247); `AbstractIntegrationTest` class javadoc does not list `@AutoConfigureMockMvc` among what the base carries [docs/testing/readme.md, AbstractIntegrationTest.java] — **partly a false positive, the rest fixed.** The readme's "34", "ceiling 36", `E2ESecurityConfig` row and two-sliced-classes text (:106, :216-247) already sit under explicit "Superseded"/"Historical (as of deferred-19)" banners added by this story. They are deferred-19's record and were kept deliberately. Fixed instead: a real gap the review missed — the readme's *current* "Writing a new integration test" rule 3 still said "accept that your class pays a context" — rewritten for the pinned guard, and a rule 8 (slice naming) added; `AbstractIntegrationTest` javadoc now lists what the base supplies (MockMvc, GeminiClient mock, eight spies, reset listener).
+- [x] [Review][Patch] AC8/AC13 record thin: per-class FSS/VPA mock trap-check is one sentence and per-class (or post-change surefire/failsafe) test counts are not listed in Completion Notes [story Dev Agent Record] — **fixed**: per-class AC8 trap-check and counts added to Completion Notes.
+- [x] [Review][Defer] Convention test swallows class-load failures (`catch (Throwable ignored)`), so a non-loading IT silently drops out of the pinned key count [IntegrationTestConventionTest.java:~169] — deferred, pre-existing pattern
+- [x] [Review][Defer] Gate takes the last statistics line of the whole log; if failsafe never logs, surefire's line is evaluated against the failsafe ceiling [assert-context-count.sh:~187-197] — deferred, pre-existing `tail -1` design
 
 ## Dev Notes
 
@@ -420,8 +439,199 @@ CI log of run 40016101569).
 
 ### Agent Model Used
 
+Claude Opus 5.5 (1M context), /bmad-dev-story, 2026-10-24.
+
 ### Debug Log References
+
+- Baseline: `pr-build` run 40016101569 (deferred-159, green): last failsafe line
+  `size = 32, maxSize = 32, parentContextCount = 0, hitCount = 32936, missCount = 47`; surefire
+  2253 tests, failsafe 1491. Per-class counts extracted from that log were compared after every
+  scoped run below: no class changed its test count.
+- Scoped runs (all `BUILD SUCCESS`, all per-class counts equal to baseline):
+  - T2: `mvn -o test -Dtest='*WebMvcTest'` → 14 classes, 121 tests.
+  - T3: 4 classes, 24 tests, `missCount = 1`.
+  - T4: 2 classes, 11 tests, `missCount = 2` (base and BaseStorageIT).
+  - T5: VideoWebhookResourceIT + AuthResourceIT + SecurityIT, 32 tests, `missCount = 1`, convention test green.
+  - T6: VideoSubscriptionLifecycleListenerIT 6/6.
+  - T7: 18 classes, 170 tests, `missCount = 3` (base, VPA group, GdprErasureIT's FSS group, before T8).
+  - T8: 25 classes, 288 tests, `missCount = 1` — the whole provider-mock group shares one context.
+  - T9: MessageModerationSweeperIT 6/6 + AuthResourceIT 18/18, `missCount = 1`.
+  - Final: `mvn -o test -Dtest='IntegrationTestConventionTest,*WebMvcTest,VideoSubscriptionLifecycleListenerTest'` → 128 tests.
+- T10 red check: with `EXPECTED_DISTINCT_CONTEXT_KEYS = 13` the test failed and printed all 14
+  configurations with their classes (base-only: 150 classes); reset to 14.
+- One shell mishap, no effect: a heredoc whose body contained `EOF` lines was rejected by zsh at
+  parse time, so nothing ran; the gate edit was redone from a script file.
 
 ### Completion Notes List
 
+- **AC1 — pending CI (T11.2/T11.3).** Local evidence predicts `missCount = 17`: the convention
+  test's model reports 14 live AbstractIntegrationTest configurations, plus the 3 allowlisted sliced
+  `@SpringBootTest` classes (RateLimitingAspectIT, PropertiesFeatureToggleServiceIT,
+  SesEmailEndToEndIT). Expected final line: `size = 16` (RateLimitingAspectIT dirtied) or 17 (if it
+  runs last). Not yet measured in CI; the story stays `in-progress` until it is.
+- **AC2** — 14 slices renamed `*WebMvcTest`, 121/121 under surefire, counts unchanged. References
+  fixed in `SesCutoverPreflightResourceTest` (javadoc link), `SubscriptionResourceWebMvcTest`
+  (TestSecurityConfig import) and `SubscriptionServiceOwnershipIT` (javadoc). The historical
+  CEILING entries in `assert-context-count.sh` keep the old names on purpose.
+- **AC3** — `config/RecordedEvents` (TestConfig bean) listens on `ApplicationEvent` and unwraps
+  `PayloadApplicationEvent`. With an `Object` parameter Spring would hand over the wrapper, and
+  `ModerationFailureEvent` is a record, so it would never match. Cleared by
+  `DatabaseResetTestExecutionListener.beforeTestMethod` right after the async quiesce, so a late
+  async event from the previous test cannot leak in. The four tests keep their own `clear()` calls
+  and assertions; only the lookup changed (`ofType(...)` + the same coach/action filters).
+- **AC4** — confirmed by running both classes without the import: green. `E2ESecurityConfig.java`
+  deleted (no users left); `AuthServiceSessionInvalidationIT`'s comment that named it was updated.
+- **AC5** — `@AutoConfigureMockMvc` on the base. `isSlice` now matches slice *test* annotation
+  names only, which also brings `VideoWebhookResourceIT` back under the convention checks.
+- **AC6** — three dead `@TestPropertySource`s removed, count 7 → 4 (the remaining four:
+  ModerationOutboxIT, RegistrationEmailDurabilityIT, PlaybackRevocationIT, WebhookPipelineIT). The
+  two `@Disabled` classes were left otherwise untouched; ledger entry added to `deferred-work.md`.
+- **AC7** — 8 spies on the base. Trap-check results:
+  - Original stubbing classes all green: GdprErasureIT 44, AdminCoachEnforcementIsolationRuntimeIT 3,
+    CaptureReservationIT 8, AccountDeletionCascadeIT 8, VideoDeletionOutboxProcessorIT 15,
+    VideoPurgedEventIT 2, MessageModerationSweeperIT 6.
+  - K01 classes exercising the same beans, all green: SessionPackPurchaseIT, PackExtensionIT,
+    CoachPayoutOutboxIT (PaymentGateway); BookingServiceConcurrencyIT, CoachProfileServiceConcurrencyIT,
+    ReinstateIT (CoachProfileRepository); ConversationResourceIT, MessageApproveIT (MessageRepository);
+    AuthResourceIT (RefreshTokenRepository); DrillUploadResourceIT, DrillUploadServiceConcurrencyIT
+    (DrillVideoRefRepository / physical deletion).
+  - `SchedulerLockTransactionOrderingIT`, the one IT using `AopUtils` on beans, is green.
+  - **Deviation:** the VideoDeletionOutboxRepository spy is named `videoDeletionOutboxRepository`,
+    not `outboxRepository`. Six classes already `@Autowire` unrelated `OutboxMessageRepository`/
+    `SubscriptionLifecycleOutboxRepository` fields called `outboxRepository`, which would hide the
+    base field. The two users were updated. The other seven keep their original names.
+  - The `@Async` listener reset race (speculative) was not observed.
+- **AC8** — `@MockitoBean FileStorageService fileStorageService` added to 19 classes and
+  `@MockitoBean VideoProviderAdapter videoProviderAdapter` to 5. All 25 classes (288 tests) run green
+  in one context. No class reached a code path where a null from the new mock broke an assertion.
+- **AC8 trap-check, per class (code-review follow-up).** Method: for each class that gained a mock,
+  grep for any use of the new mock's field (none: 0 `fileStorageService.` uses in the 19 classes that
+  gained it, 0 `videoProviderAdapter.` uses in the 5), then run it. A null from the new mock only
+  matters on a code path the class asserts on, and every class passed with its baseline count. Test
+  counts (T8 run, all 0F/0E/0S, equal to baseline):
+  - gained `FileStorageService` (19): AdminVideoIT 10, DrillUploadResourceIT 13,
+    DrillUploadServiceConcurrencyIT 5, HomeworkResourceIT 9, MinorSafetyGateIT 5,
+    OrphanedProviderAssetSweepIT 5, PlaybackServiceConcurrencyIT 2, PlaybackServiceIT 4,
+    RadarAssessmentResourceIT 9, RadarDisplayResourceIT 13, ReconciliationWorkerIT 5,
+    SessionBuilderResourceIT 17, SessionTemplateResourceIT 22, SkillExposureResourceIT 13,
+    SluCalculationServiceIT 17, VideoApprovalServiceIT 12, AccountDeletionCascadeIT 8,
+    VideoDeletionOutboxProcessorIT 15, VideoPurgedEventIT 2;
+  - gained `VideoProviderAdapter` (5): ActiveBookingsErasureBlockIT 3, CoachMarketplaceResourceIT 17,
+    CoachProfileResourceIT 10, GdprExportIT 7, GdprErasureIT 44;
+  - unchanged member: PlayerTimelineResourceIT 21.
+  Total 288 tests, one context (`missCount = 1`). Post-change suite-wide surefire/failsafe totals
+  come from CI (T11.2).
+- **AC9** — MessageModerationSweeperIT extends the base, its copy of `releaseSchedulerLock` was
+  deleted, and it was removed from ALLOWLIST. Its own `@AfterEach` cleanup was kept: it is harmless
+  under the reset.
+- **AC10** — `distinctContextKeyCountIsPinned` (14) and `noSliceTestIsNamedIT` added. The model
+  mirrors `BeanOverrideHandler.equals` (annotation attributes, field type, field name, other field
+  annotations) and skips class-level `@Disabled` classes. A discovery helper (`allConcreteItClasses`)
+  was split out so the slice check can see `*IT` slices.
+- **AC11** — script done (T11.1). CEILING is set to the predicted 17 and **must be confirmed by CI**
+  (T11.2).
+- **AC12** — readme "known gaps" closed, round-two section added with the rules, and deferred-19's
+  sections marked historical. Also updated: why-inheritance (field-name rule, guard, appendix), the
+  github-build CEILING reference, the pom failsafe comment, the application-test.yaml
+  `ComponentConfig:34` pointer, the `isSlice` javadoc, and the AbstractIntegrationTest javadoc.
+- **AC13** — no assertion was removed or weakened. Event assertions changed only how events are
+  looked up. Per-class test counts are identical to baseline for every class run.
+- **Local-only caveat:** a non-clean `target/test-classes` kept the old `*IT.class` files after the
+  renames. They were deleted by hand. CI builds clean, so this does not affect it.
+
 ### File List
+
+Added
+- src/test/java/com/softropic/skillars/config/RecordedEvents.java
+
+Deleted
+- src/test/java/com/softropic/skillars/config/E2ESecurityConfig.java
+
+Renamed (`*IT` → `*WebMvcTest`, contents: class name only, plus the cross-ref in SubscriptionResourceWebMvcTest)
+- src/test/java/com/softropic/skillars/platform/notification/api/SesCutoverPreflightResourceWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/payment/api/AdminFinanceResourceWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/payment/api/CreditWalletResourceWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/payment/api/PlayerSubscriptionOwnershipWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResourceWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResourceWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/payment/api/SubscriptionResourceWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/video/api/PlayerUploadResourceWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/video/api/VideoApprovalResourceWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/video/api/VideoDeleteResourceWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/video/api/VideoListQuotaResourceWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/video/api/VideoPlayResourceWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/video/api/VideoUploadResourceWebMvcTest.java
+- src/test/java/com/softropic/skillars/platform/video/service/VideoSseWebMvcTest.java
+
+Modified — test infrastructure
+- src/test/java/com/softropic/skillars/config/AbstractIntegrationTest.java
+- src/test/java/com/softropic/skillars/config/DatabaseResetTestExecutionListener.java
+- src/test/java/com/softropic/skillars/config/IntegrationTestConventionTest.java
+- src/test/java/com/softropic/skillars/config/TestConfig.java
+- src/test/resources/application-test.yaml
+
+Modified — test classes
+- src/test/java/com/softropic/skillars/platform/admin/api/ActiveBookingsErasureBlockIT.java
+- src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java
+- src/test/java/com/softropic/skillars/platform/admin/api/GdprExportIT.java
+- src/test/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementConcurrencyIT.java
+- src/test/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementIsolationRuntimeIT.java
+- src/test/java/com/softropic/skillars/platform/config/api/ConfigResourceIT.java
+- src/test/java/com/softropic/skillars/platform/development/api/RadarAssessmentResourceIT.java
+- src/test/java/com/softropic/skillars/platform/development/api/RadarDisplayResourceIT.java
+- src/test/java/com/softropic/skillars/platform/development/api/SkillExposureResourceIT.java
+- src/test/java/com/softropic/skillars/platform/development/service/SluCalculationServiceIT.java
+- src/test/java/com/softropic/skillars/platform/filestorage/api/StorageResourceIT.java
+- src/test/java/com/softropic/skillars/platform/marketplace/CoachProfileResourceIT.java
+- src/test/java/com/softropic/skillars/platform/marketplace/api/CoachMarketplaceResourceIT.java
+- src/test/java/com/softropic/skillars/platform/messaging/api/ModerationFailClosedIT.java
+- src/test/java/com/softropic/skillars/platform/messaging/service/MessageModerationSweeperIT.java
+- src/test/java/com/softropic/skillars/platform/notification/api/SesCutoverPreflightResourceTest.java
+- src/test/java/com/softropic/skillars/platform/payment/service/CaptureReservationIT.java
+- src/test/java/com/softropic/skillars/platform/payment/service/ReliabilityStrikeConcurrencyIT.java
+- src/test/java/com/softropic/skillars/platform/payment/service/SubscriptionServiceOwnershipIT.java
+- src/test/java/com/softropic/skillars/platform/security/service/AuthServiceSessionInvalidationIT.java
+- src/test/java/com/softropic/skillars/platform/security/service/UserProfileServiceIT.java
+- src/test/java/com/softropic/skillars/platform/session/api/DrillUploadResourceIT.java
+- src/test/java/com/softropic/skillars/platform/session/api/DrillUploadServiceConcurrencyIT.java
+- src/test/java/com/softropic/skillars/platform/session/api/HomeworkResourceIT.java
+- src/test/java/com/softropic/skillars/platform/session/api/SessionBuilderResourceIT.java
+- src/test/java/com/softropic/skillars/platform/session/api/SessionTemplateResourceIT.java
+- src/test/java/com/softropic/skillars/platform/video/api/VideoWebhookResourceIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/AccountDeletionCascadeIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/AdminVideoIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/MinorSafetyGateIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/OrphanedProviderAssetSweepIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/PlaybackServiceConcurrencyIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/PlaybackServiceIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/ReconciliationWorkerIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/SimultaneousExpiryIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/VideoApprovalServiceIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/VideoDeletionOutboxProcessorIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/VideoPurgedEventIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/VideoSubscriptionLifecycleListenerIT.java
+- src/test/java/com/softropic/skillars/platform/video/service/YearlyExemptionRenewalIT.java
+- src/test/java/com/softropic/skillars/platform/security/api/AuthResourceIT.java (code-review P4)
+- src/test/java/com/softropic/skillars/platform/security/repo/RefreshTokenRepositoryIT.java (code-review P4)
+- src/test/java/com/softropic/skillars/platform/payment/service/CoachVisibilitySuppressionIT.java (code-review P4)
+- src/test/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseRepositoryIT.java (code-review P4)
+- src/test/java/com/softropic/skillars/platform/messaging/repo/MessageRetentionRepositoryIT.java (code-review P4)
+
+Modified — CI, build, docs, tracking
+- .github/scripts/assert-context-count.sh
+- .github/workflows/pr-build.yml
+- pom.xml (comment only)
+- docs/testing/readme.md
+- docs/testing/why-inheritance-over-import.md
+- docs/deployment/baseline/github-build.md
+- _bmad-output/implementation-artifacts/deferred-work.md
+- _bmad-output/implementation-artifacts/sprint-status.yaml
+- _bmad-output/implementation-artifacts/skillars-deferred-160-spring-test-context-consolidation.md
+
+## Change Log
+
+- 2026-10-24 — Implemented L1–L8 and the guardrails (/bmad-dev-story). The failsafe JVM's distinct
+  context configurations go from 47 to a predicted 17. CI confirmation (T11.2/T11.3, AC1) is pending.
+- 2026-10-24 — Code-review follow-up: 7 patches resolved (P6 partly a false positive, see Review
+  Findings). P4 was applied to all 9 hiding fields, not the 2 named. Re-verified: 9 classes / 47 tests
+  plus the convention test (5/5), one context; five gate scenarios.

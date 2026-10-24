@@ -37,8 +37,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 // HAS_PARENT_OR_PLAYER_ROLE so a self-registered adult player can read their own credit wallet
 // for the new player dashboard. POST /cashout deliberately stays PARENT-only (not in scope).
 @WebMvcTest({CreditWalletResource.class, PaymentApiAdvice.class})
-@Import(CreditWalletResourceIT.TestSecurityConfig.class)
-class CreditWalletResourceIT {
+@Import(CreditWalletResourceWebMvcTest.TestSecurityConfig.class)
+class CreditWalletResourceWebMvcTest {
 
     @TestConfiguration
     @EnableMethodSecurity

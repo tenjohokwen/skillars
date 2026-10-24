@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.admin.api;
 
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.infrastructure.config.DataSourceConfig;
 import com.softropic.skillars.infrastructure.config.RoutingDataSource;
@@ -14,7 +15,6 @@ import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.security.SecurityIT;
-import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.service.DaoAuthProvider;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.AfterEach;
@@ -32,7 +32,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -102,12 +101,15 @@ class GdprErasureIT extends AbstractIntegrationTest {
     @MockitoBean
     private FileStorageService fileStorageService;
 
+    // skillars-deferred-160 AC8: present so this class shares the {VideoProviderAdapter, FileStorageService}
+    // mock set (and Spring context) with its peers. Keep this exact field name; it is part of the cache key.
+    @MockitoBean VideoProviderAdapter videoProviderAdapter;
+
     // (story review, 2026-09-22): a spy, not a full mock — real behavior by default for every other
     // test in this class, stubbed to throw only inside
     // erase_parentUser_laterFailureDoesNotRollBackAlreadyCommittedChild, and reset() immediately
     // after. Mirrors AccountDeletionCascadeIT's own established @MockitoSpyBean pattern.
-    @MockitoSpyBean
-    private RefreshTokenRepository refreshTokenRepository;
+    // The refreshTokenRepository spy is inherited from AbstractIntegrationTest (skillars-deferred-160 AC7).
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;

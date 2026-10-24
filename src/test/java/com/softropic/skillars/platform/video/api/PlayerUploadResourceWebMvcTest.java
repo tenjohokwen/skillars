@@ -44,8 +44,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(VideoResource.class)
-@Import(PlayerUploadResourceIT.TestSecurityConfig.class)
-class PlayerUploadResourceIT {
+@Import(PlayerUploadResourceWebMvcTest.TestSecurityConfig.class)
+class PlayerUploadResourceWebMvcTest {
 
     @TestConfiguration
     @EnableMethodSecurity

@@ -28,7 +28,6 @@ class MessageRetentionRepositoryIT extends AbstractIntegrationTest {
     private static final long SENDER_ID                 = 9350_000_010L;
     private static final long REPORTER_ID                = 9350_000_011L;
 
-    @Autowired private MessageRepository messageRepository;
     @Autowired private ConversationRepository conversationRepository;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;

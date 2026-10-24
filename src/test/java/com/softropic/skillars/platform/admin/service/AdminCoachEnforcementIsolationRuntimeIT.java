@@ -3,14 +3,12 @@ package com.softropic.skillars.platform.admin.service;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
-import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceUtils;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
@@ -38,7 +36,7 @@ import static org.mockito.Mockito.mockingDetails;
 class AdminCoachEnforcementIsolationRuntimeIT extends AbstractIntegrationTest {
 
     @Autowired private AdminCoachEnforcementService service;
-    @MockitoSpyBean private CoachProfileRepository coachProfileRepository;
+    // coachProfileRepository: a spy inherited from AbstractIntegrationTest (skillars-deferred-160 AC7).
     @Autowired private DataSource dataSource;
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private JdbcTemplate jdbcTemplate;

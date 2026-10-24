@@ -4,10 +4,8 @@ import com.softropic.skillars.platform.booking.contract.BatchBookingAcceptedEven
 import com.softropic.skillars.platform.booking.contract.BookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.payment.BasePaymentIT;
-import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
-import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 
@@ -18,7 +16,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.UnexpectedRollbackException;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -73,12 +70,12 @@ class CaptureReservationIT extends BasePaymentIT {
 
     // A spy, not a mock: the stub's return values must survive so the settle can complete. What is
     // being asserted is whether Stripe was reached at all.
-    @MockitoSpyBean PaymentGateway paymentGateway;
+    // paymentGateway: the spy is inherited from AbstractIntegrationTest (skillars-deferred-160 AC7).
 
     // Deferred-58 AC1: a spy on the real bean lets doThrow(...) force a genuine DataAccessException
     // at the exact .save(purchase) call inside PackSessionService.deductSession, inside a real
     // transactional flow — a mock cannot fail a real Spring commit.
-    @MockitoSpyBean SessionPackPurchaseRepository sessionPackPurchaseRepository;
+    // sessionPackPurchaseRepository: the spy is inherited from AbstractIntegrationTest (skillars-deferred-160 AC7).
 
     private UUID coachId;
 
@@ -456,10 +453,10 @@ class CaptureReservationIT extends BasePaymentIT {
      * player create — under the same key — with NO code change to {@link PaymentLifecycleService}
      * or {@code StripePaymentGateway}. Verified here against a real database rather than assumed.
      *
-     * <p>Added to this class, not a new file: it is the only class in this module already wired
-     * with {@code @MockitoSpyBean PaymentGateway}, so a new test method here costs zero additional
-     * Spring contexts — a second class making the same choice would add one and risk tripping the
-     * CI context-count ceiling (deferred-19 AC3), which is exactly what happened on first attempt.
+     * <p>The {@code PaymentGateway} spy is inherited from {@code AbstractIntegrationTest}
+     * (skillars-deferred-160 AC7), so any integration test can stub it without forking a Spring
+     * context. Before that hoist, this was the only class wired with it, which is why this test
+     * was added here rather than in a new file.
      * {@code doReturn(...).when(spy)...}, not {@code when(spy...).thenReturn(...)}: the latter
      * invokes the real method first as a side effect of stubbing a spy.
      */

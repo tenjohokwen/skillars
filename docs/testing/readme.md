@@ -54,9 +54,12 @@ class MyFeatureResourceIT extends AbstractIntegrationTest {
    `BaseStorageIT` if you need that family's collaborators).
 2. **Do not add `@SpringBootTest`, `@ActiveProfiles`, `@Import(TestConfig.class)` or `@EnableWireMock`
    to your class.** The base carries them. A guardrail test fails the build if you do.
-3. **Do not add a `@MockitoBean` that another class also needs.** One extra mocked type on your class
-   forks a whole new Spring context. If the collaborator should be mocked everywhere, hoist it to the
-   base; if only you need it, keep it and accept that your class pays a context. See
+3. **Reuse an existing test-double set before adding a `@MockitoBean`/`@MockitoSpyBean`.** Every
+   distinct set of overrides (types *and field names*) forks a whole new Spring context. Use the spies
+   `AbstractIntegrationTest` already declares, `RecordedEvents` for published events, or copy a peer's
+   exact mock set (e.g. `videoProviderAdapter` + `fileStorageService`, shared by 25 classes). A new
+   set fails `IntegrationTestConventionTest`'s pinned count; if the fork is genuinely needed, update
+   the count with a reason. See
    [why-inheritance-over-import.md](why-inheritance-over-import.md#the-mockitobean-trap).
 4. **Seed your own data.** Every table is empty at the start of every test method. Do not rely on rows
    another class left behind — there won't be any.
@@ -64,6 +67,8 @@ class MyFeatureResourceIT extends AbstractIntegrationTest {
 6. **Claim an id range** and add it to the [registry](test-data-isolation.md#fixture-id-registry).
 7. **Need a property no other test needs?** Add `@TestPropertySource` and update the pinned count in the
    guardrail test, with a comment saying why. It is allowed — it just has to be deliberate.
+8. **Slice tests (`@WebMvcTest` and friends) are named `*WebMvcTest`, never `*IT`**, so surefire runs
+   them outside the integration-test JVM's context cache. The guardrail test enforces it.
 
 ## Running the suite
 
@@ -83,15 +88,19 @@ mvn -o verify -Dit.test=MyIT     # one integration test class
   [frontend-unit-tests.md](frontend-unit-tests.md).
 - ~~Test PostgreSQL is behind production.~~ **Closed.** Tests now run `postgres:17-alpine`, matching
   `docker-compose.yml:64`. See [container-architecture.md](container-architecture.md#image-versions).
-- **`ModerationFailClosedIT` has no reset listener.** It is allowlisted out of
-  `AbstractIntegrationTest` to keep its own `FailureEventCapture` config, which means it does not get
-  `DatabaseResetTestExecutionListener` and still depends on ambient database state. Known-failing.
-- **`@DirtiesContext(AFTER_EACH_TEST_METHOD)` on `ConfigResourceIT`** rebuilds its context on every
-  test method, inflating the context count the CI gate measures.
+- ~~`ModerationFailClosedIT` has no reset listener.~~ **Closed.** It extends
+  `AbstractIntegrationTest`, and since `skillars-deferred-160` it shares the base context too: its
+  `FailureEventCapture` was replaced by the shared `RecordedEvents` bean.
+- ~~`@DirtiesContext(AFTER_EACH_TEST_METHOD)` on `ConfigResourceIT`.~~ **Closed.** Removed during
+  `deferred-19` (CI went from 37 to 34 context loads).
 
 ---
 
 ## Before and after — measured
+
+> **Superseded for context counts by `skillars-deferred-160`** — see
+> [Context consolidation, round two](#context-consolidation-round-two-skillars-deferred-160) below.
+> The table here is `deferred-19`'s own before/after and is kept as a record.
 
 All figures from CI (`ubuntu-latest`, 4 vCPU) unless marked local. Story `deferred-19`.
 
@@ -163,7 +172,45 @@ with the test suite**, the context count is bounded and enforced, and the suite 
 more correct — integration errors fell from 16 to 2, including pre-existing failures this story
 did not set out to fix.
 
-## The remaining contexts
+## Context consolidation, round two (`skillars-deferred-160`)
+
+By 2026-10 the failsafe JVM held **47** live distinct context configurations against Spring's
+32-entry cache. The cache was permanently full (`size = 32, maxSize = 32`), so it evicted and
+rebuilt contexts and `missCount` depended on test-class order: the gate flaked at 48 vs 45
+(deferred-156) and 47 vs 44 (deferred-159) with no context-affecting change. deferred-160 brings it
+to a predicted **17** (14 `AbstractIntegrationTest` configurations, as pinned by the convention
+test, + 3 sliced `@SpringBootTest` classes); the CI measurement is recorded in that story:
+
+| Change | Configurations removed |
+|---|---|
+| 14 `@WebMvcTest` slices renamed `*IT` → `*WebMvcTest`, so **surefire** runs them | 14 |
+| Shared `RecordedEvents` bean (`TestConfig`) replaced 4 per-class event-capture configs | 4 |
+| `@Import(E2ESecurityConfig)` dropped (its classes' `@Sql` already seeds `main.sec`) | 2 |
+| `@AutoConfigureMockMvc` hoisted onto `AbstractIntegrationTest` | 1 |
+| 8 `@MockitoSpyBean` declarations hoisted onto `AbstractIntegrationTest` | 6 |
+| `VideoProviderAdapter`-only and `FileStorageService`-only mock sets unified into one | 2 |
+| `MessageModerationSweeperIT` (a full standalone context) moved onto the base | 1 |
+
+Three rules keep it there, all enforced:
+
+- **Slice tests are named `*WebMvcTest` (or another `*Test` suffix), never `*IT`.**
+  `IntegrationTestConventionTest.noSliceTestIsNamedIT` fails otherwise.
+- **The number of distinct configurations is pinned.**
+  `IntegrationTestConventionTest.distinctContextKeyCountIsPinned` models the cache key from the
+  compiled classes: class-level context annotations, `@DynamicPropertySource`, nested
+  configurations, and every `@MockitoBean`/`@MockitoSpyBean` field *with its name*. Spring's
+  `BeanOverrideHandler.equals` compares field names for by-type overrides, so
+  `@MockitoBean VideoProviderAdapter adapter` and `... videoProviderAdapter` are two contexts. On
+  failure it prints every configuration with its classes. Before writing a new override, reuse an
+  inherited spy or match a peer's mock set exactly.
+- **The CI gate checks capacity, not just a ceiling.** `assert-context-count.sh` fails when the
+  final cache line shows `size >= maxSize` (eviction) or `missCount − size > 1` (rebuilds; the 1 is
+  `RateLimitingAspectIT`'s `@DirtiesContext(AFTER_CLASS)`), and above `CEILING = 17`.
+
+## The remaining contexts (as of `deferred-19`)
+
+> Historical. The current configurations are pinned and listed by
+> `IntegrationTestConventionTest.distinctContextKeyCountIsPinned` (see above).
 
 **Two different numbers get quoted here; they are not the same measurement.**
 

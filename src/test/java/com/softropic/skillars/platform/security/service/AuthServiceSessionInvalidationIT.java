@@ -4,7 +4,6 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.repo.RefreshToken;
-import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 
@@ -45,7 +44,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AuthServiceSessionInvalidationIT extends AbstractIntegrationTest {
 
     @Autowired private AuthService authService;
-    @Autowired private RefreshTokenRepository refreshTokenRepository;
     @Autowired private UserRepository userRepository;
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private SecretService secretService;
@@ -131,7 +129,7 @@ class AuthServiceSessionInvalidationIT extends AbstractIntegrationTest {
         // infrastructure-excluded table (see DatabaseResetTestExecutionListener's own javadoc on
         // exactly this table, citing this exact "collides with the fixed-PK insert" history), so
         // it is truncated by this test's own per-method reset and never re-seeded outside the
-        // handful of IT classes that explicitly import E2ESecurityConfig for this reason —
+        // IT classes that seed it themselves (@Sql(SecurityIT.SEC_DATA_SQL_PATH), as ConfigResourceIT does) —
         // unrelated to anything this story's AC3 redesign touches. Without a row here, JWT
         // signing itself fails (JwtConfiguration.getSecretKey), independent of which code path
         // (HTTP or direct call) reaches it.

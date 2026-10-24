@@ -36,8 +36,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Integration tests for AdminFinanceResource HTTP endpoints.
  */
 @WebMvcTest({AdminFinanceResource.class, PaymentApiAdvice.class})
-@Import(AdminFinanceResourceIT.TestSecurityConfig.class)
-class AdminFinanceResourceIT {
+@Import(AdminFinanceResourceWebMvcTest.TestSecurityConfig.class)
+class AdminFinanceResourceWebMvcTest {
 
     @TestConfiguration
     @EnableMethodSecurity

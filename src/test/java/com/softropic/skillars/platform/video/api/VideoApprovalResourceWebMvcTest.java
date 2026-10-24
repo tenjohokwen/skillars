@@ -42,8 +42,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest({VideoApprovalResource.class, VideoApiAdvice.class})
-@Import(VideoApprovalResourceIT.TestSecurityConfig.class)
-class VideoApprovalResourceIT {
+@Import(VideoApprovalResourceWebMvcTest.TestSecurityConfig.class)
+class VideoApprovalResourceWebMvcTest {
 
     @TestConfiguration
     @EnableMethodSecurity

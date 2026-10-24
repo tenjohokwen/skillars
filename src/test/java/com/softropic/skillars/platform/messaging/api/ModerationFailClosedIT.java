@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.messaging.api;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
+import com.softropic.skillars.config.RecordedEvents;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.gemini.GeminiException;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
@@ -11,8 +12,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.annotation.Import;
-import org.springframework.context.event.EventListener;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -20,7 +19,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.stereotype.Component;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -28,22 +26,17 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
-// Keeps its own context for FailureEventCapture -- that is deliberate. What was NOT deliberate
-// is that being allowlisted out of AbstractIntegrationTest also meant no
-// DatabaseResetTestExecutionListener, so it depended on ambient database state and failed once
-// every other class started truncating. Extending the base restores the reset while @Import
-// still gives it a distinct context.
-@Import(ModerationFailClosedIT.FailureEventCapture.class)
+// skillars-deferred-160 AC3: used to @Import its own FailureEventCapture, which forked a whole
+// Spring context for one list-of-events bean. The shared RecordedEvents (TestConfig) replaces it,
+// so this class now shares the base context.
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
 class ModerationFailClosedIT extends AbstractIntegrationTest {
 
@@ -64,7 +57,7 @@ class ModerationFailClosedIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
-    @Autowired private FailureEventCapture failureEventCapture;
+    @Autowired private RecordedEvents recordedEvents;
 
     @LocalServerPort private int randomServerPort;
 
@@ -73,7 +66,7 @@ class ModerationFailClosedIT extends AbstractIntegrationTest {
     @BeforeEach
     void setUp() {
         when(geminiClient.evaluate(any())).thenThrow(new GeminiException("simulated-timeout", null));
-        failureEventCapture.clear();
+        recordedEvents.clear();
 
         String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
         coachProfileId = UUID.randomUUID();
@@ -171,8 +164,9 @@ class ModerationFailClosedIT extends AbstractIntegrationTest {
         assertThat(deliveredAt).isNull();
 
         // Verify ModerationFailureEvent was published (event is synchronous — already captured before response returns)
-        assertThat(failureEventCapture.getEvents()).isNotEmpty();
-        ModerationFailureEvent event = failureEventCapture.getEvents().get(0);
+        List<ModerationFailureEvent> failures = recordedEvents.ofType(ModerationFailureEvent.class);
+        assertThat(failures).isNotEmpty();
+        ModerationFailureEvent event = failures.get(0);
         assertThat(event.failureReason()).contains("simulated-timeout");
     }
 
@@ -239,23 +233,5 @@ class ModerationFailClosedIT extends AbstractIntegrationTest {
             email, role,
             "90" + (id % 100000000),
             email, passwordHash, role);
-    }
-
-    @Component
-    static class FailureEventCapture {
-        private final List<ModerationFailureEvent> events = new CopyOnWriteArrayList<>();
-
-        @EventListener
-        public void onEvent(ModerationFailureEvent event) {
-            events.add(event);
-        }
-
-        public List<ModerationFailureEvent> getEvents() {
-            return new ArrayList<>(events);
-        }
-
-        public void clear() {
-            events.clear();
-        }
     }
 }

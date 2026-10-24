@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.admin.api;
 
+import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
@@ -51,6 +52,10 @@ class ActiveBookingsErasureBlockIT extends AbstractIntegrationTest {
 
     @MockitoBean
     private FileStorageService fileStorageService;
+
+    // skillars-deferred-160 AC8: present so this class shares the {VideoProviderAdapter, FileStorageService}
+    // mock set (and Spring context) with its peers. Keep this exact field name; it is part of the cache key.
+    @MockitoBean VideoProviderAdapter videoProviderAdapter;
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;

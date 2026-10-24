@@ -47,8 +47,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(VideoResource.class)
-@Import(VideoListQuotaResourceIT.TestSecurityConfig.class)
-class VideoListQuotaResourceIT {
+@Import(VideoListQuotaResourceWebMvcTest.TestSecurityConfig.class)
+class VideoListQuotaResourceWebMvcTest {
 
     @TestConfiguration
     @EnableMethodSecurity

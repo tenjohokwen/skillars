@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import ch.qos.logback.classic.Level;
@@ -75,6 +76,10 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
 
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
+
+    // skillars-deferred-160 AC8: present so this class shares the {VideoProviderAdapter, FileStorageService}
+    // mock set (and Spring context) with its peers. Keep this exact field name; it is part of the cache key.
+    @MockitoBean FileStorageService fileStorageService;
 
     // player_slu_weekly_snapshot_applied (skillars-deferred-86 AC1) has an FK to main.player_profiles
     // (ON DELETE CASCADE, mirroring V113/V117). player_skill_stats / player_slu_weekly_snapshot have

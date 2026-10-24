@@ -24,7 +24,7 @@ import static org.mockito.Mockito.when;
  * SesV2Client} pattern); {@link SesAccountChecker} is mocked here since
  * {@code EmailTransportArchitectureTest} forbids this {@code platform.notification.api} class from
  * ever importing the SES SDK itself. The send PATH (real circuit breaker, real retry template, real
- * send) is covered separately by {@link SesCutoverPreflightResourceIT}.
+ * send) is covered separately by {@link SesCutoverPreflightResourceWebMvcTest}.
  */
 @DisplayName("SES Cutover Preflight Resource — combining logic")
 class SesCutoverPreflightResourceTest {

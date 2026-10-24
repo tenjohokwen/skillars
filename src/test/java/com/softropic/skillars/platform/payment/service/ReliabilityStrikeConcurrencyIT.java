@@ -1,21 +1,17 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.config.RecordedEvents;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
-import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.BasePaymentIT;
 import com.softropic.skillars.platform.payment.contract.event.StrikeThresholdReachedEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Import;
-import org.springframework.context.event.EventListener;
-import org.springframework.stereotype.Component;
 
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -40,17 +36,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p><strong>Mutation check:</strong> revert the locked read in {@code ReliabilityStrikeService} to
  * {@code coachProfileRepository.findById(coachId)} and this test fails — both threads publish a
- * {@code StrikeThresholdReachedEvent}, so either the capture below sees two, or (as observed) the
+ * {@code StrikeThresholdReachedEvent}, so either {@code RecordedEvents} sees two, or (as observed) the
  * second synchronous {@code AdminAlertEventListener.onStrikeThreshold} insert trips the
  * {@code admin_alerts_unique_open_per_ref} partial unique index and one {@code issue()} transaction
  * rolls back with a {@code DataIntegrityViolationException} — losing its strike row too.
  */
-@Import(ReliabilityStrikeConcurrencyIT.StrikeEventCapture.class)
 class ReliabilityStrikeConcurrencyIT extends BasePaymentIT {
 
     @Autowired ReliabilityStrikeService reliabilityStrikeService;
-    @Autowired CoachProfileRepository coachProfileRepository;
-    @Autowired StrikeEventCapture eventCapture;
+    @Autowired RecordedEvents recordedEvents;
 
     private static final long COACH_USER_ID = 70123L;
     private static final String COACH_EMAIL = "coach.strikerace@test.com";
@@ -59,7 +53,7 @@ class ReliabilityStrikeConcurrencyIT extends BasePaymentIT {
     @Timeout(60)
     void concurrentIssue_bothCrossThreshold_publishesThresholdEventOnce() throws Exception {
         UUID coachId = insertTestCoach(COACH_USER_ID, COACH_EMAIL, "Strike Race Coach");
-        eventCapture.clear();
+        recordedEvents.clear();
 
         // Suspension threshold default is 5. Seed threshold - 1 = 4 strikes inside the 30-day
         // window so the next two issued strikes each land the rolling count at >= 5.
@@ -87,7 +81,7 @@ class ReliabilityStrikeConcurrencyIT extends BasePaymentIT {
             pool.shutdownNow();
         }
 
-        assertThat(eventCapture.forCoach(coachId))
+        assertThat(thresholdEventsFor(coachId))
             .as("exactly one StrikeThresholdReachedEvent despite two concurrent threshold-crossing strikes")
             .hasSize(1);
 
@@ -121,21 +115,9 @@ class ReliabilityStrikeConcurrencyIT extends BasePaymentIT {
             Timestamp.from(Instant.now().minusSeconds(3600)));
     }
 
-    @Component
-    static class StrikeEventCapture {
-        private final List<StrikeThresholdReachedEvent> events = new CopyOnWriteArrayList<>();
-
-        @EventListener
-        void on(StrikeThresholdReachedEvent event) {
-            events.add(event);
-        }
-
-        List<StrikeThresholdReachedEvent> forCoach(UUID coachId) {
-            return events.stream().filter(e -> coachId.equals(e.getCoachId())).toList();
-        }
-
-        void clear() {
-            events.clear();
-        }
+    private List<StrikeThresholdReachedEvent> thresholdEventsFor(UUID coachId) {
+        return recordedEvents.ofType(StrikeThresholdReachedEvent.class).stream()
+            .filter(e -> coachId.equals(e.getCoachId()))
+            .toList();
     }
 }
