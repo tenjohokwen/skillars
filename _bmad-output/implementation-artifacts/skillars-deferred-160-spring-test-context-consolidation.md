@@ -1,6 +1,6 @@
 # Story skillars-deferred-160: Spring test-context consolidation — get the failsafe JVM below the context cache cap
 
-Status: in-progress
+Status: done
 
 <!-- Created 2026-10-24 (/bmad-create-story). NOT mined from deferred-work.md: user-requested after a
      context-count investigation ("what makes up to 47 spring contexts?"). No ledger items consumed. -->
@@ -309,13 +309,13 @@ margin. If a lever's trap-check fails, record why and drop it rather than force 
       `missCount` = model + 3 (K48–K50, the sliced standalone classes), and `size` = `missCount` − 1
       (RateLimitingAspectIT dirtied). SmtpTransportBootIT is an AIT class, so it is already in the
       model. Document the arithmetic in Completion Notes.
-- [ ] T11 Gate (AC11)
+- [x] T11 Gate (AC11)
   - [x] T11.1 Script: `size >= maxSize` and `missCount − size > 1` checks, the `ctxkeys.py` pointer
         replaced, CEILING 47 → 17 (script default + `pr-build.yml`), all four outcomes exercised
         locally against deferred-159's real CI log and synthetic lines.
-  - [ ] T11.2 Push and confirm the first green `pr-build` measures `missCount = 17` (size 16 or 17);
-        correct CEILING to the measured number if it differs.
-  - [ ] T11.3 Re-run `pr-build` twice more; record the three statistics lines here (AC1).
+  - [x] T11.2 Push and confirm the first green `pr-build` measures `missCount = 17` (size 16 or 17);
+        correct CEILING to the measured number if it differs. **Measured 17 / size 16 — no correction.**
+  - [x] T11.3 Re-run `pr-build` twice more; record the three statistics lines here (AC1).
 - [x] T12 Docs/comments (AC12).
 - [x] T13 Scoped local runs of every touched IT class, e.g.
       `mvn -o verify -DskipFrontend -Dtest=none -Dsurefire.failIfNoSpecifiedTests=false -Dit.test=<Class>`.
@@ -464,11 +464,18 @@ Claude Opus 5.5 (1M context), /bmad-dev-story, 2026-10-24.
 
 ### Completion Notes List
 
-- **AC1 — pending CI (T11.2/T11.3).** Local evidence predicts `missCount = 17`: the convention
-  test's model reports 14 live AbstractIntegrationTest configurations, plus the 3 allowlisted sliced
-  `@SpringBootTest` classes (RateLimitingAspectIT, PropertiesFeatureToggleServiceIT,
-  SesEmailEndToEndIT). Expected final line: `size = 16` (RateLimitingAspectIT dirtied) or 17 (if it
-  runs last). Not yet measured in CI; the story stays `in-progress` until it is.
+- **AC1 — met.** PR #297, `pr-build` run 40063190835, three attempts of the `build` job. Each ended
+  on the identical final line
+  `size = 16, maxSize = 32, parentContextCount = 0, hitCount = 30808, missCount = 17`.
+  - The prediction matched exactly: 14 modelled configurations + 3 sliced standalone classes = 17,
+    and `size` = 16 because RateLimitingAspectIT was dirtied.
+  - Identical `hitCount` shows the run is fully deterministic.
+  - Every attempt was green with surefire 2376 tests (1 skipped) and failsafe 1370 (4 skipped). That
+    reconciles with the baseline: surefire 2253 + 121 renamed slices + 2 new convention tests = 2376,
+    and failsafe 1491 − 121 = 1370.
+  - The `build` job took 11m53s / 10m56s / 11m11s, against 13m29s for the deferred-159 baseline (run
+    40016101569; one sample).
+  - CEILING needed no correction.
 - **AC2** — 14 slices renamed `*WebMvcTest`, 121/121 under surefire, counts unchanged. References
   fixed in `SesCutoverPreflightResourceTest` (javadoc link), `SubscriptionResourceWebMvcTest`
   (TestSecurityConfig import) and `SubscriptionServiceOwnershipIT` (javadoc). The historical
@@ -528,8 +535,8 @@ Claude Opus 5.5 (1M context), /bmad-dev-story, 2026-10-24.
   mirrors `BeanOverrideHandler.equals` (annotation attributes, field type, field name, other field
   annotations) and skips class-level `@Disabled` classes. A discovery helper (`allConcreteItClasses`)
   was split out so the slice check can see `*IT` slices.
-- **AC11** — script done (T11.1). CEILING is set to the predicted 17 and **must be confirmed by CI**
-  (T11.2).
+- **AC11** — met. Script done (T11.1). CEILING 17 confirmed by CI (T11.2/T11.3); the gate printed
+  "OK" on all three attempts.
 - **AC12** — readme "known gaps" closed, round-two section added with the rules, and deferred-19's
   sections marked historical. Also updated: why-inheritance (field-name rule, guard, appendix), the
   github-build CEILING reference, the pom failsafe comment, the application-test.yaml
@@ -635,3 +642,5 @@ Modified — CI, build, docs, tracking
 - 2026-10-24 — Code-review follow-up: 7 patches resolved (P6 partly a false positive, see Review
   Findings). P4 was applied to all 9 hiding fields, not the 2 named. Re-verified: 9 classes / 47 tests
   plus the convention test (5/5), one context; five gate scenarios.
+- 2026-10-24 — CI measured (PR #297, run 40063190835 ×3): `missCount = 17`, `size = 16`, identical
+  on all three. "Predicted" wording replaced with the measurement; status → done.

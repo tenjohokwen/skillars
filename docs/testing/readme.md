@@ -177,9 +177,12 @@ did not set out to fix.
 By 2026-10 the failsafe JVM held **47** live distinct context configurations against Spring's
 32-entry cache. The cache was permanently full (`size = 32, maxSize = 32`), so it evicted and
 rebuilt contexts and `missCount` depended on test-class order: the gate flaked at 48 vs 45
-(deferred-156) and 47 vs 44 (deferred-159) with no context-affecting change. deferred-160 brings it
-to a predicted **17** (14 `AbstractIntegrationTest` configurations, as pinned by the convention
-test, + 3 sliced `@SpringBootTest` classes); the CI measurement is recorded in that story:
+(deferred-156) and 47 vs 44 (deferred-159) with no context-affecting change. deferred-160 took it
+to **17** (14 `AbstractIntegrationTest` configurations, as pinned by the convention test, + 3 sliced
+`@SpringBootTest` classes). Measured on three identical CI runs (PR #297, run 40063190835):
+`size = 16, maxSize = 32, hitCount = 30808, missCount = 17`. The CI `build` job took 11m53s / 10m56s / 11m11s, against
+13m29s for the deferred-159 baseline (one sample, so read that as roughly 2 minutes, not a precise
+gain):
 
 | Change | Configurations removed |
 |---|---|

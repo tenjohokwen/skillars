@@ -150,11 +150,12 @@ LOG="${1:?usage: assert-context-count.sh <build-log> [ceiling]}"
 # is at size = maxSize = 32, so this is the order-vs-eviction thrashing described above rather than a
 # new fork. Raised to the measured number per this file's precedent; the header's advice to remove a
 # context configuration instead still stands as the real fix.
-# CEILING = 17 (story skillars-deferred-160) -- PREDICTED, not yet measured in CI: confirm it against
-# the story's first green pr-build and correct it to the measured missCount if it differs.
+# CEILING = 17 (story skillars-deferred-160, PR #297). Measured: three attempts of pr-build run
+# 40063190835 all ended on the identical line size = 16, maxSize = 32, hitCount = 30808, missCount = 17,
+# matching the prediction exactly (even hitCount was identical, i.e. fully deterministic).
 # The real fix this header kept asking for: the failsafe JVM had 47 live distinct context
 # configurations (cache permanently at size = maxSize = 32, so LRU evicted and rebuilt contexts and
-# missCount depended on class order). The story's changes bring that to a predicted 17:
+# missCount depended on class order). The story's changes bring that to 17:
 #   - 14 @WebMvcTest slices renamed *IT -> *WebMvcTest, so surefire runs them in its own JVM;
 #   - 4 per-class event-capture configs replaced by one shared RecordedEvents bean (TestConfig);
 #   - redundant @Import(E2ESecurityConfig) dropped from 2 classes (their @Sql already seeds main.sec);
@@ -164,7 +165,7 @@ LOG="${1:?usage: assert-context-count.sh <build-log> [ceiling]}"
 #   - MessageModerationSweeperIT (a full standalone context) moved onto the base.
 # The 17 = 14 AbstractIntegrationTest configurations (pinned by IntegrationTestConventionTest's
 # EXPECTED_DISTINCT_CONTEXT_KEYS) + 3 allowlisted sliced @SpringBootTest classes. Below capacity,
-# missCount should be deterministic, so this ceiling is exact rather than padded.
+# missCount is deterministic, so this ceiling is exact rather than padded.
 #
 # Two capacity checks were added alongside it, on the same final statistics line:
 #   - size >= maxSize fails: a full cache means eviction, which is where order-dependent counts

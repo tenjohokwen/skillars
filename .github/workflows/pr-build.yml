@@ -72,9 +72,9 @@ jobs:
           mvn_status=${PIPESTATUS[0]}
 
           echo "::group::Spring context count (AC3)"
-          # CEILING = 17 (skillars-deferred-160: PREDICTED 47 -> 17 live context configurations, to be
-          # confirmed by this story's first green run; the script also fails on size >= maxSize or on
-          # rebuilds. See assert-context-count.sh).
+          # CEILING = 17 (skillars-deferred-160, PR #297: 47 -> 17 live context configurations, measured
+          # 17 on 3 identical runs; the script also fails on size >= maxSize or on rebuilds. See
+          # assert-context-count.sh).
           # Prior: CEILING = 47 (skillars-deferred-159: measured 47 x3, order-vs-eviction).
           # Prior: CEILING = 45, deliberate +1 (story skillars-deferred-128, /bmad-code-review response).
           # GdprErasureIT gained a second override, @MockitoSpyBean RefreshTokenRepository (alongside
