@@ -2,7 +2,7 @@
 
 Status: ready-for-dev
 
-<!-- Created 2026-10-24 (/bmad-create-story). User-requested bundle mined from deferred-work.md on the
+<!-- REVISED 2026-10-25 after story-review.md (see "Review corrections"). Created 2026-10-24 (/bmad-create-story). User-requested bundle mined from deferred-work.md on the
      day of the full-file re-audit/prune. Every item below was re-verified against HEAD 4317b019
      before drafting (see "Verified state at drafting"). Ledger line numbers shift constantly; locate
      bullets by the quoted lead text, not by number. -->
@@ -21,10 +21,29 @@ so that SES bounce-rate risk, scheduler lock hold time and CI determinism stop d
   ledger, untagged) and the phone operator detection residual (old AC8 / D161-F — app is not
   Cameroon-targeted; ledger bullet marked `[DECIDED]`). AC numbers 3 and 8 are kept as "Dropped" so
   references stay stable.
-- **All other sub-decisions: the recommended option is confirmed** — D161-B(1) time-boxed Quasar hop
-  with revert-and-annotate stop-loss; D161-C(1) `BoundedKey` closed by decision, no code;
+- **All other sub-decisions: the recommended option is confirmed** — D161-B time-boxed Quasar change
+  (**re-scoped 2026-10-25 to the smaller AE 2.0.0 + vitest 4 hop, no app-vite bump — owner may override
+  back to the app-vite 3 hop**) with revert-and-annotate stop-loss; D161-C(1) `BoundedKey` closed by decision, no code;
   D161-D(1) fix `ConfigService.refreshCache()` at the root; D161-E(1) trim to latest 5
   `prior last_updated` lines + convention note.
+
+## Review corrections (2026-10-25, from `story-review.md`, each re-verified against HEAD)
+
+- **AC2's premise was false → closed by verification.** `DatabaseResetTestExecutionListener`
+  (order 3000, registered on `AbstractIntegrationTest`) truncates every table except
+  `flyway_schema_history`/`main.shedlock`/`qrtz_*` before every test method, before `@BeforeEach`.
+  Foreign `envelope_entity` rows cannot exist, and the "foreign row" case already exists
+  (`retryScheduler_unrelatedStrayFailedRow_doesNotAffectScopedAssertion`, ~L362).
+- **D161-B's "no compatible AE" claim was false.** AE `2.0.0` (verified via `npm view` + unpacked
+  tarball) declares `compatibleWith('@quasar/app-vite','^2.4.0')`, peers `vitest ^4`, `quasar ^2.12.7`.
+  A far smaller hop than app-vite 3 exists — see AC4.
+- **AC6's test was vacuous** (fresh-cache hits never take the monitor) and the fix needed explicit
+  semantics — see AC6.
+- **AC1's code path is unreachable today** (`AlertEvaluationService.computeMetricValue` returns `-1.0`,
+  so `AlertFiredEvent` is never published) and `platform.admin_alert_email` is seeded blank — the change
+  is defensive, not a live SES-bounce fix.
+- Factual fixes: context-count ceiling is **17** (not ≤24); `HAS_CODE_DEFAULT` has **23** keys (not 18);
+  `# prior last_updated` lines are **73**; the AC7 bullet is in the deferred-**58** code-review section.
 
 ## Ledger → story mapping (so future passes do not re-pick these)
 
@@ -35,12 +54,12 @@ bullets (file convention) and re-annotates anything closed by decision rather th
 | AC | Ledger bullet (lead text) | Section |
 |----|---------------------------|---------|
 | 1 | "`AlertNotificationListener` mails a mailbox that cannot exist" | ses-1-5 dev section (2026-10-24) |
-| 2 | "`RegistrationEmailDurabilityIT`'s scheduler cases operate on global repository state" | `ses-1-4-registration-email-durability` |
+| 2 | "`RegistrationEmailDurabilityIT`'s scheduler cases operate on global repository state" (closed by verification) | `ses-1-4-registration-email-durability` |
 | 3 | *(dropped — bullet stays open, untagged)* `main."user"` cleanup-sweep index | code review of skillars-deferred-123 |
 | 4 | "The Quasar Vitest App Extension is used library-only…" | skillars-deferred-104 |
-| 5 | D2 "Not the full call-site migration" (`BoundedKey`, declined 4×) | deferred-129/-130 |
+| 5 | D2 "Not the full call-site migration" (`BoundedKey`, declined 4×) — tag sits mid-paragraph in a multi-closure bullet | code review of skillars-deferred-129 |
 | 6 | D5 "`lock_timeout` bound is re-read … inside `erase()`'s outer transaction" | code review of skillars-deferred-129 |
-| 7 | "`deferred-work.md` and `sprint-status.yaml` accumulate indefinitely…" | skillars-deferred-52 story creation |
+| 7 | "`deferred-work.md` and `sprint-status.yaml` accumulate indefinitely…" **and** the untagged duplicate "`sprint-status.yaml`'s `last_updated` field has grown…" | code review of skillars-deferred-58 / code review of skillars-deferred-56 |
 | 8 | *(dropped — marked `[DECIDED]` in ledger)* operator-level `Provider` detection CM-only | skillars-deferred-99 AC16 note |
 
 ## Verified state at drafting (HEAD 4317b019)
@@ -51,21 +70,21 @@ bullets (file convention) and re-annotates anything closed by decision rather th
 - `V138__baseline_schema.sql` has no index on `main."user"` supporting
   `UserRepository.findByActivatedFalseAndCreatedDateBeforeAndCleanupFailedAtIsNullOrderByIdAsc`
   (used by `UserAdminService` ~L384). Latest migration is `V168`.
-- `RegistrationEmailDurabilityIT` calls `emailRetryScheduler.retryFailedEmails()` at ~L330/343/370;
-  the scheduler polls the whole `envelope_entity` table. (The `committedRowFor` helper part is already
-  fixed.)
-- `@quasar/app-vite` is `2.4.1` in `node_modules`; `package.json` says `^2.1.0`. npm (checked today):
-  `@quasar/app-vite` latest `3.10.3`; `@quasar/quasar-app-extension-testing-unit-vitest` latest
-  `3.0.0` with peers `@quasar/app-vite ^3`, `quasar ^2.24`, **`vitest ^4 || ^5`**. Repo is on
-  vitest `^3.2.4`, quasar `^2.16`. There is **no** AE release compatible with app-vite 2.4.x + a
-  current vitest, so "register the AE" is only reachable through a full app-vite 3 / vitest 4 hop.
-- `BoundedKey.defaultValue` exists for all 18 `HAS_CODE_DEFAULT` keys (deferred-133 AC2); call sites
+- `RegistrationEmailDurabilityIT` calls `emailRetryScheduler.retryFailedEmails()` at ~L330/343/370; the
+  scheduler selects eligible rows (`LIMIT 10 … ORDER BY deadline … FOR UPDATE SKIP LOCKED`). Isolation
+  is already provided by the per-test table reset (see Review corrections).
+- `@quasar/app-vite` is `2.4.1` in `node_modules`; `package.json` says `^2.1.0`; vitest `^3.2.4`, quasar
+  `^2.16`, AE `^1.2.4` (its `vitest.config.mjs` imports `vite-tsconfig-paths`, which is only a transitive
+  dependency of AE 1.2.4). npm (checked 2026-10-25): AE `2.0.0` guards `@quasar/app-vite ^2.4.0`, peers
+  `vitest ^4`, `@vitest/ui ^4`, `quasar ^2.12.7`; AE `3.0.0` needs `app-vite ^3`, `quasar ^2.24`,
+  `vitest ^4 || ^5`; `@quasar/app-vite` latest is `3.10.3`.
+- `BoundedKey.defaultValue` exists for all 23 `HAS_CODE_DEFAULT` keys (deferred-133 AC2); call sites
   still re-type the literal. Declined a 4th time by deferred-135.
 - `GdprErasureService`: the `lock_timeout` read is already hoisted to once per `eraseParentChildren`
   (deferred-132 Fix 9); `ConfigService.refreshCache()` (`private synchronized`, `findAll()` on the
   caller's connection) is the remaining hazard.
-- `sprint-status.yaml` is ~419 KB with 72 `# prior last_updated` comment lines, one up to ~17.7 KB;
-  `deferred-work.md` ~351 KB / 3.3k lines after today's prune.
+- `sprint-status.yaml` is ~419 KB with 73 `# prior last_updated` comment lines (contiguous, newest-first,
+  ~135 KB; longest line 17,765 chars); `deferred-work.md` ~351 KB / 3.3k lines, longest line ~2.5k chars.
 - Phone: `PhoneValidationProperties` is config-driven per market; `Provider.java` /
   `CamMobileValidator.java` (MTN/Orange/NextTel prefixes, `V146__user_phone_provider_column.sql`)
   stay Cameroon-only.
@@ -78,7 +97,7 @@ Kept for the option trade-offs; the chosen option is the one marked recommended,
 EXPLAIN evidence"; there is still no production deploy.
 - *(1, recommended)* Ship the partial index
   `CREATE INDEX CONCURRENTLY idx_user_cleanup_sweep ON main."user" (id) WHERE activated = false AND cleanup_failed_at IS NULL`
-  in its own migration (convention: hot-table index = `CONCURRENTLY`, own file). It matches the
+  in its own migration (NOTE: `docs/deployment/migration-conventions.md` rule 4 says CONCURRENTLY has no working online-safe mechanism here — Flyway self-deadlock, deferred-112; re-read it before reviving). It matches the
   query's `ORDER BY id` + predicate exactly, is tiny (only unactivated rows), and costs almost nothing
   pre-data. Validate shape with `EXPLAIN` against seeded IT data (planner choice on a tiny table is
   weak evidence — say so in the story record).
@@ -86,16 +105,17 @@ EXPLAIN evidence"; there is still no production deploy.
 - *(2)* Keep deferring until a production deploy exists. Pros: no guess. Cons: this has been
   re-deferred repeatedly; lock hold time keeps depending on a PK walk.
 
-**D161-B — Quasar toolchain (AC4).**
-- *(1, recommended)* Time-boxed hop: `@quasar/app-vite` 3.x + `quasar` ≥2.24 + `vitest` 4 +
-  AE 3.0.0 + `quasar ext add`. Hard stop: if `npx quasar build` (used by `mvn verify`) or the Vitest
-  suite cannot be made green within the box, **revert, leave the toolchain as is, and re-annotate the
-  ledger bullet with the verified blocker versions above** (that outcome still closes the "unverified"
-  part). Pros: finally retires the hand-placed `vitest.config.mjs`. Cons: largest-risk task in the
-  story; frontend CI is the gate.
-- *(2)* Skip the hop; only re-verify and refresh the annotation (no AE release supports app-vite 2.4).
-  Pros: zero risk. Cons: bullet stays open indefinitely.
-- *(3)* Pull it into its own story (`skillars-deferred-162`) and drop AC4 here. Pros: isolates risk.
+**D161-B — Quasar toolchain (AC4).** (Rewritten 2026-10-25: the original text wrongly said no compatible
+AE exists for app-vite 2.4.x.)
+- *(0, recommended — new)* Keep `@quasar/app-vite` 2.4.1 / `quasar` 2.16. Bump `vitest`,
+  `@vitest/coverage-v8` and `@vitest/ui` to 4.x and the AE to `2.0.0`, then register it with
+  `quasar ext add`. Pros: removes the "AE not registered" gap without touching the app build chain.
+  Cons: vitest 3→4 may need test/config adjustments; `vite-tsconfig-paths` must be added explicitly or
+  `vitest.config.mjs` rewritten.
+- *(1)* Full hop: app-vite 3 + quasar ≥2.24 + vitest 4/5 + AE 3.0.0. Pros: current toolchain.
+  Cons: largest risk; `quasar build` (run by `mvn verify`) is in the blast radius.
+- *(2)* Skip; re-verify and refresh the annotation only. Pros: zero risk. Cons: bullet stays open.
+- *(3)* Own story. Pros: isolates risk.
 
 **D161-C — `BoundedKey` call-site migration (AC5).** Declined four consecutive times.
 - *(1, recommended)* Do **no** code; replace the bullet with a single `[DECIDED — permanent: call
@@ -111,8 +131,7 @@ EXPLAIN evidence"; there is still no production deploy.
 - *(1, recommended)* Fix the root: make `refreshCache()` run `findAll()` **outside** the monitor
   (load, then swap the cache under a short lock) so no caller can stall the JVM while waiting on a
   Hikari connection. Benefits every caller, not just GDPR erasure.
-- *(2)* Pre-read/warm the bound before `erase()`'s transaction opens (pass as parameter). Pros:
-  local. Cons: only protects this path; `refreshCache` hazard remains.
+- *(2)* (not chosen) Pre-read the bound before `erase()`'s transaction opens. Cons: only protects this path.
 
 **D161-E — Ledger/status growth (AC7).**
 - *(1, recommended)* Mechanical, low-risk trim: keep only the latest 5 `# prior last_updated`
@@ -123,72 +142,92 @@ EXPLAIN evidence"; there is still no production deploy.
   broad edit across ~400 entries; high churn.
 
 **D161-F — DROPPED.** Operator detection beyond CM (AC8).
-- *(1, recommended)* Move operator prefixes into `PhoneValidationProperties` per market
-  (`markets.<code>.operators[]`), keep the Cameroon list as the seeded default, and make
-  `CamMobileValidator`/`Provider` resolve through the same `MarketResolver`; unknown market → no
-  operator (null), never a wrong operator. Pros: removes the last CM hardcode. Cons: touches the
-  `user.phone_provider` write path.
-- *(2)* Document as intentionally CM-only and delete the residual. Pros: no code. Cons: blocks
-  other markets later.
 
 ## Acceptance Criteria
 
-1. **Alert recipient is configurable.** `AlertNotificationListener` no longer contains
-   `ops@skillars.internal`. For `notificationChannel == EMAIL` it resolves
-   `platform.admin_alert_email` via `ConfigService.find(...)`; if blank it logs at ERROR (naming the
-   key and metric, same shape as `VideoModerationEmailListener`) and sends **nothing**; it must not
-   throw into the scheduling loop. Unit tests cover configured, blank and `mailManager` failure.
-2. **`RegistrationEmailDurabilityIT` scheduler cases are order-independent.** The three
-   `retryFailedEmails()` cases (~L330/343/370) assert only on rows they created and cannot be
-   changed by `FAILED`/`retry=true` rows left behind by other tests (e.g. `@BeforeEach` parks foreign
-   retryable rows in a committed `transactionTemplate` — bare `jdbcTemplate` writes never commit,
-   see project note — and the test restores nothing it does not own). No production-code change just
-   for the test. Demonstrate by adding a deliberately foreign retryable row in one case.
+1. **Alert recipient is configurable (defensive hardening).** Note: today `AlertEvaluationService.computeMetricValue`
+   returns `-1.0`, so `AlertFiredEvent` is never published and this listener is unreachable; the default
+   `platform.admin_alert_email` is also seeded `''` (`V139`). The change removes a latent SES-bounce
+   hazard and must not be described as fixing a live one.
+   `AlertNotificationListener` no longer contains `ops@skillars.internal`. For `notificationChannel ==
+   EMAIL` it resolves `platform.admin_alert_email` via `ConfigService.find(...)` **inside the existing
+   try block** (a stale-cache refresh can throw; an escape would abort the remaining rules of that
+   `evaluate()` tick). Blank → `log.error` naming the key **and `event.metricName()`**, send nothing.
+   Direct listener unit tests (none exist today): configured, blank, `find()` throws, `mailManager`
+   throws. Docs: update `docs/dev-docs/notification/index.html` (still describes mail to
+   `ops@skillars.internal`) and the `AlertEvaluationService` class Javadoc ("no DB call is made during
+   evaluation" is no longer strictly true); record the `platform.admin_alert_email` config row (blank by
+   default) in the runbook / notification dev-doc — it is a `platform_config` row, not a secret, so not
+   `secrets-reference.md`.
+2. **Closed by verification — no code.** The premise (foreign `envelope_entity` rows leaking between tests)
+   is false: `DatabaseResetTestExecutionListener` truncates all non-infrastructure tables before every
+   test method, and `retryScheduler_unrelatedStrayFailedRow_doesNotAffectScopedAssertion` already covers
+   the stray-row case. The dev re-confirms both at HEAD, then re-annotates the ledger bullet (AC9 outcome
+   (c)). Do **not** add `@BeforeEach` parking. (Optional, only if wanted: a case seeding >10
+   earlier-deadline foreign rows to pin `LIMIT 10 ORDER BY deadline`; a second `retryFailedEmails()` call
+   in one test needs `releaseSchedulerLock` because of `@SchedulerLock(lockAtLeastFor)`.)
 3. *Dropped by owner decision (index on `main."user"`).*
-4. **Per D161-B**: outcome is exactly one of (a) toolchain upgraded with `npx quasar build` and
-   `npm run test:unit:ci` green, `quasar.config.js` registers the AE, the hand-placed config note in
-   the ledger deleted; (b) reverted with the ledger bullet re-annotated with today's verified
-   blocker versions (app-vite 2.4.1 vs AE 3.0.0 peers `^3`/vitest `^4`). Never a half-upgrade.
+4. **Per D161-B (option 0)**: outcome is exactly one of (a) `vitest`/`@vitest/coverage-v8`/`@vitest/ui` at 4.x, AE
+   at `2.0.0`, registered via `quasar ext add` (confirm where it writes — likely `quasar.extensions.json`,
+   not `quasar.config.js`), `vite-tsconfig-paths` declared or the config rewritten, the ledger bullet
+   deleted; **verified by a manually triggered green `frontend-unit-tests.yml` run** (it uses `npm ci`
+   without `--legacy-peer-deps`, is not a required check, and Maven installs with `--legacy-peer-deps`
+   — a peer conflict can pass Maven and still fail there) **and** a green `npx quasar build`; (b) reverted
+   with the ledger bullet re-annotated with the *actual* blocker found (not the old "no AE" claim). Never
+   a half-upgrade.
 5. **Per D161-C**: outcome recorded in the ledger (and code only if option 2/3).
-6. **Per D161-D**: no `ConfigService` caller can hold the JVM-wide monitor while waiting on a DB
-   connection (or the erase path no longer triggers the refresh inside its transaction). Test: a
-   concurrent-caller test proves a slow `findAll()` does not block cache hits.
-7. **Per D161-E**: `sprint-status.yaml` shrinks materially (target < 100 KB of comments removed or
-   whatever the trim yields), still parses as YAML, `development_status` entries untouched; convention
-   note added to both ledger headers.
+6. **Per D161-D (option 1)**: `ConfigService.refreshCache()` no longer holds the instance monitor while calling
+   `findAll()`. Required semantics: **single-flight** loader (N stale readers → one `findAll()`); the
+   caller that triggers a refresh, and any read after `invalidate()`, still sees fresh data (pinned by
+   `ConfigServiceTest.getString_refreshesFromDbWhenCacheStale` and the IT write→`invalidate()`→read
+   sites, e.g. `ConfigGuardIT`, `SubscriptionLifecycleIT`); cache is never observed empty; an
+   `invalidate()` landing mid-refresh is not lost (generation/epoch counter — today's unsynchronized
+   `lastRefreshed = now()` after `findAll()` already has this race; do not widen it). Do not wrap the load
+   in `REQUIRES_NEW` (double-connection hazard for in-transaction callers). Tests start from a **stale**
+   cache (a test that only exercises fresh hits passes on current code and proves nothing): a slow
+   `findAll()` does not serialise concurrent stale-path readers, and exactly one load runs. In-transaction
+   read sites (`GdprErasureService` ~:468, :608, :951) need no change.
+7. **Per D161-E (option 1)**: `sprint-status.yaml` keeps only the latest 5 `# prior last_updated` lines (73 today,
+   mixed formats — do not key on one), via a **comment-preserving text edit** (never `yaml.dump`);
+   `development_status` untouched (diff of parsed YAML before/after equal); `last_updated` stays
+   ≤200 chars with the story key first (already ~98 chars). Convention note added to the header of both
+   ledger files. `deferred-work.md` itself needs no trim (longest line ~2.5k chars).
 8. *Dropped by owner decision (operator detection).*
-9. **Ledger hygiene.** All six in-scope bullets (AC 1, 2, 4, 5, 6, 7) deleted if closed by code, or re-annotated `[DECIDED …]`
-   with date and story id if closed by decision. No other ledger text changed.
+9. **Ledger hygiene.** Outcomes: (a) closed by code → delete the bullet; (b) closed by decision →
+   re-annotate `[DECIDED …]` with date and story id (AC5: edit within the multi-closure D2 bullet, not a
+   delete); (c) closed by verification → delete the bullet citing the evidence (AC2). Covers AC 1, 2, 4,
+   5, 6, 7 **including the untagged duplicate** "`sprint-status.yaml`'s `last_updated` field has grown…"
+   (deferred-56 section). No other ledger text changed.
 
 ## Tasks / Subtasks
 
 - [ ] Task 1 — Alert recipient (AC: 1)
-  - [ ] Read `AlertNotificationListener`, `VideoModerationEmailListener.adminEmail()` pattern
-  - [ ] Replace hardcode with `ConfigService.find("platform.admin_alert_email")`; blank → ERROR log, no send
-  - [ ] Unit tests (configured / blank / mail failure); confirm `platform.admin_alert_email` is seeded
-        in config migrations and documented in `docs/deployment/secrets-reference.md` (or runbook)
-- [ ] Task 2 — IT isolation (AC: 2)
-  - [ ] Park foreign retryable `envelope_entity` rows in `@BeforeEach` via `transactionTemplate`
-  - [ ] Add a foreign-row regression case
-  - [ ] Check `IntegrationTestConventionTest` / context-count gate unaffected (no new mocks/props)
+  - [ ] Read `AlertNotificationListener`; mirror `VideoModerationEmailListener.adminAlertEnvelope(...)`'s
+        `configService.find("platform.admin_alert_email")` but **inside the try**
+  - [ ] Blank → ERROR log (key + metric), no send; unit tests: configured / blank / `find()` throws / mail throws
+  - [ ] Update `docs/dev-docs/notification/index.html`, `AlertEvaluationService` Javadoc, runbook/dev-doc config-row note
+- [ ] Task 2 — Close AC2 by verification (AC: 2, 9c)
+  - [ ] Re-confirm `DatabaseResetTestExecutionListener` truncation and the existing `:362` stray-row test; no code
 - [ ] ~~Task 3~~ — dropped (index)
-- [ ] Task 4 — Quasar toolchain (AC: 4), option D161-B(1); run frontend checks in CI only for full verify
-  - [ ] Bump in a throwaway state first; stop-loss as in D161-B
-- [ ] Task 5 — `BoundedKey` (AC: 5) — D161-C(1), no code
+- [ ] Task 4 — Quasar toolchain (AC: 4), option D161-B(0)
+  - [ ] Bump vitest family to 4 + AE 2.0.0 in a throwaway state first; `quasar ext add`; fix `vite-tsconfig-paths`
+  - [ ] Verify with a manually triggered `frontend-unit-tests.yml` run and `npx quasar build`; stop-loss → revert + annotate actual blocker
+- [ ] Task 5 — `BoundedKey` (AC: 5) — D161-C(1), no code; annotate within the D2 bullet
 - [ ] Task 6 — `ConfigService` refresh (AC: 6) — D161-D(1)
-  - [ ] Read `ConfigService` fully; preserve TTL/stampede behaviour; add concurrency test
-- [ ] Task 7 — Ledger/status trim (AC: 7) — D161-E(1)
-  - [ ] Scripted trim; verify YAML parses and story keys/statuses identical before/after
+  - [ ] Read `ConfigService` + `ConfigServiceTest` + the invalidate-then-read ITs first
+  - [ ] Single-flight loader + epoch counter; stale-cache concurrency tests
+- [ ] Task 7 — Status trim (AC: 7) — D161-E(1)
+  - [ ] Scripted comment-preserving trim; parsed-YAML before/after equality check; header notes in both files
 - [ ] ~~Task 8~~ — dropped (phone operators)
-- [ ] Task 9 — Ledger hygiene (AC: 9), sprint-status entry to `done` on completion
+- [ ] Task 9 — Ledger hygiene (AC: 9) incl. the deferred-56 duplicate bullet; sprint-status entry to `done` on completion
 
 ## Dev Notes
 
 - **Do not run `mvn verify` locally** (project rule); GitHub CI is the gate. Targeted single ITs/unit
   tests are fine.
 - Any new `@MockitoBean/@MockitoSpyBean/@TestPropertySource` in an IT risks the Spring-context-count
-  gate (`.github/scripts/assert-context-count.sh`, currently ≤24 / size < maxSize after deferred-160).
-  Prefer plain beans/`transactionTemplate` in AC2 and AC6 tests.
+  gate (`.github/scripts/assert-context-count.sh`, `CEILING = 17` per `pr-build.yml`; plus `IntegrationTestConventionTest` pins: 14 distinct context keys, 4 `@TestPropertySource`).
+  Keep the AC1/AC6 tests plain unit tests (no new Spring contexts).
 - Bare `jdbcTemplate` writes in an IT method body do not commit (Hikari auto-commit=false) — wrap in
   `transactionTemplate`.
 - CI catches Java-bytecode/dependency mismatches and stale SQL literals local runs can't; budget a

@@ -1199,7 +1199,7 @@ and the booking-reminder blocker (AC29). What genuinely remains:
   config-driven (name kept, noted misnomer); `PhoneNumberUtil.fromString` made best-effort. Backend
   `validation.phone.{digitCount,firstDigit,operator}` neutralised + `hintDefault` added (4 bundles);
   frontend `auth.phoneHintFormat` + `auth.nationalId` reworded locale-neutral (en/de/fr). Residual:
-  operator-level `Provider` detection stays CM-only. [DECIDED 2026-10-24 (skillars-deferred-161): dropped — the app is not Cameroon-targeted, operator detection will not be generalised]` Found while sweeping the bundles
+  operator-level `Provider` detection stays CM-only.]` `[DECIDED 2026-10-24 (skillars-deferred-161): dropped — the app is not Cameroon-targeted, operator detection will not be generalised]` Found while sweeping the bundles
   for AC13. The **English** source strings said a phone number must be "exactly 9 digits", must "start with
   digit 6", and must match "(MTN, Orange, NextTel)"; `auth.nationalId` rendered as "Numéro CNI".
 - **Booking rows stamped `primary_reminder_sent_at` before AC29 are known-bad history.** `V129` resets
