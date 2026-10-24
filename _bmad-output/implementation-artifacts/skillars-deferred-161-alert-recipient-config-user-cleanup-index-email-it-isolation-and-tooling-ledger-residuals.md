@@ -1,4 +1,4 @@
-# Story skillars-deferred-161: Alert recipient config, `main."user"` cleanup index, email-IT isolation, Quasar toolchain and ledger residuals
+# Story skillars-deferred-161: Alert recipient config, email-IT isolation, Quasar toolchain and ledger residuals
 
 Status: ready-for-dev
 
@@ -10,11 +10,21 @@ Status: ready-for-dev
 ## Story
 
 As a maintainer of the Skillars platform,
-I want the oldest still-open ledger residuals (an un-deliverable alert mailbox, an unindexed cleanup
-sweep, a test that depends on global DB state, an outdated frontend toolchain, and several
+I want the oldest still-open ledger residuals (an un-deliverable alert mailbox, a test that depends on global DB state, an outdated frontend toolchain, and several
 partly-closed hazards) closed or explicitly re-decided,
 so that SES bounce-rate risk, scheduler lock hold time and CI determinism stop depending on
 "deferred" notes, and the ledger stops re-offering items nobody intends to build.
+
+## Owner decisions (2026-10-24)
+
+- **Dropped from this story:** the `main."user"` cleanup-sweep index (old AC3 / D161-A — stays open in the
+  ledger, untagged) and the phone operator detection residual (old AC8 / D161-F — app is not
+  Cameroon-targeted; ledger bullet marked `[DECIDED]`). AC numbers 3 and 8 are kept as "Dropped" so
+  references stay stable.
+- **All other sub-decisions: the recommended option is confirmed** — D161-B(1) time-boxed Quasar hop
+  with revert-and-annotate stop-loss; D161-C(1) `BoundedKey` closed by decision, no code;
+  D161-D(1) fix `ConfigService.refreshCache()` at the root; D161-E(1) trim to latest 5
+  `prior last_updated` lines + convention note.
 
 ## Ledger → story mapping (so future passes do not re-pick these)
 
@@ -26,12 +36,12 @@ bullets (file convention) and re-annotates anything closed by decision rather th
 |----|---------------------------|---------|
 | 1 | "`AlertNotificationListener` mails a mailbox that cannot exist" | ses-1-5 dev section (2026-10-24) |
 | 2 | "`RegistrationEmailDurabilityIT`'s scheduler cases operate on global repository state" | `ses-1-4-registration-email-durability` |
-| 3 | "`main."user"` has no index supporting the cleanup sweep predicate" | code review of skillars-deferred-123 |
+| 3 | *(dropped — bullet stays open, untagged)* `main."user"` cleanup-sweep index | code review of skillars-deferred-123 |
 | 4 | "The Quasar Vitest App Extension is used library-only…" | skillars-deferred-104 |
 | 5 | D2 "Not the full call-site migration" (`BoundedKey`, declined 4×) | deferred-129/-130 |
 | 6 | D5 "`lock_timeout` bound is re-read … inside `erase()`'s outer transaction" | code review of skillars-deferred-129 |
 | 7 | "`deferred-work.md` and `sprint-status.yaml` accumulate indefinitely…" | skillars-deferred-52 story creation |
-| 8 | "Residual: operator-level `Provider` detection stays CM-only" | skillars-deferred-99 AC16 note |
+| 8 | *(dropped — marked `[DECIDED]` in ledger)* operator-level `Provider` detection CM-only | skillars-deferred-99 AC16 note |
 
 ## Verified state at drafting (HEAD 4317b019)
 
@@ -60,11 +70,11 @@ bullets (file convention) and re-annotates anything closed by decision rather th
   `CamMobileValidator.java` (MTN/Orange/NextTel prefixes, `V146__user_phone_provider_column.sql`)
   stay Cameroon-only.
 
-## Sub-decisions the owner must confirm before/while dev starts
+## Sub-decisions (RESOLVED 2026-10-24 — see Owner decisions above)
 
-Per the project convention, none of these is silently chosen. Recommendation first.
+Kept for the option trade-offs; the chosen option is the one marked recommended, except A and F which are dropped.
 
-**D161-A — `main."user"` index shape (AC3).** The ledger blocker was "need production row-count +
+**D161-A — DROPPED.** `main."user"` index shape (AC3). The ledger blocker was "need production row-count +
 EXPLAIN evidence"; there is still no production deploy.
 - *(1, recommended)* Ship the partial index
   `CREATE INDEX CONCURRENTLY idx_user_cleanup_sweep ON main."user" (id) WHERE activated = false AND cleanup_failed_at IS NULL`
@@ -112,7 +122,7 @@ EXPLAIN evidence"; there is still no production deploy.
 - *(2)* Also move per-story completion narrative out to the story files. Pros: smaller file. Cons:
   broad edit across ~400 entries; high churn.
 
-**D161-F — Operator detection beyond CM (AC8).**
+**D161-F — DROPPED.** Operator detection beyond CM (AC8).
 - *(1, recommended)* Move operator prefixes into `PhoneValidationProperties` per market
   (`markets.<code>.operators[]`), keep the Cameroon list as the seeded default, and make
   `CamMobileValidator`/`Provider` resolve through the same `MarketResolver`; unknown market → no
@@ -134,9 +144,7 @@ EXPLAIN evidence"; there is still no production deploy.
    retryable rows in a committed `transactionTemplate` — bare `jdbcTemplate` writes never commit,
    see project note — and the test restores nothing it does not own). No production-code change just
    for the test. Demonstrate by adding a deliberately foreign retryable row in one case.
-3. **Per D161-A**: new migration `V169__…sql` (or next free number at dev time) creating the
-   chosen index `CONCURRENTLY`, passing `MigrationLint`; an IT/EXPLAIN-backed assertion or recorded
-   plan; or, if D161-A=(2), the bullet is re-annotated and AC3 dropped.
+3. *Dropped by owner decision (index on `main."user"`).*
 4. **Per D161-B**: outcome is exactly one of (a) toolchain upgraded with `npx quasar build` and
    `npm run test:unit:ci` green, `quasar.config.js` registers the AE, the hand-placed config note in
    the ledger deleted; (b) reverted with the ledger bullet re-annotated with today's verified
@@ -148,8 +156,8 @@ EXPLAIN evidence"; there is still no production deploy.
 7. **Per D161-E**: `sprint-status.yaml` shrinks materially (target < 100 KB of comments removed or
    whatever the trim yields), still parses as YAML, `development_status` entries untouched; convention
    note added to both ledger headers.
-8. **Per D161-F**: outcome recorded; code + tests only if option 1.
-9. **Ledger hygiene.** All eight bullets above deleted if closed by code, or re-annotated `[DECIDED …]`
+8. *Dropped by owner decision (operator detection).*
+9. **Ledger hygiene.** All six in-scope bullets (AC 1, 2, 4, 5, 6, 7) deleted if closed by code, or re-annotated `[DECIDED …]`
    with date and story id if closed by decision. No other ledger text changed.
 
 ## Tasks / Subtasks
@@ -163,17 +171,15 @@ EXPLAIN evidence"; there is still no production deploy.
   - [ ] Park foreign retryable `envelope_entity` rows in `@BeforeEach` via `transactionTemplate`
   - [ ] Add a foreign-row regression case
   - [ ] Check `IntegrationTestConventionTest` / context-count gate unaffected (no new mocks/props)
-- [ ] Task 3 — `main."user"` index (AC: 3) — after D161-A
-  - [ ] Migration per `docs/deployment/migration-conventions.md` (CONCURRENTLY, own file, lint-clean)
-  - [ ] Record EXPLAIN on seeded data
-- [ ] Task 4 — Quasar toolchain (AC: 4) — after D161-B; run frontend checks in CI only for full verify
+- [ ] ~~Task 3~~ — dropped (index)
+- [ ] Task 4 — Quasar toolchain (AC: 4), option D161-B(1); run frontend checks in CI only for full verify
   - [ ] Bump in a throwaway state first; stop-loss as in D161-B
-- [ ] Task 5 — `BoundedKey` (AC: 5) — after D161-C
-- [ ] Task 6 — `ConfigService` refresh (AC: 6) — after D161-D
+- [ ] Task 5 — `BoundedKey` (AC: 5) — D161-C(1), no code
+- [ ] Task 6 — `ConfigService` refresh (AC: 6) — D161-D(1)
   - [ ] Read `ConfigService` fully; preserve TTL/stampede behaviour; add concurrency test
-- [ ] Task 7 — Ledger/status trim (AC: 7) — after D161-E
+- [ ] Task 7 — Ledger/status trim (AC: 7) — D161-E(1)
   - [ ] Scripted trim; verify YAML parses and story keys/statuses identical before/after
-- [ ] Task 8 — Phone operators (AC: 8) — after D161-F
+- [ ] ~~Task 8~~ — dropped (phone operators)
 - [ ] Task 9 — Ledger hygiene (AC: 9), sprint-status entry to `done` on completion
 
 ## Dev Notes
@@ -185,10 +191,8 @@ EXPLAIN evidence"; there is still no production deploy.
   Prefer plain beans/`transactionTemplate` in AC2 and AC6 tests.
 - Bare `jdbcTemplate` writes in an IT method body do not commit (Hikari auto-commit=false) — wrap in
   `transactionTemplate`.
-- Migrations: `CREATE INDEX CONCURRENTLY` cannot run in a transaction; follow the existing precedent
-  in `docs/deployment/migration-conventions.md` for non-transactional Flyway migrations.
 - CI catches Java-bytecode/dependency mismatches and stale SQL literals local runs can't; budget a
-  CI round-trip for AC3/AC4.
+  CI round-trip for AC4.
 - Re-verify each cited line against HEAD again at dev time; ~1 in 3 ledger items has historically
   been already closed by the time it is picked up.
 
