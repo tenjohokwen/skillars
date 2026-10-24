@@ -21,7 +21,9 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
  * {@link AlertFiredEvent} when the value breaches the configured threshold.
  *
  * <p>This service is NOT @Transactional — it reads in-memory Micrometer counters only.
- * No DB call is made during evaluation (Pitfall 3 anti-pattern: reading DB in hot loop).
+ * No DB call is made during evaluation itself (Pitfall 3 anti-pattern: reading DB in hot loop); the only
+ * possible lookup is {@code AlertNotificationListener}'s cached {@code platform.admin_alert_email} read
+ * when an EMAIL-channel rule fires.
  *
  * <p>Pitfall 8 guard: metrics with total sample count below {@link #MINIMUM_SAMPLE_SIZE}
  * return -1.0 and are skipped, preventing false alarms at startup when counters are near zero.

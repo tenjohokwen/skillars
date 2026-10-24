@@ -25,6 +25,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Slf4j
 @Service
@@ -44,6 +46,14 @@ public class ConfigService {
 
     private final ConcurrentHashMap<String, PlatformConfig> cache = new ConcurrentHashMap<>();
     private volatile Instant lastRefreshed = Instant.MIN;
+
+    // skillars-deferred-161 AC6: refresh bookkeeping. invalidate() bumps invalidationEpoch; a load stamps
+    // loadedEpoch with the epoch it observed BEFORE reading the DB, so an invalidate() that lands mid-load
+    // leaves loadedEpoch < invalidationEpoch and the next reader reloads (the old `lastRefreshed = now()`
+    // after findAll() silently swallowed it for a full TTL).
+    private final AtomicLong invalidationEpoch = new AtomicLong();
+    private volatile long loadedEpoch = -1;
+    private final ReentrantLock refreshLock = new ReentrantLock();
 
     public ConfigService(PlatformConfigRepository configRepository,
                          ConfigProperties configProperties,
@@ -368,26 +378,66 @@ public class ConfigService {
     }
 
     public void invalidate() {
-        lastRefreshed = Instant.MIN;
+        invalidationEpoch.incrementAndGet();
     }
 
     private void ensureFresh() {
-        if (Duration.between(lastRefreshed, Instant.now()).toSeconds() >= configProperties.getCacheTtlSeconds()) {
+        if (isStale()) {
             refreshCache();
         }
     }
 
-    private synchronized void refreshCache() {
-        // double-check: skip if another thread already refreshed while waiting for this lock
-        if (Duration.between(lastRefreshed, Instant.now()).toSeconds() < configProperties.getCacheTtlSeconds()) {
-            return;
+    private boolean isStale() {
+        return Duration.between(lastRefreshed, Instant.now()).toSeconds() >= configProperties.getCacheTtlSeconds()
+            || loadedEpoch < invalidationEpoch.get();
+    }
+
+    /**
+     * Single-flight refresh that never makes a TTL-expiry reader wait on another thread's DB read.
+     *
+     * <p>skillars-deferred-161 AC6: this used to be {@code synchronized} around {@code findAll()}, so one thread
+     * waiting for a Hikari connection stalled every other {@code ConfigService} caller in the app. Now:
+     * <ul>
+     *   <li>exactly one thread loads at a time ({@code refreshLock.tryLock()}), others do not run a second
+     *       {@code findAll()};</li>
+     *   <li>a reader that is stale only because the TTL expired, while a load is in flight, serves the
+     *       already-cached (never empty) snapshot immediately instead of waiting;</li>
+     *   <li>a reader after {@link #invalidate()}, or one on a cache that has never loaded, must see fresh data
+     *       and so waits for the lock, then re-checks (a load that began before the invalidate does not count);</li>
+     *   <li>the load is deliberately <em>not</em> run in {@code REQUIRES_NEW}: callers already inside a
+     *       transaction would hold two connections each.</li>
+     * </ul>
+     */
+    private void refreshCache() {
+        while (isStale()) {
+            if (refreshLock.tryLock()) {
+                try {
+                    if (isStale()) {
+                        load();
+                    }
+                } finally {
+                    refreshLock.unlock();
+                }
+                return;
+            }
+            boolean mustBeFresh = loadedEpoch < invalidationEpoch.get() || lastRefreshed == Instant.MIN;
+            if (!mustBeFresh) {
+                return; // TTL-only staleness and a load is in flight: serve the cached snapshot
+            }
+            refreshLock.lock();
+            refreshLock.unlock(); // wait for the in-flight load, then re-check staleness
         }
+    }
+
+    private void load() {
+        long epochAtStart = invalidationEpoch.get();
         List<PlatformConfig> all = configRepository.findAll();
         Map<String, PlatformConfig> newData = new HashMap<>(all.size());
         all.forEach(pc -> newData.put(pc.getKey(), pc));
         // putAll then retainAll: cache is never empty, no reader sees a gap
         cache.putAll(newData);
         cache.keySet().retainAll(newData.keySet());
+        loadedEpoch = epochAtStart;
         lastRefreshed = Instant.now();
         log.debug("Platform config cache refreshed: {} entries", cache.size());
     }

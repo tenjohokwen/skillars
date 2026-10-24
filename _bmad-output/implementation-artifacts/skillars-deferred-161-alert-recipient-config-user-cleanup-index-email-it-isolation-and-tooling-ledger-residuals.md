@@ -1,6 +1,6 @@
 # Story skillars-deferred-161: Alert recipient config, email-IT isolation, Quasar toolchain and ledger residuals
 
-Status: ready-for-dev
+Status: review
 
 <!-- REVISED 2026-10-25 after story-review.md (see "Review corrections"). Created 2026-10-24 (/bmad-create-story). User-requested bundle mined from deferred-work.md on the
      day of the full-file re-audit/prune. Every item below was re-verified against HEAD 4317b019
@@ -201,25 +201,26 @@ AE exists for app-vite 2.4.x.)
 
 ## Tasks / Subtasks
 
-- [ ] Task 1 — Alert recipient (AC: 1)
-  - [ ] Read `AlertNotificationListener`; mirror `VideoModerationEmailListener.adminAlertEnvelope(...)`'s
+- [x] Task 1 — Alert recipient (AC: 1)
+  - [x] Read `AlertNotificationListener`; mirror `VideoModerationEmailListener.adminAlertEnvelope(...)`'s
         `configService.find("platform.admin_alert_email")` but **inside the try**
-  - [ ] Blank → ERROR log (key + metric), no send; unit tests: configured / blank / `find()` throws / mail throws
-  - [ ] Update `docs/dev-docs/notification/index.html`, `AlertEvaluationService` Javadoc, runbook/dev-doc config-row note
-- [ ] Task 2 — Close AC2 by verification (AC: 2, 9c)
-  - [ ] Re-confirm `DatabaseResetTestExecutionListener` truncation and the existing `:362` stray-row test; no code
+  - [x] Blank → ERROR log (key + metric), no send; unit tests: configured / blank / `find()` throws / mail throws
+  - [x] Update `docs/dev-docs/notification/index.html`, `AlertEvaluationService` Javadoc, runbook/dev-doc config-row note
+- [x] Task 2 — Close AC2 by verification (AC: 2, 9c)
+  - [x] Re-confirm `DatabaseResetTestExecutionListener` truncation and the existing `:362` stray-row test; no code
 - [ ] ~~Task 3~~ — dropped (index)
-- [ ] Task 4 — Quasar toolchain (AC: 4), option D161-B(0)
-  - [ ] Bump vitest family to 4 + AE 2.0.0 in a throwaway state first; `quasar ext add`; fix `vite-tsconfig-paths`
-  - [ ] Verify with a manually triggered `frontend-unit-tests.yml` run and `npx quasar build`; stop-loss → revert + annotate actual blocker
-- [ ] Task 5 — `BoundedKey` (AC: 5) — D161-C(1), no code; annotate within the D2 bullet
-- [ ] Task 6 — `ConfigService` refresh (AC: 6) — D161-D(1)
-  - [ ] Read `ConfigService` + `ConfigServiceTest` + the invalidate-then-read ITs first
-  - [ ] Single-flight loader + epoch counter; stale-cache concurrency tests
-- [ ] Task 7 — Status trim (AC: 7) — D161-E(1)
-  - [ ] Scripted comment-preserving trim; parsed-YAML before/after equality check; header notes in both files
+- [x] Task 4 — Quasar toolchain (AC: 4), option D161-B(0)
+  - [x] Bump vitest family to 4 + AE 2.0.0 in a throwaway state first; `quasar ext add`; fix `vite-tsconfig-paths`
+  - [x] Verified locally: `npx quasar build` green (AE index runner executes), `npx vitest run` 567/567, `npm ci` without `--legacy-peer-deps` OK
+  - [ ] **Post-push:** trigger `frontend-unit-tests.yml` manually (workflow_dispatch) on the PR and confirm green — cannot be run before the branch is pushed
+- [x] Task 5 — `BoundedKey` (AC: 5) — D161-C(1), no code; annotate within the D2 bullet
+- [x] Task 6 — `ConfigService` refresh (AC: 6) — D161-D(1)
+  - [x] Read `ConfigService` + `ConfigServiceTest` + the invalidate-then-read ITs first
+  - [x] Single-flight loader + epoch counter; stale-cache concurrency tests
+- [x] Task 7 — Status trim (AC: 7) — D161-E(1)
+  - [x] Scripted comment-preserving trim; parsed-YAML before/after equality check; header notes in both files
 - [ ] ~~Task 8~~ — dropped (phone operators)
-- [ ] Task 9 — Ledger hygiene (AC: 9) incl. the deferred-56 duplicate bullet; sprint-status entry to `done` on completion
+- [x] Task 9 — Ledger hygiene (AC: 9) incl. the deferred-56 duplicate bullet; sprint-status entry to `done` on completion
 
 ## Dev Notes
 
@@ -250,8 +251,53 @@ AE exists for app-vite 2.4.x.)
 
 ### Agent Model Used
 
+Claude Sonnet 5.5 (claude-sonnet-5-5)
+
 ### Debug Log References
+
+- `mvn -o test -Dtest=AlertNotificationListenerTest` 6/6; `ConfigServiceTest` 42/42 (39 existing + 3 new);
+  targeted ITs green: `ConfigResourceIT` 6, `ConfigGuardIT` 1, `GdprErasureIT` 44, `CoachRosterResourceIT` 14,
+  `SubscriptionLifecycleIT` 15. No local `mvn verify` (project rule).
+- Frontend: baseline `vitest run` 567/567 (+1 pre-existing unhandled error) on vitest 3; after the bump
+  567/567 on vitest 4.1.12 with no unhandled error; `npx quasar build` green with the AE registered;
+  `npm ci` (no legacy flag) OK in a clean temp dir; prettier clean on touched frontend files.
 
 ### Completion Notes List
 
+- **AC1:** `AlertNotificationListener` now takes `ConfigService`, reads `platform.admin_alert_email` inside the
+  `try`, logs ERROR (key + metric) and sends nothing when blank. 6 new unit tests. Docs: dev-docs notification
+  page (3 spots), `AlertEvaluationService` Javadoc, new runbook section "Admin alert recipient". Listener is
+  still unreachable in production until `computeMetricValue` is implemented (noted in the story).
+- **AC2:** closed by verification, no code (per-test table reset + existing `:362` stray-row test). Ledger bullet deleted.
+- **AC3 / AC8:** dropped by owner decision.
+- **AC4 (option 0):** `vitest`/`@vitest/coverage-v8`/`@vitest/ui` → 4.1.12, AE → 2.0.0, `vite-tsconfig-paths`
+  declared explicitly, `quasar.extensions.json` registers the AE. The AE's install script was not run (it would
+  scaffold a duplicate config and rewrite npm scripts); the index runner's compat check is what matters.
+  `vitest.config.mjs` header and `docs/testing/frontend-unit-tests.md` updated. **Open:** manual
+  `frontend-unit-tests.yml` run after push.
+- **AC5:** decision recorded in the D2 ledger bullet (`[DECIDED 2026-10-25 … permanent]`), no code.
+- **AC6:** `ConfigService.refreshCache()` is no longer `synchronized`. Single-flight `ReentrantLock.tryLock()`;
+  TTL-only-stale readers serve the cached snapshot while a load is in flight; post-`invalidate()` / never-loaded
+  readers wait and re-check; epoch counters (`invalidationEpoch`/`loadedEpoch`) make an `invalidate()` that lands
+  mid-load survive (previously lost for a TTL). Not `REQUIRES_NEW`. 3 new concurrency tests (they fail on the old
+  implementation: the follower would block on the monitor).
+- **AC7:** `sprint-status.yaml` 419,802 → ~285 KB (69 prior lines dropped, latest 5 kept), parsed YAML identical
+  before/after; convention note added there and in `deferred-work.md`'s header. Both growth bullets deleted
+  (incl. the deferred-56 duplicate and its now-empty section). The `last_updated` line was already short.
+- **AC9:** ledger bullets deleted/re-annotated: alert recipient, durability IT, Quasar AE, D5, growth ×2 deleted;
+  D2 re-annotated. No `PICKED UP by skillars-deferred-161` tags remain.
+
 ### File List
+
+- `src/main/java/com/softropic/skillars/platform/notification/service/AlertNotificationListener.java`
+- `src/main/java/com/softropic/skillars/platform/notification/service/AlertEvaluationService.java` (Javadoc)
+- `src/test/java/com/softropic/skillars/platform/notification/service/AlertNotificationListenerTest.java` (new)
+- `src/main/java/com/softropic/skillars/platform/config/service/ConfigService.java`
+- `src/test/java/com/softropic/skillars/platform/config/service/ConfigServiceTest.java`
+- `src/frontend/package.json`, `src/frontend/package-lock.json`, `src/frontend/quasar.extensions.json` (new), `src/frontend/vitest.config.mjs`
+- `docs/testing/frontend-unit-tests.md`, `docs/dev-docs/notification/index.html`, `docs/deployment/runbook.md`
+- `_bmad-output/implementation-artifacts/deferred-work.md`, `sprint-status.yaml`, this story file
+
+### Change Log
+
+- 2026-10-25: Implemented AC1, 2, 4, 5, 6, 7, 9 (AC3/AC8 dropped). Status → review.

@@ -15,6 +15,8 @@ One bullet = one open item. Grouped by the review that raised it; the heading ca
   — especially any "will be fixed in Story X" / "Epic Y owns this" phrasing — records what was believed at
   review time and has **not** been re-checked. Several such promises turned out to be unkept (see below).
   Verify against the code before trusting an unannotated forward-reference.
+- **Keep both tracking files small.** `sprint-status.yaml` retains only the latest 5 `# prior last_updated`
+  comment lines (skillars-deferred-161); history lives in git. Don't re-grow it.
 - **File paths and line numbers age fast.** They were accurate at the review date in the heading.
 
 ## Last audit: 2026-09-15 (full-file re-audit + premature-prune correction)
@@ -1069,22 +1071,7 @@ above rather than duplicated here. This section holds only what the story-creati
   `src/main/java/com/softropic/skillars/platform/video/service/WebhookEventProcessorScheduler.java:171-236`,
   `src/main/java/com/softropic/skillars/platform/video/service/UploadSessionExpiryScheduler.java:40-53`] `[DECIDED 2026-08-28 (skillars-deferred-81 story creation): leave as-is, no automatic retry infrastructure. All four call sites already fail gracefully with logging (AdminVideoService.deleteVideo's own comment documents manual retry-by-recall; the other three rely on their own scheduled re-run or accept the swallow); no live incident has been reported. Building retry infra now would be speculative engineering against a working, if imperfect, accepted pattern.]`
 
-## Deferred from: code review of skillars-deferred-56-drill-upload-error-code-assertions-and-pack-deduction-exception-safety (2026-08-22)
-
-- `sprint-status.yaml`'s `last_updated` field has grown into a single, unbounded YAML comment line spanning the
-  cumulative history of 56+ stories — effectively unreviewable in normal diff/PR tooling and a guaranteed
-  merge-conflict/diff-noise hotspot on every future story. Deferred: pre-existing repo-wide bookkeeping
-  convention predating this story by dozens of prior stories, not something this one story should unilaterally
-  restructure. [`_bmad-output/implementation-artifacts/sprint-status.yaml`]
-
 ## Deferred from: code review of skillars-deferred-58-coach-availability-write-lock-consistency-and-pack-deduction-failure-record-transactional-safety (2026-08-24)
-
-- **[PICKED UP by skillars-deferred-161]** `deferred-work.md` and `sprint-status.yaml` accumulate indefinitely via ever-longer single lines (one
-  line in each file already exceeds 40,000 characters) rather than being pruned or archived. Deferred:
-  pre-existing project-wide convention followed identically by every prior story in this ledger, not
-  specific to this diff; fixing it would mean changing the ledger/status-tracking convention itself across
-  the whole project, out of scope for any single story.
-  [`_bmad-output/implementation-artifacts/deferred-work.md`, `_bmad-output/implementation-artifacts/sprint-status.yaml`]
 
 ## Deferred from: code review of skillars-deferred-62-postgres-lock-timeout-bounded-wait-fix (2026-08-24)
 
@@ -1272,19 +1259,7 @@ component spec + a pure-logic `sessionManager` spec). It also deleted the former
 `## Backlog:` section for this initiative outright per this file's
 delete-when-closed convention, and annotated every dependent coverage-gap line above with
 `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): …]` (`skillars-5-4` W9 deleted — closed
-by AC7; `deferred-90`/`-98` `sessionManager` note marked partially addressed by AC8). The
-residual:
-
-- **[PICKED UP by skillars-deferred-161]** **The Quasar Vitest App Extension is used library-only, not registered via `quasar ext add`.**
-  The vitest-3.x-compatible AE line (`@quasar/quasar-app-extension-testing-unit-vitest@1.x`) pins
-  its index runner to `@quasar/app-vite` `>=2.0.0 <2.4.0`; this repo is on `2.4.1`, so registering
-  the extension in `quasar.config.js` would fail the compatibility check on every `quasar dev` /
-  `quasar build` — including `mvn verify`'s `npx quasar build`. `vitest.config.mjs` is therefore
-  the AE's scaffold placed by hand, and `quasar.config.js` is untouched. When the repo next bumps
-  `@quasar/app-vite` to v3 / `quasar` to 2.24+, revisit: migrate to AE `3.x` and consider
-  `quasar ext add` proper so the config can be derived from `quasar.config.js` directly rather than
-  via `vite-tsconfig-paths` reading `.quasar/tsconfig.json`. [`src/frontend/vitest.config.mjs`,
-  `src/frontend/package.json`]
+by AC7; `deferred-90`/`-98` `sessionManager` note marked partially addressed by AC8).
 
 ## Deferred from: skillars-deferred-100 implementation (2026-09-08)
 
@@ -1939,23 +1914,6 @@ headers; **48** raw `[DECIDED` tokens; **38** raw `[DISMISSED` tokens.
 ## Deferred from: code review of ses-1-4-registration-email-durability (2026-09-12)
 
 - **[DECIDED: keep retain-and-alert — skillars-deferred-110]** ~~`EmailTemplate.valueOf(p.template())` creates an immortal poison outbox row for a removed or renamed constant~~ (`platform/notification/service/NotificationEmailOutboxHandler.java:90`). Payloads carry the template as a `String` and can sit in `outbox_messages` for up to the 24h default deadline, so a rename during a rolling deploy makes `valueOf` throw `IllegalArgumentException` — thrown *after* ses-1.4's new deadline guard, so a still-live row is never rescued by it. `OutboxRowProcessor` wraps it, backs the row off and retries forever, consuming a claim slot and eventually reporting `[OUTBOX_STUCK]` with no path to completion. `skillars-deferred-110`'s AC8 explicitly decided **not** to change this: `OutboxRowProcessor:109-113` already makes the identical decision for the structurally-identical missing-handler case ("never dropped: it keeps its data safe until a deploy that carries the handler picks it up"), and a rename/rollback self-resolves the same way — catch-and-drop would trade a loud, recoverable state for irreversible message loss. No code change; retain-and-alert is the documented, intentional precedent, not a silent gap.
-- **[PICKED UP by skillars-deferred-161]** **[Narrowed by skillars-deferred-129 AC3, 2026-09-22] `RegistrationEmailDurabilityIT`'s scheduler
-  cases operate on global repository state** (`src/test/java/.../listener/RegistrationEmailDurabilityIT.java`).
-  **Headline claim — genuinely open, this story does not touch it:** `emailRetryScheduler.retryFailedEmails()`
-  polls the whole `envelope_entity` table (`EmailRetryScheduler:106`); assertions are scoped by a
-  UUID-unique email address so they are correct today, but the scheduler will also re-drive
-  `FAILED`/`retry=true` rows left by other tests in the shared JVM-static Postgres. **Subordinate
-  clause — CLOSED:** the `committedRowFor`/`committedRow` helpers' own `findAll()` + in-memory
-  filter (this bullet originally also named `committedRowBySendId`, which by this ledger-editing
-  session was already fixed to a targeted `findBySendId` lookup by skillars-deferred-111 AC7 — a
-  drift in this bullet's own text, corrected here) is replaced by a single targeted
-  `EnvelopeEntityRepository.findByRecipientsEmail` query in both `RegistrationEmailDurabilityIT.committedRowFor`
-  and the structurally-identical, previously-undocumented `VideoModerationAdminAlertEnvelopeIT.committedRow`
-  (found during skillars-deferred-129's own story review, M10) — avoiding the full-table
-  materialization into the persistence context, though not an indexed lookup (the recipients table's
-  only index does not cover a bare `email` predicate — see that method's own Javadoc). Fragility
-  note, not a correctness bug, for what remains open. **[Restored 2026-09-15 — see the audit below.]**
-
 ## Last audit: 2026-09-14 (post-merge prune after ses-1-7-documentation)
 
 Narrow-scope check: reviewed every deferred-work.md item referencing a file ses-1-7 touched
@@ -2813,30 +2771,11 @@ patched or resolved in-story — see that story's own `## Review Findings` secti
   in a manual `catch (Exception e)` block, a missing/throwing-key fallback rather than an embedded
   default — its registry `defaultValue` (`90`) is genuine but reached differently at the call site,
   documented explicitly in `BoundedKey.defaultValue()`'s own Javadoc so a future reader doesn't assume
-  uniformity. **[PICKED UP by skillars-deferred-161]** Not the full call-site migration (reading `default`/`min`/`max` off `BoundedKey` itself) —
+  uniformity. Not the full call-site migration (reading `default`/`min`/`max` off `BoundedKey` itself) —
   that remains a distinct, larger, separately-scoped change, out of this fix's registry-only scope.
   **Declined a 4th consecutive time (skillars-deferred-135, owner decision)** — nothing new has surfaced
   to change the calculus since the prior decline.
-
-- **[PICKED UP by skillars-deferred-161]** **D5 — The `lock_timeout` bound is re-read from `ConfigService` once per child, inside `erase()`'s
-  outer transaction.** `GdprErasureService.java:587-588`. Hoisting the read above
-  `requiresNewTemplate` (story Task 5) correctly keeps it outside the `player_profiles` lock hold,
-  but it still runs inside the outer transaction — which already holds the flushed exclusive lock on
-  `main."user"` — and once per iteration of `eraseParentChildren`'s loop. `ConfigService.refreshCache()`
-  is `private synchronized` and issues a `configRepository.findAll()` on the caller's connection, so
-  on a TTL boundary one thread holding that monitor while waiting for a Hikari connection stalls
-  every `ConfigService` caller in the JVM. Narrow window, pre-existing `ConfigService` shape. Fix
-  shape: read the bound once in `erase()`/`eraseParentChildren` and pass it down as a parameter.
-  **[CLOSED by skillars-deferred-132 AC2 Fix 9, PARENT branch only]** — `lockTimeoutSeconds` is now
-  read once at the top of `eraseParentChildren` (before its loop, unconditionally — even for zero
-  children) and passed down as a parameter into `deletePlayerDevelopmentData(playerId,
-  lockTimeoutSeconds)`, closing the N-children repetition this bullet named. The PLAYER branch's own
-  equivalent read is a no-op change in practice — that path already called
-  `deletePlayerDevelopmentData` exactly once, so there was no repeated-read hazard to remove there.
-  **This mitigates frequency, not the underlying hazard class**: `ConfigService.refreshCache()`'s
-  `private synchronized configRepository.findAll()` stalling every other caller in the JVM while this
-  thread holds a lock and a pooled connection is unchanged in kind — hoisting the read makes it happen
-  once per `erase()` call instead of once per child, reducing probability, not eliminating the risk.
+  **[DECIDED 2026-10-25 (skillars-deferred-161, owner decision) — permanent: call sites keep their deliberate literal; `BoundedKey.defaultValue` stays registry documentation guarded only by the default ∈ [min, max] self-check (`ConfigBoundsEnumCoverageTest`). No call-site migration and no drift guard will be built; do not re-offer.]**
 
 ## Deferred from: code review of skillars-deferred-130-marketplace-reviews-concurrency-audit-and-config-bounds-fix (2026-09-23)
 
@@ -3313,7 +3252,6 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 ## Deferred from: ses-1-5 (2026-10-24)
 
 - **`SesConfig` still uses the SDK default retry strategy.** `SesConfig:52-60` carries the comment "flip to `AwsRetryStrategy.doNotRetry()` in Phase 4" (ses-1.1 code review D1); ses-1.4 (Phase 4) shipped without flipping it. On a 1/s sandboxed account SDK-internal retries happen inside a single `sendEmail` call and bypass the app's `SesSendRateLimiter`, and they multiply the per-attempt cost against the circuit breaker's time budget. Owner decision 2026-10-24: ledger, not fixed in ses-1.5 (that story forbids `src/main/java` changes). Look at this before `ses-1-5b` is reactivated, since the sandbox-first uat run is where it bites.
-- **[PICKED UP by skillars-deferred-161]** **`AlertNotificationListener` mails a mailbox that cannot exist.** `platform/notification/service/AlertNotificationListener.java:61` hardcodes `recipient.setEmail("ops@skillars.internal")`. It only fires for alert rules whose `notificationChannel` is `EMAIL` (default is `LOG`), but for those the mail goes through `MailManager.sendEmailSync` and will hard-bounce on SES, which counts against the account bounce rate (AWS pauses sending account-wide above ~5%). Make the recipient configurable (property) or route through the existing admin-alert recipient (`platform.admin_alert_email`, as `VideoModerationEmailListener` does). Look at this before `ses-1-5b` is reactivated.
 - **`ses-1-5b` / `ses-1-6` are `deferred`, a status no BMAD tooling documents.** `/bmad-sprint-status` flags it as unknown; `/bmad-sprint-planning` would upgrade `ses-1-5b` to `ready-for-dev` because it has a story file. The header of `sprint-status.yaml` now defines it. If it keeps biting, replace it with a status the tooling already tolerates.
 
 ## Deferred from: code review of ses-1-5-ses-cutover (2026-10-24)
