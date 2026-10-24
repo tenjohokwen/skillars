@@ -1,7 +1,6 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
-import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.BasePaymentIT;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,7 +12,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CoachVisibilitySuppressionIT extends BasePaymentIT {
 
     @Autowired ReliabilityStrikeService reliabilityStrikeService;
-    @Autowired CoachProfileRepository coachProfileRepository;
 
     private static final long COACH_USER_ID = 70001L;
     private static final String COACH_EMAIL = "coach.reliability@test.com";

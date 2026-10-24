@@ -83,7 +83,7 @@ allowed:
 
 enable:
   # Makes TestConfig.mailManager() (a TestMailManager) the universal MailManager.
-  # ComponentConfig:27's real bean is @ConditionalOnProperty(havingValue="false",
+  # ComponentConfig:34's real bean is @ConditionalOnProperty(havingValue="false",
   # matchIfMissing=true), so setting this true globally disables it everywhere.
   # Verified safe: MailManagerIT already set this itself and asserts the bean IS a
   # TestMailManager -- it does not exercise the real MailManager.

@@ -51,15 +51,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p><strong>First {@code @PreAuthorize}-enforcement test in this codebase</strong> (per this
  * story's own audit: {@code AlertRuleAdminResource} has no dedicated test file, and
  * {@code AppEndpointsConventionTest} only anchors the {@code permitAll()} pattern, not
- * {@code @PreAuthorize} enforcement) — written from scratch, following {@code AdminFinanceResourceIT}'s
+ * {@code @PreAuthorize} enforcement) — written from scratch, following {@code AdminFinanceResourceWebMvcTest}'s
  * {@code @WebMvcTest} + hand-rolled method-security {@code TestSecurityConfig} pattern.
  */
 @WebMvcTest(SesCutoverPreflightResource.class)
-@Import(SesCutoverPreflightResourceIT.TestSecurityConfig.class)
+@Import(SesCutoverPreflightResourceWebMvcTest.TestSecurityConfig.class)
 // context-fork: this resource only exists under app.email.transport=ses; the shared integration
 // context runs transport=log, so this slice needs its own property to get the bean registered.
 @TestPropertySource(properties = "app.email.transport=ses")
-class SesCutoverPreflightResourceIT {
+class SesCutoverPreflightResourceWebMvcTest {
 
     @TestConfiguration
     @EnableMethodSecurity
@@ -82,7 +82,7 @@ class SesCutoverPreflightResourceIT {
     @MockitoBean private EnvelopeEntityRepository envelopeEntityRepository;
     // Required by VideoApiAdvice/SecurityAdviceFilter, global beans that @WebMvcTest pulls into
     // every slice context regardless of which controller class is under test (mirrors
-    // AdminFinanceResourceIT's identical pair of mocks).
+    // AdminFinanceResourceWebMvcTest's identical pair of mocks).
     @MockitoBean private VideoMetrics videoMetrics;
     @MockitoBean private JwtSecretService jwtSecretService;
 

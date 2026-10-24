@@ -150,7 +150,35 @@ LOG="${1:?usage: assert-context-count.sh <build-log> [ceiling]}"
 # is at size = maxSize = 32, so this is the order-vs-eviction thrashing described above rather than a
 # new fork. Raised to the measured number per this file's precedent; the header's advice to remove a
 # context configuration instead still stands as the real fix.
-CEILING="${2:-47}"
+# CEILING = 17 (story skillars-deferred-160, PR #297). Measured: three attempts of pr-build run
+# 40063190835 all ended on the identical line size = 16, maxSize = 32, hitCount = 30808, missCount = 17,
+# matching the prediction exactly (even hitCount was identical, i.e. fully deterministic).
+# The real fix this header kept asking for: the failsafe JVM had 47 live distinct context
+# configurations (cache permanently at size = maxSize = 32, so LRU evicted and rebuilt contexts and
+# missCount depended on class order). The story's changes bring that to 17:
+#   - 14 @WebMvcTest slices renamed *IT -> *WebMvcTest, so surefire runs them in its own JVM;
+#   - 4 per-class event-capture configs replaced by one shared RecordedEvents bean (TestConfig);
+#   - redundant @Import(E2ESecurityConfig) dropped from 2 classes (their @Sql already seeds main.sec);
+#   - @AutoConfigureMockMvc hoisted onto AbstractIntegrationTest;
+#   - 8 @MockitoSpyBean declarations hoisted onto AbstractIntegrationTest;
+#   - the VideoProviderAdapter-only / FileStorageService-only mock sets unified into one;
+#   - MessageModerationSweeperIT (a full standalone context) moved onto the base.
+# The 17 = 14 AbstractIntegrationTest configurations (pinned by IntegrationTestConventionTest's
+# EXPECTED_DISTINCT_CONTEXT_KEYS) + 3 allowlisted sliced @SpringBootTest classes. Below capacity,
+# missCount is deterministic, so this ceiling is exact rather than padded.
+#
+# Two capacity checks were added alongside it, on the same final statistics line:
+#   - size >= maxSize fails: a full cache means eviction, which is where order-dependent counts
+#     come from;
+#   - missCount - size > 1 fails: contexts were built more often than they are held, i.e. rebuilt.
+#     The allowed 1 is RateLimitingAspectIT's @DirtiesContext(AFTER_CLASS), which closes its context
+#     (size drops) while missCount keeps counting it; it is 0 only if that class happens to run last.
+#     Seen in CI run 40016101569 before the cache filled: its early statistics lines read
+#     size = 6/missCount = 7, size = 7/missCount = 8 once RateLimitingAspectIT had run. (Its final
+#     line, size = 32/missCount = 47, is the full-cache state this story removes.)
+CEILING="${2:-17}"
+# Contexts that legitimately leave the cache while still counted in missCount (see above).
+DIRTIED_ALLOWANCE=1
 
 if [ ! -f "$LOG" ]; then
   echo "assert-context-count: build log not found: $LOG" >&2
@@ -161,7 +189,10 @@ fi
 # so without it grep decides the file is binary and prints "binary file matches" INSTEAD of the
 # match -- making this gate silently find nothing. That single missing flag is what made three
 # successive attempts at this gate look like a file-plumbing problem.
-last=$(grep -aoE 'missCount = [0-9]+' "$LOG" | tail -1 | grep -oE '[0-9]+' || true)
+# Every number below comes from ONE line: the final cache statistics line. Reading missCount and
+# size with separate greps could pair values from different lines.
+stats=$(grep -aoE 'size = [0-9]+, maxSize = [0-9]+, parentContextCount = [0-9]+, hitCount = [0-9]+, missCount = [0-9]+' "$LOG" | tail -1)
+last=$(echo "$stats" | sed -nE 's/.*missCount = ([0-9]+)$/\1/p')
 
 if [ -z "$last" ]; then
   echo "assert-context-count: no 'missCount = N' found in $LOG." >&2
@@ -171,7 +202,41 @@ if [ -z "$last" ]; then
   exit 1
 fi
 
+size=$(echo "$stats" | sed -nE 's/^size = ([0-9]+),.*/\1/p')
+max_size=$(echo "$stats" | sed -nE 's/.*maxSize = ([0-9]+),.*/\1/p')
+
 echo "Spring contexts built (missCount): $last   (ceiling: $CEILING)"
+echo "Context cache at the end: size = ${size:-?}, maxSize = ${max_size:-?}"
+
+if [ -z "$size" ] || [ -z "$max_size" ]; then
+  echo "assert-context-count: could not parse 'size = N, maxSize = M' from the last statistics line." >&2
+  echo "Last line seen: ${stats:-<none>}" >&2
+  exit 1
+fi
+
+if [ "$size" -ge "$max_size" ]; then
+  cat >&2 <<EOF
+
+FAIL: the Spring test-context cache is full (size = $size, maxSize = $max_size).
+
+A full cache evicts its least-recently-used context and rebuilds it when a later class needs
+it again, so the number of contexts built starts to depend on test-class order. That is the
+flakiness skillars-deferred-160 removed. Remove a context configuration rather than raising
+the cache size: IntegrationTestConventionTest's distinctContextKeyCountIsPinned lists them all.
+EOF
+  exit 1
+fi
+
+if [ $((last - size)) -gt "$DIRTIED_ALLOWANCE" ]; then
+  cat >&2 <<EOF
+
+FAIL: $last contexts were built but only $size are held (allowance: $DIRTIED_ALLOWANCE).
+
+Contexts were rebuilt. With room in the cache that means something is closing contexts:
+most likely a new @DirtiesContext. The allowance covers RateLimitingAspectIT's AFTER_CLASS.
+EOF
+  exit 1
+fi
 
 if [ "$last" -gt "$CEILING" ]; then
   cat >&2 <<EOF
@@ -185,9 +250,10 @@ The usual cause is a test class that declares its own @SpringBootTest, @ActivePr
 @TestPropertySource, @Import or -- most often -- an extra @MockitoBean, instead of
 extending AbstractIntegrationTest unchanged. IntegrationTestConventionTest catches most of
 these in the test phase; if it passed and this failed, run the offline analysis to find
-which class forked:
+which class forked: IntegrationTestConventionTest's distinctContextKeyCountIsPinned
+prints every configuration with its classes when its expected count does not match, e.g.
 
-    python3 scratchpad/ctxkeys.py
+    mvn -o test -DskipFrontend -Dtest=IntegrationTestConventionTest
 
 See docs/testing/ for why this matters and how to add a deliberate fork.
 EOF

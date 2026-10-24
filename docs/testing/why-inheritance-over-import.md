@@ -115,6 +115,20 @@ combinations**:
 Thirteen of the thirty-seven contexts existed for no reason other than that different authors mocked
 different subsets of the same handful of collaborators.
 
+**Field names count too.** For by-type overrides, `BeanOverrideHandler.equals` also compares the
+annotated field's **name** and qualifiers (checked against spring-test 6.2.19). So
+`@MockitoBean VideoProviderAdapter adapter;` in one class and `@MockitoBean VideoProviderAdapter
+videoProviderAdapter;` in another are two contexts.
+
+**Guarded since `skillars-deferred-160`.** This trap was the one `IntegrationTestConventionTest`
+did not cover, and it kept recurring: deferred-83, -123, -124 and -128 each added one context
+through a new mock or spy. The test now pins the number of distinct configurations
+(`distinctContextKeyCountIsPinned`), modelling every override field by annotation, type and name.
+The usual fixes are to use one of the spies `AbstractIntegrationTest` already declares, or to match
+a peer class's mock set exactly, field names included. Slice tests (`@WebMvcTest` and friends) must
+be named `*WebMvcTest`, not `*IT`, so they run in surefire's JVM and not in the integration-test
+cache (`noSliceTestIsNamedIT`).
+
 ### Property drift
 
 Across all directly-annotated classes there were only **nine distinct properties**, five of them
@@ -239,7 +253,8 @@ The context count is a measurement, not a judgement call. To re-derive it:
 
 1. Walk `src/test/java`, strip comments, and capture per class: `@SpringBootTest(...)` arguments,
    `@ActiveProfiles(...)`, `@TestPropertySource(...)`, every `@Import(...)`, `@ConfigureWireMock` names,
-   and the set of `@MockitoBean` / `@MockitoSpyBean` field **types**.
+   and the set of `@MockitoBean` / `@MockitoSpyBean` field **types and names**. Skip class-level
+   `@Disabled` classes: JUnit never loads their context.
 2. **Resolve `extends` chains** so a subclass inherits its base's annotations. This step is not optional:
    45 classes extend a `Base*IT`, and 12 of them add their own mocks or properties. Skipping it
    under-counts by roughly a third — the first pass of this analysis reported 24 contexts instead of 37
@@ -248,6 +263,11 @@ The context count is a measurement, not a judgement call. To re-derive it:
    `(springBootTest, activeProfiles, testPropertySources, imports, mocks, spies)`.
 
 **The number of groups is the number of Spring contexts, and therefore the number of container pairs.**
+
+Since `skillars-deferred-160` you do not need to do this by hand: change
+`IntegrationTestConventionTest.EXPECTED_DISTINCT_CONTEXT_KEYS` by one and run the test
+(`mvn -o test -DskipFrontend -Dtest=IntegrationTestConventionTest`); the failure lists every
+configuration with its classes.
 
 Cross-check the result against reality rather than trusting the script — run `docker ps` during a
 `mvn verify` and count, and compare the class count against `target/failsafe-reports/`.

@@ -685,12 +685,13 @@
 				<configuration>
 					<trimStackTrace>false</trimStackTrace>
 					<!--
-					  All ~135 IT classes share ONE forked JVM (no forkCount/reuseForks here), and the
-					  Spring TestContext cache holds every context open for the whole run: ~26 contexts
-					  against the default cache.maxSize of 32 means nothing is ever evicted, so nothing
-					  is ever closed. A thread dump taken mid-run measured 427 live threads — 12
-					  Tomcats, 6 Quartz schedulers, 7 Hikari pools, 10+ WireMock Jetty servers, all
-					  alive simultaneously.
+					  All IT classes share ONE forked JVM (no forkCount/reuseForks here), and the
+					  Spring TestContext cache holds every context open for the whole run. When this
+					  comment was first written, a thread dump taken mid-run measured 427 live threads
+					  — 12 Tomcats, 6 Quartz schedulers, 7 Hikari pools, 10+ WireMock Jetty servers, all
+					  alive simultaneously. (By skillars-deferred-159 the cache was full at 32 and
+					  evicting; skillars-deferred-160 cut the failsafe JVM to 17 contexts, and
+					  assert-context-count.sh now fails if the cache fills again.)
 
 					  That fork has intermittently died mid-suite, surfacing as
 					  "SurefireBooterForkException: There was an error in the forked process / Unable to

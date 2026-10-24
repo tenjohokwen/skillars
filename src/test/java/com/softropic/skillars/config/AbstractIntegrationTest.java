@@ -2,8 +2,17 @@ package com.softropic.skillars.config;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.gemini.GeminiClient;
+import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.messaging.repo.MessageRepository;
+import com.softropic.skillars.platform.payment.contract.PaymentGateway;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
+import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
+import com.softropic.skillars.platform.session.repo.DrillVideoRefRepository;
+import com.softropic.skillars.platform.session.service.VideoPhysicalDeletionListener;
+import com.softropic.skillars.platform.video.repo.VideoDeletionOutboxRepository;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
@@ -11,6 +20,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestExecutionListeners;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.wiremock.spring.ConfigureWireMock;
 import org.wiremock.spring.EnableWireMock;
@@ -37,8 +47,10 @@ import org.wiremock.spring.EnableWireMock;
  *
  * <p>Inheritance makes the cache key <strong>structurally identical by construction</strong>
  * rather than by convention. A subclass that adds nothing <em>cannot</em> fork the context.
- * Forking becomes an explicit act — adding an annotation to a concrete class — which
- * {@code IntegrationTestConventionTest} then fails the build on.
+ * Forking becomes an explicit act — adding an annotation, or a {@code @MockitoBean}/
+ * {@code @MockitoSpyBean} field, to a concrete class — which {@code IntegrationTestConventionTest}
+ * then fails the build on (the mock and spy fields since skillars-deferred-160, which pins the
+ * number of distinct configurations).
  *
  * <p>The honest trade-off: this consumes the single-inheritance slot and couples every test to one
  * hierarchy. A composed meta-annotation would give most of the same cache-key guarantee without
@@ -53,6 +65,16 @@ import org.wiremock.spring.EnableWireMock;
  * no class-level annotations. If you genuinely need a different property, add it and expect the
  * guardrail test to fail — then update its pinned count with a justification. That failure is the
  * design working, not an obstacle.
+ *
+ * <p>Besides the context configuration, the base supplies a {@code MockMvc} bean
+ * ({@code @AutoConfigureMockMvc}), the {@code GeminiClient} mock, eight spies, and the reset
+ * listener.
+ *
+ * <p>Need a test double? Prefer what is already here: the spies below, and {@code RecordedEvents}
+ * (from {@code TestConfig}) for asserting on published events. If you must mock a collaborator,
+ * copy a peer class's exact mock set, field names included (the cache key compares them). For
+ * example, {@code @MockitoBean VideoProviderAdapter videoProviderAdapter} plus
+ * {@code @MockitoBean FileStorageService fileStorageService} is shared by 25 classes.
  *
  * @see SharedContainers for why the containers are JVM-static and not beans
  * @see <a href="file:../../../../../../../docs/testing/readme.md">docs/testing/</a>
@@ -75,6 +97,11 @@ import org.wiremock.spring.EnableWireMock;
 // MERGE_WITH_DEFAULTS keeps Spring's own listeners (notably SqlScriptsTestExecutionListener and
 // MockitoResetTestExecutionListener) and adds ours. @TestExecutionListeners does NOT contribute
 // to MergedContextConfiguration, so this adds no contexts.
+// skillars-deferred-160 AC5: hoisted from VideoWebhookResourceIT, the one class that needed a
+// MockMvc. Declared there it forked a whole context; declared here it only adds a MockMvc bean to
+// the shared one. It is @Inherited, which is why IntegrationTestConventionTest.isSlice matches slice
+// *test* annotations by name rather than everything in the autoconfigure package.
+@AutoConfigureMockMvc
 @TestExecutionListeners(
     listeners = DatabaseResetTestExecutionListener.class,
     mergeMode = TestExecutionListeners.MergeMode.MERGE_WITH_DEFAULTS)
@@ -99,6 +126,49 @@ public abstract class AbstractIntegrationTest {
      */
     @MockitoBean
     protected GeminiClient geminiClient;
+
+    // ---------------------------------------------------------------------------------------------
+    // Spies, hoisted here by skillars-deferred-160 AC7. Each used to be declared by one test class,
+    // and each such class forked its own Spring context because the set of bean overrides is part
+    // of the context cache key. Declared once here, they cost no context.
+    //
+    // Safe to share because a spy delegates every call to the real bean: unlike a @MockitoBean it
+    // cannot replace the system under test in classes that never stub it. @MockitoSpyBean.reset()
+    // defaults to MockReset.AFTER (checked in the spring-test 6.2.19 bytecode), and the default
+    // MockitoResetTestExecutionListener enforces it after every test method, so a doReturn/doThrow
+    // in one test cannot leak into the next. Do not add Mockito.reset(...) for these.
+    //
+    // Field names are part of the cache key for by-type overrides (BeanOverrideHandler.equals
+    // compares them), so declare these nowhere else: use the inherited field. The deletion-outbox
+    // spy is named videoDeletionOutboxRepository, not outboxRepository, because several classes
+    // already @Autowire unrelated OutboxMessageRepository/SubscriptionLifecycleOutboxRepository
+    // fields called outboxRepository and would silently hide it.
+    // ---------------------------------------------------------------------------------------------
+
+    @MockitoSpyBean
+    protected VideoDeletionOutboxRepository videoDeletionOutboxRepository;
+
+    @MockitoSpyBean
+    protected DrillVideoRefRepository drillVideoRefRepository;
+
+    @MockitoSpyBean
+    protected VideoPhysicalDeletionListener physicalDeletionListener;
+
+    /** Wraps TestConfig's {@code @Primary} StubPaymentGateway. */
+    @MockitoSpyBean
+    protected PaymentGateway paymentGateway;
+
+    @MockitoSpyBean
+    protected SessionPackPurchaseRepository sessionPackPurchaseRepository;
+
+    @MockitoSpyBean
+    protected RefreshTokenRepository refreshTokenRepository;
+
+    @MockitoSpyBean
+    protected CoachProfileRepository coachProfileRepository;
+
+    @MockitoSpyBean
+    protected MessageRepository messageRepository;
 
     @Autowired
     protected JdbcTemplate jdbcTemplate;

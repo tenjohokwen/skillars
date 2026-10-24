@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.session.api;
 
+import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
@@ -30,6 +31,10 @@ class HomeworkResourceIT extends BaseSessionIT {
 
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
+
+    // skillars-deferred-160 AC8: present so this class shares the {VideoProviderAdapter, FileStorageService}
+    // mock set (and Spring context) with its peers. Keep this exact field name; it is part of the cache key.
+    @MockitoBean FileStorageService fileStorageService;
 
     private static final long PARENT_ID       = 9540000001L;
     private static final long WRONG_PARENT_ID = 9540000002L;

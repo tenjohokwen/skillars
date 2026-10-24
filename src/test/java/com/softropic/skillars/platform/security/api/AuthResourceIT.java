@@ -8,7 +8,6 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.contract.Gender;
 import com.softropic.skillars.platform.security.infrastructure.jwt.TokenCreator;
-import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.infrastructure.util.TestClockProvider;
 
 import org.junit.jupiter.api.AfterEach;
@@ -91,8 +90,6 @@ class AuthResourceIT extends AbstractIntegrationTest {
     @Autowired
     private ConfigService configService;
 
-    @Autowired
-    private RefreshTokenRepository refreshTokenRepository;
 
     @Autowired
     private TokenCreator tokenCreator;

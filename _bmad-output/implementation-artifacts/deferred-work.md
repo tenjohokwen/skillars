@@ -3503,3 +3503,12 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 - **Plan-path private drill names.** `SessionPlanService.createSession`/update resolve drill ids with `findAllById` and no PRIVATE/owner check; `TimelineEventListener.onBookingCompleted` then snapshots plan drills onto a SESSION_COMPLETED row whose `drills` key every viewer sees. Same class as the homework gap closed by deferred-159 AC2, different service and gate.
 - **Erasure marker not checked on the delayed QUICK path.** deferred-159 AC1 makes the timeout path write `homework_assignments` and a `HOMEWORK_ASSIGNED` row; neither listener checks a development-data erasure marker (the SESSION_COMPLETED write on the same path has the same gap, so not new in kind).
 - **Pending QUICK rows at deploy time.** QUICK rows created before AC2 shipped stay pending up to the timeout (default 24h) with unvalidated `homework_drill_ids`; `confirmCompletion` publishes the same rows today.
+
+## Deferred from: skillars-deferred-160 (2026-10-24)
+
+- **`SimultaneousExpiryIT` / `YearlyExemptionRenewalIT` are dead tests.** Both are class-level `@Disabled` ("Deferred from 6.4 …") and their `@BeforeEach` inserts into `main.platform_config (id, config_key, value)` with `ON CONFLICT (config_key)`; the column is `key` (`V138__baseline_schema.sql:2678`), so neither could pass if re-enabled. deferred-160 AC6 only removed their no-op `@TestPropertySource`. Fix the SQL and re-enable, or delete them.
+
+## Deferred from: code review of skillars-deferred-160-spring-test-context-consolidation (2026-10-24)
+
+- **Convention-test class loading swallows failures.** `integrationTestClasses()` catches `Throwable` on `Class.forName`, so an IT that fails to load drops out of `distinctContextKeyCountIsPinned`'s model and the floor is only `> 100`. Collect load failures and assert none.
+- **Gate evaluates the last statistics line of the whole build log.** `assert-context-count.sh` uses `tail -1` over surefire+failsafe output; if failsafe crashes before logging, surefire's line is checked against the failsafe ceiling. Scope the match to the failsafe section.

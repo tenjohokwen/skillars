@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.config.api;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
-import com.softropic.skillars.config.E2ESecurityConfig;
 import com.softropic.skillars.e2e.AdminLogin;
 import com.softropic.skillars.platform.config.contract.ConfigValueResponse;
 import com.softropic.skillars.platform.config.contract.UpdateConfigRequest;
@@ -17,7 +16,6 @@ import org.springframework.test.context.jdbc.Sql;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.web.client.RestTemplateBuilder;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -52,8 +50,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 // reset removes that leftover, so the class must now declare the seed it always needed.
 // main.sec is NOT Flyway-seeded reference data (no migration inserts into it), so this is
 // the "fix the class" bucket, not the "fix the reset" bucket.
+
+// skillars-deferred-160 AC4: the @Sql below is the seed. The @Import(E2ESecurityConfig) that used
+// to sit next to it seeded the same main.sec row only on ContextRefreshedEvent -- before the first
+// per-method truncate wiped it -- so it added nothing but a forked Spring context.
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-@Import(E2ESecurityConfig.class)
 class ConfigResourceIT extends AbstractIntegrationTest {
 
     // Stable fixture IDs used only in this test class

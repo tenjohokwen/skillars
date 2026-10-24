@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.security.service;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
+import com.softropic.skillars.config.RecordedEvents;
 
 import com.softropic.skillars.platform.security.repo.Address;
 import com.softropic.skillars.platform.security.repo.Authority;
@@ -14,20 +15,15 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.event.EventListener;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.context.SecurityContextImpl;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -50,7 +46,7 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
     private PasswordEncoder passwordEncoder;
 
     @Autowired
-    private AccountChangeEventCaptor eventCaptor;
+    private RecordedEvents recordedEvents;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -61,7 +57,7 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
     @BeforeEach
     void setUp() {
         initSecurityContext();
-        eventCaptor.clear();
+        recordedEvents.clear();
     }
 
     @AfterEach
@@ -88,7 +84,7 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
         assertThat(updated.getEmail()).isEqualTo(newEmail);
         assertThat(updated.getLogin()).isEqualTo(newEmail);
 
-        AccountChangeEvent event = eventCaptor.lastEventOf(AccountChangeEvent.Action.EMAIL_CHANGED);
+        AccountChangeEvent event = lastEventOf(AccountChangeEvent.Action.EMAIL_CHANGED);
         assertThat(event).isNotNull();
         assertThat(event.getOldValue()).isEqualTo(LOGIN);
         assertThat(event.getNewValue()).isEqualTo(newEmail);
@@ -123,7 +119,7 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
         assertThat(passwordEncoder.matches(newPassword, updated.getPassword())).isTrue();
         assertThat(passwordEncoder.matches(CORRECT_PW, updated.getPassword())).isFalse();
 
-        AccountChangeEvent event = eventCaptor.lastEventOf(AccountChangeEvent.Action.PASSWORD_CHANGED);
+        AccountChangeEvent event = lastEventOf(AccountChangeEvent.Action.PASSWORD_CHANGED);
         assertThat(event).isNotNull();
         assertThat(event.getOldValue()).isNull();
         assertThat(event.getNewValue()).isNull();
@@ -148,7 +144,7 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
 
         assertThat(result).isPresent();
 
-        AccountChangeEvent event = eventCaptor.lastEventOf(AccountChangeEvent.Action.PHONE_CHANGED);
+        AccountChangeEvent event = lastEventOf(AccountChangeEvent.Action.PHONE_CHANGED);
         assertThat(event).isNotNull();
         assertThat(event.getNewValue()).isEqualTo(newPhone);
     }
@@ -159,7 +155,7 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
 
         userProfileService.updatePhone("678684749");
 
-        AccountChangeEvent event = eventCaptor.lastEventOf(AccountChangeEvent.Action.PHONE_CHANGED);
+        AccountChangeEvent event = lastEventOf(AccountChangeEvent.Action.PHONE_CHANGED);
         assertThat(event.getOldValue()).isEqualTo(oldPhone);
     }
 
@@ -175,7 +171,7 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
         assertThat(result).isPresent();
         assertThat(result.get().isOtpEnabled()).isFalse();
 
-        AccountChangeEvent event = eventCaptor.lastEventOf(AccountChangeEvent.Action.TWO_FACTOR_AUTH_DISABLED);
+        AccountChangeEvent event = lastEventOf(AccountChangeEvent.Action.TWO_FACTOR_AUTH_DISABLED);
         assertThat(event).isNotNull();
         assertThat(event.getOldValue()).isEqualTo("true");
         assertThat(event.getNewValue()).isEqualTo("false");
@@ -185,14 +181,14 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
     void toggle2fa_enabling_updatesUserAndPublishesEnabledEvent() {
         // Disable first, then re-enable
         userProfileService.toggle2fa(false, CORRECT_PW);
-        eventCaptor.clear();
+        recordedEvents.clear();
 
         Optional<User> result = userProfileService.toggle2fa(true, CORRECT_PW);
 
         assertThat(result).isPresent();
         assertThat(result.get().isOtpEnabled()).isTrue();
 
-        AccountChangeEvent event = eventCaptor.lastEventOf(AccountChangeEvent.Action.TWO_FACTOR_AUTH_ENABLED);
+        AccountChangeEvent event = lastEventOf(AccountChangeEvent.Action.TWO_FACTOR_AUTH_ENABLED);
         assertThat(event).isNotNull();
         assertThat(event.getOldValue()).isEqualTo("false");
         assertThat(event.getNewValue()).isEqualTo("true");
@@ -216,7 +212,7 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
 
         assertThat(result).isPresent();
 
-        AccountChangeEvent event = eventCaptor.lastEventOf(AccountChangeEvent.Action.ADDRESS_CHANGED);
+        AccountChangeEvent event = lastEventOf(AccountChangeEvent.Action.ADDRESS_CHANGED);
         assertThat(event).isNotNull();
         assertThat(event.getNewValue()).contains("Berlin").contains("Germany");
     }
@@ -228,7 +224,7 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
 
         userProfileService.updatePostalAddress(newAddress);
 
-        AccountChangeEvent event = eventCaptor.lastEventOf(AccountChangeEvent.Action.ADDRESS_CHANGED);
+        AccountChangeEvent event = lastEventOf(AccountChangeEvent.Action.ADDRESS_CHANGED);
         // Old address had city DQUYPTHOW from seed data
         assertThat(event.getOldValue()).contains("DQUYPTHOW");
     }
@@ -265,35 +261,11 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
         SecurityContextHolder.setContext(ctx);
     }
 
-    @TestConfiguration
-    static class Config {
-        @Bean
-        AccountChangeEventCaptor accountChangeEventCaptor() {
-            return new AccountChangeEventCaptor();
-        }
-    }
-
-    /**
-     * Captures AccountChangeEvents published during tests.
-     */
-    static class AccountChangeEventCaptor {
-
-        private final List<AccountChangeEvent> captured = new ArrayList<>();
-
-        @EventListener
-        public void onEvent(AccountChangeEvent event) {
-            captured.add(event);
-        }
-
-        public AccountChangeEvent lastEventOf(AccountChangeEvent.Action action) {
-            return captured.stream()
-                           .filter(e -> e.getAction() == action)
-                           .reduce((first, second) -> second)
-                           .orElse(null);
-        }
-
-        public void clear() {
-            captured.clear();
-        }
+    /** Last {@link AccountChangeEvent} of {@code action} recorded since the last clear, or null. */
+    private AccountChangeEvent lastEventOf(AccountChangeEvent.Action action) {
+        return recordedEvents.ofType(AccountChangeEvent.class).stream()
+                             .filter(e -> e.getAction() == action)
+                             .reduce((first, second) -> second)
+                             .orElse(null);
     }
 }

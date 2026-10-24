@@ -15,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * skillars-deferred-149 AC1: {@code PlayerSubscriptionOwnershipIT} already asserts {@code 200} for a
+ * skillars-deferred-149 AC1: {@code PlayerSubscriptionOwnershipWebMvcTest} already asserts {@code 200} for a
  * self-registered player's own-subscription call, but that class is {@code @WebMvcTest} with
  * {@code @MockitoBean SubscriptionService} — {@code assertPlayerOwnership}'s real logic never runs
  * there, so it could not and did not catch the bug this story fixes. This class autowires the genuine

@@ -1,7 +1,6 @@
 package com.softropic.skillars.platform.filestorage.api;
 
 import com.softropic.skillars.platform.security.SecurityIT;
-import com.softropic.skillars.config.E2ESecurityConfig;
 import com.softropic.skillars.e2e.AdminLogin;
 import com.softropic.skillars.infrastructure.persistence.BaseEntity;
 import com.softropic.skillars.infrastructure.storage.BaseStorageIT;
@@ -24,7 +23,6 @@ import org.springframework.test.context.jdbc.Sql;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.web.client.RestTemplateBuilder;
-import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -46,8 +44,11 @@ import static org.instancio.Select.field;
 // AC5.5 triage: authenticates but seeded no security key of its own -- it was free-riding
 // on rows another test class left in main.sec. main.sec is NOT Flyway-seeded (no migration
 // inserts into it), so this is the "fix the class" bucket, not the "fix the reset" bucket.
+
+// skillars-deferred-160 AC4: the @Sql below is the seed. The @Import(E2ESecurityConfig) that used
+// to sit next to it seeded the same main.sec row only on ContextRefreshedEvent -- before the first
+// per-method truncate wiped it -- so it added nothing but a forked Spring context.
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-@Import(E2ESecurityConfig.class)
 class StorageResourceIT extends BaseStorageIT {
 
     @LocalServerPort

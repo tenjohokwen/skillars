@@ -11,9 +11,18 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,8 +59,6 @@ class IntegrationTestConventionTest {
         // Sliced @SpringBootTest(classes = ...) — starts no containers at all.
         "com.softropic.skillars.infrastructure.security.RateLimitingAspectIT",
         "com.softropic.skillars.infrastructure.feature.PropertiesFeatureToggleServiceIT",
-        // Sliced @SpringBootTest for the moderation sweeper.
-        "com.softropic.skillars.platform.messaging.service.MessageModerationSweeperIT",
         // Sliced @SpringBootTest with its own WireMock server (ses-service) — story ses-1.1 Task
         // 4b. Deliberately doesn't reuse AbstractIntegrationTest's two named servers (bunny-service,
         // stripe-service): a third server name sharing that context would fork it for a test that
@@ -67,16 +74,39 @@ class IntegrationTestConventionTest {
      * Number of concrete {@code *IT} classes still carrying their own {@code @TestPropertySource}.
      *
      * <p>These are the properties that genuinely change behaviour for one class: webhook
-     * max-attempts, playback revocation window, video-lifecycle outbox attempts, and the
-     * payments/invoicing feature toggles. Each costs one extra Spring context — which is now
-     * roughly 20 s of startup and ZERO containers, a trade that is acceptable.
+     * max-attempts, playback revocation window, and {@code enable.test.mail=false} (the real
+     * {@code MailManager}, shared by two classes). Each costs one extra Spring context — which is
+     * now roughly 20 s of startup and ZERO containers, a trade that is acceptable.
+     *
+     * <p>skillars-deferred-160 AC6: 7 → 4. The three video-lifecycle declarations were removed
+     * because those keys are DB-backed and the annotation changed nothing.
      *
      * <p><strong>If you are here because this assertion failed:</strong> you added (or removed)
      * a {@code @TestPropertySource}. That is allowed. Update this number, and put a
      * {@code // context-fork:} comment on the annotation saying why the property cannot live in
      * {@code application-test.yaml}. Making the number deliberate is the entire point.
      */
-    private static final int EXPECTED_TEST_PROPERTY_SOURCE_COUNT = 7;
+    private static final int EXPECTED_TEST_PROPERTY_SOURCE_COUNT = 4;
+
+    /**
+     * Number of distinct Spring context configurations among the live (not class-level
+     * {@code @Disabled}) concrete {@code *IT} classes that extend {@link AbstractIntegrationTest},
+     * as modelled by {@link #contextKeyModel}.
+     *
+     * <p>skillars-deferred-160 set this at 14, down from 30. With the 3 standalone sliced
+     * {@code @SpringBootTest} classes in the allowlist that makes 17 contexts in the failsafe JVM,
+     * well under Spring's 32-entry context cache, so nothing is evicted and rebuilt.
+     *
+     * <p><strong>If you are here because this assertion failed:</strong> a class added (or
+     * removed) something that is part of the context cache key: most often a
+     * {@code @MockitoBean}/{@code @MockitoSpyBean} field, also a class-level {@code @Import},
+     * {@code @TestPropertySource}, {@code @DynamicPropertySource} or nested
+     * {@code @TestConfiguration}. The failure message lists every configuration with its classes.
+     * First check whether the class can reuse an existing configuration: use an inherited spy, or
+     * match a peer's mock set with the same field names. If the fork is genuinely needed, update
+     * this number and say why next to the declaration. Making the number deliberate is the point.
+     */
+    private static final int EXPECTED_DISTINCT_CONTEXT_KEYS = 14;
 
     /**
      * Spring Boot test slices ({@code @WebMvcTest} and friends) build a cut-down context with no
@@ -86,21 +116,35 @@ class IntegrationTestConventionTest {
      * {@link #ALLOWLIST}: the allowlist is for genuine exceptions that someone should have to
      * justify, and a slice test needs no justification.
      *
-     * <p>This mirrors the offline context-count analysis, which likewise counts only
-     * {@code @SpringBootTest} classes (129 of the 144 {@code *IT} files).
+     * <p>Since skillars-deferred-160 no slice may be named {@code *IT} at all
+     * ({@link #noSliceTestIsNamedIT}), so in practice this only filters the discovery helper.
      */
     private static boolean isSlice(Class<?> c) {
+        // Slice *test* annotations only. This used to match everything under
+        // org.springframework.boot.test.autoconfigure. too, but that package also holds
+        // @AutoConfigureMockMvc, which is @Inherited and sits on AbstractIntegrationTest
+        // (skillars-deferred-160 AC5): getAnnotations() would then report every integration test
+        // as a slice and exclude it from these checks. The prefix rule had already been silently
+        // excluding VideoWebhookResourceIT, the one class that declared it.
         return Stream.of(c.getAnnotations())
-            .map(a -> a.annotationType().getName())
-            .anyMatch(n -> n.startsWith("org.springframework.boot.test.autoconfigure.")
-                        || n.endsWith(".WebMvcTest")
-                        || n.endsWith(".DataJpaTest")
-                        || n.endsWith(".JsonTest")
-                        || n.endsWith(".WebFluxTest")
-                        || n.endsWith(".JdbcTest"));
+            .map(a -> a.annotationType().getSimpleName())
+            .anyMatch(SLICE_ANNOTATIONS::contains);
     }
 
+    private static final Set<String> SLICE_ANNOTATIONS = Set.of(
+        "WebMvcTest", "WebFluxTest", "DataJpaTest", "DataJdbcTest", "JdbcTest", "JsonTest",
+        "RestClientTest", "DataRedisTest", "JooqTest", "GraphQlTest", "WebServiceClientTest");
+
     private static List<Class<?>> integrationTestClasses() throws IOException {
+        List<Class<?>> found = allConcreteItClasses().stream().filter(c -> !isSlice(c)).toList();
+        assertThat(found)
+            .as("expected to discover the integration-test classes")
+            .hasSizeGreaterThan(100);
+        return found;
+    }
+
+    /** Every concrete {@code *IT} class in {@code target/test-classes}, slices included. */
+    private static List<Class<?>> allConcreteItClasses() throws IOException {
         Path root = Paths.get("target", "test-classes");
         assertThat(root)
             .as("target/test-classes must exist — run this through Maven, not standalone")
@@ -119,7 +163,7 @@ class IntegrationTestConventionTest {
                 try {
                     Class<?> c = Class.forName(cn, false,
                         IntegrationTestConventionTest.class.getClassLoader());
-                    if (!java.lang.reflect.Modifier.isAbstract(c.getModifiers()) && !isSlice(c)) {
+                    if (!java.lang.reflect.Modifier.isAbstract(c.getModifiers())) {
                         found.add(c);
                     }
                 } catch (Throwable ignored) {
@@ -127,9 +171,6 @@ class IntegrationTestConventionTest {
                 }
             }
         }
-        assertThat(found)
-            .as("expected to discover the integration-test classes")
-            .hasSizeGreaterThan(100);
         return found;
     }
 
@@ -204,5 +245,119 @@ class IntegrationTestConventionTest {
                 EXPECTED_TEST_PROPERTY_SOURCE_COUNT and add a // context-fork: comment \
                 explaining why the property cannot live in application-test.yaml.""")
             .hasSize(EXPECTED_TEST_PROPERTY_SOURCE_COUNT);
+    }
+
+    @Test
+    @DisplayName("the number of distinct context configurations among the base's subclasses is pinned")
+    void distinctContextKeyCountIsPinned() throws IOException {
+        SortedSet<String> baseKey = contextKeyModel(AbstractIntegrationTest.class);
+        Map<String, List<String>> classesByKey = new TreeMap<>();
+        for (Class<?> c : integrationTestClasses()) {
+            if (!AbstractIntegrationTest.class.isAssignableFrom(c) || isClassDisabled(c)) {
+                continue;
+            }
+            SortedSet<String> delta = new TreeSet<>(contextKeyModel(c));
+            delta.removeAll(baseKey);
+            classesByKey.computeIfAbsent(delta.isEmpty() ? "(base only)" : String.join("\n      ", delta),
+                k -> new ArrayList<>()).add(c.getSimpleName());
+        }
+
+        String table = classesByKey.entrySet().stream()
+            .map(e -> "  " + e.getValue().size() + " class(es): " + e.getValue().stream().sorted().toList()
+                      + "\n      " + e.getKey())
+            .collect(Collectors.joining("\n"));
+
+        assertThat(classesByKey)
+            .as("""
+                Each distinct configuration below is a separate Spring ApplicationContext in the \
+                failsafe JVM, and Spring caches only 32 of them before evicting and rebuilding. \
+                If you added a bean override, @Import, @TestPropertySource, @DynamicPropertySource \
+                or nested @TestConfiguration, see EXPECTED_DISTINCT_CONTEXT_KEYS's javadoc. \
+                Configurations (difference from AbstractIntegrationTest):
+                %s""", table)
+            .hasSize(EXPECTED_DISTINCT_CONTEXT_KEYS);
+    }
+
+    @Test
+    @DisplayName("no Spring Boot slice test is named *IT")
+    void noSliceTestIsNamedIT() throws IOException {
+        List<String> offenders = allConcreteItClasses().stream()
+            .filter(IntegrationTestConventionTest::isSlice)
+            .map(Class::getName)
+            .sorted()
+            .toList();
+
+        assertThat(offenders)
+            .as("""
+                These are Spring Boot slice tests (@WebMvcTest and friends) named *IT, so failsafe \
+                runs them in the integration-test JVM, where each one takes a slot in Spring's \
+                32-entry context cache next to the full contexts. They need no container: name \
+                them *WebMvcTest (or another *Test suffix) so surefire runs them instead \
+                (skillars-deferred-160 AC2).""")
+            .isEmpty();
+    }
+
+    /**
+     * A conservative model of what Spring folds into a test class's context cache key, built from
+     * the class hierarchy. Over-distinguishing is acceptable here, because the CI context-count
+     * gate measures reality; under-distinguishing is not. Captured, per class in the hierarchy:
+     * <ul>
+     *   <li>class-level annotations that configure the context, with all attribute values
+     *       ({@code toString()} includes them);</li>
+     *   <li>{@code @DynamicPropertySource} methods and nested {@code @Configuration}/
+     *       {@code @TestConfiguration} classes, by name, since each is specific to its class;</li>
+     *   <li>every {@code @MockitoBean}/{@code @MockitoSpyBean} field: the annotation with its
+     *       attributes, the field type, the field name and the field's other annotations. This
+     *       mirrors {@code BeanOverrideHandler.equals}, which for by-type overrides compares the
+     *       field name and qualifiers too, not just the type.</li>
+     * </ul>
+     */
+    private static SortedSet<String> contextKeyModel(Class<?> testClass) {
+        SortedSet<String> key = new TreeSet<>();
+        for (Class<?> c = testClass; c != null && c != Object.class; c = c.getSuperclass()) {
+            for (Annotation a : c.getDeclaredAnnotations()) {
+                if (isContextAnnotation(a)) {
+                    key.add("class " + a);
+                }
+            }
+            for (Method m : c.getDeclaredMethods()) {
+                if (hasAnnotationNamed(m.getDeclaredAnnotations(), "DynamicPropertySource")) {
+                    key.add("@DynamicPropertySource " + c.getName() + "#" + m.getName());
+                }
+            }
+            for (Class<?> nested : c.getDeclaredClasses()) {
+                if (hasAnnotationNamed(nested.getDeclaredAnnotations(), "TestConfiguration", "Configuration")) {
+                    key.add("nested configuration " + nested.getName());
+                }
+            }
+            for (Field f : c.getDeclaredFields()) {
+                Annotation[] anns = f.getDeclaredAnnotations();
+                if (hasAnnotationNamed(anns, "MockitoBean", "MockitoSpyBean", "MockBean", "SpyBean")) {
+                    key.add("field " + f.getType().getName() + " " + f.getName() + " "
+                            + Arrays.stream(anns).map(Annotation::toString).sorted().toList());
+                }
+            }
+        }
+        return key;
+    }
+
+    private static boolean isContextAnnotation(Annotation a) {
+        String n = a.annotationType().getName();
+        String simple = a.annotationType().getSimpleName();
+        return n.startsWith("org.springframework.boot.test.autoconfigure.")
+            || n.startsWith("org.wiremock.spring.")
+            || Set.of("SpringBootTest", "ActiveProfiles", "Import", "TestPropertySource",
+                      "TestPropertySources", "ContextConfiguration", "DirtiesContext",
+                      "MockitoBean", "MockitoBeans", "MockitoSpyBean", "MockitoSpyBeans",
+                      "BootstrapWith").contains(simple);
+    }
+
+    private static boolean hasAnnotationNamed(Annotation[] anns, String... simpleNames) {
+        Set<String> names = Set.of(simpleNames);
+        return Arrays.stream(anns).anyMatch(a -> names.contains(a.annotationType().getSimpleName()));
+    }
+
+    private static boolean isClassDisabled(Class<?> c) {
+        return hasAnnotationNamed(c.getAnnotations(), "Disabled");
     }
 }

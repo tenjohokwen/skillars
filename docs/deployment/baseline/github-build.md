@@ -75,7 +75,7 @@ consumes only `pom.xml`, `src/` and `.git/`, all straight from `actions/checkout
 1. Checkout, set up JDK 17 (Temurin), restore the Maven cache keyed on `hashFiles('**/pom.xml')`
 2. Start the container sampler (AC1 ceiling gate)
 3. `mvn -B verify` — full compile and test, including Testcontainers integration tests — then
-   assert the Spring context count in the same shell (`assert-context-count.sh build.log 45`)
+   assert the Spring context count in the same shell (`assert-context-count.sh build.log 17`; measured 17 by skillars-deferred-160 (PR #297))
 4. Assert the container ceiling, upload surefire/failsafe reports
 
 `docker-image`:

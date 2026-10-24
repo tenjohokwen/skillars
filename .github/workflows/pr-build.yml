@@ -72,7 +72,10 @@ jobs:
           mvn_status=${PIPESTATUS[0]}
 
           echo "::group::Spring context count (AC3)"
-          # CEILING = 47 (skillars-deferred-159: measured 47 x3, order-vs-eviction; see assert-context-count.sh).
+          # CEILING = 17 (skillars-deferred-160, PR #297: 47 -> 17 live context configurations, measured
+          # 17 on 3 identical runs; the script also fails on size >= maxSize or on rebuilds. See
+          # assert-context-count.sh).
+          # Prior: CEILING = 47 (skillars-deferred-159: measured 47 x3, order-vs-eviction).
           # Prior: CEILING = 45, deliberate +1 (story skillars-deferred-128, /bmad-code-review response).
           # GdprErasureIT gained a second override, @MockitoSpyBean RefreshTokenRepository (alongside
           # its existing @MockitoBean FileStorageService), replacing a 1ms-budget race in the atomicity
@@ -82,7 +85,7 @@ jobs:
           # AccountDeletionCascadeIT/SmtpTransportBootIT/AdminCoachEnforcementIsolationRuntimeIT before
           # it, not ordering-dependent thrashing. See assert-context-count.sh's own header for the full
           # history.
-          .github/scripts/assert-context-count.sh build.log 47
+          .github/scripts/assert-context-count.sh build.log 17
           gate_status=$?
           echo "::endgroup::"
           # NB: stay under `set +e` here -- restoring `set -e` before the gate would abort the

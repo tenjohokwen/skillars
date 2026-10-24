@@ -1,7 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
-import com.softropic.skillars.platform.session.repo.DrillVideoRefRepository;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.LifecycleTrigger;
@@ -11,14 +11,12 @@ import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoDeletionLog;
 import com.softropic.skillars.platform.video.repo.VideoDeletionLogRepository;
 import com.softropic.skillars.platform.video.repo.VideoDeletionOutbox;
-import com.softropic.skillars.platform.video.repo.VideoDeletionOutboxRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
@@ -41,24 +39,17 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
 
     @MockitoBean VideoProviderAdapter videoProviderAdapter;
 
-    // skillars-deferred-124 AC2 Task 5: needed to force a failure OUTSIDE the already-mocked
-    // deleteAsset path (the only seam this class had before), so the new loop-level per-row isolation
-    // guard (VideoDeletionOutboxProcessor.process()'s outer try/catch) is actually exercised rather
-    // than the pre-existing inner try/catch around deleteAsset+completeRowWithNullAsset. A distinct
-    // ContextCustomizer set from every other class already using BaseVideoIT — per
-    // AccountDeletionCascadeIT's own identical precedent (adding a second @MockitoBean/@MockitoSpyBean
-    // to fork a new Spring test context), this forks a new context; pre-authorised as this story's own
-    // cost (see .github/scripts/assert-context-count.sh's ceiling history).
-    @MockitoSpyBean DrillVideoRefRepository drillVideoRefRepository;
+    // skillars-deferred-160 AC8: present so this class shares the {VideoProviderAdapter, FileStorageService}
+    // mock set (and Spring context) with its peers. Keep this exact field name; it is part of the cache key.
+    @MockitoBean FileStorageService fileStorageService;
 
-    // skillars-deferred-124 code review 2026-09-19 (Patch): changed from @Autowired to
-    // @MockitoSpyBean so handleFailure_itselfThrows_... below can force failClaimed to throw, without
-    // adding a new ConfigService mock (which would need its own bean override). Same test class
-    // already forks its own dedicated Spring context for the drillVideoRefRepository spy above — adding
-    // this second override to that SAME class does not fork an additional context (no other class in
-    // the suite shares either combination), so this does not need its own assert-context-count.sh
-    // ceiling bump.
-    @MockitoSpyBean VideoDeletionOutboxRepository outboxRepository;
+    // Two spies used here are inherited from AbstractIntegrationTest (skillars-deferred-160 AC7):
+    // - drillVideoRefRepository (skillars-deferred-124 AC2 Task 5): forces a failure OUTSIDE the
+    //   mocked deleteAsset path, so VideoDeletionOutboxProcessor.process()'s outer per-row isolation
+    //   try/catch is exercised rather than the inner one around deleteAsset+completeRowWithNullAsset.
+    // - videoDeletionOutboxRepository (deferred-124 code review 2026-09-19): lets
+    //   handleFailure_itselfThrows_... force failClaimed to throw without a ConfigService mock.
+    // Declaring either here would fork this class its own Spring context again.
 
     @Autowired VideoDeletionOutboxProcessor processor;
     @Autowired VideoRepository videoRepository;
@@ -68,7 +59,7 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
     @BeforeEach
     void setUp() {
         deletionLogRepository.deleteAll();
-        outboxRepository.deleteAll();
+        videoDeletionOutboxRepository.deleteAll();
         videoRepository.deleteAll();
     }
 
@@ -80,7 +71,7 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
 
         processor.process();
 
-        VideoDeletionOutbox updated = outboxRepository.findById(row.getId()).orElseThrow();
+        VideoDeletionOutbox updated = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
         assertThat(updated.getStatus()).isEqualTo("COMPLETED");
         // skillars-deferred-123 code review 2026-09-18 (Patch): claimed_at clearing on the COMPLETED
         // path was previously unasserted anywhere in the suite (grep for getClaimedAt found nothing).
@@ -104,7 +95,7 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
 
         processor.process();
 
-        VideoDeletionOutbox updated = outboxRepository.findById(row.getId()).orElseThrow();
+        VideoDeletionOutbox updated = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
         assertThat(updated.getStatus()).isEqualTo("COMPLETED");
         assertThat(deletionLogRepository.findAll()).hasSize(1);
     }
@@ -117,7 +108,7 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
 
         processor.process();
 
-        VideoDeletionOutbox updated = outboxRepository.findById(row.getId()).orElseThrow();
+        VideoDeletionOutbox updated = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
         assertThat(updated.getAttempts()).isEqualTo(1);
         assertThat(updated.getStatus()).isEqualTo("PENDING");
         assertThat(updated.getLastError()).contains("Bunny 503");
@@ -135,16 +126,16 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         VideoDeletionOutbox row = seedPendingOutboxRow(video.getId(), "asset-dead");
         // Set attempts to max - 1 so next failure triggers DEAD
         transactionTemplate.execute(status -> {
-            VideoDeletionOutbox loaded = outboxRepository.findById(row.getId()).orElseThrow();
+            VideoDeletionOutbox loaded = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
             loaded.setAttempts(4); // max is 5 from config seed
-            outboxRepository.save(loaded);
+            videoDeletionOutboxRepository.save(loaded);
             return null;
         });
         doThrow(new RuntimeException("Bunny permanently down")).when(videoProviderAdapter).deleteAsset(eq("asset-dead"));
 
         processor.process();
 
-        VideoDeletionOutbox updated = outboxRepository.findById(row.getId()).orElseThrow();
+        VideoDeletionOutbox updated = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
         assertThat(updated.getStatus()).isEqualTo("DEAD");
         assertThat(updated.getAttempts()).isEqualTo(5);
         // skillars-deferred-123 code review 2026-09-18 (Patch): a DEAD row keeping a stale non-null
@@ -163,15 +154,15 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         doThrow(new RuntimeException("Bunny 503")).when(videoProviderAdapter).deleteAsset(eq("asset-retry"));
         processor.process();
 
-        VideoDeletionOutbox afterFirst = outboxRepository.findById(row.getId()).orElseThrow();
+        VideoDeletionOutbox afterFirst = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
         assertThat(afterFirst.getAttempts()).isEqualTo(1);
         assertThat(afterFirst.getStatus()).isEqualTo("PENDING");
 
         // Reset next_retry_at so the row is eligible on the next drain
         transactionTemplate.execute(status -> {
-            VideoDeletionOutbox loaded = outboxRepository.findById(row.getId()).orElseThrow();
+            VideoDeletionOutbox loaded = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
             loaded.setNextRetryAt(Instant.now().minusSeconds(1));
-            outboxRepository.save(loaded);
+            videoDeletionOutboxRepository.save(loaded);
             return null;
         });
 
@@ -185,7 +176,7 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         releaseSchedulerLock("VideoDeletionOutboxProcessor_process");
         processor.process();
 
-        VideoDeletionOutbox afterSecond = outboxRepository.findById(row.getId()).orElseThrow();
+        VideoDeletionOutbox afterSecond = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
         assertThat(afterSecond.getStatus()).isEqualTo("COMPLETED");
     }
 
@@ -216,9 +207,9 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
 
         processor.process();
 
-        VideoDeletionOutbox updatedA = outboxRepository.findById(rowA.getId()).orElseThrow();
-        VideoDeletionOutbox updatedMiddle = outboxRepository.findById(rowMiddle.getId()).orElseThrow();
-        VideoDeletionOutbox updatedC = outboxRepository.findById(rowC.getId()).orElseThrow();
+        VideoDeletionOutbox updatedA = videoDeletionOutboxRepository.findById(rowA.getId()).orElseThrow();
+        VideoDeletionOutbox updatedMiddle = videoDeletionOutboxRepository.findById(rowMiddle.getId()).orElseThrow();
+        VideoDeletionOutbox updatedC = videoDeletionOutboxRepository.findById(rowC.getId()).orElseThrow();
 
         assertThat(updatedA.getStatus())
             .as("the row before the failing one must still complete normally").isEqualTo("COMPLETED");
@@ -278,21 +269,21 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         // handleFailure's own transactionTemplate.execute throws before reaching its return statement —
         // the same effective gap as configService.getBoundedLong throwing.
         doThrow(new RuntimeException("db write boom"))
-            .when(outboxRepository).failClaimed(eq(rowMiddle.getId()), any(), any(), anyInt(), any(), any());
+            .when(videoDeletionOutboxRepository).failClaimed(eq(rowMiddle.getId()), any(), any(), anyInt(), any(), any());
 
         assertThatCode(() -> processor.process())
             .as("a failure inside handleFailure itself must not abort the batch")
             .doesNotThrowAnyException();
 
-        VideoDeletionOutbox updatedA = outboxRepository.findById(rowA.getId()).orElseThrow();
-        VideoDeletionOutbox updatedC = outboxRepository.findById(rowC.getId()).orElseThrow();
+        VideoDeletionOutbox updatedA = videoDeletionOutboxRepository.findById(rowA.getId()).orElseThrow();
+        VideoDeletionOutbox updatedC = videoDeletionOutboxRepository.findById(rowC.getId()).orElseThrow();
         assertThat(updatedA.getStatus())
             .as("the row before the failing one must still complete normally").isEqualTo("COMPLETED");
         assertThat(updatedC.getStatus())
             .as("the row after the failing one must still complete normally — proves batch isolation")
             .isEqualTo("COMPLETED");
 
-        VideoDeletionOutbox updatedMiddle = outboxRepository.findById(rowMiddle.getId()).orElseThrow();
+        VideoDeletionOutbox updatedMiddle = videoDeletionOutboxRepository.findById(rowMiddle.getId()).orElseThrow();
         assertThat(updatedMiddle.getStatus())
             .as("handleFailure's own DB write threw before persisting — row must remain CLAIMED, "
                 + "recovered later by the next stale-claim sweep, not left in an inconsistent state")
@@ -321,12 +312,12 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
 
         Instant runClaimedAt = Instant.now();
         UUID runId = UUID.randomUUID();
-        int claimed = outboxRepository.claimPendingBatch(runClaimedAt, runId, 50);
+        int claimed = videoDeletionOutboxRepository.claimPendingBatch(runClaimedAt, runId, 50);
         assertThat(claimed).isEqualTo(1);
 
         // skillars-deferred-124 AC4: findClaimedBatch now keys on claimed_by (runId), not
         // claimed_at-exact-equality.
-        List<VideoDeletionOutbox> batch = outboxRepository.findClaimedBatch(runId, 50);
+        List<VideoDeletionOutbox> batch = videoDeletionOutboxRepository.findClaimedBatch(runId, 50);
         assertThat(batch).extracting(VideoDeletionOutbox::getId).containsExactly(row.getId());
         assertThat(batch.get(0).getClaimedAt()).isNotNull();
         assertThat(batch.get(0).getClaimedBy()).isEqualTo(runId);
@@ -346,18 +337,18 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         Video video = seedPurgedVideo("asset-genuinely-stale");
         VideoDeletionOutbox row = seedPendingOutboxRow(video.getId(), "asset-genuinely-stale");
         transactionTemplate.execute(status -> {
-            VideoDeletionOutbox loaded = outboxRepository.findById(row.getId()).orElseThrow();
+            VideoDeletionOutbox loaded = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
             loaded.setStatus("CLAIMED");
             loaded.setClaimedAt(Instant.now().minus(30, java.time.temporal.ChronoUnit.MINUTES));
             loaded.setClaimedBy(UUID.randomUUID());
-            outboxRepository.save(loaded);
+            videoDeletionOutboxRepository.save(loaded);
             return null;
         });
 
-        int reset = outboxRepository.resetStaleClaimed(java.time.Duration.ofMinutes(20).toSeconds());
+        int reset = videoDeletionOutboxRepository.resetStaleClaimed(java.time.Duration.ofMinutes(20).toSeconds());
 
         assertThat(reset).as("a genuinely stale claim must be reclaimed").isEqualTo(1);
-        VideoDeletionOutbox recovered = outboxRepository.findById(row.getId()).orElseThrow();
+        VideoDeletionOutbox recovered = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
         assertThat(recovered.getStatus()).isEqualTo("PENDING");
         assertThat(recovered.getClaimedAt()).isNull();
         // skillars-deferred-124 AC4 Task 7: claimed_by must also clear on this transition, mirroring
@@ -375,18 +366,18 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         Video video = seedPurgedVideo("asset-backlogged");
         VideoDeletionOutbox row = seedPendingOutboxRow(video.getId(), "asset-backlogged");
         transactionTemplate.execute(status -> {
-            VideoDeletionOutbox loaded = outboxRepository.findById(row.getId()).orElseThrow();
+            VideoDeletionOutbox loaded = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
             loaded.setStatus("CLAIMED");
             loaded.setNextRetryAt(Instant.now().minus(2, java.time.temporal.ChronoUnit.HOURS));
             loaded.setClaimedAt(Instant.now());
-            outboxRepository.save(loaded);
+            videoDeletionOutboxRepository.save(loaded);
             return null;
         });
 
-        int reset = outboxRepository.resetStaleClaimed(java.time.Duration.ofMinutes(20).toSeconds());
+        int reset = videoDeletionOutboxRepository.resetStaleClaimed(java.time.Duration.ofMinutes(20).toSeconds());
 
         assertThat(reset).as("a genuinely-just-claimed row must not be reclaimed").isZero();
-        VideoDeletionOutbox stillClaimed = outboxRepository.findById(row.getId()).orElseThrow();
+        VideoDeletionOutbox stillClaimed = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
         assertThat(stillClaimed.getStatus()).isEqualTo("CLAIMED");
     }
 
@@ -425,10 +416,10 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         Video video = seedPurgedVideo("asset-db-time-boundary-under");
         VideoDeletionOutbox row = seedPendingOutboxRow(video.getId(), "asset-db-time-boundary-under");
         transactionTemplate.execute(status -> {
-            VideoDeletionOutbox loaded = outboxRepository.findById(row.getId()).orElseThrow();
+            VideoDeletionOutbox loaded = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
             loaded.setStatus("CLAIMED");
             loaded.setClaimedBy(UUID.randomUUID());
-            outboxRepository.save(loaded);
+            videoDeletionOutboxRepository.save(loaded);
             return null;
         });
 
@@ -436,7 +427,7 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
             jdbcTemplate.update(
                 "UPDATE main.video_deletion_outbox SET claimed_at = now() - interval '19 minutes 59 seconds' WHERE id = ?",
                 row.getId());
-            return outboxRepository.resetStaleClaimed(java.time.Duration.ofMinutes(20).toSeconds());
+            return videoDeletionOutboxRepository.resetStaleClaimed(java.time.Duration.ofMinutes(20).toSeconds());
         });
 
         assertThat(reset).as("a claim one second inside the stale window must NOT be reclaimed yet").isZero();
@@ -447,10 +438,10 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         Video video = seedPurgedVideo("asset-db-time-boundary-over");
         VideoDeletionOutbox row = seedPendingOutboxRow(video.getId(), "asset-db-time-boundary-over");
         transactionTemplate.execute(status -> {
-            VideoDeletionOutbox loaded = outboxRepository.findById(row.getId()).orElseThrow();
+            VideoDeletionOutbox loaded = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
             loaded.setStatus("CLAIMED");
             loaded.setClaimedBy(UUID.randomUUID());
-            outboxRepository.save(loaded);
+            videoDeletionOutboxRepository.save(loaded);
             return null;
         });
 
@@ -458,11 +449,11 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
             jdbcTemplate.update(
                 "UPDATE main.video_deletion_outbox SET claimed_at = now() - interval '20 minutes 1 second' WHERE id = ?",
                 row.getId());
-            return outboxRepository.resetStaleClaimed(java.time.Duration.ofMinutes(20).toSeconds());
+            return videoDeletionOutboxRepository.resetStaleClaimed(java.time.Duration.ofMinutes(20).toSeconds());
         });
 
         assertThat(reset).as("a claim one second past the stale window must be reclaimed").isEqualTo(1);
-        VideoDeletionOutbox recovered = outboxRepository.findById(row.getId()).orElseThrow();
+        VideoDeletionOutbox recovered = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
         assertThat(recovered.getStatus()).isEqualTo("PENDING");
         assertThat(recovered.getClaimedAt()).isNull();
         assertThat(recovered.getClaimedBy()).isNull();
@@ -483,21 +474,21 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         UUID runAId = UUID.randomUUID();
         UUID runBId = UUID.randomUUID();
         transactionTemplate.execute(status -> {
-            VideoDeletionOutbox loadedA = outboxRepository.findById(rowA.getId()).orElseThrow();
+            VideoDeletionOutbox loadedA = videoDeletionOutboxRepository.findById(rowA.getId()).orElseThrow();
             loadedA.setStatus("CLAIMED");
             loadedA.setClaimedAt(Instant.now().minusSeconds(120));
             loadedA.setClaimedBy(runAId);
-            outboxRepository.save(loadedA);
+            videoDeletionOutboxRepository.save(loadedA);
 
-            VideoDeletionOutbox loadedB = outboxRepository.findById(rowB.getId()).orElseThrow();
+            VideoDeletionOutbox loadedB = videoDeletionOutboxRepository.findById(rowB.getId()).orElseThrow();
             loadedB.setStatus("CLAIMED");
             loadedB.setClaimedAt(Instant.now());
             loadedB.setClaimedBy(runBId);
-            outboxRepository.save(loadedB);
+            videoDeletionOutboxRepository.save(loadedB);
             return null;
         });
 
-        List<VideoDeletionOutbox> runBBatch = outboxRepository.findClaimedBatch(runBId, 50);
+        List<VideoDeletionOutbox> runBBatch = videoDeletionOutboxRepository.findClaimedBatch(runBId, 50);
 
         assertThat(runBBatch).extracting(VideoDeletionOutbox::getId).containsExactly(rowB.getId());
     }
@@ -511,12 +502,12 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
      * generated inside {@code process()} ({@code UUID.randomUUID()}), so this test has no a-priori
      * handle on it — captured via {@code ArgumentCaptor} on {@code claimPendingBatch}'s own second
      * argument, then asserted as the same value passed to {@code releaseClaimed}. A bare
-     * {@code verify(outboxRepository).releaseClaimed(any())} would pass without proving the released
+     * {@code verify(videoDeletionOutboxRepository).releaseClaimed(any())} would pass without proving the released
      * run is actually this run's own.
      *
      * <p>/bmad-code-review fix (2026-09-21): the {@code verify(...)} calls above only prove
      * {@code releaseClaimed} was INVOKED on the spy — every other test in this class asserts real DB
-     * state via {@code outboxRepository.findById(...)}. {@code outboxRepository} is a
+     * state via {@code videoDeletionOutboxRepository.findById(...)}. {@code videoDeletionOutboxRepository} is a
      * {@code @MockitoSpyBean} wrapping the real bean (only {@code findClaimedBatch} is stubbed), so
      * {@code releaseClaimed}'s real UPDATE genuinely runs — asserted directly below rather than only
      * inferred from the mock having been called.
@@ -526,7 +517,7 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         Video video = seedPurgedVideo("asset-claim-throw");
         VideoDeletionOutbox row = seedPendingOutboxRow(video.getId(), "asset-claim-throw");
         doThrow(new RuntimeException("row-mapping failure"))
-            .when(outboxRepository).findClaimedBatch(any(), anyInt());
+            .when(videoDeletionOutboxRepository).findClaimedBatch(any(), anyInt());
 
         assertThatThrownBy(() -> processor.process())
             .as("a claim-phase failure must propagate — this phase has no log-and-return convention")
@@ -534,10 +525,10 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
             .hasMessageContaining("row-mapping failure");
 
         ArgumentCaptor<UUID> runIdCaptor = ArgumentCaptor.forClass(UUID.class);
-        verify(outboxRepository).claimPendingBatch(any(), runIdCaptor.capture(), anyInt());
-        verify(outboxRepository).releaseClaimed(runIdCaptor.getValue());
+        verify(videoDeletionOutboxRepository).claimPendingBatch(any(), runIdCaptor.capture(), anyInt());
+        verify(videoDeletionOutboxRepository).releaseClaimed(runIdCaptor.getValue());
 
-        VideoDeletionOutbox released = outboxRepository.findById(row.getId()).orElseThrow();
+        VideoDeletionOutbox released = videoDeletionOutboxRepository.findById(row.getId()).orElseThrow();
         assertThat(released.getStatus())
             .as("the row must genuinely be back in PENDING in the database, not merely have had "
                 + "releaseClaimed invoked on the mock")
@@ -561,7 +552,7 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
 
         processor.process();
 
-        verify(outboxRepository, never()).releaseClaimed(any());
+        verify(videoDeletionOutboxRepository, never()).releaseClaimed(any());
     }
 
     private Video seedPurgedVideo(String providerAssetId) {
@@ -583,7 +574,7 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         row.setStatus("PENDING");
         row.setAttempts(0);
         row.setTriggeredBy(LifecycleTrigger.USER_DELETION);
-        return outboxRepository.save(row);
+        return videoDeletionOutboxRepository.save(row);
     }
 
     private VideoDeletionOutbox seedPendingOutboxRowAt(UUID videoId, String bunnyVideoId, Instant nextRetryAt) {
@@ -594,6 +585,6 @@ class VideoDeletionOutboxProcessorIT extends BaseVideoIT {
         row.setAttempts(0);
         row.setNextRetryAt(nextRetryAt);
         row.setTriggeredBy(LifecycleTrigger.USER_DELETION);
-        return outboxRepository.save(row);
+        return videoDeletionOutboxRepository.save(row);
     }
 }

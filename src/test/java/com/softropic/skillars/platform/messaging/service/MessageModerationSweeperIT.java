@@ -1,15 +1,10 @@
 package com.softropic.skillars.platform.messaging.service;
 
-import com.softropic.skillars.config.TestConfig;
+import com.softropic.skillars.config.AbstractIntegrationTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -25,28 +20,22 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p><strong>ShedLock testing trap:</strong> invoking a {@code @SchedulerLock} method from a test
  * goes through the Spring proxy, so with {@code lockAtLeastFor = PT2M} every call after the first in
- * this class would be silently skipped. {@link #releaseSchedulerLock} (copied from
- * {@code BasePaymentIT}, since messaging ITs have no shared base class) is called before every
- * {@code sweep()} invocation to guard against that.
+ * this class would be silently skipped. The inherited {@link #releaseSchedulerLock} is called before
+ * every {@code sweep()} invocation to guard against that.
+ *
+ * <p>skillars-deferred-160 AC9: this class used to declare its own {@code @SpringBootTest} and was
+ * allowlisted as "sliced", but it was a full application context of its own. It now extends
+ * {@link AbstractIntegrationTest}, which also gives it the per-method database reset.
  */
-@ActiveProfiles({"dev", "test"})
-@SpringBootTest
-@Import(TestConfig.class)
-class MessageModerationSweeperIT {
+class MessageModerationSweeperIT extends AbstractIntegrationTest {
 
     private static final String LOCK_NAME = "MessageModerationSweeper_sweep";
 
     @Autowired private MessageModerationSweeper sweeper;
-    @Autowired private JdbcTemplate jdbcTemplate;
-    @Autowired private TransactionTemplate transactionTemplate;
 
-    /**
-     * Spied, not mocked — every test but the select/sweep-race case below uses the real query. Only
-     * that one stubs {@code findPendingOlderThan}, to hand the sweeper the stale snapshot a real
-     * race would have produced.
-     */
-    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
-    private com.softropic.skillars.platform.messaging.repo.MessageRepository messageRepository;
+    // messageRepository: a spy inherited from AbstractIntegrationTest (skillars-deferred-160 AC7).
+    // Every test but the select/sweep-race case below uses the real query. Only that one stubs
+    // findPendingOlderThan, to hand the sweeper the stale snapshot a real race would have produced.
 
     private static final long CONVERSATION_ID = 9870_000_001L;
     private static final UUID COACH_ID = UUID.randomUUID();
@@ -110,14 +99,6 @@ class MessageModerationSweeperIT {
         return jdbcTemplate.queryForObject(
             "SELECT reason FROM admin.admin_alerts WHERE reference_id = ? AND type = 'MODERATION_UNRESOLVED'",
             String.class, String.valueOf(messageId));
-    }
-
-    private void releaseSchedulerLock(String lockName) {
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update(
-                "UPDATE main.shedlock SET lock_until = now() - interval '1 minute' WHERE name = ?", lockName);
-            return null;
-        });
     }
 
     @Test

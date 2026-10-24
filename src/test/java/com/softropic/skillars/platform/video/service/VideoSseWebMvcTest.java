@@ -39,8 +39,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(VideoEventResource.class)
-@Import(VideoSseIT.TestSecurityConfig.class)
-class VideoSseIT {
+@Import(VideoSseWebMvcTest.TestSecurityConfig.class)
+class VideoSseWebMvcTest {
 
     @TestConfiguration
     @EnableMethodSecurity

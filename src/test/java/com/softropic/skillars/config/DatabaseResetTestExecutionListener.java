@@ -118,6 +118,11 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
             recordQuiesceCost(System.nanoTime() - quiesceStartNanos);
         }
 
+        // skillars-deferred-160 AC3: after quiescing, so an async event from the previous test
+        // cannot land in this test's recording. getBeanProvider: a context without TestConfig
+        // (none today) simply has nothing to clear.
+        ctx.getBeanProvider(RecordedEvents.class).ifAvailable(RecordedEvents::clear);
+
         // Code review 2026-09-23: measured from AFTER quiescing, not before. Quiescing can legitimately
         // wait up to its own 30s bound (skillars-deferred-136 AC4 raised it from the 10s this comment
         // used to cite — see quiesceAsyncExecutors's own Awaitility.await().atMost call); folding that

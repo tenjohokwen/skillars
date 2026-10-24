@@ -1,7 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
-import com.softropic.skillars.platform.session.service.VideoPhysicalDeletionListener;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.LifecycleTrigger;
@@ -14,7 +14,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
@@ -36,7 +35,11 @@ import static org.mockito.Mockito.verify;
 class VideoPurgedEventIT extends BaseVideoIT {
 
     @MockitoBean VideoProviderAdapter videoProviderAdapter;
-    @MockitoSpyBean VideoPhysicalDeletionListener physicalDeletionListener;
+
+    // skillars-deferred-160 AC8: present so this class shares the {VideoProviderAdapter, FileStorageService}
+    // mock set (and Spring context) with its peers. Keep this exact field name; it is part of the cache key.
+    @MockitoBean FileStorageService fileStorageService;
+    // physicalDeletionListener: a spy inherited from AbstractIntegrationTest (skillars-deferred-160 AC7).
 
     @Autowired VideoDeletionService videoDeletionService;
     @Autowired VideoRepository videoRepository;

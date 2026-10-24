@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.infrastructure.video.AssetStatus;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.video.BaseVideoIT;
@@ -25,6 +26,10 @@ class AdminVideoIT extends BaseVideoIT {
 
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
+
+    // skillars-deferred-160 AC8: present so this class shares the {VideoProviderAdapter, FileStorageService}
+    // mock set (and Spring context) with its peers. Keep this exact field name; it is part of the cache key.
+    @MockitoBean FileStorageService fileStorageService;
 
     @Autowired AdminVideoService adminVideoService;
     @Autowired VideoRepository videoRepository;

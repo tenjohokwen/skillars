@@ -31,12 +31,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 // AC3: 9 of SubscriptionResource's 10 endpoints have no HTTP-level coverage today — only
-// GET /player/me is covered, by PlayerSubscriptionOwnershipIT. Reuses that class's
+// GET /player/me is covered, by PlayerSubscriptionOwnershipWebMvcTest. Reuses that class's
 // TestSecurityConfig (anyRequest().authenticated(), with @EnableMethodSecurity) rather than
 // duplicating it, per this codebase's existing precedent.
 @WebMvcTest(SubscriptionResource.class)
-@Import(PlayerSubscriptionOwnershipIT.TestSecurityConfig.class)
-class SubscriptionResourceIT {
+@Import(PlayerSubscriptionOwnershipWebMvcTest.TestSecurityConfig.class)
+class SubscriptionResourceWebMvcTest {
 
     private static final Long COACH_USER_ID = 7001L;
     private static final UUID COACH_PROFILE_ID = UUID.randomUUID();

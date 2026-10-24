@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.contract.AccountRole;
 import com.softropic.skillars.platform.security.contract.event.AccountDeletionRequestedEvent;
@@ -10,14 +11,12 @@ import com.softropic.skillars.platform.video.contract.Visibility;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoApprovalRequest;
 import com.softropic.skillars.platform.video.repo.VideoApprovalRequestRepository;
-import com.softropic.skillars.platform.video.repo.VideoDeletionOutboxRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
@@ -31,10 +30,14 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
 
     @MockitoBean VideoProviderAdapter videoProviderAdapter;
 
+    // skillars-deferred-160 AC8: present so this class shares the {VideoProviderAdapter, FileStorageService}
+    // mock set (and Spring context) with its peers. Keep this exact field name; it is part of the cache key.
+    @MockitoBean FileStorageService fileStorageService;
+
     @Autowired AccountDeletionCascadeListener listener;
     @Autowired VideoDeletionService videoDeletionService;
     @Autowired VideoRepository videoRepository;
-    @MockitoSpyBean VideoDeletionOutboxRepository outboxRepository;
+    // videoDeletionOutboxRepository: a spy inherited from AbstractIntegrationTest (skillars-deferred-160 AC7).
     @Autowired VideoApprovalRequestRepository approvalRequestRepository;
     @Autowired ApplicationEventPublisher eventPublisher;
     @Autowired TransactionTemplate transactionTemplate;
@@ -42,7 +45,7 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
     @BeforeEach
     void setUp() {
         doNothing().when(videoProviderAdapter).deleteAsset(org.mockito.ArgumentMatchers.anyString());
-        outboxRepository.deleteAll();
+        videoDeletionOutboxRepository.deleteAll();
         approvalRequestRepository.deleteAll();
         videoRepository.deleteAll();
     }
@@ -61,7 +64,7 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
             .isEqualTo(OperationalState.PURGED);
         assertThat(videoRepository.findById(v2.getId()).orElseThrow().getOperationalState())
             .isEqualTo(OperationalState.PURGED);
-        assertThat(outboxRepository.findAll()).hasSize(2);
+        assertThat(videoDeletionOutboxRepository.findAll()).hasSize(2);
     }
 
     @Test
@@ -117,7 +120,7 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
         listener.onAccountDeleted(event);
 
         // Already PURGED: should not add a second outbox entry
-        assertThat(outboxRepository.existsByVideoIdAndStatus(v.getId(), "PENDING")).isFalse();
+        assertThat(videoDeletionOutboxRepository.existsByVideoIdAndStatus(v.getId(), "PENDING")).isFalse();
     }
 
     @Test
@@ -155,7 +158,7 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
 
         assertThat(videoRepository.findById(v.getId()).orElseThrow().getOperationalState())
             .isEqualTo(OperationalState.PURGED);
-        assertThat(outboxRepository.findAll()).hasSize(1);
+        assertThat(videoDeletionOutboxRepository.findAll()).hasSize(1);
     }
 
     @Test
@@ -175,7 +178,7 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
 
         assertThat(videoRepository.findById(v.getId()).orElseThrow().getOperationalState())
             .isEqualTo(OperationalState.PURGED);
-        assertThat(outboxRepository.findAll())
+        assertThat(videoDeletionOutboxRepository.findAll())
             .hasSize(1)
             .first()
             .satisfies(row -> assertThat(row.getBunnyVideoId()).isNull());
@@ -188,7 +191,7 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
         Video videoB = seedVideo(coachOwnerId, "asset-partial-b");
 
         doThrow(new RuntimeException("simulated outbox failure"))
-            .when(outboxRepository)
+            .when(videoDeletionOutboxRepository)
             .save(argThat(outbox -> outbox.getVideoId().equals(videoB.getId())));
 
         AccountDeletionRequestedEvent event =
@@ -197,11 +200,11 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
 
         assertThat(videoRepository.findById(videoA.getId()).orElseThrow().getOperationalState())
             .isEqualTo(OperationalState.PURGED);
-        assertThat(outboxRepository.existsByVideoIdAndStatus(videoA.getId(), "PENDING")).isTrue();
+        assertThat(videoDeletionOutboxRepository.existsByVideoIdAndStatus(videoA.getId(), "PENDING")).isTrue();
 
         assertThat(videoRepository.findById(videoB.getId()).orElseThrow().getOperationalState())
             .isEqualTo(OperationalState.READY);
-        assertThat(outboxRepository.existsByVideoIdAndStatus(videoB.getId(), "PENDING")).isFalse();
+        assertThat(videoDeletionOutboxRepository.existsByVideoIdAndStatus(videoB.getId(), "PENDING")).isFalse();
     }
 
     private VideoApprovalRequest seedPendingApproval(java.util.UUID videoId, long playerId, long parentId) {

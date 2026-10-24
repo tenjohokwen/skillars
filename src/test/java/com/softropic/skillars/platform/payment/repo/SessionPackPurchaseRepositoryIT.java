@@ -2,7 +2,6 @@ package com.softropic.skillars.platform.payment.repo;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
-import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,8 +28,6 @@ class SessionPackPurchaseRepositoryIT extends AbstractIntegrationTest {
     private static final long OTHER_PLAYER_ID = 9_620_000_003L;
     private static final long OTHER_COACH_USER_ID = 9_620_000_004L;
 
-    @Autowired private SessionPackPurchaseRepository sessionPackPurchaseRepository;
-    @Autowired private CoachProfileRepository coachProfileRepository;
     @Autowired private SessionPackTierRepository sessionPackTierRepository;
 
     private void seedCoachUser(long coachUserId) {

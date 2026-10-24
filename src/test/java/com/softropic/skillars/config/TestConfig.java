@@ -202,6 +202,12 @@ public class TestConfig {
         return new EntityFetchAsserter(emf);
     }
 
+    /** Shared event capture; see {@link RecordedEvents} for why it is not per-class. */
+    @Bean
+    public RecordedEvents recordedEvents() {
+        return new RecordedEvents();
+    }
+
 
     @Bean
     @Primary

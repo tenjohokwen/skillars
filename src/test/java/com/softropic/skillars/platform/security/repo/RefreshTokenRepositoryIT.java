@@ -26,8 +26,6 @@ class RefreshTokenRepositoryIT extends AbstractIntegrationTest {
     private static final String TOKEN_HASH =
         "deferred144repotest0000000000000000000000000000000000000000000aa";
 
-    @Autowired
-    private RefreshTokenRepository refreshTokenRepository;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
