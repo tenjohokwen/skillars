@@ -493,7 +493,8 @@ management:
       group:
         smoke:
           include: db,diskSpace,ping
-        # The `notification` group is declared PER PROFILE (application-prod: ses; -dev/-uat: smtp),
+        # The `notification` group is declared PER PROFILE (application-prod: ses; -uat: smtp; -dev: none, it runs
+        # transport=log - ses-1.5),
         # never here. Spring Boot's HealthEndpointGroupMembershipValidator resolves every name in an
         # include list against actually-registered beans at context refresh and fails startup on a
         # miss, and both transport health indicators are @Conditional on the active transport — so a

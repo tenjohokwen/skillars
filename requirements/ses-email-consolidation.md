@@ -1,7 +1,7 @@
 # SES Email Consolidation — Single Outbound Email Transport
 
-**Status:** Proposed
-**Date:** 2026-09-11 (revised after decision round 1 — see §9)
+**Status:** In progress — Phases 1-4 and 7 shipped (`ses-1.1`-`ses-1.4`, `ses-1.7`); Phase 5 split 2026-10-24 into `ses-1.5` (dev → `log`, shipped; domain-free) and `ses-1-5b` (uat → SES; **deferred** until the sending domain exists); Phase 6 (`ses-1-6`) deferred behind it. Status of record: `_bmad-output/implementation-artifacts/sprint-status.yaml`.
+**Date:** 2026-09-11 (revised after decision round 1 — see §9; Phase 5 split and D-1b/D-4 notes 2026-10-24)
 **Scope:** `infrastructure/ses`, new `infrastructure/email`, `platform/notification`,
 `platform/security/infrastructure/listener`, config, deployment, tests
 
@@ -614,9 +614,22 @@ production access. Then, per environment and independently:
 1. uat → `transport=ses` with its own identity and configuration set; run §7.3's manual
    checklist against a real inbox.
 2. dev → `transport=log` with `dump-dir` (per D-4).
-3. Confirm `/actuator/health/notification` reports SES in both prod and uat.
+3. Confirm `/manage/health/notification` (management port 8367, e.g. `docker exec <app> wget -qO-
+   http://localhost:8367/manage/health/notification`; `/actuator/health` is only the public smoke rewrite)
+   reports SES in both prod and uat.
 
 *Exit:* no environment uses SMTP. This phase changes configuration only — no code.
+
+> **Update 2026-10-24 (ses-1.5 / ses-1-5b split).** Phase 5 no longer holds as one step, and "configuration only" proved untrue in practice.
+> - **Step 2 (dev → `log`) shipped as `ses-1.5`** — it needs no domain. It also had to remove dev's `notification` health
+>   group (a `log` transport registers no health indicator, and a stale `include: smtp` aborts boot), add a Docker bind mount
+>   for the dump directory, and `TransportHealthGroupConsistencyTest` now pins transport ↔ health group per profile.
+> - **Phase 5 also needed code-adjacent work**: `SES_CUTOVER_PREFLIGHT` was missing from `envelope_entity_email_template_check`,
+>   so the preflight endpoint could not persist its envelope on a real database. V168 widens the CHECK;
+>   `EnvelopeEntitySchemaIT` pins enum ↔ constraint parity.
+> - **Steps 1 and 3 (uat → `ses`, confirm health) are `ses-1-5b-uat-ses-cutover`, deferred** by the owner until the
+>   sending domain is registered — which happens only after the app is thoroughly tested. Until then uat stays on Gmail/GMX
+>   SMTP, which is the workaround. The `deferred` status is documented in `sprint-status.yaml`'s header.
 
 ### Phase 6 — Delete SMTP
 
@@ -1203,15 +1216,15 @@ recovers the backlog automatically. Beyond it, rows go `DEADLINE_EXPIRED`.
 |---|---|---|
 | D-3 | What does UAT do for email? | **dev, test and uat stay on Gmail SMTP** until the SES/domain decision lands, structured so the switch and the removal are easy. This is what drove §3.4 and the Phase 2/5/6 split |
 | D-3b | What does prod do? | **Prod goes to SES for everything, immediately** (Phase 2). Prod is not live, and it must never acquire an SMTP dependency it would later have to shed |
-| D-4 | Dev transport after cutover | **Rendered HTML to disk** (`app.email.log.dump-dir`), Phase 5 |
+| D-4 | Dev transport after cutover | **Rendered HTML to disk** (`app.email.log.dump-dir`), Phase 5 — **shipped 2026-10-24 as `ses-1.5`** |
 | D-5 | Registration durability (Phase 4) | **In scope for this migration**, not a follow-up |
 
 ### 9.2 Still open
 
 | # | Decision | Notes |
 |---|---|---|
-| **D-1** | **Which domain does the platform send from?** Undecided; `skillars.com` is unavailable | **Blocks Phase 5 only** — that is the point of the staging. Carries up to 72 h of DNS + DKIM lead time, so start it early. Whatever is chosen reaches the app only through `${APP_SES_FROM_ADDRESS}`; no literal in committed YAML (§6.7) |
-| D-1b | Is the SES account out of the sandbox, in `app.ses.region`, with the chosen domain DKIM-verified? | Depends on D-1. Hard gate for Phase 5 and for prod serving real users (§6.8) |
+| **D-1** | **Which domain does the platform send from?** Undecided; `skillars.com` is unavailable | **Owner decision 2026-10-24: deliberately deferred** — the domain will be registered only after the app is thoroughly tested; anything that needs it (`ses-1-5b`, `ses-1-6`) stays `deferred` and must not be picked up automatically. **Blocks Phase 5 only** — that is the point of the staging. Carries up to 72 h of DNS + DKIM lead time, so start it early. Whatever is chosen reaches the app only through `${APP_SES_FROM_ADDRESS}`; no literal in committed YAML (§6.7) |
+| D-1b | Is the SES account out of the sandbox, in `app.ses.region`, with the chosen domain DKIM-verified? | Depends on D-1. Hard gate for prod serving real users (§6.8). **Owner decision 2026-10-24 (supersedes "hard gate for Phase 5"):** the uat flip (`ses-1-5b`) may run **sandbox-first** with verified individual identities for the technical checks (expected: preflight `ready:false`, `ses` health DOWN), but the story is not done until re-verified with production access. Also decided: uat may share prod's AWS account/region while prod is not live; separate it (or explicitly accept the risk) before prod serves real traffic (`runbook.md`, SES cutover gate item 5) |
 | D-2 | Display name and reply path — bare address or `Skillars <noreply@…>`? Any `Reply-To`? | **Proceeding with:** support both shapes from the start, `app.ses.reply-to-address` present but unset. One line now versus a schema change later. Say if you want a specific default |
 | D-6 | Bounce/complaint handling — this migration or the next? | **Proceeding with:** follow-up story, but set `app.ses.configuration-set` and the correlation-id message tag now so events are correlatable when the consumer lands (§6.9) |
 | D-7 | Test profile transport — `log` or `smtp`? | **Proceeding with `log`.** Tests never reach a transport (`TestMailManager` replaces `MailManager`), so `log` preserves today's behaviour while guaranteeing CI can never open a socket to Gmail or call AWS (§4.5) |

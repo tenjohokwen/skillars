@@ -4,10 +4,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.platform.notification.contract.EmailDeliveryStatus;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
+import com.softropic.skillars.platform.notification.contract.Envelope;
+import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.notification.infrastructure.EmailRetryScheduler;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntity;
 import com.softropic.skillars.platform.notification.repo.EnvelopeEntityRepository;
 import com.softropic.skillars.platform.notification.repo.RecipientEntity;
+import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.platform.notification.service.NotificationEmailOutboxHandler;
 import com.softropic.skillars.platform.notification.service.NotificationOutboxSupport;
 import com.softropic.skillars.platform.notification.service.NotificationOutboxSupport.NotificationEmailPayload;
@@ -67,6 +70,7 @@ class RegistrationEmailDurabilityIT extends AbstractIntegrationTest {
     @Autowired private NotificationEmailOutboxHandler notificationEmailOutboxHandler;
     @Autowired private EmailRetryScheduler emailRetryScheduler;
     @Autowired private ObjectMapper objectMapper;
+    @Autowired private MailManager mailManager;
 
     private String freshEmail(String prefix) {
         return "ses14." + prefix + "." + UUID.randomUUID() + "@skillars-test.com";
@@ -107,6 +111,32 @@ class RegistrationEmailDurabilityIT extends AbstractIntegrationTest {
         EnvelopeEntity row = transactionTemplate.execute(status -> envelopeEntityRepository.findBySendId(sendId));
         assertThat(row).as("a committed envelope row for sendId %s", sendId).isNotNull();
         return row;
+    }
+
+    /**
+     * ses-1.5 AC3 — the SES cutover preflight persists its envelope through the real
+     * {@code MailManager.sendEmailSync}. {@code SES_CUTOVER_PREFLIGHT} was missing from
+     * {@code envelope_entity_email_template_check} until V168, so on a real database the insert threw
+     * (after the send, since the insert is last and deliberately uncaught). Every other test of the
+     * preflight mocks {@code MailManager}, and the shared context's {@code TestMailManager} persists
+     * nothing, so this fork — the only context with the real bean — is where the regression has to live.
+     * Reuses this class's existing context fork: no new context, no new {@code @TestPropertySource}.
+     */
+    @Test
+    @DisplayName("SES_CUTOVER_PREFLIGHT envelope persists as SENT through the real MailManager (V168 CHECK)")
+    void sesCutoverPreflightEnvelope_persistsThroughRealMailManager() {
+        Recipient recipient = new Recipient();
+        recipient.setEmail(freshEmail("preflight"));
+        recipient.setLangKey("en");
+        String sendId = "ses-preflight-" + UUID.randomUUID();
+        Envelope envelope = new Envelope(List.of(recipient), EmailTemplate.SES_CUTOVER_PREFLIGHT,
+            Instant.now().plus(EmailTemplate.SES_CUTOVER_PREFLIGHT.deliveryDeadline()), Map.of(), sendId);
+
+        mailManager.sendEmailSync(envelope);
+
+        EnvelopeEntity row = committedRowBySendId(sendId);
+        assertThat(row.getEmailTemplate()).isEqualTo(EmailTemplate.SES_CUTOVER_PREFLIGHT);
+        assertThat(row.getStatus()).isEqualTo(EmailDeliveryStatus.SENT);
     }
 
     /**

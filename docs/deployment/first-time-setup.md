@@ -326,6 +326,8 @@ cp .env.example .env
 
 Open `.env` and fill in **every value**. See [`docs/deployment/secrets-reference.md`](secrets-reference.md) for the full list with format descriptions and generation commands.
 
+> **Before the first deploy that serves real users:** production sends email through AWS SES, so read the runbook's [Pre-production release gate: SES cutover](runbook.md#pre-production-release-gate-ses-cutover) — SES production access, IAM permissions, the post-deploy preflight call, and the decision to separate (or explicitly accept sharing) the AWS account with uat. Set `APP_SES_FROM_ADDRESS` here; it has no default and a blank value aborts boot.
+
 > **At least one of `GF_ALERT_NOTIFY_EMAIL` / `GF_SLACK_WEBHOOK_URL` is required** — `provision.sh`
 > (Step 3) refuses to proceed (`exit 1`) if `.env` is present and both are blank. If you set
 > `GF_ALERT_NOTIFY_EMAIL`, you must **also** set `GF_SMTP_ENABLED=true` and the `GF_SMTP_*` block, or
