@@ -6,13 +6,12 @@ import tsconfigPaths from 'vite-tsconfig-paths'
 // skillars-deferred-104: Vitest config for the frontend unit suite.
 //
 // This is the scaffold shipped by @quasar/quasar-app-extension-testing-unit-vitest
-// (the "official Quasar Vitest AE", decision D2), placed by hand rather than through
-// `quasar ext add`. The AE's index runner (`api.compatibleWith('@quasar/app-vite',
-// '^1.6.0 || >=2.0.0 <2.4.0')`) rejects this repo's @quasar/app-vite 2.4.1 on every
-// `quasar dev` / `quasar build`, so registering the extension in quasar.config.js would
-// break `mvn verify`'s `npx quasar build` step — the exact outcome skillars-deferred-104
-// forbids. Used purely as a library instead: this config + `installQuasarPlugin` from the
-// same package in test/vitest/setup-file.js. quasar.config.js is left untouched.
+// (the "official Quasar Vitest AE", decision D2). Since skillars-deferred-161 the AE (2.x, which
+// supports @quasar/app-vite ^2.4.0 and Vitest 4) is registered in quasar.extensions.json, so its
+// index runner's compatibility check runs on every `quasar dev` / `quasar build`. Its install script
+// was deliberately not run (it would render a second config and rewrite npm scripts); this file
+// stays hand-tuned, and `installQuasarPlugin` comes from the same package in
+// test/vitest/setup-file.js.
 //
 // Alias sync with the app build: `vite-tsconfig-paths` reads .quasar/tsconfig.json, which
 // `quasar prepare` regenerates from quasar.config.js on every `npm install` — so the
@@ -29,9 +28,8 @@ import tsconfigPaths from 'vite-tsconfig-paths'
 // export, so any boot file loaded for real under Vitest throws "defineBoot is not a function" at
 // import time. In the real app this only works because `@quasar/app-vite`'s own CLI injects a
 // runtime Vite alias for `#q-app/*` when it builds `quasar.config.js` — machinery this project's
-// vitest.config.mjs deliberately does not include (see the note above on why the Vitest AE itself is
-// unregistered). The explicit alias below points at the SAME real runtime module the public `
-// @quasar/app-vite/wrappers` subpath export already resolves to (`defineBoot = callback => callback`
+// vitest.config.mjs deliberately does not include. The explicit alias below points at the SAME real runtime module the
+// public `@quasar/app-vite/wrappers` subpath export already resolves to (`defineBoot = callback => callback`
 // — a plain identity wrapper, confirmed by reading its source), so this is not a stand-in for
 // different behavior, only a resolution-path fix.
 //

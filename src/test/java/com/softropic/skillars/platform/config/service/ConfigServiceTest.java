@@ -17,8 +17,15 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -532,5 +539,119 @@ class ConfigServiceTest {
 
         assertThat(result).isEqualTo("new");
         verify(configRepository, times(2)).findAll();
+    }
+
+    // ---- skillars-deferred-161 AC6: refreshCache() no longer holds a monitor across findAll() ----
+
+    @Test
+    void ttlStaleReader_doesNotWaitForAnInFlightLoad_andServesTheCachedSnapshot() throws Exception {
+        // ttl 0 => every read is TTL-stale. Cache is loaded once by init(); the second findAll() blocks.
+        when(configProperties.getCacheTtlSeconds()).thenReturn(0L);
+        CountDownLatch loadEntered = new CountDownLatch(1);
+        CountDownLatch releaseLoad = new CountDownLatch(1);
+        AtomicInteger findAllCalls = new AtomicInteger();
+        when(configRepository.findAll()).thenAnswer(inv -> {
+            if (findAllCalls.incrementAndGet() == 1) {
+                return List.of(entry("k", "v1", ConfigValueType.STRING));
+            }
+            loadEntered.countDown();
+            assertThat(releaseLoad.await(10, TimeUnit.SECONDS)).isTrue();
+            return List.of(entry("k", "v2", ConfigValueType.STRING));
+        });
+        configService.init();
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Optional<String>> leader = pool.submit(() -> configService.find("k"));
+            assertThat(loadEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            // The leader is parked inside findAll(). A second TTL-stale reader must return at once with the
+            // cached value instead of queueing behind it (the old synchronized refreshCache() blocked here).
+            Future<Optional<String>> follower = pool.submit(() -> configService.find("k"));
+            assertThat(follower.get(2, TimeUnit.SECONDS)).contains("v1");
+
+            releaseLoad.countDown();
+            assertThat(leader.get(5, TimeUnit.SECONDS)).contains("v2");
+            // single-flight: the follower never started a second load
+            assertThat(findAllCalls.get()).isEqualTo(2);
+        } finally {
+            releaseLoad.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void readersAfterInvalidate_allSeeFreshData_withASingleLoad() throws Exception {
+        AtomicInteger findAllCalls = new AtomicInteger();
+        CountDownLatch loadEntered = new CountDownLatch(1);
+        CountDownLatch releaseLoad = new CountDownLatch(1);
+        when(configRepository.findAll()).thenAnswer(inv -> {
+            int call = findAllCalls.incrementAndGet();
+            if (call == 1) {
+                return List.of(entry("k", "v1", ConfigValueType.STRING));
+            }
+            loadEntered.countDown();
+            assertThat(releaseLoad.await(10, TimeUnit.SECONDS)).isTrue();
+            return List.of(entry("k", "v2", ConfigValueType.STRING));
+        });
+        configService.init();
+        configService.invalidate();
+
+        int readers = 5;
+        ExecutorService pool = Executors.newFixedThreadPool(readers);
+        try {
+            List<Future<Optional<String>>> results = new ArrayList<>();
+            for (int i = 0; i < readers; i++) {
+                results.add(pool.submit(() -> configService.find("k")));
+            }
+            assertThat(loadEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            releaseLoad.countDown();
+            for (Future<Optional<String>> r : results) {
+                // read-after-invalidate: nobody may be handed the pre-invalidate snapshot
+                assertThat(r.get(5, TimeUnit.SECONDS)).contains("v2");
+            }
+            assertThat(findAllCalls.get()).isEqualTo(2);
+        } finally {
+            releaseLoad.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void invalidateDuringALoad_isNotLost() throws Exception {
+        AtomicInteger findAllCalls = new AtomicInteger();
+        CountDownLatch loadEntered = new CountDownLatch(1);
+        CountDownLatch releaseLoad = new CountDownLatch(1);
+        when(configRepository.findAll()).thenAnswer(inv -> {
+            int call = findAllCalls.incrementAndGet();
+            if (call == 1) {
+                return List.of(entry("k", "v1", ConfigValueType.STRING));
+            }
+            if (call == 2) {
+                // snapshot taken BEFORE the writer commits: stale by the time it is applied
+                loadEntered.countDown();
+                assertThat(releaseLoad.await(10, TimeUnit.SECONDS)).isTrue();
+                return List.of(entry("k", "v1", ConfigValueType.STRING));
+            }
+            return List.of(entry("k", "v2", ConfigValueType.STRING));
+        });
+        configService.init();
+        configService.invalidate();
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Optional<String>> loader = pool.submit(() -> configService.find("k"));
+            assertThat(loadEntered.await(5, TimeUnit.SECONDS)).isTrue();
+            configService.invalidate(); // the write commits and invalidates while the old snapshot is loading
+            releaseLoad.countDown();
+            loader.get(5, TimeUnit.SECONDS);
+
+            // the invalidate must still be honoured: the next read reloads instead of waiting out the TTL
+            assertThat(configService.find("k")).contains("v2");
+            assertThat(findAllCalls.get()).isEqualTo(3);
+        } finally {
+            releaseLoad.countDown();
+            pool.shutdownNow();
+        }
     }
 }
