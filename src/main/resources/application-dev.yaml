@@ -8,14 +8,18 @@ app:
       enabled: true
   ses:
     from-address: "${APP_SES_FROM_ADDRESS:dev@localhost}"
-  # ses-1.2: dev now runs the SMTP transport — including registration/OTP mail, for the first time
-  # (fixes D4). The old DevSesEmailService/@Profile("!dev") trap this comment used to document is
-  # gone since ses-1.1; app.email.log.dump-dir (skillars-deferred-110 AC10: renamed from
-  # outbox-dir, which collided in name with platform.outbox's real transactional outbox) stays set
-  # below, harmless while unused — Phase 5 flips dev to `log` and it becomes load-bearing again, so
-  # don't delete it.
+  # ses-1.5: dev runs the `log` transport (source doc D-4, §6.11): every email is logged and, because
+  # app.email.log.dump-dir is set below, its rendered body is written to <dump-dir>/<correlationId>.html. No
+  # Gmail/GMX credentials or sending domain are needed locally. The file is the only place the OTP / verification
+  # link appears (the log line carries just the masked recipient, subject and correlationId), and the file name is
+  # a random per-attempt UUID - open the newest file or grep the directory for the recipient.
+  # (History: ses-1.2 moved dev to SMTP, fixing D4 - registration/OTP mail had been silently dropped in dev; the
+  # old DevSesEmailService/@Profile("!dev") trap is gone since ses-1.1. dump-dir was renamed from outbox-dir by
+  # skillars-deferred-110 AC10, which collided in name with platform.outbox's real transactional outbox.)
+  # The smtp provider-configs below are kept only because uat still uses the smtp transport and Phase 6
+  # (ses-1-6) deletes them; they are inert while transport=log.
   email:
-    transport: smtp
+    transport: log
     log:
       dump-dir: target/mails
     # Lists replace entirely in Spring — must repeat full entries to override passwords.
@@ -65,10 +69,9 @@ skillars:
     pin-encryption-secret: "${PLATFORM_PIN_ENCRYPTION_SECRET:S3CR3TW0RD}"
     registration-verification-secret: "${PLATFORM_REGISTRATION_VERIFICATION_SECRET:dev-registration-verification-secret-32b!}"
 
-# Story ses-1.3 AC2: dev runs app.email.transport=smtp, so SmtpHealthIndicator is the only registered transport indicator.
-management:
-  endpoint:
-    health:
-      group:
-        notification:
-          include: smtp
+# ses-1.5: deliberately NO management.endpoint.health.group.notification block here. dev runs transport=log, which
+# has no health indicator, and Spring Boot's HealthEndpointGroupMembershipValidator aborts startup if an include
+# names a contributor that is not registered (the old `include: smtp` would do exactly that). The base
+# application.yaml declares no group for the log transport, which is the correct shape. Do not replace this with
+# `include: ""` - a blank include means "every contributor" in Boot, not "no group".
+# TransportHealthGroupConsistencyTest pins transport <-> include for dev/uat/prod.

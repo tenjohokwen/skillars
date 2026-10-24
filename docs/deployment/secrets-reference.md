@@ -134,9 +134,9 @@ application read them but no deploy supplied them. Defaults below are the applic
 | `GEMINI_API_KEY` | String | *empty* | Google AI Studio → API keys. Used by the AI narrative features |
 | `ARACHNID_API_KEY` | String | *empty* | Project Arachnid (C3P) credential. Only needed when `features.toggles.arachnid-enabled` is on |
 | `APP_ACCESS_LOG_ENABLED` | Boolean | `true` | **Tuning knob, not a secret.** Tomcat access logging, emitted through SLF4J (loggers `skillars.access` for port 9990 and `skillars.access.management` for 8367) so entries reach Loki. Set `false` to disable both; see [`local/deployment.md`](local/deployment.md) for silencing only the management half, which is mostly healthcheck and Prometheus traffic |
-| `ENVIRONMENT` | String | `prod` | Stamped onto every log line and Loki stream as the `environment` label |
+| `ENVIRONMENT` | String | `prod` | Stamped onto every log line and Loki stream as the `environment` label. **uat must set `ENVIRONMENT=uat`** in `.env.uat` — the compose default (`prod`) overrides the profile |
 | `APP_VERSION` | String | `unknown` | Stamped onto every log line; set from the CI build to make log/trace correlation across deploys possible |
-| `APP_FRONTEND_URL` | URL | per-profile | Base URL used to build email verification links. Wrong value ⇒ users receive unusable links |
+| `APP_FRONTEND_URL` | URL | per-profile | Base URL used to build email verification links. Wrong value ⇒ users receive unusable links. **uat must set it** in `.env.uat`: `docker-compose.yml` defaults it to the production URL, which overrides `application-uat.yaml` |
 
 > **Previously wired only on `dev` and `uat`.** `app.storage.s3.access-key`,
 > `app.storage.s3.secret-key`, `app.video.playback.signing-secret`,
@@ -158,7 +158,9 @@ application read them but no deploy supplied them. Defaults below are the applic
 > `app.email.transport: ses`, and `SesPropertiesValidator` aborts startup when `app.ses.from-address`
 > resolves blank. `docker-compose.yml` passes `APP_SES_FROM_ADDRESS` through with **no `:-` fallback**,
 > deliberately, so a missing value reaches the app blank rather than silently becoming a literal.
-> Set it in prod's real `.env` **before** deploying. Note that the manual deploy workflow has a
+> Set it in prod's real `.env` **before** deploying. Also read the runbook's
+> [Pre-production release gate: SES cutover](runbook.md#pre-production-release-gate-ses-cutover) before the first deploy that
+> serves real users — it covers production access, IAM, the preflight, and the shared-AWS-account decision. Note that the manual deploy workflow has a
 > smoke-test auto-revert, so a missing value presents as a failed smoke test and an automatic
 > revert — not as a readable boot error in the deploy console.
 >
@@ -176,11 +178,14 @@ application read them but no deploy supplied them. Defaults below are the applic
 > that can send but cannot call `GetAccount` makes that group report DOWN with an `AccessDeniedException`
 > while mail delivery itself is unaffected. Grant both actions on the SES resource.
 >
-> **Phase-5 ordering constraint (story ses-1.3).** `SesHealthIndicator` reports UP only when
+> **Phase-5 ordering constraint (story ses-1.3; owner exception recorded 2026-10-24).** `SesHealthIndicator` reports UP only when
 > `sendingEnabled` **and** `productionAccessEnabled` hold **and** `enforcementStatus` is readable and not
 > `SHUTDOWN` — a sandboxed account is deliberately DOWN, because a sandboxed prod account cannot mail real
 > users. So SES **production access must be granted before** an environment is flipped to
-> `app.email.transport: ses`, or its `notification` health group reports DOWN from the first boot. This does
+> `app.email.transport: ses`, or its `notification` health group reports DOWN from the first boot. **Owner
+> exception (2026-10-24, source doc §9.2 D-1b):** the uat flip (`ses-1-5b`) may run sandbox-first, sending only
+> to verified individual addresses; there `notification` DOWN and preflight `ready:false` are the expected shape,
+> and production access remains a hard gate for prod serving real users. This does
 > not affect container liveness or the deploy gate: both poll the `smoke` group (db, diskSpace, ping), which
 > carries no mail contributor — see `docker-compose.yml`'s app `healthcheck` and the `health-rewrite`
 > Traefik middleware.

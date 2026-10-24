@@ -243,6 +243,13 @@ scp .env.uat root@hwsrv-1301707.hostwindsdns.com:/server/skillars/.env.uat
 ssh root@hwsrv-1301707.hostwindsdns.com "chmod 600 /server/skillars/.env.uat"
 ```
 
+**`.env.uat` must set `ENVIRONMENT=uat` and `APP_FRONTEND_URL` to this box's URL** (ses-1.5): `docker-compose.yml`
+injects `ENVIRONMENT=${ENVIRONMENT:-prod}` and `APP_FRONTEND_URL=${APP_FRONTEND_URL:-https://skillars.com}`, which
+override `application-uat.yaml`, and `.env.example` seeds the production values — so without these two lines uat logs
+are labelled `prod` and every email link points at production. See the table in
+[`uat-deployment.md`](uat-deployment.md#step-4-prepare-envuat). uat sends email over Gmail/GMX SMTP for now; the move to
+SES is deferred (`ses-1-5b-uat-ses-cutover`).
+
 (If you're already `cd /server/skillars` on the box from Step 4, and
 `.env.uat` already has real values for this box, this is the only new file
 to bring over — everything else came from `git clone`.)

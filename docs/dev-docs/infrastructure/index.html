@@ -343,12 +343,15 @@ sequenceDiagram
       silently don't apply to whatever you stored.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Dev/uat deliver real email over SMTP; there is no silent local suppression any more.</strong>
-      <code>app.ses.enabled</code> and <code>NoOpSesEmailService</code> no longer exist. <code>dev</code> and
-      <code>uat</code> both run <code>app.email.transport=smtp</code> — real mail goes out, registration/OTP
-      included since <code>ses-1.4</code>. If a base context or test slice runs with no profile active it falls
-      through to the <code>log</code> transport instead, which only logs (and optionally writes to disk) rather
-      than sending — check <code>app.email.transport</code> before assuming a bug in the sending code.</p>
+      <p><strong>Dev writes email to disk; uat still delivers real email over SMTP.</strong>
+      <code>app.ses.enabled</code> and <code>NoOpSesEmailService</code> no longer exist. Since <code>ses-1.5</code>
+      <code>dev</code> runs <code>app.email.transport=log</code>: nothing is sent, each rendered email (registration/OTP
+      included) is logged and written to <code>app.email.log.dump-dir</code> (<code>target/mails</code>, one
+      random-UUID-named <code>.html</code> per send &mdash; open the newest or grep for the recipient). <code>uat</code>
+      still runs <code>smtp</code> until the SES cutover (<code>ses-1-5b</code>, deferred until the sending domain
+      exists), and <code>prod</code> is configured for <code>ses</code>. A base context or test slice with no profile
+      also falls through to <code>log</code> &mdash; check <code>app.email.transport</code> before assuming a bug in the
+      sending code.</p>
     </div>
     <div class="callout">
       <p><strong>All custom exceptions should extend <code>ApplicationException</code>, not raw <code>RuntimeException</code>.</strong>
@@ -395,8 +398,8 @@ sequenceDiagram
       <li><a href="../messaging/index.html">Messaging</a> — uses <code>sanitizer</code> for contact-detail redaction and <code>gemini</code> for moderation.</li>
       <li><a href="../notification/index.html">Notification</a> — the primary consumer of the
         <code>infrastructure.email</code> transport port, not <code>ses</code> specifically; <code>ses</code> is
-        only the transport that's active in <code>prod</code> (<code>uat</code>/<code>dev</code> run
-        <code>smtp</code>).</li>
+        only the transport that's active in <code>prod</code> (<code>uat</code> runs
+        <code>smtp</code>, <code>dev</code> runs <code>log</code>).</li>
       <li><a href="../admin/index.html">Admin</a> — consumes security/persistence primitives for cross-cutting admin operations.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>

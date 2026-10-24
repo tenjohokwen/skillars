@@ -170,6 +170,11 @@ services:
       - PLATFORM_PIN_ENCRYPTION_SECRET=S3CR3TW0RD
       - PLATFORM_REGISTRATION_VERIFICATION_SECRET=dev-registration-verification-secret-32-bytes!
       - GEMINI_API_KEY=${GEMINI_API_KEY:-dev-key}
+    # ses-1.5: dev runs app.email.transport=log, which writes each rendered email to /app/target/mails.
+    # Bind-mounted to the host so you can read OTP codes / verification links; setup.sh creates ./target/mails
+    # (mode 777, dev-only) because the container user cannot write to a root-owned or Docker-created directory.
+    volumes:
+      - ./target/mails:/app/target/mails
     ports:
       - "9990:9990"   # main app
       - "8367:8367"   # actuator/health (management port)
@@ -326,7 +331,8 @@ stack, not hypothetical ones:
   bean to activate on and is inert regardless of this flag's value. This
   codebase's real SMTP reachability check is now `SmtpHealthIndicator`
   (`infrastructure.email.smtp`), registered under the separate
-  `notification` actuator group; it never authenticates (TCP connect + `220`
+  `notification` actuator group — only when `app.email.transport=smtp`, so
+  not in `dev` any more (ses-1.5: `dev` runs `log`, which has no health indicator); it never authenticates (TCP connect + `220`
   banner + `EHLO`/TLS only), so a placeholder password cannot fail it
   either. `MANAGEMENT_HEALTH_MAIL_ENABLED=false` is kept here as a
   belt-and-braces no-op rather than removed — see `docker-compose.uat.yml`
@@ -651,7 +657,8 @@ docker logs skillars-app-1 --since 30m 2>&1 | grep -i "Email sent\|player/regist
 
 (`"Email sent"` is logged by `MailService` after every successful send, regardless of which transport is
 active — the `log` transport's own `LoggingEmailSender` additionally logs `"Sending email (log
-transport)"`, which is transport-specific and won't match under `dev`'s `smtp` transport.)
+transport)"`, which is transport-specific — and it is exactly what `dev` runs since ses-1.5, so that line is the
+way to find the file name of the email you just triggered.)
 
 **Follow one request end-to-end** — every log line for a request carries the
 same `traceId`/`requestId`, so once you spot one, you can pull the whole

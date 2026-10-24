@@ -32,18 +32,18 @@ services:
       - APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder
       # No LOKI_ENABLED override: docker-compose.yml's LOKI_ENABLED=true now works, so
       # app logs actually reach the local Loki container and are queryable in Grafana.
-      # ses-1.2: dev now runs app.email.transport: smtp (application-dev.yaml), including
-      # registration/OTP mail. ses-1.1's app.ses.enabled and the DevSesEmailService/
+      # ses-1.5: dev runs app.email.transport: log (application-dev.yaml): no mail is sent; each
+      # rendered email is written to /app/target/mails (bind-mounted below to ./target/mails on the
+      # host), including registration/OTP mail. ses-1.1's app.ses.enabled and the DevSesEmailService/
       # @Profile("!dev") trap it used to route around are both gone.
       # ses-1.2 D9: SPRING_MAIL_PASSWORD removed — it backed Boot's own autoconfigured
       # JavaMailSenderImpl, which nothing in this codebase ever injected.
-      # code review 2026-09-11 (owner decision (a)): these `:-` defaults restate
-      # application-dev.yaml's OWN `${GMX_PASSWORD:dev_gmx_password}`/`${GMAIL_PASSWORD:
-      # dev_gmail_password}` fallbacks — same "EMPTY IS NOT UNSET" reasoning as every other
-      # variable in this block (see the comment below). Without them, a bare `docker compose -f
-      # docker-compose.local.yml up` with no `.env` passes an empty (present-but-blank) value,
-      # which overrides application-dev.yaml's own default and requires real GMX/Gmail
-      # credentials just to run locally — a regression from AC6 flipping dev to `transport: smtp`.
+      # GMAIL_PASSWORD / GMX_PASSWORD are NOT used by dev any more (ses-1.5: transport=log). They stay
+      # only because the shared base docker-compose.yml still passes them for uat, which runs the smtp
+      # transport until the SES cutover (ses-1-5b, deferred) and Phase 6 (ses-1-6) deletes them.
+      # The `:-` defaults restate application-dev.yaml's own fallbacks - same "EMPTY IS NOT UNSET"
+      # reasoning as every other variable in this block (see the comment below): a bare `docker
+      # compose -f docker-compose.local.yml up` with no `.env` would otherwise pass an empty value.
       - GMAIL_PASSWORD=${GMAIL_PASSWORD:-dev_gmail_password}
       - GMX_PASSWORD=${GMX_PASSWORD:-dev_gmx_password}
       # These restate application-dev.yaml's OWN defaults, and are required rather than tidy.
@@ -60,9 +60,9 @@ services:
       # docker-compose.yml's APP_SES_FROM_ADDRESS carries no default at all (see the comment
       # there), so listing it in the base file makes it present-and-blank under compose —
       # overriding application-dev.yaml's ${APP_SES_FROM_ADDRESS:dev@localhost} fallback the
-      # same way the other variables in this block do. Harmless today (dev runs the smtp
-      # transport, which doesn't validate from-address), but restated anyway so it isn't
-      # silently dead the moment anyone runs dev locally against the ses transport.
+      # same way the other variables in this block do. Harmless today (dev runs the log
+      # transport, which never reads from-address), but restated anyway so it isn't silently
+      # dead the moment anyone runs dev locally against the ses transport.
       - APP_SES_FROM_ADDRESS=dev@localhost
       - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=dev-webhook-signing-secret
       - APP_VIDEO_PLAYBACK_SIGNING_SECRET=dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh
@@ -73,6 +73,14 @@ services:
       # The presigned upload URLs it generates also use this host — see the
       # /etc/hosts note by the `storage` service below for why that's required.
       - APP_STORAGE_ENDPOINT_URL=http://storage:9500
+    # ses-1.5: host side of the email dump directory. application-dev.yaml's relative
+    # app.email.log.dump-dir (target/mails) resolves to /app/target/mails in the container (WORKDIR /app).
+    # The container user (busybox adduser -S, unpinned uid) can only write here if the host directory
+    # already exists and is world-writable: docs/deployment/local/setup.sh creates it (mode 777, dev-only).
+    # If Docker creates it instead it is root-owned and LoggingEmailSender logs a WARN and falls back to
+    # log-only (the OTP is then not recoverable from a file), and a later `mvn clean` cannot delete it.
+    volumes:
+      - ./target/mails:/app/target/mails
     ports:
       - "9990:9990"   # main app
       - "8367:8367"   # actuator/health (management port)

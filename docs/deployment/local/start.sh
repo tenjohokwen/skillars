@@ -3,6 +3,9 @@
 # local Skillars stack. Re-run setup.sh any time to verify or repair what this needs.
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../.."
+# ses-1.5: docker-compose.local.yml bind-mounts ./target/mails; `mvn clean` deletes it, and if Docker
+# re-creates it the directory is root-owned (Linux) and the app can no longer write emails there.
+mkdir -p target/mails && chmod 777 target/mails 2>/dev/null || echo "WARN: target/mails is not writable by the app; re-run docs/deployment/local/setup.sh" >&2
 docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local \
   up -d app postgres redis storage-init grafana
 cat <<'MSG'

@@ -38,6 +38,7 @@ COMPOSE_BASE="${REPO_ROOT}/docker-compose.yml"
 COMPOSE_LOCAL="${REPO_ROOT}/docker-compose.local.yml"
 SEAWEED_IDENTITY="${REPO_ROOT}/deploy/seaweedfs/s3-identity.json"
 START_SCRIPT="${SCRIPT_DIR}/start.sh"
+MAIL_DUMP_DIR="${REPO_ROOT}/target/mails"
 
 # ------------------------------------------------------------------------------
 # Output helpers
@@ -174,10 +175,19 @@ check_image_built() {
 check_start_helper() {
   [ -x "${START_SCRIPT}" ] || return 1
   grep -q "storage-init" "${START_SCRIPT}" || return 1
+  grep -q "target/mails" "${START_SCRIPT}" || return 1
   return 0
 }
 
-ALL_CHECKS=(check_docker_ready check_env check_compose_override check_seaweed_identity check_hosts_storage check_image_built check_start_helper)
+# ses-1.5: the dev profile runs app.email.transport=log, which writes each rendered email to
+# /app/target/mails inside the container (bind-mounted to ./target/mails by docker-compose.local.yml).
+# The container runs as a non-root user with an unpinned uid, so on Linux the host directory must exist
+# beforehand (Docker would otherwise create it root-owned) and be writable by "other".
+check_mail_dump_dir() { [ -d "${MAIL_DUMP_DIR}" ] && [ -w "${MAIL_DUMP_DIR}" ] && [ -x "${MAIL_DUMP_DIR}" ] && mode_is_777 "$(stat -c '%a' "${MAIL_DUMP_DIR}" 2>/dev/null || stat -f '%Lp' "${MAIL_DUMP_DIR}")"; }
+# Compares only the permission digits: a setgid/sticky directory reports 2777/1777 and is just as writable.
+mode_is_777() { local mode="$1"; [ "${mode: -3}" = "777" ]; }
+
+ALL_CHECKS=(check_docker_ready check_env check_compose_override check_seaweed_identity check_hosts_storage check_mail_dump_dir check_image_built check_start_helper)
 
 all_done() {
   local fn
@@ -403,6 +413,25 @@ ensure_seaweed_identity() {
   done
 }
 
+ensure_mail_dump_dir() {
+  if check_mail_dump_dir; then
+    ok "target/mails exists and is writable by the app container (local email dump directory)."
+    return 0
+  fi
+  step "Local email dump directory"
+  info "Locally the app writes each email it would send to target/mails (rendered HTML, one file per send)"
+  info "instead of sending it - that is where you find registration OTP codes and verification links."
+  info "The container's user can only write there if the directory pre-exists and is world-writable"
+  info "(dev-only; target/ is gitignored and holds no secrets)."
+  mkdir -p "${MAIL_DUMP_DIR}" && chmod 777 "${MAIL_DUMP_DIR}"
+  if check_mail_dump_dir; then
+    ok "Created ${MAIL_DUMP_DIR} (mode 777)."
+  else
+    warn "Could not prepare ${MAIL_DUMP_DIR}; emails will only appear in the app log."
+    info "If Docker created it (root-owned, Linux), remove it and re-run: sudo rm -rf \"${MAIL_DUMP_DIR}\""
+  fi
+}
+
 ensure_hosts_storage() {
   if check_hosts_storage; then
     ok "/etc/hosts already resolves 'storage' to 127.0.0.1."
@@ -460,6 +489,9 @@ write_start_helper() {
 # local Skillars stack. Re-run setup.sh any time to verify or repair what this needs.
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../.."
+# ses-1.5: docker-compose.local.yml bind-mounts ./target/mails; `mvn clean` deletes it, and if Docker
+# re-creates it the directory is root-owned (Linux) and the app can no longer write emails there.
+mkdir -p target/mails && chmod 777 target/mails 2>/dev/null || echo "WARN: target/mails is not writable by the app; re-run docs/deployment/local/setup.sh" >&2
 docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local \
   up -d app postgres redis storage-init grafana
 cat <<'MSG'
@@ -510,6 +542,7 @@ print_checklist() {
   checklist_line "docker-compose.local.yml overrides present" check_compose_override
   checklist_line "SeaweedFS S3 identity file present"         check_seaweed_identity
   checklist_line "/etc/hosts 'storage' entry present"         check_hosts_storage
+  checklist_line "target/mails email dump dir writable"       check_mail_dump_dir
   checklist_line "App image built"                            check_image_built
   checklist_line "Start command generated"                    check_start_helper
 }
@@ -550,6 +583,7 @@ main() {
   ensure_compose_override
   ensure_seaweed_identity
   ensure_hosts_storage
+  ensure_mail_dump_dir
   ensure_image_built
   ensure_start_helper
 

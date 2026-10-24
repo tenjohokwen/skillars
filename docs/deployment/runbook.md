@@ -626,37 +626,44 @@ drained.
 
 ## Pre-production release gate: SES cutover
 
-**Owner:** whoever prepares the first production deploy that turns on `app.email.transport: ses`.
-**Trigger:** before that deploy, not after.
+**Owner:** whoever prepares the first production deploy that serves real users. `application-prod.yaml` has
+carried `app.email.transport: ses` since `ses-1.1`, so there is no separate "flip" commit for prod: every prod
+deploy already runs SES, and prod is not live yet.
+**Trigger:** before that first live deploy, not after.
 
-`dev`/`uat`/`test` all run `app.email.transport: log` today, `smtp` is deliberately rejected until
-Phase 2 (see `requirements/ses-email-consolidation.md`), and `DevSesEmailService` — the old way to
-exercise SES from a dev box — was deleted during `ses-1.1`. That means the switch to
-`app.email.transport: ses` in `application-prod.yaml` (`src/main/resources/application-prod.yaml`)
-is the **first time ever** `SesEmailSender` runs against real AWS: real credentials, real region,
-real verified-domain state, a 3s attempt timeout, zero retries — with no prior non-production
+Transports per environment today (`ses-1.5`, see `requirements/ses-email-consolidation.md`): `dev` runs
+`log` (each rendered email is written to `target/mails`), `uat` runs `smtp` (Gmail/GMX, unchanged — the uat
+move to SES is `ses-1-5b-uat-ses-cutover`, deferred until the sending domain is registered), `test` runs
+`log`, and `prod` is configured for `ses`. `DevSesEmailService` — the old way to exercise SES from a dev box —
+was deleted during `ses-1.1`. That means the first live prod deploy is the **first time ever**
+`SesEmailSender` runs against real AWS: real credentials, real region,
+real verified-domain state, a 3s attempt timeout, the AWS SDK's default retry strategy (`SesConfig` was
+meant to switch to zero SDK retries in Phase 4 and has not — see `deferred-work.md`) — with no prior non-production
 exercise of the path. This is a deliberate phase-plan gap (`ses-1.1`'s own plan calls for `smtp` in
-non-prod and `ses` only in prod), not a defect — there is nothing to patch in code, only a pre-flight
+non-prod and `ses` only in prod; `ses-1-5b` will change that), not a defect — there is nothing to patch in code, only a pre-flight
 verification gap to close with process. This mirrors this runbook's existing
 "Pre-production release gate: queued webhook events" section above: an accepted cutover risk closed
 by a checklist, not a code change.
 
-Before flipping `app.email.transport` to `ses` in production, verify **all** of the following:
+Before prod serves real users on `app.email.transport: ses`, verify **all** of the following:
 
 1. **The target SES account/domain is out of the sandbox.** Once `transport=ses` is live,
    `SesHealthIndicator` exposes this as the `productionAccessEnabled` detail on the `notification`
-   actuator health group (`GET /actuator/health/notification` — group is declared per-profile;
-   `application-prod.yaml` includes `ses`). A sandboxed account can only send to verified
+   actuator health group (from inside the app container:
+   `docker exec <app> wget -qO- http://localhost:8367/manage/health/notification` — details need an admin
+   login, e.g. through an SSH tunnel; the group is declared per-profile and `application-prod.yaml` includes
+   `ses`. `/actuator/health/...` on the public port 9990 does not exist: the actuator lives on management
+   port 8367 under `/manage`, and Traefik only exposes `/actuator/health`, rewritten to `/manage/health/smoke`). A sandboxed account can only send to verified
    individual addresses, which is enough for step 3 below but not for real user traffic — confirm
    `productionAccessEnabled: true` before considering the account itself production-ready.
 2. **The IAM identity the app runs as has `ses:GetAccount` and `ses:SendEmail` attached.**
    `SesHealthIndicator` calls `GetAccount` on every health check; `SesEmailSender` calls `SendEmail`
    on every send. A missing permission on either surfaces as a health-check/send failure only after
    the flip — verify both are attached beforehand, not discovered afterward.
-3. **Immediately after flipping the property, run the SES cutover preflight endpoint** —
+3. **On the first live prod deploy, before real users are let on, run the SES cutover preflight endpoint** —
    `POST /v1/admin/ses/preflight` (`SesCutoverPreflightResource`, `skillars-deferred-114` AC5;
-   admin-only, `@ConditionalOnProperty(app.email.transport=ses)` so it only exists once this flip is
-   live), body `{"recipientEmail": "<an internal address you can check>"}`. One call replaces the
+   admin-only, `@ConditionalOnProperty(app.email.transport=ses)` so it only exists where SES is the
+   transport — prod today), body `{"recipientEmail": "<an internal address you can check>"}`. One call replaces the
    rest of this step: it calls `SesV2Client.getAccount(...)` **directly, bypassing
    `SesHealthIndicator`'s TTL cache** (that indicator caches a healthy result for up to
    `SesHealthProperties.getTtl()`, default 60s, and a `DOWN` result for `getDownTtl()`, default 15s —
@@ -670,13 +677,88 @@ Before flipping `app.email.transport` to `ses` in production, verify **all** of 
    test email actually arrived at the recipient address too — the endpoint reports what the send API
    returned, not a mailbox-level delivery confirmation. Re-running the tool after fixing a config
    issue is safe: it generates a fresh `sendId` every call, so each run is an independent probe.
-4. **Roll back to `smtp`/`log` immediately if the preflight endpoint reports `ready: false`.** There
+   (Before `ses-1.5` this endpoint could not succeed: `SES_CUTOVER_PREFLIGHT` was missing from the
+   `envelope_entity_email_template_check` constraint, so persisting the envelope failed after the test email
+   had already been sent. V168 fixes that; `EnvelopeEntitySchemaIT` pins enum ↔ constraint parity.)
+4. **If the preflight endpoint reports `ready: false`, do not let real users on this deploy.** There
    is no config-gated grace path for a half-verified SES cutover — this is an accepted deploy risk,
-   not a feature to build.
+   not a feature to build. Note what "roll back" means for prod: `application-prod.yaml` has **no SMTP
+   configuration** and `transport: ses` is committed, so there is nothing to flip back. Reverting only
+   `transport` is not enough either — `notification.include: ses` would then name a health indicator that no
+   longer exists and boot aborts (`HealthEndpointGroupMembershipValidator`). A real rollback re-adds
+   `app.email.smtp.provider-configs`, `transport: smtp` **and** `notification.include: smtp` together in
+   `application-prod.yaml` (and the `GMX_PASSWORD`/`GMAIL_PASSWORD` secrets), rebuilds and redeploys; setting
+   `transport: log` instead silently drops all mail. Prefer fixing the SES side (domain, production access,
+   IAM) and re-running the preflight.
+5. **Shared AWS account (decision 2026-10-24).** `uat` may share prod's AWS account and region **while prod
+   is not live**. SES reputation and the bounce/complaint-rate pause are per account+region; a configuration
+   set only separates metrics, so a uat mistake (bad addresses, a bounce spike) could pause *all* prod mail.
+   Before prod serves real traffic, either move uat to a separate AWS account (preferred) or record explicit
+   acceptance of that shared risk in this section.
 
-Revisit this gate only if a later change adds a non-production environment that genuinely exercises
-the SES path end-to-end (at which point this cutover stops being this codebase's first-ever
-production exercise of it, and the gate's core premise no longer holds).
+Revisit this gate when `ses-1-5b-uat-ses-cutover` ships: uat will then exercise the SES path end-to-end, the
+"first-ever production exercise" premise above stops holding, and step 3 becomes "run the preflight on uat first
+(and again on prod)". Until then the premise is still true: no non-production environment sends through SES.
+
+### Recovering from an SES account-level incident
+
+`AccountSuspendedException` and `MailFromDomainNotVerifiedException` classify as transient
+(`SesErrorClassifier`), so envelopes stranded by a suspension or an unverified-domain window keep
+`retry=true` and `EmailRetryScheduler` drains them on its own once the block lifts. Two bounds apply: 6
+attempts and the per-template envelope deadline. If the incident outlasts either, the rows become
+`ATTEMPTS_EXHAUSTED` / `DEADLINE_EXPIRED` with `retry=false` and the scheduler ignores them. To re-arm them,
+run the statement below in `psql`, set `incident_start` / `incident_end` to when the incident began and ended,
+then let the scheduler pick them up:
+
+```sql
+-- psql -v ON_ERROR_STOP=1 -v incident_start=2026-10-24T08:00:00Z -v incident_end=2026-10-24T14:00:00Z \
+--      -f recover-ses-envelopes.sql
+BEGIN;
+UPDATE main.envelope_entity
+   SET status   = 'FAILED',
+       retry    = 'true',          -- retry is a TEXT column holding 'true'/'false'
+       attempts = 0,
+       deadline = now() + interval '12 hours'   -- must move forward, or the next scheduler run re-expires the row
+ WHERE status IN ('DEADLINE_EXPIRED', 'ATTEMPTS_EXHAUSTED')
+   -- envelope_entity has no created_at/updated_at; deadline = creation + the template's window, which is the
+   -- default 1 day for every template below. A row that terminated during the incident therefore has a
+   -- deadline between incident_start and incident_end + 1 day.
+   AND deadline >= :'incident_start'::timestamptz
+   AND deadline <= :'incident_end'::timestamptz + interval '1 day'
+   AND email_template IN (         -- ALLOW-list: only mail whose content is still true and useful hours later
+       'BOOKING_REQUESTED', 'BOOKING_CONFIRMED', 'BOOKING_DECLINED', 'BOOKING_EXPIRED',
+       'BOOKING_BATCH_REQUESTED', 'BOOKING_BATCH_ACCEPTED', 'BOOKING_DUPLICATE_PROPOSED',
+       'BOOKING_RESCHEDULE_REQUESTED', 'BOOKING_RESCHEDULE_ACCEPTED', 'BOOKING_RESCHEDULE_DECLINED',
+       'BOOKING_RESCHEDULE_REQUESTED_BY_COACH', 'BOOKING_RESCHEDULE_DECLINED_BY_PARENT',
+       'BOOKING_CANCELLED_BY_PARENT', 'BOOKING_CANCELLED_BY_COACH', 'BOOKING_CANCELLED_DUE_TO_PAUSE',
+       'COACH_NO_SHOW', 'PLAYER_NO_SHOW', 'PACK_PAUSED', 'SESSION_PACK_EXPIRED',
+       'PERFORMANCE_REPORT_SHARED', 'PROFILE_CHANGE', 'VIDEO_MODERATION_OWNER_FLAGGED', 'COACH_VISIBILITY_REDUCED')
+RETURNING send_id, email_template;
+COMMIT;
+```
+
+Notes:
+
+- **Why an allow-list.** A template added to `EmailTemplate` later is *not* re-sent until someone adds it here on
+  purpose. Deliberately excluded: codes and links that have expired (`*_OTP`, `SEND_OTP`, `*_EMAIL_VERIFY`,
+  `PASSWORD_RESET`, `ACTIVATION`, `CREATION_DUP`, `EMAIL_CHANGE`); time-bound reminders and prompts
+  (`BOOKING_REMINDER`, `SESSION_PACK_EXPIRY_WARNING`, `BOOKING_QUICK_COMPLETE_CONFIRM`,
+  `BOOKING_PAYMENT_UNRESOLVED`); ops-only or meaningless (`VIDEO_MODERATION_ADMIN_ALERT`, `NONE`,
+  `SES_CUTOVER_PREFLIGHT`). If you add a template to the list, check its window: the `+ interval '1 day'` bound
+  assumes the default.
+- Only the two terminal statuses are touched. A permanent rejection (e.g. a bad address) is
+  `FAILED, retry=false` and must stay that way.
+- Do **not** reset `envelope_entity_recipients.delivered`. The scheduler skips recipients already delivered,
+  and clearing it would mail them twice.
+- **Drain rate.** The scheduler drains 10 rows per run, by default every 60 s, so about 7,200 rows fit in the
+  12-hour deadline. Check the `RETURNING` count, and for a larger backlog raise the interval to cover it
+  (count / 10 minutes, plus margin), or the tail re-expires.
+- The `incident_start`/`incident_end` values are passed unquoted and cast explicitly. `ON_ERROR_STOP` makes a
+  bad value abort the script instead of being skipped.
+- Tested 2026-10-24 (ses-1.5 code review) inside a rolled-back transaction on the local dev database (V168 schema),
+  with the `psql` invocation above. Seven rows: an exhausted and an expired allow-listed row were re-armed; an OTP
+  row, a `BOOKING_PAYMENT_UNRESOLVED` row, a permanent rejection, and rows before and after the window were left
+  untouched.
 
 ---
 
