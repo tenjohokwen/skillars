@@ -116,15 +116,15 @@ that; it is the house style.
 ## The config model
 
 `vitest.config.mjs` is the scaffold shipped by the official Quasar Vitest App Extension
-(`@quasar/quasar-app-extension-testing-unit-vitest`, owner decision D2), **placed by hand**
-rather than registered through `quasar ext add`.
+(`@quasar/quasar-app-extension-testing-unit-vitest` 2.x, owner decision D2), kept hand-tuned.
 
-Why by hand: the AE's index runner pins `@quasar/app-vite` to `>=2.0.0 <2.4.0`, and this repo
-is on `2.4.1`. Registering the extension in `quasar.config.js` would make **every**
-`quasar dev` / `quasar build` — including `mvn verify`'s `npx quasar build` — fail that
-compatibility check. So the AE is used purely as a library: this config plus
-`installQuasarPlugin()` from the same package in the setup file. `quasar.config.js` is
-untouched.
+The AE is **registered** (skillars-deferred-161): `src/frontend/quasar.extensions.json` lists
+`@quasar/testing-unit-vitest`, so its index runner executes on every `quasar dev` / `quasar build` and
+enforces `quasar ^2.12.7` and `@quasar/app-vite ^2.4.0`. We did not run its install script (it would
+render a second config next to ours and rewrite npm scripts); the registration entry is the only part
+of `quasar ext add` that matters here. AE 2.x requires Vitest 4. The earlier 1.x line pinned
+`@quasar/app-vite <2.4.0`, which is why this was previously unregistered. AE 3.x needs
+`@quasar/app-vite` 3 and is not used.
 
 The config wires:
 

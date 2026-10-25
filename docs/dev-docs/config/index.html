@@ -158,7 +158,7 @@ sequenceDiagram
     CS-->>CR: throw ResourceNotFoundException (404)
   end
   CS->>DB: entity.setValue("12"), setUpdatedAt(now), save
-  CS->>CS: invalidate() -- lastRefreshed = Instant.MIN (this JVM only)
+  CS->>CS: invalidate() -- invalidationEpoch++ (this JVM only)
   CS-->>CR: ConfigValueResponse
   CR-->>A: 200 OK
 
@@ -169,8 +169,9 @@ sequenceDiagram
     </pre>
     <p>
       <code>updateConfig</code> writes straight through to Postgres and then calls <code>invalidate()</code>, which
-      just resets <code>lastRefreshed</code> to <code>Instant.MIN</code> on the JVM handling the request &mdash; it
-      does not proactively push the new value anywhere. The next call into <code>ConfigService</code> on that same
+      just bumps an in-memory <code>invalidationEpoch</code> on the JVM handling the request &mdash; it
+      does not proactively push the new value anywhere. Each load records the epoch it observed <em>before</em>
+      reading the DB, so an <code>invalidate()</code> that lands mid-load is not lost (skillars-deferred-161). The next call into <code>ConfigService</code> on that same
       instance triggers a full <code>refreshCache()</code> (reloads every row, not just the changed key), so the
       change is effectively immediate for that instance. Any other application instance in the cluster keeps serving
       its old cached value until its own <code>@Scheduled</code> refresh fires (interval = <code>app.config.cache-ttl-seconds</code>,
@@ -198,9 +199,13 @@ sequenceDiagram
     <p>
       The cache is populated once at startup and refreshed on a fixed delay driven by the same
       <code>app.config.cache-ttl-seconds</code> property that governs staleness checks in <code>ensureFresh()</code>.
-      The refresh uses put-all-then-retain-all so a reader never sees an empty cache mid-refresh, and a
-      <code>synchronized</code> double-check inside <code>refreshCache()</code> prevents two threads from both
-      re-querying the database when several callers race a cold cache at once.
+      The refresh uses put-all-then-retain-all so a reader never sees an empty cache mid-refresh. Since
+      skillars-deferred-161, <code>refreshCache()</code> is a single-flight loader on a <code>ReentrantLock</code>
+      (<code>tryLock()</code>) rather than a <code>synchronized</code> method: only one thread runs
+      <code>findAll()</code>; a reader that is stale only because the TTL expired is served the cached snapshot
+      instead of waiting (and if a TTL-only load fails, the snapshot is served and a WARN logged); a reader after
+      <code>invalidate()</code>, or on a never-loaded cache, waits for the in-flight load and reloads if that load
+      began before the invalidation.
     </p>
 
     <h2>Conventions &amp; Gotchas</h2>

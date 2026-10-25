@@ -762,6 +762,16 @@ Notes:
 
 ---
 
+## Admin alert recipient (`platform.admin_alert_email`)
+
+Both video-moderation admin alerts and EMAIL-channel alert rules (`AlertNotificationListener`) are
+addressed to the `main.platform_config` row `platform.admin_alert_email`. It is a config row, not a
+secret, and is seeded **blank** (`V139`). While blank: video-moderation alerts are dropped with an ERROR
+log (and startup aborts if Arachnid is enabled), and EMAIL alert rules send nothing and log
+`platform.admin_alert_email config key is blank — alert email NOT sent`. Set it via
+`PUT /api/config/values/platform.admin_alert_email` before relying on either path (see
+"Config change appears to have no effect" for cache timing).
+
 ## Repository cleanup safety
 
 **skillars-deferred-102 AC6:** the git checkout now lives at `/opt/skillars/app`, a **sibling** of the

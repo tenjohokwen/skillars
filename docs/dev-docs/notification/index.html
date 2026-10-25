@@ -80,7 +80,8 @@
       <li>Alert rules (<code>metricName</code>, <code>threshold</code>, <code>windowSeconds</code>,
         <code>notificationChannel</code>) are admin-configurable at runtime via REST, hot-reloaded from the DB
         every 60s (no restart needed), and support two channels: <code>LOG</code> (just a WARN log line) or
-        <code>EMAIL</code> (also sends to <code>ops@skillars.internal</code>).</li>
+        <code>EMAIL</code> (also sends to the address in the <code>platform.admin_alert_email</code> config row — the same one video
+        moderation alerts use; blank by default, in which case nothing is sent and an ERROR is logged).</li>
       <li>Failed sends are never silently dropped: they're persisted with a retry flag and picked up by a
         scheduled retry job, up to <code>MAX_RETRY_ATTEMPTS = 6</code> total attempts, after which the envelope
         is marked <code>ATTEMPTS_EXHAUSTED</code>. An envelope past its <code>deadline</code> is marked
@@ -124,7 +125,7 @@
         <tr><td><code>EmailRetryScheduler</code></td><td>Every 60s (configurable), <code>SELECT ... FOR UPDATE SKIP LOCKED</code>s up to 10 failed+retryable envelopes, expires/exhausts stale ones in-transaction, then dispatches the rest via <code>MailManager.sendEmailSync</code> only <em>after</em> the DB transaction commits (the transport call is deliberately kept off the DB connection).</td></tr>
         <tr><td><code>AlertEvaluationService</code></td><td>Scheduled (30s) evaluator that reads enabled rules from <code>AlertRuleCache</code> and computes a metric value per rule, publishing <code>AlertFiredEvent</code> on breach. Metric computation is currently a stub (<code>computeMetricValue</code> always returns -1.0 — domain-specific metrics were removed during a template conversion and are a TODO).</td></tr>
         <tr><td><code>AlertRuleCache</code></td><td>In-memory <code>AtomicReference</code> cache of enabled <code>AlertRule</code>s, refreshed from the DB every 60s and on startup — lets admins change rules via REST with no redeploy.</td></tr>
-        <tr><td><code>AlertNotificationListener</code></td><td>Reacts to <code>AlertFiredEvent</code>: always logs a WARN, and if the rule's channel is <code>EMAIL</code>, sends a plain-text ops alert (via <code>EmailTemplate.NONE</code>) to <code>ops@skillars.internal</code>, swallowing any mail failure so the alerting loop itself never breaks.</td></tr>
+        <tr><td><code>AlertNotificationListener</code></td><td>Reacts to <code>AlertFiredEvent</code>: always logs a WARN, and if the rule's channel is <code>EMAIL</code>, sends a plain-text ops alert (via <code>EmailTemplate.NONE</code>) to <code>platform.admin_alert_email</code> (skipped with an ERROR log when blank), swallowing any config-lookup or mail failure so the alerting loop itself never breaks.</td></tr>
         <tr><td><code>ResendEmailService</code></td><td>Looks up a previously-persisted <code>EnvelopeEntity</code> by <code>sendId</code> and republishes it as a fresh <code>Envelope</code> event — a manual "resend" escape hatch (e.g. for support tooling).</td></tr>
         <tr><td><code>infrastructure.listener.*</code></td><td>Four listener classes (<code>AccountChangeEmailListener</code>, <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code>, <code>VideoModerationEmailListener</code>) that each consume one family of cross-module domain events and translate them into a template send — this is where the module's actual "which event maps to which template" logic lives. Only <code>AccountChangeEmailListener</code> and <code>VideoModerationEmailListener</code> still publish an <code>Envelope</code>; <code>BookingEmailListener</code> and <code>SessionPackEmailListener</code> call <code>NotificationOutboxSupport.enqueueEmail</code> directly, <code>BEFORE_COMMIT</code> — the same shape three more listeners in <code>platform.security</code> use for registration/OTP mail (see Dependencies on other layers below). (A fifth, <code>TenantLifecycleEmailListener</code>, was deleted with the tenant module, along with its six <code>tenant*.html</code> templates and their <code>EmailTemplate</code> constants.)</td></tr>
       </tbody>
@@ -293,7 +294,7 @@ sequenceDiagram
     alt breach
       Eval->>Notif: publish AlertFiredEvent
       Notif->>Notif: log WARN
-      Notif->>Manager: sendEmailSync(envelope) to ops@skillars.internal
+      Notif->>Manager: sendEmailSync(envelope) to platform.admin_alert_email
     end
   end
     </pre>
