@@ -168,4 +168,24 @@ public interface PlayerTimelineRepository extends JpaRepository<PlayerTimelineEv
         nativeQuery = true)
     int appendHomeworkDrills(@Param("playerId") Long playerId, @Param("bookingId") UUID bookingId,
                              @Param("drills") String drills);
+
+    // skillars-deferred-162 AC7: the only SESSION_COMPLETED writer. A replayed BookingCompletedEvent (the 12.8
+    // replay, or the async executor redelivering) used to append a second row, double-counting the session in
+    // the timeline, the roster and the coach-access clock. Backed by V169's partial unique index
+    // uq_pte_session_completed_per_booking; the ON CONFLICT target predicate must match that index predicate
+    // exactly, or Postgres rejects the statement ("no unique or exclusion constraint matching") -- loud, never
+    // a silent duplicate. Returns 0 on a replay. No @Version on this entity, so NativeModifyingVersionAuditTest
+    // does not apply. coach_id is nullable (a non-attended session), hence the explicit cast.
+    @Modifying
+    @Query(nativeQuery = true, value = """
+        INSERT INTO development.player_timeline_events
+            (id, player_id, event_type, reference_id, reference_module, occurred_at, metadata, coach_id)
+        VALUES (gen_random_uuid(), :playerId, 'SESSION_COMPLETED', :bookingId, 'booking', :occurredAt,
+                CAST(:metadata AS jsonb), CAST(:coachId AS uuid))
+        ON CONFLICT (player_id, reference_id) WHERE event_type = 'SESSION_COMPLETED' AND reference_id IS NOT NULL
+        DO NOTHING
+        """)
+    int insertSessionCompletedIfAbsent(@Param("playerId") Long playerId, @Param("bookingId") UUID bookingId,
+                                       @Param("occurredAt") java.time.Instant occurredAt,
+                                       @Param("metadata") String metadata, @Param("coachId") UUID coachId);
 }

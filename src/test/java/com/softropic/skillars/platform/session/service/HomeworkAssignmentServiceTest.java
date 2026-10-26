@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import com.softropic.skillars.platform.session.contract.HomeworkAssignedEvent;
 import com.softropic.skillars.platform.session.contract.HomeworkAssignmentResponse;
 import com.softropic.skillars.platform.session.repo.Drill;
@@ -25,6 +26,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.util.List;
 import java.util.Map;
@@ -58,6 +60,10 @@ class HomeworkAssignmentServiceTest {
     @Mock private CoachProfileService coachProfileService;
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
+    // skillars-deferred-162 AC5: a mock manager is enough for the per-drill TransactionTemplate (begin/commit/rollback
+    // are no-ops); an unstubbed guard returns false, i.e. "not erased".
+    @Mock private DevelopmentDataErasureGuard erasureGuard;
+    @Mock private PlatformTransactionManager transactionManager;
     @Spy private MeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     @InjectMocks private HomeworkAssignmentService service;
@@ -154,6 +160,49 @@ class HomeworkAssignmentServiceTest {
 
         assertThatThrownBy(() -> service.handleBookingCompleted(event)).isInstanceOf(IllegalStateException.class);
 
+        ArgumentCaptor<HomeworkAssignedEvent> captor = ArgumentCaptor.forClass(HomeworkAssignedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().drillIds()).containsExactly(d1);
+    }
+
+    // skillars-deferred-162 AC5.2/AC5.5: an erased player gets no homework row and no HomeworkAssignedEvent.
+    @Test
+    void handleBookingCompleted_erasedPlayer_savesNothingAndAnnouncesNothing() {
+        UUID bookingId = UUID.randomUUID();
+        BookingCompletedEvent event = new BookingCompletedEvent(this, bookingId, UUID.randomUUID(), 1001L,
+            2001L, true, null, null, null, List.of(UUID.randomUUID(), UUID.randomUUID()));
+        when(sessionRepository.findByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(packSessionService.getActivePackId(anyLong(), any())).thenReturn(null);
+        when(erasureGuard.isErasedUnderLock(eq(1001L), any())).thenReturn(true);
+
+        service.handleBookingCompleted(event);
+
+        verify(erasureGuard, times(1)).isErasedUnderLock(eq(1001L), any());
+        verify(homeworkAssignmentRepository, never()).saveAndFlush(any());
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
+    // skillars-deferred-162 AC5.1: each drill commits in its own transaction, so drill 2's duplicate key cannot
+    // roll back drill 1.
+    @Test
+    void handleBookingCompleted_eachDrillRunsInItsOwnTransaction() {
+        UUID bookingId = UUID.randomUUID();
+        UUID d1 = UUID.randomUUID();
+        UUID d2 = UUID.randomUUID();
+        BookingCompletedEvent event = new BookingCompletedEvent(this, bookingId, UUID.randomUUID(), 1001L,
+            2001L, true, null, null, null, List.of(d1, d2));
+        when(sessionRepository.findByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(packSessionService.getActivePackId(anyLong(), any())).thenReturn(null);
+        when(homeworkAssignmentRepository.existsByBookingIdAndDrillId(any(), any())).thenReturn(false);
+        when(homeworkAssignmentRepository.saveAndFlush(any(HomeworkAssignment.class)))
+            .thenAnswer(inv -> inv.getArgument(0))
+            .thenThrow(new DataIntegrityViolationException("dup"));
+
+        service.handleBookingCompleted(event);
+
+        verify(transactionManager, times(2)).getTransaction(any());
+        verify(transactionManager, times(1)).commit(any());
+        verify(transactionManager, times(1)).rollback(any());
         ArgumentCaptor<HomeworkAssignedEvent> captor = ArgumentCaptor.forClass(HomeworkAssignedEvent.class);
         verify(eventPublisher).publishEvent(captor.capture());
         assertThat(captor.getValue().drillIds()).containsExactly(d1);

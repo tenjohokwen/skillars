@@ -86,7 +86,7 @@ public class SessionPlanService {
         }
 
         List<SessionBlockData> blocks = mapBlocksFromRequest(req.blocks());
-        List<Drill> drills = fetchDrills(blocks);
+        List<Drill> drills = fetchUsableDrillsOrThrow(blocks, coachId);
         Map<UUID, DrillMetadata> metaMap = toMetaMap(drills);
         List<DrillMetadata> allMeta = expandMetaForDna(blocks, metaMap);
         SessionDnaScore dna = dnaCalculator.calculate(allMeta);
@@ -147,7 +147,7 @@ public class SessionPlanService {
         }
 
         List<SessionBlockData> blocks = mapBlocksFromRequest(req.blocks());
-        List<Drill> drills = fetchDrills(blocks);
+        List<Drill> drills = fetchUsableDrillsOrThrow(blocks, coachId);
         Map<UUID, DrillMetadata> metaMap = toMetaMap(drills);
         List<DrillMetadata> allMeta = expandMetaForDna(blocks, metaMap);
         SessionDnaScore dna = dnaCalculator.calculate(allMeta);
@@ -224,7 +224,7 @@ public class SessionPlanService {
             throw new ResourceNotFoundException("Session not found", "session");
         }
 
-        List<Drill> drills = fetchDrills(session.getBlocks());
+        List<Drill> drills = fetchDrills(session.getBlocks(), session.getCoachId());
         return buildResponse(session, toMetaMap(drills), toResponseMap(drills));
     }
 
@@ -234,7 +234,7 @@ public class SessionPlanService {
         UUID coachId = resolveCoachId(coachUserId);
         return sessionRepository.findByBookingIdAndCoachId(bookingId, coachId)
             .map(s -> {
-                List<Drill> drills = fetchDrills(s.getBlocks());
+                List<Drill> drills = fetchDrills(s.getBlocks(), s.getCoachId());
                 return buildResponse(s, toMetaMap(drills), toResponseMap(drills));
             });
     }
@@ -266,17 +266,36 @@ public class SessionPlanService {
         }).collect(Collectors.toList());
     }
 
-    // Single fetch point for a block list's referenced drills — resolveMetaMap and buildResponse
-    // previously each queried drillRepository.findAllById independently for the same id set.
-    private List<Drill> fetchDrills(List<SessionBlockData> blocks) {
+    /**
+     * skillars-deferred-162 AC4.2: write path. Every referenced drill must be a PLATFORM drill or one of
+     * {@code coachId}'s own PRIVATE drills, any status (D162-E). Null, unknown and foreign-PRIVATE ids all
+     * get the same 404 before anything is saved; previously unknown ids were silently dropped while the
+     * reference was still stored, and a foreign PRIVATE drill was stored and returned in full.
+     */
+    private List<Drill> fetchUsableDrillsOrThrow(List<SessionBlockData> blocks, UUID coachId) {
+        List<UUID> ids = drillIds(blocks);
+        if (ids.isEmpty()) return List.of();
+        List<Drill> drills = ids.contains(null) ? List.of() : drillRepository.findAllById(ids);
+        DrillUsagePolicy.requireAllUsable(ids, drills, coachId);
+        return drills;
+    }
+
+    // Read path. skillars-deferred-162 AC4.3: a plan saved before the write-side check may still reference
+    // another coach's PRIVATE drill; it is left out of the response (and of DNA/SLU) rather than returned.
+    private List<Drill> fetchDrills(List<SessionBlockData> blocks, UUID coachId) {
+        List<UUID> ids = drillIds(blocks);
+        if (ids.isEmpty()) return List.of();
+        return DrillUsagePolicy.usableOnly(drillRepository.findAllById(ids), coachId);
+    }
+
+    // Single source of a block list's distinct referenced drill ids (nulls kept for the write-side check).
+    private static List<UUID> drillIds(List<SessionBlockData> blocks) {
         if (blocks == null || blocks.isEmpty()) return List.of();
-        List<UUID> uniqueIds = blocks.stream()
+        return blocks.stream()
             .flatMap(b -> b.drills() != null ? b.drills().stream() : Stream.empty())
             .map(SessionDrillRef::drillId)
             .distinct()
             .collect(Collectors.toList());
-        if (uniqueIds.isEmpty()) return List.of();
-        return drillRepository.findAllById(uniqueIds);
     }
 
     private Map<UUID, DrillMetadata> toMetaMap(List<Drill> drills) {

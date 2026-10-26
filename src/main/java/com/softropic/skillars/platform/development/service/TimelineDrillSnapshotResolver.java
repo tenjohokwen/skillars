@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.session.repo.DrillRepository;
 import com.softropic.skillars.platform.session.repo.Session;
 import com.softropic.skillars.platform.session.repo.SessionRepository;
 import com.softropic.skillars.platform.session.repo.SessionStatus;
+import com.softropic.skillars.platform.session.service.DrillUsagePolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -68,15 +69,20 @@ class TimelineDrillSnapshotResolver {
                     .sorted(java.util.Comparator.comparingInt(SessionDrillRef::order))
                     .forEach(ref -> ids.add(ref.drillId()));
             }
-            return snapshot(new ArrayList<>(ids));
+            return snapshot(new ArrayList<>(ids), session.getCoachId());
         } catch (Exception e) {
             log.warn("Could not resolve session drills for booking {} -- continuing without them", bookingId, e);
             return List.of();
         }
     }
 
-    /** Name snapshot for the given drill ids (input order kept, null/duplicate ids dropped, capped). */
-    List<Map<String, Object>> snapshot(List<UUID> drillIds) {
+    /**
+     * Name snapshot for the given drill ids (input order kept, null/duplicate ids dropped, capped).
+     * skillars-deferred-162 AC4.3: only drills {@code coachId} may use are named. The {@code drills} key is
+     * visible to every timeline viewer, so another coach's PRIVATE drill (from a plan saved before the
+     * Session Builder validated ownership) is skipped, never snapshotted.
+     */
+    List<Map<String, Object>> snapshot(List<UUID> drillIds, UUID coachId) {
         try {
             if (drillIds == null || drillIds.isEmpty()) return List.of();
             List<UUID> ids = drillIds.stream().filter(java.util.Objects::nonNull).distinct().limit(MAX_DRILLS).toList();
@@ -87,6 +93,10 @@ class TimelineDrillSnapshotResolver {
                 Drill d = byId.get(id);
                 if (d == null) {
                     log.warn("Drill {} no longer resolves -- skipped in timeline snapshot", id);
+                    continue;
+                }
+                if (!DrillUsagePolicy.isUsableBy(d, coachId)) {
+                    log.warn("Drill {} is not usable by coach {} -- skipped in timeline snapshot", id, coachId);
                     continue;
                 }
                 Map<String, Object> entry = new LinkedHashMap<>();

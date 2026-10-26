@@ -1298,6 +1298,7 @@ export default {
       editableUntil: 'You can edit this recap until {date}.',
       windowClosedError: 'This session is too old to edit its recap.',
       erasedError: 'This recap can no longer be edited.',
+      disputedError: 'This session was disputed, so its recap can no longer be edited.',
       missingTitle: 'Sessions without a recap',
       missingBanner: '{count} session needs a recap | {count} sessions need a recap',
       missingToggle: 'Show',

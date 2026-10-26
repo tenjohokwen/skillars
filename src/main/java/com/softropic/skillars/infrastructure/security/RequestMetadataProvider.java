@@ -46,11 +46,11 @@ public final class RequestMetadataProvider {
         //TODO eventually move logic from RequestIdProvider to this class
         RequestIdProvider.addReqIdToThread(request);
 
-        String ipAddress = request.getHeader("Forwarded"); //request.getHeader("X-FORWARDED-FOR");
-        if (StringUtils.isBlank(ipAddress)) {
-            ipAddress = request.getRemoteAddr();
-        }
-        requestMetadata.setIpAddress(ipAddress);
+        // skillars-deferred-162 AC1: never read a forwarded header here. Tomcat's RemoteIpValve has already
+        // resolved getRemoteAddr() from X-Forwarded-For when (and only when) the TCP peer is a trusted
+        // proxy. The raw "Forwarded" header this used to read was client-controlled, so any caller could
+        // mint a fresh rate-limit bucket per request.
+        requestMetadata.setIpAddress(request.getRemoteAddr());
 
         requestMetadata.setUserAgent(request.getHeader("user-agent"));
 

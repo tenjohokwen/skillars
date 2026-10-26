@@ -43,4 +43,17 @@ public interface DisputeRepository extends JpaRepository<Dispute, UUID> {
     boolean existsActiveDisputeByAuthor(
         @Param("coachId") UUID coachId,
         @Param("authorId") Long authorId);
+
+    // skillars-deferred-162 AC6.1 (D162-A1): a dispute locks the session recap while active, and after a
+    // RESOLVED outcome that returned money or warned the coach. resolution is nullable, so COALESCE: a bare
+    // "<> 'NO_ACTION'" would leave a RESOLVED/NULL row unlocked through three-valued logic.
+    // BookingRepository.findBookingsMissingRecap/countBookingsMissingRecap repeat this predicate; keep identical.
+    @Query("""
+        SELECT CASE WHEN COUNT(d) > 0 THEN true ELSE false END
+        FROM Dispute d
+        WHERE d.bookingId = :bookingId
+          AND (d.status NOT IN ('RESOLVED', 'DISMISSED')
+               OR (d.status = 'RESOLVED' AND COALESCE(d.resolution, '') <> 'NO_ACTION'))
+        """)
+    boolean existsRecapLockingDispute(@Param("bookingId") UUID bookingId);
 }

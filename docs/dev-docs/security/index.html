@@ -215,7 +215,7 @@ sequenceDiagram
 
   U->>R: POST /api/security/{role}/verify-phone {userId, otp}
   R->>S: verifyPhone(userId, otp)
-  S->>DB: check rate limit, hash-compare OTP
+  S->>DB: find live OTP, check expiry, then rate limit (userId:otpId), hash-compare OTP
   S->>DB: User.verificationStatus = BASIC_VERIFIED
   S-->>U: 200 OK (can now log in)
     </pre>
@@ -223,8 +223,14 @@ sequenceDiagram
       All three roles share the same underlying tables (<code>email_verification_tokens</code>, <code>phone_otp_tokens</code>)
       and the same three-step state machine: <code>UNVERIFIED &rarr; EMAIL_VERIFIED &rarr; BASIC_VERIFIED</code>. Login
       is blocked by <code>AuthService</code> until <code>BASIC_VERIFIED</code> is reached for any user with a non-null
-      <code>skillarsRole</code>. OTP codes are never stored in plaintext — only their SHA-256(otp+userId) hash is
-      persisted, and phone-OTP verification is itself rate-limited per user via <code>RateLimitingService</code>.
+      <code>skillarsRole</code>. OTP codes are never stored in plaintext — only a keyed
+      <code>HmacSHA256(otpKey, userId:otp)</code> computed by <code>OtpHasher</code> is persisted, where
+      <code>otpKey</code> is derived from <code>registration-verification-secret</code>. Rotating that secret therefore
+      also invalidates any OTP in flight (10 min TTL), and an OTP in flight across the skillars-deferred-162 deploy
+      fails once; the user resends. Phone-OTP verification is rate-limited per OTP (bucket key
+      <code>userId:otpId</code>) via <code>RateLimitingService</code>, and the bucket is only touched once a live,
+      unexpired OTP has been found, so a resend starts a fresh budget. <code>/verify-email</code> is
+      <code>@RateLimited</code> per client IP like the other public registration endpoints.
     </p>
 
     <h3>Parent creates a shadow player profile (minor)</h3>
@@ -348,7 +354,8 @@ sequenceDiagram
     </div>
     <div class="callout">
       <p><strong>OTPs and passwords are always hashed at rest.</strong> Phone OTPs are stored as
-      <code>SHA-256(otp + userId)</code>, refresh tokens as <code>SHA-256(rawToken)</code>, and passwords via
+      a keyed <code>HmacSHA256</code> via <code>OtpHasher</code> (never re-implement it in a test; inject the bean),
+      refresh tokens as <code>SHA-256(rawToken)</code>, and passwords via
       <code>BCryptPasswordEncoder</code>. There is no code path that reads a plaintext credential back out of the
       database — plan test/debug tooling accordingly.</p>
     </div>

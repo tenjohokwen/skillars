@@ -24,9 +24,18 @@ server:
       # environment logged "Failed to create directory [/usr/local/var/ledger] for access logs"
       # and produced no access log at all.
       enabled: false
-    remote-ip-header: x-forwarded-for  #tomcat: configure the RemoteIpValve for more sophisticated Forwarded header handling
-    protocol-header: x-forwarded-proto #tomcat: configure the RemoteIpValve for more sophisticated Forwarded header handling
-  forward-headers-strategy: native  #spring: config to get client ip in compliance with the RFC 7239 specification. see ForwardedHeaderFilter bean.
+    # skillars-deferred-162 AC1: Tomcat's RemoteIpValve is the ONE forwarded-header mechanism. It honours
+    # X-Forwarded-For/-Proto only when the TCP peer matches internal-proxies (Boot's default regex covers
+    # 10/8, 172.16/12, 192.168/16, 127/8, 100.64/10 and their IPv6 equivalents, which includes Traefik's
+    # Docker bridge network and the Hostwinds nginx on localhost), and it walks XFF right-to-left, so a
+    # client-supplied leftmost value is never picked. request.getRemoteAddr() is then the client IP that
+    # RequestMetadata, rate limiting and login lockout use. Spring's ForwardedHeaderFilter was removed
+    # because it trusted these headers from ANY peer. These keys were previously written directly under
+    # server.tomcat (the pre-Boot-2.3 names), which Boot 3 ignores; the values match the valve defaults.
+    remoteip:
+      remote-ip-header: x-forwarded-for
+      protocol-header: x-forwarded-proto
+  forward-headers-strategy: native
 
 quartz:
   job-store-type: jdbc

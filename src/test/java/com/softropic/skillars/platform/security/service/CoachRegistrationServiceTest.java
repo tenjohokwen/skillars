@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.api.dto.VerifyEmailResponse;
 import com.softropic.skillars.platform.security.contract.SkillarsVerificationStatus;
 import com.softropic.skillars.platform.security.contract.event.CoachOtpEmailEvent;
+import com.softropic.skillars.platform.security.contract.exception.OtpVerificationException;
 import com.softropic.skillars.platform.security.repo.AuthorityRepository;
 import com.softropic.skillars.platform.security.repo.EmailVerificationToken;
 import com.softropic.skillars.platform.security.repo.EmailVerificationTokenRepository;
@@ -26,12 +27,15 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -65,7 +69,7 @@ class CoachRegistrationServiceTest {
     void setUp() {
         service = new CoachRegistrationService(userRepository, authorityRepository, emailTokenRepository,
             otpTokenRepository, passwordEncoder, publisher, sanitizer, rateLimitingService, otpResendSupport,
-            verificationTokenService, configService);
+            verificationTokenService, OtpHasherTest.hasher(), configService);
     }
 
     private EmailVerificationToken buildToken(UUID token) {
@@ -117,5 +121,89 @@ class CoachRegistrationServiceTest {
         verify(otpTokenRepository, never()).saveAndFlush(any());
         verify(publisher, never()).publishEvent(any(CoachOtpEmailEvent.class));
         verify(verificationTokenService, never()).issuePhoneVerificationToken(anyLong(), any());
+    }
+
+    // skillars-deferred-162 AC3.5: the verify-phone limiter is reached only for a live OTP, and is keyed on it.
+
+    private static final Long OTP_ID = 7001L;
+
+    private PhoneOtpToken otpToken(String otp, Instant expiresAt) {
+        PhoneOtpToken token = new PhoneOtpToken();
+        token.setId(OTP_ID);
+        token.setUserId(USER_ID);
+        token.setOtpHash(OtpHasherTest.hasher().hash(USER_ID, otp));
+        token.setExpiresAt(expiresAt);
+        token.setUsed(false);
+        return token;
+    }
+
+    private User emailVerifiedUser() {
+        User user = buildUser();
+        user.setVerificationStatus(SkillarsVerificationStatus.EMAIL_VERIFIED);
+        return user;
+    }
+
+    @Test
+    void verifyPhone_missingOtp_rejectsWithoutConsumingTheBudget() {
+        when(otpTokenRepository.findFirstByUserIdAndUsedFalseOrderByExpiresAtDesc(USER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.verifyPhone(USER_ID, "123456"))
+            .isInstanceOfSatisfying(OtpVerificationException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo("security.otpMismatch"));
+        verifyNoInteractions(rateLimitingService);
+    }
+
+    @Test
+    void verifyPhone_expiredOtp_rejectsWithoutConsumingTheBudget() {
+        when(otpTokenRepository.findFirstByUserIdAndUsedFalseOrderByExpiresAtDesc(USER_ID))
+            .thenReturn(Optional.of(otpToken("123456", Instant.now().minus(1, ChronoUnit.MINUTES))));
+
+        assertThatThrownBy(() -> service.verifyPhone(USER_ID, "123456"))
+            .isInstanceOfSatisfying(OtpVerificationException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo("security.otpMismatch"));
+        verifyNoInteractions(rateLimitingService);
+    }
+
+    @Test
+    void verifyPhone_wrongCodeAgainstLiveOtp_consumesTheBucketForThatOtp() {
+        when(otpTokenRepository.findFirstByUserIdAndUsedFalseOrderByExpiresAtDesc(USER_ID))
+            .thenReturn(Optional.of(otpToken("123456", Instant.now().plus(5, ChronoUnit.MINUTES))));
+        when(rateLimitingService.tryConsume(USER_ID + ":" + OTP_ID, "coach_otp_verify", 5, 10, TimeUnit.MINUTES))
+            .thenReturn(true);
+        when(userRepository.findOneById(USER_ID)).thenReturn(Optional.of(emailVerifiedUser()));
+
+        assertThatThrownBy(() -> service.verifyPhone(USER_ID, "654321"))
+            .isInstanceOfSatisfying(OtpVerificationException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo("security.otpMismatch"));
+        verify(rateLimitingService).tryConsume(USER_ID + ":" + OTP_ID, "coach_otp_verify", 5, 10, TimeUnit.MINUTES);
+        verify(otpTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void verifyPhone_exhaustedBucket_rejectsWithOtpMismatchBeforeTheHashCompare() {
+        when(otpTokenRepository.findFirstByUserIdAndUsedFalseOrderByExpiresAtDesc(USER_ID))
+            .thenReturn(Optional.of(otpToken("123456", Instant.now().plus(5, ChronoUnit.MINUTES))));
+        when(rateLimitingService.tryConsume(USER_ID + ":" + OTP_ID, "coach_otp_verify", 5, 10, TimeUnit.MINUTES))
+            .thenReturn(false);
+
+        assertThatThrownBy(() -> service.verifyPhone(USER_ID, "123456"))
+            .isInstanceOfSatisfying(OtpVerificationException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo("security.otpMismatch"));
+        verifyNoInteractions(userRepository);
+    }
+
+    @Test
+    void verifyPhone_rightCodeAgainstLiveOtp_marksUserBasicVerifiedAndOtpUsed() {
+        PhoneOtpToken token = otpToken("123456", Instant.now().plus(5, ChronoUnit.MINUTES));
+        User user = emailVerifiedUser();
+        when(otpTokenRepository.findFirstByUserIdAndUsedFalseOrderByExpiresAtDesc(USER_ID)).thenReturn(Optional.of(token));
+        when(rateLimitingService.tryConsume(USER_ID + ":" + OTP_ID, "coach_otp_verify", 5, 10, TimeUnit.MINUTES))
+            .thenReturn(true);
+        when(userRepository.findOneById(USER_ID)).thenReturn(Optional.of(user));
+
+        service.verifyPhone(USER_ID, "123456");
+
+        assertThat(user.getVerificationStatus()).isEqualTo(SkillarsVerificationStatus.BASIC_VERIFIED);
+        assertThat(token.isUsed()).isTrue();
     }
 }

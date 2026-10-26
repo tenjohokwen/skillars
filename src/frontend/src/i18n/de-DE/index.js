@@ -459,6 +459,8 @@ export default {
       editableUntil: 'Du kannst diesen Rückblick bis {date} bearbeiten.',
       windowClosedError: 'Diese Sitzung ist zu alt, um ihren Rückblick zu bearbeiten.',
       erasedError: 'Dieser Rückblick kann nicht mehr bearbeitet werden.',
+      disputedError:
+        'Diese Sitzung wurde beanstandet, daher kann der Rückblick nicht mehr bearbeitet werden.',
       missingTitle: 'Sitzungen ohne Rückblick',
       missingBanner:
         '{count} Sitzung braucht einen Rückblick | {count} Sitzungen brauchen einen Rückblick',

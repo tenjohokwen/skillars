@@ -148,6 +148,16 @@ public class SessionTemplateService {
                 "Booking has no player assigned", SessionErrorCode.SESSION_BOOKING_NOT_OWNED);
         }
 
+        // skillars-deferred-162 AC4.2: deploy saves a session directly, bypassing SessionPlanService's
+        // write-side check, so apply the same rule here for the deploying coach. A template copied from a
+        // plan saved before that check could otherwise re-deploy another coach's PRIVATE drill forever.
+        List<UUID> templateDrillIds = drillIds(t.getBlocks());
+        if (!templateDrillIds.isEmpty()) {
+            DrillUsagePolicy.requireAllUsable(templateDrillIds,
+                templateDrillIds.contains(null) ? List.of() : drillRepository.findAllById(templateDrillIds),
+                coachId);
+        }
+
         Session session = new Session();
         session.setBookingId(bookingId);
         session.setCoachId(coachId);
@@ -191,16 +201,13 @@ public class SessionTemplateService {
         );
     }
 
-    // mirrors SessionPlanService.buildResponse — keep in sync
+    // mirrors SessionPlanService.buildResponse — keep in sync (including the AC4.3 ownership filter)
     private SessionPlanResponse buildResponse(Session session) {
         List<SessionBlockData> blocks = session.getBlocks() == null ? List.of() : session.getBlocks();
-        List<UUID> drillIds = blocks.stream()
-            .flatMap(b -> b.drills() != null ? b.drills().stream() : Stream.empty())
-            .map(SessionDrillRef::drillId)
-            .distinct()
-            .collect(Collectors.toList());
+        List<UUID> drillIds = drillIds(blocks);
 
-        List<Drill> drills = drillIds.isEmpty() ? List.of() : drillRepository.findAllById(drillIds);
+        List<Drill> drills = drillIds.isEmpty() ? List.of()
+            : DrillUsagePolicy.usableOnly(drillRepository.findAllById(drillIds), session.getCoachId());
         Map<UUID, DrillResponse> drillResponseMap = drills.stream()
             .collect(Collectors.toMap(Drill::getId, d ->
                 drillLibraryService.toResponse(d, false, List.of(), null, null, null)));
@@ -226,6 +233,15 @@ public class SessionTemplateService {
             session.getStatus(), session.getCreatedAt(), session.getUpdatedAt(),
             session.getSourceTemplateId(), session.getSourceTemplateName()
         );
+    }
+
+    private static List<UUID> drillIds(List<SessionBlockData> blocks) {
+        if (blocks == null || blocks.isEmpty()) return List.of();
+        return blocks.stream()
+            .flatMap(b -> b.drills() != null ? b.drills().stream() : Stream.empty())
+            .map(SessionDrillRef::drillId)
+            .distinct()
+            .collect(Collectors.toList());
     }
 
     private int calculateBlockSlu(List<SessionDrillRef> drillRefs, Map<UUID, DrillMetadata> metaMap) {

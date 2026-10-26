@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import com.softropic.skillars.platform.session.contract.DrillResponse;
 import com.softropic.skillars.platform.session.contract.HomeworkAssignedEvent;
 import com.softropic.skillars.platform.session.contract.HomeworkAssignmentResponse;
@@ -23,9 +24,12 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -51,6 +55,8 @@ public class HomeworkAssignmentService {
     private final PlayerProfileRepository playerProfileRepository;
     private final MeterRegistry meterRegistry;
     private final ApplicationEventPublisher eventPublisher;
+    private final DevelopmentDataErasureGuard erasureGuard;
+    private final PlatformTransactionManager transactionManager;
 
     private static final String LOCKER_ROOM_DRILLS_LATENCY = "session.homework.locker_room_drills.latency";
 
@@ -79,40 +85,65 @@ public class HomeworkAssignmentService {
         // skillars-12-8 AC6: only rows actually inserted by THIS invocation are announced, so a replayed
         // BookingCompletedEvent publishes nothing. Published from a finally so a non-duplicate-key failure
         // on drill 2 cannot swallow the already-committed drill 1 (a replay would skip it as "exists").
+        //
+        // skillars-deferred-162 AC5: each drill is its own REQUIRES_NEW transaction that locks the player
+        // profile, checks the erasure marker and inserts, then commits. One transaction for the whole loop
+        // would let drill 2's duplicate-key failure mark it rollback-only and silently discard drill 1, so the
+        // catch stays outside each per-drill transaction. An erased player stops the loop and, with nothing
+        // newly assigned, no HomeworkAssignedEvent is published.
+        TransactionTemplate perDrillTx = new TransactionTemplate(transactionManager);
+        perDrillTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         List<UUID> newlyAssigned = new ArrayList<>();
         try {
             for (UUID drillId : drillIdsToAssign) {
-                // Idempotency: skip if assignment already exists for this booking+drill.
-                // Uses bookingId (never null) — not sessionId, which may be null for QUICK-mode bookings.
-                // PostgreSQL UNIQUE constraints treat NULL ≠ NULL, so a nullable-column constraint gives
-                // zero protection when that column is null; bookingId is the correct idempotency anchor.
-                if (homeworkAssignmentRepository.existsByBookingIdAndDrillId(event.getBookingId(), drillId)) {
-                    log.debug("Homework assignment already exists for booking {} drill {} — skipping", event.getBookingId(), drillId);
-                    continue;
-                }
-                HomeworkAssignment assignment = new HomeworkAssignment();
-                assignment.setBookingId(event.getBookingId());
-                assignment.setSessionId(sessionId);
-                assignment.setPlayerId(event.getPlayerId());
-                assignment.setCoachId(event.getCoachId());
-                assignment.setDrillId(drillId);
-                assignment.setPackId(packId);
+                DrillOutcome outcome;
                 try {
-                    homeworkAssignmentRepository.saveAndFlush(assignment);
-                    newlyAssigned.add(drillId);
+                    outcome = perDrillTx.execute(status -> assignOne(event, drillId, sessionId, packId));
                 } catch (DataIntegrityViolationException e) {
                     // UNIQUE(booking_id, drill_id) constraint violation — race condition on concurrent event replay
                     log.warn("Duplicate homework assignment for booking {} drill {} — ignored", event.getBookingId(), drillId);
+                    continue;
+                }
+                if (outcome == DrillOutcome.PLAYER_ERASED) {
+                    break;
+                }
+                if (outcome == DrillOutcome.ASSIGNED) {
+                    newlyAssigned.add(drillId);
                 }
             }
         } finally {
             if (!newlyAssigned.isEmpty()) {
-                // No active transaction here (each saveAndFlush committed on its own); the timeline consumer
-                // therefore declares fallbackExecution = true.
+                // No active transaction here (each per-drill transaction has already committed); the timeline
+                // consumer therefore declares fallbackExecution = true.
                 eventPublisher.publishEvent(new HomeworkAssignedEvent(
                     event.getBookingId(), event.getPlayerId(), event.getCoachId(), List.copyOf(newlyAssigned)));
             }
         }
+    }
+
+    private enum DrillOutcome { ASSIGNED, ALREADY_ASSIGNED, PLAYER_ERASED }
+
+    private DrillOutcome assignOne(BookingCompletedEvent event, UUID drillId, UUID sessionId, UUID packId) {
+        if (erasureGuard.isErasedUnderLock(event.getPlayerId(), "HomeworkAssignmentService.handleBookingCompleted")) {
+            return DrillOutcome.PLAYER_ERASED;
+        }
+        // Idempotency: skip if assignment already exists for this booking+drill.
+        // Uses bookingId (never null) — not sessionId, which may be null for QUICK-mode bookings.
+        // PostgreSQL UNIQUE constraints treat NULL ≠ NULL, so a nullable-column constraint gives
+        // zero protection when that column is null; bookingId is the correct idempotency anchor.
+        if (homeworkAssignmentRepository.existsByBookingIdAndDrillId(event.getBookingId(), drillId)) {
+            log.debug("Homework assignment already exists for booking {} drill {} — skipping", event.getBookingId(), drillId);
+            return DrillOutcome.ALREADY_ASSIGNED;
+        }
+        HomeworkAssignment assignment = new HomeworkAssignment();
+        assignment.setBookingId(event.getBookingId());
+        assignment.setSessionId(sessionId);
+        assignment.setPlayerId(event.getPlayerId());
+        assignment.setCoachId(event.getCoachId());
+        assignment.setDrillId(drillId);
+        assignment.setPackId(packId);
+        homeworkAssignmentRepository.saveAndFlush(assignment);
+        return DrillOutcome.ASSIGNED;
     }
 
     @Transactional(readOnly = true)

@@ -51,8 +51,9 @@ public class SkillarsPlatformProperties {
      * HMAC-SHA256 key for the short-lived phone-verification handle returned by
      * {@code /verify-email} and required by {@code /verify-phone} and {@code /resend-otp}
      * (skillars-deferred-93 AC8). Bound from {@code skillars.platform.registration-verification-secret},
-     * set via {@code PLATFORM_REGISTRATION_VERIFICATION_SECRET}. Rotating it only invalidates
-     * in-flight registration handles (24h TTL), nothing persistent.
+     * set via {@code PLATFORM_REGISTRATION_VERIFICATION_SECRET}. Also the root of {@code OtpHasher}'s
+     * purpose-separated phone-OTP key (skillars-deferred-162 AC2). Rotating it invalidates in-flight
+     * registration handles (24h TTL) and in-flight phone OTPs (10 min TTL), nothing else persistent.
      * {@code RegistrationVerificationTokenService} fails fast if this is blank.
      */
     private String registrationVerificationSecret;

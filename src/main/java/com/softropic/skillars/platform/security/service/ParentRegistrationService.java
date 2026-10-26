@@ -37,13 +37,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
-import java.util.HexFormat;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -66,6 +63,7 @@ public class ParentRegistrationService {
     private final RateLimitingService rateLimitingService;
     private final RegistrationOtpResendSupport otpResendSupport;
     private final RegistrationVerificationTokenService verificationTokenService;
+    private final OtpHasher otpHasher;
     private final ConfigService configService;
 
     @Value("${app.frontend-url}")
@@ -113,6 +111,10 @@ public class ParentRegistrationService {
         sendVerificationEmail(user);
     }
 
+    // skillars-deferred-162 AC1: per-IP bound on abuse and side effects (a valid call re-issues an OTP and
+    // sends an email). The token is single-use and 122-bit, so this is not a guessing defence; 10 per 10
+    // minutes leaves room for a household behind one NAT.
+    @RateLimited(key = "parent_verify_email", capacity = 10, duration = 10)
     public VerifyEmailResponse verifyEmail(UUID token) {
         EmailVerificationToken evt = emailTokenRepository.findByToken(token)
             .orElseThrow(() -> new EmailTokenException("security.emailTokenInvalid", true));
@@ -171,7 +173,7 @@ public class ParentRegistrationService {
 
         PhoneOtpToken otpToken = new PhoneOtpToken();
         otpToken.setUserId(user.getId());
-        otpToken.setOtpHash(hashOtp(otp, user.getId()));
+        otpToken.setOtpHash(otpHasher.hash(user.getId(), otp));
         otpToken.setExpiresAt(Instant.now().plus(10, ChronoUnit.MINUTES));
         otpToken.setUsed(false);
         // AC10 (skillars-deferred-88): saveAndFlush, not save — force the INSERT now so a
@@ -187,15 +189,20 @@ public class ParentRegistrationService {
     }
 
     public void verifyPhone(Long userId, String otp) {
-        if (!rateLimitingService.tryConsume(String.valueOf(userId), "parent_otp_verify", 10, 10, TimeUnit.MINUTES)) {
-            throw new OtpVerificationException("security.otpMismatch");
-        }
-
+        // skillars-deferred-162 AC3: find the live OTP and check its expiry BEFORE touching the limiter, and
+        // key the bucket on that one OTP. A missing, used or expired OTP no longer drains the budget, and a
+        // resend (which replaces the OTP) starts a fresh one. All three failures stay the same
+        // otpMismatch 400 as a wrong code, so the order leaks nothing.
         PhoneOtpToken otpToken = otpTokenRepository
             .findFirstByUserIdAndUsedFalseOrderByExpiresAtDesc(userId)
             .orElseThrow(() -> new OtpVerificationException("security.otpMismatch"));
 
         if (Instant.now().isAfter(otpToken.getExpiresAt())) {
+            throw new OtpVerificationException("security.otpMismatch");
+        }
+
+        if (!rateLimitingService.tryConsume(
+                userId + ":" + otpToken.getId(), "parent_otp_verify", 10, 10, TimeUnit.MINUTES)) {
             throw new OtpVerificationException("security.otpMismatch");
         }
 
@@ -212,8 +219,7 @@ public class ParentRegistrationService {
             throw new OtpVerificationException("security.otpMismatch");
         }
 
-        String expectedHash = hashOtp(otp, userId);
-        if (!expectedHash.equals(otpToken.getOtpHash())) {
+        if (!otpHasher.matches(otpToken.getOtpHash(), userId, otp)) {
             throw new OtpVerificationException("security.otpMismatch");
         }
 
@@ -277,16 +283,5 @@ public class ParentRegistrationService {
     private String generateOtp() {
         int code = 100000 + SECURE_RANDOM.nextInt(900000);
         return String.valueOf(code);
-    }
-
-    private String hashOtp(String otp, Long userId) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            String input = otp + userId.toString();
-            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 not available", e);
-        }
     }
 }

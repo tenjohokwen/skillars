@@ -135,7 +135,12 @@ public enum BookingError implements ErrorCode {
      * skillars-12-7 AC2/AC4: the recap cannot be written because the coach or the player has been
      * erased (GDPR) — writing would resurrect scrubbed text.
      */
-    RECAP_NOT_EDITABLE_ERASED;
+    RECAP_NOT_EDITABLE_ERASED,
+    /**
+     * skillars-deferred-162 AC6.2 (D162-A): the recap is locked because the session is disputed (an active
+     * dispute, or one resolved with credit or a coach warning). The booking itself stays COMPLETED.
+     */
+    RECAP_NOT_EDITABLE_DISPUTED;
 
     @Override
     public String getErrorCode() {
@@ -165,6 +170,7 @@ public enum BookingError implements ErrorCode {
             case SESSION_ALREADY_ENDED     -> "booking.sessionAlreadyEnded";
             case RECAP_EDIT_WINDOW_CLOSED  -> "booking.recapEditWindowClosed";
             case RECAP_NOT_EDITABLE_ERASED -> "booking.recapNotEditableErased";
+            case RECAP_NOT_EDITABLE_DISPUTED -> "booking.recapNotEditableDisputed";
         };
     }
 

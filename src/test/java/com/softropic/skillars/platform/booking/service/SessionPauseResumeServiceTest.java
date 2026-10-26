@@ -63,7 +63,8 @@ class SessionPauseResumeServiceTest {
         service = new BookingCompletionService(
             bookingService, bookingRepository, completionDataRepository,
             coachProfileRepository, userRepository, playerProfileRepository,
-            eventPublisher, new ObjectMapper(), configService, drillRepository
+            eventPublisher, new ObjectMapper(), configService, drillRepository,
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.booking.contract.BookingDisputeLookup.class)
         );
 
         coach = new CoachProfile();
