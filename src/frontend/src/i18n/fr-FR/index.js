@@ -1594,6 +1594,8 @@ export default {
       editableUntil: "Vous pouvez modifier ce bilan jusqu'au {date}.",
       windowClosedError: 'Cette séance est trop ancienne pour modifier son bilan.',
       erasedError: 'Ce bilan ne peut plus être modifié.',
+      disputedError:
+        'Cette séance a fait l’objet d’une contestation ; son bilan ne peut plus être modifié.',
       missingTitle: 'Séances sans bilan',
       missingBanner: "{count} séance a besoin d'un bilan | {count} séances ont besoin d'un bilan",
       missingToggle: 'Afficher',

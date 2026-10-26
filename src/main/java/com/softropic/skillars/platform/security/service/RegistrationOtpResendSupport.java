@@ -13,13 +13,9 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.HexFormat;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -41,6 +37,7 @@ public class RegistrationOtpResendSupport {
     private final PhoneOtpTokenRepository otpTokenRepository;
     private final RateLimitingService rateLimitingService;
     private final ApplicationEventPublisher publisher;
+    private final OtpHasher otpHasher;
 
     /**
      * Re-issues a phone OTP for {@code userId} and re-sends it by email. Behaviour is exactly what
@@ -78,7 +75,7 @@ public class RegistrationOtpResendSupport {
         String otp = generateOtp();
         PhoneOtpToken otpToken = new PhoneOtpToken();
         otpToken.setUserId(user.getId());
-        otpToken.setOtpHash(hashOtp(otp, user.getId()));
+        otpToken.setOtpHash(otpHasher.hash(user.getId(), otp));
         otpToken.setExpiresAt(Instant.now().plus(10, ChronoUnit.MINUTES));
         otpToken.setUsed(false);
         otpTokenRepository.saveAndFlush(otpToken);
@@ -89,17 +86,6 @@ public class RegistrationOtpResendSupport {
     private String generateOtp() {
         int code = 100000 + SECURE_RANDOM.nextInt(900000);
         return String.valueOf(code);
-    }
-
-    private String hashOtp(String otp, Long userId) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            String input = otp + userId.toString();
-            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 not available", e);
-        }
     }
 
     /** Factory for a role's OTP-email event (Parent/Coach/PlayerOtpEmailEvent share this shape). */

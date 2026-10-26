@@ -857,19 +857,15 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - Client-side `skp` clear in `auth.store.logout()` is redundant — server `logout()` already sends `Set-Cookie: skp=; Max-Age=0`; the `document.cookie` write is belt-and-suspenders [auth.store.js]
 
 ## Deferred from: code review of skillars-1-4-parent-registration-player-profiles-shadow-accounts Group 1 (2026-06-12)
-- OTP hash uses `SHA-256(otp+userId)` no separator — same pre-existing pattern as CoachRegistrationService (already tracked Story 1.3 Group B D3); rate limiting is primary mitigation [ParentRegistrationService.java — hashOtp]
 - `verifyEmail` saves `activated=true` before optimistic-lock check — correctly rolled back by `@Transactional`; same pattern as CoachRegistrationService; would break if called inside `REQUIRES_NEW` propagation [ParentRegistrationService.java:129–137]
 - `PhoneNumber("XX")` hardcoded country placeholder — intentional per Dev Notes; same as coach flow (Story 1.3 Dev Notes) [ParentRegistrationService.java:98]
 - Migration IDs 100–102 in `platform_config` — different table from V21's authority rows; `ON CONFLICT (key) DO NOTHING` is correct idempotency guard [V22__parent_player_shadow_accounts.sql]
 - `dateOfBirth = LocalDate.of(1900, 1, 1)` parent user placeholder — intentional per Dev Notes; same pattern as coach (Story 1.3 Dev Notes) [ParentRegistrationService.java:102]
 - Age tier snapshotted at creation, never recomputed as child ages — by design per spec; explicit consent-escalation update deferred to Story 1.6 [PlayerProfile.java; ShadowAccountService.java]
 - `@Past` constraint allows 1-day-old player DOB; no minimum player age enforced — not in scope per spec; no AC addresses minimum player age [CreatePlayerProfileRequest.java:12]
-- OTP rate-limit key is `userId` only — expired-OTP resubmissions drain legitimate user's budget; same pre-existing pattern as CoachRegistrationService (Story 1.3 Group B D2) [ParentRegistrationService.java:154]
 - Phone-collision detection via `msg.contains("phone")` — DB-dialect fragile; same pre-existing pattern as CoachRegistrationService [ParentRegistrationService.java:100–104]
 
 ## Deferred from: code review of skillars-1-3-coach-account-registration-email-verification Group D (2026-06-11)
-- D1: `/verify-email` endpoint not rate-limited — large UUID space; already tracked Group A D6; acceptable risk [CoachRegistrationResource.java]
-- D2: Rate limit consumed before user table lookup in `verifyPhone` — targeted bucket exhaustion possible; design limitation of public OTP endpoints; mitigated by per-userId keying [CoachRegistrationService.java:145–147]
 - D4: SES failure during `/resend-verification` creates valid DB token with no email delivery — logged at ERROR; resend button available [CoachRegistrationEmailListener.java]
 - D5: Frontend 60s cooldown resets on page refresh — UI-only throttle; server-side rate limit is authoritative [CoachEmailPendingPage.vue]
 - D7: `ON CONFLICT (name) DO NOTHING` in authority seed does not protect against PK collision on `id` — already tracked Group A D4; id=100/101 safe for this project [V21__skillars_security_extension.sql]
@@ -887,7 +883,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 
 ## Deferred from: code review of skillars-1-3-coach-account-registration-email-verification Group B (2026-06-11)
 - D2: IP-keyed rate limiting timing oracle on /resend-verification — pre-existing RateLimitingService limitation [CoachRegistrationService.java]
-- D3: OTP hash SHA-256(otp+userId) no random salt — spec-prescribed; already tracked as W1 [CoachRegistrationService.java:hashOtp]
 - D4: Hardcoded DOB(1900,1,1) and Gender.OTHER placeholders persisted to DB — spec-acknowledged; cleaned up in Story 2.1 [CoachRegistrationService.java]
 - D5: registerCoach returns void not CoachRegistrationResult — intentional simplification; void sufficient for current ACs [CoachRegistrationService.java]
 - D6: resendVerificationEmail deletes unused tokens instead of marking used=true — deletion achieves invalidation intent [CoachRegistrationService.java:168]
@@ -898,11 +893,9 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D2: verification_status unconstrained VARCHAR(20) — no CHECK constraint; pre-existing pattern for enum-backed columns [V21__skillars_security_extension.sql]
 - D3: SES region hardcoded eu-west-1 in SesProperties, not overridden in application-prod.yaml — deployment config concern [SesProperties.java, application-prod.yaml]
 - D4: Authority id 100/101 magic numbers — PK collision if authority sequence reaches these values; ON CONFLICT (name) DO NOTHING does not protect against PK clash with different name [V21__skillars_security_extension.sql]
-- D6: verifyEmail endpoint not @RateLimited — brute-force UUID token space; Group B code [CoachRegistrationService.java]
 - D7: resendVerificationEmail accepts EMAIL_VERIFIED users and re-triggers email verification instead of OTP step — flow regression; Group B code [CoachRegistrationService.java]
 
 ## Deferred from: code review of skillars-1-3-coach-account-registration-email-verification (2026-06-11)
-- W1: OTP hash uses `SHA-256(otp+userId)` — 6-digit OTP space vulnerable to offline pre-computation if DB is breached; hash scheme is spec-prescribed; rate limiting on `/verify-phone` is primary mitigation [CoachRegistrationService.java:hashOtp]
 - W4: `BaseEntity` TSID + V21 `BIGINT PRIMARY KEY` with no sequence — direct SQL inserts in future migrations or test fixtures require manual TSID generation [V21__skillars_security_extension.sql]
 - W5: `ContactDetailSanitizer.PHONE_PATTERN` may redact digit-heavy name segments (e.g. "Type 2 Analyst") — pattern is spec-prescribed; refine when real-world false positives are observed [ContactDetailSanitizer.java]
 - W7: `TokenErrorResponse.errorKey` field alignment with `useErrorHandler` composable — confirm when applying patches; likely aligned by naming convention [ApiAdvice.java]
@@ -3126,7 +3119,7 @@ removed); 2 patch items and 6 dismissed false positives are recorded in the stor
 (`skillars-deferred-143-account-lock-enforcement-and-forced-logout-session-termination.md`,
 Review Findings section).
 
-- **`markUsedByTokenHash`/`markAllUsedByUserId` calls are unguarded against transient DB failures.**
+- **`markUsedByTokenHash`/`markAllUsedByUserId` calls are unguarded against transient DB failures.** `[DECIDED 2026-10-26 (skillars-deferred-162 AC8): no bespoke DataAccessException handling; revisit only if this failure is observed in production for an auth-adjacent write. No production deployment exists yet.]`
   A `DataAccessException` mid-call propagates to `ApiAdvice`'s generic `Throwable` handler (500)
   rather than the intended 401/403. Pre-existing pattern — `markAllUsedByUserId` already carried this
   risk pre-diff, and no bespoke handling for transient DB errors exists anywhere else in this codebase
@@ -3214,7 +3207,6 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 - **Recovered recaps are timestamped at write time (Open Question 3).** `TimelineEventListener.writeTimelineEvent` stamps `occurredAt = Instant.now()`, so a swept session's event carries the sweep time (>= the stuck-completion timeout after the session). A recovered older `whatsNext` can outrank a newer normal one in `findLatestWhatsNextSuggestion` and is labelled with the sweep date; the report's Session Notes date has the same skew. Fix by putting the session end time into the event metadata and ordering/labelling by it.
 - **Recap attendance on recovery (Open Question 1).** `updateRecap` deliberately leaves `playerAttended=false` on a swept placeholder, so a recovered recap shows in the timeline, report and feed-forward suggestion but not as the prep card's last-session recap. Letting the coach confirm attendance touches the access clock and SLU; its own story.
 - **Recap text is stored and reported raw (unsanitised).** Pre-existing: `submitWrapUp` never ran `ContactDetailSanitizer` on the recap, and D1(a) documents that recaps reach the player and parent through the report PDF. Revisit if contact details in recaps become a concern.
-- **Refunded/disputed sessions stay `COMPLETED`** (no production `DISPUTE`/`REFUND` transition callers), so they stay editable and nudged inside the window.
 
 
 ## Deferred from: code review of skillars-12-7-recap-lifecycle-edit-resume-nudge-and-report-visibility (2026-10-22)
@@ -3224,7 +3216,6 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 ## Deferred from: code review of skillars-12-8-timeline-enrichment-session-content-and-event-producers (2026-10-23)
 
 - **QUICK-mode drill snapshot reflects plan at parent confirmation.** The session plan stays editable (`SessionPlanService.java:129` blocks only COMPLETED/CANCELLED) until `confirmCompletion` fires BookingCompletedEvent, so post-session plan edits appear as "Drills" on the timeline. Fix: lock the plan on QUICK wrap-up submit, or snapshot drill ids into session_completion_data at wrap-up.
-- **`TimelineEventListener.onBookingCompleted` not idempotent.** A replayed BookingCompletedEvent writes a second SESSION_COMPLETED row (now including drills/ratings). Pre-existing; the 12.8 replay IT works around it.
 
 ## Deferred from: code review of skillars-12-9-coach-player-workspace-parity (2026-10-23)
 
@@ -3234,8 +3225,6 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 
 ## Deferred from: skillars-deferred-159 (2026-10-23)
 
-- **Plan-path private drill names.** `SessionPlanService.createSession`/update resolve drill ids with `findAllById` and no PRIVATE/owner check; `TimelineEventListener.onBookingCompleted` then snapshots plan drills onto a SESSION_COMPLETED row whose `drills` key every viewer sees. Same class as the homework gap closed by deferred-159 AC2, different service and gate.
-- **Erasure marker not checked on the delayed QUICK path.** deferred-159 AC1 makes the timeout path write `homework_assignments` and a `HOMEWORK_ASSIGNED` row; neither listener checks a development-data erasure marker (the SESSION_COMPLETED write on the same path has the same gap, so not new in kind).
 - **Pending QUICK rows at deploy time.** QUICK rows created before AC2 shipped stay pending up to the timeout (default 24h) with unvalidated `homework_drill_ids`; `confirmCompletion` publishes the same rows today.
 
 ## Deferred from: skillars-deferred-160 (2026-10-24)
@@ -3269,3 +3258,15 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 
   [`src/main/java/com/softropic/skillars/platform/notification/service/AlertNotificationListener.java`]
 - **Frontend root `happy-dom` is pinned `^15.11.6`, the version Vitest's `happy-dom` environment resolves (15.11.7, pre-20 VM-context-escape advisory).** AE 2.0.0 depends on `happy-dom ^20.11.6` and nests 20.14.6. Bump the root pin to `^20` and re-run the suite. Test-only dependency; pre-existing pin. [`src/frontend/package.json:49`]
+
+## Deferred from: skillars-deferred-162 (2026-10-26)
+
+- **`@RateLimited` hits return 401, not 429, and raise a security alert.** `RateLimitingAspect` throws `AuthorizationException(TOO_MANY_REQUESTS)`, which `ApiAdvice.handleAuthException` (`:246`) maps to 401 `security.unauthorized`; its shared helper publishes a `SecurityAlertEvent` (`:688`), so every rate-limit hit on every `@RateLimited` endpoint (now including the three `/verify-email`s) is an alert. Precedent for a proper 429: `LoginRateLimitedException` (`ApiAdvice:374-380`). Out of scope by owner decision D162-C.
+- **Raw forwarded headers still read in two places.** `LoggingFilter.resolveClientIp` logs the raw `Forwarded` header (client-controlled, so log forensics can be spoofed), and `VideoPlayResource.extractClientIp` takes the last `X-Forwarded-For` entry. Both are correct behind Traefik today (Traefik replaces client XFF, and `RemoteIpValve` consumes a single-hop XFF), but neither uses the valve-resolved `getRemoteAddr()` that `RequestMetadataProvider` now uses. Fix: switch both to `request.getRemoteAddr()`; `VideoPlayResourceWebMvcTest:190` pins the current XFF behaviour.
+- **Coach-initiated development writes have no erasure check.** `RadarAssessmentService.submitAssessment` and `ReportGenerationService.generateReport`, plus their timeline rows (`TimelineEventListener.onRadarEntrySubmitted`, `ReportGenerationService.onReportGenerated`), write into tables `GdprErasureService.deletePlayerDevelopmentDataInDedicatedPool` empties, gated only by the coach access window. `DevelopmentDataErasureGuard` (skillars-deferred-162) is the drop-in: call it inside the write transaction.
+- **`SluCalculationService.onBookingCompleted` has no erasure check.** Same shape as the listeners skillars-deferred-162 AC5 fixed; use `DevelopmentDataErasureGuard`.
+- **`session.homework_assignments` is not deleted by GDPR erasure.** Erasure deletes `homework_completions` but leaves the assignments (player id, coach id, drill id, booking id).
+- **SCD `homework_drill_ids` survives `anonymizeByPlayerId`.** `SessionCompletionDataRepository.anonymizeByPlayerId` nulls the recap text but not the stored homework drill ids.
+- **Bank chargebacks and Stripe-dashboard refunds are not handled.** No `charge.dispute.*` or `charge.refunded` webhook handling exists (`StripeWebhookService`), so such a session never gets a `Dispute` row and its recap stays editable and nudged. Needs a PaymentIntent-to-booking lookup that copes with batch and pack charges.
+- **HOMEWORK_ASSIGNED is still check-then-insert.** `TimelineEventListener.writeHomeworkAssigned` does exists-then-insert-or-merge. Since skillars-deferred-162 it runs under the `player_profiles` lock, which serializes it per player, but there is no unique index backing it. Possible follow-up: the V169 pattern (partial unique index on `(player_id, reference_id) WHERE event_type = 'HOMEWORK_ASSIGNED'` plus `ON CONFLICT ... DO UPDATE` merging drills).
+- **A busy profile lock drops a development write.** `DevelopmentDataErasureGuard` uses NOWAIT plus `PessimisticLockRetryer` (~3.2 s budget). If another transaction holds the `player_profiles` row longer (an erasure, where losing the write is correct, or an unusually slow radar recalculation), the SESSION_COMPLETED/HOMEWORK_ASSIGNED write or the remaining homework drill is lost with an ERROR log and no retry. Watch `persistence.lock_retry.exhausted{lock="TimelineEventListener.*|HomeworkAssignmentService.*"}`; add a retry/DLQ only if it is ever non-zero.

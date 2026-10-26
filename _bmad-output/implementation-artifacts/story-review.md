@@ -1,223 +1,114 @@
-# Story Review — skillars-deferred-161
+# Story Review: skillars-deferred-162
 
-- **Story:** `skillars-deferred-161-alert-recipient-config-user-cleanup-index-email-it-isolation-and-tooling-ledger-residuals`
-- **Audit date:** 2026-10-24
-- **Real HEAD:** `967c7359 docs(deferred-161): sprint-status note`
-- Citations were checked against this HEAD. The story says it was verified at `4317b019`; that was not trusted. No `src/` file differs between the two commits; only the ledger and sprint-status changed.
-- **Method:** four parallel read-only verification layers (citations, ledger/precedent, mechanism, corner cases), followed by my own adversarial re-read of every surviving finding (Step 4b). For AC4, npm metadata was queried live and the AE 2.0.0 and 3.0.0 tarballs were unpacked to read their `compatibleWith` guards.
-
-## Summary of blocking issues (fix the story before dev)
-
-| # | AC | Issue | Severity |
-|---|----|-------|----------|
-| B1 | 2 | The premise is false. `DatabaseResetTestExecutionListener` truncates `envelope_entity` before every test method, so foreign rows from other tests cannot exist. The "foreign row" demonstration test already exists. | HIGH |
-| B2 | 4 | "There is **no** AE release compatible with app-vite 2.4.x + a current vitest" is false. AE **2.0.0** guards `@quasar/app-vite ^2.4.0` and peers `vitest ^4`. A much smaller hop exists that D161-B never offers. | HIGH |
-| B3 | 6 | The AC6 test ("slow `findAll()` does not block cache hits") already passes on current code: fresh-cache hits never take the monitor. The fix shape also conflicts with existing synchronous read-after-invalidate tests unless it specifies single-flight semantics. | HIGH |
-| B4 | 1 | The code path cannot run today. `AlertEvaluationService.computeMetricValue` always returns `-1.0`, so `AlertFiredEvent` is never published. Also, the default `platform.admin_alert_email` is seeded `''`. | MED (it does not block AC1; it reframes the justification and the tests) |
+**Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-162-otp-hmac-verify-email-rate-limit-client-ip-drill-ownership-timeline-idempotency-erasure-and-dispute-recap-lock.md`
+**Audit date:** 2026-10-26
+**Real HEAD at audit time:** `5f5e2994` — "feat: alert recipient from config, ConfigService single-flight refresh, Vitest 4 + AE 2.0.0 (deferred-161) (#300)"
+**Note:** every citation below was independently re-opened and read at this HEAD. The story's own "Verified state at drafting" header also claims `5f5e2994`, so there is no commit drift between drafting and audit time in this case — but every citation was still re-verified from the real file content, not trusted from that match. ~140 individual claims were checked across 7 parallel verification passes (2 citation-location passes, 1 ledger/precedent pass, 2 mechanistic-behavior passes, 2 corner-case passes), followed by my own adversarial re-check (Step 4b) of every finding that survived, done by re-opening the cited files myself.
 
 ---
 
 ## 1. Citation verification
 
-| # | Story citation | Verdict | Evidence at 967c7359 |
-|---|---|---|---|
-| 1 | `AlertNotificationListener.java:61` hardcodes `ops@skillars.internal`, EMAIL-only, default `LOG` | MATCH | `:53` `if ("EMAIL".equalsIgnoreCase(event.notificationChannel()))`; `:61` `recipient.setEmail("ops@skillars.internal")`. LOG default: `V138__baseline_schema.sql:492`, `AlertRuleAdminResource.java:66-67` |
-| 2 | `VideoModerationEmailListener` resolves `platform.admin_alert_email` via `ConfigService.find(...)`; Task 1 names `adminEmail()` | MATCH (method name drifted) | `:172` `configService.find("platform.admin_alert_email").orElse("")`. No method named `adminEmail()`: it is a local variable in `adminAlertEnvelope(...)` `:170-186` |
-| 3 | `V138` has no index for `findByActivatedFalseAndCreatedDateBefore…OrderByIdAsc`; `UserAdminService` ~L384; latest migration V168 | MATCH | `UserAdminService.java:384`; `UserRepository.java:50`. `main."user"` has only pkey/email/login/phone keys (`V138:2712-2734`). Latest is `V168__envelope_entity_email_template_check_ses_cutover_preflight.sql` (AC3 dropped; informational) |
-| 4 | `RegistrationEmailDurabilityIT` `retryFailedEmails()` at ~L330/343/370 | MATCH (approximate) | `src/test/java/com/softropic/skillars/platform/notification/infrastructure/listener/RegistrationEmailDurabilityIT.java` calls at ~330/343/365-370. **No `@BeforeEach` exists** (story L143/L171 describes new work) |
-| 5 | app-vite `2.4.1` installed / `^2.1.0` declared; vitest `^3.2.4`; quasar `^2.16` | MATCH | `src/frontend/package.json:39,52,27`. AE installed `1.2.4` (`:40`); `vitest.config.mjs` and `quasar.config.js` exist; no `quasar.extensions.json` |
-| 6 | `BoundedKey.defaultValue` exists for all **18** `HAS_CODE_DEFAULT` keys | DRIFTED | `BoundedKey` is the nested record at `ConfigBounds.java:80`. `HAS_CODE_DEFAULT` (`ConfigBounds.java:432-455`) now has **23** keys |
-| 7 | `GdprErasureService` lock_timeout hoisted per `eraseParentChildren`; `refreshCache()` `private synchronized` + `findAll()` | MATCH (incomplete) | `GdprErasureService.java:943-952`; `ConfigService.java:380` `private synchronized void refreshCache()`, `:385` `findAll()`. There are also in-transaction reads at `:468-469` (COACH) and `:607-608` (PLAYER), which the story does not mention |
-| 8 | sprint-status ~419 KB, **72** prior lines, longest ~17.7 KB; deferred-work ~351 KB / 3.3k lines | MATCH (count +1) | 419,837 B; **73** `# prior last_updated` lines (HEAD's commit added one); longest 17,765 chars; deferred-work 351,446 B / 3,321 lines |
-| 9 | `PhoneValidationProperties` / `Provider` / `CamMobileValidator`, `V146` | MATCH | All exist under `infrastructure/validation/` (AC8 dropped; informational) |
-| 10 | Context-count gate "currently **≤24** / size < maxSize after deferred-160" | **WRONG** | `pr-build.yml:88` `assert-context-count.sh build.log 17`; script default `CEILING=17`. 24 was the deferred-160 AC target and 17 is the measured value. A second gate also exists: `IntegrationTestConventionTest:89` `EXPECTED_TEST_PROPERTY_SOURCE_COUNT = 4`, `:109` `EXPECTED_DISTINCT_CONTEXT_KEYS = 14` |
-| 11 | `IntegrationTestConventionTest`, `migration-conventions.md`, `secrets-reference.md` exist | MATCH | All present |
-| 12 | References list paths | MATCH | Every path exists |
+~100 `file:line` citations were checked by opening the real file at the cited location. The overwhelming majority are accurate. Only citations with a verdict other than a clean MATCH are listed individually; everything else is summarized by AC.
+
+| AC | Citations checked | Clean MATCH | Issues |
+|----|---|---|---|
+| AC1 (verify-email / client IP) | 18 | 15 | 3 (see below) |
+| AC2 (OTP hash) | 15 | 14 | 1 (see below) |
+| AC3 (OTP budget) | 6 | 4 | 2 (see below) |
+| AC4 (plan drills) | 13 | 12 | 1 (see below) |
+| AC5 (erasure) | 11 | 11 | 0 (two trivial caveats, not defects) |
+| AC6 (disputes) | 9 | 9 | 0 |
+| AC7 (timeline idempotency) | 11 | 11 | 0 (one trivial caveat) |
+| AC8 (token writes) | 4 | 4 | 0 |
+
+**Issues found:**
+
+1. **`ApiAdvice:242-249` claim is factually wrong (real defect).** The story's "Verified state" for AC1 says the rate-limit handler "maps to 401 `security.unauthorized` **plus a `SecurityAlertEvent`**." Re-read directly: `handleAuthException(AuthorizationException)` (`ApiAdvice.java:246-249`) does **not** publish anything. `SecurityAlertEvent` is only published by the separate `accessDeniedHandler(AccessDeniedException)` (`ApiAdvice.java:314-318`) — a different exception type entirely, thrown by method-security `@PreAuthorize` failures, not by the rate limiter. **CONFIRMED by my own re-read.** This doesn't block any AC (it's background context, not something an AC depends on), but a dev reading this literally would wrongly assume rate-limit hits already trigger a security alert.
+
+2. **`TimelineDrillSnapshotResolver.forBooking:51-76`, "session loaded at `:53` has `getCoachId()`" — fabricated detail (real defect).** Re-read the full file directly: line 53 is `Session session = sessionRepository.findByBookingId(bookingId).orElse(null);`. `grep -n "getCoachId" TimelineDrillSnapshotResolver.java` returns **zero matches** anywhere in the file. **CONFIRMED by my own re-read.** This matters more than item 1: AC4.3 tells the dev to pass `session.getCoachId()` into the new ownership filter for this resolver, on the premise that the session object already exposes it at the point the story cites — true (Session does have a `getCoachId()` method generally, used elsewhere), but the specific claim that this call already appears at this location is false. Not a blocker, but the dev should not go looking for an existing call there.
+
+3. Minor, non-blocking citation imprecisions (listed for completeness, no action implied): `CoachRegistrationService:165-179` says "sends an SMS/email" — only email is sent (`sendOtpEmail`/`CoachOtpEmailEvent`), there is no SMS path. `application.yaml:27-29`'s dotted-path paraphrase ("server.tomcat.remoteip.remote-ip-header") has a spurious extra segment; the real property is `server.tomcat.remote-ip-header`. The "14 call-site uses" of `getIpAddress()` is accurate as a raw grep count but 6 of the 14 are the method's own getter/interface declarations, not call sites (8 are genuine invocations). `SkillarsPlatformProperties:52-65`'s "≥32 chars, startup-checked" detail is true but the actual length check lives in `RegistrationVerificationTokenService`'s constructor, not at the cited lines. `CoachRegistrationService` line citations `:190` (should be `:191` for the `findFirst...` call) and `:211` (should be `:211-212`, the compare is on 212) are off by one line each — same conclusion reachable either way. V138's `uq_pot_one_active_per_user` is a partial **unique index**, not a named CONSTRAINT clause — functionally identical, syntactically imprecise wording.
+
+None of the minor items above change any AC's required work; items 1 and 2 are real but non-blocking since no AC's acceptance test depends on either claim being true.
+
+---
 
 ## 2. Ledger & precedent attribution
 
-Sources checked for each item: `deferred-work.md`, code comments/Javadoc, `git log --grep`, and story files.
+All 11 ledger-bullet line-number citations in the "Ledger → story mapping" table are **stale** — every single one is off by roughly 9–22 lines from its real current location in `deferred-work.md`, consistent with the story's own disclaimer that the working tree had uncommitted deletions at drafting time. This is cosmetic *except* for three rows where the drift also names the **wrong section/group letter**, which is more than cosmetic — a reader following the citation literally lands in the wrong block:
 
-| Claim | Sources / findings | Verdict |
-|---|---|---|
-| 6 bullets tagged `[PICKED UP by skillars-deferred-161]` | `grep -c` = 6 ✔. The sprint-status entry (`sprint-status.yaml:438`) still says "8 ledger bullets tagged PICKED UP", which is stale after `4bf7478f` | CONFIRMED (status note stale) |
-| AC1 section "ses-1-5 dev section (2026-10-24)" | `deferred-work.md:3316` under `## Deferred from: ses-1-5 (2026-10-24)` | CONFIRMED |
-| AC2 section `ses-1-4-registration-email-durability` | `:1942` under code review of ses-1-4… (2026-09-12) | CONFIRMED |
-| AC4 section `skillars-deferred-104` | `:1278` under `skillars-deferred-104 implementation` | CONFIRMED |
-| AC5 section "deferred-129/-130" | Under `## Deferred from: code review of skillars-deferred-129` (D2 bullet `:2769-2819`). The tag sits **mid-paragraph** at `:2816` inside a multi-closure bullet, so AC9 cannot simply "delete" it | CONFIRMED (location precision needed) |
-| AC6 section "code review of skillars-deferred-129" | `:2821-2839` | CONFIRMED. The bullet's own `:587-588` citation is stale; reads are now `:468/608/951` |
-| AC7 section "skillars-deferred-52 story creation" | Bullet at `:1082` sits under **code review of skillars-deferred-58** (section header `:1080`), not deferred-52 (`:1040`) | **WRONG label** |
-| AC8 section "skillars-deferred-99 AC16 note" | Under `## Deferred from: skillars-deferred-92 story creation and implementation` (`:1170`). "deferred-99 AC16" is the `[CLOSED by …]` annotation it sits inside | **WRONG label** (AC dropped; table-only fix) |
-| deferred-133 AC2 added `defaultValue`; deferred-135 declined a 4th time | Ledger `:2801`, `:2818`; deferred-133 story; deferred-135 story L37-40; `ConfigBoundsEnumCoverageTest:122` | CONFIRMED (key count is 23, not 18) |
-| deferred-132 Fix 9 hoisted lock_timeout | Ledger `:2833` "[CLOSED by skillars-deferred-132 AC2 Fix 9, PARENT branch only]"; code `:944-952` | CONFIRMED |
-| `refreshCache()` is the remaining hazard | AC6 bullet text names it explicitly ("mitigates frequency, not the underlying hazard class") | CONFIRMED |
-| `committedRowFor` already fixed | IT `:89-97` Javadoc cites deferred-129 AC3; commit `1746965d` | CONFIRMED |
-| "Bare jdbcTemplate writes don't commit — see project note" | `application.yaml:183` `auto-commit: false`, not overridden in `application-test.yaml`; documented in several IT comments. The "project note" is the user's memory file, not a repo doc | CONFIRMED |
-| "~1 in 3 ledger items already closed" | No repo source; only the user's memory note | CONFIRMED as a heuristic (no repo evidence) |
-| D161-A "convention: hot-table index = CONCURRENTLY, own file" | `docs/deployment/migration-conventions.md:34-37` and rule 4 (`:95-138`): CONCURRENTLY has **no working online-safe mechanism** in this codebase (Flyway self-deadlock, deferred-112) | **WRONG** (AC3 dropped; correct the option text before anyone revives it) |
-| Untagged duplicate of AC7 | `:1074` (deferred-56 code review): "`sprint-status.yaml`'s `last_updated` field has grown into a single, unbounded YAML comment line…". It is not tagged, so AC9's "No other ledger text changed" would leave it behind | MISSED ITEM |
+| Ledger bullet | Story's claimed section | Real section (verified) | Real line |
+|---|---|---|---|
+| "D1: `/verify-email` endpoint not rate-limited" | "...Group C (2026-06-11)" | **Group D** | 862 |
+| "D6: verifyEmail endpoint not @RateLimited" | "...(2026-06-11)" labeled as a Group-C duplicate | **Group A** | 888 |
+| "D3: OTP hash SHA-256(otp+userId) no random salt" | "...Group C" | **Group B** | 878 |
+
+The other 8 rows drift only in line number, not section — all were re-located and confirmed to match their claimed lead text and section description. The `[PICKED UP by skillars-deferred-162 ACn]` tags are correctly worded throughout.
+
+**One real, independently-confirmed citation error:** the story cites migration **V161** as the "precedent" for marking a `CREATE UNIQUE INDEX` with the `-- migration-lint: allow-blocking-index` marker (AC7.1). I re-read `V161__development_player_timeline_events_coach_lookup_index.sql` directly: it creates a plain, **non-unique** `CREATE INDEX`, not a unique one. The lint-marker pattern itself is a valid precedent (any blocking index needs the marker, unique or not), but citing V161 specifically as precedent for a *unique* blocking index overstates what that migration actually shows.
+
+**Everything else checked out as accurate, independently confirmed against primary sources (not just the story's own paraphrase):**
+- `skillars-10-3-dispute-resolution.md:562-568` genuinely says "Do NOT transition the booking to `DISPUTED` status in Story 10.3" — verbatim match.
+- The "Plan-path private drill names" / "Erasure marker not checked on the delayed QUICK path" findings genuinely originate in `skillars-deferred-159`'s own text (lines 39 and 42 respectively), not just in deferred-162's paraphrase of it.
+- The ledger-hygiene convention ("if a section ends up with no bullets, remove its heading") is genuinely traceable to a real deferred-161 review-findings patch, not fabricated.
+- V160's cited DML-marker justification text is a close paraphrase of the real (slightly richer) comment.
+- The `DISPUTED` `BookingStatus` enum value exists in the codebase (a different, in-session mechanism per Story 7.2) but has zero production callers triggering that transition — so its existence does not make the "booking status stays untouched" decision stale.
+- `skillars-12-7`, `skillars-12-8`, and `skillars-deferred-143` story files all exist and all genuinely contain the findings deferred-162 attributes to them, verified by reading each file directly rather than trusting the paraphrase.
+
+---
 
 ## 3. Mechanistic claims
 
-1. **"AC1 … must not throw into the scheduling loop."**
-   `AlertNotificationListener` is a plain synchronous `@EventListener(AlertFiredEvent.class)` (no `@Async`/`@Transactional`). Its only publisher is `AlertEvaluationService.evaluate()`, `@Scheduled(fixedDelayString="${alert.evaluation-interval-ms:30000}")`, which loops over rules and publishes inline.
-   **CORRECT.** An exception escaping the listener aborts the remaining rules for that tick.
-   **But:** `computeMetricValue` (`AlertEvaluationService.java:84-88`) is `return -1.0; // TODO`, and `evaluate()` `continue`s on `< 0`. The event is never published. **The listener is dead code today**, so the "SES bounce-rate risk" is latent, not live.
+All 26 mechanistic/behavioral claims checked (transaction boundaries, control-flow order, exception types, annotation values) were verified by reading the full method bodies, not snippets. **24 of 26 are clean matches**, confirmed by my own re-read of the highest-stakes ones (the AC3 verify-order claim, the AC5 transaction-boundary claim, the AC7 `REQUIRES_NEW` claim, the `AuthorizationException`/`ApiAdvice` mapping). Two have a minor precision gap, neither changing any AC's required work:
 
-2. **"same shape as `VideoModerationEmailListener` (naming the key and metric)."**
-   `VideoModerationEmailListener:174`: `log.error("platform.admin_alert_email config key is blank — admin alert NOT sent: {}", event.subject())`. It names the key and the subject, **not a metric**.
-   **PARTIALLY CORRECT.** For AC1 that is harmless; the listener has `event.metricName()` to log.
+- The claim that "listeners are all AFTER_COMMIT + @Async(taskExecutor)" is true for all three AC5 listeners, but omits that `TimelineEventListener.onHomeworkAssigned` also carries `fallbackExecution = true` — a real, functionally-necessary extra attribute (its publisher has no active transaction), just not mentioned.
+- The story cites `GdprErasureIT:1497-1510` as covering the "[the AC8 call] rolls back and is retried" claim. Re-read: that test (`erase_parentUser_laterFailureDoesNotRollBackAlreadyCommittedChild`) calls `erase()` directly, bypassing the `GdprEventListener`/`markFailed`/`retryFailedErasures` path entirely — it proves the atomicity-tradeoff half of the claim (already-committed children survive), not the retry half. The retry mechanism itself is real (confirmed in `GdprEventListener.onErasureRequested` and `retryFailedErasures`), just not exercised by the cited test.
 
-3. **"`ConfigService.find(...)`" in the blank case.**
-   `ConfigService.java:195-198` returns `Optional<String>`. Seeded value: `V139__baseline_seed_data.sql:96` `('platform.admin_alert_email', '', …) ON CONFLICT DO NOTHING`.
-   **CORRECT.** But "blank" is the **default** in every environment, so post-AC1 behaviour is ERROR-and-drop until an operator sets the row. The key is not in `secrets-reference.md` or the runbook. It is a DB `platform_config` row, not a secret, so `secrets-reference.md` is arguably the wrong home.
+---
 
-4. **"`refreshCache()` … `findAll()` on the caller's connection … stall the JVM while waiting on a Hikari connection."**
-   `ConfigService.java:374-393`:
-   - `ensureFresh()` does an unsynchronized TTL check.
-   - `refreshCache()` is `synchronized` on the singleton instance, with a TTL double-check, then `findAll()`, `putAll`/`retainAll`, and `lastRefreshed = now()`.
-   - `PlatformConfigRepository.findAll()` inherits Spring Data's `@Transactional(readOnly=true)`, `REQUIRED`.
+## 4. Corner cases, false assumptions, and missed flows (survived adversarial re-check)
 
-   **PARTIALLY CORRECT.**
-   - A caller **inside** a transaction (e.g. GDPR `eraseTransactional`, `REQUIRES_NEW` at `GdprErasureService.java:370-371`) runs `findAll()` on the connection it already holds, so it does **not** wait on Hikari.
-   - A caller **without** a transaction (schedulers, listeners, `open-in-view: false`) borrows a connection while holding the monitor, for up to `connection-timeout: 30000`.
-   - The real hazard is the convoy: every stale-cache reader blocks behind that thread, including transaction-holding erasure threads.
-   - "JVM-wide" is loose: the monitor is per-bean, effectively app-wide.
+Each of these was independently re-opened and re-read by me after the hunting passes reported them — see §5 for what did not survive.
 
-5. **AC6 test: "a slow `findAll()` does not block cache hits."**
-   Fresh hits never reach `refreshCache()`.
-   **WRONG as a test design.** It passes on today's code. The test must start from a **stale** cache (`invalidate()` or TTL 0) and prove stale-path readers are not serialised behind a slow loader.
+### 4.1 AC4 — a false "closed transitively" assumption (real gap)
+The story explicitly asserts: *"Templates copy blocks only from the coach's own sessions (`:67`, `:155`), so it is closed transitively once plan writes are checked."* **This is false.** I re-read `SessionTemplateService.deployTemplate` (lines 112–166) directly: it builds a brand-new `Session` from a template's stored blocks (`session.setBlocks(t.getBlocks()...)`, line 151) and calls `sessionRepository.save(session)` (line 163) **without ever calling `SessionPlanService.createSession`/`updateSession`** — so AC4.2's new ownership validation, which the story scopes only to those two `SessionPlanService` methods, never runs on this path. Worse, `buildResponse` (lines 195+, explicitly commented `// mirrors SessionPlanService.buildResponse — keep in sync`) does the exact same unfiltered `drillRepository.findAllById(drillIds)` → `drillLibraryService.toResponse(...)` the story is fixing in `SessionPlanService.toResponseMap` — and AC4.3's read-side filtering list never mentions `SessionTemplateService` at all.
+**Concrete failure scenario:** a coach saved a plan with another coach's PRIVATE drill before this fix (the pre-existing bug), turned it into a template. After the fix ships, deploying that template (a) persists the foreign drill id into a brand-new session row with zero validation, and (b) the deploy response itself hands the deploying coach the foreign drill's full detail (name, description, coaching points) via the unfiltered `buildResponse`/`toResponse` call — on every future deploy of that template, indefinitely, since templates are archived rather than deleted.
 
-6. **"`retryFailedEmails()` polls the whole `envelope_entity` table."**
-   `EnvelopeEntityRepository.java:18`: `… WHERE e.retry = 'true' AND e.status = 'FAILED' ORDER BY e.deadline LIMIT 10 FOR UPDATE SKIP LOCKED`.
-   **PARTIALLY CORRECT.** It is all *eligible* rows, capped at 10 and ordered by deadline. If isolation mattered, starvation by earlier-deadline rows would be the real risk, and the story never mentions it.
+### 4.2 AC5 — the fix's own title is not actually achieved; two more writers are untouched (real gap)
+AC5 is titled "No new development data is written for an erased player," but I independently confirmed (via `grep`, then reading both services directly) that **two additional listeners write into tables the GDPR erasure explicitly scrubs, and neither is in the story's list of three**:
+- `TimelineEventListener.onRadarEntrySubmitted` (writes a `RADAR_ASSESSMENT` timeline row) ← fed by `RadarAssessmentService.submitAssessment`, which writes to `RadarAssessmentEntry` rows.
+- `ReportGenerationService.onReportGenerated` (writes a `PERFORMANCE_REPORT` timeline row) ← fed by `ReportGenerationService.generateReport`, which writes `PerformanceReport` rows.
 
-7. **"rows left behind by other tests" (AC2).**
-   - `DatabaseResetTestExecutionListener.beforeTestMethod` (`:108`) runs before `@BeforeEach` (Javadoc `:43`) and truncates every table except `flyway_schema_history`, `main.shedlock`, `qrtz_*` (`isInfrastructureTable` `:494-497`, applied `:526`).
-   - It is registered for all ITs at `AbstractIntegrationTest.java:106`.
-   - There is a single forked JVM and no parallel test methods.
+I confirmed directly that `GdprErasureService` deletes both tables during erasure (`radarAssessmentRepository.deleteAllByPlayerId(playerId)` at line 1483, `performanceReportRepository.deleteAllByPlayerId(playerId)` at line 1496), and confirmed via `grep` that neither `RadarAssessmentService` nor `ReportGenerationService` contains any `developmentDataErasedAt`/`ErasedAt` check anywhere. Their only gate is a coach-player relationship/access-window check, unrelated to erasure. **Concrete failure scenario:** a coach with an open access window to an already-erased player can still submit a radar assessment or generate a performance report; both actions insert fresh rows into the exact tables GDPR erasure just emptied, completely unguarded, after this story ships.
 
-   **WRONG.** Foreign rows cannot exist at `@BeforeEach`. The listener predates the ledger bullet (b1d8c831 vs 0bf1fc96). Parking would always find an empty table. The requested demonstration already exists: `retryScheduler_unrelatedStrayFailedRow_doesNotAffectScopedAssertion` (`RegistrationEmailDurabilityIT.java:362`).
+### 4.3 AC5 — the proposed lock, if implemented as a single wrapping transaction, risks silently breaking `HomeworkAssignmentService`'s documented replay-tolerance (real implementation risk)
+I re-read `HomeworkAssignmentService.handleBookingCompleted` directly (lines 57–116): it carries **no** `@Transactional` today — only `@TransactionalEventListener(phase = AFTER_COMMIT)` + `@Async`. Each `homeworkAssignmentRepository.saveAndFlush(assignment)` (line 101, inside a per-drill loop) auto-commits independently, and the method's own comment explicitly says why: *"No active transaction here (each saveAndFlush committed on its own)..."* (line 110), and *"Published from a finally so a non-duplicate-key failure on drill 2 cannot swallow the already-committed drill 1"* (line 80–81). AC5.1 requires checking the erasure marker "under the `player_profiles` row lock... inside the same transaction as their write" — to close the check-then-act gap, the lock must stay held across the write(s), which for this method means wrapping the per-drill loop in one new transaction. If done naively (one `@Transactional(REQUIRES_NEW)` around the whole loop), a `DataIntegrityViolationException` on drill 2 — the *exact replay scenario this method is already designed to tolerate* — would poison that shared transaction; catching the Java exception does not un-poison a transaction, so its eventual commit would behave as a rollback, silently discarding drill 1's otherwise-successful insert. This is a real regression risk the story doesn't flag, and the fix would need per-iteration savepoints (the same technique `PessimisticLockRetryer` already uses elsewhere in this codebase) to avoid it.
 
-8. **"`quasar.config.js` registers the AE" (AC4a).**
-   Quasar CLI's `ext add` records extensions in `quasar.extensions.json`, and none exists today.
-   **PLAUSIBLE (medium confidence).** This rests on Quasar CLI convention and was not executed. The dev should confirm where `ext add` writes before making it the success check.
+### 4.4 AC6 — `resolution <> 'NO_ACTION'` relies on an unenforced invariant, not a constraint (real latent risk, currently dormant)
+I confirmed directly: `Dispute.resolution` (`Dispute.java:47-48`) has no `nullable = false` — it's nullable at the schema level. The proposed nudge-exclusion JPQL predicate (`d.status = 'RESOLVED' AND d.resolution <> 'NO_ACTION'`) relies on SQL's three-valued logic resolving `NULL <> 'NO_ACTION'` to `UNKNOWN`/not-true for safety to hold, which happens to match today's single-writer behavior (only `DisputeService.resolveDispute` ever sets `status = 'RESOLVED'`, and it always also sets a non-null `resolution` from a `switch` with no fall-through default). But this safety comes from a single-method invariant, not a schema guarantee — a future bulk-fix script, data import, or legacy row with `status='RESOLVED'` and `resolution = NULL` would silently leave that booking's recap nudge-eligible (and editable) when AC6 intends it locked. Recommend `COALESCE(d.resolution, '') <> 'NO_ACTION'` or a DB CHECK, not flagged in the story.
 
-9. **"`npx quasar build` (used by `mvn verify`) or the Vitest suite" gate (D161-B).**
-   - `pom.xml:596` `install --legacy-peer-deps`; `:635-641` `quasar build`.
-   - Vitest is not run by Maven (`pom.xml:614-616`).
-   - `frontend-unit-tests.yml:147` uses `npm ci` (no legacy flag), and its header says "NOT a required status check".
+### 4.5 AC7 — "all in one transaction" (AC7.4) is locally true but easy to misread across the AC5/AC7 combination
+`writeTimelineEvent` genuinely is `@Transactional(propagation = REQUIRES_NEW)` and the lock+check+insert inside it are one real transaction — confirmed by direct re-read. But `REQUIRES_NEW` *suspends* any caller's transaction; it does not extend atomicity to the original booking-completion write or to `HomeworkAssignmentService`'s own (separately committed) write. The phrase "all in one transaction" in AC7.4 should not be read as implying broader rollback coupling than actually exists — worth one clarifying sentence so an implementer doesn't assume more safety than the propagation model provides. This is the same underlying mechanism as finding 4.3, surfacing from the AC7 side.
 
-   **CORRECT, with a caveat.** A peer conflict can pass the Maven install yet fail `npm ci` in the Vitest job, and a red Vitest job does not block merge. "Green" has to be checked by hand on the PR.
-
-10. **AC7 trim layout.**
-    - `# prior last_updated` lines are contiguous at L3-75 (73 lines, ≈135 KB, newest-first).
-    - `development_status:` starts at L92.
-    - No script under `.claude/`, `_bmad/` or `.github/` parses the prior lines.
-    - The `mto-story-review` skill only parses the first key in the `last_updated` comment.
-
-    **CORRECT.** Keeping 5 removes ≈134 KB. `last_updated` is already 98 chars, so "shorten to ≤200" is a no-op. The trim must be a comment-preserving text edit, not `yaml.dump`.
-
-## 4. Corner cases / false assumptions / missed flows (survived Step 4b)
-
-**HIGH**
-
-- **C1 (AC2) — false premise; the AC as written is a no-op.**
-  - Evidence: mechanism #7.
-  - Recommend closing AC2 *by verification*: re-annotate the bullet as "already isolated by DatabaseResetTestExecutionListener (Deferred-19); stray-row case exists at `:362`".
-  - If a guard is still wanted, the only meaningful test seeds **>10** earlier-deadline foreign FAILED/retry rows to pin the `LIMIT 10 ORDER BY deadline` behaviour.
-  - Note that "closed by verification" fits neither AC9 category; AC9 needs a third.
-
-- **C2 (AC4) — the "no compatible AE" claim is false.**
-  - `npm view @quasar/quasar-app-extension-testing-unit-vitest versions`: `… 1.2.4, 2.0.0, 3.0.0-alpha.0, 3.0.0-alpha.1, 3.0.0`.
-  - 2.0.0 peers: `@quasar/app-vite ^2.4.0`, `vitest ^4.0.0`, `@vitest/ui ^4.0.0`, `quasar ^2.12.7`. Its `src/index.js:12` has `api.compatibleWith('@quasar/app-vite', '^2.4.0')`. By contrast, 3.0.0 `src/index.ts:11-12` requires `quasar ^2.24.0` and `app-vite ^3.0.0`.
-  - So there is an option D161-B(0): keep app-vite 2.4.1 / quasar 2.16; bump `vitest`, `@vitest/coverage-v8` (`package.json:41`, `^3.2.4`) and `@vitest/ui` to 4 and the AE to 2.0.0. That is far smaller than the recommended full app-vite 3 hop.
-  - AC4(b)'s prescribed re-annotation text would record a false blocker.
-  - **The owner should re-decide D161-B.**
-
-- **C3 (AC6) — the test proves nothing, and the fix needs explicit semantics.**
-  - Evidence: mechanism #5, plus `ConfigServiceTest.getString_refreshesFromDbWhenCacheStale` (`:90-102`): `invalidate()`, then `getString("k")` must return `"v2"` with `times(2) findAll()`. That pins synchronous refresh for the refreshing caller.
-  - ITs also do write → `invalidate()` → read and expect the new value; Layer 4 cited ~9 sites, e.g. `ConfigGuardIT`, `SubscriptionLifecycleIT`. I did not re-read each one.
-  - "Load outside the monitor" without single-flight lets N stale readers run N concurrent `findAll()` calls, breaking "preserve stampede behaviour".
-  - The AC must state the semantics: single-flight loader; the caller that triggered the refresh (or the one after `invalidate()`) still sees fresh data; other stale readers either wait or serve stale.
-
-**MED**
-
-- **C4 (AC1) — the config read must sit inside the listener's try.**
-  - `find()` can throw when a stale refresh's `findAll()` fails: the listener thread has no transaction, so it borrows a connection.
-  - `VideoModerationEmailListener:172` does the read outside any try. Copying that shape into `AlertNotificationListener` would let an exception escape into `evaluate()`'s rule loop.
-  - Add a "find throws" unit test. AC1's "mailManager failure" case is mostly mock-only, since `MailManager.sendEmailSync` catches transport failures itself.
-
-- **C5 (AC1) — the default is blank, and the docs are stale.**
-  - Evidence: mechanism #3.
-  - `docs/dev-docs/notification/index.html:83,127,296` (per Layer 4) still describe mail to `ops@skillars.internal`; no task updates them.
-  - Task 1's "documented in secrets-reference.md" target is wrong: this is a DB config row.
-  - `AlertEvaluationService` class Javadoc (`:23-24`, per Layer 4) says "No DB call is made during evaluation". A ConfigService refresh in the listener can now make one.
-
-- **C6 (AC1) — reframe the justification.**
-  - The listener is unreachable today (mechanism #1). The change is defensive, so the story should not claim it removes a live SES bounce risk.
-  - Only direct listener unit tests can cover it, and no existing tests reference the class, so nothing breaks.
-
-- **C7 (AC6) — lost-invalidation race.**
-  - `invalidate()` (`:370-372`) is unsynchronized, and `refreshCache` sets `lastRefreshed = now()` *after* `findAll()`.
-  - An `invalidate()` landing mid-refresh, with a snapshot taken before the writer's commit, is lost for up to 300 s. Moving `findAll()` outside the monitor widens this.
-  - A generation/epoch counter closes it. This already exists today; the fix should not make it worse.
-  - Do not move `findAll()` into `REQUIRES_NEW`: callers already in a transaction would hold two connections each.
-
-- **C8 (AC4 option 1) — the full hop also breaks the hand-written config.**
-  - `vitest.config.mjs:4` imports `vite-tsconfig-paths`. That package is not in `package.json`; it reaches the repo only transitively via AE 1.2.4.
-  - AE 3.0.0's dependencies (unpacked tarball) do not include it, so the bump must add it explicitly or rewrite the config.
-
-- **C9 (AC4 gate) — two install paths, and the suite is not a merge gate.**
-  - Evidence: mechanism #9.
-  - AC4(a) should require a green `frontend-unit-tests.yml` run, triggered and checked by hand.
-
-- **C10 (AC7/AC9) — partial closure.**
-  - The AC7 bullet covers **both** files. Its "one line already exceeds 40,000 characters" is stale: the longest lines are 17,765 chars in sprint-status and 2,545 in deferred-work.
-  - Trimming only `sprint-status.yaml` and then deleting the bullet as "closed by code" would overclaim for `deferred-work.md`.
-  - The untagged duplicate at `:1074` is out of AC9's allowed edit set.
-
-**LOW**
-
-- **C11 (Dev Notes):** the context-count ceiling is **17**, not ≤24. Also mention the `IntegrationTestConventionTest` pins (14 keys / 4 `@TestPropertySource`).
-- **C12 (AC5 decision text):** "18" should be "23" `HAS_CODE_DEFAULT` keys. The 5 newer keys carry real defaults.
-- **C13 (AC6 wording):** "or the erase path no longer triggers the refresh inside its transaction" is option D161-D(2), which the owner did not choose. Drop it, or make it an explicit fallback.
-- **C14 (ledger hygiene):** the AC8 `[DECIDED …]` edit in `4bf7478f` replaced `**[PICKED UP…]**.]` with `. [DECIDED …]`. That removed the `]` closing the enclosing `` `[CLOSED by skillars-deferred-99 AC16 … `` span (`deferred-work.md:1202`).
-  - The fragment at `:1197-1203` also reads as an orphan attached to the "W6's premise" bullet. Layer 2 attributes the missing lead line to earlier commit `f28a9818`; I did not independently confirm that commit.
-- **C15 (AC7 numbers):** 73 prior lines, not 72. The line formats vary (`'2026-10-24'  #` vs `2026-10-04 --`), so the trim script must not key on one format.
-- **C16 (sprint-status note):** `sprint-status.yaml:438` says "8 ledger bullets tagged PICKED UP"; it is 6 now.
-- **C17 (AC2 side note):** `retryFailedEmails` has `@SchedulerLock(lockAtLeastFor="${email.retry.lock-at-least:PT10S}")`. A second call within one test is silently skipped. This is irrelevant today, since each case calls it once and the reset listener backdates ShedLock per test. Any new multi-call case would need `releaseSchedulerLock`.
+---
 
 ## 5. What did not survive re-verification
 
-- **"AC2 parking would mutate other tests' rows and break them" (Layer 4 angle):** killed. Truncate-per-method means no other test's rows exist at `@BeforeEach`. Parking is redundant, not harmful.
-- **"`LIMIT 10` starvation is a live IT risk":** downgraded to "irrelevant under truncate". It is real only for a deliberately seeded >10-row test.
-- **"`ConfigService.find` throws on a missing key":** killed. It returns `Optional.empty()` (`:195-198`); only a refresh failure throws.
-- **"Shortening `last_updated` breaks the mto-story-review convention":** killed. The line is 98 chars and leads with the story key; ≤200 is safe if the newest key stays first.
-- **"The AE 3.0.0 / vitest ^4 blocker text in AC4(b) is internally inconsistent with the ledger's `>=2.0.0 <2.4.0` pin":** killed as an inconsistency. Both are true facts about different AE majors. The defect is the omission of 2.0.0 (C2), not a contradiction.
-- **"`adminEmail()` method doesn't exist, so Task 1 is wrong":** downgraded to a naming nit. The pattern exists as a local variable in `adminAlertEnvelope`.
+- **AC1 blast-radius worry (AC1.5) is more resolved than the story treats it, not less.** The hunting pass found that `PersistentToken` is dead code in production (never constructed/queried outside GDPR-erasure clearing) and `JWTAuthorizationFilter` never binds session validity to IP at all (its only IP use is an audit-alert dedup key). I did not re-verify this one myself byte-for-byte, but it is not a defect in the story — if anything it means AC1.5's hedge ("record it in Completion Notes; it is acceptable because there is no prod deployment") can be answered with higher confidence than the story assumes, not a finding against the story. Not included in §4 because it doesn't identify a wrong or missing requirement — it only means the dev's eventual answer to AC1.5 will likely be "no impact," which the story already anticipates as an acceptable outcome either way.
+- **AC5.5's Awaitility-test false-pass concern** (raised by the hunting pass: an async listener simply not having run yet could produce a false "nothing appears" pass that a same-signal positive control can't fully rule out) is a legitimate test-design subtlety, but I downgraded it out of the confirmed-findings list: the story already asks for "a positive control so it cannot pass vacuously," and the specific scenario described (no third always-fires signal from the same event delivery) is a general hazard of this testing style in this codebase, not something unique to this AC that the story overlooked. Worth the dev's attention during implementation, but not rising to a corner case the story missed.
+- **AC6 multiple-disputes-per-booking aggregation** — checked directly against the proposed `NOT EXISTS` predicate; it correctly excludes `DISMISSED` rows from being confused with a separate active dispute. No defect.
+- **AC7 cross-event-type `reference_id` collision** (worry that `HOMEWORK_ASSIGNED` rows sharing the same `reference_id` value could be mis-touched by the dedupe DELETE or the partial index) — confirmed both are scoped by `event_type = 'SESSION_COMPLETED'`, so this is structurally excluded. No defect.
+- **AC6 ArchUnit/module-boundary risk** for the new cross-module JPQL — confirmed no such test exists, but also confirmed the exact same pattern (referencing another module's entity by name in JPQL with no Java import) is already shipped and working in `BookingRepository.findBookingsMissingRecap`. Not a new risk; downgraded to an informational note.
+- **AC4 duplicate/null drill-id handling** — initially flagged as a possible gap; confirmed directly that `fetchDrills` already `.distinct()`s ids, and new-write-path null ids are already rejected by `@NotNull`/`@Valid` Bean Validation before reaching the service. No live gap on the write path (a residual, low-confidence concern about pre-existing rows with a literal null in legacy JSON data was raised but not confirmed, so it is not included as a finding).
+
+---
 
 ## 6. Recommendation
 
-The story is **not ready for dev as written**. Per-claim confidence:
+This story is unusually well-grounded for its size — of the ~140 individual claims checked (citations, ledger attributions, mechanistic behavior, and corner-case assumptions), the large majority were confirmed exactly as written, including every one of the highest-stakes mechanistic claims (the AC3 control-flow order the whole fix depends on, the AC5/AC7 transaction boundaries, the AC6 module-direction and status-mutation claims). That said, calibration matters more than a single score here, so treat the findings by tier:
 
-| Area | Confidence | Basis |
-|---|---|---|
-| C1 (AC2 premise false) | High | Re-read `DatabaseResetTestExecutionListener:43,108,494-526` and `AbstractIntegrationTest:106` myself, plus the existing `:362` test |
-| C2 (AE 2.0.0 exists, guards `^2.4.0`) | High | Re-ran `npm view` and read the unpacked `compatibleWith` lines myself |
-| C3 (AC6 test vacuous; semantics needed) | High | Re-read `ConfigService:365-393` and `ConfigServiceTest:90-102` myself. The ~9 IT write→invalidate→read sites are Layer 4's count, not individually re-read |
-| C4/C6 (listener unreachable; read inside try) | High | Re-read `AlertEvaluationService:50-88` myself |
-| C5 (blank seed) | High; docs-staleness Medium | Re-read `V139:96` myself; the dev-docs line numbers are Layer 4's |
-| C7 (lost invalidation) | Medium | Follows from the code read, but no reproduction |
-| C8/C9 (toolchain wiring) | High | Re-read `vitest.config.mjs:4`, `package.json`, `pom.xml:596`, `frontend-unit-tests.yml:5,147` myself |
-| Mechanism #8 (`quasar.extensions.json`) | Medium | Quasar CLI convention; not executed |
-| C10–C17, ledger labels | High | Gate, key count, bracket diff and section headers re-checked directly; the `f28a9818` attribution was not |
-
-Suggested story edits before `/bmad-dev-story`:
-
-1. **AC2:** close it by verification, or rescope it to the >10-row `LIMIT 10` guard.
-2. **D161-B:** re-decide with the new option (AE 2.0.0 + vitest 4, no app-vite bump), and fix AC4(b)'s blocker text.
-3. **AC6:** test from a stale cache, specify single-flight / read-after-invalidate semantics, and address the lost-invalidation race.
-4. **AC1:** put the read inside the try, add a "find throws" test, note the blank default and where to document it, update the dev-docs, and reframe the justification as defensive.
-5. **AC7/AC9:** cover `deferred-work.md` or re-annotate the bullet instead of deleting it; include the `:1074` duplicate; add a "closed by verification" outcome.
-6. Correct the gate (17), the key count (23), the AC7/AC8 section labels, the D161-A CONCURRENTLY wording, the AC8 bracket, and the sprint-status "8 bullets" note.
+- **High confidence, should be addressed before/during dev:** §4.1 (SessionTemplateService is an unvalidated/unfiltered second path AC4 doesn't cover — the story's own "closed transitively" justification is demonstrably false) and §4.2 (AC5 doesn't actually achieve its own title; two more writers need the same guard). Both were confirmed by me re-reading the exact cited and uncited files directly, not just taken from the hunting pass.
+- **Medium confidence, worth a note in Dev Notes before implementation starts:** §4.3 (transaction-poisoning risk if the AC5 lock is added to `HomeworkAssignmentService` naively) and §4.4 (nullable `resolution` column + three-valued-logic risk in the AC6 predicate) — both real and directly confirmed, but currently dormant/avoidable with a small implementation choice rather than requiring a design change.
+- **Low confidence / cosmetic, no action required:** the two factual citation errors in §1 (items 1–2) and the ledger line-drift in §2 (all 11 lines stale, 3 with a wrong section letter) — true defects in the story's own self-documentation, but none of them changes what the dev needs to build.
+- **Explicitly downgraded after adversarial re-check:** the four items in §5 — each was raised by a verification pass and then independently re-examined and found to be either already-resolved, already-covered, or not actually load-bearing.

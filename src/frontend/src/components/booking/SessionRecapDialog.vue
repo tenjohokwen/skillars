@@ -33,6 +33,9 @@
             <template v-if="notEditableReason === 'booking.recapNotEditableErased'">
               {{ t('booking.recap.erasedError') }}
             </template>
+            <template v-else-if="notEditableReason === 'booking.recapNotEditableDisputed'">
+              {{ t('booking.recap.disputedError') }}
+            </template>
             <template v-else-if="untilLabel">
               {{ t('booking.recap.closedWindow', { date: untilLabel }) }}
             </template>
@@ -131,8 +134,9 @@ const loadError = ref(false)
 const saving = ref(false)
 const editable = ref(false)
 const editableUntil = ref(null)
-// Server-supplied reason when `editable` is false ('booking.recapEditWindowClosed' or
-// 'booking.recapNotEditableErased'); picks which read-only message to show, never re-decides editability.
+// Server-supplied reason when `editable` is false ('booking.recapEditWindowClosed',
+// 'booking.recapNotEditableErased' or 'booking.recapNotEditableDisputed'); picks which read-only message to
+// show, never re-decides editability.
 const notEditableReason = ref(null)
 const whatWeDid = ref('')
 const whatsNext = ref('')
@@ -186,6 +190,7 @@ function saveErrorMessage(err) {
   const errorKey = err?.response?.data?.errorMsg?.errorKey
   if (errorKey === 'booking.recapEditWindowClosed') return t('booking.recap.windowClosedError')
   if (errorKey === 'booking.recapNotEditableErased') return t('booking.recap.erasedError')
+  if (errorKey === 'booking.recapNotEditableDisputed') return t('booking.recap.disputedError')
   return t('booking.recap.saveError')
 }
 

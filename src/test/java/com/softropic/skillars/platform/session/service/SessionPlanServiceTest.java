@@ -36,6 +36,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -501,5 +502,149 @@ class SessionPlanServiceTest {
                 .isEqualTo(com.softropic.skillars.platform.session.contract.SessionErrorCode.SESSION_PLAN_LOCKED));
         verify(sessionRepository, never()).save(any(Session.class));
         verify(bookingQueryService, never()).getBookingSnapshot(any());
+    }
+
+    // ── skillars-deferred-162 AC4: drill ownership on the plan path ──────────
+
+    private static final UUID OTHER_COACH_ID = UUID.randomUUID();
+
+    private Drill privateDrill(UUID id, UUID owner, String status) {
+        Drill d = drill(id);
+        d.setLibraryType("PRIVATE");
+        d.setOwnerCoachId(owner);
+        d.setStatus(status);
+        return d;
+    }
+
+    private void stubCreatableBooking() {
+        when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        when(bookingQueryService.getBookingSnapshot(BOOKING_ID))
+            .thenReturn(Optional.of(new BookingSnapshot(BOOKING_ID, COACH_ID, 500L, "CONFIRMED")));
+        when(sessionRepository.existsByBookingId(BOOKING_ID)).thenReturn(false);
+    }
+
+    private void stubDerivedResponses() {
+        when(drillLibraryService.toResponse(any(Drill.class), eq(false), any(), any(), any(), any()))
+            .thenAnswer(inv -> drillResponse(((Drill) inv.getArgument(0)).getId()));
+        when(dnaCalculator.calculate(any())).thenReturn(new SessionDnaScore(1, 1, 1, 1, 1));
+        when(equipmentListService.generate(any())).thenReturn(List.of("cones"));
+    }
+
+    private Session existingDraft(UUID sessionId) {
+        Session existing = new Session();
+        existing.setId(sessionId);
+        existing.setCoachId(COACH_ID);
+        existing.setBookingId(BOOKING_ID);
+        existing.setPlayerId(500L);
+        existing.setStatus("DRAFT");
+        return existing;
+    }
+
+    @Test
+    void createSession_ownPrivateAndPlatformDrills_areAccepted() {
+        stubCreatableBooking();
+        when(drillRepository.findAllById(any())).thenReturn(
+            List.of(privateDrill(DRILL_ID_1, COACH_ID, "ACTIVE"), drill(DRILL_ID_2)));
+        stubDerivedResponses();
+        when(sessionRepository.save(any(Session.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        SessionPlanResponse response = service.createSession(new CreateSessionPlanRequest(BOOKING_ID,
+            List.of(blockRequest(DRILL_ID_1, DRILL_ID_2)), List.of("PASSING")), COACH_USER_ID);
+
+        assertBothDrillsPresent(response);
+    }
+
+    @Test
+    void createSession_anotherCoachsPrivateDrill_is404_andNothingIsSaved() {
+        stubCreatableBooking();
+        when(drillRepository.findAllById(any())).thenReturn(
+            List.of(drill(DRILL_ID_1), privateDrill(DRILL_ID_2, OTHER_COACH_ID, "ACTIVE")));
+
+        assertThatThrownBy(() -> service.createSession(new CreateSessionPlanRequest(BOOKING_ID,
+                List.of(blockRequest(DRILL_ID_1, DRILL_ID_2)), List.of("PASSING")), COACH_USER_ID))
+            .isInstanceOf(ResourceNotFoundException.class);
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void createSession_unknownDrill_is404_andNothingIsSaved() {
+        stubCreatableBooking();
+        when(drillRepository.findAllById(any())).thenReturn(List.of(drill(DRILL_ID_1)));
+
+        assertThatThrownBy(() -> service.createSession(new CreateSessionPlanRequest(BOOKING_ID,
+                List.of(blockRequest(DRILL_ID_1, DRILL_ID_2)), List.of("PASSING")), COACH_USER_ID))
+            .isInstanceOf(ResourceNotFoundException.class);
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void createSession_nullDrillId_is404_withoutQueryingAndNothingIsSaved() {
+        stubCreatableBooking();
+
+        assertThatThrownBy(() -> service.createSession(new CreateSessionPlanRequest(BOOKING_ID,
+                List.of(new SessionBlockRequest("WARMUP", "Warmup", 10, List.of(new SessionDrillRefRequest(null, 0)))),
+                List.of("PASSING")), COACH_USER_ID))
+            .isInstanceOf(ResourceNotFoundException.class);
+        verify(drillRepository, never()).findAllById(any());
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void updateSession_ownArchivedPrivateDrill_isAccepted() {
+        // D162-E: the builder re-sends every drill on save, so an own drill archived since must not block it.
+        when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        UUID sessionId = UUID.randomUUID();
+        when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(existingDraft(sessionId)));
+        when(bookingQueryService.getBookingSnapshot(BOOKING_ID))
+            .thenReturn(Optional.of(new BookingSnapshot(BOOKING_ID, COACH_ID, 500L, "CONFIRMED")));
+        when(drillRepository.findAllById(any())).thenReturn(
+            List.of(privateDrill(DRILL_ID_1, COACH_ID, "ARCHIVED"), drill(DRILL_ID_2)));
+        stubDerivedResponses();
+        when(sessionRepository.save(any(Session.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        SessionPlanResponse response = service.updateSession(sessionId, new UpdateSessionPlanRequest(
+            List.of(blockRequest(DRILL_ID_1, DRILL_ID_2)), List.of("PASSING"), "SAVED"), COACH_USER_ID);
+
+        assertBothDrillsPresent(response);
+    }
+
+    @Test
+    void updateSession_anotherCoachsPrivateDrill_is404_andNothingIsSaved() {
+        when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        UUID sessionId = UUID.randomUUID();
+        when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(existingDraft(sessionId)));
+        when(bookingQueryService.getBookingSnapshot(BOOKING_ID))
+            .thenReturn(Optional.of(new BookingSnapshot(BOOKING_ID, COACH_ID, 500L, "CONFIRMED")));
+        when(drillRepository.findAllById(any())).thenReturn(
+            List.of(privateDrill(DRILL_ID_1, OTHER_COACH_ID, "ACTIVE")));
+
+        assertThatThrownBy(() -> service.updateSession(sessionId, new UpdateSessionPlanRequest(
+                List.of(blockRequest(DRILL_ID_1)), List.of("PASSING"), "SAVED"), COACH_USER_ID))
+            .isInstanceOf(ResourceNotFoundException.class);
+        verify(sessionRepository, never()).save(any());
+    }
+
+    @Test
+    void getSession_legacyRowWithAnotherCoachsPrivateDrill_omitsThatDrill() {
+        when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        UUID sessionId = UUID.randomUUID();
+        Session existing = existingDraft(sessionId);
+        existing.setBlocks(List.of(new com.softropic.skillars.platform.session.contract.SessionBlockData(
+            "WARMUP", "Warmup", 10,
+            List.of(new com.softropic.skillars.platform.session.contract.SessionDrillRef(DRILL_ID_1, 0),
+                new com.softropic.skillars.platform.session.contract.SessionDrillRef(DRILL_ID_2, 1)))));
+        when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(existing));
+        when(drillRepository.findAllById(any())).thenReturn(
+            List.of(drill(DRILL_ID_1), privateDrill(DRILL_ID_2, OTHER_COACH_ID, "ACTIVE")));
+        when(drillLibraryService.toResponse(any(Drill.class), eq(false), any(), any(), any(), any()))
+            .thenAnswer(inv -> drillResponse(((Drill) inv.getArgument(0)).getId()));
+
+        SessionPlanResponse response = service.getSession(sessionId, COACH_USER_ID);
+
+        assertThat(response.blocks().get(0).drills())
+            .extracting(d -> d.drill() != null ? d.drill().id() : null)
+            .containsExactly(DRILL_ID_1, null);
+        verify(drillLibraryService, never()).toResponse(
+            argThat((Drill d) -> d != null && DRILL_ID_2.equals(d.getId())), eq(false), any(), any(), any(), any());
     }
 }

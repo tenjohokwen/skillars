@@ -32,11 +32,20 @@ class TimelineDrillSnapshotResolverTest {
     @InjectMocks private TimelineDrillSnapshotResolver resolver;
 
     private final UUID bookingId = UUID.randomUUID();
+    private static final UUID COACH_ID = UUID.randomUUID();
 
     private static Drill drill(UUID id, String name) {
         Drill d = new Drill();
         d.setId(id);
         d.setName(name);
+        d.setLibraryType("PLATFORM");
+        return d;
+    }
+
+    private static Drill privateDrill(UUID id, String name, UUID ownerCoachId) {
+        Drill d = drill(id, name);
+        d.setLibraryType("PRIVATE");
+        d.setOwnerCoachId(ownerCoachId);
         return d;
     }
 
@@ -44,6 +53,7 @@ class TimelineDrillSnapshotResolverTest {
         Session s = new Session();
         s.setStatus(status);
         s.setBlocks(blocks);
+        s.setCoachId(COACH_ID);
         return s;
     }
 
@@ -131,5 +141,34 @@ class TimelineDrillSnapshotResolverTest {
     void repositoryFailure_returnsEmptyInsteadOfThrowing() {
         when(sessionRepository.findByBookingId(bookingId)).thenThrow(new IllegalStateException("db down"));
         assertThat(resolver.forBooking(bookingId)).isEmpty();
+    }
+
+    // skillars-deferred-162 AC4.3/AC4.4: another coach's PRIVATE drill is never named on the timeline.
+
+    @Test
+    void forBooking_skipsAnotherCoachsPrivateDrill_keepsOwnPrivateAndPlatform() {
+        UUID own = UUID.randomUUID();
+        UUID foreign = UUID.randomUUID();
+        UUID platform = UUID.randomUUID();
+        when(sessionRepository.findByBookingId(bookingId)).thenReturn(Optional.of(session(SessionStatus.SAVED,
+            List.of(new SessionBlockData("a", "A", 10, List.of(
+                new SessionDrillRef(own, 1), new SessionDrillRef(foreign, 2), new SessionDrillRef(platform, 3)))))));
+        when(drillRepository.findAllById(anyIterable())).thenReturn(List.of(
+            privateDrill(own, "Mine", COACH_ID),
+            privateDrill(foreign, "Theirs", UUID.randomUUID()),
+            drill(platform, "Shared")));
+
+        assertThat(resolver.forBooking(bookingId)).extracting(m -> m.get("name")).containsExactly("Mine", "Shared");
+    }
+
+    @Test
+    void snapshot_skipsAnotherCoachsPrivateDrill() {
+        UUID foreign = UUID.randomUUID();
+        UUID own = UUID.randomUUID();
+        when(drillRepository.findAllById(anyIterable())).thenReturn(List.of(
+            privateDrill(foreign, "Theirs", UUID.randomUUID()), privateDrill(own, "Mine", COACH_ID)));
+
+        assertThat(resolver.snapshot(List.of(foreign, own), COACH_ID))
+            .extracting(m -> m.get("name")).containsExactly("Mine");
     }
 }

@@ -79,6 +79,34 @@ describe('SessionRecapDialog.vue (skillars-12-7)', () => {
     expect(save(w).exists()).toBe(false)
   })
 
+  it('shows the disputed message when the server says a dispute locks the recap (skillars-deferred-162)', async () => {
+    getSessionRecap.mockResolvedValue(
+      RECAP({ editable: false, notEditableReason: 'booking.recapNotEditableDisputed' }),
+    )
+    const w = await mountDialog()
+
+    expect(w.find('[data-testid="recap-closed"]').text()).toBe('booking.recap.disputedError')
+    expect(save(w).exists()).toBe(false)
+  })
+
+  it('maps the disputed errorKey on save to the disputed message', async () => {
+    getSessionRecap.mockResolvedValue(RECAP())
+    updateSessionRecap.mockRejectedValueOnce({
+      response: {
+        status: 403,
+        data: { errorMsg: { errorKey: 'booking.recapNotEditableDisputed' } },
+      },
+    })
+    const w = await mountDialog()
+
+    await save(w).trigger('click')
+    await flushPromises()
+    expect(notifySpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: 'negative', message: 'booking.recap.disputedError' }),
+    )
+    expect(w.emitted('saved')).toBeUndefined()
+  })
+
   it('shows the dated closed-window message when the window closed and editableUntil is known', async () => {
     getSessionRecap.mockResolvedValue(
       RECAP({ editable: false, notEditableReason: 'booking.recapEditWindowClosed' }),

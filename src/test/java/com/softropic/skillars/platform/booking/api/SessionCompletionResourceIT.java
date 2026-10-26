@@ -725,22 +725,44 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
         assertThat(afterEdit.get("f")).isEqualTo("4");
         assertThat(afterEdit.get("t")).isEqualTo("3");
 
-        // Last on purpose: onBookingCompleted is not idempotent, so the replay writes a second SESSION_COMPLETED row.
-        // Replay of the SAME BookingCompletedEvent, published inside a transaction: AFTER_COMMIT listeners are
-        // silently dropped without one, which would make the assertion below pass vacuously. The assignment
-        // guard stops it upstream, so no second HOMEWORK_ASSIGNED may appear.
+        // Last on purpose: replay the booking's BookingCompletedEvent (skillars-deferred-162 AC7.5). It is published
+        // inside a transaction, because AFTER_COMMIT listeners are silently dropped without one. It carries ONLY a
+        // third, not-yet-assigned homework drill: handleBookingCompleted truncates to 2 ids, so appending it to the
+        // original two would drop it. Its new homework_assignments row proves the replay was delivered; the
+        // SESSION_COMPLETED count must still be 1 (the ON CONFLICT insert), held for a window because the timeline
+        // listener runs on another pool thread.
+        UUID homework3 = insertDrill("Cone Weave");
         transactionTemplate.executeWithoutResult(t -> eventPublisher.publishEvent(new BookingCompletedEvent(
-            this, bookingId, coachProfileId, PLAYER_ID, PARENT_ID, true, 4, 4, 3, List.of(homework1, homework2))));
-        // The replay's own visible effect (a second SESSION_COMPLETED) proves it was actually delivered, so the
-        // HOMEWORK assertion that follows cannot pass vacuously.
-        Awaitility.await("replayed BookingCompletedEvent delivered")
+            this, bookingId, coachProfileId, PLAYER_ID, PARENT_ID, true, 4, 4, 3, List.of(homework3))));
+        Awaitility.await("replayed BookingCompletedEvent delivered (its new homework row lands)")
             .atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(100))
-            .until(() -> countTimeline("SESSION_COMPLETED") == 2);
-        Awaitility.await("no second HOMEWORK_ASSIGNED row appears")
+            .until(() -> jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM session.homework_assignments WHERE booking_id = ? AND drill_id = ?",
+                Integer.class, bookingId, homework3) == 1);
+        Awaitility.await("the replay writes no second SESSION_COMPLETED and no second HOMEWORK_ASSIGNED row")
             .during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5)).pollInterval(Duration.ofMillis(100))
-            .until(() -> countTimeline("HOMEWORK_ASSIGNED") == 1);
+            .until(() -> countTimeline("SESSION_COMPLETED") == 1 && countTimeline("HOMEWORK_ASSIGNED") == 1);
         assertThat(jdbcTemplate.queryForObject(
-            "SELECT count(*) FROM session.homework_assignments WHERE booking_id = ?", Integer.class, bookingId)).isEqualTo(2);
+            "SELECT count(*) FROM session.homework_assignments WHERE booking_id = ?", Integer.class, bookingId)).isEqualTo(3);
+    }
+
+    // skillars-deferred-162 AC7.6: the same event delivered twice at one commit (two listener invocations racing on
+    // the pool) still yields exactly one SESSION_COMPLETED row.
+    @Test
+    void bookingCompletedEvent_deliveredTwice_writesExactlyOneSessionCompletedRow() {
+        BookingCompletedEvent event = new BookingCompletedEvent(
+            this, bookingId, coachProfileId, PLAYER_ID, PARENT_ID, true, 4, 4, 3, List.of());
+        transactionTemplate.executeWithoutResult(t -> {
+            eventPublisher.publishEvent(event);
+            eventPublisher.publishEvent(event);
+        });
+
+        Awaitility.await("SESSION_COMPLETED written")
+            .atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("SESSION_COMPLETED") >= 1);
+        Awaitility.await("and only once")
+            .during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("SESSION_COMPLETED") == 1);
     }
 
     @Test
@@ -822,6 +844,40 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
             Integer.class, bookingId, homework)).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
             "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId)).isEqualTo("COMPLETED");
+    }
+
+    // skillars-deferred-162 AC5.5: the delayed QUICK path still completes the booking for an erased player, but
+    // writes no homework and no timeline rows. Positive control: SessionPlanService's listener on the SAME
+    // BookingCompletedEvent flips the planned session to COMPLETED, proving the event was delivered, so the
+    // "nothing appears" window below cannot pass vacuously.
+    @Test
+    void quickCompleteTimeout_erasedPlayer_completesBookingButWritesNoDevelopmentData() {
+        UUID homework = insertDrill("Erased Juggling");
+        insertPlannedSession("[]", "DRAFT");
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        assertThat(postQuickWrapUp(List.of(homework), COACH_EMAIL).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        transactionTemplate.executeWithoutResult(t -> {
+            jdbcTemplate.update(
+                "UPDATE booking.session_completion_data SET created_at = ? WHERE booking_id = ?",
+                Timestamp.from(Instant.now().minus(Duration.ofHours(30))), bookingId);
+            jdbcTemplate.update(
+                "UPDATE main.player_profiles SET development_data_erased_at = NOW() WHERE id = ?", PLAYER_ID);
+        });
+
+        quickCompleteTimeoutService.processExpiredQuickCompletes();
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId)).isEqualTo("COMPLETED");
+        Awaitility.await("positive control: BookingCompletedEvent delivered (session plan flipped to COMPLETED)")
+            .atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(100))
+            .until(() -> "COMPLETED".equals(jdbcTemplate.queryForObject(
+                "SELECT status FROM session.sessions WHERE booking_id = ?", String.class, bookingId)));
+        Awaitility.await("no homework and no timeline rows for the erased player")
+            .during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5)).pollInterval(Duration.ofMillis(100))
+            .until(() -> jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM session.homework_assignments WHERE booking_id = ?", Integer.class, bookingId) == 0
+                && jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM development.player_timeline_events WHERE player_id = ?", Integer.class, PLAYER_ID) == 0);
     }
 
     @Test

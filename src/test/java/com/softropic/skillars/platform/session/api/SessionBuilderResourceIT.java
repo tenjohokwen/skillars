@@ -526,6 +526,48 @@ class SessionBuilderResourceIT extends BaseSessionIT {
         )).isInstanceOf(HttpClientErrorException.NotFound.class);
     }
 
+    // skillars-deferred-162 AC4.4: a plan cannot reference another coach's PRIVATE drill.
+
+    @Test
+    void createSession_withAnotherCoachsPrivateDrill_returns404_andNoSessionRow() {
+        UUID foreignPrivate = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            insertDrill(foreignPrivate, "Foreign Secret", "PRIVATE", otherCoachId, "ACTIVE");
+            return null;
+        });
+        String cookies = loginAndGetCookies(INSTR_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + SESSIONS_BASE,
+            HttpMethod.POST,
+            buildCreateRequest(confirmedBookingId, foreignPrivate),
+            authenticatedHeaders(cookies),
+            Map.class
+        )).isInstanceOf(HttpClientErrorException.NotFound.class);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM session.sessions WHERE booking_id = ?", Integer.class, confirmedBookingId)).isZero();
+    }
+
+    @Test
+    void createSession_withOwnPrivateDrill_returns201() {
+        UUID ownPrivate = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            insertDrill(ownPrivate, "Own Secret", "PRIVATE", instrCoachId, "ACTIVE");
+            return null;
+        });
+        String cookies = loginAndGetCookies(INSTR_EMAIL);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + SESSIONS_BASE,
+            HttpMethod.POST,
+            buildCreateRequest(confirmedBookingId, ownPrivate),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
     private Map<String, Object> buildCreateRequest(UUID bookingId, UUID aDrillId) {
         return Map.of(
             "bookingId", bookingId.toString(),

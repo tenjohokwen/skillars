@@ -344,6 +344,10 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // nag forever -- and every "Add recap" is rejected for them). Driven from Booking because
     // session_completion_data has no coach_id index (only idx_scd_booking_id). `cutoff` = now - window,
     // since "requestedEndTime + window > now" is "requestedEndTime > now - window". Deterministic order.
+    // skillars-deferred-162 AC6.3: a recap locked by a dispute is not nudged either (it cannot be added). The NOT
+    // EXISTS is a deliberate cross-module read of admin's Dispute entity by name only (no Java import, so booking
+    // still does not depend on admin); its predicate must stay identical to
+    // DisputeRepository.existsRecapLockingDispute, which BookingDisputeLookup serves to recapEditability.
     @Query("""
         SELECT b FROM Booking b, SessionCompletionData s, PlayerProfile p
         WHERE s.bookingId = b.id AND p.id = b.playerId
@@ -351,6 +355,9 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
           AND s.whatWeDid IS NULL AND s.whatsNext IS NULL
           AND p.developmentDataErasedAt IS NULL
           AND b.requestedEndTime > :cutoff
+          AND NOT EXISTS (SELECT 1 FROM Dispute d WHERE d.bookingId = b.id
+              AND (d.status NOT IN ('RESOLVED', 'DISMISSED')
+                   OR (d.status = 'RESOLVED' AND COALESCE(d.resolution, '') <> 'NO_ACTION')))
         ORDER BY b.requestedEndTime DESC, b.id DESC
         """)
     List<Booking> findBookingsMissingRecap(@Param("coachId") UUID coachId, @Param("cutoff") Instant cutoff,
@@ -363,6 +370,9 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
           AND s.whatWeDid IS NULL AND s.whatsNext IS NULL
           AND p.developmentDataErasedAt IS NULL
           AND b.requestedEndTime > :cutoff
+          AND NOT EXISTS (SELECT 1 FROM Dispute d WHERE d.bookingId = b.id
+              AND (d.status NOT IN ('RESOLVED', 'DISMISSED')
+                   OR (d.status = 'RESOLVED' AND COALESCE(d.resolution, '') <> 'NO_ACTION')))
         """)
     long countBookingsMissingRecap(@Param("coachId") UUID coachId, @Param("cutoff") Instant cutoff);
 

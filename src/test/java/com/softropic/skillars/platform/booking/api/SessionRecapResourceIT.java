@@ -64,6 +64,7 @@ class SessionRecapResourceIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private com.softropic.skillars.platform.booking.contract.BookingDisputeLookup bookingDisputeLookup;
 
     @LocalServerPort private int randomServerPort;
 
@@ -125,6 +126,8 @@ class SessionRecapResourceIT extends AbstractIntegrationTest {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM development.player_timeline_events WHERE player_id IN (?, ?)",
                 SELF_PLAYER_ID, CHILD_PLAYER_ID);
+            jdbcTemplate.update("DELETE FROM admin.disputes WHERE booking_id IN "
+                + "(SELECT id FROM booking.bookings WHERE coach_id IN (?, ?))", coachProfileId, otherCoachProfileId);
             jdbcTemplate.update("DELETE FROM booking.session_completion_data WHERE coach_id IN (?, ?)",
                 coachProfileId, otherCoachProfileId);
             jdbcTemplate.update("DELETE FROM booking.bookings WHERE coach_id IN (?, ?)",
@@ -407,6 +410,75 @@ class SessionRecapResourceIT extends AbstractIntegrationTest {
     }
 
     // ---- helpers ----
+
+    // ---- skillars-deferred-162 AC6: a disputed or refunded session's recap is locked and not nudged ----
+
+    @Test
+    void openDispute_putRejectedWithDisputedKey_getReportsNotEditable_andSessionIsNotNudged() {
+        UUID bookingId = insertCompletedBooking(-2 * DAY);
+        insertScd(bookingId, true, null, null, null);
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        assertThat(getMissing(cookies).getBody().get("count")).as("control: nudged before the dispute").isEqualTo(1);
+
+        insertDispute(bookingId, "OPEN", null);
+
+        assertForbidden(() -> putRecap(bookingId, "a", "b", null, cookies), "booking.recapNotEditableDisputed");
+        Map body = getRecap(bookingId, cookies).getBody();
+        assertThat(body.get("editable")).isEqualTo(false);
+        assertThat(body.get("notEditableReason")).isEqualTo("booking.recapNotEditableDisputed");
+        assertThat(persistedWhatWeDid(bookingId)).isNull();
+        ResponseEntity<Map> missing = getMissing(cookies);
+        assertThat(missing.getBody().get("count")).isEqualTo(0);
+        assertThat((List<?>) missing.getBody().get("items")).isEmpty();
+    }
+
+    /**
+     * AC6.3/AC6.6: every status/resolution shape, through both the port (recapEditability) and the nudge JPQL,
+     * which repeat one predicate in two places. Asserting they agree on each row pins that they stay identical.
+     */
+    @Test
+    void disputeLock_portAndNudgeQueryAgree_forEveryStatusAndResolution() {
+        record Case(String status, String resolution, boolean locked) {}
+        List<Case> cases = List.of(
+            new Case("OPEN", null, true),
+            new Case("UNDER_REVIEW", null, true),
+            new Case("RESOLVED", "FULL_CREDIT", true),
+            new Case("RESOLVED", "PARTIAL_CREDIT", true),
+            new Case("RESOLVED", "COACH_WARNING", true),
+            new Case("RESOLVED", null, true),
+            new Case("RESOLVED", "NO_ACTION", false),
+            new Case("DISMISSED", null, false));
+        Map<UUID, Case> byBooking = new java.util.LinkedHashMap<>();
+        for (Case c : cases) {
+            UUID bookingId = insertCompletedBooking(-2 * DAY);
+            insertScd(bookingId, true, null, null, null);
+            insertDispute(bookingId, c.status(), c.resolution());
+            byBooking.put(bookingId, c);
+        }
+
+        ResponseEntity<Map> missing = getMissing(loginAndGetCookies(COACH_EMAIL));
+        @SuppressWarnings("unchecked")
+        List<String> nudged = ((List<Map<String, Object>>) missing.getBody().get("items")).stream()
+            .map(i -> (String) i.get("bookingId")).toList();
+
+        byBooking.forEach((bookingId, c) -> {
+            assertThat(bookingDisputeLookup.isRecapLockedByDispute(bookingId))
+                .as("port verdict for %s/%s", c.status(), c.resolution()).isEqualTo(c.locked());
+            assertThat(nudged.contains(bookingId.toString()))
+                .as("nudge membership for %s/%s", c.status(), c.resolution()).isEqualTo(!c.locked());
+        });
+        assertThat(missing.getBody().get("count")).isEqualTo(2);
+    }
+
+    private void insertDispute(UUID bookingId, String status, String resolution) {
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update(
+                "INSERT INTO admin.disputes (id, booking_id, raised_by, raised_by_role, reason, details, status, resolution) "
+              + "VALUES (?, ?, ?, 'PARENT', 'SESSION_QUALITY', 'details', ?, ?)",
+                UUID.randomUUID(), bookingId, PARENT_USER_ID, status, resolution);
+            return null;
+        });
+    }
 
     private static final long DAY = 86_400L;
 

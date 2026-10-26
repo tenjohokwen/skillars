@@ -5,6 +5,7 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.SecurityIT;
+import com.softropic.skillars.platform.security.service.OtpHasher;
 import com.softropic.skillars.platform.security.service.RegistrationVerificationTokenService;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -21,14 +22,10 @@ import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -64,6 +61,9 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
 
     @Autowired
     private RegistrationVerificationTokenService verificationTokenService;
+
+    @Autowired
+    private OtpHasher otpHasher;
 
     @LocalServerPort
     private int randomServerPort;
@@ -840,14 +840,9 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
         transactionTemplate.execute(status -> jdbcTemplate.update(sql, args));
     }
 
+    // skillars-deferred-162 AC2.5: the production hasher, so fixtures cannot drift from the real formula.
     private String hashOtp(String otp, Long userId) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest((otp + userId).getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 not available", e);
-        }
+        return otpHasher.hash(userId, otp);
     }
 }
 

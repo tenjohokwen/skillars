@@ -6,6 +6,7 @@ import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingDisputeLookup;
 import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.ForceCompleteOutcome;
@@ -35,6 +36,7 @@ import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
+import com.softropic.skillars.platform.session.service.DrillUsagePolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -67,6 +69,7 @@ public class BookingCompletionService {
     private final ObjectMapper objectMapper;
     private final ConfigService configService;
     private final DrillRepository drillRepository;
+    private final BookingDisputeLookup bookingDisputeLookup;
 
     @Transactional
     public void startSession(UUID bookingId, Long coachUserId) {
@@ -228,8 +231,8 @@ public class BookingCompletionService {
 
     /**
      * skillars-deferred-159 AC2: every homework drill must be an ACTIVE PLATFORM drill or one of this
-     * coach's own ACTIVE PRIVATE drills (the same rule {@code DrillSuggestionService.allCandidates}
-     * applies). Unknown, foreign-PRIVATE, archived and null ids all get the same 404 so the response
+     * coach's own ACTIVE PRIVATE drills ({@link DrillUsagePolicy#isAssignableAsHomework}, the same rule
+     * {@code DrillSuggestionService.allCandidates} applies). Unknown, foreign-PRIVATE, archived and null ids all get the same 404 so the response
      * never confirms that another coach's drill exists. Returns the de-duplicated list, order kept.
      */
     private List<UUID> validateHomeworkDrills(List<UUID> requested, CoachProfile coach) {
@@ -239,19 +242,13 @@ public class BookingCompletionService {
         }
         List<UUID> distinct = requested.stream().distinct().toList();
         Set<UUID> usable = drillRepository.findAllById(distinct).stream()
-            .filter(d -> isUsableHomeworkDrill(d, coach))
+            .filter(d -> DrillUsagePolicy.isAssignableAsHomework(d, coach.getId()))
             .map(Drill::getId)
             .collect(Collectors.toSet());
         if (!usable.containsAll(distinct)) {
             throw new ResourceNotFoundException("Homework drill not found", "drill");
         }
         return distinct;
-    }
-
-    private static boolean isUsableHomeworkDrill(Drill d, CoachProfile coach) {
-        if (!"ACTIVE".equals(d.getStatus())) return false;
-        return "PLATFORM".equals(d.getLibraryType())
-            || ("PRIVATE".equals(d.getLibraryType()) && Objects.equals(d.getOwnerCoachId(), coach.getId()));
     }
 
     /**
@@ -354,6 +351,11 @@ public class BookingCompletionService {
             .map(p -> p.getDevelopmentDataErasedAt() != null).orElse(true);
         if (playerErased) {
             return new Editability(false, BookingError.RECAP_NOT_EDITABLE_ERASED);
+        }
+        // skillars-deferred-162 AC6.2: a disputed or refunded session is no longer a normal completed one.
+        // After the erasure checks (erasure wins the error key), before the window check.
+        if (bookingDisputeLookup.isRecapLockedByDispute(booking.getId())) {
+            return new Editability(false, BookingError.RECAP_NOT_EDITABLE_DISPUTED);
         }
         if (!booking.isRecapEditable(now, recapEditWindowDays())) {
             return new Editability(false, BookingError.RECAP_EDIT_WINDOW_CLOSED);

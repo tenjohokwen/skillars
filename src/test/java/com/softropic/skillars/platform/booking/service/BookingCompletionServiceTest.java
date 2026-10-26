@@ -54,6 +54,8 @@ class BookingCompletionServiceTest {
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private com.softropic.skillars.platform.session.repo.DrillRepository drillRepository;
+    // skillars-deferred-162 AC6: unstubbed -> false, i.e. no dispute locks the recap.
+    @Mock private com.softropic.skillars.platform.booking.contract.BookingDisputeLookup bookingDisputeLookup;
 
     private BookingCompletionService service;
 
@@ -71,7 +73,7 @@ class BookingCompletionServiceTest {
         service = new BookingCompletionService(
             bookingService, bookingRepository, completionDataRepository,
             coachProfileRepository, userRepository, playerProfileRepository,
-            eventPublisher, new ObjectMapper(), configService, drillRepository
+            eventPublisher, new ObjectMapper(), configService, drillRepository, bookingDisputeLookup
         );
 
         coach = new CoachProfile();
@@ -681,6 +683,50 @@ class BookingCompletionServiceTest {
         existing.setBookingId(BOOKING_ID);
         when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
         assertThat(service.getRecap(BOOKING_ID, COACH_USER_ID).editable()).isFalse();
+    }
+
+    // skillars-deferred-162 AC6.2/AC6.6: a dispute-locked recap is refused with its own key, on GET and PUT alike.
+    @Test
+    void updateRecap_lockedByDispute_throwsDisputedCode_andGetReportsNotEditable() {
+        arrangeEditableRecap(Instant.now().minusSeconds(3600));
+        when(bookingDisputeLookup.isRecapLockedByDispute(BOOKING_ID)).thenReturn(true);
+        var req = new com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest("d", "n", null);
+
+        assertThatThrownBy(() -> service.updateRecap(BOOKING_ID, COACH_USER_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.RECAP_NOT_EDITABLE_DISPUTED);
+        verify(completionDataRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+        SessionCompletionData existing = new SessionCompletionData();
+        existing.setBookingId(BOOKING_ID);
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+        assertThat(service.getRecap(BOOKING_ID, COACH_USER_ID).editable()).isFalse();
+    }
+
+    @Test
+    void updateRecap_erasedPlayerAndDisputed_reportsErasureFirst() {
+        arrangeEditableRecap(Instant.now().minusSeconds(3600));
+        PlayerProfile erased = new PlayerProfile();
+        erased.setDevelopmentDataErasedAt(Instant.now());
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(erased));
+        lenient().when(bookingDisputeLookup.isRecapLockedByDispute(BOOKING_ID)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.updateRecap(BOOKING_ID, COACH_USER_ID,
+            new com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest("d", "n", null)))
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.RECAP_NOT_EDITABLE_ERASED);
+    }
+
+    @Test
+    void updateRecap_disputedButOutsideWindow_reportsDisputeBeforeWindow() {
+        arrangeEditableRecap(Instant.now().minusSeconds(40L * 86_400));
+        when(bookingDisputeLookup.isRecapLockedByDispute(BOOKING_ID)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.updateRecap(BOOKING_ID, COACH_USER_ID,
+            new com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest("d", "n", null)))
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.RECAP_NOT_EDITABLE_DISPUTED);
     }
 
     /** Code review (Decision 1(a)): the scrub-transaction tombstone alone refuses the edit, user not yet locked. */

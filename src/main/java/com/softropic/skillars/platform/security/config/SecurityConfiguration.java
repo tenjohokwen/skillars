@@ -26,11 +26,9 @@ import com.softropic.skillars.platform.security.service.LoadUserByUserNameServic
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.actuate.autoconfigure.security.servlet.EndpointRequest;
-import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.Ordered;
 import org.springframework.core.env.Environment;
 import org.springframework.security.authentication.AccountStatusUserDetailsChecker;
 import org.springframework.security.authentication.AuthenticationEventPublisher;
@@ -56,7 +54,6 @@ import org.springframework.security.web.context.request.async.WebAsyncManagerInt
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import jakarta.servlet.DispatcherType;
 import org.springframework.web.cors.CorsConfiguration;
-import org.springframework.web.filter.ForwardedHeaderFilter;
 import org.springframework.web.servlet.HandlerExceptionResolver;
 import com.softropic.skillars.platform.security.contract.AdminBootstrapProperties;
 import com.softropic.skillars.platform.security.contract.SecurityProperties;
@@ -130,19 +127,6 @@ public class SecurityConfiguration {
     @Bean
     public List<String> allowedClients(@Value("#{'${allowed.clients}'.split(',')}") final List<String> allowedClients) {
         return allowedClients;
-    }
-
-    /**
-     * This filter kicks in conditionally. i.e if a request comes in with an X-Forwarded-* or Forwarded header
-     * It helps when the app is behind a load balancer or proxy
-     * @return
-     */
-    @Bean
-    public FilterRegistrationBean<ForwardedHeaderFilter> forwardedHeaderFilter() {
-        ForwardedHeaderFilter filter = new ForwardedHeaderFilter();
-        FilterRegistrationBean<ForwardedHeaderFilter> registration = new FilterRegistrationBean<>(filter);
-        registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
-        return registration;
     }
 
     @Bean

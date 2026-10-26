@@ -10,6 +10,15 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 import com.softropic.skillars.utils.TestMailManager;
 
+import org.apache.catalina.connector.Connector;
+import org.apache.catalina.connector.Request;
+import org.apache.catalina.connector.Response;
+import org.apache.catalina.valves.RemoteIpValve;
+import org.apache.catalina.valves.ValveBase;
+import org.springframework.boot.web.embedded.tomcat.TomcatWebServer;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext;
+import org.springframework.web.filter.ForwardedHeaderFilter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,8 +33,10 @@ import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.JWT_COOKIE_NAME;
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.JWT_SESSION_COOKIE;
@@ -204,5 +215,71 @@ public class SecurityFilterChainIT extends AbstractIntegrationTest {
         
         ResponseEntity<Map> finalAccountResponse = httpTestClient.makeHttpRequest(baseUrl() + ACCOUNT_URL, HttpMethod.GET, null, finalHeaders, Map.class);
         assertThat(finalAccountResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    // skillars-deferred-162 AC1.3/AC1.4: the RemoteIpValve Boot actually built from application.yaml is the
+    // single forwarded-header mechanism. A copy of the live valve's configuration is driven with synthetic
+    // Tomcat requests, so both a trusted-proxy peer and a direct (non-proxy) peer can be simulated; MockMvc
+    // and a loopback HTTP call cannot set the TCP peer. The live valve itself is not mutated.
+
+    @Autowired
+    private ServletWebServerApplicationContext webServerContext;
+
+    @Test
+    void remoteIpValve_trustedProxyPeer_resolvesTheClientFromXForwardedFor() throws Exception {
+        assertThat(resolveRemoteAddr("172.18.0.5", "203.0.113.7")).isEqualTo("203.0.113.7");
+    }
+
+    @Test
+    void remoteIpValve_trustedProxyPeer_ignoresAClientSuppliedLeftmostEntry() throws Exception {
+        // A proxy that appends (nginx's $proxy_add_x_forwarded_for) leaves the client's own value on the
+        // left. The valve walks right-to-left and stops at the first untrusted address.
+        assertThat(resolveRemoteAddr("127.0.0.1", "1.2.3.4, 203.0.113.7")).isEqualTo("203.0.113.7");
+    }
+
+    @Test
+    void remoteIpValve_nonProxyPeer_ignoresForwardedHeaders() throws Exception {
+        assertThat(resolveRemoteAddr("198.51.100.20", "1.2.3.4")).isEqualTo("198.51.100.20");
+    }
+
+    @Test
+    void forwardedHeaderFilter_isNotRegistered() {
+        assertThat(webServerContext.getBeansOfType(FilterRegistrationBean.class).values())
+                .extracting(FilterRegistrationBean::getFilter)
+                .noneMatch(ForwardedHeaderFilter.class::isInstance);
+        assertThat(webServerContext.getBeansOfType(ForwardedHeaderFilter.class)).isEmpty();
+    }
+
+    private String resolveRemoteAddr(String peer, String xForwardedFor) throws Exception {
+        RemoteIpValve live = Arrays.stream(((TomcatWebServer) webServerContext.getWebServer())
+                        .getTomcat().getEngine().getPipeline().getValves())
+                .filter(RemoteIpValve.class::isInstance)
+                .map(RemoteIpValve.class::cast)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no RemoteIpValve: forward-headers-strategy native is not active"));
+        assertThat(live.getRemoteIpHeader()).isEqualToIgnoringCase("x-forwarded-for");
+        assertThat(live.getProtocolHeader()).isEqualToIgnoringCase("x-forwarded-proto");
+
+        RemoteIpValve valve = new RemoteIpValve();
+        valve.setRemoteIpHeader(live.getRemoteIpHeader());
+        valve.setProtocolHeader(live.getProtocolHeader());
+        valve.setInternalProxies(live.getInternalProxies());
+        valve.setTrustedProxies(live.getTrustedProxies());
+        AtomicReference<String> seen = new AtomicReference<>();
+        valve.setNext(new ValveBase() {
+            @Override
+            public void invoke(Request request, Response response) {
+                seen.set(request.getRemoteAddr());
+            }
+        });
+
+        Request request = new Request(new Connector());
+        request.setCoyoteRequest(new org.apache.coyote.Request());
+        request.setRemoteAddr(peer);
+        request.setRemoteHost(peer);
+        request.getCoyoteRequest().getMimeHeaders().addValue("X-Forwarded-For").setString(xForwardedFor);
+        request.getCoyoteRequest().getMimeHeaders().addValue("Forwarded").setString("for=1.2.3.4");
+        valve.invoke(request, null);
+        return seen.get();
     }
 }

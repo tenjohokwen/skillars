@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.development.contract.PlayerTimelineEventT
 import com.softropic.skillars.platform.development.contract.RadarEntrySubmittedEvent;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineEvent;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineRepository;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import com.softropic.skillars.platform.session.contract.HomeworkAssignedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -51,6 +52,7 @@ public class TimelineEventListener {
     private final SessionCompletionDataRepository completionDataRepository;
     private final ObjectMapper objectMapper;
     private final TimelineDrillSnapshotResolver drillSnapshotResolver;
+    private final DevelopmentDataErasureGuard erasureGuard;
 
     @Autowired
     @Lazy
@@ -103,16 +105,33 @@ public class TimelineEventListener {
             // more than it earns an SLU row today — mirrors SluCalculationService.onBookingCompleted's
             // own !event.isPlayerAttended() early return exactly.
             UUID coachIdForClock = event.isPlayerAttended() ? event.getCoachId() : null;
-            self.writeTimelineEvent(
-                event.getPlayerId(),
-                PlayerTimelineEventType.SESSION_COMPLETED,
-                event.getBookingId(),
-                "booking",
-                metadata,
-                coachIdForClock
-            );
+            self.writeSessionCompleted(event.getPlayerId(), event.getBookingId(), metadata, coachIdForClock);
         } catch (Exception e) {
             log.error("Failed to write SESSION_COMPLETED timeline event: playerId={}", event.getPlayerId(), e);
+        }
+    }
+
+    /**
+     * skillars-deferred-162 AC5/AC7: lock the player profile, check the erasure marker, then insert at most one
+     * SESSION_COMPLETED row per (player, booking), all in this one REQUIRES_NEW transaction. It suspends nothing
+     * of value (the AFTER_COMMIT async caller has no transaction) and gives no atomicity with the booking
+     * completion or with HomeworkAssignmentService's separately committed rows. A replay is a quiet no-op.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void writeSessionCompleted(Long playerId, UUID bookingId, Map<String, Object> metadata, UUID coachId) {
+        if (erasureGuard.isErasedUnderLock(playerId, "TimelineEventListener.onBookingCompleted")) {
+            return;
+        }
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(metadata);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Cannot serialise SESSION_COMPLETED metadata for booking " + bookingId, e);
+        }
+        int inserted = timelineRepository.insertSessionCompletedIfAbsent(playerId, bookingId, Instant.now(), json, coachId);
+        if (inserted == 0) {
+            log.info("SESSION_COMPLETED for booking {} is already on player {}'s timeline -- replay ignored",
+                bookingId, playerId);
         }
     }
 
@@ -179,35 +198,42 @@ public class TimelineEventListener {
     @Async("taskExecutor")
     public void onHomeworkAssigned(HomeworkAssignedEvent event) {
         try {
-            List<Map<String, Object>> drills = drillSnapshotResolver.snapshot(event.drillIds());
+            List<Map<String, Object>> drills = drillSnapshotResolver.snapshot(event.drillIds(), event.coachId());
             if (drills.isEmpty()) {
                 return;
             }
-            if (timelineRepository.existsByPlayerIdAndEventTypeAndReferenceId(
-                    event.playerId(), PlayerTimelineEventType.HOMEWORK_ASSIGNED, event.bookingId())) {
-                self.appendHomeworkDrills(event.playerId(), event.bookingId(), drills);
-                return;
-            }
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put(METADATA_KEY_DRILLS, drills);
-            metadata.put(METADATA_KEY_COACH_ID, event.coachId().toString());
-            self.writeTimelineEvent(event.playerId(), PlayerTimelineEventType.HOMEWORK_ASSIGNED,
-                event.bookingId(), "booking", metadata);
+            self.writeHomeworkAssigned(event.playerId(), event.bookingId(), event.coachId(), drills);
         } catch (Exception e) {
             log.error("Failed to write HOMEWORK_ASSIGNED timeline event: playerId={}", event.playerId(), e);
         }
     }
 
+    /**
+     * skillars-deferred-162 AC5: the erasure check, the exists check and the insert-or-merge share one
+     * REQUIRES_NEW transaction, holding the player profile lock until the write commits. The exists-then-insert
+     * itself is unchanged (still check-then-insert; see the story's Dev Notes for the possible follow-up).
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void appendHomeworkDrills(Long playerId, UUID bookingId, List<Map<String, Object>> drills) {
-        String json;
-        try {
-            json = objectMapper.writeValueAsString(drills);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Cannot serialise homework drills for booking " + bookingId, e);
+    public void writeHomeworkAssigned(Long playerId, UUID bookingId, UUID coachId, List<Map<String, Object>> drills) {
+        if (erasureGuard.isErasedUnderLock(playerId, "TimelineEventListener.onHomeworkAssigned")) {
+            return;
         }
-        int updated = timelineRepository.appendHomeworkDrills(playerId, bookingId, json);
-        log.debug("Merged homework drills into existing HOMEWORK_ASSIGNED row for booking {} ({} row(s))", bookingId, updated);
+        if (timelineRepository.existsByPlayerIdAndEventTypeAndReferenceId(
+                playerId, PlayerTimelineEventType.HOMEWORK_ASSIGNED, bookingId)) {
+            String json;
+            try {
+                json = objectMapper.writeValueAsString(drills);
+            } catch (JsonProcessingException e) {
+                throw new IllegalStateException("Cannot serialise homework drills for booking " + bookingId, e);
+            }
+            int updated = timelineRepository.appendHomeworkDrills(playerId, bookingId, json);
+            log.debug("Merged homework drills into existing HOMEWORK_ASSIGNED row for booking {} ({} row(s))", bookingId, updated);
+            return;
+        }
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put(METADATA_KEY_DRILLS, drills);
+        metadata.put(METADATA_KEY_COACH_ID, coachId.toString());
+        saveTimelineEvent(playerId, PlayerTimelineEventType.HOMEWORK_ASSIGNED, bookingId, "booking", metadata, null);
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -239,6 +265,12 @@ public class TimelineEventListener {
     // to a coach id usable here, and for a non-attended SESSION_COMPLETED.
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void writeTimelineEvent(Long playerId, PlayerTimelineEventType type,
+                                   UUID referenceId, String referenceModule,
+                                   Map<String, Object> metadata, UUID coachId) {
+        saveTimelineEvent(playerId, type, referenceId, referenceModule, metadata, coachId);
+    }
+
+    private void saveTimelineEvent(Long playerId, PlayerTimelineEventType type,
                                    UUID referenceId, String referenceModule,
                                    Map<String, Object> metadata, UUID coachId) {
         PlayerTimelineEvent evt = new PlayerTimelineEvent();
