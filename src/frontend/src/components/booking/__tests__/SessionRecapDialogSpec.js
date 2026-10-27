@@ -137,6 +137,25 @@ describe('SessionRecapDialog.vue (skillars-12-7)', () => {
     expect(w.find('[data-testid="recap-load-error"]').exists()).toBe(true)
   })
 
+  // skillars-deferred-165 AC10: a GET failure shows a retry button; clicking it re-fetches and, on
+  // success, applies prefill exactly as the happy path does.
+  it('a load failure shows a retry button; retrying re-fetches and applies prefill on success', async () => {
+    getSessionRecap.mockRejectedValueOnce(new Error('boom'))
+    const w = await mountDialog({ prefill: { whatsNext: 'Prefilled next step' } })
+
+    expect(w.find('[data-testid="recap-load-error"]').exists()).toBe(true)
+    const retry = w.find('[data-testid="recap-load-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    getSessionRecap.mockResolvedValueOnce(RECAP({ whatWeDid: null, whatsNext: null }))
+    await retry.trigger('click')
+    await flushPromises()
+
+    expect(getSessionRecap).toHaveBeenCalledTimes(2)
+    expect(w.find('[data-testid="recap-load-error"]').exists()).toBe(false)
+    expect(w.find('[data-testid="recap-whats-next"]').element.value).toBe('Prefilled next step')
+  })
+
   it('disables save until both required fields are non-blank; what went well stays optional', async () => {
     getSessionRecap.mockResolvedValue(RECAP({ whatWeDid: null, whatsNext: null }))
     const w = await mountDialog()

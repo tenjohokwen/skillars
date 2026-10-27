@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 // skillars-12-3 Task 2.1: merges the two "last completed, attended session with this coach"
 // signals (the SLU-only proxy and the new coach-scoped timeline signal) into one reusable
@@ -26,6 +27,20 @@ public class CoachPlayerLastSessionResolver {
     private final PlayerTimelineRepository playerTimelineRepository;
 
     public LastCoachSessionSignal resolve(Long playerId, UUID coachId) {
+        return resolve(playerId, coachId, null, null);
+    }
+
+    // skillars-deferred-165 AC9: overload used by SessionPrepService so the RECAP source
+    // (lastWhatWeDid/lastWhatsNext) can be bounded by the prepped booking's own requestedStartTime --
+    // mirroring PlayerTimelineRepository.findLatestWhatsNextSuggestion's existing bound for the
+    // sibling suggestion field. preppedBookingId/preppedBookingStartTime are null for every other
+    // caller (TimelineQueryService, CoachRosterService, ReportGenerationService), none of which reads
+    // recapSourceEventOrNull() -- only lastSessionDate() -- so they keep the prior unbounded behavior
+    // unchanged. lastSessionDate() itself is ALWAYS computed from the unbounded timelineEvent/sluDate
+    // below, in both overloads: it is a different signal (the coach-access clock) that this AC does
+    // not touch.
+    public LastCoachSessionSignal resolve(
+            Long playerId, UUID coachId, UUID preppedBookingId, Instant preppedBookingStartTime) {
         // Raw processing-time presence signals: whether an SLU row / timeline event exists at all.
         Instant sluDate = sluRepository.findLastSessionDate(playerId, coachId);
         Optional<PlayerTimelineEvent> timelineEvent = playerTimelineRepository
@@ -43,8 +58,21 @@ public class CoachPlayerLastSessionResolver {
             : playerTimelineRepository.findLastSessionEnd(playerId, coachId, now);
         Instant lastSessionDate = laterOf(sluEnd, timelineEnd);
 
-        PlayerTimelineEvent recapSourceEventOrNull = timelineEvent
-            .filter(evt -> isRecapAttributable(evt, sluEnd, playerId, coachId))
+        boolean bounded = preppedBookingStartTime != null;
+        Optional<PlayerTimelineEvent> recapCandidate = bounded
+            ? playerTimelineRepository.findLatestSessionCompletedEvent(
+                playerId, coachId, preppedBookingId, preppedBookingStartTime)
+            : timelineEvent;
+        // skillars-deferred-165 code review (2026-10-27): a bounded candidate must be checked against the
+        // SAME-bounded SLU signal -- otherwise a later-scheduled session's SLU row (excluded from the
+        // candidate) still "wins" the attributability check and nulls the earlier, correct recap.
+        Instant recapSluEnd = !bounded || sluDate == null ? sluEnd
+            : sluRepository.findLastSessionEndBefore(playerId, coachId, now, preppedBookingId, preppedBookingStartTime);
+        Supplier<Optional<UUID>> lastSluBookingId = bounded
+            ? () -> sluRepository.findLastSessionBookingIdBefore(playerId, coachId, preppedBookingId, preppedBookingStartTime)
+            : () -> sluRepository.findLastSessionBookingId(playerId, coachId);
+        PlayerTimelineEvent recapSourceEventOrNull = recapCandidate
+            .filter(evt -> isRecapAttributable(evt, recapSluEnd, lastSluBookingId))
             .orElse(null);
 
         return new LastCoachSessionSignal(lastSessionDate, recapSourceEventOrNull);
@@ -67,11 +95,12 @@ public class CoachPlayerLastSessionResolver {
     // genuinely newer session and null that session's recap. sluEnd (MAX booking end over SLU rows) and
     // findLastSessionBookingId (now ordered by booking end too) are the session-time counterparts; for one
     // and the same session the two ends are equal, so the fast path is again the common case.
-    private boolean isRecapAttributable(PlayerTimelineEvent timelineEvent, Instant sluEnd, Long playerId, UUID coachId) {
+    private boolean isRecapAttributable(PlayerTimelineEvent timelineEvent, Instant sluEnd,
+                                        Supplier<Optional<UUID>> lastSluBookingId) {
         if (sluEnd == null || !timelineEvent.getOccurredAt().isBefore(sluEnd)) {
             return true;
         }
-        return sluRepository.findLastSessionBookingId(playerId, coachId)
+        return lastSluBookingId.get()
             .map(bookingId -> bookingId.equals(timelineEvent.getReferenceId()))
             .orElse(false);
     }

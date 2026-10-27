@@ -793,28 +793,11 @@ class BookingCompletionServiceTest {
         verify(completionDataRepository, never()).save(any());
     }
 
-    /**
-     * skillars-deferred-163 AC6.1: isSweeperPlaceholder no longer reads voiceNoteText at all -- a
-     * legacy row that happens to carry one (pre-dating this column's removal from the condition)
-     * must still be recognised as a placeholder purely on whatWeDid/whatsNext being null.
-     */
-    @Test
-    void submitWrapUp_placeholderWithLegacyVoiceNoteText_isStillRecognisedAsPlaceholder() {
-        arrangeEditableRecap(Instant.now().minusSeconds(3600));
-        SessionCompletionData placeholder = new SessionCompletionData();
-        placeholder.setBookingId(BOOKING_ID);
-        placeholder.setPlayerAttended(false);
-        placeholder.setCompletionMode("QUICK");
-        placeholder.setVoiceNoteText("a stray legacy voice note");
-        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(placeholder));
-        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE",
-            "Worked on first touch", "Continue weak-foot drills", null);
-
-        assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req))
-            .isInstanceOf(OperationNotAllowedException.class)
-            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
-            .isEqualTo(BookingError.RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE);
-    }
+    // skillars-deferred-165 AC12: submitWrapUp_placeholderWithLegacyVoiceNoteText_isStillRecognisedAsPlaceholder
+    // removed here (step 2 of 3) -- its whole premise was an in-memory SessionCompletionData
+    // carrying a voiceNoteText, which is no longer constructible once the field itself is gone.
+    // isSweeperPlaceholder's own condition already ignored this field entirely (deferred-163 AC6.1,
+    // step 1), so no other test covered a behavior this deletion could silently lose.
 
     // ---- skillars-12-7 ----
 
@@ -842,7 +825,6 @@ class BookingCompletionServiceTest {
         ArgumentCaptor<SessionCompletionData> scd = ArgumentCaptor.forClass(SessionCompletionData.class);
         verify(completionDataRepository).save(scd.capture());
         assertThat(scd.getValue().getWhatWentWell()).isNull();
-        assertThat(scd.getValue().getVoiceNoteText()).as("voice note is no longer captured").isNull();
     }
 
     @Test

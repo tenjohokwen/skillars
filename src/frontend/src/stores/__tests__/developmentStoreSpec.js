@@ -26,6 +26,7 @@ vi.mock('src/api/development.api', () => ({
   getTimeline: vi.fn(),
   getCoachContributions: vi.fn(),
   getNeglectedSkills: vi.fn(),
+  getSkillTrends: vi.fn(),
 }))
 
 import {
@@ -43,6 +44,7 @@ import {
   getNeglectedSkills,
   getSkillExposure,
   getRadarPreferences,
+  getSkillTrends,
 } from 'src/api/development.api'
 import { useDevelopmentStore } from 'src/stores/development.store'
 
@@ -564,5 +566,72 @@ describe('development.store — fetchTimeline pagination (deferred-153 AC4)', ()
     expect(store.timeline.accessExpired).toBe(true)
     expect(store.timeline.accessExpiryDays).toBe(90)
     expect(store.timeline.events).toEqual([])
+  })
+})
+
+// skillars-deferred-165 AC4: fetchSkillTrends unwraps SkillTrendResponse's `{ trends: [...] }`
+// envelope — unlike the SEQ_CASES actions above, the stored value is NOT the raw API response.
+describe('development.store — fetchSkillTrends (deferred-165 AC4)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('unwraps the trends array from the response envelope', async () => {
+    getSkillTrends.mockResolvedValue({ trends: [{ skillCode: 'PAC', direction: 'IMPROVING' }] })
+    const store = useDevelopmentStore()
+
+    await store.fetchSkillTrends('p1')
+
+    expect(getSkillTrends).toHaveBeenCalledWith('p1', 8)
+    expect(store.skillTrends).toEqual([{ skillCode: 'PAC', direction: 'IMPROVING' }])
+  })
+
+  it('defaults to an empty array when the response has no trends field', async () => {
+    getSkillTrends.mockResolvedValue({})
+    const store = useDevelopmentStore()
+
+    await store.fetchSkillTrends('p1')
+
+    expect(store.skillTrends).toEqual([])
+  })
+
+  it('clears skillTrends at fetch start', async () => {
+    getSkillTrends.mockResolvedValueOnce({ trends: [{ skillCode: 'PAC' }] })
+    const store = useDevelopmentStore()
+    await store.fetchSkillTrends('p1')
+
+    const pending = deferred()
+    getSkillTrends.mockReturnValueOnce(pending.promise)
+    const p = store.fetchSkillTrends('p2')
+    expect(store.skillTrends).toEqual([])
+    pending.resolve({ trends: [] })
+    await p
+  })
+
+  it("keeps only the latest player's response when responses arrive out of order", async () => {
+    const a = deferred()
+    const b = deferred()
+    getSkillTrends.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise)
+    const store = useDevelopmentStore()
+
+    const pA = store.fetchSkillTrends('A')
+    const pB = store.fetchSkillTrends('B')
+    b.resolve({ trends: [{ skillCode: 'B_SKILL' }] })
+    await pB
+    a.resolve({ trends: [{ skillCode: 'A_SKILL' }] })
+    await pA
+
+    expect(store.skillTrends).toEqual([{ skillCode: 'B_SKILL' }])
+  })
+
+  it('a failed fetch sets skillTrendsError and leaves skillTrends empty', async () => {
+    getSkillTrends.mockRejectedValue(rejection(500))
+    const store = useDevelopmentStore()
+
+    await store.fetchSkillTrends('p1')
+
+    expect(store.skillTrends).toEqual([])
+    expect(store.skillTrendsError).not.toBeNull()
   })
 })

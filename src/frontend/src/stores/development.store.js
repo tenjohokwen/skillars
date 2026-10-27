@@ -19,6 +19,7 @@ import {
   getTimeline,
   getCoachContributions,
   getNeglectedSkills,
+  getSkillTrends,
 } from 'src/api/development.api'
 
 export const useDevelopmentStore = defineStore('development', () => {
@@ -72,6 +73,10 @@ export const useDevelopmentStore = defineStore('development', () => {
   const neglectedSkills = ref([])
   const neglectedSkillsLoading = ref(false)
   const neglectedSkillsError = ref(null)
+  // skillars-deferred-165 AC4: per-skill weekly SLU trend direction/slope — unwired until now.
+  const skillTrends = ref([])
+  const skillTrendsLoading = ref(false)
+  const skillTrendsError = ref(null)
 
   const neglectedCodes = computed(() => exposure.value?.neglectedSkillCodes ?? [])
 
@@ -354,6 +359,27 @@ export const useDevelopmentStore = defineStore('development', () => {
     }
   }
 
+  let _skillTrendsSeq = 0
+
+  // skillars-deferred-165 AC4: SkillExposureResource#getSkillTrends was fully built and tested but
+  // never wired into any page. Response shape is `{ trends: [...] }`, not a bare array (unlike
+  // getNeglectedSkills), so unwrap it here rather than exposing the wrapper object to callers.
+  async function fetchSkillTrends(playerId, weeks = 8) {
+    if (!playerId) return
+    const seq = ++_skillTrendsSeq
+    skillTrends.value = []
+    skillTrendsLoading.value = true
+    skillTrendsError.value = null
+    try {
+      const response = await getSkillTrends(playerId, weeks)
+      if (seq === _skillTrendsSeq) skillTrends.value = response?.trends ?? []
+    } catch (err) {
+      if (seq === _skillTrendsSeq) skillTrendsError.value = getErrorMessage(err)
+    } finally {
+      if (seq === _skillTrendsSeq) skillTrendsLoading.value = false
+    }
+  }
+
   let _timelineSeq = 0
 
   // skillars-deferred-153 AC4: page === 0 replaces (today's established behavior — a fresh
@@ -514,5 +540,9 @@ export const useDevelopmentStore = defineStore('development', () => {
     neglectedSkillsLoading,
     neglectedSkillsError,
     fetchNeglectedSkills,
+    skillTrends,
+    skillTrendsLoading,
+    skillTrendsError,
+    fetchSkillTrends,
   }
 })

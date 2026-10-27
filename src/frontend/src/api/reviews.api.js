@@ -17,3 +17,7 @@ export const listMyReviews = (page = 0) => api.get('/api/reviews/coaches/me', { 
 
 export const submitCoachResponse = (reviewId, body) =>
   api.post(`/api/reviews/${reviewId}/response`, { body })
+
+// skillars-deferred-165 AC5: flag a review for moderation (FAKE_REVIEW | OFFENSIVE_CONTENT |
+// CONFLICT_OF_INTEREST | OTHER, details optional, max 500).
+export const flagReview = (reviewId, payload) => api.post(`/api/reviews/${reviewId}/flag`, payload)

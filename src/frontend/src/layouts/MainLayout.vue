@@ -312,6 +312,16 @@
               <q-item-label class="nav-label">{{ $t('nav.healthDashboard') }}</q-item-label>
             </q-item-section>
           </q-item>
+
+          <!-- skillars-deferred-165 AC3 -->
+          <q-item clickable to="/admin/disputes" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="gavel" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.disputes') }}</q-item-label>
+            </q-item-section>
+          </q-item>
         </template>
       </q-list>
 

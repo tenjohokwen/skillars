@@ -26,6 +26,7 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -170,6 +171,21 @@ class CoachPlanNoteResourceIT extends AbstractIntegrationTest {
         assertThat(persistedNote(bookingId)).isNull();
     }
 
+    // skillars-deferred-165 AC15: a literal JSON null had never been exercised end to end — only
+    // blank/whitespace (above) and, separately, a unit test for sanitizeAndTruncate's null branch
+    // (BookingServiceTest:1858-1866, which only covers "   "). UpdateCoachPlanNoteRequest has no
+    // @NotNull and its own Javadoc says "null/blank clears", so no production change is needed here.
+    @Test
+    void setCoachPlanNote_nullClearsExistingNote() {
+        UUID bookingId = insertBooking("CONFIRMED", 3600, 7200);
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        patchNote(bookingId, "first", cookies);
+
+        patchNote(bookingId, null, cookies);
+
+        assertThat(persistedNote(bookingId)).isNull();
+    }
+
     @Test
     void setCoachPlanNote_contactDetails_realSanitizerRedactsThem() {
         UUID bookingId = insertBooking("CONFIRMED", 3600, 7200);
@@ -292,11 +308,16 @@ class CoachPlanNoteResourceIT extends AbstractIntegrationTest {
             "SELECT coach_plan_note FROM booking.bookings WHERE id = ?", String.class, bookingId);
     }
 
+    // skillars-deferred-165 AC15: a mutable map (not Map.of, which throws NPE on a null value) so a
+    // literal JSON null body can be sent — mirrors SanitizePreviewResourceIT.java:142-157 and
+    // SkillExposureResourceIT.java:250-253's exact precedent for this.
     private ResponseEntity<Map> patchNote(UUID bookingId, String planNote, String cookies) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("planNote", planNote);
         return httpTestClient.makeHttpRequest(
             baseUrl() + "/api/bookings/" + bookingId + "/coach-plan-note",
             HttpMethod.PATCH,
-            Map.of("planNote", planNote),
+            body,
             authenticatedHeaders(cookies),
             Map.class
         );

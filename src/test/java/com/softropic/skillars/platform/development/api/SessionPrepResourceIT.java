@@ -513,6 +513,73 @@ class SessionPrepResourceIT extends AbstractIntegrationTest {
         assertThat(body.get("suggestedWhatsNext")).isEqualTo("FROM EARLIER BOOKING");
     }
 
+    // skillars-deferred-165 AC9: CoachPlayerLastSessionResolver's recap source
+    // (lastWhatWeDid/lastWhatsNext) is now bounded by the prepped booking's own requestedStartTime,
+    // mirroring getPrep_suggestionBoundedByReferencedBookingTime_notJustOccurredAt's exact fixture
+    // shape for the sibling suggestion field.
+    @Test
+    void getPrep_recapSourceBoundedByReferencedBookingTime_notJustOccurredAt() {
+        long playerId = 9800000042L;
+        Instant preppedStart = Instant.now().plus(2, ChronoUnit.DAYS);
+        UUID[] preppedBookingId = new UUID[1];
+
+        transactionTemplate.execute(txStatus -> {
+            insertPlayer(playerId, "Recap Bound Player");
+            preppedBookingId[0] = insertBooking(coachProfileId, playerId, "CONFIRMED", preppedStart);
+            // Booking A: genuinely BEFORE the prepped booking -- a legitimate recap source despite its
+            // event having the OLDER occurred_at (processed promptly, long before the later sweep below).
+            UUID earlierBookingId = insertBooking(coachProfileId, playerId, "COMPLETED", preppedStart.minus(10, ChronoUnit.DAYS));
+            // Booking B: AFTER the prepped booking -- can never legitimately be "last time" for an
+            // earlier-scheduled session, even though its event has the NEWER occurred_at (e.g. a late sweep).
+            UUID laterBookingId = insertBooking(coachProfileId, playerId, "COMPLETED", preppedStart.plus(10, ChronoUnit.DAYS));
+            insertSessionCompletedEventWithRecapForBooking(earlierBookingId, playerId, coachProfileId,
+                "EARLIER WHAT WE DID", "EARLIER WHATS NEXT", Instant.now().minus(2, ChronoUnit.DAYS));
+            insertSessionCompletedEventWithRecapForBooking(laterBookingId, playerId, coachProfileId,
+                "LATER WHAT WE DID", "LATER WHATS NEXT", Instant.now().minus(1, ChronoUnit.DAYS));
+            return null;
+        });
+
+        Map<String, Object> body = getPrepBody(preppedBookingId[0]);
+
+        assertThat(body.get("lastWhatWeDid")).isEqualTo("EARLIER WHAT WE DID");
+        assertThat(body.get("lastWhatsNext")).isEqualTo("EARLIER WHATS NEXT");
+        // Mutation check: revert resolve()'s recapCandidate to the plain unbounded `timelineEvent` ->
+        // this flips to "LATER WHAT WE DID" / "LATER WHATS NEXT" (the newer occurred_at wins), RED.
+    }
+
+    // skillars-deferred-165 code review (2026-10-27): the bounded recap candidate must also be checked
+    // against a bounded SLU signal. Here the later-scheduled booking B (after the prepped one, already
+    // completed) has a real SLU row; the unbounded findLastSessionEnd/findLastSessionBookingId pair would
+    // pick B, see the earlier booking A's event as "older than a different, newer session", and null the
+    // recap -- an empty prep card instead of A's recap.
+    @Test
+    void getPrep_laterScheduledSessionWithSluRow_doesNotNullTheBoundedEarlierRecap() {
+        long playerId = 9800000043L;
+        Instant preppedStart = Instant.now().minus(1, ChronoUnit.DAYS);
+        UUID[] preppedBookingId = new UUID[1];
+
+        transactionTemplate.execute(txStatus -> {
+            insertPlayer(playerId, "Recap Bound SLU Player");
+            preppedBookingId[0] = insertBooking(coachProfileId, playerId, "CONFIRMED", preppedStart);
+            Instant earlierStart = preppedStart.minus(10, ChronoUnit.DAYS);
+            UUID earlierBookingId = insertBooking(coachProfileId, playerId, "COMPLETED", earlierStart);
+            Instant laterStart = Instant.now().minus(12, ChronoUnit.HOURS);
+            UUID laterBookingId = insertBooking(coachProfileId, playerId, "COMPLETED", laterStart);
+            insertSessionCompletedEventWithRecapForBooking(earlierBookingId, playerId, coachProfileId,
+                "EARLIER WHAT WE DID", "EARLIER WHATS NEXT", earlierStart.plusSeconds(3600));
+            UUID laterSessionId = insertSessionForBooking(laterBookingId, playerId, coachProfileId, laterStart);
+            insertSluRecordForSession(playerId, coachProfileId, "PAC", laterStart.plusSeconds(3700), laterSessionId);
+            return null;
+        });
+
+        Map<String, Object> body = getPrepBody(preppedBookingId[0]);
+
+        assertThat(body.get("lastWhatWeDid")).isEqualTo("EARLIER WHAT WE DID");
+        assertThat(body.get("lastWhatsNext")).isEqualTo("EARLIER WHATS NEXT");
+        // Mutation check: pass the unbounded sluEnd / findLastSessionBookingId into isRecapAttributable
+        // again -> both fields come back null, RED.
+    }
+
     @Test
     void getPrep_suggestionIsSanitisedAndCappedAt500() {
         long playerId = 9800000038L;

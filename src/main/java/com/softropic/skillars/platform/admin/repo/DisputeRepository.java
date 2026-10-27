@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.admin.repo;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -18,6 +20,10 @@ public interface DisputeRepository extends JpaRepository<Dispute, UUID> {
     Optional<Dispute> findOpenByBookingId(@Param("bookingId") UUID bookingId);
 
     List<Dispute> findByRaisedBy(Long raisedBy);
+
+    // skillars-deferred-165 AC1: admin worklist of open disputes, mirroring
+    // AdminReviewService.getUnderReviewQueue's single-status paged query shape.
+    Page<Dispute> findByStatusOrderByCreatedAtAsc(String status, Pageable pageable);
 
     // skillars-deferred-145 AC2.c: scoped to d.raisedBy = :authorId (not every open dispute between
     // the pair) so a coach being reviewed negatively cannot raise a dispute on an unrelated old

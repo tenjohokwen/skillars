@@ -120,6 +120,34 @@ public interface PlayerTimelineRepository extends JpaRepository<PlayerTimelineEv
         @Param("playerId") Long playerId, @Param("coachId") UUID coachId, @Param("bookingId") UUID bookingId,
         @Param("preppedBookingStartTime") java.time.Instant preppedBookingStartTime);
 
+    // skillars-deferred-165 AC9: the recap source for lastWhatWeDid/lastWhatsNext, bounded in the same
+    // spirit as findLatestWhatsNextSuggestion above -- without this bound, a later-scheduled booking's
+    // recap can pair with an earlier-scheduled booking's prep card (SessionPrepService calls getPrep
+    // for a NOT-YET-completed booking, so "latest by occurred_at" is not the same as "latest among
+    // sessions that happened before this one was scheduled"). Deliberately NOT a reference_id <>
+    // :bookingId exclusion like the sibling query: that query excludes the prepped booking because a
+    // "what's next" suggestion must come from a DIFFERENT, earlier session, but a recap of the booking
+    // ITSELF is always a legitimate source for its own lastWhatWeDid/lastWhatsNext (pinned by
+    // getPrep_sameSessionWriteClockSkew_recapStillAttributedDespiteSluTimestampWinning, where the
+    // prepped booking's own requested_start_time equals the bound exactly and would otherwise exclude
+    // its own event too) -- so reference_id = :bookingId short-circuits the time bound entirely.
+    // Matches CoachPlayerLastSessionResolver's own coach_id COLUMN filter (not metadata->>'coachId' --
+    // that substitution exists on the sibling query for a documented, unrelated reason: this column is
+    // NULL for an unattended session, which does not apply here since the derived query this replaces
+    // already used the same column).
+    @Query(value = "SELECT pte.* FROM development.player_timeline_events pte "
+        + "LEFT JOIN booking.bookings b ON b.id = pte.reference_id "
+        + "WHERE pte.player_id = :playerId AND pte.coach_id = :coachId "
+        + "AND pte.event_type = 'SESSION_COMPLETED' "
+        + "AND (pte.reference_id = :bookingId "
+        + "     OR b.requested_start_time IS NULL "
+        + "     OR b.requested_start_time < :preppedBookingStartTime) "
+        + "ORDER BY pte.occurred_at DESC, pte.id DESC "
+        + "LIMIT 1", nativeQuery = true)
+    Optional<PlayerTimelineEvent> findLatestSessionCompletedEvent(
+        @Param("playerId") Long playerId, @Param("coachId") UUID coachId, @Param("bookingId") UUID bookingId,
+        @Param("preppedBookingStartTime") java.time.Instant preppedBookingStartTime);
+
     // skillars-12-7 AC4: applies an edited recap to the EXISTING SESSION_COMPLETED row for a booking -- never a
     // second event (that would double-count the session in the timeline, roster and access clock).
     // PlayerTimelineEvent.metadata is updatable = false on the entity, so a JPA save of a mutated entity is a

@@ -44,6 +44,17 @@ export default defineConfig({
     // SkillsRadarChartSpec.js and eslint.config.js, which registers no test-runner globals).
     globals: false,
     setupFiles: ['./test/vitest/setup-file.js'],
+    // skillars-deferred-165 AC16: bounded experiment for the "Test timed out in 5000ms" flakes
+    // reported in routerGuardSpec.js/CoachPlayerDetailPageSpec.js/CoachSessionPackTiersPageSpec.js
+    // under full-suite load (code review of skillars-deferred-164). Raises Vitest's 5000ms default
+    // directly against the symptom, without touching worker/pool concurrency (a bigger, riskier
+    // lever this experiment deliberately did not reach for). Could not be locally confirmed as the
+    // actual fix — the flake did not reproduce even at baseline (2/2 clean full-suite runs before
+    // this change, 2/2 clean after) — so this is a precautionary, low-risk change kept on its own
+    // merits (directly targets the reported symptom, zero behavioral cost to a passing test) rather
+    // than a verified fix. See deferred-work.md's re-annotated note for the done-condition this
+    // still owes (N consecutive green CI full-suite runs).
+    testTimeout: 10000,
     include: [
       // Sibling `*.spec.js` / `*.test.js` layout (future specs) …
       'src/**/*.{spec,test}.{js,mjs}',

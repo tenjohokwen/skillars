@@ -25,7 +25,7 @@
           class="q-mt-sm"
           :label="applyState === 'use' ? t('coach.planNoteUse') : t('coach.planNoteAppend')"
           :loading="applying"
-          :disable="applyState === 'tooLong' || panelDirty"
+          :disable="applyState === 'tooLong' || panelDirty || locallyLocked"
           data-testid="apply-button"
           @click="apply"
         />
@@ -47,9 +47,10 @@
       <CoachPlanNotePanel
         :booking-id="props.bookingId"
         :note="note"
-        :editable="prep.coachPlanNoteEditable"
+        :editable="prep.coachPlanNoteEditable && !locallyLocked"
         :busy="applying"
         @saved="onSaved"
+        @locked="locallyLocked = true"
         @dirty-change="panelDirty = $event"
       />
     </q-card-section>
@@ -65,7 +66,7 @@ import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { setCoachPlanNote } from 'src/api/booking.api'
-import { planNoteErrorMessage } from 'src/utils/planNoteError'
+import { planNoteErrorMessage, isLockedPlanNoteError } from 'src/utils/planNoteError'
 import CoachPlanNotePanel from 'src/components/booking/CoachPlanNotePanel.vue'
 
 const PLAN_NOTE_MAX_LENGTH = 500
@@ -81,11 +82,23 @@ const $q = useQuasar()
 const note = ref(props.prep.coachPlanNote ?? null)
 const panelDirty = ref(false)
 const applying = ref(false)
+// skillars-deferred-165 AC8: this card's own Apply write path is separate from
+// CoachPlanNotePanel's internal save() — one lock for both: a locked 403 from Apply also flips the
+// embedded panel read-only (via :editable), and a locked 403 from the panel's save arrives here via
+// its `locked` event and disables Apply.
+const locallyLocked = ref(false)
 
 watch(
   () => props.prep.coachPlanNote,
   (next) => {
     note.value = next ?? null
+  },
+)
+
+watch(
+  () => props.bookingId,
+  () => {
+    locallyLocked.value = false
   },
 )
 
@@ -125,6 +138,7 @@ async function apply() {
     note.value = res?.planNote ?? null
     $q.notify({ type: 'positive', message: t('coach.planNoteSaved') })
   } catch (err) {
+    if (isLockedPlanNoteError(err)) locallyLocked.value = true
     $q.notify({ type: 'negative', message: planNoteErrorMessage(err, t) })
   } finally {
     applying.value = false

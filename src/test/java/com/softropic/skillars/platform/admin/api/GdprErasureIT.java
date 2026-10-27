@@ -666,11 +666,12 @@ class GdprErasureIT extends AbstractIntegrationTest {
     }
 
     /**
-     * skillars-deferred-153 AC2: session_completion_data's three coach-authored free-text columns
-     * (the pre-existing voice_note_text gap, plus the newer what_we_did/whats_next) must not survive
-     * the player's own erasure. Asserts both the erased player's own row is anonymized AND an
-     * unrelated player's row is left completely untouched — anonymizeByPlayerId is scoped by
-     * player_id, not by booking/coach.
+     * skillars-deferred-153 AC2: session_completion_data's coach-authored free-text columns
+     * (what_we_did/whats_next) must not survive the player's own erasure. Asserts both the erased
+     * player's own row is anonymized AND an unrelated player's row is left completely untouched —
+     * anonymizeByPlayerId is scoped by player_id, not by booking/coach. voice_note_text is unmapped
+     * by JPA since skillars-deferred-165 AC12, but legacy rows still hold text in it, so it is still
+     * scrubbed (natively) until the column is dropped.
      */
     @Test
     void erase_selfRegisteredPlayer_anonymizesSessionCompletionRecapForThatPlayerOnly() {
@@ -704,6 +705,7 @@ class GdprErasureIT extends AbstractIntegrationTest {
         Map<String, Object> erasedRow = jdbcTemplate.queryForMap(
             "SELECT voice_note_text, what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
             erasedBookingId);
+        // skillars-deferred-165 AC12: unmapped by JPA, but legacy rows still hold text — still scrubbed.
         assertThat(erasedRow.get("voice_note_text")).isNull();
         assertThat(erasedRow.get("what_we_did")).isNull();
         assertThat(erasedRow.get("whats_next")).isNull();
@@ -942,6 +944,7 @@ class GdprErasureIT extends AbstractIntegrationTest {
         Map<String, Object> ownRow = jdbcTemplate.queryForMap(
             "SELECT voice_note_text, what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
             ownBookingId);
+        // skillars-deferred-165 AC12: unmapped by JPA, but legacy rows still hold text — still scrubbed.
         assertThat(ownRow.get("voice_note_text")).isNull();
         assertThat(ownRow.get("what_we_did")).isNull();
         assertThat(ownRow.get("whats_next")).isNull();

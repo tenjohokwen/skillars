@@ -102,6 +102,17 @@
                   {{ review.authorRole === 'PARENT' ? t('parent.nav') : t('player.nav') }}
                   · {{ formatDate(review.createdAt) }}
                 </span>
+                <q-space />
+                <!-- skillars-deferred-165 AC5: parents/players only (this page is public and
+                     POST /api/reviews/{id}/flag requires auth), and hidden on the viewer's own
+                     review (loaded separately as myReview, not part of this loop). -->
+                <ReviewFlagAction
+                  v-if="
+                    (authStore.isParent || authStore.isPlayer) &&
+                    review.reviewId !== myReview?.reviewId
+                  "
+                  :review-id="review.reviewId"
+                />
               </div>
               <div v-if="review.body" class="text-body2" style="color: var(--text-primary)">
                 {{ review.body }}
@@ -389,6 +400,7 @@ import ReliabilityIndicator from 'src/components/marketplace/ReliabilityIndicato
 import CapabilityBadgeSet from 'src/components/marketplace/CapabilityBadgeSet.vue'
 import SessionPackPricingDisplay from 'src/components/marketplace/SessionPackPricingDisplay.vue'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
+import ReviewFlagAction from 'src/components/marketplace/ReviewFlagAction.vue'
 
 const route = useRoute()
 const router = useRouter()

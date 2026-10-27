@@ -276,3 +276,48 @@ describe('ParentBookingsPage.vue — player request edit affordance (deferred-15
     expect(notifySpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'negative' }))
   })
 })
+
+// skillars-deferred-165 AC2: the "Raise a dispute" action only renders for eligible booking
+// statuses (mirrors DisputeService.ELIGIBLE_STATUSES client-side, purely for UX).
+describe('ParentBookingsPage.vue — dispute action visibility (deferred-165 AC2)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.restoreAllMocks()
+  })
+
+  it('renders the dispute action for a COMPLETED booking', async () => {
+    const { wrapper } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: { parentBookings: [{ ...BOOKING_1H, status: 'COMPLETED' }] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="dispute-raise-btn"]').exists()).toBe(true)
+  })
+
+  it.each(['CANCELLED', 'CANCELLED_PARENT', 'CANCELLED_COACH', 'NO_SHOW_PLAYER', 'NO_SHOW_COACH'])(
+    'renders the dispute action for a %s booking',
+    async (status) => {
+      const { wrapper } = mountPage({
+        auth: { role: 'PARENT' },
+        booking: { parentBookings: [{ ...BOOKING_1H, status }] },
+      })
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="dispute-raise-btn"]').exists()).toBe(true)
+    },
+  )
+
+  it.each(['CONFIRMED', 'UPCOMING', 'COMPLETED_PENDING_CONFIRMATION'])(
+    'does not render the dispute action for a %s booking',
+    async (status) => {
+      const { wrapper } = mountPage({
+        auth: { role: 'PARENT' },
+        booking: { parentBookings: [{ ...BOOKING_1H, status }] },
+      })
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="dispute-raise-btn"]').exists()).toBe(false)
+    },
+  )
+})

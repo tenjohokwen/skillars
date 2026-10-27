@@ -45,18 +45,26 @@ public interface SessionCompletionDataRepository extends JpaRepository<SessionCo
     }
 
     // skillars-deferred-153 AC2: GdprErasureService never touched booking.session_completion_data
-    // before this — what_we_did/whats_next (skillars-12-2) and the pre-existing voice_note_text
-    // otherwise survive a player's own erasure indefinitely. Nulls the three coach-authored free-text
-    // columns in place; does not delete the row itself (ratings/attendance are not personally-
-    // identifying free text — out of this method's scope).
+    // before this — what_we_did/whats_next (skillars-12-2) otherwise survive a player's own erasure
+    // indefinitely. Nulls the coach-authored free-text columns in place; does not delete the row
+    // itself (ratings/attendance are not personally-identifying free text — out of this method's
+    // scope). skillars-deferred-165 AC12: the voiceNoteText entity field is removed (step 2 of 3), but
+    // the column stays until a later release's migration (migration-conventions.md rule 2 forbids
+    // compressing field-removal and column-drop into one release) — and rows written before
+    // skillars-12-7 stopped sending voice notes still hold coach-authored free text in it. So this is
+    // native SQL, still nulling voice_note_text, until the column itself is dropped (code review
+    // 2026-10-27, Decision 1).
     @Modifying
-    @Query("UPDATE SessionCompletionData s SET s.voiceNoteText = NULL, s.whatWeDid = NULL, s.whatsNext = NULL, s.whatWentWell = NULL WHERE s.playerId = :playerId")
+    @Query(value = "UPDATE booking.session_completion_data SET voice_note_text = NULL, what_we_did = NULL, "
+        + "whats_next = NULL, what_went_well = NULL WHERE player_id = :playerId", nativeQuery = true)
     void anonymizeByPlayerId(@Param("playerId") Long playerId);
 
     // skillars-deferred-154 AC2: anonymizeByPlayerId only runs from the PLAYER-side erasure branch —
-    // a coach's own erasure never touched this table, so their authored voice_note_text/what_we_did/
-    // whats_next survived their own erasure indefinitely. Identical shape, keyed on coachId instead.
+    // a coach's own erasure never touched this table, so their authored what_we_did/whats_next
+    // survived their own erasure indefinitely. Identical shape, keyed on coachId instead (native for
+    // the same legacy voice_note_text reason as anonymizeByPlayerId above).
     @Modifying
-    @Query("UPDATE SessionCompletionData s SET s.voiceNoteText = NULL, s.whatWeDid = NULL, s.whatsNext = NULL, s.whatWentWell = NULL WHERE s.coachId = :coachId")
+    @Query(value = "UPDATE booking.session_completion_data SET voice_note_text = NULL, what_we_did = NULL, "
+        + "whats_next = NULL, what_went_well = NULL WHERE coach_id = :coachId", nativeQuery = true)
     void anonymizeByCoachId(@Param("coachId") UUID coachId);
 }
