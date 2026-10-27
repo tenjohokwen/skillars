@@ -4,9 +4,12 @@ import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
 import com.softropic.skillars.infrastructure.security.RateLimitingService;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.api.dto.VerifyEmailResponse;
+import com.softropic.skillars.platform.security.contract.ParentRegistrationRequest;
 import com.softropic.skillars.platform.security.contract.SkillarsVerificationStatus;
 import com.softropic.skillars.platform.security.contract.event.ParentOtpEmailEvent;
 import com.softropic.skillars.platform.security.contract.exception.OtpVerificationException;
+import com.softropic.skillars.platform.security.contract.exception.ParentRegistrationException;
+import com.softropic.skillars.platform.security.repo.Authority;
 import com.softropic.skillars.platform.security.repo.AuthorityRepository;
 import com.softropic.skillars.platform.security.repo.EmailVerificationToken;
 import com.softropic.skillars.platform.security.repo.EmailVerificationTokenRepository;
@@ -21,11 +24,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -87,6 +93,65 @@ class ParentRegistrationServiceTest {
         user.setVerificationStatus(SkillarsVerificationStatus.UNVERIFIED);
         user.setLocked(false);
         return user;
+    }
+
+    // skillars-deferred-164 AC6: registerParent's phone-vs-email collision mapping had zero
+    // existing coverage before this story (grep of src/test for "phoneInUse" — 0 hits).
+
+    private static DataIntegrityViolationException dive(String constraintName) {
+        org.hibernate.exception.ConstraintViolationException cve =
+            new org.hibernate.exception.ConstraintViolationException(
+                "duplicate key value violates unique constraint", new SQLException("23505"), constraintName);
+        return new DataIntegrityViolationException("could not execute statement", cve);
+    }
+
+    private ParentRegistrationRequest buildRequest() {
+        return new ParentRegistrationRequest(
+            "Jane", "Doe", "jane.doe@test.com", "password123", "+491701234567", "en");
+    }
+
+    private void stubRegistrationPrerequisites() {
+        when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.empty());
+        when(sanitizer.sanitize(any()))
+            .thenAnswer(inv -> new ContactDetailSanitizer.SanitizerResult(inv.getArgument(0), false));
+        when(authorityRepository.findOneByName(any())).thenReturn(Optional.of(new Authority()));
+        when(passwordEncoder.encode(any())).thenReturn("hashed");
+    }
+
+    @Test
+    void registerParent_phoneUniqueViolation_throwsPhoneInUse() {
+        stubRegistrationPrerequisites();
+        when(userRepository.saveAndFlush(any(User.class))).thenThrow(dive("user_phone_key"));
+
+        assertThatThrownBy(() -> service.registerParent(buildRequest()))
+            .isInstanceOfSatisfying(ParentRegistrationException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo("security.phoneInUse"));
+
+        verify(emailTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void registerParent_nonPhoneDataIntegrityViolation_fallsThroughToEmailInUse() {
+        stubRegistrationPrerequisites();
+        // A constraint-name-less generic violation, and one naming an unrelated constraint, must
+        // both fall through to the existing emailInUse default — mirrors
+        // SluPersistenceRetrier's isSessionSkillUniqueViolation's own "anything else" fallthrough.
+        when(userRepository.saveAndFlush(any(User.class)))
+            .thenThrow(new DataIntegrityViolationException("could not execute statement"));
+
+        assertThatThrownBy(() -> service.registerParent(buildRequest()))
+            .isInstanceOfSatisfying(ParentRegistrationException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo("security.emailInUse"));
+    }
+
+    @Test
+    void registerParent_unrelatedConstraintViolation_fallsThroughToEmailInUse() {
+        stubRegistrationPrerequisites();
+        when(userRepository.saveAndFlush(any(User.class))).thenThrow(dive("user_login_key"));
+
+        assertThatThrownBy(() -> service.registerParent(buildRequest()))
+            .isInstanceOfSatisfying(ParentRegistrationException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo("security.emailInUse"));
     }
 
     @Test

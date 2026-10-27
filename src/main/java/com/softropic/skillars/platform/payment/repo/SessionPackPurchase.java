@@ -46,6 +46,16 @@ public class SessionPackPurchase {
     @Column(name = "remaining_sessions", nullable = false)
     private int remainingSessions;
 
+    /**
+     * skillars-deferred-164 AC5. Mutable by design — deliberately NOT {@code updatable = false}.
+     * Three service-layer call sites mutate this outside the entity: {@code PackSessionService}
+     * (pause, extends by the pause duration) and {@code SessionPackPaymentService} (both
+     * {@code extendPack}, +30 days, and {@code createPurchase}'s initial set, now+60 days). Treat
+     * this as a service-layer invariant mutated only by those two services' pause/extend/create
+     * logic, not a bare "whoever has the setter can call it" surface — the class-level
+     * {@link Setter @Setter} stays (52 existing test call sites make a narrower, field-specific
+     * replacement its own, separate change).
+     */
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 

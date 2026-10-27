@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.notification.repo;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
+import com.softropic.skillars.platform.notification.contract.EmailDeliveryStatus;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 
 import org.junit.jupiter.api.Test;
@@ -83,20 +84,54 @@ class EnvelopeEntitySchemaIT extends AbstractIntegrationTest {
      */
     @Test
     void emailTemplateCheck_allowsExactlyTheEmailTemplateEnumValues() {
+        Set<String> enumNames = Arrays.stream(EmailTemplate.values())
+            .map(Enum::name)
+            .collect(Collectors.toCollection(TreeSet::new));
+        assertCheckConstraintAllowsExactlyTheEnumValues(
+            "envelope_entity_email_template_check", enumNames,
+            "EmailTemplate", "add a Flyway migration widening envelope_entity_email_template_check (see V168)");
+    }
+
+    /**
+     * skillars-deferred-164 AC9. Generalizes the parity pattern above
+     * ({@code emailTemplateCheck_allowsExactlyTheEmailTemplateEnumValues}) to
+     * {@code envelope_entity_status_check} ↔ {@link EmailDeliveryStatus} — before this story that
+     * constraint was only ever asserted to EXIST
+     * ({@code envelopeEntity_hasExactlyOneCheckConstraintPerEnumColumn}), never compared against the
+     * enum's actual values, so a future enum change without a matching migration (or vice versa)
+     * would have gone undetected until a real insert failed in production.
+     */
+    @Test
+    void envelopeEntityStatusCheck_allowsExactlyTheEmailDeliveryStatusEnumValues() {
+        Set<String> enumNames = Arrays.stream(EmailDeliveryStatus.values())
+            .map(Enum::name)
+            .collect(Collectors.toCollection(TreeSet::new));
+        assertCheckConstraintAllowsExactlyTheEnumValues(
+            "envelope_entity_status_check", enumNames,
+            "EmailDeliveryStatus", "add a Flyway migration widening envelope_entity_status_check");
+    }
+
+    /**
+     * Shared by both {@code *_allowsExactlyThe*EnumValues} tests (skillars-deferred-164 AC9):
+     * compares a {@code CHECK (col::text = ANY (ARRAY['A','B',...]))}-shaped constraint's live
+     * definition against an enum's {@code values()} in both directions, so a future enum value
+     * added without a migration (or a migration value the enum no longer defines) fails here with
+     * the missing names listed — rather than a loop of row inserts, where the first violation would
+     * abort the Postgres transaction and hide the rest.
+     */
+    private void assertCheckConstraintAllowsExactlyTheEnumValues(String constraintName, Set<String> enumNames,
+                                                                   String enumDisplayName, String migrationHint) {
         String definition = jdbcTemplate.queryForObject(
             "select pg_get_constraintdef(oid) from pg_constraint "
                 + "where conrelid = 'main.envelope_entity'::regclass "
-                + "and conname = 'envelope_entity_email_template_check'",
-            String.class);
+                + "and conname = ?",
+            String.class, constraintName);
 
         Set<String> allowed = new TreeSet<>();
         Matcher m = Pattern.compile("'([A-Z0-9_]+)'::character varying").matcher(definition);
         while (m.find()) {
             allowed.add(m.group(1));
         }
-        Set<String> enumNames = Arrays.stream(EmailTemplate.values())
-            .map(Enum::name)
-            .collect(Collectors.toCollection(TreeSet::new));
 
         Set<String> missingFromConstraint = new TreeSet<>(enumNames);
         missingFromConstraint.removeAll(allowed);
@@ -104,11 +139,10 @@ class EnvelopeEntitySchemaIT extends AbstractIntegrationTest {
         unknownToEnum.removeAll(enumNames);
 
         assertThat(missingFromConstraint)
-            .as("EmailTemplate values the DB CHECK would reject - add a Flyway migration widening "
-                + "envelope_entity_email_template_check (see V168)")
+            .as(enumDisplayName + " values the DB CHECK would reject - " + migrationHint)
             .isEmpty();
         assertThat(unknownToEnum)
-            .as("values the CHECK allows that EmailTemplate no longer defines")
+            .as("values " + constraintName + " allows that " + enumDisplayName + " no longer defines")
             .isEmpty();
         assertThat(allowed).as("the parsed constraint must not be empty").isNotEmpty();
     }

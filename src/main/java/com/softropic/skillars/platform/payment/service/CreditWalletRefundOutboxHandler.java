@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.outbox.contract.OutboxMessageHandler;
+import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
 import com.softropic.skillars.platform.payment.service.RefundOutboxSupport.BookingRefundPayload;
 
@@ -39,12 +40,12 @@ public class CreditWalletRefundOutboxHandler implements OutboxMessageHandler {
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new UncheckedIOException(e);
         }
-        if (ledgerRepository.existsByReferenceIdAndType(p.bookingId(), "BOOKING_REFUND")) {
+        if (ledgerRepository.existsByReferenceIdAndType(p.bookingId(), CreditLedgerEntryType.BOOKING_REFUND)) {
             log.info("[CREDIT_WALLET_REFUND] BOOKING_REFUND already present for booking {} — re-drive is a no-op",
                 p.bookingId());
             return;
         }
-        creditWalletService.writeLedgerEntry(p.parentId(), p.amount(), "BOOKING_REFUND",
+        creditWalletService.writeLedgerEntry(p.parentId(), p.amount(), CreditLedgerEntryType.BOOKING_REFUND,
             p.bookingId(), p.description());
         log.info("[CREDIT_WALLET_REFUND] re-driven BOOKING_REFUND for booking {} parentId {} amount {}",
             p.bookingId(), p.parentId(), p.amount());

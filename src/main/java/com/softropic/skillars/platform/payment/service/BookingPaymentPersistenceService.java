@@ -14,6 +14,7 @@ import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
+import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import io.micrometer.core.instrument.Counter;
@@ -97,9 +98,9 @@ public class BookingPaymentPersistenceService {
      * method touches only {@code booking.bookings} (the locked read) and
      * {@code payment.booking_payments}. If a caller's transaction ever held a lock or an
      * uncommitted write on the same booking row, this would self-deadlock against its own caller —
-     * and a plain {@code UPDATE} ignores the 5 s {@code lock.timeout} hint, so it would hang rather
-     * than fail. Both call sites are annotated with that constraint; verify it before adding a
-     * third.
+     * and a plain {@code UPDATE} ignores the {@code jakarta.persistence.lock.timeout=0} (NOWAIT)
+     * hint {@code findByIdForUpdate} relies on, so it would hang rather than fail fast. Both call
+     * sites are annotated with that constraint; verify it before adding a third.
      *
      * <p>The {@code booking_payments} read below is deliberately unlocked: two concurrent
      * reservations for the same booking serialise on the booking-row lock taken first, so the
@@ -252,7 +253,7 @@ public class BookingPaymentPersistenceService {
         settleSuccessCounter.increment();
         if (creditDebited.compareTo(BigDecimal.ZERO) > 0) {
             creditWalletService.writeLedgerEntry(parentId, creditDebited.negate(),
-                "BOOKING_DEDUCTION", bookingId, "Session booking deduction");
+                CreditLedgerEntryType.BOOKING_DEDUCTION, bookingId, "Session booking deduction");
         }
         BookingPayment bp = loadOrCreate(bookingId);
         bp.setCreditDebited(creditDebited);
@@ -301,7 +302,7 @@ public class BookingPaymentPersistenceService {
         settleFailedCounter.increment();
         if (creditToReverse.compareTo(BigDecimal.ZERO) > 0) {
             creditWalletService.writeLedgerEntry(parentId, creditToReverse,
-                "BOOKING_DEDUCTION_REVERSAL", bookingId, "Payment failed - credit restored");
+                CreditLedgerEntryType.BOOKING_DEDUCTION_REVERSAL, bookingId, "Payment failed - credit restored");
         }
         BookingPayment bp = loadOrCreate(bookingId);
         bp.setCreditDebited(BigDecimal.ZERO);

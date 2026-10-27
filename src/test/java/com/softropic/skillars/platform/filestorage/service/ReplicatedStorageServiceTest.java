@@ -20,6 +20,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -127,6 +128,15 @@ class ReplicatedStorageServiceTest {
 
         verify(primaryStorageService).delete("test/file.jpg");
         verifyNoInteractions(outboxReplicationJobRepository);
+    }
+
+    @Test
+    void deleteAll_delegatesToPrimaryOnly_noReplicaWriteOrOutboxEntry() {
+        service.deleteAll(List.of("test/file.jpg", "test/other.jpg"));
+
+        verify(primaryStorageService).deleteAll(List.of("test/file.jpg", "test/other.jpg"));
+        verifyNoInteractions(outboxReplicationJobRepository);
+        verifyNoInteractions(transactionTemplate);
     }
 
     @Test

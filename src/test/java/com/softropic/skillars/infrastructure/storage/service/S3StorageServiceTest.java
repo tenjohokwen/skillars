@@ -8,16 +8,20 @@ import com.softropic.skillars.infrastructure.blobstore.service.S3StorageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.DeleteObjectResponse;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectResponse;
+import software.amazon.awssdk.services.s3.model.S3Error;
 import software.amazon.awssdk.transfer.s3.S3TransferManager;
 import software.amazon.awssdk.transfer.s3.model.CompletedUpload;
 import software.amazon.awssdk.transfer.s3.model.Upload;
@@ -26,11 +30,14 @@ import software.amazon.awssdk.transfer.s3.model.UploadRequest;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -103,6 +110,106 @@ class S3StorageServiceTest {
         service.delete("key/path.txt");
 
         verify(s3Client).deleteObject(any(Consumer.class));
+    }
+
+    @Test
+    void deleteAll_nullKeys_isNoOp() {
+        service.deleteAll(null);
+
+        verifyNoInteractions(s3Client);
+    }
+
+    @Test
+    void deleteAll_emptyKeys_isNoOp() {
+        service.deleteAll(List.of());
+
+        verifyNoInteractions(s3Client);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void deleteAll_fewerThan1000Keys_callsDeleteObjectsOnce() {
+        when(s3Client.deleteObjects(any(Consumer.class)))
+            .thenReturn(DeleteObjectsResponse.builder().build());
+
+        service.deleteAll(List.of("a.txt", "b.txt"));
+
+        verify(s3Client, times(1)).deleteObjects(any(Consumer.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void deleteAll_moreThan1000Keys_chunksIntoMultipleCalls() {
+        when(s3Client.deleteObjects(any(Consumer.class)))
+            .thenReturn(DeleteObjectsResponse.builder().build());
+        List<String> keys = new ArrayList<>();
+        for (int i = 0; i < 1500; i++) {
+            keys.add("key-" + i + ".txt");
+        }
+
+        service.deleteAll(keys);
+
+        // Sizes, not just the call count: 750+750 would also be two calls.
+        assertThat(capturedChunkSizes()).containsExactly(1000, 500);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void deleteAll_exactly1000Keys_isOneCall() {
+        when(s3Client.deleteObjects(any(Consumer.class)))
+            .thenReturn(DeleteObjectsResponse.builder().build());
+        List<String> keys = new ArrayList<>();
+        for (int i = 0; i < 1000; i++) {
+            keys.add("key-" + i + ".txt");
+        }
+
+        service.deleteAll(keys);
+
+        assertThat(capturedChunkSizes()).containsExactly(1000);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Integer> capturedChunkSizes() {
+        ArgumentCaptor<Consumer<DeleteObjectsRequest.Builder>> captor = ArgumentCaptor.forClass(Consumer.class);
+        verify(s3Client, atLeastOnce()).deleteObjects(captor.capture());
+        return captor.getAllValues().stream()
+            .map(consumer -> {
+                DeleteObjectsRequest.Builder builder = DeleteObjectsRequest.builder();
+                consumer.accept(builder);
+                return builder.build().delete().objects().size();
+            })
+            .toList();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void deleteAll_s3ReportsPerKeyErrors_throwsStorageProviderExceptionNamingTheFailedKey() {
+        DeleteObjectsResponse withErrors = DeleteObjectsResponse.builder()
+            .errors(S3Error.builder().key("locked.txt").code("AccessDenied").message("denied").build())
+            .build();
+        when(s3Client.deleteObjects(any(Consumer.class))).thenReturn(withErrors);
+
+        assertThatThrownBy(() -> service.deleteAll(List.of("locked.txt")))
+            .isInstanceOf(StorageProviderException.class)
+            .hasMessageContaining("locked.txt");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void deleteAll_missingKeyOnly_isNotAnError() {
+        // skillars-deferred-164 AC11: S3's DeleteObjects never reports a missing key in errors() —
+        // idempotent-on-missing-key, same as delete(String). An empty errors() list must not throw.
+        when(s3Client.deleteObjects(any(Consumer.class)))
+            .thenReturn(DeleteObjectsResponse.builder().build());
+
+        assertThatCode(() -> service.deleteAll(List.of("never-existed.txt"))).doesNotThrowAnyException();
+    }
+
+    @Test
+    void recoverDeleteAll_throwsStorageProviderException() {
+        SdkException sdkEx = SdkException.builder().message("deleteAll failed").build();
+        assertThatThrownBy(() -> service.recoverDeleteAll(sdkEx, List.of("a.txt", "b.txt")))
+            .isInstanceOf(StorageProviderException.class);
     }
 
     @Test

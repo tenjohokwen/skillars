@@ -267,8 +267,9 @@ public class BookingBatchService {
      * {@link #createBatch} (skillars-deferred-69 AC7): once against the initially-resolved
      * {@code requiredDuration}/{@code windows}, and again immediately before persisting against
      * freshly re-fetched values, to narrow (not eliminate) the staleness window between the two.
-     * {@code isSlotWithinAvailabilityWindow} is called directly rather than copied — a second copy
-     * would drift from its cross-midnight anchoring and invalid-timezone handling.
+     * {@code isSlotWithinAvailabilityWindow} is called (via
+     * {@code requireSlotWithinAvailabilityWindow}, skillars-deferred-164 AC2) rather than copied —
+     * a second copy would drift from its cross-midnight anchoring and invalid-timezone handling.
      */
     private void validateSlotDurationAndAvailability(BatchSlot slot, Duration requiredDuration,
                                                        List<CoachAvailabilityWindow> windows, UUID coachId,
@@ -282,14 +283,11 @@ public class BookingBatchService {
                     "required minutes", requiredDuration.toMinutes()),
                 BookingError.INVALID_SESSION_DURATION);
         }
-        if (!bookingService.isSlotWithinAvailabilityWindow(
-                slot.requestedStartTime(), slot.requestedEndTime(), windows, coachId, coachTimezone)) {
-            throw new OperationNotAllowedException(
-                "Requested slot is not within coach availability",
-                Map.of("requested start time", slot.requestedStartTime(),
-                    "requested end time", slot.requestedEndTime()),
-                BookingError.SLOT_OUTSIDE_AVAILABILITY);
-        }
+        bookingService.requireSlotWithinAvailabilityWindow(
+            slot.requestedStartTime(), slot.requestedEndTime(), windows, coachId, coachTimezone,
+            "Requested slot is not within coach availability",
+            Map.of("requested start time", slot.requestedStartTime(),
+                "requested end time", slot.requestedEndTime()));
         // Deferred-79 AC1: called twice by createBatch (initial validation, then the pre-commit
         // re-check) via this shared helper — one change here covers both call sites.
         if (bookingService.isSlotBlocked(slot.requestedStartTime(), slot.requestedEndTime(), coachId)) {

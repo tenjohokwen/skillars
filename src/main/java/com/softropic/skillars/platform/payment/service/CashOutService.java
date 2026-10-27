@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
@@ -44,18 +45,18 @@ public class CashOutService {
         }
 
         creditWalletService.writeLedgerEntry(parentId, requestedAmount.negate(),
-            "CASH_OUT_DEBIT", null, "Credit cash-out");
+            CreditLedgerEntryType.CASH_OUT_DEBIT, null, "Credit cash-out");
         creditWalletService.writeLedgerEntry(parentId, feeAmount.negate(),
-            "STRIPE_FEE_DEBIT", null, "Stripe processing fee for cash-out");
+            CreditLedgerEntryType.STRIPE_FEE_DEBIT, null, "Stripe processing fee for cash-out");
 
         try {
             paymentGateway.refund(paymentIntentId, netAmount);
         } catch (PaymentGatewayException e) {
             log.error("Cash-out refund failed for parentId={}, compensating credit", parentId);
             creditWalletService.writeLedgerEntry(parentId, requestedAmount,
-                "CASH_OUT_REVERSAL", null, "Cashout refund failed - credit restored");
+                CreditLedgerEntryType.CASH_OUT_REVERSAL, null, "Cashout refund failed - credit restored");
             creditWalletService.writeLedgerEntry(parentId, feeAmount,
-                "CASH_OUT_REVERSAL", null, "Cashout refund failed - fee restored");
+                CreditLedgerEntryType.CASH_OUT_REVERSAL, null, "Cashout refund failed - fee restored");
             throw new PaymentGatewayException("payment.refundFailed");
         }
     }

@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.contract.BatchRuleViolationException;
+import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.contract.ConflictingBookingItem;
 import com.softropic.skillars.platform.booking.contract.PackPausedEvent;
 import com.softropic.skillars.platform.booking.contract.PauseConflictResponse;
@@ -48,7 +49,13 @@ import static org.springframework.util.StringUtils.hasText;
 @Slf4j
 public class PackSessionService {
 
-    private static final List<String> CONFLICT_STATUSES = List.of("REQUESTED", "ACCEPTED", "CONFIRMED", "UPCOMING");
+    // skillars-deferred-164 AC4: derived from BookingStatus's own names rather than re-typed
+    // literals, so a future rename of one of these constants fails to compile here instead of
+    // silently drifting out of sync. Booking.status itself stays a plain String column (D164-F) —
+    // this list is only the argument to BookingRepository.findConflictingBookingsForPause.
+    private static final List<String> CONFLICT_STATUSES = List.of(
+        BookingStatus.REQUESTED.name(), BookingStatus.ACCEPTED.name(),
+        BookingStatus.CONFIRMED.name(), BookingStatus.UPCOMING.name());
     private static final long DEFAULT_PACK_PAUSE_MAX_DAYS = 90L;
     // skillars-deferred-107 AC1: a stored pause window longer than 10 years is certainly a
     // fat-finger, not a real setting. Business cap; mirrors ConfigBounds.PACK_PAUSE_MAX_DAYS.

@@ -27,6 +27,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -92,7 +93,6 @@ class BookingDuplicationServiceTest {
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
         when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenReturn(activePackId);
 
@@ -118,8 +118,11 @@ class BookingDuplicationServiceTest {
         Instant expectedStart = originalStart.plus(7, ChronoUnit.DAYS);
         Instant expectedEnd = expectedStart.plus(1, ChronoUnit.HOURS);
         // Deferred-50 AC3: verify the actual duplicated-slot times were passed, not (for example)
-        // the original booking's pre-duplication times — an argument-swap regression.
-        verify(bookingService).isSlotWithinAvailabilityWindow(eq(expectedStart), eq(expectedEnd), any(), any(), any());
+        // the original booking's pre-duplication times — an argument-swap regression. Also pins
+        // the exact message/detail-map wording this call site must keep (skillars-deferred-164 AC2).
+        verify(bookingService).requireSlotWithinAvailabilityWindow(eq(expectedStart), eq(expectedEnd),
+            any(), any(), any(), eq("Proposed slot is not within coach availability"),
+            eq(Map.of("proposed start time", expectedStart, "proposed end time", expectedEnd)));
         assertThat(saved.getRequestedStartTime()).isEqualTo(expectedStart);
         assertThat(saved.getCoachId()).isEqualTo(COACH_ID);
         assertThat(saved.getPlayerId()).isEqualTo(PLAYER_ID);
@@ -199,7 +202,6 @@ class BookingDuplicationServiceTest {
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenThrow(
             new OperationNotAllowedException(
                 "No effective session credits available for this coach", SecurityError.MISSING_RIGHTS));
@@ -219,7 +221,13 @@ class BookingDuplicationServiceTest {
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(false);
+        // skillars-deferred-164 AC2: the boolean check moved behind a void check-and-throw method
+        // (requireSlotWithinAvailabilityWindow); a mocked void method is a no-op by default, so the
+        // failure case must stub it to throw, not stub isSlotWithinAvailabilityWindow to return false.
+        doThrow(new OperationNotAllowedException("Proposed slot is not within coach availability",
+                Map.of(), BookingError.SLOT_OUTSIDE_AVAILABILITY))
+            .when(bookingService).requireSlotWithinAvailabilityWindow(
+                any(), any(), any(), any(), any(), any(), any());
 
         assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class)
@@ -240,7 +248,6 @@ class BookingDuplicationServiceTest {
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(true);
 
         assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
@@ -262,7 +269,6 @@ class BookingDuplicationServiceTest {
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false);
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
         when(bookingRepository.save(any())).thenAnswer(i -> {
@@ -288,7 +294,6 @@ class BookingDuplicationServiceTest {
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any()))
             .thenReturn(List.of(new Booking()));
 

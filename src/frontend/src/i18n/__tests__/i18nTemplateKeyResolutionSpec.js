@@ -161,11 +161,14 @@ const EN_KEY_SET = new Set(collectKeyPaths(enUS))
 
 // skillars-deferred-157 AC11(c): an order-of-magnitude "the scan found something" guard against
 // the scan silently matching zero files/calls (e.g. a SRC_ROOT path typo) and every other assertion
-// passing vacuously — NOT a precise count. Measured at skillars-deferred-157: 1571 statically-
-// resolvable CALL SITES (what literalCalls.length counts — not distinct keys). If a legitimate i18n
-// consolidation ever trips this, lower the constant and note why here. Deliberately no upper bound:
-// that would make every new translated string a spec edit.
-const MIN_LITERAL_CALL_SITES = 500
+// passing vacuously — NOT a precise count. Measured at skillars-deferred-164: 1641 statically-
+// resolvable CALL SITES (what literalCalls.length counts — not distinct keys) — raised from 1571
+// (skillars-deferred-157) by ordinary growth. The floor itself was raised from the original 500,
+// which left so much headroom that a drop to, say, 600 would pass unnoticed; 1550 is ~95% of the
+// measured 1641, close enough to catch exactly that regression while leaving room for ordinary
+// future additions. If a legitimate i18n consolidation ever trips this, lower the constant and note
+// why here. Deliberately no upper bound: that would make every new translated string a spec edit.
+const MIN_LITERAL_CALL_SITES = 1550
 
 // Matches a call whose first argument is a quoted (or backtick) string: captures the quote
 // character and the literal content between the (possibly escaped) delimiters.

@@ -13,6 +13,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 @Slf4j
@@ -66,6 +68,31 @@ public class LocalFileSystemStorageService implements StorageService {
             log.info("Deleted file: {}", key);
         } catch (IOException e) {
             throw new StorageProviderException("delete", e, key);
+        }
+    }
+
+    /**
+     * skillars-deferred-164 AC11. {@code null}/empty is a no-op. Loops over {@link #delete(String)}
+     * — not a raw {@code Files.deleteIfExists} — so the path-traversal guard above is never
+     * bypassed for a bulk call. Best-effort, matching {@code S3StorageService.deleteAll}: a failing
+     * key does not stop the remaining keys from being attempted; every failure is reported together
+     * in one {@link StorageProviderException} at the end.
+     */
+    @Override
+    public void deleteAll(List<String> keys) {
+        if (keys == null || keys.isEmpty()) return;
+        List<String> failures = new ArrayList<>();
+        StorageProviderException firstFailure = null;
+        for (String key : keys) {
+            try {
+                delete(key);
+            } catch (StorageProviderException e) {
+                failures.add(key);
+                if (firstFailure == null) firstFailure = e;
+            }
+        }
+        if (!failures.isEmpty()) {
+            throw new StorageProviderException("deleteAll", firstFailure, String.join(", ", failures));
         }
     }
 

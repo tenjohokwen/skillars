@@ -92,6 +92,38 @@ class S3StorageServiceIT extends BaseStorageIT {
         storageService.delete(key);
     }
 
+    /**
+     * skillars-deferred-164 AC11. Against the real SeaweedFS test container, not a mocked
+     * {@code S3Client} — {@code S3StorageServiceTest}'s unit tests mock the SDK entirely and would
+     * not catch a real checksum/Content-MD5 incompatibility in the batch {@code DeleteObjects}
+     * request the way this IT can.
+     */
+    @Test
+    void deleteAll_removesEveryObject_andIsIdempotentOnAnAlreadyMissingKey() {
+        String key1 = "s3-it/" + Instancio.create(String.class) + ".pdf";
+        String key2 = "s3-it/" + Instancio.create(String.class) + ".pdf";
+        String neverExisted = "s3-it/" + UUID.randomUUID() + ".pdf";
+        byte[] content = "bulk-delete-me".getBytes(StandardCharsets.UTF_8);
+        storageService.put(key1, new ByteArrayInputStream(content), content.length, "application/pdf");
+        storageService.put(key2, new ByteArrayInputStream(content), content.length, "application/pdf");
+        assertThat(storageService.exists(key1)).isTrue();
+        assertThat(storageService.exists(key2)).isTrue();
+
+        storageService.deleteAll(List.of(key1, key2, neverExisted));
+
+        assertThat(storageService.exists(key1)).isFalse();
+        assertThat(storageService.exists(key2)).isFalse();
+
+        // idempotent: a second call over the same (now-missing) keys must not throw
+        storageService.deleteAll(List.of(key1, key2));
+    }
+
+    @Test
+    void deleteAll_nullOrEmpty_isNoOp() {
+        storageService.deleteAll(null);
+        storageService.deleteAll(List.of());
+    }
+
     @Test
     void exists_returnsTrueAndFalse() {
         String key = "s3-it/" + Instancio.create(String.class) + ".pdf";
