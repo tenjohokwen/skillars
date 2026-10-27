@@ -76,7 +76,7 @@ const approvalsCount = computed(
 // skillars-deferred-141 code review: `paymentStore.loading.creditBalance` initialises to FALSE
 // (payment.store.js emptyKeyedState()) with `creditBalance` still null, and onMounted runs after the
 // first render — so gating the spinner on the store flag alone made the tile's first paint render the
-// "Unavailable" ERROR copy via formattedBalance's null fallback. ParentDashboardPlaceholderPage.vue
+// "Unavailable" ERROR copy via formattedBalance's null fallback. ParentDashboardPage.vue
 // avoids this by seeding a local `creditLoading = ref(true)`; treating "no balance yet and no error"
 // as still-pending is the equivalent without duplicating store state.
 const creditPending = computed(

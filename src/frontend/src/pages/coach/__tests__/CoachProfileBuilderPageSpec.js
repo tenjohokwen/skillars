@@ -1,4 +1,4 @@
-// skillars-deferred-140 AC3.3 — CoachProfileBuilderPlaceholderPage.vue's error banner.
+// skillars-deferred-140 AC3.3 — CoachProfileBuilderPage.vue's error banner.
 //
 // Before this story, the banner read `store.error?.response?.data?.message`, a field the real
 // ErrorDto response never has (the message is nested under `errorMsg.message` — see
@@ -17,7 +17,7 @@ import { createTestingPinia } from '@pinia/testing'
 import { createI18n } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import messages from 'src/i18n'
-import CoachProfileBuilderPlaceholderPage from 'src/pages/auth/CoachProfileBuilderPlaceholderPage.vue'
+import CoachProfileBuilderPage from 'src/pages/coach/CoachProfileBuilderPage.vue'
 
 // test/vitest/setup-file.js installs a global key-passthrough i18n stub for every spec. This file
 // needs the REAL message catalogs instead (that is the whole point of the regression guard), so
@@ -56,14 +56,14 @@ function mountPage(locale, error) {
     createSpy: () => () => {},
     initialState: { profileBuilder: { currentStep: 99, error } },
   })
-  const wrapper = mount(CoachProfileBuilderPlaceholderPage, {
+  const wrapper = mount(CoachProfileBuilderPage, {
     global: { plugins: [i18n, pinia, router] },
   })
   mounted.push(wrapper)
   return wrapper
 }
 
-describe("CoachProfileBuilderPlaceholderPage.vue's error banner (skillars-deferred-140 AC3.3)", () => {
+describe("CoachProfileBuilderPage.vue's error banner (skillars-deferred-140 AC3.3)", () => {
   afterEach(() => {
     while (mounted.length) mounted.pop().unmount()
   })

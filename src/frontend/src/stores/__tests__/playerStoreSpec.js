@@ -30,6 +30,7 @@ vi.mock('src/api/playerProfile.api', () => ({
 }))
 
 import { playerRegistrationApi } from 'src/api/playerRegistration.api'
+import { playerProfileApi } from 'src/api/playerProfile.api'
 import { usePlayerStore } from 'src/stores/playerStore'
 
 const getMyProfile = playerRegistrationApi.getMyProfile
@@ -173,5 +174,74 @@ describe('playerStore — self player-id cache (deferred-108 AC4)', () => {
 
     await expect(store.fetchSelfPlayerId()).rejects.toThrow(/no id/i)
     expect(store.selfPlayerId).toBeNull()
+  })
+})
+
+// Navigation reachability: MainLayout loads a parent's children for the drawer in the background.
+describe('playerStore — linked players (navigation reachability)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  const KIDS = [
+    { id: '893573203704173564', name: 'Mia' },
+    { id: '893573203704173565', name: 'Leo' },
+  ]
+
+  it('fetchPlayers() selects the first child when none is active (unchanged default)', async () => {
+    const store = usePlayerStore()
+    playerProfileApi.listProfiles.mockResolvedValue(KIDS)
+
+    await store.fetchPlayers()
+
+    expect(store.players).toEqual(KIDS)
+    expect(store.activePlayerId).toBe(KIDS[0].id)
+  })
+
+  it('fetchPlayers({ selectFirst: false }) loads the list without selecting a child', async () => {
+    const store = usePlayerStore()
+    playerProfileApi.listProfiles.mockResolvedValue(KIDS)
+
+    await store.fetchPlayers({ selectFirst: false })
+
+    expect(store.players).toEqual(KIDS)
+    expect(store.activePlayerId).toBeNull()
+  })
+
+  it('resetPlayers() clears the list and the active child', async () => {
+    const store = usePlayerStore()
+    playerProfileApi.listProfiles.mockResolvedValue(KIDS)
+    await store.fetchPlayers()
+
+    store.resetPlayers()
+
+    expect(store.players).toEqual([])
+    expect(store.activePlayerId).toBeNull()
+  })
+
+  it('concurrent fetchPlayers() calls share one listProfiles request', async () => {
+    const store = usePlayerStore()
+    playerProfileApi.listProfiles.mockResolvedValue(KIDS)
+
+    await Promise.all([store.fetchPlayers({ selectFirst: false }), store.fetchPlayers()])
+
+    expect(playerProfileApi.listProfiles).toHaveBeenCalledTimes(1)
+    expect(store.activePlayerId).toBe(KIDS[0].id)
+  })
+
+  it('a fetch still in flight at resetPlayers() (logout) does not repopulate the list', async () => {
+    const store = usePlayerStore()
+    let resolveList
+    playerProfileApi.listProfiles.mockReturnValue(new Promise((r) => (resolveList = r)))
+
+    const pending = store.fetchPlayers()
+    store.resetPlayers()
+    resolveList(KIDS)
+    await pending
+
+    expect(store.players).toEqual([])
+    expect(store.activePlayerId).toBeNull()
+    // Mutation check: drop the playersGeneration check in fetchPlayers → KIDS land, RED.
   })
 })

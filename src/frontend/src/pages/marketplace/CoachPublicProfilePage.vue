@@ -63,7 +63,10 @@
         <div class="glass-card q-pa-md q-mb-md">
           <CapabilityBadgeSet :badges="profile.capabilityBadges" />
           <div class="q-mt-sm">
-            <ReliabilityIndicator :strike-count="profile.reliabilityStrikeCount" />
+            <ReliabilityIndicator
+              :strike-count="profile.reliabilityStrikeCount"
+              :coach-context="isOwnProfile"
+            />
           </div>
         </div>
 
@@ -382,7 +385,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
-import { getCoachProfile } from 'src/api/marketplace.api'
+import { getCoachProfile, getProfileBuilderStatus } from 'src/api/marketplace.api'
 import {
   listCoachReviews,
   getMyReviewForCoach,
@@ -446,6 +449,22 @@ const coachId = route.params.coachId
 // Not sourced from playerStore, which is a parent's linked-children store and meaningless here.
 const selfPlayerId = ref(null)
 
+// Navigation reachability: true only when a COACH is viewing their OWN public profile — enables
+// ReliabilityIndicator's coachContext link to /coach/reliability (their strike history). Every
+// other viewer (guests, parents, players, other coaches) keeps the plain, non-clickable indicator.
+const isOwnProfile = ref(false)
+
+async function resolveOwnProfile() {
+  try {
+    const status = await getProfileBuilderStatus()
+    isOwnProfile.value = status?.coachId != null && String(status.coachId) === String(coachId)
+  } catch {
+    // No coach profile / transient failure: leave the indicator non-clickable — it is a shortcut,
+    // not information the page depends on.
+    isOwnProfile.value = false
+  }
+}
+
 const creditsForThisCoach = computed(() => bookingStore.creditsForCoach(coachId))
 const activePackSessionCount = computed(() => {
   const activePack = bookingStore.sessionPacks.find(
@@ -481,6 +500,11 @@ onMounted(async () => {
     // envelope fetchReviews(0) would produce, so there is no reachable fallback case for this
     // backend — a prior `else { await fetchReviews(0) }` was dead code (skillars-deferred-92 review).
     applyReviewPage(response.reviews, 0)
+    if (authStore.isCoach) {
+      // Not awaited: the ownership check only decorates the reliability indicator and must not
+      // delay the rest of the page's loading.
+      resolveOwnProfile()
+    }
     if (authStore.isParent || authStore.isPlayer) {
       await fetchMyReview()
     }

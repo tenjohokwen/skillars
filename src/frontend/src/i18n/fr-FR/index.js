@@ -1,9 +1,8 @@
 export default {
   coach: {
     commandCenterTitle: 'Espace coach',
-    commandCenterBody:
-      'Votre tableau de bord de coaching apparaîtra ici une fois les séances configurées.',
-    nav: 'Coach',
+    stripeBannerAction: 'Configurer les paiements',
+    bookingRequestsCta: 'Demandes de réservation',
     commandCenterSidebar: 'Clients actifs',
     commandCenterNoClients: 'Aucun client actif cette semaine',
     commandCenterSchedule: 'Planning',
@@ -85,7 +84,6 @@ export default {
     homeworkCompleted: 'Fait !',
     homeworkMarkDone: "Je l'ai fait",
     assignedBy: 'Donné par {coach}',
-    viewLockerRoom: 'Vestiaire',
     createTitle: 'Ajouter un profil de joueur',
     nameLabel: 'Nom du joueur',
     dobLabel: 'Date de naissance',
@@ -1033,6 +1031,15 @@ export default {
   },
   parent: {
     nav: 'Parent',
+    hub: {
+      title: 'Espace joueur',
+      development: 'Progression',
+      packs: 'Packs de séances',
+      subscription: 'Abonnement',
+      lockerRoom: 'Vestiaire',
+      approvals: 'Validations vidéo',
+      openHub: "Ouvrir l'espace de {name}",
+    },
   },
   admin: {
     health: {
@@ -1780,5 +1787,21 @@ export default {
     admin: 'Administration',
     healthDashboard: "Tableau de bord de l'état",
     disputes: 'Litiges',
+    groupSchedule: 'Planning',
+    groupCoaching: 'Entraînement',
+    groupBusiness: 'Activité et compte',
+    bookingRequests: 'Demandes de réservation',
+    availability: 'Disponibilités',
+    drillLibrary: "Bibliothèque d'exercices",
+    sessionTemplates: 'Modèles de séance',
+    paymentSettings: 'Paramètres de paiement',
+    reliability: 'Fiabilité',
+    subscription: 'Abonnement',
+    myPlayers: 'Mes joueurs',
+    bookings: 'Réservations',
+    creditWallet: 'Portefeuille de crédits',
+    approvals: 'Approbations',
+    lockerRoom: 'Vestiaire',
+    videos: 'Mes vidéos',
   },
 }

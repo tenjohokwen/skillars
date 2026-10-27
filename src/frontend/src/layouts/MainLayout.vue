@@ -148,9 +148,10 @@
           </q-item-section>
         </q-item>
 
-        <!-- Coach section -->
+        <!-- Coach section — split into Schedule / Coaching / Business groups so every built coach
+             page is reachable without the drawer becoming one long undifferentiated list. -->
         <template v-if="authStore.isCoach">
-          <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ t('coach.nav') }}</div>
+          <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ t('nav.groupSchedule') }}</div>
 
           <q-item clickable to="/coach/command-center" class="nav-item">
             <q-item-section avatar>
@@ -161,6 +162,26 @@
             </q-item-section>
           </q-item>
 
+          <q-item clickable to="/coach/booking-requests" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="inbox" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.bookingRequests') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/coach/availability" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="event_available" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.availability') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ t('nav.groupCoaching') }}</div>
+
           <q-item clickable to="/coach/players" class="nav-item">
             <q-item-section avatar>
               <q-icon name="groups" class="nav-icon" />
@@ -170,21 +191,41 @@
             </q-item-section>
           </q-item>
 
+          <q-item clickable to="/coach/drills" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="sports_soccer" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.drillLibrary') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/coach/session-templates" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="content_copy" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.sessionTemplates') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/messaging" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="chat" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('messaging.pageTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ t('nav.groupBusiness') }}</div>
+
           <q-item clickable to="/coach/revenue" class="nav-item">
             <q-item-section avatar>
               <q-icon name="bar_chart" class="nav-icon" />
             </q-item-section>
             <q-item-section>
               <q-item-label class="nav-label">{{ t('revenue.pageTitle') }}</q-item-label>
-            </q-item-section>
-          </q-item>
-
-          <q-item clickable to="/coach/reviews" class="nav-item">
-            <q-item-section avatar>
-              <q-icon name="star" class="nav-icon" />
-            </q-item-section>
-            <q-item-section>
-              <q-item-label class="nav-label">{{ t('reviews.myReviewsTitle') }}</q-item-label>
             </q-item-section>
           </q-item>
 
@@ -199,12 +240,39 @@
             </q-item-section>
           </q-item>
 
-          <q-item clickable to="/messaging" class="nav-item">
+          <q-item clickable to="/coach/payment-settings" class="nav-item">
             <q-item-section avatar>
-              <q-icon name="chat" class="nav-icon" />
+              <q-icon name="account_balance" class="nav-icon" />
             </q-item-section>
             <q-item-section>
-              <q-item-label class="nav-label">{{ t('messaging.pageTitle') }}</q-item-label>
+              <q-item-label class="nav-label">{{ t('nav.paymentSettings') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/coach/subscription" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="workspace_premium" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.subscription') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/coach/reviews" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="star" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('reviews.myReviewsTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/coach/reliability" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="verified" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.reliability') }}</q-item-label>
             </q-item-section>
           </q-item>
         </template>
@@ -219,6 +287,33 @@
             </q-item-section>
             <q-item-section>
               <q-item-label class="nav-label">{{ $t('nav.dashboard') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/parent/bookings" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="event" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.bookings') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/parent/approvals" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="task_alt" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.approvals') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/parent/credit-wallet" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="account_balance_wallet" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.creditWallet') }}</q-item-label>
             </q-item-section>
           </q-item>
 
@@ -239,6 +334,26 @@
               <q-item-label class="nav-label">{{ t('messaging.pageTitle') }}</q-item-label>
             </q-item-section>
           </q-item>
+
+          <!-- One entry per linked child, each opening that child's hub (ParentPlayerPortalPage),
+               which links on to the child's development, packs, subscription and locker room. -->
+          <template v-if="playerStore.players.length > 0">
+            <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ t('nav.myPlayers') }}</div>
+            <q-item
+              v-for="player in playerStore.players"
+              :key="player.id"
+              clickable
+              :to="parentChildLinks(player.id).sessions"
+              class="nav-item"
+            >
+              <q-item-section avatar>
+                <q-icon name="person" class="nav-icon" />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label class="nav-label">{{ player.name }}</q-item-label>
+              </q-item-section>
+            </q-item>
+          </template>
         </template>
 
         <!-- Player section (UAT.5: self-registered adult player) -->
@@ -278,6 +393,24 @@
             </q-item-section>
             <q-item-section>
               <q-item-label class="nav-label">{{ t('messaging.pageTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item v-if="lockerRoomRoute" clickable :to="lockerRoomRoute" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="sports_soccer" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.lockerRoom') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/player/videos" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="videocam" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.videos') }}</q-item-label>
             </q-item-section>
           </q-item>
 
@@ -356,6 +489,7 @@ import ParentChildSwitcher from 'src/components/ParentChildSwitcher.vue'
 import { useAuthStore } from 'src/stores/auth.store'
 import { usePlayerStore } from 'src/stores/playerStore'
 import { pushLoginOrHardNavigate } from 'src/utils/sessionRedirect'
+import { parentChildLinks } from 'src/utils/parentChildLinks'
 
 const router = useRouter()
 const { t, locale } = useI18n()
@@ -374,6 +508,9 @@ const packsRoute = computed(() =>
 )
 const developmentRoute = computed(() =>
   selfPlayerId.value ? `/player/development/${selfPlayerId.value}` : null,
+)
+const lockerRoomRoute = computed(() =>
+  selfPlayerId.value ? `/player/locker-room/${selfPlayerId.value}` : null,
 )
 
 const languages = [
@@ -477,6 +614,7 @@ async function handleLogout() {
   // (useSession.js:104).
   document.cookie = 'rint=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
   playerStore.resetSelfPlayerId()
+  playerStore.resetPlayers()
   destroySession()
   deleteUserCookie()
   // skillars-deferred-125 AC3: shared helper falls back to a hard navigation if router.push does
@@ -516,6 +654,24 @@ watch(
       if (err.response?.status !== 404) {
         console.error('Failed to resolve self player id for nav', err)
       }
+    }
+  },
+  { immediate: true },
+)
+
+// Navigation reachability: the parent drawer lists one "My players" entry per linked child, so the
+// children must be known on every parent page, not only after the dashboard has been visited (the
+// dashboard was previously the only caller of fetchPlayers). Same watch-not-onMounted reasoning as
+// the isPlayer watch above: this layout never remounts across a client-side login.
+watch(
+  () => authStore.isParent,
+  async (isParent) => {
+    if (!isParent) return
+    try {
+      await playerStore.fetchPlayers({ selectFirst: false })
+    } catch (err) {
+      // Non-fatal: the section simply stays hidden; the dashboard surfaces its own load error.
+      console.error('Failed to load linked players for nav', err)
     }
   },
   { immediate: true },

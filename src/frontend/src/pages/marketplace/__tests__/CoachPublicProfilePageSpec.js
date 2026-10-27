@@ -12,6 +12,7 @@ vi.mock('src/boot/axios', () => ({
 
 vi.mock('src/api/marketplace.api', () => ({
   getCoachProfile: vi.fn(),
+  getProfileBuilderStatus: vi.fn(),
 }))
 
 vi.mock('src/api/reviews.api', () => ({
@@ -23,10 +24,11 @@ vi.mock('src/api/reviews.api', () => ({
   flagReview: vi.fn(),
 }))
 
-import { getCoachProfile } from 'src/api/marketplace.api'
+import { getCoachProfile, getProfileBuilderStatus } from 'src/api/marketplace.api'
 import { getMyReviewForCoach } from 'src/api/reviews.api'
 import CoachPublicProfilePage from 'src/pages/marketplace/CoachPublicProfilePage.vue'
 import ReviewFlagAction from 'src/components/marketplace/ReviewFlagAction.vue'
+import ReliabilityIndicator from 'src/components/marketplace/ReliabilityIndicator.vue'
 
 const mounted = []
 
@@ -126,5 +128,56 @@ describe('CoachPublicProfilePage.vue — review flag visibility (deferred-165 AC
     const wrapper = await mountPage('coach-1', role)
 
     expect(wrapper.findAllComponents(ReviewFlagAction)).toHaveLength(0)
+  })
+})
+
+// Navigation reachability: ReliabilityIndicator's coachContext (a link to /coach/reliability) is
+// enabled only for a coach viewing their OWN public profile.
+// Mutation check: pass `:coach-context="authStore.isCoach"` instead of isOwnProfile → the "another
+// coach's profile" case goes RED.
+describe('CoachPublicProfilePage.vue — own-profile reliability link (navigation reachability)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  const coachContextOf = (wrapper) =>
+    wrapper.findComponent(ReliabilityIndicator).props('coachContext')
+
+  it('enables coachContext when a COACH views their own profile', async () => {
+    getCoachProfile.mockResolvedValue({ ...PROFILE, reliabilityStrikeCount: 1 })
+    getProfileBuilderStatus.mockResolvedValue({ coachId: 'coach-1' })
+
+    const wrapper = await mountPage('coach-1', 'COACH')
+
+    expect(coachContextOf(wrapper)).toBe(true)
+  })
+
+  it("keeps coachContext off when a COACH views another coach's profile", async () => {
+    getCoachProfile.mockResolvedValue({ ...PROFILE, reliabilityStrikeCount: 1 })
+    getProfileBuilderStatus.mockResolvedValue({ coachId: 'coach-2' })
+
+    const wrapper = await mountPage('coach-1', 'COACH')
+
+    expect(coachContextOf(wrapper)).toBe(false)
+  })
+
+  it('keeps coachContext off (and never asks for coach status) for a non-coach viewer', async () => {
+    getCoachProfile.mockResolvedValue({ ...PROFILE, reliabilityStrikeCount: 1 })
+    getMyReviewForCoach.mockResolvedValue(null)
+
+    const wrapper = await mountPage('coach-1', 'PARENT')
+
+    expect(coachContextOf(wrapper)).toBe(false)
+    expect(getProfileBuilderStatus).not.toHaveBeenCalled()
+  })
+
+  it('keeps coachContext off when the coach-status lookup fails', async () => {
+    getCoachProfile.mockResolvedValue({ ...PROFILE, reliabilityStrikeCount: 1 })
+    getProfileBuilderStatus.mockRejectedValue({ response: { status: 404 } })
+
+    const wrapper = await mountPage('coach-1', 'COACH')
+
+    expect(coachContextOf(wrapper)).toBe(false)
   })
 })

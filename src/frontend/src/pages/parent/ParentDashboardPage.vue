@@ -16,17 +16,48 @@
         <div class="text-subtitle1 q-mb-md">{{ t('auth.parent.playersTitle') }}</div>
 
         <div class="parent-dashboard__grid">
+          <!-- Each child card opens that child's hub (ParentPlayerPortalPage); the chips below are
+               one-tap shortcuts to the hub's most-used destinations. The chips are siblings of
+               the hub link, not nested in it — an <a> may not contain another <a>. -->
           <div
             v-for="player in players"
             :key="player.id"
-            class="glass-card parent-dashboard__player-card"
+            class="glass-card soft-hover parent-dashboard__player-card"
+            data-testid="child-card"
           >
-            <div class="text-card-title">{{ player.name }}</div>
-            <div class="text-meta q-mt-xs">
-              {{ player.ageTierLabel }}
-              <template v-if="player.position">
-                &middot; {{ t('player.positions.' + player.position) }}
-              </template>
+            <router-link
+              :to="childLinks(player.id).sessions"
+              class="parent-dashboard__player-link"
+              data-testid="child-card-hub-link"
+              :aria-label="t('parent.hub.openHub', { name: player.name })"
+            >
+              <div class="text-card-title">{{ player.name }}</div>
+              <div class="text-meta q-mt-xs">
+                {{ player.ageTierLabel }}
+                <template v-if="player.position">
+                  &middot; {{ t('player.positions.' + player.position) }}
+                </template>
+              </div>
+            </router-link>
+            <div class="row q-gutter-xs q-mt-sm">
+              <q-btn
+                v-bind="chipProps"
+                icon="insights"
+                :to="childLinks(player.id).development"
+                :label="t('parent.hub.development')"
+              />
+              <q-btn
+                v-bind="chipProps"
+                icon="confirmation_number"
+                :to="childLinks(player.id).packs"
+                :label="t('parent.hub.packs')"
+              />
+              <q-btn
+                v-bind="chipProps"
+                icon="sports_soccer"
+                :to="childLinks(player.id).lockerRoom"
+                :label="t('parent.hub.lockerRoom')"
+              />
             </div>
           </div>
 
@@ -103,6 +134,7 @@ import { useBookingStore } from 'src/stores/booking.store'
 import { usePaymentStore } from 'src/stores/payment.store'
 import { videoApi } from 'src/api/video.api'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
+import { parentChildLinks as childLinks } from 'src/utils/parentChildLinks'
 
 const { t } = useI18n()
 const playerStore = usePlayerStore()
@@ -111,6 +143,17 @@ const paymentStore = usePaymentStore()
 const { setError, hasError, errorMessage } = useErrorHandler()
 
 const players = computed(() => playerStore.players)
+
+// Shared look of the per-child quick-action chips.
+const chipProps = {
+  outline: true,
+  rounded: true,
+  dense: true,
+  noCaps: true,
+  size: 'sm',
+  color: 'primary',
+  'data-testid': 'child-chip',
+}
 const playersLoading = ref(true)
 
 const UPCOMING_STATUSES = ['CONFIRMED', 'UPCOMING']
@@ -179,6 +222,12 @@ onMounted(async () => {
 
 .parent-dashboard__player-card {
   padding: 20px;
+}
+
+.parent-dashboard__player-link {
+  display: block;
+  text-decoration: none;
+  color: var(--text-primary);
 }
 
 .parent-dashboard__add-card {

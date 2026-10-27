@@ -1,6 +1,6 @@
 // skillars-deferred-139 AC3 — EditCoachPhotoDialog.vue.
 //
-// Upload/replace reuses CoachProfileBuilderPlaceholderPage.vue's already-tested sign/confirm/step5
+// Upload/replace reuses CoachProfileBuilderPage.vue's already-tested sign/confirm/step5
 // mechanics verbatim (smoke-tested here only). The new behavior this AC adds is the delete action:
 // it must require an explicit confirm step before calling deleteCoachPhoto(), matching the
 // confirm-before-destructive-action pattern Toggle2faDialog.vue already establishes.

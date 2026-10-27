@@ -66,7 +66,7 @@ export const useAuthStore = defineStore('auth', () => {
    * emit `id` unquoted, and a Tsid-sized id (every id in this system) silently lost precision the
    * moment JSON.parse below touched it — authStore.userId then held a DIFFERENT number than the
    * backend's own JWT business ID, surfacing as a 403 wherever that value was later sent back (e.g.
-   * CoachProfileBuilderPlaceholderPage.vue's photo-upload entityId). This parses fine as long as
+   * CoachProfileBuilderPage.vue's photo-upload entityId). This parses fine as long as
    * the backend keeps quoting it.
    * NOTE: the user= cookie contains only the display name (plain string) — do NOT parse it as JSON.
    */
