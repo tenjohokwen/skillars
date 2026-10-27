@@ -53,6 +53,11 @@ public class ParentRegistrationService {
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
+    // skillars-deferred-164 AC6. V138__baseline_schema.sql's UNIQUE (phone) constraint on
+    // main."user" — re-verify this name is still live before trusting it (no later migration
+    // renames it as of this writing).
+    private static final String USER_PHONE_UNIQUE_CONSTRAINT = "user_phone_key";
+
     private final UserRepository userRepository;
     private final AuthorityRepository authorityRepository;
     private final EmailVerificationTokenRepository emailTokenRepository;
@@ -99,10 +104,14 @@ public class ParentRegistrationService {
         user.setAuthorities(Set.of(parentAuthority));
 
         try {
-            userRepository.save(user);
+            // skillars-deferred-164 AC6: saveAndFlush, not save. User.id is an app-assigned @Tsid
+            // (BaseEntity), so a bare save() defers the INSERT past this try/catch — the real
+            // constraint violation would only surface at commit, after isPhoneUniqueViolation below
+            // could ever run against it. Mirrors ParentRegistrationService's own AC10 OTP save and
+            // the three constraint-name precedents this method's catch block now follows.
+            userRepository.saveAndFlush(user);
         } catch (DataIntegrityViolationException ex) {
-            String msg = ex.getMessage() != null ? ex.getMessage().toLowerCase() : "";
-            if (msg.contains("phone")) {
+            if (isPhoneUniqueViolation(ex)) {
                 throw new ParentRegistrationException("security.phoneInUse", "Phone number already registered");
             }
             throw new ParentRegistrationException("security.emailInUse", "Email already registered");
@@ -283,5 +292,18 @@ public class ParentRegistrationService {
     private String generateOtp() {
         int code = 100000 + SECURE_RANDOM.nextInt(900000);
         return String.valueOf(code);
+    }
+
+    /**
+     * skillars-deferred-164 AC6. Mirrors
+     * {@code SluPersistenceRetrier.isSessionSkillUniqueViolation}'s exact shape (single-level
+     * unwrap, same as {@code ApiAdvice.integrityViolationHandler}): a non-phone
+     * {@code DataIntegrityViolationException} — including one with no {@code ConstraintViolationException}
+     * cause at all — falls through to {@code false}, which {@link #registerParent} maps to the
+     * existing {@code security.emailInUse} default.
+     */
+    private static boolean isPhoneUniqueViolation(DataIntegrityViolationException ex) {
+        return ex.getCause() instanceof org.hibernate.exception.ConstraintViolationException cve
+            && USER_PHONE_UNIQUE_CONSTRAINT.equals(cve.getConstraintName());
     }
 }

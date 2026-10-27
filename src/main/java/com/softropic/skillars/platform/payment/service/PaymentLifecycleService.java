@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
+import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
@@ -87,8 +88,9 @@ public class PaymentLifecycleService {
      * application-level signal at all — the very silence AC4 exists to remove, and it would be
      * perverse to close it around {@code transition(...)} while leaving it open around the
      * reservation guarding the Stripe call. {@code reserveCapture} can genuinely throw: it takes a
-     * bounded PESSIMISTIC_WRITE lock (a 5 s timeout surfaces as PessimisticLockingFailureException)
-     * and inserts against a primary key.
+     * NOWAIT PESSIMISTIC_WRITE lock, bounded-retried by {@code PessimisticLockRetryer} (worst case
+     * ~2-3s), that surfaces as {@code PessimisticLockingFailureException} once exhausted, and
+     * inserts against a primary key.
      *
      * <p>Returning null rather than rethrowing is deliberate. Nothing has been charged — the
      * reservation is what gates the gateway call — so the booking simply rests in PAYMENT_PENDING
@@ -211,8 +213,8 @@ public class PaymentLifecycleService {
             // lock on booking.bookings on a SECOND connection. This transaction must therefore
             // hold no lock and no uncommitted write on that booking row here — today it only
             // issues reads. If a future edit adds a write above this line, it deadlocks with NO
-            // timeout: a plain UPDATE ignores the 5 s lock.timeout hint, which applies only to the
-            // locked SELECT.
+            // timeout: a plain UPDATE ignores the jakarta.persistence.lock.timeout=0 (NOWAIT) hint,
+            // which applies only to the locked SELECT.
             CaptureReservation reservation = reserveOrReport(
                 event.getBookingId(), creditToUse, stripeAmount, null);
             if (reservation != CaptureReservation.RESERVED) {
@@ -298,7 +300,8 @@ public class PaymentLifecycleService {
         // writing that this transaction holds no lock and no uncommitted write on these rows: it
         // only issues plain findById reads, and the pack loop above writes exclusively through
         // perBookingTx (REQUIRES_NEW), which has already committed. If a future edit adds a write
-        // here, it deadlocks with NO timeout — a plain UPDATE ignores the 5 s lock.timeout hint.
+        // here, it deadlocks with NO timeout — a plain UPDATE ignores the
+        // jakarta.persistence.lock.timeout=0 (NOWAIT) hint.
         List<UUID> reserved = new ArrayList<>();
         BigDecimal creditSubtotal = BigDecimal.ZERO;
         for (UUID bookingId : creditIds) {
@@ -337,7 +340,7 @@ public class PaymentLifecycleService {
 
         if (creditToUse.compareTo(BigDecimal.ZERO) > 0) {
             creditWalletService.writeLedgerEntry(event.getParentId(), creditToUse.negate(),
-                "BOOKING_DEDUCTION", event.getBatchId(), "Batch session booking deduction");
+                CreditLedgerEntryType.BOOKING_DEDUCTION, event.getBatchId(), "Batch session booking deduction");
         }
 
         String paymentIntentId = null;
@@ -349,7 +352,7 @@ public class PaymentLifecycleService {
                 log.error("Stripe batch charge failed: batchId={}", event.getBatchId());
                 if (creditToUse.compareTo(BigDecimal.ZERO) > 0) {
                     creditWalletService.writeLedgerEntry(event.getParentId(), creditToUse,
-                        "BOOKING_DEDUCTION_REVERSAL", event.getBatchId(), "Batch payment failed - credit restored");
+                        CreditLedgerEntryType.BOOKING_DEDUCTION_REVERSAL, event.getBatchId(), "Batch payment failed - credit restored");
                 }
                 // UAT.3 AC3. Every reserved booking now HAS a row, so the previous
                 // `if (!existsById(bookingId))` condition would be permanently false and nothing

@@ -287,12 +287,10 @@ public class BookingService {
                     Map.of("coach id", req.coachId()), BookingError.AVAILABILITY_CHANGED);
             }
         }
-        if (!isSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows,
-                req.coachId(), lockedCoach.getCanonicalTimezone())) {
-            throw new OperationNotAllowedException("Requested slot is not within coach availability",
-                Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()),
-                BookingError.SLOT_OUTSIDE_AVAILABILITY);
-        }
+        requireSlotWithinAvailabilityWindow(req.requestedStartTime(), req.requestedEndTime(), windows,
+            req.coachId(), lockedCoach.getCanonicalTimezone(),
+            "Requested slot is not within coach availability",
+            Map.of("requested start time", req.requestedStartTime(), "requested end time", req.requestedEndTime()));
         // Deferred-79 AC1: a CoachAvailabilityBlock was previously enforced only on the read-side
         // calendar (getAvailabilityCalendar) — a parent working off a stale view, or any client
         // calling this endpoint directly, could book a slot the coach explicitly marked unavailable.
@@ -1193,6 +1191,27 @@ public class BookingService {
             }
         }
         return false;
+    }
+
+    /**
+     * skillars-deferred-164 AC2. Shared check-and-throw idiom for the five call sites
+     * ({@code createBookingRequest} below, plus {@code RescheduleService} ×2,
+     * {@code BookingDuplicationService}, {@code BookingBatchService}) that each independently called
+     * {@link #isSlotWithinAvailabilityWindow} and then threw an identically-shaped
+     * {@code OperationNotAllowedException(..., BookingError.SLOT_OUTSIDE_AVAILABILITY)} on failure.
+     * Only the repeated check-and-throw boilerplate is centralized — {@code message} and
+     * {@code details} are still built by each caller, since the wording genuinely differs per site
+     * ("Requested slot…" vs "Proposed slot…", and {@code acceptRescheduleShared} has a third,
+     * {@code "submitted coach id"}, detail key the others don't). Package-private, mirroring
+     * {@link #isSlotWithinAvailabilityWindow}'s own visibility and external-call pattern.
+     */
+    void requireSlotWithinAvailabilityWindow(Instant startTime, Instant endTime,
+                                              List<CoachAvailabilityWindow> windows, UUID coachId,
+                                              String coachTimezone, String message,
+                                              Map<String, Object> details) {
+        if (!isSlotWithinAvailabilityWindow(startTime, endTime, windows, coachId, coachTimezone)) {
+            throw new OperationNotAllowedException(message, details, BookingError.SLOT_OUTSIDE_AVAILABILITY);
+        }
     }
 
     /**

@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.InputStream;
+import java.util.List;
 
 @Slf4j
 @RequiredArgsConstructor
@@ -49,6 +50,13 @@ public class ReplicatedStorageService implements StorageService {
     @Override
     public void delete(String key) {
         primaryStorageService.delete(key);
+    }
+
+    // skillars-deferred-164 AC11: delegates to the primary only, same as delete(String) above —
+    // no replica write/outbox entry for a delete, exactly the existing single-key behavior.
+    @Override
+    public void deleteAll(List<String> keys) {
+        primaryStorageService.deleteAll(keys);
     }
 
     @Override

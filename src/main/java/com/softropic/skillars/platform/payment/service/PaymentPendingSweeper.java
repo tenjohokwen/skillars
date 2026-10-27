@@ -101,6 +101,20 @@ public class PaymentPendingSweeper {
     private final MeterRegistry meterRegistry;
     private final PessimisticLockRetryer lockRetryer;
 
+    // skillars-deferred-164 AC1. Test-only synchronization seam: default no-op, package-private so
+    // only PaymentPendingSweeperIT (same package) can reach it. Lets a test pause sweepOne() AFTER
+    // it has taken the booking-row lock and decided there is no existing payment row, but BEFORE it
+    // writes the CHARGE_FAILED row — the exact window the class Javadoc on sweepOne says the lock
+    // must hold closed against a concurrent reserveCapture. Tests MUST reset this to a no-op in
+    // @AfterEach: a stuck hook holds the row lock (and a pooled connection) past the end of the test.
+    //
+    // @SchedulerLock makes this class an AOP (CGLIB) proxy — a test setting this field through an
+    // @Autowired PaymentPendingSweeper reference writes to the PROXY's copy, not the TARGET
+    // instance sweepOne() itself runs on, and would silently never observe it. A test MUST set/reset
+    // this field through org.springframework.test.util.AopTestUtils.getUltimateTargetObject(sweeper)
+    // instead (mirrors MinorSafetyGateIT's identical @Async-proxy workaround).
+    volatile Runnable sweepOneBeforeChargeFailedWriteHook = () -> {};
+
     // lockAtMostFor is deliberately 2x the fixedDelay, not equal to it: with both at 15 minutes a run
     // that merely reached its own next tick would have its lock expire mid-execution and a second
     // instance could start an overlapping sweep. The sibling schedulers keep the same kind of margin
@@ -171,6 +185,9 @@ public class PaymentPendingSweeper {
         }
         // No row at all ⇒ UAT.3 AC1's invariant says no Stripe call was ever attempted for this
         // booking, whatever its funding type. Safe to decline and hand the coach's slot back.
+
+        // skillars-deferred-164 AC1. Test-only — see the field's own Javadoc for why this exact spot.
+        sweepOneBeforeChargeFailedWriteHook.run();
 
         // Same triple BookingPaymentPersistenceService.persistPaymentFailure performs, in the same
         // order: payment row, then the transition, then the event.

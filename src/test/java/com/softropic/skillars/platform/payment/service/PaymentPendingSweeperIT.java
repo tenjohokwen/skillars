@@ -6,11 +6,15 @@ import com.softropic.skillars.platform.booking.service.BookingExpiryScheduler;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.payment.BasePaymentIT;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.utils.ConcurrencyLockWaitSupport;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.test.util.AopTestUtils;
 
 import java.math.BigDecimal;
 import java.sql.Timestamp;
@@ -19,6 +23,12 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -41,10 +51,30 @@ class PaymentPendingSweeperIT extends BasePaymentIT {
     @Autowired BookingExpiryScheduler bookingExpiryScheduler;
     @Autowired BookingService bookingService;
     @Autowired BookingPaymentPersistenceService persistenceService;
+    @Autowired MeterRegistry meterRegistry;
 
     private UUID coachId;
     private Instant slotStart;
     private Instant slotEnd;
+
+    // skillars-deferred-164 AC1: @SchedulerLock makes PaymentPendingSweeper an AOP (CGLIB) proxy —
+    // sweepOne()'s own method body runs on the TARGET instance, a separate object from the proxy
+    // `sweeper` above, so a field write through `sweeper` directly is invisible to it. AopTestUtils
+    // unwraps to the real target, mirroring MinorSafetyGateIT's identical fix for an @Async proxy.
+    private PaymentPendingSweeper sweeperTarget;
+
+    @BeforeEach
+    void resolveSweeperTarget() {
+        sweeperTarget = AopTestUtils.getUltimateTargetObject(sweeper);
+    }
+
+    // A stuck hook holds sweepOne's booking-row lock (and a pooled connection) past the end of a
+    // test, which can hang DatabaseResetTestExecutionListener's truncate — always reset, even if
+    // the test that set it failed an assertion mid-flight.
+    @AfterEach
+    void resetSweeperTestHook() {
+        sweeperTarget.sweepOneBeforeChargeFailedWriteHook = () -> {};
+    }
 
     @BeforeEach
     void setUpFixtures() {
@@ -304,8 +334,9 @@ class PaymentPendingSweeperIT extends BasePaymentIT {
      * it passed unchanged with the lock removed</strong> — both threads start together but the
      * sweeper first reads config and queries for stranded bookings, so the reservation always
      * committed first by a wide margin and the correct outcome came from the payment-row check,
-     * not the lock. It cost 280s and proved nothing. The lock's own read-then-write window is
-     * microseconds wide and is not reachable from a test at this level; see the deferred item.
+     * not the lock. It cost 280s and proved nothing. skillars-deferred-164 AC1 finally reaches that
+     * read-then-write window directly with a synchronization seam instead of a race — see
+     * {@link #concurrentReserveCapture_isBlockedBySweepOnesLock_andLoses()} below.
      */
     @Test
     void afterTheSweepDeclinesABooking_aLateSettlementRefusesToReserve() {
@@ -323,6 +354,124 @@ class PaymentPendingSweeperIT extends BasePaymentIT {
             .as("the refused reservation must not have touched the sweeper's CHARGE_FAILED record")
             .isEqualTo("CHARGE_FAILED");
         assertThat(paymentRowCount(bookingId)).isEqualTo(1);
+    }
+
+    /**
+     * skillars-deferred-164 AC1. Proves {@code sweepOne}'s booking-row lock actually serializes
+     * against a concurrent {@code reserveCaptureTransactional} — the gap the deleted test above
+     * (see its own javadoc) could never reach, because it raced two threads instead of pausing one
+     * deterministically at the exact contested window.
+     *
+     * <p>{@code sweepOneBeforeChargeFailedWriteHook} pauses {@code sweepOne} (thread A) AFTER it has
+     * taken the {@code PESSIMISTIC_WRITE} lock on the booking row and decided there is no existing
+     * {@code booking_payments} row, but BEFORE it writes the {@code CHARGE_FAILED} row — exactly the
+     * window the class Javadoc on {@code sweepOne} says the lock must hold closed. While A is
+     * paused there, thread B calls {@code reserveCapture} for the same booking. {@code
+     * findByIdForUpdate} is NOWAIT ({@code BookingRepository.java}'s {@code
+     * jakarta.persistence.lock.timeout=0} hint), so B does not block in Postgres — it fails
+     * instantly and {@code PessimisticLockRetryer} retries it in Java (worst case ~2-3s, 8 attempts).
+     * With A never releasing until B has already given up, B must exhaust every attempt and
+     * propagate a {@link PessimisticLockingFailureException} — proven both by the thrown exception
+     * and, independently, by {@code persistence.lock_retry.retries}/{@code .exhausted} actually
+     * incrementing for B's own {@code lock} tag (not merely a timing assumption).
+     *
+     * <p>Only once B has failed is A released to commit its {@code CHARGE_FAILED} write — proving
+     * the lock is what forced B to lose the race, not scheduling luck. {@code BookingPayment} has an
+     * assigned {@code @Id} and no {@code @Version} ({@code bookingPaymentRepository.save} is a JPA
+     * {@code merge} for an already-persistent id), so an unlocked B finishing after A would silently
+     * overwrite A's {@code CHARGE_FAILED} row with B's own write — exactly the harm the lock exists
+     * to prevent, and exactly what the deleted test's wide, luck-based margin could never exercise.
+     *
+     * <p><strong>Mutation-tested</strong> (2026-10-27): temporarily replacing {@code
+     * sweepOne}'s {@code findByIdForUpdate} with a plain {@code findById} makes this test fail — B no
+     * longer retries or throws (the {@code persistence.lock_retry} assertion below times out) and,
+     * depending on commit ordering, A's own write can be the one silently lost instead. Restored
+     * before committing.
+     */
+    @Test
+    void concurrentReserveCapture_isBlockedBySweepOnesLock_andLoses() throws Exception {
+        UUID bookingId = seedStrandedBooking(null, 24 * 60);
+        String lockName = "BookingPaymentPersistenceService.reserveCapture";
+        double retryBaseline = ConcurrencyLockWaitSupport.currentLockRetryCount(meterRegistry, lockName);
+
+        CountDownLatch sweepPausedHoldingLock = new CountDownLatch(1);
+        CountDownLatch releaseSweep = new CountDownLatch(1);
+        sweeperTarget.sweepOneBeforeChargeFailedWriteHook = () -> {
+            sweepPausedHoldingLock.countDown();
+            try {
+                boolean released = releaseSweep.await(10, TimeUnit.SECONDS);
+                if (!released) {
+                    throw new AssertionError("releaseSweep was never signalled within 10s");
+                }
+            } catch (InterruptedException e) {
+                // Never fall through to the CHARGE_FAILED write: the interrupt comes from the finally
+                // block's shutdownNow() after an early failure, and returning normally here would let
+                // sweepOne commit while the next test's DB reset runs.
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("sweepOne test hook interrupted", e);
+            }
+        };
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            AtomicReference<Throwable> sweepFailure = new AtomicReference<>();
+            Future<?> sweepFuture = executor.submit(() -> {
+                try {
+                    sweep();
+                } catch (Throwable t) {
+                    sweepFailure.set(t);
+                }
+            });
+
+            assertThat(sweepPausedHoldingLock.await(10, TimeUnit.SECONDS))
+                .as("sweepOne must reach the hook (holding the row lock) within 10s")
+                .isTrue();
+
+            AtomicReference<Throwable> reserveOutcome = new AtomicReference<>();
+            Future<?> reserveFuture = executor.submit(() -> {
+                try {
+                    persistenceService.reserveCapture(bookingId, BigDecimal.ZERO, new BigDecimal("50.00"), null);
+                    reserveOutcome.set(new AssertionError(
+                        "reserveCapture should have exhausted its lock retries and thrown while "
+                            + "sweepOne still held the row lock"));
+                } catch (Throwable t) {
+                    reserveOutcome.set(t);
+                }
+            });
+            // Bounded well past the retryer's worst-case ~3.2s budget; sweep() is still paused at
+            // the hook throughout, so this is purely waiting out B's own retry-and-exhaust loop.
+            reserveFuture.get(15, TimeUnit.SECONDS);
+
+            assertThat(reserveOutcome.get())
+                .as("a concurrent reserveCapture must fail with a lock-acquire failure, not block or "
+                    + "silently succeed, while sweepOne holds the row lock")
+                .isInstanceOf(PessimisticLockingFailureException.class);
+
+            ConcurrencyLockWaitSupport.assertGenuineLockRetryOccurred(meterRegistry, lockName, retryBaseline);
+
+            releaseSweep.countDown();
+            sweepFuture.get(10, TimeUnit.SECONDS);
+            if (sweepFailure.get() != null) {
+                throw new AssertionError("sweep() thread failed", sweepFailure.get());
+            }
+
+            assertThat(statusOf(bookingId))
+                .as("sweepOne's write must be the one that lands — it held the lock throughout")
+                .isEqualTo("DECLINED");
+            assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM payment.booking_payments WHERE booking_id = ?", String.class, bookingId))
+                .isEqualTo("CHARGE_FAILED");
+            assertThat(paymentRowCount(bookingId))
+                .as("exactly one booking_payments row — the losing reserveCapture never inserted one")
+                .isEqualTo(1);
+        } finally {
+            executor.shutdownNow();
+            // Wait for the interrupted sweep thread to roll back and release the row lock and its
+            // pooled connection before @AfterEach / the next test's DB reset runs.
+            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+                throw new AssertionError("sweep/reserve threads did not terminate within 10s");
+            }
+        }
     }
 
     // ── Task 1 reproduction, kept as a regression pin ──

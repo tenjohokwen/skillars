@@ -220,13 +220,10 @@ public class RescheduleService {
                     Map.of("coach id", lockedCoach.getId()), BookingError.AVAILABILITY_CHANGED);
             }
         }
-        if (!bookingService.isSlotWithinAvailabilityWindow(req.proposedStartTime(), req.proposedEndTime(), windows,
-                booking.getCoachId(), lockedCoach.getCanonicalTimezone())) {
-            throw new OperationNotAllowedException(
-                "Proposed slot is not within coach availability",
-                Map.of("proposed start time", req.proposedStartTime(), "proposed end time", req.proposedEndTime()),
-                BookingError.SLOT_OUTSIDE_AVAILABILITY);
-        }
+        bookingService.requireSlotWithinAvailabilityWindow(req.proposedStartTime(), req.proposedEndTime(), windows,
+            booking.getCoachId(), lockedCoach.getCanonicalTimezone(),
+            "Proposed slot is not within coach availability",
+            Map.of("proposed start time", req.proposedStartTime(), "proposed end time", req.proposedEndTime()));
         // Deferred-79 AC1: request-time proposal check — the accept-time re-check below in
         // acceptRescheduleShared repeats this against a freshly re-fetched block set.
         if (bookingService.isSlotBlocked(req.proposedStartTime(), req.proposedEndTime(), booking.getCoachId())) {
@@ -406,14 +403,11 @@ public class RescheduleService {
         // slot also happens to be free — matches this method's existing check ordering, where each
         // earlier check gates the next rather than running independently.
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coach.getId());
-        if (!bookingService.isSlotWithinAvailabilityWindow(lockedReq.getProposedStartTime(), lockedReq.getProposedEndTime(),
-                windows, coach.getId(), coach.getCanonicalTimezone())) {
-            throw new OperationNotAllowedException(
-                "Proposed slot is not within coach availability",
-                Map.of("submitted coach id", coach.getId(), "proposed start time", lockedReq.getProposedStartTime(),
-                    "proposed end time", lockedReq.getProposedEndTime()),
-                BookingError.SLOT_OUTSIDE_AVAILABILITY);
-        }
+        bookingService.requireSlotWithinAvailabilityWindow(lockedReq.getProposedStartTime(),
+            lockedReq.getProposedEndTime(), windows, coach.getId(), coach.getCanonicalTimezone(),
+            "Proposed slot is not within coach availability",
+            Map.of("submitted coach id", coach.getId(), "proposed start time", lockedReq.getProposedStartTime(),
+                "proposed end time", lockedReq.getProposedEndTime()));
         // Deferred-79 AC1: accept-time re-check — a fresh, independent lookup against
         // isSlotBlocked's own repository-backed query, not a cached copy from proposal time.
         if (bookingService.isSlotBlocked(lockedReq.getProposedStartTime(), lockedReq.getProposedEndTime(), coach.getId())) {

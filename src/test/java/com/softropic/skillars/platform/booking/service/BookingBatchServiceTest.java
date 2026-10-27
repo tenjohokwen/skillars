@@ -51,6 +51,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
@@ -98,8 +99,10 @@ class BookingBatchServiceTest {
         // availability. Lenient because the tests that fail earlier (batch size, ownership,
         // inactive coach) never reach either check.
         lenient().when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofHours(1));
-        lenient().when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any()))
-            .thenReturn(true);
+        // skillars-deferred-164 AC2: the boolean check moved behind a void check-and-throw method
+        // (requireSlotWithinAvailabilityWindow). A mocked void method is a no-op by default, so
+        // "every slot passes availability" is now the default with no stub needed at all — the old
+        // lenient thenReturn(true) stub is gone, not replaced.
     }
 
     private static final long PARENT_ID = 9000001L;
@@ -195,13 +198,28 @@ class BookingBatchServiceTest {
     void createBatch_slotOutsideCoachAvailability_isRejected() {
         when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
         stubOwnershipAndActiveCoach();
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(false);
+        // skillars-deferred-164 AC2: the boolean check moved behind a void check-and-throw method
+        // (requireSlotWithinAvailabilityWindow); a mocked void method is a no-op by default, so the
+        // failure case must stub it to throw, not stub isSlotWithinAvailabilityWindow to return false.
+        doThrow(new OperationNotAllowedException("Requested slot is not within coach availability",
+                java.util.Map.of(), BookingError.SLOT_OUTSIDE_AVAILABILITY))
+            .when(bookingService).requireSlotWithinAvailabilityWindow(
+                any(), any(), any(), any(), any(), any(), any());
 
-        assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(2)))
+        CreateBatchRequest req = buildRequest(2);
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, req))
             .isInstanceOf(OperationNotAllowedException.class)
-            .hasMessageContaining("not within coach availability");
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_OUTSIDE_AVAILABILITY));
 
         verify(batchRepository, never()).save(any());
+        // The message above comes from this test's own stub, so it proves nothing about production
+        // wording; pin what the batch site actually passes to the helper instead.
+        Instant firstStart = req.slots().get(0).requestedStartTime();
+        Instant firstEnd = req.slots().get(0).requestedEndTime();
+        verify(bookingService).requireSlotWithinAvailabilityWindow(eq(firstStart), eq(firstEnd),
+            any(), eq(COACH_ID), any(), eq("Requested slot is not within coach availability"),
+            eq(java.util.Map.of("requested start time", firstStart, "requested end time", firstEnd)));
     }
 
     /**
@@ -217,15 +235,25 @@ class BookingBatchServiceTest {
 
         CreateBatchRequest req = buildRequest(2);
         Instant secondSlotStart = req.slots().get(1).requestedStartTime();
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any()))
-            .thenAnswer(inv -> !secondSlotStart.equals(inv.getArgument(0)));
+        // skillars-deferred-164 AC2: the boolean check moved behind a void check-and-throw method —
+        // mirror the old thenAnswer's per-argument logic with doAnswer, throwing only for the second
+        // slot's start time instead of returning false for it.
+        doAnswer(inv -> {
+            if (secondSlotStart.equals(inv.getArgument(0))) {
+                throw new OperationNotAllowedException("Requested slot is not within coach availability",
+                    java.util.Map.of(), BookingError.SLOT_OUTSIDE_AVAILABILITY);
+            }
+            return null;
+        }).when(bookingService).requireSlotWithinAvailabilityWindow(
+            any(), any(), any(), any(), any(), any(), any());
 
         assertThatThrownBy(() -> service.createBatch(PARENT_ID, req))
             .isInstanceOf(OperationNotAllowedException.class)
             .hasMessageContaining("not within coach availability");
 
         verify(batchRepository, never()).save(any());
-        verify(bookingService, times(2)).isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any());
+        verify(bookingService, times(2)).requireSlotWithinAvailabilityWindow(
+            any(), any(), any(), any(), any(), any(), any());
     }
 
     /** The window list is fetched ONCE for the batch, not once per slot. */
@@ -251,16 +279,22 @@ class BookingBatchServiceTest {
 
     /**
      * skillars-deferred-69 AC7: a coach edit landing between the initial resolve and the persist
-     * point (simulated here by the second isSlotWithinAvailabilityWindow call returning false, where
-     * the first — the initial pass — returned true) must abort the whole batch, and no booking or
+     * point (simulated here by the second requireSlotWithinAvailabilityWindow call throwing, where
+     * the first — the initial pass — was a no-op) must abort the whole batch, and no booking or
      * batch row may be written.
      */
     @Test
     void createBatch_availabilityNarrowsBetweenInitialResolveAndPersist_abortsWholeBatch() {
         when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(10L);
         stubOwnershipAndActiveCoach();
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any()))
-            .thenReturn(true, false);
+        // skillars-deferred-164 AC2: the boolean check moved behind a void check-and-throw method —
+        // mirror the old thenReturn(true, false) sequential stubbing with doNothing (1st call, the
+        // initial pass) then doThrow (2nd call, the pre-commit re-check).
+        doNothing()
+            .doThrow(new OperationNotAllowedException("Requested slot is not within coach availability",
+                java.util.Map.of(), BookingError.SLOT_OUTSIDE_AVAILABILITY))
+            .when(bookingService).requireSlotWithinAvailabilityWindow(
+                any(), any(), any(), any(), any(), any(), any());
 
         assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(1)))
             .isInstanceOf(OperationNotAllowedException.class)

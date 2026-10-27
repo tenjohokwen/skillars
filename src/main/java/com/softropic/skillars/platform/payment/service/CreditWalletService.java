@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedger;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
@@ -29,8 +30,8 @@ public class CreditWalletService {
         if (balance.compareTo(requestedAmount) < 0) {
             throw new PaymentGatewayException("payment.insufficientCredit");
         }
-        writeLedgerEntry(parentId, requestedAmount.negate(), "CASH_OUT_DEBIT", null, "Credit cash-out");
-        writeLedgerEntry(parentId, feeAmount.negate(), "STRIPE_FEE_DEBIT", null, "Stripe processing fee for cash-out");
+        writeLedgerEntry(parentId, requestedAmount.negate(), CreditLedgerEntryType.CASH_OUT_DEBIT, null, "Credit cash-out");
+        writeLedgerEntry(parentId, feeAmount.negate(), CreditLedgerEntryType.STRIPE_FEE_DEBIT, null, "Stripe processing fee for cash-out");
     }
 
     @Transactional

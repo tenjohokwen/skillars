@@ -89,13 +89,10 @@ public class BookingDuplicationService {
         // no longer repeat-next-week into a time they don't currently work, even if the original
         // booking was legitimate when made. Reuses BookingService's own package-private helper.
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coach.getId());
-        if (!bookingService.isSlotWithinAvailabilityWindow(newStart, newEnd, windows,
-                coach.getId(), coach.getCanonicalTimezone())) {
-            throw new OperationNotAllowedException(
-                "Proposed slot is not within coach availability",
-                Map.of("proposed start time", newStart, "proposed end time", newEnd),
-                BookingError.SLOT_OUTSIDE_AVAILABILITY);
-        }
+        bookingService.requireSlotWithinAvailabilityWindow(newStart, newEnd, windows,
+            coach.getId(), coach.getCanonicalTimezone(),
+            "Proposed slot is not within coach availability",
+            Map.of("proposed start time", newStart, "proposed end time", newEnd));
 
         // Deferred-79 AC1: this method creates exactly one duplicate per invocation — no loop over
         // multiple weeks/occurrences — so the check goes at this single point, once per call.

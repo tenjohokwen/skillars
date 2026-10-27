@@ -121,6 +121,46 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
             });
     }
 
+    /**
+     * skillars-deferred-164 AC6, end-to-end: two parents with different emails but the same phone.
+     * Before this story the catch block's {@code msg.contains("phone")} heuristic happened to work
+     * for this real constraint violation's message text, but only coincidentally — this proves the
+     * constraint-name check (and the {@code saveAndFlush} fix it depends on) still produces the real
+     * {@code security.phoneInUse} response, not a generic 500/{@code emailInUse} regression.
+     */
+    @Test
+    void registerParent_duplicatePhone_returns409WithPhoneInUse() {
+        httpTestClient.makeHttpRequest(
+            baseUrl() + REGISTER_ENDPOINT,
+            HttpMethod.POST,
+            registrationBody(TEST_EMAIL),
+            jsonHeaders(),
+            Void.class
+        );
+
+        java.util.Map<String, Object> secondBody = new java.util.HashMap<>(registrationBody("second.parent@skillars.com"));
+        // Same phone as registrationBody(TEST_EMAIL) above ("1234567890") — left unchanged.
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + REGISTER_ENDPOINT,
+            HttpMethod.POST,
+            secondBody,
+            jsonHeaders(),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(ex.getResponseBodyAsString()).contains("security.phoneInUse");
+            });
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM main.\"user\" WHERE email = ?", Integer.class, "second.parent@skillars.com"))
+            .as("the rejected second registration must not have left a user row behind")
+            .isEqualTo(0);
+    }
+
     @Test
     void registerParent_missingRequiredField_returns400() {
         Map<String, Object> body = Map.of(

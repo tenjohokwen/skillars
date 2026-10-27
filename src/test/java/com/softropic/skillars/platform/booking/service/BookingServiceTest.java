@@ -65,6 +65,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -840,6 +841,51 @@ class BookingServiceTest {
         boolean result = bookingService.isSlotWithinAvailabilityWindow(start, end, List.of(window), COACH_ID, "Europe/Berlin");
 
         assertThat(result).isTrue();
+    }
+
+    /**
+     * skillars-deferred-164 AC2 (code review): the five call sites' unit tests all mock
+     * BookingService, so the helper's own check-and-throw is pinned only here.
+     */
+    @Test
+    void requireSlotWithinAvailabilityWindow_slotOutsideWindow_throwsWithCallerMessageAndDetails() {
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(1).withHour(20).withMinute(0).withSecond(0).withNano(0);
+        CoachAvailabilityWindow window = new CoachAvailabilityWindow();
+        window.setCoachId(COACH_ID);
+        window.setDayOfWeek((short) slotStart.getDayOfWeek().getValue());
+        window.setStartTime(LocalTime.of(8, 0));
+        window.setEndTime(LocalTime.of(12, 0));
+
+        Instant start = slotStart.toInstant();
+        Instant end = slotStart.plusHours(1).toInstant();
+        Map<String, Object> details = Map.of("proposed start time", start, "proposed end time", end);
+
+        assertThatThrownBy(() -> bookingService.requireSlotWithinAvailabilityWindow(start, end, List.of(window),
+                COACH_ID, "Europe/Berlin", "Proposed slot is not within coach availability", details))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .hasMessageContaining("Proposed slot is not within coach availability")
+            .satisfies(ex -> {
+                OperationNotAllowedException onae = (OperationNotAllowedException) ex;
+                assertThat(onae.getErrorCode()).isEqualTo(BookingError.SLOT_OUTSIDE_AVAILABILITY);
+                assertThat(onae.getLogContext()).isEqualTo(details);
+            });
+    }
+
+    @Test
+    void requireSlotWithinAvailabilityWindow_slotInsideWindow_doesNotThrow() {
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+        window.setDayOfWeek((short) slotStart.getDayOfWeek().getValue());
+
+        Instant start = slotStart.toInstant();
+        Instant end = slotStart.plusHours(1).toInstant();
+
+        assertThatCode(() -> bookingService.requireSlotWithinAvailabilityWindow(start, end, List.of(window),
+                COACH_ID, "Europe/Berlin", "Requested slot is not within coach availability",
+                Map.of("requested start time", start, "requested end time", end)))
+            .doesNotThrowAnyException();
     }
 
     @Test

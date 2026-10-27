@@ -35,6 +35,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -105,7 +106,6 @@ class RescheduleServiceTest {
     @Test
     void requestReschedule_parentOwnsBooking_confirmedStatus_createsRequest() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.empty());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
@@ -116,8 +116,11 @@ class RescheduleServiceTest {
         service.requestReschedule(BOOKING_ID, PARENT_ID, new CreateRescheduleRequest(proposedStart, proposedEnd, null));
 
         // Deferred-50 AC3: verify the actual proposed times were passed, not (for example) the
-        // booking's original requestedStartTime/requestedEndTime — an argument-swap regression.
-        verify(bookingService).isSlotWithinAvailabilityWindow(eq(proposedStart), eq(proposedEnd), any(), any(), any());
+        // booking's original requestedStartTime/requestedEndTime — an argument-swap regression. Also
+        // pins validateRescheduleProposal's exact message/detail-map wording (skillars-deferred-164 AC2).
+        verify(bookingService).requireSlotWithinAvailabilityWindow(eq(proposedStart), eq(proposedEnd),
+            any(), any(), any(), eq("Proposed slot is not within coach availability"),
+            eq(Map.of("proposed start time", proposedStart, "proposed end time", proposedEnd)));
         verify(rescheduleRepo).save(any(BookingRescheduleRequest.class));
         ArgumentCaptor<RescheduleRequestedEvent> captor = ArgumentCaptor.forClass(RescheduleRequestedEvent.class);
         verify(eventPublisher).publishEvent(captor.capture());
@@ -140,7 +143,6 @@ class RescheduleServiceTest {
         confirmedBooking.setRequestedEndTime(legacyStart.plus(3, ChronoUnit.HOURS));
 
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.empty());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
@@ -238,7 +240,13 @@ class RescheduleServiceTest {
     @Test
     void requestReschedule_slotOutsideAvailabilityWindow_throwsSlotOutsideAvailability() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(false);
+        // skillars-deferred-164 AC2: the boolean check moved behind a void check-and-throw method
+        // (requireSlotWithinAvailabilityWindow); a mocked void method is a no-op by default, so the
+        // failure case must stub it to throw, not stub isSlotWithinAvailabilityWindow to return false.
+        doThrow(new OperationNotAllowedException("Proposed slot is not within coach availability",
+                Map.of(), BookingError.SLOT_OUTSIDE_AVAILABILITY))
+            .when(bookingService).requireSlotWithinAvailabilityWindow(
+                any(), any(), any(), any(), any(), any(), any());
 
         Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
         assertThatThrownBy(() -> service.requestReschedule(BOOKING_ID, PARENT_ID,
@@ -255,7 +263,6 @@ class RescheduleServiceTest {
     @Test
     void requestReschedule_slotOverlapsActiveBlock_throwsSlotBlockedByCoach() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(true);
 
         Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
@@ -271,7 +278,6 @@ class RescheduleServiceTest {
     @Test
     void requestReschedule_slotOutsideAnyBlock_createsRequest() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false);
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.empty());
@@ -288,7 +294,6 @@ class RescheduleServiceTest {
     @Test
     void requestReschedule_slotWithinAvailabilityWindow_createsRequest() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.empty());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
@@ -306,7 +311,6 @@ class RescheduleServiceTest {
     @Test
     void requestReschedule_nullAvailabilitySignature_succeedsUnchanged() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.empty());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
@@ -322,7 +326,6 @@ class RescheduleServiceTest {
     @Test
     void requestReschedule_matchingAvailabilitySignature_succeeds() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.empty());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
@@ -370,7 +373,6 @@ class RescheduleServiceTest {
     @Test
     void requestReschedule_pendingAlreadyExists_throws() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         BookingRescheduleRequest existing = new BookingRescheduleRequest();
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.of(existing));
@@ -388,7 +390,6 @@ class RescheduleServiceTest {
     @Test
     void acceptReschedule_coachOwnsBooking_updatesTimesAndStatus() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
         Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
@@ -412,8 +413,13 @@ class RescheduleServiceTest {
         service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID);
 
         // Deferred-50 AC3: verify the actual proposed times were passed, not (for example) the
-        // booking's original requestedStartTime/requestedEndTime — an argument-swap regression.
-        verify(bookingService).isSlotWithinAvailabilityWindow(eq(proposedStart), eq(proposedEnd), any(), any(), any());
+        // booking's original requestedStartTime/requestedEndTime — an argument-swap regression. Also
+        // pins acceptRescheduleShared's exact message/detail-map wording, including the third
+        // "submitted coach id" key the other four call sites don't have (skillars-deferred-164 AC2).
+        verify(bookingService).requireSlotWithinAvailabilityWindow(eq(proposedStart), eq(proposedEnd),
+            any(), any(), any(), eq("Proposed slot is not within coach availability"),
+            eq(Map.of("submitted coach id", coach.getId(), "proposed start time", proposedStart,
+                "proposed end time", proposedEnd)));
         assertThat(confirmedBooking.getRequestedStartTime()).isEqualTo(proposedStart);
         assertThat(confirmedBooking.getRequestedEndTime()).isEqualTo(proposedEnd);
         assertThat(pending.getStatus()).isEqualTo("ACCEPTED");
@@ -426,7 +432,6 @@ class RescheduleServiceTest {
     @Test
     void acceptReschedule_concurrentModification_throwsRetryableException() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
         Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
@@ -455,7 +460,6 @@ class RescheduleServiceTest {
     @Test
     void acceptReschedule_proposedSlotOverlapsAnotherBooking_throwsSlotUnavailable() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
         Instant originalStart = confirmedBooking.getRequestedStartTime();
@@ -510,7 +514,13 @@ class RescheduleServiceTest {
         when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(false);
+        // skillars-deferred-164 AC2: the boolean check moved behind a void check-and-throw method
+        // (requireSlotWithinAvailabilityWindow); a mocked void method is a no-op by default, so the
+        // failure case must stub it to throw, not stub isSlotWithinAvailabilityWindow to return false.
+        doThrow(new OperationNotAllowedException("Proposed slot is not within coach availability",
+                Map.of(), BookingError.SLOT_OUTSIDE_AVAILABILITY))
+            .when(bookingService).requireSlotWithinAvailabilityWindow(
+                any(), any(), any(), any(), any(), any(), any());
 
         assertThatThrownBy(() -> service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID))
             .isInstanceOf(OperationNotAllowedException.class)
@@ -548,7 +558,6 @@ class RescheduleServiceTest {
         when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(true);
 
         assertThatThrownBy(() -> service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID))
@@ -580,7 +589,6 @@ class RescheduleServiceTest {
         when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(coachProfileRepository.findByIdForUpdate(coach.getId())).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false);
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
         when(rescheduleRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -714,7 +722,6 @@ class RescheduleServiceTest {
     @Test
     void acceptReschedule_lockAcquisitionOrder_rescheduleRequestBeforeCoachProfile() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
         Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
@@ -746,7 +753,6 @@ class RescheduleServiceTest {
     void requestRescheduleAsCoach_coachOwnsBooking_createsRequestAndPublishesEvent() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
         when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
             .thenReturn(Optional.empty());
         when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -825,7 +831,6 @@ class RescheduleServiceTest {
     void acceptRescheduleAsParent_parentOwnsBooking_updatesTimesAndStatus() {
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
-        when(bookingService.isSlotWithinAvailabilityWindow(any(), any(), any(), any(), any())).thenReturn(true);
 
         Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
         Instant proposedEnd = proposedStart.plus(1, ChronoUnit.HOURS);

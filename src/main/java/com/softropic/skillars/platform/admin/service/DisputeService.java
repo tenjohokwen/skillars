@@ -25,6 +25,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutStatus;
+import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
@@ -228,7 +229,7 @@ public class DisputeService {
             case "FULL_CREDIT" -> {
                 if (sessionPrice.compareTo(BigDecimal.ZERO) > 0) {
                     creditWalletService.writeLedgerEntry(
-                        booking.getParentId(), sessionPrice, "BOOKING_REFUND",
+                        booking.getParentId(), sessionPrice, CreditLedgerEntryType.BOOKING_REFUND,
                         booking.getId(), "Admin dispute resolution — full refund");
                 } else {
                     log.warn("FULL_CREDIT resolution for disputeId={} issued no credit — sessionPrice=0 (pack-based or missing payment record)", disputeId);
@@ -241,7 +242,7 @@ public class DisputeService {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, DisputeError.INVALID_CREDIT_AMOUNT.getErrorCode());
                 }
                 creditWalletService.writeLedgerEntry(
-                    booking.getParentId(), creditAmount, "BOOKING_REFUND",
+                    booking.getParentId(), creditAmount, CreditLedgerEntryType.BOOKING_REFUND,
                     booking.getId(), "Admin dispute resolution — partial refund");
             }
             case "NO_ACTION" -> { /* no credit operation */ }
@@ -251,7 +252,7 @@ public class DisputeService {
                         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, DisputeError.INVALID_CREDIT_AMOUNT.getErrorCode());
                     }
                     creditWalletService.writeLedgerEntry(
-                        booking.getParentId(), creditAmount, "BOOKING_REFUND",
+                        booking.getParentId(), creditAmount, CreditLedgerEntryType.BOOKING_REFUND,
                         booking.getId(), "Admin dispute resolution — coach warning + partial refund");
                 }
                 eventPublisher.publishEvent(
