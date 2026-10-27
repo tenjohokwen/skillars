@@ -58,6 +58,7 @@ async function mountPage(playerId = LARGE_PLAYER_ID) {
       { path: '/coach/players', name: 'coach-players', component: { template: '<div />' } },
       // The correlation teaser's upgrade CTA links here.
       { path: '/coach/subscription', component: { template: '<div />' } },
+      { path: '/messaging', name: 'messaging', component: { template: '<div />' } },
       {
         path: '/coach/players/:playerId',
         name: 'coach-player-detail',
@@ -1045,5 +1046,30 @@ describe('CoachPlayerDetailPage.vue — out-of-order responses (skillars-12-9 AC
     ])
     expect(wrapper.text()).toContain('narr.fromB')
     expect(wrapper.text()).not.toContain('narr.fromA')
+  })
+})
+
+describe('CoachPlayerDetailPage.vue — Message player entry point (feat/messaging-completion)', () => {
+  it('opens the coach/player conversation (coachId left to the backend) and lands on /messaging with it selected', async () => {
+    mockApiGetByUrl({
+      '/skill-definitions': { resolve: SKILL_DEFINITIONS },
+      '/exposure': { resolve: { playerName: 'Alex', currentWeek: {}, history: [] } },
+    })
+    api.post.mockImplementation((url) =>
+      url === '/api/messaging/conversations'
+        ? Promise.resolve({ conversationId: '4242', status: 'ACTIVE', canSend: true })
+        : Promise.resolve({}),
+    )
+    const { wrapper, router } = await mountPage()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="coach-message-player"]').trigger('click')
+    await flushPromises()
+
+    expect(api.post).toHaveBeenCalledWith('/api/messaging/conversations', {
+      playerId: LARGE_PLAYER_ID,
+    })
+    expect(router.currentRoute.value.name).toBe('messaging')
+    expect(router.currentRoute.value.query.conversation).toBe('4242')
   })
 })

@@ -70,6 +70,22 @@
                 t('coach.myPlayersNeglectedSkillCount', { count: player.openNeglectedSkillCount })
               }}
             </q-badge>
+            <!-- Story 8.1 entry point; .stop so it doesn't also open the player detail. -->
+            <q-btn
+              flat
+              dense
+              round
+              icon="chat"
+              color="primary"
+              :data-testid="`roster-message-${player.playerId}`"
+              :aria-label="t('messaging.messagePlayer')"
+              :loading="isStarting(null, player.playerId)"
+              @click.stop="startConversation(null, player.playerId)"
+              @keyup.enter.stop
+              @keyup.space.stop
+            >
+              <q-tooltip>{{ t('messaging.messagePlayer') }}</q-tooltip>
+            </q-btn>
           </div>
         </div>
 
@@ -106,9 +122,11 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { getCoachRoster } from 'src/api/development.api'
+import { useStartConversation } from 'src/composables/useStartConversation'
 
 const { t } = useI18n()
 const router = useRouter()
+const { isStarting, startConversation } = useStartConversation()
 
 const loading = ref(true)
 const loadError = ref(false)

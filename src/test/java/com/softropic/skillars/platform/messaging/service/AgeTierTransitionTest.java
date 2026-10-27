@@ -55,6 +55,7 @@ class AgeTierTransitionTest {
     @Mock private ConversationCreationHelper conversationCreationHelper;
     @Mock private AgePolicyService agePolicyService;
     @Mock private TransactionTemplate transactionTemplate;
+    @Mock private com.softropic.skillars.platform.marketplace.service.PlayerProfileService playerProfileService;
 
     @InjectMocks
     private MessagingService messagingService;
@@ -230,6 +231,68 @@ class AgeTierTransitionTest {
             .isInstanceOf(OperationNotAllowedException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode().getErrorCode())
                 .isEqualTo(MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE.getErrorCode()));
+    }
+
+    // ── initiateConversation: PLAYER age gate (feat/messaging-completion) ──
+
+    @Test
+    void initiateConversation_playerRole_parentManagedPlayer_throws403PlayerRestricted_noConversationCreated() {
+        when(bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(any(), any(), any())).thenReturn(true);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(mock(PlayerProfile.class)));
+        when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.parentManaged());
+
+        assertThatThrownBy(() ->
+            messagingService.initiateConversation(COACH_PROFILE_ID, PLAYER_ID, PLAYER_USER_ID, "PLAYER"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode().getErrorCode())
+                .isEqualTo(MessagingErrorCode.PLAYER_DIRECT_MESSAGING_RESTRICTED.getErrorCode()));
+        org.mockito.Mockito.verifyNoInteractions(conversationCreationHelper);
+    }
+
+    // ── ConversationSummaryDto.status / canSend / parentObserver (feat/messaging-completion) ──
+
+    private ConversationSummaryDto initiateAs(String role, Long callerUserId, MessagingPolicy policy) {
+        when(bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(any(), any(), any())).thenReturn(true);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(mock(PlayerProfile.class)));
+        lenient().when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(policy);
+        when(conversationCreationHelper.tryCreate(any(), any(), any())).thenReturn(conversation);
+        when(agePolicyService.findMessagingPoliciesByPlayerIds(any())).thenReturn(Map.of(PLAYER_ID, policy));
+        return messagingService.initiateConversation(COACH_PROFILE_ID, PLAYER_ID, callerUserId, role);
+    }
+
+    @Test
+    void summary_parentOfSupervisedPlayer_isObserverAndCanSend() {
+        ConversationSummaryDto dto = initiateAs("PARENT", PARENT_ID, MessagingPolicy.supervised());
+
+        assertThat(dto.status()).isEqualTo("ACTIVE");
+        assertThat(dto.canSend()).isTrue();
+        assertThat(dto.parentObserver()).isTrue();
+    }
+
+    @Test
+    void summary_parentOfUnder13Player_isPrimaryNotObserver() {
+        ConversationSummaryDto dto = initiateAs("PARENT", PARENT_ID, MessagingPolicy.parentManaged());
+
+        assertThat(dto.canSend()).isTrue();
+        assertThat(dto.parentObserver()).isFalse();
+    }
+
+    @Test
+    void summary_coachOfUnder13Player_canSend_notObserver() {
+        ConversationSummaryDto dto = initiateAs("COACH", COACH_USER_ID, MessagingPolicy.prohibited());
+
+        assertThat(dto.canSend()).isTrue();
+        assertThat(dto.parentObserver()).isFalse();
+    }
+
+    @Test
+    void summary_blockedConversation_returnedAsBlocked_cannotSend() {
+        conversation.setStatus(com.softropic.skillars.platform.messaging.contract.ConversationStatus.BLOCKED);
+
+        ConversationSummaryDto dto = initiateAs("COACH", COACH_USER_ID, MessagingPolicy.unrestricted());
+
+        assertThat(dto.status()).isEqualTo("BLOCKED");
+        assertThat(dto.canSend()).isFalse();
     }
 
     // ── getConversationsForPlayer: ownership and age guards (Finding 10) ──

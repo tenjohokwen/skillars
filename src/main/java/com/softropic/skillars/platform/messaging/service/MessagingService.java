@@ -87,6 +87,16 @@ public class MessagingService {
                     "Parent cannot initiate conversations for adult players",
                     MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE);
             }
+        } else if ("PLAYER".equals(role)) {
+            // Under-13 tiers: the player can neither send into nor even see the thread (visibleToPlayer
+            // is false), so letting them create one would only produce a conversation that is
+            // invisible to its creator. Same code sendMessage uses for the same rule.
+            AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(agePolicyService.getMessagingPolicy(playerId));
+            if (agePolicy.playerIsBlocked()) {
+                throw new OperationNotAllowedException(
+                    "Player direct messaging is restricted for this age tier",
+                    MessagingErrorCode.PLAYER_DIRECT_MESSAGING_RESTRICTED);
+            }
         }
 
         Conversation conversation;
@@ -469,14 +479,38 @@ public class MessagingService {
 
         long unreadCount = ctx.unreadByConversationId().getOrDefault(conv.getId(), 0L);
 
+        MessagingPolicy policy = ctx.policyByPlayerId().get(conv.getPlayerId());
+        AgeMessagingPolicy agePolicy = policy == null ? null : AgeMessagingPolicy.from(policy);
+
         return new ConversationSummaryDto(
             conv.getId(),
             otherPartyName,
             null,
             lastMessagePreview,
             conv.getLastMessageAt(),
-            unreadCount
+            unreadCount,
+            conv.getStatus().name(),
+            canSend(conv, role, agePolicy),
+            "PARENT".equals(role) && agePolicy == AgeMessagingPolicy.SUPERVISED
         );
+    }
+
+    /**
+     * UI hint mirroring the sendMessage gates (BLOCKED, then the story 8.2 age-tier table). An
+     * unresolvable policy (orphaned player_profiles row) degrades to "cannot send" — sendMessage
+     * itself would 404 on getMessagingPolicy for the same row.
+     */
+    private static boolean canSend(Conversation conv, String role, AgeMessagingPolicy agePolicy) {
+        if (conv.getStatus() == ConversationStatus.BLOCKED || agePolicy == null) {
+            return false;
+        }
+        if ("PLAYER".equals(role)) {
+            return !agePolicy.playerIsBlocked();
+        }
+        if ("PARENT".equals(role)) {
+            return !agePolicy.parentIsBlocked();
+        }
+        return true;
     }
 
     private String resolveOtherPartyName(Conversation conv, String role, SummaryContext ctx) {

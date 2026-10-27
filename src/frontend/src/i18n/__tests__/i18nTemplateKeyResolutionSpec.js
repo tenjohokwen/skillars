@@ -188,8 +188,30 @@ const DYNAMIC_KEY_CALL_SITES = [
       't on stripeCallbackErrorKey, a computed mapping ?stripe_error to one of three payment.error.stripeCallback.* keys',
   },
   {
-    at: 'src/pages/coach/CoachPlayerDetailPage.vue:188',
+    at: 'src/pages/coach/CoachPlayerDetailPage.vue:202',
     reason: '$t on noContributionsKey, a computed that picks between two real i18n keys at runtime',
+  },
+  {
+    at: 'src/pages/messaging/MessagingPage.vue:109',
+    reason:
+      'list load error: messagingErrorI18nKey maps a backend code to a messaging.errors.* key',
+  },
+  {
+    at: 'src/pages/messaging/MessagingPage.vue:153',
+    reason: 'moderationNotice(msg) picks one of the four messaging.moderation.* keys',
+  },
+  {
+    at: 'src/pages/messaging/MessagingPage.vue:226',
+    reason: 'composerLockKey picks messaging.blockedBanner or messaging.cannotSend',
+  },
+  {
+    at: 'src/pages/messaging/MessagingPage.vue:472',
+    reason: 'send error: messagingErrorI18nKey maps a backend code to a messaging.errors.* key',
+  },
+  {
+    at: 'src/composables/useStartConversation.js:43',
+    reason:
+      'start-conversation error: messagingErrorI18nKey maps a backend code to messaging.errors.*',
   },
   {
     at: 'src/pages/marketplace/CoachPublicProfilePage.vue:190',

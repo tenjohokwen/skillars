@@ -309,6 +309,25 @@
             :loading="(authStore.isParent || authStore.isPlayer) && bookingStore.packsLoading"
             @click="handleCta"
           />
+          <!-- Story 8.1 entry point: only once a confirmed booking links this coach to the selected
+               child (parent — the header child switcher's selection) or to the player themself;
+               the backend refuses anything else with messaging.noBookingRelationship. -->
+          <q-btn
+            v-if="messagePlayerId != null"
+            outline
+            color="primary"
+            class="full-width q-mt-sm"
+            size="md"
+            icon="chat"
+            data-testid="message-coach-btn"
+            :label="
+              authStore.isParent && playerStore.activePlayer?.name
+                ? t('messaging.messageCoachAbout', { name: playerStore.activePlayer.name })
+                : t('messaging.messageCoach')
+            "
+            :loading="isStarting(coachId, messagePlayerId)"
+            @click="startConversation(coachId, messagePlayerId)"
+          />
         </div>
       </div>
     </div>
@@ -407,6 +426,10 @@ import { useErrorHandler } from 'src/composables/useErrorHandler'
 import { useAuthStore } from 'src/stores/auth.store'
 import { useBookingStore } from 'src/stores/booking.store'
 import { usePlayerStore } from 'src/stores/playerStore'
+import {
+  useStartConversation,
+  establishesMessagingRelationship,
+} from 'src/composables/useStartConversation'
 import VerificationBadge from 'src/components/marketplace/VerificationBadge.vue'
 import ReliabilityIndicator from 'src/components/marketplace/ReliabilityIndicator.vue'
 import CapabilityBadgeSet from 'src/components/marketplace/CapabilityBadgeSet.vue'
@@ -475,6 +498,29 @@ async function resolveOwnProfile() {
   }
 }
 
+const { isStarting, startConversation } = useStartConversation()
+
+// The player the "Message coach" button would message about, or null to hide it: the parent's
+// currently selected child / the self-registered player, provided one of the caller's own bookings
+// with this coach is in a relationship-establishing status.
+const messagePlayerId = computed(() => {
+  let playerId = null
+  if (authStore.isParent) {
+    // A parent cannot open a conversation for an 18+ child (story 8.2 — the backend refuses with
+    // messaging.parentalOversightNotApplicable), so offer nothing that can only fail.
+    if (playerStore.activePlayer?.ageTier === 'ADULT') return null
+    playerId = playerStore.activePlayerId
+  } else if (authStore.isPlayer) playerId = selfPlayerId.value
+  if (playerId == null) return null
+  const related = (bookingStore.parentBookings ?? []).some(
+    (b) =>
+      String(b.coachId) === String(coachId) &&
+      String(b.playerId) === String(playerId) &&
+      establishesMessagingRelationship(b),
+  )
+  return related ? playerId : null
+})
+
 const creditsForThisCoach = computed(() => bookingStore.creditsForCoach(coachId))
 const activePackSessionCount = computed(() => {
   const activePack = bookingStore.sessionPacks.find(
@@ -517,6 +563,10 @@ onMounted(async () => {
     }
     if (authStore.isParent || authStore.isPlayer) {
       await fetchMyReview()
+      // Feeds the "Message coach" eligibility above. loadParentBookings never throws (it records
+      // bookingsError), so a failure just leaves the button hidden; not awaited so it never delays
+      // the profile render.
+      bookingStore.loadParentBookings()
     }
 
     if (authStore.isParent) {

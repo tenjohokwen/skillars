@@ -162,6 +162,45 @@ class ConversationResourceIT extends AbstractIntegrationTest {
         assertThat(second.getBody().get("conversationId")).isEqualTo(firstId);
     }
 
+    // ── feat/messaging-completion: coach-side entry points omit coachId ──
+
+    @Test
+    void createConversation_coachOmitsCoachId_defaultsToOwnProfile_sameConversation() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        Long explicitId = ensureConversation(coachCookies);
+
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + MESSAGING_BASE + "/conversations",
+            HttpMethod.POST,
+            Map.of("playerId", PLAYER_ID),
+            authenticatedHeaders(coachCookies),
+            Map.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(toLong(resp.getBody().get("conversationId"))).isEqualTo(explicitId);
+        assertThat(resp.getBody().get("status")).isEqualTo("ACTIVE");
+        assertThat(resp.getBody().get("canSend")).isEqualTo(true);
+        assertThat(resp.getBody().get("parentObserver")).isEqualTo(false);
+    }
+
+    @Test
+    void createConversation_nonCoachOmitsCoachId_returns400CoachIdRequired() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + MESSAGING_BASE + "/conversations",
+            HttpMethod.POST,
+            Map.of("playerId", PLAYER_ID),
+            authenticatedHeaders(parentCookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("messaging.coachIdRequired");
+            });
+    }
+
     // ── AC4: Send message ──
 
     @Test

@@ -32,6 +32,7 @@ vi.mock('quasar', async (importOriginal) => {
 import ParentBookingsPage from 'src/pages/parent/ParentBookingsPage.vue'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import { useBookingStore } from 'src/stores/booking.store'
+import { useMessagingStore } from 'src/stores/messaging.store'
 
 const mounted = []
 
@@ -318,6 +319,66 @@ describe('ParentBookingsPage.vue — dispute action visibility (deferred-165 AC2
       await flushPromises()
 
       expect(wrapper.find('[data-testid="dispute-raise-btn"]').exists()).toBe(false)
+    },
+  )
+})
+
+describe('ParentBookingsPage.vue — Message coach entry point (feat/messaging-completion)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.restoreAllMocks()
+  })
+
+  const booking = (overrides) => ({
+    ...BOOKING_1H,
+    coachId: 'coach-uuid-1',
+    playerId: '893573203704173564',
+    ...overrides,
+  })
+
+  it.each(['CONFIRMED', 'UPCOMING', 'IN_PROGRESS', 'COMPLETED'])(
+    'offers Message coach on a %s booking and opens that coach/child conversation',
+    async (status) => {
+      const { wrapper } = mountPage({
+        auth: { userId: '1', role: 'PARENT' },
+        booking: { parentBookings: [booking({ status })] },
+      })
+      await flushPromises()
+      const messagingStore = useMessagingStore()
+      messagingStore.openConversation.mockResolvedValue({ conversationId: '9' })
+
+      const btn = wrapper.find('[data-testid="message-coach-42"]')
+      expect(btn.exists()).toBe(true)
+      await btn.trigger('click')
+
+      expect(messagingStore.openConversation).toHaveBeenCalledWith(
+        'coach-uuid-1',
+        '893573203704173564',
+      )
+    },
+  )
+
+  it("hides Message coach for a parent's 18+ child (parents have no access to adult conversations)", async () => {
+    const { wrapper } = mountPage({
+      auth: { userId: '1', role: 'PARENT' },
+      player: { players: [{ id: '893573203704173564', name: 'Grown', ageTier: 'ADULT' }] },
+      booking: { parentBookings: [booking({ status: 'CONFIRMED' })] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="message-coach-42"]').exists()).toBe(false)
+  })
+
+  it.each(['REQUESTED', 'DECLINED', 'CANCELLED'])(
+    'hides Message coach on a %s booking (no booking relationship yet / any more)',
+    async (status) => {
+      const { wrapper } = mountPage({
+        auth: { userId: '1', role: 'PARENT' },
+        booking: { parentBookings: [booking({ status })] },
+      })
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="message-coach-42"]').exists()).toBe(false)
     },
   )
 })

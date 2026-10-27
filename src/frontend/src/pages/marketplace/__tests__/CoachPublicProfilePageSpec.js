@@ -64,10 +64,10 @@ const PROFILE = {
 
 let lastRouter = null
 
-async function mountPage(coachId = 'coach-1', role = 'PARENT', { query = '', booking } = {}) {
+async function mountPage(coachId = 'coach-1', role = 'PARENT', { query = '', ...extraState } = {}) {
   const pinia = createTestingPinia({
     createSpy: vi.fn,
-    initialState: { auth: { role }, ...(booking ? { booking } : {}) },
+    initialState: { auth: { role }, ...extraState },
   })
   const router = createRouter({
     history: createMemoryHistory(),
@@ -225,5 +225,78 @@ describe('CoachPublicProfilePage.vue — shared slot', () => {
     })
     const wrapper = await mountPage('coach-1', 'PARENT', { query: '?slot=garbage' })
     expect(wrapper.find('.shared-slot-banner').exists()).toBe(false)
+  })
+})
+
+describe('CoachPublicProfilePage.vue — Message coach entry point (feat/messaging-completion)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  const CHILD = { id: '77', name: 'Kid One', ageTier: 'AGE_13_17' }
+  const parentState = (bookings) => ({
+    player: { players: [CHILD], activePlayerId: '77' },
+    booking: { parentBookings: bookings },
+  })
+
+  function arrange() {
+    getCoachProfile.mockResolvedValue(PROFILE)
+    getMyReviewForCoach.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'reviews.reviewNotFound' } } },
+    })
+  }
+
+  it('shows Message coach for the selected child once a confirmed booking links them to this coach', async () => {
+    arrange()
+    const wrapper = await mountPage(
+      'coach-1',
+      'PARENT',
+      parentState([{ coachId: 'coach-1', playerId: '77', status: 'COMPLETED' }]),
+    )
+
+    expect(wrapper.find('[data-testid="message-coach-btn"]').exists()).toBe(true)
+  })
+
+  it.each([
+    [
+      'the booking is still only requested',
+      [{ coachId: 'coach-1', playerId: '77', status: 'REQUESTED' }],
+    ],
+    [
+      'the booking is with another coach',
+      [{ coachId: 'coach-2', playerId: '77', status: 'CONFIRMED' }],
+    ],
+    [
+      'the booking is for another child',
+      [{ coachId: 'coach-1', playerId: '78', status: 'CONFIRMED' }],
+    ],
+    ['there is no booking', []],
+  ])('hides Message coach when %s', async (_label, bookings) => {
+    arrange()
+    const wrapper = await mountPage('coach-1', 'PARENT', parentState(bookings))
+
+    expect(wrapper.find('[data-testid="message-coach-btn"]').exists()).toBe(false)
+  })
+
+  it('hides Message coach when the selected child is 18+', async () => {
+    arrange()
+    const wrapper = await mountPage('coach-1', 'PARENT', {
+      player: { players: [{ ...CHILD, ageTier: 'ADULT' }], activePlayerId: '77' },
+      booking: { parentBookings: [{ coachId: 'coach-1', playerId: '77', status: 'CONFIRMED' }] },
+    })
+
+    expect(wrapper.find('[data-testid="message-coach-btn"]').exists()).toBe(false)
+  })
+
+  it('hides Message coach for a coach viewer', async () => {
+    arrange()
+    const wrapper = await mountPage(
+      'coach-1',
+      'COACH',
+      parentState([{ coachId: 'coach-1', playerId: '77', status: 'CONFIRMED' }]),
+    )
+
+    expect(wrapper.find('[data-testid="message-coach-btn"]').exists()).toBe(false)
   })
 })
