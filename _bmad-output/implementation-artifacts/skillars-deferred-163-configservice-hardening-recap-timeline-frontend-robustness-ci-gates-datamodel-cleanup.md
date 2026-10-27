@@ -934,6 +934,7 @@ claude-sonnet-5 (Claude Code)
 - `src/test/java/com/softropic/skillars/platform/development/api/SessionPrepResourceIT.java`
 - `src/test/java/com/softropic/skillars/platform/development/service/CoachPlayerLastSessionResolverTest.java`
 - `src/test/java/com/softropic/skillars/platform/development/service/TimelineEventListenerTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/api/RosterQueryCountIT.java` (post-review CI fix: pinned budget)
 
 **Modified (CI script):**
 - `.github/scripts/assert-context-count.sh`
@@ -964,3 +965,9 @@ claude-sonnet-5 (Claude Code)
   mechanism, CI-script fixture verification without a committed test harness).
 - 2026-10-27: Code review (/bmad-code-review): 2 decisions resolved (full-blocks QUICK snapshot; session-time
   recap attribution), 11 patches applied, 2 items deferred to deferred-work.md. Status review → done.
+- 2026-10-27: GitHub CI caught a stale pinned statement-count budget in `RosterQueryCountIT` (expected 7, got 6
+  for an attended player) that the session-time recap-attribution fix made correct but didn't update: with
+  occurredAt now compared against sluEnd instead of calculated_at, the resolver's recap booking-id lookup no
+  longer fires for that IT's seeded shape. Updated the pinned budget (7 → 6) and the comments explaining why.
+  Also fixed a CoachRadarCardSpec ESLint no-unused-vars failure (`quasar build` ran ESLint on it) caught by the
+  same CI run. No production code changed by either fix.
