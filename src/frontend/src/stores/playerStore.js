@@ -10,15 +10,43 @@ export const usePlayerStore = defineStore('player', () => {
     () => players.value.find((p) => p.id === activePlayerId.value) ?? null,
   )
   const selfPlayerId = ref(null)
+  // In-flight listProfiles() shared by concurrent fetchPlayers() callers (MainLayout's background
+  // drawer load and ParentDashboardPage's onMounted both fire on a dashboard load), plus a
+  // generation bumped by resetPlayers() so a request still in flight at logout cannot write the
+  // logged-out parent's children back afterwards — same pattern as selfPlayerIdGeneration below.
+  let playersRequest = null
+  let playersGeneration = 0
   let selfPlayerIdRequest = null
   let selfPlayerIdGeneration = 0
 
-  async function fetchPlayers() {
-    const data = await playerProfileApi.listProfiles()
+  // selectFirst: false is for background loads (MainLayout's parent drawer) that must NOT pick an
+  // active child — ParentDevelopmentPortalPage watches activePlayerId and navigates to it, so an
+  // implicit "first child" selection racing a bookmarked child-2 URL would bounce the parent onto
+  // child 1.
+  async function fetchPlayers({ selectFirst = true } = {}) {
+    const generation = playersGeneration
+    if (!playersRequest) {
+      const request = playerProfileApi.listProfiles().finally(() => {
+        if (playersRequest === request) playersRequest = null
+      })
+      playersRequest = request
+    }
+    const data = await playersRequest
+    if (generation !== playersGeneration) return
     players.value = data
-    if (data.length > 0 && !activePlayerId.value) {
+    if (selectFirst && data.length > 0 && !activePlayerId.value) {
       activePlayerId.value = data[0].id
     }
+  }
+
+  // Navigation reachability: MainLayout's parent "My players" drawer section and the header
+  // ParentChildSwitcher both render from `players`, which otherwise survived logout — a different
+  // parent signing in on the same tab would briefly see the previous account's children.
+  function resetPlayers() {
+    playersGeneration++
+    playersRequest = null
+    players.value = []
+    activePlayerId.value = null
   }
 
   function setActivePlayer(id) {
@@ -81,5 +109,6 @@ export const usePlayerStore = defineStore('player', () => {
     setActivePlayer,
     fetchSelfPlayerId,
     resetSelfPlayerId,
+    resetPlayers,
   }
 })

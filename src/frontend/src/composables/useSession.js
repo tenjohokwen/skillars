@@ -106,6 +106,7 @@ export function useSession() {
     // else would re-clear it.
     document.cookie = 'rint=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
     playerStore.resetSelfPlayerId()
+    playerStore.resetPlayers()
     cleanup()
 
     // skillars-deferred-125 AC3: shared helper falls back to a hard navigation if router.push does

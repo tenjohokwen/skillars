@@ -5,18 +5,59 @@
       :pitch-timezone="firstBookingTimezone"
     />
 
-    <div class="row items-center justify-between q-mb-md">
-      <div class="text-h5">{{ t('booking.timezone.parentScheduleTitle') }}</div>
-      <q-btn
-        flat
-        icon="sports_soccer"
-        :to="{ name: 'player-locker-room', params: { playerId: route.params.playerId } }"
-        :label="t('player.viewLockerRoom')"
-      />
+    <!-- Child hub (navigation reachability): one place linking to every per-child destination a
+         parent has. The session list below is the hub's own content. -->
+    <div class="glass-card q-pa-md q-mb-md" data-testid="child-hub-header">
+      <div class="text-label">{{ t('parent.hub.title') }}</div>
+      <div v-if="childName" class="text-h6" data-testid="child-hub-name">{{ childName }}</div>
+      <div class="row q-gutter-sm q-mt-sm">
+        <q-btn
+          v-bind="hubLinkProps"
+          icon="insights"
+          :to="links.development"
+          :label="t('parent.hub.development')"
+        />
+        <q-btn
+          v-bind="hubLinkProps"
+          icon="confirmation_number"
+          :to="links.packs"
+          :label="t('parent.hub.packs')"
+        />
+        <q-btn
+          v-bind="hubLinkProps"
+          icon="workspace_premium"
+          :to="links.subscription"
+          :label="t('parent.hub.subscription')"
+        />
+        <q-btn
+          v-bind="hubLinkProps"
+          icon="sports_soccer"
+          :to="links.lockerRoom"
+          :label="t('parent.hub.lockerRoom')"
+        />
+        <q-btn
+          v-bind="hubLinkProps"
+          icon="task_alt"
+          to="/parent/approvals"
+          :label="t('parent.hub.approvals')"
+        />
+      </div>
     </div>
+
+    <div class="text-h5 q-mb-md">{{ t('booking.timezone.parentScheduleTitle') }}</div>
 
     <div v-if="bookingStore.parentScheduleLoading" class="flex flex-center q-py-xl">
       <q-spinner size="48px" />
+    </div>
+
+    <!-- A failed load must not fall through to the list: parentSchedule may still hold the
+         previously viewed child's sessions. -->
+    <div
+      v-else-if="bookingStore.parentScheduleError"
+      class="text-body2 text-negative q-py-md"
+      data-testid="child-hub-schedule-error"
+    >
+      {{ t('common.errorGeneric') }}
     </div>
 
     <div
@@ -66,6 +107,7 @@ import { usePlayerStore } from 'src/stores/playerStore'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
+import { parentChildLinks } from 'src/utils/parentChildLinks'
 
 const { t, locale } = useI18n()
 const route = useRoute()
@@ -73,21 +115,46 @@ const bookingStore = useBookingStore()
 const authStore = useAuthStore()
 const playerStore = usePlayerStore()
 
-const playerId = route.params.playerId
+// Kept as the raw route-param STRING (never Number(...)): player ids are Tsids past
+// Number.MAX_SAFE_INTEGER (skillars-deferred-148 AC1). Computed so a param-only navigation (the
+// "My players" drawer entries and ParentChildSwitcher reuse this component across children)
+// reloads for the new child instead of keeping the first child's data under the new URL.
+const playerId = computed(() => route.params.playerId)
+const links = computed(() => parentChildLinks(playerId.value))
+const childName = computed(
+  () => playerStore.players.find((p) => String(p.id) === String(playerId.value))?.name ?? null,
+)
 
-async function loadForPlayer(id) {
-  await bookingStore.loadParentSchedule(id)
-  await bookingStore.loadPlayerPacks(id)
+const hubLinkProps = { outline: true, rounded: true, noCaps: true, color: 'primary' }
+
+// Loads are SERIALIZED: the store's loaders write shared refs (parentSchedule, sessionPacks) with no
+// per-player guard, so two overlapping loads (child A still in flight when the parent switches to
+// child B) could resolve out of order and leave A's sessions under B's header. Chaining makes the
+// last-requested child's load always the last write; a queued load whose child is no longer the
+// one on screen is skipped. The store loaders never reject (they catch into their *Error refs).
+let loadChain = Promise.resolve()
+
+function loadForPlayer(id) {
+  if (!id) return loadChain
+  // Keep the header ParentChildSwitcher's highlighted child in step with the child on screen.
+  playerStore.setActivePlayer(id)
+  loadChain = loadChain.then(async () => {
+    if (id !== playerId.value) return
+    await bookingStore.loadParentSchedule(id)
+    await bookingStore.loadPlayerPacks(id)
+  })
+  return loadChain
 }
 
-onMounted(() => loadForPlayer(playerId))
+onMounted(() => loadForPlayer(playerId.value))
 
+// Previously this page watched playerStore.activePlayerId and reloaded THAT child's data while the
+// URL still named the original child. The route param is now the single source of truth: the
+// switcher navigates here (see ParentChildSwitcher.vue) instead of mutating state underneath.
 watch(
-  () => playerStore.activePlayerId,
-  (newId) => {
-    if (newId && newId !== playerId) {
-      loadForPlayer(newId)
-    }
+  () => route.params.playerId,
+  (newId, oldId) => {
+    if (newId && newId !== oldId) loadForPlayer(newId)
   },
 )
 

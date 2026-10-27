@@ -23,6 +23,33 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createTestingPinia } from '@pinia/testing'
 
+// The router resolves a target's lazy page component before confirming a navigation. This spec
+// tests the GUARD, not the pages, so the pages the navigation-reachability cases below visit are
+// stubbed: a cold import of the real (chart-/Stripe-heavy) pages took 10s+ and timed tests out.
+vi.mock('@stripe/stripe-js', () => ({ loadStripe: vi.fn() }))
+vi.mock('src/pages/coach/CoachBookingRequestsPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/coach/AvailabilityManagerPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/coach/DrillLibraryPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/coach/SessionTemplateVault.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/coach/CoachPaymentSettingsPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/coach/CoachReliabilityPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/coach/CoachSubscriptionPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/coach/CoachCommandCenterPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/parent/ParentBookingsPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/parent/ParentCreditWalletPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/parent/ParentApprovalPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/parent/ParentPlayerPortalPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/parent/ParentDevelopmentPortalPage.vue', () => ({
+  default: { render: () => null },
+}))
+vi.mock('src/pages/parent/SessionPackDashboardPage.vue', () => ({
+  default: { render: () => null },
+}))
+vi.mock('src/pages/parent/PlayerSubscriptionPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/parent/ParentDashboardPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/player/PlayerLockerRoomPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/VideoManagementPage.vue', () => ({ default: { render: () => null } }))
+
 async function buildRouter(initialState) {
   createTestingPinia({ createSpy: vi.fn, initialState })
   const { default: createRouterFactory } = await import('src/router')
@@ -194,5 +221,75 @@ describe('router/index.js — :playerId(\\d+) constraint rejects a non-digit seg
     expect(router.currentRoute.value.meta.notFound).toBe(true)
     // Mutation check: loosen routes.js's `coach/players/:playerId(\\d+)` back to an unconstrained
     // `:playerId` -> this resolves to the real coach-player-detail route instead, RED.
+  })
+})
+
+// Navigation reachability: every destination the drawer / dashboards now link to must actually
+// admit the role it is linked for, and still bounce the roles it is not for. A nav entry pointing
+// at a route the guard rejects would look reachable but silently redirect.
+describe('router/index.js — nav destinations admit their own role (navigation reachability)', () => {
+  const PID = '893573203704173564'
+  const COACH_COMPLETE = {
+    auth: { userId: '1', role: 'COACH' },
+    profileBuilder: { status: { profileComplete: true } },
+  }
+
+  it.each([
+    '/coach/booking-requests',
+    '/coach/availability',
+    '/coach/drills',
+    '/coach/session-templates',
+    '/coach/payment-settings',
+    '/coach/reliability',
+    '/coach/subscription',
+  ])('lets a COACH reach %s', async (path) => {
+    const router = await buildRouter(COACH_COMPLETE)
+    await router.push(path)
+    expect(router.currentRoute.value.path).toBe(path)
+  })
+
+  it('redirects a PARENT away from a coach-only nav destination', async () => {
+    const router = await buildRouter({ auth: { userId: '1', role: 'PARENT' } })
+    await router.push('/coach/payment-settings')
+    expect(router.currentRoute.value.path).toBe('/parent/dashboard')
+  })
+
+  it.each([
+    '/parent/bookings',
+    '/parent/credit-wallet',
+    '/parent/approvals',
+    `/parent/players/${PID}/sessions`,
+    `/parent/players/${PID}/development`,
+    // Verified for the parent role specifically: MainLayout only builds this link for a PLAYER's
+    // own id, but the parent dashboard chips and child hub link here for each child.
+    `/parent/players/${PID}/packs`,
+    `/parent/player/${PID}/subscription`,
+    `/player/locker-room/${PID}`,
+  ])('lets a PARENT reach %s', async (path) => {
+    const router = await buildRouter({ auth: { userId: '1', role: 'PARENT' } })
+    await router.push(path)
+    expect(router.currentRoute.value.path).toBe(path)
+  })
+
+  it('names the child hub route parent-player-hub (ParentChildSwitcher navigates by name)', async () => {
+    const router = await buildRouter({ auth: { userId: '1', role: 'PARENT' } })
+    await router.push({ name: 'parent-player-hub', params: { playerId: PID } })
+    expect(router.currentRoute.value.path).toBe(`/parent/players/${PID}/sessions`)
+  })
+
+  it('lets a PLAYER reach /player/videos, and redirects a PARENT away from it', async () => {
+    const playerRouter = await buildRouter({ auth: { userId: '1', role: 'PLAYER' } })
+    await playerRouter.push('/player/videos')
+    expect(playerRouter.currentRoute.value.path).toBe('/player/videos')
+
+    const parentRouter = await buildRouter({ auth: { userId: '1', role: 'PARENT' } })
+    await parentRouter.push('/player/videos')
+    expect(parentRouter.currentRoute.value.path).toBe('/parent/dashboard')
+  })
+
+  it('redirects a COACH away from the parent child hub', async () => {
+    const router = await buildRouter(COACH_COMPLETE)
+    await router.push(`/parent/players/${PID}/sessions`)
+    expect(router.currentRoute.value.path).toBe('/coach/command-center')
   })
 })

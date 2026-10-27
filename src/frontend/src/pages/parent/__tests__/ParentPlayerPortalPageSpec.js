@@ -27,7 +27,7 @@ const mounted = []
 const LARGE_PLAYER_ID = '893573203704173564'
 const CORRUPTED_PLAYER_ID = '893573203704173600'
 
-async function mountPage(playerId = LARGE_PLAYER_ID, initialState = {}) {
+async function mountPage(playerId = LARGE_PLAYER_ID, initialState = {}, { shallow = true } = {}) {
   const pinia = createTestingPinia({
     createSpy: vi.fn,
     initialState: { auth: { role: 'PARENT' }, ...initialState },
@@ -41,13 +41,17 @@ async function mountPage(playerId = LARGE_PLAYER_ID, initialState = {}) {
         component: ParentPlayerPortalPage,
       },
       { path: '/player/locker-room/:playerId', name: 'player-locker-room', component: STUB },
+      { path: '/parent/players/:playerId/development', component: STUB },
+      { path: '/parent/players/:playerId/packs', component: STUB },
+      { path: '/parent/player/:playerId/subscription', component: STUB },
+      { path: '/parent/approvals', component: STUB },
     ],
   })
   router.push(`/parent/players/${playerId}/sessions`)
   await router.isReady()
 
   const wrapper = mount(ParentPlayerPortalPage, {
-    shallow: true,
+    shallow,
     global: { plugins: [pinia, router] },
   })
   mounted.push(wrapper)
@@ -73,5 +77,88 @@ describe('ParentPlayerPortalPage.vue — playerId precision (deferred-148 AC1)',
     expect(calledWithId).toBe(LARGE_PLAYER_ID)
     expect(calledWithId).not.toBe(CORRUPTED_PLAYER_ID)
     expect(bookingStore.loadPlayerPacks).toHaveBeenCalledWith(LARGE_PLAYER_ID)
+  })
+})
+
+// Navigation reachability: this page is now the per-child hub.
+describe('ParentPlayerPortalPage.vue — child hub', () => {
+  it('links to every per-child destination for THIS child (exact Tsid, not corrupted)', async () => {
+    const { wrapper } = await mountPage(LARGE_PLAYER_ID, {}, { shallow: false })
+
+    for (const href of [
+      `/parent/players/${LARGE_PLAYER_ID}/development`,
+      `/parent/players/${LARGE_PLAYER_ID}/packs`,
+      `/parent/player/${LARGE_PLAYER_ID}/subscription`,
+      `/player/locker-room/${LARGE_PLAYER_ID}`,
+      '/parent/approvals',
+    ]) {
+      expect(wrapper.find(`[href="${href}"]`).exists()).toBe(true)
+    }
+  })
+
+  it("shows the child's name from the parent's linked players", async () => {
+    const { wrapper } = await mountPage(
+      LARGE_PLAYER_ID,
+      { player: { players: [{ id: LARGE_PLAYER_ID, name: 'Mia' }] } },
+      { shallow: false },
+    )
+    expect(wrapper.find('[data-testid="child-hub-name"]').text()).toBe('Mia')
+  })
+
+  it('marks the child on screen as the active child (keeps the header switcher in step)', async () => {
+    const { pinia } = await mountPage()
+    const { usePlayerStore } = await import('src/stores/playerStore')
+    expect(usePlayerStore(pinia).setActivePlayer).toHaveBeenCalledWith(LARGE_PLAYER_ID)
+  })
+
+  it('reloads for the new child when only :playerId changes (component reuse across children)', async () => {
+    const { pinia, router } = await mountPage()
+    const { useBookingStore } = await import('src/stores/booking.store')
+    const bookingStore = useBookingStore(pinia)
+
+    await router.push('/parent/players/893573203704173999/sessions')
+    await flushPromises()
+
+    expect(bookingStore.loadParentSchedule).toHaveBeenLastCalledWith('893573203704173999')
+    expect(bookingStore.loadPlayerPacks).toHaveBeenLastCalledWith('893573203704173999')
+    // Mutation check: revert playerId to a setup-time const + drop the route-param watch → the
+    // last call is still the original id, RED.
+  })
+
+  it('shows an error instead of a possibly-stale session list when the schedule load failed', async () => {
+    const { wrapper } = await mountPage(
+      LARGE_PLAYER_ID,
+      {
+        booking: {
+          parentScheduleError: new Error('500'),
+          parentSchedule: { sessions: [{ bookingId: 'old-child-booking' }] },
+        },
+      },
+      { shallow: false },
+    )
+    expect(wrapper.find('[data-testid="child-hub-schedule-error"]').exists()).toBe(true)
+  })
+
+  it('serializes loads: a switch while a load is in flight runs the new child last', async () => {
+    const { pinia, router } = await mountPage()
+    const { useBookingStore } = await import('src/stores/booking.store')
+    const bookingStore = useBookingStore(pinia)
+    bookingStore.loadParentSchedule.mockClear()
+
+    let releaseFirst
+    bookingStore.loadParentSchedule.mockImplementationOnce(
+      () => new Promise((resolve) => (releaseFirst = resolve)),
+    )
+    await router.push('/parent/players/111/sessions')
+    await flushPromises()
+    await router.push('/parent/players/222/sessions')
+    await flushPromises()
+    // 222's load has not started while 111's is still in flight.
+    expect(bookingStore.loadParentSchedule.mock.calls.map((c) => c[0])).toEqual(['111'])
+
+    releaseFirst()
+    await flushPromises()
+    expect(bookingStore.loadParentSchedule.mock.calls.map((c) => c[0])).toEqual(['111', '222'])
+    // Mutation check: replace the loadChain with a direct await → both start at once, RED above.
   })
 })

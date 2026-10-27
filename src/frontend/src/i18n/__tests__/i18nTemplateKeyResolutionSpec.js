@@ -129,7 +129,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'insight key built from a camelCased insight-type enum value',
   },
   {
-    at: 'src/pages/auth/ParentDashboardPlaceholderPage.vue:28',
+    at: 'src/pages/parent/ParentDashboardPage.vue:38',
     reason: "position label keyed by the player's position enum value",
   },
   // ---- bare variable / property-access first argument ----
@@ -163,23 +163,23 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: "tooltip text keyed by the same badge config entry's tooltipKey",
   },
   {
-    at: 'src/pages/auth/CoachProfileBuilderPlaceholderPage.vue:32',
+    at: 'src/pages/coach/CoachProfileBuilderPage.vue:32',
     reason: "rail step label keyed by that step config entry's shortKey",
   },
   {
-    at: 'src/pages/auth/CoachProfileBuilderPlaceholderPage.vue:47',
+    at: 'src/pages/coach/CoachProfileBuilderPage.vue:47',
     reason: "card title keyed by the current step config entry's titleKey",
   },
   {
-    at: 'src/pages/auth/CoachProfileBuilderPlaceholderPage.vue:112',
+    at: 'src/pages/coach/CoachProfileBuilderPage.vue:112',
     reason: 't() on a server-supplied errorKey, guarded by its own $te probe on the same line',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:800',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:859',
     reason: 'notify message keyed by a successMessage key chosen earlier in the handler',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:811',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:870',
     reason: 'notify message keyed by a messageKey chosen earlier in the handler',
   },
   {
@@ -187,7 +187,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: '$t on noContributionsKey, a computed that picks between two real i18n keys at runtime',
   },
   {
-    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:187',
+    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:190',
     reason: "label keyed by the review-eligibility response's own reasonCode enum",
   },
   {

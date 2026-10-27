@@ -33,6 +33,34 @@
       :pitch-timezone="bookingStore.coachSchedule.coachTimezone"
     />
 
+    <!-- Story 7.1: "Complete your Stripe setup to accept bookings" while onboarding is not COMPLETE
+         (PENDING / RESTRICTED / NOT_CONNECTED). Rendered only once the status has actually loaded —
+         a failed status fetch shows nothing here (CoachPaymentSettingsPage owns that error state).
+         Same rule as CoachPaymentSettingsPage's own banner; this copy adds the link to it. -->
+    <q-banner
+      v-if="stripeSetupIncomplete"
+      rounded
+      inline-actions
+      class="q-mb-md stripe-setup-banner"
+      data-testid="stripe-setup-banner"
+    >
+      <template #avatar>
+        <q-icon name="mdi-alert-circle" color="warning" />
+      </template>
+      {{ t('payment.stripe.bannerWarning') }}
+      <template #action>
+        <q-btn
+          flat
+          dense
+          no-caps
+          color="primary"
+          to="/coach/payment-settings"
+          data-testid="stripe-setup-link"
+          :label="t('coach.stripeBannerAction')"
+        />
+      </template>
+    </q-banner>
+
     <!-- skillars-12-7 AC9: sessions that completed without a recap. Five-state convention: loading and
          empty render nothing (a secondary nudge must not shift the page), error is a quiet inline line
          (no toast: it would nag on every page load), data is the banner. -->
@@ -105,6 +133,16 @@
         icon="chevron_right"
         :label="t('booking.schedule.nextWeek')"
         @click="nextWeek"
+      />
+      <q-space />
+      <q-btn
+        outline
+        no-caps
+        icon="inbox"
+        color="primary"
+        to="/coach/booking-requests"
+        data-testid="booking-requests-link"
+        :label="t('coach.bookingRequestsCta')"
       />
     </div>
 
@@ -433,6 +471,7 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
 import { useAuthStore } from 'src/stores/auth.store'
+import { usePaymentStore } from 'src/stores/payment.store'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
 import ActiveSessionScreen from 'src/components/booking/ActiveSessionScreen.vue'
@@ -462,6 +501,19 @@ const { t, locale } = useI18n()
 const $q = useQuasar()
 const bookingStore = useBookingStore()
 const authStore = useAuthStore()
+const paymentStore = usePaymentStore()
+
+// Story 7.1 banner. Only a status loaded by THIS mount's fetch, that is not COMPLETE, counts as
+// incomplete. payment.store keeps the previous stripeStatus while a refetch is in flight and after
+// a failed one (and is not reset on logout), so a stale value — e.g. another coach's PENDING from
+// earlier in the tab — is ignored while loading or errored rather than nagging a fully-onboarded
+// coach.
+const stripeStatusFetched = ref(false)
+const stripeSetupIncomplete = computed(() => {
+  if (!stripeStatusFetched.value || paymentStore.error.stripeStatus) return false
+  const status = paymentStore.stripeStatus
+  return status != null && status.onboardingStatus !== 'COMPLETE'
+})
 
 const showActiveSession = ref(false)
 const showWrapUp = ref(false)
@@ -571,7 +623,14 @@ const selectedWeek = ref(currentMonday())
 onMounted(() => {
   bookingStore.loadCoachSchedule(selectedWeek.value)
   loadMissingRecaps()
+  loadStripeStatus()
 })
+
+async function loadStripeStatus() {
+  // fetchStripeStatus never rejects (it catches into paymentStore.error.stripeStatus).
+  await paymentStore.fetchStripeStatus()
+  stripeStatusFetched.value = true
+}
 
 function prevWeek() {
   selectedWeek.value = addDaysToIsoDate(selectedWeek.value, -7)
@@ -1063,6 +1122,10 @@ async function shareSlot() {
 </script>
 
 <style lang="scss" scoped>
+.stripe-setup-banner {
+  background: rgba(255, 165, 0, 0.15);
+}
+
 .command-center__layout {
   display: grid;
   grid-template-columns: 260px 1fr 280px;

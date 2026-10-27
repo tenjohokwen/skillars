@@ -187,7 +187,7 @@ class AuthResourceIT extends AbstractIntegrationTest {
         // cookie is hand-built JSON (AuthService.login/refresh), so it bypassed that protection.
         // auth.store.js's hydrateFromCookie() (called on every page load) then silently corrupted
         // authStore.userId via IEEE-754 double rounding, which 403'd wherever that value was later
-        // sent back as an owner-bound entityId (CoachProfileBuilderPlaceholderPage.vue's upload
+        // sent back as an owner-bound entityId (CoachProfileBuilderPage.vue's upload
         // step). Asserting the literal quoted shape, not just "parses as JSON", is deliberate: a
         // bare-number regression still parses fine, it just silently corrupts large ids.
         String skpCookie = setCookies.stream().filter(c -> c.startsWith("skp=")).findFirst().orElseThrow();

@@ -32,6 +32,7 @@ function handleSessionExpired() {
   document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
   authStore.logout() // best-effort backend call fires in background; cookie/state already cleared
   playerStore.resetSelfPlayerId()
+  playerStore.resetPlayers()
   cleanup()
   // skillars-deferred-125 AC3: router.push does not reject for the failure modes this teardown can
   // actually hit (see sessionRedirect.js's own comment) — it falls back to a hard navigation instead

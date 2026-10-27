@@ -83,9 +83,24 @@ async function mountLayout(
         '/player/dashboard',
         '/marketplace',
         '/parent/bookings',
+        '/coach/booking-requests',
+        '/coach/availability',
+        '/coach/players',
+        '/coach/drills',
+        '/coach/session-templates',
+        '/coach/session-pack-tiers',
+        '/coach/payment-settings',
+        '/coach/subscription',
+        '/coach/reviews',
+        '/coach/reliability',
+        '/parent/approvals',
+        '/parent/credit-wallet',
+        '/player/videos',
       ].map((path) => ({ path, component: STUB })),
       { path: '/player/development/:playerId', component: STUB },
+      { path: '/player/locker-room/:playerId', component: STUB },
       { path: '/parent/players/:playerId/packs', component: STUB },
+      { path: '/parent/players/:playerId/sessions', component: STUB },
     ],
   })
   if (beforeEachGuard) {
@@ -145,6 +160,8 @@ describe('MainLayout.vue — handleLogout order (deferred-108 AC4)', () => {
     expect(stopSessionMonitoringSpy).toHaveBeenCalledTimes(1)
     expect(authStore.logout).toHaveBeenCalledTimes(1)
     expect(playerStore.resetSelfPlayerId).toHaveBeenCalledTimes(1)
+    // Navigation reachability: the parent "My players" drawer entries must not survive logout.
+    expect(playerStore.resetPlayers).toHaveBeenCalledTimes(1)
     expect(destroySessionSpy).toHaveBeenCalledTimes(1)
     // skillars-deferred-125 AC3: handleLogout's final push now goes through the shared
     // pushLoginOrHardNavigate helper, which pushes an object (path + query) rather than the bare
@@ -513,5 +530,104 @@ describe('MainLayout.vue — player nav: Development Dashboard link', () => {
     expect(wrapper.find('[href="/player/development/77"]').exists()).toBe(true)
     // Mutation: revert the onMounted-only check (drop the `watch`) → this assertion goes RED,
     // since fetchSelfPlayerId would only ever have been attempted once, before role flipped.
+  })
+})
+
+// Navigation reachability: every built page reachable from the drawer, for the right role only.
+// Mutation check: move any entry below into a different role's <template v-if> (or drop it) → the
+// matching "present for X" / "absent for Y" assertion goes RED.
+describe('MainLayout.vue — role-scoped nav entries (navigation reachability)', () => {
+  const COACH_ONLY = [
+    '/coach/booking-requests',
+    '/coach/availability',
+    '/coach/drills',
+    '/coach/session-templates',
+    '/coach/payment-settings',
+    '/coach/reliability',
+    '/coach/subscription',
+  ]
+  const PARENT_ONLY = ['/parent/approvals', '/parent/credit-wallet']
+  const PLAYER_ONLY = ['/player/videos', '/player/locker-room/42']
+
+  async function mountAs(role, { players = [] } = {}) {
+    const { wrapper } = await mountLayout(
+      { role, userId: 3 },
+      async ({ pinia }) => {
+        const { usePlayerStore } = await import('src/stores/playerStore')
+        const playerStore = usePlayerStore(pinia)
+        playerStore.players = players
+        playerStore.fetchSelfPlayerId.mockResolvedValue(42)
+      },
+      undefined,
+      { shallow: false },
+    )
+    return wrapper
+  }
+
+  const has = (wrapper, href) => wrapper.find(`[href="${href}"]`).exists()
+
+  it.each(COACH_ONLY)('COACH sees %s', async (href) => {
+    expect(has(await mountAs('COACH'), href)).toBe(true)
+  })
+
+  it.each(['PARENT', 'PLAYER', 'ADMIN'])('%s sees none of the coach-only entries', async (role) => {
+    const wrapper = await mountAs(role)
+    for (const href of COACH_ONLY) expect(has(wrapper, href)).toBe(false)
+  })
+
+  it.each(PARENT_ONLY)('PARENT sees %s', async (href) => {
+    expect(has(await mountAs('PARENT'), href)).toBe(true)
+  })
+
+  it('PARENT sees Bookings (/parent/bookings) — shared with PLAYER, absent for COACH', async () => {
+    expect(has(await mountAs('PARENT'), '/parent/bookings')).toBe(true)
+    expect(has(await mountAs('COACH'), '/parent/bookings')).toBe(false)
+  })
+
+  it.each(['COACH', 'PLAYER', 'ADMIN'])('%s sees none of the parent-only entries', async (role) => {
+    const wrapper = await mountAs(role)
+    for (const href of PARENT_ONLY) expect(has(wrapper, href)).toBe(false)
+  })
+
+  it('PARENT gets one "My players" entry per linked child, each opening that child hub', async () => {
+    const wrapper = await mountAs('PARENT', {
+      players: [
+        { id: '893573203704173564', name: 'Mia' },
+        { id: '893573203704173565', name: 'Leo' },
+      ],
+    })
+    expect(has(wrapper, '/parent/players/893573203704173564/sessions')).toBe(true)
+    expect(has(wrapper, '/parent/players/893573203704173565/sessions')).toBe(true)
+    expect(wrapper.text()).toContain('Mia')
+  })
+
+  it('PARENT with no linked children gets no "My players" section', async () => {
+    const wrapper = await mountAs('PARENT')
+    expect(wrapper.text()).not.toContain('nav.myPlayers')
+  })
+
+  it('PARENT loads linked children for the drawer WITHOUT selecting an active child', async () => {
+    const { pinia } = await mountLayout({ role: 'PARENT', userId: 3 }, undefined, undefined, {
+      shallow: false,
+    })
+    const { usePlayerStore } = await import('src/stores/playerStore')
+    expect(usePlayerStore(pinia).fetchPlayers).toHaveBeenCalledWith({ selectFirst: false })
+  })
+
+  it('a non-PARENT role does not load linked children', async () => {
+    const { pinia } = await mountLayout({ role: 'COACH', userId: 3 }, undefined, undefined, {
+      shallow: false,
+    })
+    const { usePlayerStore } = await import('src/stores/playerStore')
+    expect(usePlayerStore(pinia).fetchPlayers).not.toHaveBeenCalled()
+  })
+
+  it.each(PLAYER_ONLY)('PLAYER sees %s', async (href) => {
+    expect(has(await mountAs('PLAYER'), href)).toBe(true)
+  })
+
+  it.each(['COACH', 'PARENT', 'ADMIN'])('%s sees none of the player-only entries', async (role) => {
+    const wrapper = await mountAs(role)
+    for (const href of PLAYER_ONLY) expect(has(wrapper, href)).toBe(false)
   })
 })

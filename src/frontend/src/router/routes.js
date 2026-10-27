@@ -65,7 +65,7 @@ const routes = [
       },
       {
         path: 'coach/profile-builder',
-        component: () => import('pages/auth/CoachProfileBuilderPlaceholderPage.vue'),
+        component: () => import('pages/coach/CoachProfileBuilderPage.vue'),
         // requiresCoach added 2026-10-01: this page calls coach-only APIs, but the route itself
         // only required login, not the COACH role. A stale/forged redirect (or a bookmark, or the
         // browser back button) landing a non-coach account here produced a raw 401
@@ -113,7 +113,7 @@ const routes = [
       },
       {
         path: 'parent/dashboard',
-        component: () => import('pages/auth/ParentDashboardPlaceholderPage.vue'),
+        component: () => import('pages/parent/ParentDashboardPage.vue'),
         meta: { requiresAuth: true, role: 'PARENT' },
       },
       {
@@ -132,7 +132,10 @@ const routes = [
         meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
       },
       {
+        // Per-child hub: the parent dashboard's child cards, the "My players" drawer entries and
+        // ParentChildSwitcher land here; it links on to the child's other per-child pages.
         path: 'parent/players/:playerId(\\d+)/sessions',
+        name: 'parent-player-hub',
         component: () => import('pages/parent/ParentPlayerPortalPage.vue'),
         meta: { requiresAuth: true, role: 'PARENT' },
       },
@@ -274,10 +277,10 @@ const routes = [
       {
         // Dual-role (skillars-deferred-148 Finding 4 correction): PlayerOwnershipGuard authorizes
         // both a self-registered PLAYER and a PARENT on their own/their child's player profile —
-        // ParentPlayerPortalPage.vue's "View Locker Room" button depends on the PARENT half.
+        // the parent child hub (ParentPlayerPortalPage.vue) links here, relying on the PARENT half.
         path: 'player/locker-room/:playerId(\\d+)',
         name: 'player-locker-room',
-        component: () => import('pages/player/PlayerLockerRoomPlaceholderPage.vue'),
+        component: () => import('pages/player/PlayerLockerRoomPage.vue'),
         meta: { requiresAuth: true, roles: ['PLAYER', 'PARENT'] },
       },
       {
