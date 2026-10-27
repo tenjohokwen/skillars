@@ -687,6 +687,8 @@ export default {
       sessionNotYetStarted:
         'Diese Einheit kann nicht vor ihrem geplanten Beginn gestartet oder abgeschlossen werden.',
       noShowTooEarly: 'Ein Nichterscheinen kann nicht vor Beginn der Einheit gemeldet werden.',
+      recapStillEditableAfterForceComplete:
+        'Diese Einheit wurde bereits abgeschlossen, aber Ihr Bericht wurde unten übernommen — Sie können ihn weiterhin speichern.',
     },
   },
   video: {

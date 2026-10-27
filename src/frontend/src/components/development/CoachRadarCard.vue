@@ -44,6 +44,7 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useQuasar } from 'quasar'
 import { useDevelopmentStore } from 'src/stores/development.store'
 import { getErrorMessage } from 'src/utils/errorHandler'
+import { putRadarPreferencesKeepAlive } from 'src/api/development.api'
 import SkillsRadarChart from 'src/components/development/SkillsRadarChart.vue'
 
 // skillars-12-9 AC9: the radar card plus its per-(coach, player) skill-subset persistence, moved
@@ -59,7 +60,9 @@ const store = useDevelopmentStore()
 const $q = useQuasar()
 
 // Local inline debounce (this codebase has no shared debounce composable). Extended with flush()
-// so a pending persistence call is never silently dropped on player-switch, unmount or pagehide.
+// so a pending persistence call is never silently dropped on player-switch, unmount or pagehide,
+// and with flushWith() (skillars-deferred-163 AC4.1) so the pagehide handler can divert the
+// pending call to a different sender without losing the pending-call bookkeeping.
 function useDebounce(fn, delay) {
   let timer = null
   let pendingArgs = null
@@ -81,6 +84,14 @@ function useDebounce(fn, delay) {
     pendingArgs = null
     if (argsToRun) fn(...argsToRun)
   }
+  debounced.flushWith = (altFn) => {
+    if (timer === null) return
+    clearTimeout(timer)
+    timer = null
+    const argsToRun = pendingArgs
+    pendingArgs = null
+    if (argsToRun) altFn(...argsToRun)
+  }
   return debounced
 }
 
@@ -93,16 +104,37 @@ const showBaseline = ref(false)
 // response never overwrites a fresher click (AC12a).
 let selectionTouched = false
 
-const debouncedSave = useDebounce(async (targetPlayerId, codes) => {
-  try {
-    await store.saveRadarPreferences(targetPlayerId, codes)
-  } catch (err) {
-    $q.notify({ type: 'negative', message: getErrorMessage(err) })
-  }
-}, 300)
+// skillars-deferred-163 AC4.2: each new save CHAINS on the promise of the prior in-flight one, so
+// PUTs always reach the network in the order they were issued. Before this, the debounced fn was
+// invoked straight from a bare setTimeout callback with nothing awaiting any prior in-flight
+// call — two debounce firings more than 300ms apart (the normal case, not a bug) could have
+// overlapping in-flight PUTs on the wire, and the SERVER could then apply an older one after a
+// newer one. A client-side response guard cannot fix this: saveRadarPreferences writes no local
+// state on success, so there is nothing to compare "the response" against — the defect is in SEND
+// order, not response-handling order.
+let pendingSave = Promise.resolve()
+
+function saveSerialised(targetPlayerId, codes) {
+  pendingSave = pendingSave
+    .catch(() => {}) // a prior failure must not break the chain for the next save
+    .then(() => store.saveRadarPreferences(targetPlayerId, codes))
+    .catch((err) => {
+      $q.notify({ type: 'negative', message: getErrorMessage(err) })
+    })
+  return pendingSave
+}
+
+const debouncedSave = useDebounce(saveSerialised, 300)
 
 function flushPendingSave() {
-  debouncedSave.flush()
+  // skillars-deferred-163 AC4.1: pagehide means the browser may tear this page down before a
+  // normal axios PUT completes. Diverted straight to the keepalive sender — not through
+  // saveSerialised/the inFlight chain above, which could still be waiting out an earlier call
+  // that is itself about to be cancelled by the very navigation this handler is reacting to.
+  // Fire-and-forget: there is no UI left to report a failure to, and nothing left to retry.
+  debouncedSave.flushWith((targetPlayerId, codes) => {
+    putRadarPreferencesKeepAlive(targetPlayerId, codes).catch(() => {})
+  })
 }
 
 const hasBaseline = computed(() => {

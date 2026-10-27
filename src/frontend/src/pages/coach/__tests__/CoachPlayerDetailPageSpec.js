@@ -727,6 +727,19 @@ describe('CoachPlayerDetailPage.vue — coach tools (skillars-12-9 G17)', () => 
     expect(callsTo('/radar/correlation')[0][0]).toContain(LARGE_PLAYER_ID)
   })
 
+  // skillars-deferred-163 AC4.3: getCoachTier (marketplace.api.js) gives this call a scoped
+  // timeout, so a hung tier fetch eventually settles (rejects) instead of leaving tierSettled
+  // stuck forever -- the existing "failed tier fetch" test above covers the resulting UI; this
+  // pins the wiring that makes a hang behave like any other rejection in the first place.
+  it('fetches the coach tier with a scoped timeout', async () => {
+    mockApiGetByUrl({ ...CORE, ...tier('INSTRUCTOR') })
+    await mountPage()
+    await flushPromises()
+
+    const tierCall = callsTo('/coaches/me/tier')[0]
+    expect(tierCall[1]).toEqual(expect.objectContaining({ timeout: 20000 }))
+  })
+
   it('a failed tier fetch is "unknown", not SCOUT: tools hidden, one message, no upsell teaser (AC4)', async () => {
     mockApiGetByUrl({
       ...CORE,

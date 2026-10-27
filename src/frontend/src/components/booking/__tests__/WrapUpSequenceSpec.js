@@ -201,4 +201,35 @@ describe('WrapUpSequence.vue — session recap step (skillars-12-2)', () => {
       expect.objectContaining({ type: 'negative', message: 'booking.wrapUp.step5SubmitError' }),
     )
   })
+
+  // skillars-deferred-163 AC2.1/AC2.2: a force-completed booking gets a dedicated redirect, not the
+  // generic submit-failure toast -- the typed recap text must survive in the emitted payload.
+  it('emits recap-still-editable with the typed text when the booking was already force-completed', async () => {
+    const wrapper = mountComponent()
+    const store = storeOf(wrapper)
+    store.handleSubmitWrapUp = vi.fn().mockRejectedValue({
+      response: {
+        data: { errorMsg: { errorKey: 'booking.recapStillEditableAfterForceComplete' } },
+      },
+    })
+    await goToRecapStep(wrapper)
+
+    const textareas = wrapper.findAll('textarea')
+    await textareas[0].setValue('Worked on first touch')
+    await textareas[1].setValue('Continue weak-foot drills')
+    await textareas[2].setValue('Great tempo')
+
+    await findStep5SubmitBtn(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(notifySpy).not.toHaveBeenCalled()
+    expect(wrapper.emitted('recap-still-editable')).toHaveLength(1)
+    expect(wrapper.emitted('recap-still-editable')[0][0]).toEqual({
+      bookingId: 'booking-1',
+      playerName: 'Test Player',
+      whatWeDid: 'Worked on first touch',
+      whatsNext: 'Continue weak-foot drills',
+      whatWentWell: 'Great tempo',
+    })
+  })
 })

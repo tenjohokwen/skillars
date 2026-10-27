@@ -2,6 +2,9 @@ package com.softropic.skillars.platform.development.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
+import com.softropic.skillars.platform.booking.repo.Booking;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.repo.SessionCompletionData;
 import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
 import com.softropic.skillars.platform.development.contract.PlayerTimelineEventType;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineEvent;
@@ -26,6 +29,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
@@ -39,6 +43,7 @@ class TimelineEventListenerTest {
     @Mock private SessionCompletionDataRepository completionDataRepository;
     @Mock private TimelineDrillSnapshotResolver drillSnapshotResolver;
     @Mock private DevelopmentDataErasureGuard erasureGuard;
+    @Mock private BookingRepository bookingRepository;
 
     private TimelineEventListener listener;
     private final UUID bookingId = UUID.randomUUID();
@@ -47,8 +52,14 @@ class TimelineEventListenerTest {
     @BeforeEach
     void setUp() {
         listener = new TimelineEventListener(timelineRepository, completionDataRepository,
-            objectMapper, drillSnapshotResolver, erasureGuard);
+            objectMapper, drillSnapshotResolver, erasureGuard, bookingRepository);
         ReflectionTestUtils.setField(listener, "self", listener);
+        // skillars-deferred-163 AC3.1: most tests here don't care about the SESSION_COMPLETED
+        // timestamp itself (they verify with any()) — default to a real booking row so the
+        // production code's requestedEndTime lookup has something to find.
+        Booking booking = new Booking();
+        booking.setRequestedEndTime(java.time.Instant.now());
+        lenient().when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
     }
 
     private BookingCompletedEvent completed(boolean attended, Integer effort, Integer focus, Integer technique) {
@@ -107,6 +118,115 @@ class TimelineEventListenerTest {
             .containsEntry(TimelineEventListener.METADATA_KEY_TECHNIQUE_RATING, 5)
             .doesNotContainKey(TimelineEventListener.METADATA_KEY_FOCUS_RATING);
         assertThat(e.getCoachId()).isEqualTo(coachId);
+    }
+
+    /**
+     * skillars-deferred-163 AC3.1: SESSION_COMPLETED is timestamped with the booking's own
+     * requestedEndTime, not wall-clock Instant.now() at write time.
+     */
+    @Test
+    void attended_usesBookingRequestedEndTime_notWallClockNow() {
+        when(completionDataRepository.findByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(drillSnapshotResolver.forBooking(bookingId)).thenReturn(List.of());
+        java.time.Instant sessionEndTime = java.time.Instant.now().minusSeconds(86_400);
+        Booking booking = new Booking();
+        booking.setRequestedEndTime(sessionEndTime);
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+
+        listener.onBookingCompleted(completed(true, 4, null, 5));
+
+        verify(timelineRepository).insertSessionCompletedIfAbsent(
+            eq(7L), eq(bookingId), eq(sessionEndTime), any(), eq(coachId));
+    }
+
+    /**
+     * Code review 2026-10-27: a session ended (LIVE) or quick-completed before its scheduled end must not
+     * be stamped in the future — the timestamp is capped at write time.
+     */
+    @Test
+    void attended_requestedEndTimeInTheFuture_isCappedAtNow() {
+        when(completionDataRepository.findByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(drillSnapshotResolver.forBooking(bookingId)).thenReturn(List.of());
+        Booking booking = new Booking();
+        booking.setRequestedEndTime(java.time.Instant.now().plusSeconds(1800)); // ended 30 min early
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        java.time.Instant before = java.time.Instant.now();
+
+        listener.onBookingCompleted(completed(true, 4, null, 5));
+
+        org.mockito.ArgumentCaptor<java.time.Instant> at = org.mockito.ArgumentCaptor.forClass(java.time.Instant.class);
+        verify(timelineRepository).insertSessionCompletedIfAbsent(eq(7L), eq(bookingId), at.capture(), any(), eq(coachId));
+        assertThat(at.getValue()).isBetween(before, java.time.Instant.now());
+    }
+
+    /**
+     * skillars-deferred-163 AC2.4 (code review 2026-10-27, Decision 1): a QUICK-mode booking names the
+     * drills of the BLOCKS snapshot captured at wrap-up (forBlocks), not the live plan (forBooking), which
+     * may have been edited since — the same blocks SluCalculationService computes SLU from.
+     */
+    @Test
+    void attended_quickModeWithSnapshot_resolvesDrillsFromSnapshotBlocks_notLivePlan() throws Exception {
+        UUID snapshotDrillId = UUID.randomUUID();
+        List<com.softropic.skillars.platform.session.contract.SessionBlockData> blocks = List.of(
+            new com.softropic.skillars.platform.session.contract.SessionBlockData("MAIN", "Main", 30,
+                List.of(new com.softropic.skillars.platform.session.contract.SessionDrillRef(snapshotDrillId, 0))));
+        SessionCompletionData scd = new SessionCompletionData();
+        scd.setCompletionMode("QUICK");
+        scd.setPlanBlocksSnapshot(objectMapper.writeValueAsString(blocks));
+        when(completionDataRepository.findByBookingId(bookingId)).thenReturn(Optional.of(scd));
+        List<Map<String, Object>> drills = List.of(Map.of("drillId", snapshotDrillId.toString(), "name", "Rondo"));
+        when(drillSnapshotResolver.forBlocks(blocks, coachId)).thenReturn(drills);
+
+        listener.onBookingCompleted(completed(true, 4, null, 5));
+
+        assertThat(sessionCompletedRow().getMetadata()).containsEntry(TimelineEventListener.METADATA_KEY_DRILLS, drills);
+        verify(drillSnapshotResolver, never()).forBooking(any());
+    }
+
+    /** An empty snapshot ("[]": no plan at wrap-up) is authoritative — a plan created later must not leak in. */
+    @Test
+    void attended_quickModeWithEmptySnapshot_showsNoDrills_andNeverReadsTheLivePlan() {
+        SessionCompletionData scd = new SessionCompletionData();
+        scd.setCompletionMode("QUICK");
+        scd.setPlanBlocksSnapshot("[]");
+        when(completionDataRepository.findByBookingId(bookingId)).thenReturn(Optional.of(scd));
+        when(drillSnapshotResolver.forBlocks(List.of(), coachId)).thenReturn(List.of());
+
+        listener.onBookingCompleted(completed(true, 4, null, 5));
+
+        assertThat(sessionCompletedRow().getMetadata()).doesNotContainKey(TimelineEventListener.METADATA_KEY_DRILLS);
+        verify(drillSnapshotResolver, never()).forBooking(any());
+    }
+
+    /**
+     * A QUICK row with no snapshot column (pre-V170) or an unreadable one falls back to forBooking exactly
+     * like LIVE mode — and SluCalculationService takes the same fallback through the same QuickPlanSnapshot.
+     */
+    @Test
+    void attended_quickModeWithoutSnapshot_fallsBackToForBooking() {
+        SessionCompletionData scd = new SessionCompletionData();
+        scd.setCompletionMode("QUICK");
+        when(completionDataRepository.findByBookingId(bookingId)).thenReturn(Optional.of(scd));
+        when(drillSnapshotResolver.forBooking(bookingId)).thenReturn(List.of());
+
+        listener.onBookingCompleted(completed(true, 4, null, 5));
+
+        verify(drillSnapshotResolver).forBooking(bookingId);
+        verify(drillSnapshotResolver, never()).forBlocks(any(), any());
+    }
+
+    @Test
+    void attended_quickModeWithUnreadableSnapshot_fallsBackToForBooking() {
+        SessionCompletionData scd = new SessionCompletionData();
+        scd.setCompletionMode("QUICK");
+        scd.setPlanBlocksSnapshot("{not json");
+        when(completionDataRepository.findByBookingId(bookingId)).thenReturn(Optional.of(scd));
+        when(drillSnapshotResolver.forBooking(bookingId)).thenReturn(List.of());
+
+        listener.onBookingCompleted(completed(true, 4, null, 5));
+
+        verify(drillSnapshotResolver).forBooking(bookingId);
+        verify(drillSnapshotResolver, never()).forBlocks(any(), any());
     }
 
     @Test

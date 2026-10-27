@@ -123,6 +123,11 @@ const props = defineProps({
   modelValue: { type: Boolean, default: false },
   bookingId: { type: String, default: null },
   playerName: { type: String, default: '' },
+  // skillars-deferred-163 AC2.2: recap text recovered from a wrap-up that could no longer be
+  // submitted (the booking was force-completed first). Applied once load() resolves, only into
+  // fields the GET response left empty — a fresh force-complete placeholder's recap fields are
+  // always empty, so this never clobbers real saved text. Shape: { whatWeDid, whatsNext, whatWentWell }.
+  prefill: { type: Object, default: null },
 })
 const emit = defineEmits(['update:modelValue', 'saved'])
 
@@ -178,12 +183,24 @@ async function load() {
     editable.value = data?.editable === true
     editableUntil.value = data?.editableUntil ?? null
     notEditableReason.value = data?.notEditableReason ?? null
+    applyPrefillIntoEmptyFields()
   } catch {
     if (token !== loadToken) return
     loadError.value = true
   } finally {
     if (token === loadToken) loading.value = false
   }
+}
+
+// skillars-deferred-163 AC2.2: only into fields the load left empty -- never overwrites real,
+// already-saved recap text. Code review 2026-10-27: and only when the recap can actually be saved --
+// unsaved text in a read-only dialog would look like a saved recap.
+function applyPrefillIntoEmptyFields() {
+  const prefill = props.prefill
+  if (!prefill || !editable.value) return
+  if (!whatWeDid.value && prefill.whatWeDid) whatWeDid.value = prefill.whatWeDid
+  if (!whatsNext.value && prefill.whatsNext) whatsNext.value = prefill.whatsNext
+  if (!whatWentWell.value && prefill.whatWentWell) whatWentWell.value = prefill.whatWentWell
 }
 
 function saveErrorMessage(err) {

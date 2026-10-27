@@ -64,7 +64,12 @@ class SessionPauseResumeServiceTest {
             bookingService, bookingRepository, completionDataRepository,
             coachProfileRepository, userRepository, playerProfileRepository,
             eventPublisher, new ObjectMapper(), configService, drillRepository,
-            org.mockito.Mockito.mock(com.softropic.skillars.platform.booking.contract.BookingDisputeLookup.class)
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.booking.contract.BookingDisputeLookup.class),
+            // skillars-deferred-163 AC2.3: BookingCompletionService's new ContactDetailSanitizer/
+            // SessionRepository dependencies — this test never exercises submitWrapUp/updateRecap,
+            // so plain mocks (unstubbed) are enough.
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.session.repo.SessionRepository.class),
+            org.mockito.Mockito.mock(com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.class)
         );
 
         coach = new CoachProfile();

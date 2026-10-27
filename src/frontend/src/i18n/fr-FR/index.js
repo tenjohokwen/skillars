@@ -1578,6 +1578,8 @@ export default {
       sessionNotYetStarted:
         'Cette séance ne peut pas être démarrée ou terminée avant son heure de début prévue.',
       noShowTooEarly: 'Une absence ne peut pas être signalée avant le début de la séance.',
+      recapStillEditableAfterForceComplete:
+        'Cette séance a déjà été terminée, mais votre bilan a été reporté ci-dessous — vous pouvez toujours l’enregistrer.',
     },
     recap: {
       dialogTitle: 'Bilan de séance — {name}',

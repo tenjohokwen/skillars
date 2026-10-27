@@ -140,7 +140,17 @@ public enum BookingError implements ErrorCode {
      * skillars-deferred-162 AC6.2 (D162-A): the recap is locked because the session is disputed (an active
      * dispute, or one resolved with credit or a coach warning). The booking itself stays COMPLETED.
      */
-    RECAP_NOT_EDITABLE_DISPUTED;
+    RECAP_NOT_EDITABLE_DISPUTED,
+    /**
+     * skillars-deferred-163 AC2.1: {@code submitWrapUp} throws this instead of the generic
+     * {@code MISSING_RIGHTS} "can no longer be edited" message when the booking was already
+     * force-completed with an empty-recap placeholder row — by the stuck-completion sweeper OR by
+     * admin force-complete, which produce the identical placeholder signature
+     * ({@code BookingCompletionService.isSweeperPlaceholder}). Deliberately does not claim the
+     * sweeper is the exclusive cause. {@code PUT /recap} ({@code updateRecap}) can still save the
+     * recap text, so the old message was also substantively wrong, not just imprecise.
+     */
+    RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE;
 
     @Override
     public String getErrorCode() {
@@ -171,6 +181,7 @@ public enum BookingError implements ErrorCode {
             case RECAP_EDIT_WINDOW_CLOSED  -> "booking.recapEditWindowClosed";
             case RECAP_NOT_EDITABLE_ERASED -> "booking.recapNotEditableErased";
             case RECAP_NOT_EDITABLE_DISPUTED -> "booking.recapNotEditableDisputed";
+            case RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE -> "booking.recapStillEditableAfterForceComplete";
         };
     }
 

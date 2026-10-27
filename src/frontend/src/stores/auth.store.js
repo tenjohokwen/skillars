@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from 'src/api/auth.api'
-import { api } from 'src/boot/axios'
+import { getCoachTier } from 'src/api/marketplace.api'
 
 const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
 
@@ -31,9 +31,14 @@ export const useAuthStore = defineStore('auth', () => {
     coachTier.value = null
   }
 
+  // skillars-deferred-163 AC4.3: a 20s timeout (getCoachTier, marketplace.api.js) means this always
+  // settles — a hung request used to leave both CoachPlayerDetailPage.vue's and ProfilePage.vue's
+  // tierSettled gate stuck forever, since a request that never settles is neither a resolved nor a
+  // rejected promise. A timeout still rejects, taking the existing catch branch below exactly like
+  // any other failure (the UI's tierUnknown indicator already covers "settled but unavailable").
   async function fetchCoachTier() {
     try {
-      const response = await api.get('/api/marketplace/coaches/me/tier')
+      const response = await getCoachTier()
       coachTier.value = response.tier
     } catch {
       coachTier.value = null

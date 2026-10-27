@@ -61,17 +61,33 @@ class TimelineDrillSnapshotResolver {
                     session.getId(), bookingId, session.getStatus());
                 return List.of();
             }
+            return forBlocks(session.getBlocks(), session.getCoachId());
+        } catch (Exception e) {
+            log.warn("Could not resolve session drills for booking {} -- continuing without them", bookingId, e);
+            return List.of();
+        }
+    }
+
+    /**
+     * Name snapshot for the drills in {@code blocks}, gathered exactly as {@link #forBooking} does (block order
+     * then {@link SessionDrillRef#order()}, de-duplicated first-wins). skillars-deferred-163 AC2.4: the entry
+     * point for a QUICK completion's wrap-up-time {@code plan_blocks_snapshot}, so it and the live-plan path
+     * can never gather ids differently.
+     */
+    List<Map<String, Object>> forBlocks(List<SessionBlockData> blocks, UUID coachId) {
+        try {
+            if (blocks == null) return List.of();
             Set<UUID> ids = new LinkedHashSet<>();
-            for (SessionBlockData block : session.getBlocks()) {
-                if (block.drills() == null) continue;
+            for (SessionBlockData block : blocks) {
+                if (block == null || block.drills() == null) continue;
                 block.drills().stream()
                     .filter(java.util.Objects::nonNull)
                     .sorted(java.util.Comparator.comparingInt(SessionDrillRef::order))
                     .forEach(ref -> ids.add(ref.drillId()));
             }
-            return snapshot(new ArrayList<>(ids), session.getCoachId());
+            return snapshot(new ArrayList<>(ids), coachId);
         } catch (Exception e) {
-            log.warn("Could not resolve session drills for booking {} -- continuing without them", bookingId, e);
+            log.warn("Could not resolve plan drills -- continuing without them", e);
             return List.of();
         }
     }

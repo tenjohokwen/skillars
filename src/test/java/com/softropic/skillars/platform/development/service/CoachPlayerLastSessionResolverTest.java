@@ -212,6 +212,64 @@ class CoachPlayerLastSessionResolverTest {
         assertThat(signal.recapSourceEventOrNull()).isNull();
     }
 
+    /**
+     * skillars-deferred-163 AC3.1 + code review (2026-10-27, Decision 2): {@code occurredAt} is now the
+     * booking's own end time, and attribution compares it against the SESSION-time {@code sluEnd}, not
+     * the processing-time {@code calculated_at}. For one and the same session the two ends are equal, so
+     * the realistic shape (SLU processed long after the session ended) takes the fast path again — no
+     * correlation query.
+     */
+    @Test
+    void resolve_sessionEndOccurredAtFarBeforeSluCalculatedAt_attributesRecapOnSessionTimeFastPath() {
+        Instant sessionEnd = NOW.minusSeconds(30L * 86_400); // the session itself ended a month ago
+        PlayerTimelineEvent event = sessionCompletedEvent(sessionEnd, UUID.randomUUID());
+        stubSluDate(NOW.minusSeconds(5));                     // SLU just finished calculating
+        stubSluSessionEnd(sessionEnd);                        // ...for that same session
+        stubTimelineEvent(Optional.of(event));
+
+        CoachPlayerLastSessionResolver.LastCoachSessionSignal signal = resolver.resolve(PLAYER_ID, COACH_ID);
+
+        assertThat(signal.recapSourceEventOrNull()).isSameAs(event);
+        verify(sluRepository, never()).findLastSessionBookingId(any(), any());
+    }
+
+    /**
+     * Code review (2026-10-27, Decision 2) regression: older QUICK booking A is confirmed by the parent
+     * only after newer booking B completed. A's SLU row is processed LAST (latest calculated_at), but B is
+     * the latest session — B's own recap must survive. Comparing B's session-end occurredAt against the
+     * processing-time sluDate used to null it.
+     */
+    @Test
+    void resolve_olderBookingConfirmedAfterNewerOne_keepsTheNewerSessionsRecap() {
+        Instant endB = NOW.minusSeconds(2L * 86_400);
+        PlayerTimelineEvent eventB = sessionCompletedEvent(endB, UUID.randomUUID());
+        stubSluDate(NOW.minusSeconds(30));  // A's SLU, processed just now
+        stubSluSessionEnd(endB);            // B also earned SLU: MAX(booking end) is B's
+        stubTimelineEvent(Optional.of(eventB));
+
+        CoachPlayerLastSessionResolver.LastCoachSessionSignal signal = resolver.resolve(PLAYER_ID, COACH_ID);
+
+        assertThat(signal.recapSourceEventOrNull()).isSameAs(eventB);
+        assertThat(signal.lastSessionDate()).isEqualTo(endB);
+        verify(sluRepository, never()).findLastSessionBookingId(any(), any());
+    }
+
+    /** Same as above, but newer booking B earned no SLU (no plan) — A's older session end still loses. */
+    @Test
+    void resolve_olderBookingConfirmedAfterNewerSluLessOne_keepsTheNewerSessionsRecap() {
+        Instant endA = NOW.minusSeconds(10L * 86_400);
+        Instant endB = NOW.minusSeconds(2L * 86_400);
+        PlayerTimelineEvent eventB = sessionCompletedEvent(endB, UUID.randomUUID());
+        stubSluDate(NOW.minusSeconds(30));  // A's SLU, processed just now
+        stubSluSessionEnd(endA);            // only A has SLU rows
+        stubTimelineEvent(Optional.of(eventB));
+
+        CoachPlayerLastSessionResolver.LastCoachSessionSignal signal = resolver.resolve(PLAYER_ID, COACH_ID);
+
+        assertThat(signal.recapSourceEventOrNull()).isSameAs(eventB);
+        verify(sluRepository, never()).findLastSessionBookingId(any(), any());
+    }
+
     @Test
     void resolve_sluRowWinsTimestampRaceAndEventHasNoReferenceId_nullsRecap() {
         Instant occurredAt = NOW.minusSeconds(86_400);
@@ -264,7 +322,7 @@ class CoachPlayerLastSessionResolverTest {
     // ── skillars-12-10 AC4 (G21): session time, not processing time ──────────────────────────────
 
     @Test
-    void resolve_exposesSessionEndNotProcessingTime_butRecapAttributionStaysOnRawSignals() {
+    void resolve_exposesSessionEndNotProcessingTime() {
         UUID bookingId = UUID.randomUUID();
         Instant occurredAt = NOW.minusSeconds(60);          // processed a minute ago...
         Instant sessionEnd = NOW.minusSeconds(100L * 86_400); // ...for a session that ended 100 days ago

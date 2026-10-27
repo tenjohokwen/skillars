@@ -1749,6 +1749,32 @@ class BookingServiceTest {
                 .isEqualTo(BookingError.BOOKING_NOT_EDITABLE));
     }
 
+    /**
+     * skillars-deferred-163 AC3.3: rejectIfNotEditablePlayerRequest's clock source moved to
+     * ClockProvider, re-using Booking.isPrepNoteEditable's time half (its status half is already
+     * guaranteed true by the status check above it) — the two distinct error codes
+     * (BOOKING_NOT_EDITABLE for status, SESSION_ALREADY_ENDED for the clock) must still fire
+     * independently after that change.
+     */
+    @Test
+    void setPlayerRequest_bothErrorCodesStillFireIndependently_afterClockSourceChange() {
+        Booking statusRejected = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        when(bookingRepository.findById(statusRejected.getId())).thenReturn(Optional.of(statusRejected));
+        assertThatThrownBy(() -> bookingService.setPlayerRequest(statusRejected.getId(), PARENT_ID, "too early"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.BOOKING_NOT_EDITABLE));
+
+        Booking clockRejected = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        clockRejected.setRequestedStartTime(Instant.now().minusSeconds(10800));
+        clockRejected.setRequestedEndTime(Instant.now().minusSeconds(7200));
+        when(bookingRepository.findById(clockRejected.getId())).thenReturn(Optional.of(clockRejected));
+        assertThatThrownBy(() -> bookingService.setPlayerRequest(clockRejected.getId(), PARENT_ID, "after the fact"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SESSION_ALREADY_ENDED));
+    }
+
     @Test
     void setPlayerRequest_concurrentModification_throwsRetryableException() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");

@@ -202,6 +202,52 @@ describe('SessionRecapDialog.vue (skillars-12-7)', () => {
     )
   })
 
+  // skillars-deferred-163 AC2.2: a force-completed placeholder's GET response has empty recap
+  // fields, so the prefill applies safely into all three.
+  it('applies the prefill into fields the load left empty', async () => {
+    getSessionRecap.mockResolvedValue(
+      RECAP({ whatWeDid: null, whatsNext: null, whatWentWell: null }),
+    )
+    const w = await mountDialog({
+      prefill: {
+        whatWeDid: 'Recovered did',
+        whatsNext: 'Recovered next',
+        whatWentWell: 'Recovered well',
+      },
+    })
+
+    expect(w.find('textarea[data-testid="recap-what-we-did"]').element.value).toBe('Recovered did')
+    expect(w.find('textarea[data-testid="recap-whats-next"]').element.value).toBe('Recovered next')
+    expect(w.find('textarea[data-testid="recap-what-went-well"]').element.value).toBe(
+      'Recovered well',
+    )
+  })
+
+  // The prefill must never clobber real, already-saved recap text.
+  it('does not overwrite fields the load already populated with real text', async () => {
+    getSessionRecap.mockResolvedValue(RECAP({ whatWeDid: 'Real did', whatsNext: 'Real next' }))
+    const w = await mountDialog({
+      prefill: { whatWeDid: 'Recovered did', whatsNext: 'Recovered next' },
+    })
+
+    expect(w.find('textarea[data-testid="recap-what-we-did"]').element.value).toBe('Real did')
+    expect(w.find('textarea[data-testid="recap-whats-next"]').element.value).toBe('Real next')
+  })
+
+  // Code review 2026-10-27: a read-only recap (window closed, disputed, erased) must not show the
+  // carried-over text -- it could never be saved and would look like a saved recap.
+  it('does not apply the prefill when the recap is not editable', async () => {
+    getSessionRecap.mockResolvedValue(
+      RECAP({ whatWeDid: null, whatsNext: null, whatWentWell: null, editable: false }),
+    )
+    const w = await mountDialog({
+      prefill: { whatWeDid: 'Recovered did', whatsNext: 'Recovered next' },
+    })
+
+    expect(w.find('textarea[data-testid="recap-what-we-did"]').element.value).toBe('')
+    expect(w.find('textarea[data-testid="recap-whats-next"]').element.value).toBe('')
+  })
+
   // A slow GET for booking A must not overwrite the fields once the dialog has moved to booking B.
   it('ignores a stale load response after the booking changed', async () => {
     let resolveA
