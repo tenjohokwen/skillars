@@ -31,6 +31,30 @@
                 <q-badge v-if="conv.unreadCount > 0" color="primary" :label="conv.unreadCount" />
                 <q-item-label caption>{{ relativeTime(conv.lastMessageAt) }}</q-item-label>
               </q-item-section>
+              <!-- skillars-deferred-165 AC6: conversation-level report. -->
+              <q-item-section side>
+                <q-btn
+                  flat
+                  dense
+                  round
+                  icon="more_vert"
+                  data-testid="conversation-kebab-btn"
+                  @click.stop
+                >
+                  <q-menu>
+                    <q-list>
+                      <q-item
+                        clickable
+                        v-close-popup
+                        data-testid="report-conversation-action"
+                        @click="openReportDialog('conversation', conv.conversationId)"
+                      >
+                        <q-item-section>{{ t('messaging.reportConversation') }}</q-item-section>
+                      </q-item>
+                    </q-list>
+                  </q-menu>
+                </q-btn>
+              </q-item-section>
             </q-item>
           </q-list>
           <div v-else class="text-caption text-secondary q-mt-md">
@@ -45,15 +69,53 @@
               <div
                 v-for="msg in currentMessages"
                 :key="msg.messageId"
-                class="q-mb-sm"
-                :class="msg.senderId === myUserId ? 'text-right' : 'text-left'"
+                class="q-mb-sm row items-center q-gutter-xs"
+                :class="msg.senderId === myUserId ? 'justify-end' : 'justify-start'"
               >
                 <q-chip
                   :color="msg.senderId === myUserId ? 'primary' : 'grey-3'"
                   :text-color="msg.senderId === myUserId ? 'white' : 'dark'"
+                  :data-testid="`message-bubble-${msg.messageId}`"
                 >
-                  {{ msg.content ?? t('messaging.contentRemoved') }}
+                  <span v-if="msg.locallyDeleted" class="text-italic">{{
+                    t('messaging.messageDeleted')
+                  }}</span>
+                  <span v-else>{{ msg.content ?? t('messaging.contentRemoved') }}</span>
                 </q-chip>
+                <!-- skillars-deferred-165 AC6: delete (own messages only) / report (any message). -->
+                <q-btn
+                  v-if="!msg.locallyDeleted"
+                  flat
+                  dense
+                  round
+                  size="sm"
+                  icon="more_vert"
+                  :data-testid="`message-kebab-${msg.messageId}`"
+                >
+                  <q-menu>
+                    <q-list>
+                      <q-item
+                        v-if="canDelete(msg)"
+                        clickable
+                        v-close-popup
+                        data-testid="delete-message-action"
+                        @click="handleDeleteMessage(msg)"
+                      >
+                        <q-item-section class="text-negative">{{
+                          t('messaging.deleteMessage')
+                        }}</q-item-section>
+                      </q-item>
+                      <q-item
+                        clickable
+                        v-close-popup
+                        data-testid="report-message-action"
+                        @click="openReportDialog('message', msg.messageId)"
+                      >
+                        <q-item-section>{{ t('messaging.reportMessage') }}</q-item-section>
+                      </q-item>
+                    </q-list>
+                  </q-menu>
+                </q-btn>
               </div>
             </div>
 
@@ -84,17 +146,64 @@
         </div>
       </div>
     </div>
+
+    <!-- skillars-deferred-165 AC6: shared report dialog (message- and conversation-level). -->
+    <q-dialog v-model="reportDialogOpen">
+      <q-card data-testid="report-dialog" style="min-width: 320px; max-width: 480px; width: 100%">
+        <q-card-section>
+          <div class="text-h6">{{ t('messaging.reportDialogTitle') }}</div>
+        </q-card-section>
+        <q-card-section>
+          <q-select
+            v-model="reportReason"
+            data-testid="report-reason-select"
+            :options="reportReasonOptions"
+            :label="t('messaging.reportReasonLabel')"
+            emit-value
+            map-options
+            outlined
+            dense
+            class="q-mb-md"
+          />
+          <q-input
+            v-model="reportDetails"
+            data-testid="report-details-input"
+            type="textarea"
+            outlined
+            autogrow
+            maxlength="500"
+            counter
+            :label="t('messaging.reportDetailsLabel')"
+          />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn
+            unelevated
+            color="primary"
+            data-testid="report-submit-btn"
+            :label="t('messaging.reportSubmit')"
+            :loading="reportSubmitting"
+            :disable="!reportReason"
+            @click="submitReport"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useQuasar } from 'quasar'
 import { useMessagingStore } from 'src/stores/messaging.store'
 import { useAuthStore } from 'src/stores/auth.store'
+import { softDeleteMessage, reportMessage, reportConversation } from 'src/api/messaging.api'
 import { date } from 'quasar'
 
 const { t } = useI18n()
+const $q = useQuasar()
 const store = useMessagingStore()
 const authStore = useAuthStore()
 
@@ -102,7 +211,26 @@ const newMessage = ref('')
 const sending = ref(false)
 const threadRef = ref(null)
 
-const myUserId = computed(() => authStore.user?.id ?? null)
+// skillars-deferred-165 AC6 fix: authStore has no `user` object (only a flat `userId` ref) — this
+// read was always undefined, so `msg.senderId === myUserId` never matched and no message ever
+// rendered as "mine". Found while wiring the own-message-only Delete gate, which depends on the
+// same comparison.
+const myUserId = computed(() => authStore.userId)
+
+const reportDialogOpen = ref(false)
+const reportTargetType = ref(null) // 'message' | 'conversation'
+const reportTargetId = ref(null)
+const reportReason = ref(null)
+const reportDetails = ref('')
+const reportSubmitting = ref(false)
+
+const reportReasonOptions = [
+  { label: t('messaging.reportReason.HARASSMENT'), value: 'HARASSMENT' },
+  { label: t('messaging.reportReason.INAPPROPRIATE_CONTENT'), value: 'INAPPROPRIATE_CONTENT' },
+  { label: t('messaging.reportReason.SPAM'), value: 'SPAM' },
+  { label: t('messaging.reportReason.CONTACT_SOLICITATION'), value: 'CONTACT_SOLICITATION' },
+  { label: t('messaging.reportReason.OTHER'), value: 'OTHER' },
+]
 
 const currentMessages = computed(() => {
   if (!store.activeConversationId) return []
@@ -132,6 +260,66 @@ async function submitMessage() {
     newMessage.value = ''
   } finally {
     sending.value = false
+  }
+}
+
+// MessagingService.softDeleteMessage always refuses a message under active moderation
+// (MODERATION_PENDING) — don't offer an action that can only fail.
+const UNDELETABLE_MODERATION_STATUSES = ['UNDER_REVIEW', 'BLOCKED']
+function canDelete(msg) {
+  return (
+    msg.senderId === myUserId.value &&
+    !UNDELETABLE_MODERATION_STATUSES.includes(msg.moderationStatus)
+  )
+}
+
+async function handleDeleteMessage(msg) {
+  try {
+    // 204 No Content (MessagingResource#softDeleteMessage) — optimistically update locally, don't
+    // rely on a response body. `msg` is the same object reference the store holds, so mutating it
+    // here is reactive without a separate store action.
+    await softDeleteMessage(store.activeConversationId, msg.messageId)
+    msg.locallyDeleted = true
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'messaging.alreadyDeleted') {
+      msg.locallyDeleted = true
+    } else if (errorKey === 'messaging.moderationPending') {
+      $q.notify({ message: t('messaging.deleteModerationPending'), type: 'negative' })
+    } else {
+      $q.notify({ message: t('messaging.deleteFailed'), type: 'negative' })
+    }
+  }
+}
+
+function openReportDialog(targetType, targetId) {
+  reportTargetType.value = targetType
+  reportTargetId.value = targetId
+  reportReason.value = null
+  reportDetails.value = ''
+  reportDialogOpen.value = true
+}
+
+async function submitReport() {
+  reportSubmitting.value = true
+  try {
+    const payload = { reason: reportReason.value, details: reportDetails.value }
+    if (reportTargetType.value === 'message') {
+      await reportMessage(store.activeConversationId, reportTargetId.value, payload)
+    } else {
+      await reportConversation(reportTargetId.value, payload)
+    }
+    reportDialogOpen.value = false
+    $q.notify({ message: t('messaging.reportSuccess'), type: 'positive' })
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'messaging.alreadyReported') {
+      $q.notify({ message: t('messaging.alreadyReported'), type: 'negative' })
+    } else {
+      $q.notify({ message: t('messaging.reportFailed'), type: 'negative' })
+    }
+  } finally {
+    reportSubmitting.value = false
   }
 }
 

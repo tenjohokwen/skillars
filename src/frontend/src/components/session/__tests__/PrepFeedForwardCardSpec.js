@@ -17,6 +17,7 @@ vi.mock('quasar', async (importOriginal) => {
 
 import { setCoachPlanNote } from 'src/api/booking.api'
 import PrepFeedForwardCard from 'src/components/session/PrepFeedForwardCard.vue'
+import CoachPlanNotePanel from 'src/components/booking/CoachPlanNotePanel.vue'
 
 const PREP = (overrides = {}) => ({
   coachPlanNote: null,
@@ -153,5 +154,86 @@ describe('PrepFeedForwardCard.vue (skillars-12-6)', () => {
       expect.objectContaining({ type: 'negative', message: 'coach.planNoteConflict' }),
     )
     expect(wrapper.find('textarea').element.value).toBe('Passing')
+  })
+
+  // skillars-deferred-165 AC8: this card's Apply write path is separate from CoachPlanNotePanel's
+  // own save() — a locked 403 here must disable the Apply button too, without a page reload.
+  it.each([
+    [
+      'booking.notEditable',
+      { response: { status: 403, data: { errorMsg: { errorKey: 'booking.notEditable' } } } },
+    ],
+    [
+      'SESSION_ALREADY_ENDED',
+      { response: { status: 403, data: { errorMsg: { errorKey: 'SESSION_ALREADY_ENDED' } } } },
+    ],
+  ])(
+    'a locked-error response (%s) disables the Apply button without a page reload',
+    async (_label, error) => {
+      setCoachPlanNote.mockRejectedValue(error)
+      const wrapper = mountCard(PREP({ coachPlanNote: 'Passing' }))
+
+      await apply(wrapper).trigger('click')
+      await flushPromises()
+
+      expect(apply(wrapper).attributes('disabled')).toBeDefined()
+      // Mutation check: drop the `locallyLocked.value = true` assignment in apply()'s catch branch ->
+      // this assertion goes RED (the button stays enabled).
+    },
+  )
+
+  // Code review 2026-10-27: one lock for the whole card — the panel and Apply share it both ways.
+  const LOCKED_403 = {
+    response: { status: 403, data: { errorMsg: { errorKey: 'booking.notEditable' } } },
+  }
+
+  it('a locked Apply response also flips the embedded note panel read-only', async () => {
+    setCoachPlanNote.mockRejectedValue(LOCKED_403)
+    const wrapper = mountCard(PREP({ coachPlanNote: 'Passing' }))
+
+    await apply(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="plan-note-readonly"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="plan-note-input"]').exists()).toBe(false)
+  })
+
+  it("a locked response to the panel's own save (its `locked` event) also disables Apply", async () => {
+    const wrapper = mountCard(PREP({ coachPlanNote: 'Passing' }))
+    expect(apply(wrapper).attributes('disabled')).toBeUndefined()
+
+    // Emitted directly: driving a real panel save would also leave the panel dirty, which disables
+    // Apply on its own and would hide whether the lock itself propagated.
+    wrapper.findComponent(CoachPlanNotePanel).vm.$emit('locked')
+    await flushPromises()
+
+    expect(apply(wrapper).attributes('disabled')).toBeDefined()
+  })
+
+  it('a non-locked apply failure does not disable the Apply button', async () => {
+    setCoachPlanNote.mockRejectedValue({ response: { status: 409, data: {} } })
+    const wrapper = mountCard(PREP({ coachPlanNote: 'Different note entirely' }))
+
+    await apply(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(apply(wrapper).attributes('disabled')).toBeUndefined()
+  })
+
+  it('resets the lock when the card is reused for a different booking', async () => {
+    setCoachPlanNote.mockRejectedValue({
+      response: { status: 403, data: { errorMsg: { errorKey: 'booking.notEditable' } } },
+    })
+    const wrapper = mount(PrepFeedForwardCard, {
+      props: { bookingId: 'b-1', prep: PREP({ coachPlanNote: 'Passing' }) },
+    })
+    mounted.push(wrapper)
+    await apply(wrapper).trigger('click')
+    await flushPromises()
+    expect(apply(wrapper).attributes('disabled')).toBeDefined()
+
+    await wrapper.setProps({ bookingId: 'b-2', prep: PREP({ coachPlanNote: 'Dribbling' }) })
+
+    expect(apply(wrapper).attributes('disabled')).toBeUndefined()
   })
 })

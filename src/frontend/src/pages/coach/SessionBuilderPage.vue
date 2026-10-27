@@ -243,6 +243,7 @@
             v-model="templateNameInput"
             dense
             autofocus
+            maxlength="200"
             :label="t('session.templates.nameLabel')"
           />
         </q-card-section>

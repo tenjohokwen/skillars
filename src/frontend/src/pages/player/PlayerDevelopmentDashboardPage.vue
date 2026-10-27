@@ -60,6 +60,22 @@
         </q-card-section>
       </q-card>
 
+      <!-- Skill Trends — skillars-deferred-165 AC4: per-skill direction/slope, a different shape
+           than the weekly-total time series above. -->
+      <q-card class="q-mt-md">
+        <q-card-section>
+          <div class="text-subtitle1">{{ $t('development.skillTrends.title') }}</div>
+        </q-card-section>
+        <q-card-section class="relative-position">
+          <q-inner-loading :showing="store.skillTrendsLoading" />
+          <SkillTrendsPanel
+            :trends="store.skillTrends"
+            :skill-definitions="skillDefinitions"
+            :error="!!store.skillTrendsError && !store.skillTrendsLoading"
+          />
+        </q-card-section>
+      </q-card>
+
       <!-- Performance Reports — read-only list for the player (no generate button). -->
       <q-card class="q-mt-md">
         <q-card-section>
@@ -87,6 +103,7 @@ import { useRoute } from 'vue-router'
 import { useDevelopmentStore } from 'src/stores/development.store'
 import SkillExposureBarChart from 'src/components/development/SkillExposureBarChart.vue'
 import SkillExposureTrendChart from 'src/components/development/SkillExposureTrendChart.vue'
+import SkillTrendsPanel from 'src/components/development/SkillTrendsPanel.vue'
 import PerformanceReportsPanel from 'src/components/development/PerformanceReportsPanel.vue'
 import PlayerTimelinePanel from 'src/components/development/PlayerTimelinePanel.vue'
 
@@ -121,6 +138,7 @@ let loadRequestId = 0
 
 async function loadPlayerData(id) {
   const requestId = ++loadRequestId
+  store.fetchSkillTrends(id)
   await Promise.all([
     store.fetchSkillDefinitions(),
     store.fetchExposure(id),

@@ -46,9 +46,6 @@ public class SessionCompletionData {
     @Column(name = "technique_rating")
     private Integer techniqueRating;
 
-    @Column(name = "voice_note_text", length = 2000)
-    private String voiceNoteText;
-
     @Column(name = "what_we_did", length = 500)
     private String whatWeDid;
 

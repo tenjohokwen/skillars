@@ -377,6 +377,11 @@ const routes = [
             component: () => import('pages/admin/HealthDashboardPage.vue'),
             meta: { requiresAuth: true, roles: ['ADMIN'] },
           },
+          {
+            path: 'disputes',
+            component: () => import('pages/admin/AdminDisputesPage.vue'),
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
+          },
         ],
       },
     ],

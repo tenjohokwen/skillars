@@ -156,6 +156,13 @@
             "
             @click="openPlayerRequestDialog(booking)"
           />
+
+          <!-- skillars-deferred-165 AC2: raise/view a dispute, parent-or-self-booking-player. -->
+          <DisputeAction
+            v-if="(authStore.isParent || authStore.isPlayer) && isDisputeEligible(booking.status)"
+            :booking-id="booking.id"
+            class="self-start q-mt-xs"
+          />
         </q-item-section>
         <q-item-section side>
           <BookingStateChip :status="booking.status" :booking-id="booking.id" />
@@ -280,6 +287,21 @@ import { useBookingStore } from 'src/stores/booking.store'
 import { useAuthStore } from 'src/stores/auth.store'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
+import DisputeAction from 'src/components/booking/DisputeAction.vue'
+
+// skillars-deferred-165 AC2: mirrors DisputeService.ELIGIBLE_STATUSES client-side, purely for UX —
+// the server is the real gate.
+const DISPUTE_ELIGIBLE_STATUSES = [
+  'COMPLETED',
+  'CANCELLED',
+  'CANCELLED_PARENT',
+  'CANCELLED_COACH',
+  'NO_SHOW_PLAYER',
+  'NO_SHOW_COACH',
+]
+function isDisputeEligible(status) {
+  return DISPUTE_ELIGIBLE_STATUSES.includes(status)
+}
 
 const { t, locale } = useI18n()
 const $q = useQuasar()

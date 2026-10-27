@@ -11,6 +11,13 @@ const LOCKED_ERROR_KEYS = new Set([
   'SESSION_ALREADY_ENDED',
 ])
 
+// skillars-deferred-165 AC8: exported so CoachPlanNotePanel/PrepFeedForwardCard can flip their
+// own `locallyLocked` guard on the exact same condition this already maps to the locked message.
+export function isLockedPlanNoteError(err) {
+  const errorKey = err?.response?.data?.errorMsg?.errorKey
+  return LOCKED_ERROR_KEYS.has(errorKey)
+}
+
 export function planNoteErrorMessage(err, t) {
   const errorKey = err?.response?.data?.errorMsg?.errorKey
   // The note write either flushes inside the service (403 + concurrent-modification key) or loses the
@@ -20,6 +27,6 @@ export function planNoteErrorMessage(err, t) {
   if (err?.response?.status === 409 || CONFLICT_ERROR_KEYS.has(errorKey)) {
     return t('coach.planNoteConflict')
   }
-  if (LOCKED_ERROR_KEYS.has(errorKey)) return t('coach.planNoteLocked')
+  if (isLockedPlanNoteError(err)) return t('coach.planNoteLocked')
   return t('coach.planNoteSaveError')
 }

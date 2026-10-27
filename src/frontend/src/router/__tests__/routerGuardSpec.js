@@ -178,3 +178,21 @@ describe('router/index.js beforeEach — role-gated routes (deferred-148 AC4)', 
     expect(router.currentRoute.value.path).toBe('/coach/command-center')
   })
 })
+
+// skillars-deferred-165 AC13: the real router's `:playerId(\d+)` constraint actually rejects a
+// non-digit segment — code review of skillars-deferred-154 found zero coverage of this (every
+// pushed :playerId in this file was an all-digit Tsid fixture).
+describe('router/index.js — :playerId(\\d+) constraint rejects a non-digit segment (deferred-165 AC13)', () => {
+  it('falls through to the catch-all 404 for a non-digit :playerId', async () => {
+    const router = await buildRouter({
+      auth: { userId: '1', role: 'COACH' },
+      profileBuilder: { status: { profileComplete: true } },
+    })
+
+    await router.push('/coach/players/abc')
+
+    expect(router.currentRoute.value.meta.notFound).toBe(true)
+    // Mutation check: loosen routes.js's `coach/players/:playerId(\\d+)` back to an unconstrained
+    // `:playerId` -> this resolves to the real coach-player-detail route instead, RED.
+  })
+})

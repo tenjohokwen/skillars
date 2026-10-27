@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.admin.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.admin.contract.AdminDisputeDetailDto;
+import com.softropic.skillars.platform.admin.contract.AdminDisputeQueueDto;
 import com.softropic.skillars.platform.admin.contract.AdminDismissDisputeRequest;
 import com.softropic.skillars.platform.admin.contract.AdminResolveDisputeRequest;
 import com.softropic.skillars.platform.admin.service.DisputeService;
@@ -10,6 +11,8 @@ import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
@@ -18,7 +21,9 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.UUID;
 
@@ -30,6 +35,22 @@ public class AdminDisputeResource {
 
     private final DisputeService disputeService;
     private final SecurityUtil securityUtil;
+
+    // skillars-deferred-165 AC1: mirrors AdminReviewResource.getQueue / AdminModerationResource.getQueue --
+    // a literal "/queue" segment is matched ahead of the "/{disputeId}" variable mapping below by Spring's
+    // path-pattern comparator, so there is no routing ambiguity.
+    @GetMapping("/queue")
+    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @Observed(name = "admin.disputes.queue")
+    public ResponseEntity<Page<AdminDisputeQueueDto>> getQueue(
+            @RequestParam(defaultValue = "OPEN") String status,
+            @RequestParam(defaultValue = "0") int page) {
+        if (!"OPEN".equalsIgnoreCase(status)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Only status=OPEN is supported in this version");
+        }
+        return ResponseEntity.ok(disputeService.getDisputeQueue(page));
+    }
 
     @GetMapping("/{disputeId}")
     @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)

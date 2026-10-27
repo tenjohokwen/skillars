@@ -296,3 +296,76 @@ describe('CoachCommandCenterPage.vue UPCOMING-action time gate (deferred-151 AC6
     expect(negativeMessages()).toContain('booking.errors.noShowTooEarly')
   })
 })
+
+// skillars-deferred-165 AC2: the "Raise a dispute" action only renders for eligible booking
+// statuses (mirrors DisputeService.ELIGIBLE_STATUSES client-side, purely for UX). Full-mounted
+// (not shallow): bookingsByDay groups purely by day-of-week from requestedStartTime, independent
+// of selectedWeek, so any valid Instant lands in the grid regardless of the currently shown week.
+describe('CoachCommandCenterPage.vue — dispute action visibility (deferred-165 AC2)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  function mountFullPage(status) {
+    const pinia = createTestingPinia({
+      createSpy: vi.fn,
+      initialState: {
+        auth: { userId: '1', role: 'COACH' },
+        booking: {
+          coachSchedule: {
+            coachTimezone: 'UTC',
+            bookings: [
+              {
+                bookingId: 'b1',
+                status,
+                requestedStartTime: '2026-03-02T10:00:00Z',
+                requestedEndTime: '2026-03-02T11:00:00Z',
+                playerName: 'Kid',
+              },
+            ],
+            availabilityWindows: [],
+            projectedGrossRevenue: 0,
+            commissionDeduction: 0,
+            projectedNetRevenue: 0,
+          },
+        },
+      },
+    })
+    const wrapper = mount(CoachCommandCenterPage, {
+      global: {
+        plugins: [pinia],
+        stubs: { BookingStateChip: true, TimezoneNotice: true, SessionDNAChart: true },
+      },
+    })
+    mounted.push(wrapper)
+    return wrapper
+  }
+
+  it('renders the dispute action for a COMPLETED booking', async () => {
+    const wrapper = mountFullPage('COMPLETED')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="dispute-raise-btn"]').exists()).toBe(true)
+  })
+
+  it.each(['CANCELLED', 'CANCELLED_PARENT', 'CANCELLED_COACH', 'NO_SHOW_PLAYER', 'NO_SHOW_COACH'])(
+    'renders the dispute action for a %s booking',
+    async (status) => {
+      const wrapper = mountFullPage(status)
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="dispute-raise-btn"]').exists()).toBe(true)
+    },
+  )
+
+  it.each(['CONFIRMED', 'UPCOMING'])(
+    'does not render the dispute action for a %s booking',
+    async (status) => {
+      const wrapper = mountFullPage(status)
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="dispute-raise-btn"]').exists()).toBe(false)
+    },
+  )
+})

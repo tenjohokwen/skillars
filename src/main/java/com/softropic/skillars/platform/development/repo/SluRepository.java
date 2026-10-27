@@ -92,6 +92,39 @@ public interface SluRepository extends JpaRepository<PlayerSkillStat, UUID> {
         """)
     Optional<UUID> findLastSessionBookingId(@Param("playerId") Long playerId, @Param("coachId") UUID coachId);
 
+    // skillars-deferred-165 code review (2026-10-27): the prep-card counterparts of findLastSessionEnd /
+    // findLastSessionBookingId, bounded exactly like PlayerTimelineRepository.findLatestSessionCompletedEvent
+    // (the prepped booking itself, or any booking scheduled before it, or an unresolvable booking). Without
+    // this, CoachPlayerLastSessionResolver checked a correctly-bounded earlier recap against the UNBOUNDED
+    // SLU signal, so a later-scheduled session that already has an SLU row nulled the earlier recap.
+    @Query(nativeQuery = true, value = """
+        SELECT MAX(LEAST(COALESCE(b.requested_end_time, p.calculated_at), CAST(:now AS timestamptz)))
+        FROM development.player_skill_stats p
+        LEFT JOIN session.sessions s ON s.id = p.session_id
+        LEFT JOIN booking.bookings b ON b.id = s.booking_id
+        WHERE p.player_id = :playerId AND p.coach_id = :coachId
+          AND (b.id = :bookingId OR b.requested_start_time IS NULL
+               OR b.requested_start_time < :preppedBookingStartTime)
+        """)
+    Instant findLastSessionEndBefore(@Param("playerId") Long playerId, @Param("coachId") UUID coachId,
+                                     @Param("now") Instant now, @Param("bookingId") UUID bookingId,
+                                     @Param("preppedBookingStartTime") Instant preppedBookingStartTime);
+
+    @Query(nativeQuery = true, value = """
+        SELECT s.booking_id
+        FROM development.player_skill_stats p
+        JOIN session.sessions s ON s.id = p.session_id
+        LEFT JOIN booking.bookings b ON b.id = s.booking_id
+        WHERE p.player_id = :playerId AND p.coach_id = :coachId
+          AND (b.id = :bookingId OR b.requested_start_time IS NULL
+               OR b.requested_start_time < :preppedBookingStartTime)
+        ORDER BY COALESCE(b.requested_end_time, p.calculated_at) DESC, p.calculated_at DESC
+        LIMIT 1
+        """)
+    Optional<UUID> findLastSessionBookingIdBefore(@Param("playerId") Long playerId, @Param("coachId") UUID coachId,
+                                                  @Param("bookingId") UUID bookingId,
+                                                  @Param("preppedBookingStartTime") Instant preppedBookingStartTime);
+
     @Query(nativeQuery = true, value = """
         SELECT coach_id, skill_code, SUM(slu_value) AS total_slu
         FROM development.player_skill_stats

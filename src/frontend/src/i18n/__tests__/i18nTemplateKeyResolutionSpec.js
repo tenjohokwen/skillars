@@ -57,6 +57,45 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'same axis-key interpolation, second render site on the same component',
   },
   {
+    at: 'src/components/booking/DisputeAction.vue:89',
+    reason: 'label keyed by disputeStatus.reason, a runtime enum value from GET /api/disputes/{id}',
+  },
+  {
+    at: 'src/components/booking/DisputeAction.vue:92',
+    reason: 'label keyed by disputeStatus.status, a runtime enum value from GET /api/disputes/{id}',
+  },
+  {
+    at: 'src/components/booking/DisputeAction.vue:96',
+    reason:
+      'label keyed by disputeStatus.resolution, a runtime enum value from GET /api/disputes/{id}',
+  },
+  {
+    at: 'src/pages/admin/AdminDisputesPage.vue:27',
+    reason: 'table cell keyed by props.row.reason, a runtime enum value from the dispute queue',
+  },
+  {
+    at: 'src/pages/admin/AdminDisputesPage.vue:30',
+    reason: 'table cell keyed by props.row.status, a runtime enum value from the dispute queue',
+  },
+  {
+    at: 'src/pages/admin/AdminDisputesPage.vue:81',
+    reason: 'label keyed by detail.reason, a runtime enum value from GET /api/admin/disputes/{id}',
+  },
+  {
+    at: 'src/pages/admin/AdminDisputesPage.vue:84',
+    reason: 'label keyed by detail.status, a runtime enum value from GET /api/admin/disputes/{id}',
+  },
+  {
+    at: 'src/pages/admin/AdminDisputesPage.vue:95',
+    reason:
+      'label keyed by detail.resolution, a runtime enum value from GET /api/admin/disputes/{id}',
+  },
+  {
+    at: 'src/components/development/SkillTrendsPanel.vue:81',
+    reason:
+      'directionLabel: t() on a DIRECTION_LABEL_KEYS lookup (static keys) keyed by trend.direction, a runtime enum value from GET .../slu/skill-trends',
+  },
+  {
     at: 'src/components/booking/SessionPackTracker.vue:55',
     reason: "status label keyed by the pack state machine's current state value",
   },
@@ -136,19 +175,19 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 't() on a server-supplied errorKey, guarded by its own $te probe on the same line',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:778',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:800',
     reason: 'notify message keyed by a successMessage key chosen earlier in the handler',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:789',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:811',
     reason: 'notify message keyed by a messageKey chosen earlier in the handler',
   },
   {
-    at: 'src/pages/coach/CoachPlayerDetailPage.vue:172',
+    at: 'src/pages/coach/CoachPlayerDetailPage.vue:188',
     reason: '$t on noContributionsKey, a computed that picks between two real i18n keys at runtime',
   },
   {
-    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:176',
+    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:187',
     reason: "label keyed by the review-eligibility response's own reasonCode enum",
   },
   {

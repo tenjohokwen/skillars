@@ -19,7 +19,16 @@
       </q-card-section>
 
       <q-card-section v-else-if="loadError" class="text-negative" data-testid="recap-load-error">
-        {{ t('booking.recap.loadError') }}
+        <div>{{ t('booking.recap.loadError') }}</div>
+        <q-btn
+          flat
+          dense
+          class="q-mt-sm"
+          color="primary"
+          :label="t('booking.recap.retry')"
+          data-testid="recap-load-retry"
+          @click="load"
+        />
       </q-card-section>
 
       <template v-else>

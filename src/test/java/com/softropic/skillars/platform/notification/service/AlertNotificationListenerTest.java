@@ -23,6 +23,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -268,5 +269,96 @@ class AlertNotificationListenerTest {
             .filter(e -> e.getFormattedMessage().contains("blank or not a plausible email address"))
             .count();
         assertThat(noRecipientErrorCount).as("a repeat past the cooldown must log again").isEqualTo(2);
+    }
+
+    // ---- skillars-deferred-165 AC11: EMAIL_CONFIG_ERROR log throttling, mirroring AC12(a) above ----
+
+    @Test
+    @DisplayName("a second config-lookup failure within the cooldown window logs EMAIL_CONFIG_ERROR only once")
+    void emailChannel_repeatedConfigLookupFailureWithinCooldown_logsOnlyOnce() {
+        when(configService.find(KEY)).thenThrow(new IllegalStateException("db down"));
+        Clock clock = mock(Clock.class);
+        Instant t0 = Instant.parse("2026-01-01T00:00:00Z");
+        // Fires twice, 10s apart — well inside the default 300s cooldown.
+        when(clock.instant()).thenReturn(t0, t0.plusSeconds(10));
+        AlertNotificationListener throttledListener =
+            new AlertNotificationListener(mailManager, configService, clock, DEFAULT_COOLDOWN_SECONDS);
+
+        ListAppender<ILoggingEvent> logCapture = captureListenerLogs();
+        try {
+            throttledListener.onAlertFired(emailEvent());
+            throttledListener.onAlertFired(emailEvent());
+        } finally {
+            listenerLogger().detachAppender(logCapture);
+        }
+
+        long configErrorCount = logCapture.list.stream()
+            .filter(e -> e.getLevel() == Level.ERROR)
+            .filter(e -> structuredArgs(e).contains("status=EMAIL_CONFIG_ERROR"))
+            .count();
+        assertThat(configErrorCount).as("the second failure within the cooldown must not log again").isEqualTo(1);
+        verifyNoInteractions(mailManager);
+    }
+
+    @Test
+    @DisplayName("a second config-lookup failure AFTER the cooldown window logs EMAIL_CONFIG_ERROR again")
+    void emailChannel_repeatedConfigLookupFailureAfterCooldown_logsAgain() {
+        when(configService.find(KEY)).thenThrow(new IllegalStateException("db down"));
+        Clock clock = mock(Clock.class);
+        Instant t0 = Instant.parse("2026-01-01T00:00:00Z");
+        // Fires twice, 301s apart — just past the default 300s cooldown.
+        when(clock.instant()).thenReturn(t0, t0.plusSeconds(301));
+        AlertNotificationListener throttledListener =
+            new AlertNotificationListener(mailManager, configService, clock, DEFAULT_COOLDOWN_SECONDS);
+
+        ListAppender<ILoggingEvent> logCapture = captureListenerLogs();
+        try {
+            throttledListener.onAlertFired(emailEvent());
+            throttledListener.onAlertFired(emailEvent());
+        } finally {
+            listenerLogger().detachAppender(logCapture);
+        }
+
+        long configErrorCount = logCapture.list.stream()
+            .filter(e -> e.getLevel() == Level.ERROR)
+            .filter(e -> structuredArgs(e).contains("status=EMAIL_CONFIG_ERROR"))
+            .count();
+        assertThat(configErrorCount).as("a repeat past the cooldown must log again").isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("the EMAIL_CONFIG_ERROR and EMAIL_NO_RECIPIENT throttles are independent")
+    void emailConfigErrorThrottle_doesNotShareCooldownWithNoRecipientThrottle() {
+        Clock clock = mock(Clock.class);
+        Instant t0 = Instant.parse("2026-01-01T00:00:00Z");
+        when(clock.instant()).thenReturn(t0, t0.plusSeconds(10));
+        AlertNotificationListener throttledListener =
+            new AlertNotificationListener(mailManager, configService, clock, DEFAULT_COOLDOWN_SECONDS);
+
+        // doThrow/doReturn (not when(...).thenX()): re-stubbing with when(mock.find(KEY)) would call
+        // the mock a second time to register the new stub, and since the FIRST stub already throws
+        // for that exact call, that second registration call would itself throw before Mockito could
+        // install the override.
+        ListAppender<ILoggingEvent> logCapture = captureListenerLogs();
+        try {
+            // First alert: config lookup fails outright.
+            doThrow(new IllegalStateException("db down")).when(configService).find(KEY);
+            throttledListener.onAlertFired(emailEvent());
+            // Second alert, 10s later (still within either cooldown): config lookup now succeeds
+            // but returns blank — a DIFFERENT failure mode, so it must still log its own ERROR.
+            doReturn(Optional.of("")).when(configService).find(KEY);
+            throttledListener.onAlertFired(emailEvent());
+        } finally {
+            listenerLogger().detachAppender(logCapture);
+        }
+
+        assertThat(logCapture.list).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(structuredArgs(event)).contains("status=EMAIL_CONFIG_ERROR");
+        });
+        assertThat(logCapture.list).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(structuredArgs(event)).contains("status=EMAIL_NO_RECIPIENT");
+        });
     }
 }

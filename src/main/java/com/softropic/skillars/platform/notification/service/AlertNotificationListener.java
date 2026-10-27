@@ -69,6 +69,12 @@ public class AlertNotificationListener {
      */
     private final AtomicReference<Instant> lastNoRecipientLogAt = new AtomicReference<>();
 
+    // skillars-deferred-165 AC11: same rationale as lastNoRecipientLogAt above (a config-service
+    // lookup failure is one problem affecting every rule identically) — mirrors that throttle
+    // exactly, reusing the same injected clock + cooldown Duration, just a separate AtomicReference
+    // so the two failure modes don't reset each other's cooldown window.
+    private final AtomicReference<Instant> lastEmailConfigErrorLogAt = new AtomicReference<>();
+
     public AlertNotificationListener(MailManager mailManager, ConfigService configService, Clock clock,
             @Value("${alert.notification.no-recipient-log-cooldown-seconds:300}") long noRecipientLogCooldownSeconds) {
         this.mailManager = mailManager;
@@ -101,11 +107,7 @@ public class AlertNotificationListener {
             // service problem, not a mail transport problem, and must be distinguishable as one.
             adminEmail = configService.find(ADMIN_ALERT_EMAIL_KEY).orElse("").strip();
         } catch (Exception e) {
-            log.error("Failed to look up platform.admin_alert_email — alert email NOT sent",
-                kv("operation", "alert_notification"),
-                kv("metric", event.metricName()),
-                kv("status", "EMAIL_CONFIG_ERROR"),
-                e);
+            logEmailConfigErrorThrottled(event, e);
             return;
         }
 
@@ -161,5 +163,20 @@ public class AlertNotificationListener {
             kv("operation", "alert_notification"),
             kv("metric", event.metricName()),
             kv("status", "EMAIL_NO_RECIPIENT"));
+    }
+
+    /** AC11: see {@link #lastEmailConfigErrorLogAt}'s own Javadoc for why this mirrors the sibling throttle. */
+    private void logEmailConfigErrorThrottled(AlertFiredEvent event, Exception cause) {
+        Instant now = clock.instant();
+        Instant last = lastEmailConfigErrorLogAt.get();
+        if (last != null && now.isBefore(last.plus(noRecipientLogCooldown))) {
+            return;
+        }
+        lastEmailConfigErrorLogAt.set(now);
+        log.error("Failed to look up platform.admin_alert_email — alert email NOT sent",
+            kv("operation", "alert_notification"),
+            kv("metric", event.metricName()),
+            kv("status", "EMAIL_CONFIG_ERROR"),
+            cause);
     }
 }

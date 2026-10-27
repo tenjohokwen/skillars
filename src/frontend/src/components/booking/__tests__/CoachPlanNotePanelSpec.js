@@ -134,4 +134,54 @@ describe('CoachPlanNotePanel.vue (skillars-12-6)', () => {
     )
     expect(wrapper.emitted('saved')).toBeUndefined()
   })
+
+  // skillars-deferred-165 AC8: a locked 403 means this will never succeed again for this booking -
+  // disable further edits without a page reload.
+  it.each([
+    [
+      'booking.notEditable',
+      { response: { status: 403, data: { errorMsg: { errorKey: 'booking.notEditable' } } } },
+    ],
+    [
+      'SESSION_ALREADY_ENDED',
+      { response: { status: 403, data: { errorMsg: { errorKey: 'SESSION_ALREADY_ENDED' } } } },
+    ],
+  ])(
+    'a locked-error response (%s) disables further edits without a page reload',
+    async (_label, error) => {
+      setCoachPlanNote.mockRejectedValue(error)
+      const wrapper = mountPanel()
+
+      await typeAndSave(wrapper)
+
+      expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
+      expect(wrapper.find('[data-testid="plan-note-save"]').attributes('disabled')).toBeDefined()
+      // Code review 2026-10-27: lets PrepFeedForwardCard lock its Apply button too.
+      expect(wrapper.emitted('locked')).toHaveLength(1)
+      // Mutation check: drop the `locallyLocked.value = true` assignment in save()'s catch branch ->
+      // both assertions above go RED (textarea/button stay enabled).
+    },
+  )
+
+  it('a non-locked error (e.g. conflict) does not disable the editor', async () => {
+    setCoachPlanNote.mockRejectedValue({ response: { status: 409, data: {} } })
+    const wrapper = mountPanel()
+
+    await typeAndSave(wrapper)
+
+    expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
+  })
+
+  it('resets the lock when the panel is reused for a different booking', async () => {
+    setCoachPlanNote.mockRejectedValue({
+      response: { status: 403, data: { errorMsg: { errorKey: 'booking.notEditable' } } },
+    })
+    const wrapper = mountPanel({ bookingId: 'b-1' })
+    await typeAndSave(wrapper)
+    expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
+
+    await wrapper.setProps({ bookingId: 'b-2', note: null })
+
+    expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
+  })
 })

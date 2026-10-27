@@ -155,6 +155,22 @@
         </q-card-section>
       </q-card>
 
+      <!-- Skill Trends — skillars-deferred-165 AC4: per-skill direction/slope, a different shape
+           than the weekly-total time series above. -->
+      <q-card class="q-mb-md">
+        <q-card-section>
+          <div class="text-subtitle1">{{ $t('development.skillTrends.title') }}</div>
+        </q-card-section>
+        <q-card-section class="relative-position">
+          <q-inner-loading :showing="store.skillTrendsLoading" />
+          <SkillTrendsPanel
+            :trends="store.skillTrends"
+            :skill-definitions="store.skillDefinitions"
+            :error="!!store.skillTrendsError && !store.skillTrendsLoading"
+          />
+        </q-card-section>
+      </q-card>
+
       <!-- Coach contribution breakdown — AC9: CoachContributionSection.vue's own root v-if has
            no v-else, so it renders literally nothing when its top-per-skill/>=30% filter result
            is empty. hasTopContributions mirrors that same filter at the page level so this page
@@ -266,6 +282,7 @@ import CoachRadarCard from 'src/components/development/CoachRadarCard.vue'
 import SluNarrativeSummary from 'src/components/development/SluNarrativeSummary.vue'
 import SkillExposureBarChart from 'src/components/development/SkillExposureBarChart.vue'
 import SkillExposureTrendChart from 'src/components/development/SkillExposureTrendChart.vue'
+import SkillTrendsPanel from 'src/components/development/SkillTrendsPanel.vue'
 import SluTargetEditor from 'src/components/development/SluTargetEditor.vue'
 import SkillsRadarAssessmentPanel from 'src/components/development/SkillsRadarAssessmentPanel.vue'
 import RadarAssessmentHistoryList from 'src/components/development/RadarAssessmentHistoryList.vue'
@@ -410,6 +427,7 @@ async function loadPlayerDetail(id) {
   // is what makes a switch safe for them).
   store.fetchNarrative(id)
   store.fetchNeglectedSkills(id)
+  store.fetchSkillTrends(id)
   store.fetchTargets(id)
   loadTierGatedSections(id, gen)
   try {

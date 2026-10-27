@@ -410,10 +410,13 @@ public class GdprErasureService {
             cp.setDistrict(null);
             coachProfileRepository.save(cp);
 
-            // skillars-deferred-154 AC2: booking.session_completion_data.{voice_note_text,
-            // what_we_did, whats_next} are coach-authored free text, but anonymizeByPlayerId (used
-            // by the PLAYER branch below) is keyed on playerId — a coach's own erasure never touched
-            // this table, so their authored recap text survived their own erasure indefinitely.
+            // skillars-deferred-154 AC2: booking.session_completion_data.{what_we_did, whats_next}
+            // are coach-authored free text, but anonymizeByPlayerId (used by the PLAYER branch
+            // below) is keyed on playerId — a coach's own erasure never touched this table, so their
+            // authored recap text survived their own erasure indefinitely. (skillars-deferred-165
+            // AC12: the voice_note_text column is unmapped by JPA now, but legacy rows still hold
+            // coach-authored text in it, so anonymizeByCoachId keeps nulling it via native SQL until
+            // the column is dropped.)
             //
             // skillars-deferred-155 AC9: two more copies of the same underlying fact, scrubbed in
             // the same unit. (1) development.player_timeline_events.metadata carries a SECOND,

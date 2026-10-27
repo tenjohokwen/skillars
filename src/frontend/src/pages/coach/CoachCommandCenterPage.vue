@@ -296,6 +296,13 @@
                 class="q-mt-xs"
                 @click="openCoachRescheduleDialog(booking)"
               />
+
+              <!-- skillars-deferred-165 AC2: raise/view a dispute on an eligible booking, coach side. -->
+              <DisputeAction
+                v-if="isDisputeEligible(booking.status)"
+                :booking-id="booking.bookingId"
+                class="q-mt-xs"
+              />
             </div>
 
             <!-- Available windows without bookings -->
@@ -434,6 +441,21 @@ import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
 import CancelCoachModal from 'src/components/booking/CancelCoachModal.vue'
 import SessionPrepCard from 'src/components/booking/SessionPrepCard.vue'
 import SessionRecapDialog from 'src/components/booking/SessionRecapDialog.vue'
+import DisputeAction from 'src/components/booking/DisputeAction.vue'
+
+// skillars-deferred-165 AC2: mirrors DisputeService.ELIGIBLE_STATUSES client-side, purely for UX —
+// the server is the real gate.
+const DISPUTE_ELIGIBLE_STATUSES = [
+  'COMPLETED',
+  'CANCELLED',
+  'CANCELLED_PARENT',
+  'CANCELLED_COACH',
+  'NO_SHOW_PLAYER',
+  'NO_SHOW_COACH',
+]
+function isDisputeEligible(status) {
+  return DISPUTE_ELIGIBLE_STATUSES.includes(status)
+}
 import { getMissingRecaps } from 'src/api/booking.api'
 
 const { t, locale } = useI18n()

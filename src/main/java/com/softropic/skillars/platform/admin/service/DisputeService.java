@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.admin.service;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.admin.contract.AdminDisputeDetailDto;
+import com.softropic.skillars.platform.admin.contract.AdminDisputeQueueDto;
 import com.softropic.skillars.platform.admin.contract.AdminActionType;
 import com.softropic.skillars.platform.admin.contract.AdminAlertStatus;
 import com.softropic.skillars.platform.admin.contract.AdminAlertType;
@@ -39,6 +40,9 @@ import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -162,6 +166,16 @@ public class DisputeService {
         return new DisputeResponse(
             dispute.getId(), dispute.getBookingId(), dispute.getReason(), dispute.getDetails(),
             dispute.getStatus(), dispute.getResolution(), dispute.getResolutionNote(), dispute.getCreatedAt());
+    }
+
+    // skillars-deferred-165 AC1: a paged admin worklist of open disputes, mirroring
+    // AdminReviewService.getUnderReviewQueue's single-status paged query shape.
+    @Transactional(readOnly = true)
+    public Page<AdminDisputeQueueDto> getDisputeQueue(int page) {
+        Pageable pageable = PageRequest.of(Math.max(0, page), 20);
+        return disputeRepository.findByStatusOrderByCreatedAtAsc("OPEN", pageable)
+            .map(d -> new AdminDisputeQueueDto(
+                d.getId(), d.getBookingId(), d.getRaisedByRole(), d.getReason(), d.getStatus(), d.getCreatedAt()));
     }
 
     @Transactional(readOnly = true)

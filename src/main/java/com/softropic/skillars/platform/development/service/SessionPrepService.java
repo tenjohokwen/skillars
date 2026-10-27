@@ -64,7 +64,8 @@ public class SessionPrepService {
         Long playerId = booking.getPlayerId();
 
         CoachPlayerLastSessionResolver.LastCoachSessionSignal signal =
-            coachPlayerLastSessionResolver.resolve(playerId, coachId);
+            coachPlayerLastSessionResolver.resolve(
+                playerId, coachId, bookingId, booking.getRequestedStartTime());
 
         String lastWhatWeDid = null;
         String lastWhatsNext = null;

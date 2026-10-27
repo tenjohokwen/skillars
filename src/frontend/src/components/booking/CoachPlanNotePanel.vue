@@ -13,7 +13,7 @@
         counter
         class="q-mt-xs"
         :placeholder="t('coach.planNotePlaceholder')"
-        :disable="saving || busy"
+        :disable="saving || busy || locallyLocked"
         data-testid="plan-note-input"
       />
       <div class="row items-center q-mt-xs">
@@ -23,7 +23,7 @@
           size="sm"
           :label="t('coach.planNoteSave')"
           :loading="saving"
-          :disable="!dirty || busy"
+          :disable="!dirty || busy || locallyLocked"
           data-testid="plan-note-save"
           @click="save"
         />
@@ -51,7 +51,7 @@ import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { setCoachPlanNote } from 'src/api/booking.api'
-import { planNoteErrorMessage } from 'src/utils/planNoteError'
+import { planNoteErrorMessage, isLockedPlanNoteError } from 'src/utils/planNoteError'
 
 const props = defineProps({
   bookingId: { type: String, required: true },
@@ -61,13 +61,17 @@ const props = defineProps({
   // keystrokes typed meanwhile are not silently replaced when the new note arrives via `note`.
   busy: { type: Boolean, default: false },
 })
-const emit = defineEmits(['saved', 'dirty-change'])
+const emit = defineEmits(['saved', 'dirty-change', 'locked'])
 
 const { t } = useI18n()
 const $q = useQuasar()
 
 const draft = ref(props.note ?? '')
 const saving = ref(false)
+// skillars-deferred-165 AC8: a locked 403 means this will never succeed again for this booking —
+// flip the editor non-interactive instead of leaving it live after the toast fades. `editable`
+// itself stays a read-only prop; this is a separate, client-only guard layered on top of it.
+const locallyLocked = ref(false)
 
 const dirty = computed(() => (draft.value ?? '') !== (props.note ?? ''))
 
@@ -80,6 +84,15 @@ watch(
 )
 watch(dirty, (value) => emit('dirty-change', value), { immediate: true })
 
+// The panel is not remounted on every booking switch (SessionPrepCard has no :key), so a stale
+// lock from a previous booking must not bleed into the next one.
+watch(
+  () => props.bookingId,
+  () => {
+    locallyLocked.value = false
+  },
+)
+
 async function save() {
   saving.value = true
   try {
@@ -90,6 +103,11 @@ async function save() {
     emit('saved', stored)
     $q.notify({ type: 'positive', message: t('coach.planNoteSaved') })
   } catch (err) {
+    if (isLockedPlanNoteError(err)) {
+      locallyLocked.value = true
+      // Lets a host with its own write path to the same note (PrepFeedForwardCard's Apply) lock too.
+      emit('locked')
+    }
     $q.notify({ type: 'negative', message: planNoteErrorMessage(err, t) })
   } finally {
     saving.value = false
