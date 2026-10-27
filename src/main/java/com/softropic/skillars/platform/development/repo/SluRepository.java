@@ -75,12 +75,19 @@ public interface SluRepository extends JpaRepository<PlayerSkillStat, UUID> {
     // disambiguate "a genuinely newer, different SLU-only session exists" from "this is the SAME
     // session whose two independently-async-stamped signals just landed in the opposite order" by
     // comparing booking identity rather than raw timestamps.
+    //
+    // skillars-deferred-163 code review (2026-10-27, Decision 2): "latest" is by SESSION time (the
+    // booking's end, calculated_at only as the fallback/tie-break), matching findLastSessionEnd above and
+    // the session-end occurred_at TimelineEventListener now writes (AC3.1). Ordering by calculated_at let
+    // an older booking confirmed late (its SLU processed last) masquerade as the newest session and
+    // null the genuinely newer session's recap.
     @Query(nativeQuery = true, value = """
         SELECT s.booking_id
         FROM development.player_skill_stats p
         JOIN session.sessions s ON s.id = p.session_id
+        LEFT JOIN booking.bookings b ON b.id = s.booking_id
         WHERE p.player_id = :playerId AND p.coach_id = :coachId
-        ORDER BY p.calculated_at DESC
+        ORDER BY COALESCE(b.requested_end_time, p.calculated_at) DESC, p.calculated_at DESC
         LIMIT 1
         """)
     Optional<UUID> findLastSessionBookingId(@Param("playerId") Long playerId, @Param("coachId") UUID coachId);

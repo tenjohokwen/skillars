@@ -746,6 +746,127 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
             "SELECT count(*) FROM session.homework_assignments WHERE booking_id = ?", Integer.class, bookingId)).isEqualTo(3);
     }
 
+    /**
+     * skillars-deferred-163 AC2.4/AC2.5: the session plan stays editable until confirmCompletion's
+     * BookingCompletedEvent fires, so an edit landing in that window must not leak into the
+     * timeline -- the plan-drill snapshot taken at submitWrapUp time is what gets shown, not
+     * whatever the plan looks like by the time the event is actually processed. Covers the
+     * confirmCompletion route (one of the three QUICK-completion routes to BookingCompletedEvent).
+     */
+    @Test
+    void quickCompleteThenConfirm_planEditedAfterWrapUp_timelineShowsTheWrapUpTimeSnapshot() throws Exception {
+        UUID original = insertDrill("Original Drill");
+        UUID editedIn = insertDrill("Edited-In Drill");
+        insertPlannedSession(
+            "[{\"blockType\":\"MAIN\",\"blockName\":\"Main\",\"durationMinutes\":30,"
+          + "\"drills\":[{\"drillId\":\"" + original + "\",\"order\":1}]}]",
+            "DRAFT");
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        assertThat(postQuickWrapUp(List.of(), COACH_EMAIL).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        // The plan is still editable here (QUICK mode; nothing has flipped it to COMPLETED yet) --
+        // this is exactly the window AC2.4 closes.
+        transactionTemplate.executeWithoutResult(t -> jdbcTemplate.update(
+            "UPDATE session.sessions SET blocks = ?::jsonb WHERE booking_id = ?",
+            "[{\"blockType\":\"MAIN\",\"blockName\":\"Main\",\"durationMinutes\":30,"
+          + "\"drills\":[{\"drillId\":\"" + editedIn + "\",\"order\":1}]}]",
+            bookingId));
+
+        ResponseEntity<Void> confirm = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/confirm-completion", HttpMethod.PUT, null,
+            authenticatedHeaders(loginAndGetCookies(PARENT_EMAIL)), Void.class);
+        assertThat(confirm.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        Awaitility.await("SESSION_COMPLETED written")
+            .atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("SESSION_COMPLETED") == 1);
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT d->>'name' FROM development.player_timeline_events e, jsonb_array_elements(e.metadata->'drills') d "
+          + "WHERE e.reference_id = ? AND e.event_type = 'SESSION_COMPLETED'", String.class, bookingId))
+            .containsExactly("Original Drill");
+    }
+
+    /**
+     * skillars-deferred-163 AC2.4/AC2.5: same guarantee as above, through the OTHER route to
+     * BookingCompletedEvent -- QuickCompleteTimeoutService's delayed auto-confirm, which never
+     * creates its own SessionCompletionData row (it only re-reads the one submitWrapUp already
+     * saved), so the snapshot it relies on must already be there.
+     */
+    @Test
+    void quickCompleteTimeout_planEditedAfterWrapUp_timelineShowsTheWrapUpTimeSnapshot() throws Exception {
+        UUID original = insertDrill("Timeout Original Drill");
+        UUID editedIn = insertDrill("Timeout Edited-In Drill");
+        insertPlannedSession(
+            "[{\"blockType\":\"MAIN\",\"blockName\":\"Main\",\"durationMinutes\":30,"
+          + "\"drills\":[{\"drillId\":\"" + original + "\",\"order\":1}]}]",
+            "DRAFT");
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        assertThat(postQuickWrapUp(List.of(), COACH_EMAIL).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        transactionTemplate.executeWithoutResult(t -> {
+            jdbcTemplate.update(
+                "UPDATE session.sessions SET blocks = ?::jsonb WHERE booking_id = ?",
+                "[{\"blockType\":\"MAIN\",\"blockName\":\"Main\",\"durationMinutes\":30,"
+              + "\"drills\":[{\"drillId\":\"" + editedIn + "\",\"order\":1}]}]",
+                bookingId);
+            // created_at is updatable=false on the entity, so backdate it past the 24h seeded timeout via SQL.
+            jdbcTemplate.update(
+                "UPDATE booking.session_completion_data SET created_at = ? WHERE booking_id = ?",
+                Timestamp.from(Instant.now().minus(Duration.ofHours(30))), bookingId);
+        });
+
+        quickCompleteTimeoutService.processExpiredQuickCompletes();
+
+        Awaitility.await("SESSION_COMPLETED written after the timeout auto-confirm")
+            .atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("SESSION_COMPLETED") == 1);
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT d->>'name' FROM development.player_timeline_events e, jsonb_array_elements(e.metadata->'drills') d "
+          + "WHERE e.reference_id = ? AND e.event_type = 'SESSION_COMPLETED'", String.class, bookingId))
+            .containsExactly("Timeout Original Drill");
+    }
+
+    /**
+     * skillars-deferred-163 AC2.4 (code review 2026-10-27, Decision 1): SLU and the timeline must agree
+     * for a QUICK completion whose plan is edited between wrap-up and the delayed BookingCompletedEvent.
+     * Drill A (PAC-only) is planned at wrap-up, then swapped for drill B (SHO-only). Both the timeline's
+     * drill list and the SLU rows must reflect A — the wrap-up-time blocks snapshot — and B must earn
+     * nothing. (A SAVED plan, so SLU's own SAVED/COMPLETED session-status gate admits it.)
+     */
+    @Test
+    void quickCompleteThenConfirm_planDrillSwappedAfterWrapUp_sluAndTimelineBothUseTheWrapUpSnapshot() throws Exception {
+        UUID drillA = insertDrillWithMetadata("Snapshot PAC Drill", skillOnlyMetadata("PAC"));
+        UUID drillB = insertDrillWithMetadata("Edited-In SHO Drill", skillOnlyMetadata("SHO"));
+        insertPlannedSession(
+            "[{\"blockType\":\"MAIN\",\"blockName\":\"Main\",\"durationMinutes\":30,"
+          + "\"drills\":[{\"drillId\":\"" + drillA + "\",\"order\":1}]}]",
+            "SAVED");
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        assertThat(postQuickWrapUp(List.of(), COACH_EMAIL).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        transactionTemplate.executeWithoutResult(t -> jdbcTemplate.update(
+            "UPDATE session.sessions SET blocks = ?::jsonb WHERE booking_id = ?",
+            "[{\"blockType\":\"MAIN\",\"blockName\":\"Main\",\"durationMinutes\":30,"
+          + "\"drills\":[{\"drillId\":\"" + drillB + "\",\"order\":1}]}]",
+            bookingId));
+
+        ResponseEntity<Void> confirm = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/confirm-completion", HttpMethod.PUT, null,
+            authenticatedHeaders(loginAndGetCookies(PARENT_EMAIL)), Void.class);
+        assertThat(confirm.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        Awaitility.await("SESSION_COMPLETED and SLU written")
+            .atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(100))
+            .until(() -> countTimeline("SESSION_COMPLETED") == 1 && countSluRows() > 0);
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT d->>'name' FROM development.player_timeline_events e, jsonb_array_elements(e.metadata->'drills') d "
+          + "WHERE e.reference_id = ? AND e.event_type = 'SESSION_COMPLETED'", String.class, bookingId))
+            .containsExactly("Snapshot PAC Drill");
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT p.skill_code FROM development.player_skill_stats p "
+          + "JOIN session.sessions s ON s.id = p.session_id WHERE s.booking_id = ?", String.class, bookingId))
+            .containsExactly("PAC");
+    }
+
     // skillars-deferred-162 AC7.6: the same event delivered twice at one commit (two listener invocations racing on
     // the pool) still yields exactly one SESSION_COMPLETED row.
     @Test
@@ -927,6 +1048,33 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
             return null;
         });
         return id;
+    }
+
+    private UUID insertDrillWithMetadata(String name, String metadataJson) {
+        UUID id = UUID.randomUUID();
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update(
+                "INSERT INTO session.drills (id, name, library_type, owner_coach_id, status, metadata, version) "
+              + "VALUES (?, ?, 'PLATFORM', NULL, 'ACTIVE', ?::jsonb, 0)", id, name, metadataJson);
+            return null;
+        });
+        return id;
+    }
+
+    // Same shape as SluCalculationServiceIT's DRILL_METADATA_JSON, weighted to ONE seeded skill code.
+    private static String skillOnlyMetadata(String skillCode) {
+        return "{\"primarySkills\":[\"" + skillCode + "\"],\"secondarySkills\":[],"
+            + "\"skillWeighting\":{\"" + skillCode + "\":5},"
+            + "\"repDensity\":8,\"intensity\":7,\"pressureLevel\":6,\"cognitiveLoad\":3,\"matchRealism\":5,"
+            + "\"weakFootBias\":false,\"difficultyTier\":\"U14\",\"equipmentRequired\":[\"ball\"],"
+            + "\"recommendedGroupSize\":\"2\",\"coachingPoints\":[],\"setupDiagram\":null}";
+    }
+
+    private int countSluRows() {
+        Integer n = jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM development.player_skill_stats p JOIN session.sessions s ON s.id = p.session_id "
+          + "WHERE s.booking_id = ?", Integer.class, bookingId);
+        return n == null ? 0 : n;
     }
 
     private void insertPlannedSession(String blocksJson, String status) {

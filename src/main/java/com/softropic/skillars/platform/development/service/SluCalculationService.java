@@ -1,6 +1,8 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
+import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.development.repo.PlayerSkillStat;
 import com.softropic.skillars.platform.development.repo.SkillDefinitionRepository;
@@ -44,6 +46,8 @@ public class SluCalculationService {
     private final SkillDefinitionRepository skillDefinitionRepository;
     private final ConfigService configService;
     private final SluPersistenceDispatcher sluPersistenceDispatcher;
+    private final SessionCompletionDataRepository completionDataRepository;
+    private final ObjectMapper objectMapper;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async("taskExecutor")
@@ -70,7 +74,16 @@ public class SluCalculationService {
             return;
         }
 
-        if (session.getBlocks() == null || session.getBlocks().isEmpty()) {
+        // skillars-deferred-163 AC2.4 (code review 2026-10-27, Decision 1): a QUICK-mode booking's plan
+        // stays editable until this delayed event fires, so SLU is computed from the blocks snapshotted at
+        // wrap-up (drills AND per-block durations) — the same blocks TimelineEventListener names on the
+        // timeline, via the same QuickPlanSnapshot reader, so the two cannot disagree. LIVE mode and
+        // pre-V170 rows have no snapshot and keep using the live plan.
+        List<SessionBlockData> blocks = QuickPlanSnapshot.blocksOf(
+                completionDataRepository.findByBookingId(event.getBookingId()).orElse(null), objectMapper)
+            .orElse(session.getBlocks());
+
+        if (blocks == null || blocks.isEmpty()) {
             log.warn("Session {} for booking {} has no blocks — SLU skipped",
                 session.getId(), event.getBookingId());
             return;
@@ -100,7 +113,7 @@ public class SluCalculationService {
         // Collect unique drill IDs for batch loading (separate concern from per-block iteration below)
         Set<UUID> drillIds = new LinkedHashSet<>();
         boolean hasDrills = false;
-        for (SessionBlockData block : session.getBlocks()) {
+        for (SessionBlockData block : blocks) {
             if (block.drills() == null || block.drills().isEmpty()) continue;
             for (SessionDrillRef ref : block.drills()) {
                 drillIds.add(ref.drillId());
@@ -126,7 +139,7 @@ public class SluCalculationService {
             .stream().map(sd -> sd.getCode()).collect(Collectors.toSet());
 
         Map<String, BigDecimal> totalSluPerSkill = new HashMap<>();
-        for (SessionBlockData block : session.getBlocks()) {
+        for (SessionBlockData block : blocks) {
             if (block.drills() == null || block.drills().isEmpty()) continue;
             if (block.durationMinutes() <= 0) continue;
             int allocatedPerDrill = Math.max(1, Math.round((float) block.durationMinutes() / block.drills().size()));

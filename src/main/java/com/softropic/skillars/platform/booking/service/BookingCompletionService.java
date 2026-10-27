@@ -22,6 +22,7 @@ import com.softropic.skillars.platform.booking.contract.WrapUpRequest;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.security.repo.User;
 import org.springframework.data.domain.PageRequest;
@@ -34,8 +35,12 @@ import com.softropic.skillars.platform.security.contract.exception.OperationNotA
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import com.softropic.skillars.platform.session.contract.SessionBlockData;
 import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
+import com.softropic.skillars.platform.session.repo.Session;
+import com.softropic.skillars.platform.session.repo.SessionRepository;
+import com.softropic.skillars.platform.session.repo.SessionStatus;
 import com.softropic.skillars.platform.session.service.DrillUsagePolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -70,6 +75,8 @@ public class BookingCompletionService {
     private final ConfigService configService;
     private final DrillRepository drillRepository;
     private final BookingDisputeLookup bookingDisputeLookup;
+    private final SessionRepository sessionRepository;
+    private final ContactDetailSanitizer contactDetailSanitizer;
 
     @Transactional
     public void startSession(UUID bookingId, Long coachUserId) {
@@ -162,15 +169,28 @@ public class BookingCompletionService {
         // case where the coach is about to lose recap text they just typed, and verifyStatus's raw
         // "Booking is in status COMPLETED, expected COMPLETED_PENDING_CONFIRMATION" tells them nothing
         // actionable. The transition is one-way (BookingStateMachine has no path back to
-        // COMPLETED_PENDING_CONFIRMATION) and the only update path for an existing row is the
-        // separate, windowed updateRecap (skillars-12-7), so the honest message here is that the wrap-up
-        // can no longer be SUBMITTED -- the coach can still add the recap afterwards.
+        // COMPLETED_PENDING_CONFIRMATION).
+        //
+        // skillars-deferred-163 AC2.1 (corrected): the old message claimed the recap "can no longer be
+        // edited" and blamed the sweeper exclusively. Both are wrong — admin force-complete
+        // (forceCompleteWithPlaceholderData) produces the identical empty-recap placeholder signature,
+        // and PUT /recap (updateRecap) can still save the text either way. A dedicated error lets the
+        // caller redirect the coach to the recap dialog instead of a dead-end "can no longer be edited".
+        //
+        // Code review 2026-10-27: only when updateRecap would actually accept the text — the same
+        // recapEditability verdict it applies. A disputed, erased or out-of-window booking gets that
+        // verdict's own reason instead, never a "you can still save it" redirect into a read-only dialog.
+        // The message names no cause: "automatically" would be false for an admin force-complete.
         if (BookingStatus.valueOf(booking.getStatus()) == BookingStatus.COMPLETED) {
             Optional<SessionCompletionData> existing = completionDataRepository.findByBookingId(bookingId);
             if (existing.isPresent() && isSweeperPlaceholder(existing.get())) {
+                Editability verdict = recapEditability(booking, coach, Instant.now(ClockProvider.getClock()));
+                if (!verdict.editable()) {
+                    throw new OperationNotAllowedException("Recap cannot be edited", verdict.reason());
+                }
                 throw new OperationNotAllowedException(
-                    "This session was auto-completed after the wrap-up was left unsubmitted and can no longer be edited",
-                    SecurityError.MISSING_RIGHTS);
+                    "This session was already completed, but you can still add the recap",
+                    BookingError.RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE);
             }
         }
         verifyStatus(booking, BookingStatus.COMPLETED_PENDING_CONFIRMATION);
@@ -185,9 +205,11 @@ public class BookingCompletionService {
         scd.setFocusRating(req.focusRating());
         scd.setTechniqueRating(req.techniqueRating());
         scd.setCompletionMode(req.mode());
-        scd.setWhatWeDid(req.recapWhatWeDid());
-        scd.setWhatsNext(req.recapWhatsNext());
-        scd.setWhatWentWell(blankToNull(req.recapWhatWentWell()));
+        // skillars-deferred-163 AC2.3: sanitised on every write path (updateRecap already shares this
+        // helper — see BookingService.setPlayerRequest/setCoachPlanNote for the same call shape).
+        scd.setWhatWeDid(BookingService.sanitizeAndTruncate(contactDetailSanitizer, req.recapWhatWeDid(), 500));
+        scd.setWhatsNext(BookingService.sanitizeAndTruncate(contactDetailSanitizer, req.recapWhatsNext(), 500));
+        scd.setWhatWentWell(BookingService.sanitizeAndTruncate(contactDetailSanitizer, blankToNull(req.recapWhatWentWell()), 500));
 
         if (!homeworkDrillIds.isEmpty()) {
             try {
@@ -195,6 +217,12 @@ public class BookingCompletionService {
             } catch (JsonProcessingException e) {
                 log.warn("Failed to serialize homeworkDrillIds for booking {}", bookingId, e);
             }
+        }
+        if (!"LIVE".equals(req.mode())) {
+            // skillars-deferred-163 AC2.4: QUICK's session plan stays editable until the delayed
+            // BookingCompletedEvent (parent confirm or QuickCompleteTimeoutService's timeout)
+            // eventually fires, so snapshot the plan's blocks now, while they are still trustworthy.
+            scd.setPlanBlocksSnapshot(capturePlanBlocksSnapshot(bookingId));
         }
         try {
             completionDataRepository.save(scd);
@@ -210,11 +238,14 @@ public class BookingCompletionService {
             } catch (OptimisticLockingFailureException e) {
                 throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
             }
+            // skillars-deferred-163 AC2.3: use the saved (sanitised) scd values for all three recap
+            // fields, matching confirmCompletion's QUICK path — not the raw request text this used to
+            // mix in for the first two fields while already using scd for the third.
             eventPublisher.publishEvent(new BookingCompletedEvent(
                 this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
                 scd.isPlayerAttended(), req.effortRating(), req.focusRating(), req.techniqueRating(),
                 homeworkDrillIds,
-                req.recapWhatWeDid(), req.recapWhatsNext(), scd.getWhatWentWell()
+                scd.getWhatWeDid(), scd.getWhatsNext(), scd.getWhatWentWell()
             ));
         } else {
             String parentEmail = userRepository.findById(booking.getParentId())
@@ -226,6 +257,35 @@ public class BookingCompletionService {
                 this, bookingId, booking.getParentId(), parentEmail, coachDisplayName,
                 booking.getRequestedStartTime(), booking.getCanonicalTimezone(), playerName
             ));
+        }
+    }
+
+    /**
+     * skillars-deferred-163 AC2.4: the QUICK-mode session plan's blocks as they stand right now
+     * (wrap-up time) — drill refs, their order and each block's duration, so that BOTH the timeline's
+     * drill list and SLU (which needs per-block durations) are computed from this one snapshot and
+     * cannot disagree (code review 2026-10-27, Decision 1). A missing or CANCELLED plan snapshots as
+     * {@code "[]"}, never {@code null}: readers treat {@code null} as "no snapshot, use the live plan",
+     * so a plan created after wrap-up would otherwise leak in. Refs with a null drill id are dropped
+     * here, matching the readers' own null-id filtering. {@code null} only if serialisation fails.
+     */
+    private String capturePlanBlocksSnapshot(UUID bookingId) {
+        List<SessionBlockData> blocks = sessionRepository.findByBookingId(bookingId)
+            .filter(session -> !SessionStatus.CANCELLED.equals(session.getStatus()))
+            .map(Session::getBlocks)
+            .orElse(null);
+        List<SessionBlockData> snapshot = blocks == null ? List.of() : blocks.stream()
+            .filter(Objects::nonNull)
+            .map(block -> new SessionBlockData(block.blockType(), block.blockName(), block.durationMinutes(),
+                block.drills() == null ? null : block.drills().stream()
+                    .filter(ref -> ref != null && ref.drillId() != null)
+                    .toList()))
+            .toList();
+        try {
+            return objectMapper.writeValueAsString(snapshot);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize plan-blocks snapshot for booking {}", bookingId, e);
+            return null;
         }
     }
 
@@ -390,9 +450,12 @@ public class BookingCompletionService {
         if (!verdict.editable()) {
             throw new OperationNotAllowedException("Recap cannot be edited", verdict.reason());
         }
-        scd.setWhatWeDid(req.whatWeDid().trim());
-        scd.setWhatsNext(req.whatsNext().trim());
-        scd.setWhatWentWell(blankToNull(req.whatWentWell()));
+        // skillars-deferred-163 AC2.3: sanitised exactly like submitWrapUp — this is the path AC2.2
+        // now routes the sweeper/force-complete recovery flow into, so leaving it unsanitised would
+        // defeat the point of sanitising the other write path.
+        scd.setWhatWeDid(BookingService.sanitizeAndTruncate(contactDetailSanitizer, req.whatWeDid().trim(), 500));
+        scd.setWhatsNext(BookingService.sanitizeAndTruncate(contactDetailSanitizer, req.whatsNext().trim(), 500));
+        scd.setWhatWentWell(BookingService.sanitizeAndTruncate(contactDetailSanitizer, blankToNull(req.whatWentWell()), 500));
         completionDataRepository.save(scd);
         eventPublisher.publishEvent(new SessionRecapUpdatedEvent(this, bookingId, booking.getCoachId(), booking.getPlayerId()));
         return toRecapResponse(booking, scd, verdict);
@@ -463,15 +526,20 @@ public class BookingCompletionService {
 
     /**
      * skillars-deferred-153 AC1 (code review, 2026-10-17): recognises a row written by
-     * {@code forceCompleteWithPlaceholderData} rather than by a real coach submission — all three
+     * {@code forceCompleteWithPlaceholderData} rather than by a real coach submission — all
      * recap fields null and the player recorded absent, which a genuine wrap-up never produces
      * (step 5 is mandatory, so at least {@code whatWeDid} is always set on a real submit).
+     *
+     * <p>skillars-deferred-163 AC6.1: no longer reads {@code voiceNoteText} — step 1 of a
+     * three-release sequence to drop the column (see {@code migration-conventions.md} rule 2).
+     * The entity field, both GDPR scrub references and this method's placeholder test without it
+     * are unaffected: {@code whatWeDid}/{@code whatsNext} being null is already sufficient to
+     * detect the placeholder signature.
      */
     private boolean isSweeperPlaceholder(SessionCompletionData existing) {
         return !existing.isPlayerAttended()
             && existing.getWhatWeDid() == null
-            && existing.getWhatsNext() == null
-            && existing.getVoiceNoteText() == null;
+            && existing.getWhatsNext() == null;
     }
 
     private void verifyStatus(Booking booking, BookingStatus expected) {

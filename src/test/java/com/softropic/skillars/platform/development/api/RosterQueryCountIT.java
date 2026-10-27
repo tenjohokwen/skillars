@@ -34,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * default of 150 the same property would need 160 seeded players). Every player is seeded identically, because
  * the resolver's third query is conditional and a heterogeneous seed would make {@code k} non-constant.
  * Formula: {@code statements = k * N + c} for {@code N <= CAP}, and constant beyond CAP. {@code k} depends on the
- * player's shape, so each shape has its own pinned budget: 4 (booked, nothing attended), 7 (attended), 2 (lapsed).
+ * player's shape, so each shape has its own pinned budget: 4 (booked, nothing attended), 6 (attended), 2 (lapsed).
  */
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
 class RosterQueryCountIT extends AbstractIntegrationTest {
@@ -111,9 +111,15 @@ class RosterQueryCountIT extends AbstractIntegrationTest {
     private static final long EXPECTED_STATEMENTS_PER_PLAYER = 4;
 
     // Code review 2026-10-23: the test above seeds no attended rows, so it pins only the CHEAPEST path. A real
-    // attended player also runs the resolver's two session-END aggregates and (normal async ordering,
-    // occurred_at < calculated_at) the recap booking-id lookup. Lapsed players skip neglected count + snapshots.
-    private static final long EXPECTED_STATEMENTS_PER_ATTENDED_PLAYER = 7;
+    // attended player also runs the resolver's two session-END aggregates. Lapsed players skip neglected count +
+    // snapshots.
+    //
+    // skillars-deferred-163 code review (2026-10-27, Decision 2): CoachPlayerLastSessionResolver.isRecapAttributable
+    // now compares occurredAt against sluEnd (session time), not the raw calculated_at (processing time). Below
+    // seeds occurredAt as "now" (recent) and the booking's end as 5 days ago, so occurredAt is no longer "before"
+    // sluEnd and the fast path applies -- the recap booking-id lookup, previously the 7th statement, no longer
+    // fires for this seed shape. Budget dropped from 7 to 6.
+    private static final long EXPECTED_STATEMENTS_PER_ATTENDED_PLAYER = 6;
     private static final long EXPECTED_STATEMENTS_PER_LAPSED_PLAYER = 2;
 
     @Test
@@ -124,8 +130,8 @@ class RosterQueryCountIT extends AbstractIntegrationTest {
         seedUpTo(4);
         long at4 = measure(4);
 
-        assertThat((at4 - at2) / 2).as("documented per-player budget for an attended player: resolver 5 (SLU raw "
-            + "date, timeline top-1, SLU end, timeline end, recap booking id) + neglected count + weekly snapshots")
+        assertThat((at4 - at2) / 2).as("documented per-player budget for an attended player: resolver 4 (SLU raw "
+            + "date, timeline top-1, SLU end, timeline end) + neglected count + weekly snapshots")
             .isEqualTo(EXPECTED_STATEMENTS_PER_ATTENDED_PLAYER);
         assertThat(at4 - at2).isEqualTo(2 * EXPECTED_STATEMENTS_PER_ATTENDED_PLAYER);
     }
@@ -182,8 +188,9 @@ class RosterQueryCountIT extends AbstractIntegrationTest {
                     Timestamp.from(end.minus(Duration.ofHours(1))), Timestamp.from(end),
                     Timestamp.from(now), Timestamp.from(now));
                 if (kind == Kind.ATTENDED) {
-                    // One attended session per player, both signals present, timeline stamped just before SLU
-                    // (the normal async ordering) so the resolver's recap booking-id lookup fires for every player.
+                    // One attended session per player, both signals present. occurredAt is stamped "now" (recent)
+                    // while the booking itself ended 5 days ago, so occurredAt is not before sluEnd (session time)
+                    // and the resolver's fast path applies -- the recap booking-id lookup does not fire.
                     UUID sessionId = UUID.randomUUID();
                     jdbcTemplate.update(
                         "INSERT INTO session.sessions (id, booking_id, coach_id, player_id, status) " +

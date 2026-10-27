@@ -143,6 +143,11 @@ class IntegrationTestConventionTest {
         return found;
     }
 
+    // skillars-deferred-163 AC5.1: populated by allConcreteItClasses() with any class whose
+    // Class.forName failed — see loadFailuresCollectEveryClassThatFailed below for why this must
+    // be asserted on, not just collected.
+    private static final Map<String, Throwable> LOAD_FAILURES = new TreeMap<>();
+
     /** Every concrete {@code *IT} class in {@code target/test-classes}, slices included. */
     private static List<Class<?>> allConcreteItClasses() throws IOException {
         Path root = Paths.get("target", "test-classes");
@@ -150,6 +155,7 @@ class IntegrationTestConventionTest {
             .as("target/test-classes must exist — run this through Maven, not standalone")
             .exists();
 
+        LOAD_FAILURES.clear();
         List<Class<?>> found = new ArrayList<>();
         try (Stream<Path> paths = Files.walk(root)) {
             for (Path p : paths.filter(Files::isRegularFile).toList()) {
@@ -166,12 +172,38 @@ class IntegrationTestConventionTest {
                     if (!java.lang.reflect.Modifier.isAbstract(c.getModifiers())) {
                         found.add(c);
                     }
-                } catch (Throwable ignored) {
-                    // A class that cannot be loaded without initialising it is not our concern.
+                } catch (Throwable t) {
+                    // skillars-deferred-163 AC5.1: with initialize=false, only linkage errors are
+                    // possible here — a class that fails to load for a genuine reason used to
+                    // silently never enter the model, invisible to every check built on it,
+                    // including the size-100 floor itself. Recorded, not swallowed; a DEDICATED
+                    // test below asserts this is empty, so a real regression fails loudly instead
+                    // of just shrinking the floor's safety margin unnoticed. A stale target/
+                    // classes directory (e.g. a renamed/deleted class whose old .class file is
+                    // still on disk from a prior build) is a known, local-only false-positive
+                    // source here — a `mvn clean` resolves it; this is not a reason to skip the fix.
+                    LOAD_FAILURES.put(cn, t);
                 }
             }
         }
         return found;
+    }
+
+    @Test
+    @DisplayName("no *IT/slice class silently failed to load into the model this suite is built on")
+    void loadFailuresCollectEveryClassThatFailed() throws IOException {
+        integrationTestClasses(); // populates LOAD_FAILURES as a side effect
+
+        assertThat(LOAD_FAILURES)
+            .as("""
+                Each of these classes exists under *.class in target/test-classes but
+                Class.forName failed to load it (a LinkageError — initialize=false means
+                nothing else can throw here). A class that fails to load for a genuine reason
+                is invisible to every check in this file, including the size-100 floor itself,
+                unless this assertion catches it. If this fails locally and the class was
+                recently renamed, moved or deleted, run `mvn clean` first — a stale class file
+                left over from a prior build is the one known local-only false positive.""")
+            .isEmpty();
     }
 
     @Test

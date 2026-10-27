@@ -477,6 +477,42 @@ class SessionPrepResourceIT extends AbstractIntegrationTest {
         assertThat(body.get("lastWhatsNext")).isNull();
     }
 
+    /**
+     * skillars-deferred-163 AC3.1/AC3.2: occurred_at alone is unreliable for a recovered/swept
+     * completion -- a booking the sweeper got to LATE has a RECENT occurred_at despite its own
+     * session having happened long ago (or, as modeled here, despite the referenced booking's own
+     * scheduled time being chronologically AFTER the one being prepped, which can never legitimately
+     * suggest a "next time" for it). The booking-time bound must exclude that later-booking-time
+     * candidate even though its occurred_at would otherwise rank it first, and must still surface the
+     * genuinely earlier-booking-time candidate despite its OLDER occurred_at.
+     */
+    @Test
+    void getPrep_suggestionBoundedByReferencedBookingTime_notJustOccurredAt() {
+        long playerId = 9800000040L;
+        Instant preppedStart = Instant.now().plus(2, ChronoUnit.DAYS);
+        UUID[] preppedBookingId = new UUID[1];
+
+        transactionTemplate.execute(txStatus -> {
+            insertPlayer(playerId, "Bound Player");
+            preppedBookingId[0] = insertBooking(coachProfileId, playerId, "CONFIRMED", preppedStart);
+            // Booking A: genuinely BEFORE the prepped booking -- a legitimate suggestion source despite
+            // its event having the OLDER occurred_at (processed promptly, long before the later sweep below).
+            UUID earlierBookingId = insertBooking(coachProfileId, playerId, "COMPLETED", preppedStart.minus(10, ChronoUnit.DAYS));
+            // Booking B: AFTER the prepped booking -- can never legitimately suggest a "next time" for
+            // an earlier-scheduled session, even though its event has the NEWER occurred_at (e.g. a late sweep).
+            UUID laterBookingId = insertBooking(coachProfileId, playerId, "COMPLETED", preppedStart.plus(10, ChronoUnit.DAYS));
+            insertSessionCompletedEventWithRecapForBooking(earlierBookingId, playerId, coachProfileId,
+                "earlier work", "FROM EARLIER BOOKING", Instant.now().minus(2, ChronoUnit.DAYS));
+            insertSessionCompletedEventWithRecapForBooking(laterBookingId, playerId, coachProfileId,
+                "later work", "FROM LATER BOOKING", Instant.now().minus(1, ChronoUnit.DAYS));
+            return null;
+        });
+
+        Map<String, Object> body = getPrepBody(preppedBookingId[0]);
+
+        assertThat(body.get("suggestedWhatsNext")).isEqualTo("FROM EARLIER BOOKING");
+    }
+
     @Test
     void getPrep_suggestionIsSanitisedAndCappedAt500() {
         long playerId = 9800000038L;

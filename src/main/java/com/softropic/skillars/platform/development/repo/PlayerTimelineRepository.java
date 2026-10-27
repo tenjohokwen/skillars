@@ -94,18 +94,31 @@ public interface PlayerTimelineRepository extends JpaRepository<PlayerTimelineEv
     // rule for the suggestion and the report -- "a recap the coach authored counts regardless of the
     // player's attendance" (the coach_id COLUMN is attendance-gated and would drop recovered/unattended
     // recaps). The prep card's lastSessionDate/lastWhatWeDid/lastWhatsNext pairing and the coach-access
-    // clock deliberately stay attendance-gated (12-3 AC3). reference_id <> :bookingId so a booking that already has
-    // its own SESSION_COMPLETED event cannot suggest its own whatsNext. jsonb_exists, not the bare `?`
-    // operator (see findSessionNotesForReport's comment above).
-    @Query(value = "SELECT * FROM development.player_timeline_events "
-        + "WHERE player_id = :playerId AND metadata->>'coachId' = CAST(:coachId AS text) "
-        + "AND event_type = 'SESSION_COMPLETED' "
-        + "AND (reference_id IS NULL OR reference_id <> :bookingId) "
-        + "AND jsonb_exists(metadata, 'whatsNext') AND btrim(metadata->>'whatsNext') <> '' "
-        + "ORDER BY occurred_at DESC, id DESC "
+    // clock deliberately stay attendance-gated (12-3 AC3). pte.reference_id <> :bookingId so a booking that
+    // already has its own SESSION_COMPLETED event cannot suggest its own whatsNext. jsonb_exists, not the
+    // bare `?` operator (see findSessionNotesForReport's comment above).
+    //
+    // skillars-deferred-163 AC3.2: additionally bounded by the REFERENCED booking's own
+    // requestedStartTime against the prepped booking's -- occurred_at alone is unreliable for a
+    // recovered/swept completion (that is exactly why this bound is coupled with AC3.1's timestamp
+    // fix, which makes occurred_at trustworthy for the ORDER BY tie-break but does not by itself add
+    // this bound). Precedent for joining booking.bookings via reference_id: findLastSessionEnd above.
+    // LEFT join, matching that precedent: a SESSION_COMPLETED row with no resolvable referenced
+    // booking (reference_id NULL, or pointing at a row that no longer exists) has nothing to bound
+    // against, so it keeps the OLD "always eligible" behavior (preserves the original
+    // "reference_id IS NULL" allowance) rather than being silently dropped by an INNER join.
+    @Query(value = "SELECT pte.* FROM development.player_timeline_events pte "
+        + "LEFT JOIN booking.bookings b ON b.id = pte.reference_id "
+        + "WHERE pte.player_id = :playerId AND pte.metadata->>'coachId' = CAST(:coachId AS text) "
+        + "AND pte.event_type = 'SESSION_COMPLETED' "
+        + "AND (pte.reference_id IS NULL OR pte.reference_id <> :bookingId) "
+        + "AND (b.requested_start_time IS NULL OR b.requested_start_time < :preppedBookingStartTime) "
+        + "AND jsonb_exists(pte.metadata, 'whatsNext') AND btrim(pte.metadata->>'whatsNext') <> '' "
+        + "ORDER BY pte.occurred_at DESC, pte.id DESC "
         + "LIMIT 1", nativeQuery = true)
     Optional<PlayerTimelineEvent> findLatestWhatsNextSuggestion(
-        @Param("playerId") Long playerId, @Param("coachId") UUID coachId, @Param("bookingId") UUID bookingId);
+        @Param("playerId") Long playerId, @Param("coachId") UUID coachId, @Param("bookingId") UUID bookingId,
+        @Param("preppedBookingStartTime") java.time.Instant preppedBookingStartTime);
 
     // skillars-12-7 AC4: applies an edited recap to the EXISTING SESSION_COMPLETED row for a booking -- never a
     // second event (that would double-count the session in the timeline, roster and access clock).

@@ -28,6 +28,22 @@ export const getRadarPreferences = (playerId) =>
 export const putRadarPreferences = (playerId, selectedSkillCodes) =>
   api.put(`/api/development/players/${playerId}/radar/preferences`, { selectedSkillCodes })
 
+// skillars-deferred-163 AC4.1: the pagehide flush needs a request that survives page teardown —
+// a normal axios PUT can be cancelled mid-flight by the browser on unload. `fetch(..., {keepalive:
+// true})` is the only API that promises this; `navigator.sendBeacon` cannot be used (it only ever
+// sends POST, and this endpoint is @PutMapping). Deliberately bypasses the shared axios instance:
+// its interceptors (loading spinner, 401 teardown, etc.) make no sense for a fire-and-forget call
+// issued as the page is being torn down. Auth is cookie-based and CSRF is disabled for this app
+// (boot/axios.js), so `credentials: 'include'` is the only auth-equivalent needed.
+export const putRadarPreferencesKeepAlive = (playerId, selectedSkillCodes) =>
+  fetch(`/api/development/players/${playerId}/radar/preferences`, {
+    method: 'PUT',
+    keepalive: true,
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selectedSkillCodes }),
+  })
+
 export const getCorrelationInsights = (playerId) =>
   api.get(`/api/development/players/${playerId}/radar/correlation`)
 

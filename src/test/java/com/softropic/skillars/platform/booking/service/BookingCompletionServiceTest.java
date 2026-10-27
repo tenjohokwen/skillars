@@ -56,6 +56,8 @@ class BookingCompletionServiceTest {
     @Mock private com.softropic.skillars.platform.session.repo.DrillRepository drillRepository;
     // skillars-deferred-162 AC6: unstubbed -> false, i.e. no dispute locks the recap.
     @Mock private com.softropic.skillars.platform.booking.contract.BookingDisputeLookup bookingDisputeLookup;
+    @Mock private com.softropic.skillars.platform.session.repo.SessionRepository sessionRepository;
+    @Mock private com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer contactDetailSanitizer;
 
     private BookingCompletionService service;
 
@@ -73,8 +75,14 @@ class BookingCompletionServiceTest {
         service = new BookingCompletionService(
             bookingService, bookingRepository, completionDataRepository,
             coachProfileRepository, userRepository, playerProfileRepository,
-            eventPublisher, new ObjectMapper(), configService, drillRepository, bookingDisputeLookup
+            eventPublisher, new ObjectMapper(), configService, drillRepository, bookingDisputeLookup,
+            sessionRepository, contactDetailSanitizer
         );
+        // skillars-deferred-163 AC2.3: passthrough default, matching BookingServiceTest's own
+        // convention — tests exercising the actual redaction/truncation wiring override this.
+        lenient().when(contactDetailSanitizer.sanitize(anyString())).thenAnswer(
+            inv -> new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.SanitizerResult(
+                inv.getArgument(0), false));
 
         coach = new CoachProfile();
         coach.setId(COACH_ID);
@@ -114,10 +122,183 @@ class BookingCompletionServiceTest {
         BookingCompletedEvent event = captor.getValue();
         assertThat(event.getBookingId()).isEqualTo(BOOKING_ID);
         assertThat(event.isPlayerAttended()).isTrue();
-        // skillars-12-2 code review (P5): the LIVE-mode publish reads the recap straight from
-        // the request's two trailing args — assert both land on the right getter, not transposed.
+        // skillars-12-2 code review (P5): assert both land on the right getter, not transposed.
+        // skillars-deferred-163 AC2.3: the LIVE-mode publish now reads from the saved (sanitised)
+        // scd values rather than the raw request — the passthrough sanitizer stub in setUp makes
+        // these equal the request text here; see the dedicated sanitization test below for the
+        // case where they differ.
         assertThat(event.getWhatWeDid()).isEqualTo("Worked on first touch");
         assertThat(event.getWhatsNext()).isEqualTo("Continue weak-foot drills");
+    }
+
+    /**
+     * skillars-deferred-163 AC2.3: the LIVE-branch event must carry the SAVED scd values, not the
+     * raw request — this is the one case where they can actually differ (the sanitizer redacts).
+     */
+    @Test
+    void submitWrapUp_liveMode_eventCarriesSanitisedScdValues_notRawRequestText() {
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(contactDetailSanitizer.sanitize("Call me at 555-0100-123 about first touch")).thenReturn(
+            new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.SanitizerResult(
+                "[contact details removed] about first touch", true));
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE",
+            "Call me at 555-0100-123 about first touch", "Continue weak-foot drills", null);
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req);
+
+        ArgumentCaptor<SessionCompletionData> scdCaptor = ArgumentCaptor.forClass(SessionCompletionData.class);
+        verify(completionDataRepository).save(scdCaptor.capture());
+        assertThat(scdCaptor.getValue().getWhatWeDid()).isEqualTo("[contact details removed] about first touch");
+
+        ArgumentCaptor<BookingCompletedEvent> captor = ArgumentCaptor.forClass(BookingCompletedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().getWhatWeDid()).isEqualTo("[contact details removed] about first touch");
+    }
+
+    /**
+     * skillars-deferred-163 AC2.3: both submitWrapUp and updateRecap must sanitise — a
+     * contact-detail-bearing recap is redacted before save, on either write path.
+     */
+    @Test
+    void submitWrapUp_sanitizesRecapTextBeforeSave() {
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(contactDetailSanitizer.sanitize("email me at coach@example.com")).thenReturn(
+            new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.SanitizerResult(
+                "[contact details removed]", true));
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE",
+            "email me at coach@example.com", "Continue weak-foot drills", null);
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req);
+
+        ArgumentCaptor<SessionCompletionData> scdCaptor = ArgumentCaptor.forClass(SessionCompletionData.class);
+        verify(completionDataRepository).save(scdCaptor.capture());
+        assertThat(scdCaptor.getValue().getWhatWeDid()).isEqualTo("[contact details removed]");
+        verify(contactDetailSanitizer).sanitize("email me at coach@example.com");
+    }
+
+    /**
+     * skillars-deferred-163 AC2.1: an admin force-complete (not just the sweeper) produces the
+     * identical placeholder signature, so a coach resuming after EITHER cause gets the same
+     * dedicated error — built end-to-end through forceCompleteWithPlaceholderData itself, not a
+     * hand-built placeholder, to prove the two methods' placeholder shapes actually agree.
+     */
+    @Test
+    void submitWrapUp_afterAdminForceComplete_throwsSameDedicatedRecapStillEditableCode() {
+        booking.setStatus(BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.empty());
+        ArgumentCaptor<SessionCompletionData> savedCaptor = ArgumentCaptor.forClass(SessionCompletionData.class);
+        when(completionDataRepository.save(savedCaptor.capture())).thenAnswer(i -> i.getArgument(0));
+
+        service.forceCompleteWithPlaceholderData(BOOKING_ID,
+            com.softropic.skillars.platform.booking.contract.ActorRole.ADMIN, 999L);
+
+        SessionCompletionData placeholder = savedCaptor.getValue();
+        arrangeEditableRecap(Instant.now().minusSeconds(3600)); // -> COMPLETED, recap still editable
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(placeholder));
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE",
+            "Worked on first touch", "Continue weak-foot drills", null);
+
+        assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE);
+    }
+
+    /**
+     * skillars-deferred-163 AC2.4 (code review 2026-10-27, Decision 1): QUICK's session plan stays
+     * editable until the delayed BookingCompletedEvent eventually fires, so the plan's BLOCKS (drill refs
+     * and per-block durations, everything SLU needs) are snapshotted at wrap-up time. LIVE's event fires
+     * immediately, so no snapshot is needed there.
+     */
+    @Test
+    void submitWrapUp_quickMode_capturesPlanBlocksSnapshot() throws Exception {
+        UUID drillId = UUID.randomUUID();
+        var session = new com.softropic.skillars.platform.session.repo.Session();
+        session.setStatus(com.softropic.skillars.platform.session.repo.SessionStatus.SAVED);
+        session.setBlocks(List.of(new com.softropic.skillars.platform.session.contract.SessionBlockData(
+            "WARMUP", "Warmup", 10, List.of(new com.softropic.skillars.platform.session.contract.SessionDrillRef(drillId, 0)))));
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(session));
+
+        SessionCompletionData saved = submitQuickWrapUp();
+
+        assertThat(readBlocks(saved.getPlanBlocksSnapshot())).containsExactly(
+            new com.softropic.skillars.platform.session.contract.SessionBlockData(
+                "WARMUP", "Warmup", 10, List.of(new com.softropic.skillars.platform.session.contract.SessionDrillRef(drillId, 0))));
+    }
+
+    /**
+     * No plan at wrap-up snapshots as "[]", never null: readers treat null as "use the live plan", so a
+     * plan created after wrap-up would otherwise leak into the timeline and SLU.
+     */
+    @Test
+    void submitWrapUp_quickModeWithNoPlan_capturesEmptySnapshotNotNull() {
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.empty());
+
+        assertThat(submitQuickWrapUp().getPlanBlocksSnapshot()).isEqualTo("[]");
+    }
+
+    @Test
+    void submitWrapUp_quickModeWithCancelledPlan_capturesEmptySnapshot() {
+        var session = new com.softropic.skillars.platform.session.repo.Session();
+        session.setStatus(com.softropic.skillars.platform.session.repo.SessionStatus.CANCELLED);
+        session.setBlocks(List.of(new com.softropic.skillars.platform.session.contract.SessionBlockData(
+            "MAIN", "Main", 30, List.of(new com.softropic.skillars.platform.session.contract.SessionDrillRef(UUID.randomUUID(), 0)))));
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(session));
+
+        assertThat(submitQuickWrapUp().getPlanBlocksSnapshot()).isEqualTo("[]");
+    }
+
+    /** A ref with a null drill id is dropped at capture, so it can never poison the snapshot's readers. */
+    @Test
+    void submitWrapUp_quickMode_dropsRefsWithANullDrillId() throws Exception {
+        UUID drillId = UUID.randomUUID();
+        var session = new com.softropic.skillars.platform.session.repo.Session();
+        session.setStatus(com.softropic.skillars.platform.session.repo.SessionStatus.DRAFT);
+        session.setBlocks(List.of(new com.softropic.skillars.platform.session.contract.SessionBlockData(
+            "MAIN", "Main", 30, List.of(
+                new com.softropic.skillars.platform.session.contract.SessionDrillRef(null, 0),
+                new com.softropic.skillars.platform.session.contract.SessionDrillRef(drillId, 1)))));
+        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(session));
+
+        var blocks = readBlocks(submitQuickWrapUp().getPlanBlocksSnapshot());
+
+        assertThat(blocks).hasSize(1);
+        assertThat(blocks.get(0).drills()).containsExactly(
+            new com.softropic.skillars.platform.session.contract.SessionDrillRef(drillId, 1));
+    }
+
+    @Test
+    void submitWrapUp_liveMode_doesNotCapturePlanBlocksSnapshot() {
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE", "did", "next", null);
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req);
+
+        ArgumentCaptor<SessionCompletionData> scdCaptor = ArgumentCaptor.forClass(SessionCompletionData.class);
+        verify(completionDataRepository).save(scdCaptor.capture());
+        assertThat(scdCaptor.getValue().getPlanBlocksSnapshot()).isNull();
+        verifyNoInteractions(sessionRepository);
+    }
+
+    private SessionCompletionData submitQuickWrapUp() {
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        User parent = new User();
+        parent.setEmail("parent@test.com");
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(parent));
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(new PlayerProfile()));
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID,
+            new WrapUpRequest(true, 4, 3, 5, List.of(), "QUICK", "did", "next", null));
+
+        ArgumentCaptor<SessionCompletionData> scdCaptor = ArgumentCaptor.forClass(SessionCompletionData.class);
+        verify(completionDataRepository).save(scdCaptor.capture());
+        return scdCaptor.getValue();
+    }
+
+    private static List<com.softropic.skillars.platform.session.contract.SessionBlockData> readBlocks(String json)
+            throws Exception {
+        return new ObjectMapper().readValue(json,
+            new com.fasterxml.jackson.core.type.TypeReference<List<com.softropic.skillars.platform.session.contract.SessionBlockData>>() {});
     }
 
     private static com.softropic.skillars.platform.session.repo.Drill drill(UUID id, String library, UUID owner, String status) {
@@ -545,24 +726,49 @@ class BookingCompletionServiceTest {
     }
 
     // skillars-deferred-153 AC1 code review (2026-10-17): NEW — the coach-facing half of the sweeper.
-    // A coach who finishes the wizard after the sweeper already auto-completed the booking must get
-    // an actionable message, not verifyStatus's raw "Booking is in status COMPLETED, expected
-    // COMPLETED_PENDING_CONFIRMATION".
+    // A coach who finishes the wizard after the sweeper (or an admin force-complete) already
+    // auto-completed the booking must get an actionable, dedicated error — not verifyStatus's raw
+    // "Booking is in status COMPLETED, expected COMPLETED_PENDING_CONFIRMATION", and not a message
+    // that falsely claims the sweeper is the exclusive cause (skillars-deferred-163 AC2.1).
     @Test
-    void submitWrapUp_bookingAutoCompletedBySweeper_throwsNoLongerEditable() {
-        booking.setStatus(BookingStatus.COMPLETED.name());
+    void submitWrapUp_bookingAutoCompletedBySweeper_throwsDedicatedRecapStillEditableCode() {
+        arrangeEditableRecap(Instant.now().minusSeconds(3600)); // code review 2026-10-27: PUT /recap would accept
         SessionCompletionData placeholder = new SessionCompletionData();
         placeholder.setBookingId(BOOKING_ID);
-        placeholder.setPlayerAttended(false);   // all four isSweeperPlaceholder conditions
-        placeholder.setCompletionMode("QUICK"); // whatWeDid/whatsNext/voiceNoteText left null
+        placeholder.setPlayerAttended(false);   // all isSweeperPlaceholder conditions
+        placeholder.setCompletionMode("QUICK"); // whatWeDid/whatsNext left null
         when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(placeholder));
         WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE",
             "Worked on first touch", "Continue weak-foot drills", null);
 
         assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req))
             .isInstanceOf(OperationNotAllowedException.class)
-            .hasMessageContaining("auto-completed after the wrap-up was left unsubmitted");
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE);
 
+        verify(completionDataRepository, never()).save(any());
+    }
+
+    /**
+     * Code review 2026-10-27: the redirect is offered only when PUT /recap would actually accept the
+     * text. A placeholder booking past the recap edit window gets that verdict's own reason instead of a
+     * "you can still save it" redirect into a read-only dialog.
+     */
+    @Test
+    void submitWrapUp_placeholderButRecapWindowClosed_throwsTheVerdictReasonNotTheRedirect() {
+        arrangeEditableRecap(Instant.now().minusSeconds(40L * 86_400)); // past the 30-day window
+        SessionCompletionData placeholder = new SessionCompletionData();
+        placeholder.setBookingId(BOOKING_ID);
+        placeholder.setPlayerAttended(false);
+        placeholder.setCompletionMode("QUICK");
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(placeholder));
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE",
+            "Worked on first touch", "Continue weak-foot drills", null);
+
+        assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.RECAP_EDIT_WINDOW_CLOSED);
         verify(completionDataRepository, never()).save(any());
     }
 
@@ -585,6 +791,29 @@ class BookingCompletionServiceTest {
             .hasMessageContaining("Booking is in status COMPLETED, expected COMPLETED_PENDING_CONFIRMATION");
 
         verify(completionDataRepository, never()).save(any());
+    }
+
+    /**
+     * skillars-deferred-163 AC6.1: isSweeperPlaceholder no longer reads voiceNoteText at all -- a
+     * legacy row that happens to carry one (pre-dating this column's removal from the condition)
+     * must still be recognised as a placeholder purely on whatWeDid/whatsNext being null.
+     */
+    @Test
+    void submitWrapUp_placeholderWithLegacyVoiceNoteText_isStillRecognisedAsPlaceholder() {
+        arrangeEditableRecap(Instant.now().minusSeconds(3600));
+        SessionCompletionData placeholder = new SessionCompletionData();
+        placeholder.setBookingId(BOOKING_ID);
+        placeholder.setPlayerAttended(false);
+        placeholder.setCompletionMode("QUICK");
+        placeholder.setVoiceNoteText("a stray legacy voice note");
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(placeholder));
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE",
+            "Worked on first touch", "Continue weak-foot drills", null);
+
+        assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE);
     }
 
     // ---- skillars-12-7 ----
@@ -665,6 +894,26 @@ class BookingCompletionServiceTest {
         assertThat(ev.getValue().getBookingId()).isEqualTo(BOOKING_ID);
         assertThat(ev.getValue().getCoachId()).isEqualTo(COACH_ID);
         assertThat(ev.getValue().getPlayerId()).isEqualTo(PLAYER_ID);
+    }
+
+    /** skillars-deferred-163 AC2.3/AC2.5: updateRecap sanitises too — the path AC2.2's recovery flow saves through. */
+    @Test
+    void updateRecap_sanitizesRecapTextBeforeSave() {
+        arrangeEditableRecap(Instant.now().minusSeconds(3600));
+        when(contactDetailSanitizer.sanitize("email me at coach@example.com")).thenReturn(
+            new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.SanitizerResult(
+                "[contact details removed]", true));
+
+        var response = service.updateRecap(BOOKING_ID, COACH_USER_ID,
+            new com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest(
+                "  email me at coach@example.com ", "next", null));
+
+        ArgumentCaptor<SessionCompletionData> scdCaptor = ArgumentCaptor.forClass(SessionCompletionData.class);
+        verify(completionDataRepository).save(scdCaptor.capture());
+        assertThat(scdCaptor.getValue().getWhatWeDid()).isEqualTo("[contact details removed]");
+        assertThat(response.whatWeDid()).isEqualTo("[contact details removed]");
+        // trimmed BEFORE sanitising, matching updateRecap's pre-existing trim behavior
+        verify(contactDetailSanitizer).sanitize("email me at coach@example.com");
     }
 
     @Test

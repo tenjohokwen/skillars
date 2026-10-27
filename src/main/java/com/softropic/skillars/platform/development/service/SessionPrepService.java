@@ -108,8 +108,11 @@ public class SessionPrepService {
 
         String suggestedWhatsNext = null;
         Instant suggestedWhatsNextSessionDate = null;
+        // skillars-deferred-163 AC3.2: bounded by this (the prepped) booking's own requestedStartTime
+        // against the suggestion's referenced booking.
         PlayerTimelineEvent suggestion = playerTimelineRepository
-            .findLatestWhatsNextSuggestion(playerId, coachId, bookingId).orElse(null);
+            .findLatestWhatsNextSuggestion(playerId, coachId, bookingId, booking.getRequestedStartTime())
+            .orElse(null);
         if (suggestion != null && suggestion.getMetadata() != null) {
             Object raw = suggestion.getMetadata().get(TimelineEventListener.METADATA_KEY_WHATS_NEXT);
             if (raw != null) {

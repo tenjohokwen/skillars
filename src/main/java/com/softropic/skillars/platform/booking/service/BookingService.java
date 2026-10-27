@@ -834,13 +834,18 @@ public class BookingService {
      * {@code requestedStartTime} bounds for their own different reasons. Separate error code from the
      * status rejection so the UI can say "this session has already taken place" rather than inviting a
      * retry that can never succeed.
+     *
+     * <p>skillars-deferred-163 AC3.3: the time check's clock source is now {@link ClockProvider},
+     * matching {@code setCoachPlanNote}'s identical two-step pattern — the status check above
+     * already guarantees {@link Booking#isPrepNoteEditable}'s own status half, so only its time half
+     * is actually exercised here.
      */
     private void rejectIfNotEditablePlayerRequest(Booking booking) {
         if (!PLAYER_REQUEST_EDITABLE_STATUSES.contains(booking.getStatus())) {
             throw new OperationNotAllowedException(
                 "This booking cannot be edited right now", BookingError.BOOKING_NOT_EDITABLE);
         }
-        if (booking.getRequestedEndTime() != null && !Instant.now().isBefore(booking.getRequestedEndTime())) {
+        if (!booking.isPrepNoteEditable(Instant.now(ClockProvider.getClock()))) {
             throw new OperationNotAllowedException(
                 "This session has already taken place", BookingError.SESSION_ALREADY_ENDED);
         }

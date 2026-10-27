@@ -1283,6 +1283,12 @@ export default {
       // long-standing gap for whenever a parent-facing no-show-report surface is eventually built,
       // not a key this story's own UI wires up.
       noShowTooEarly: 'A no-show cannot be reported before the session has started.',
+      // skillars-deferred-163 AC2.1/AC2.2: shown when the wrap-up wizard can no longer be submitted
+      // because this booking was already completed (by the stuck-completion sweeper or an admin) -- the
+      // coach is redirected into the recap dialog with their typed text carried over. Deliberately names
+      // no cause: "automatically" would be false for an admin force-complete.
+      recapStillEditableAfterForceComplete:
+        'This session has already been completed, but your recap has been carried over below — you can still save it.',
     },
     recap: {
       dialogTitle: 'Session recap — {name}',

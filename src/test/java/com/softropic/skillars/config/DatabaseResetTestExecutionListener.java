@@ -713,6 +713,11 @@ public class DatabaseResetTestExecutionListener extends AbstractTestExecutionLis
     private void evictInProcessCaches(ApplicationContext ctx) {
         ConfigService configService = ctx.getBeanProvider(ConfigService.class).getIfAvailable();
         if (configService != null) {
+            // skillars-deferred-163 AC1.5: scheduledRefresh() alone only loads when the cache is
+            // already stale (TTL expired or invalidated) — immediately after a truncate it usually
+            // isn't yet, so the refresh silently no-ops. invalidate() first guarantees this actually
+            // reloads regardless of TTL state.
+            configService.invalidate();
             configService.scheduledRefresh();
         }
         AlertRuleCache alertRuleCache = ctx.getBeanProvider(AlertRuleCache.class).getIfAvailable();

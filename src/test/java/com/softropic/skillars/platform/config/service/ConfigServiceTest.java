@@ -27,6 +27,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -659,7 +660,9 @@ class ConfigServiceTest {
 
     @Test
     void mustBeFreshReaderParkedBehindAPreInvalidateLoad_reloadsAfterIt() throws Exception {
-        // Exercises the waiter loop's second pass: B must not accept A's load, which began before B's invalidate.
+        // skillars-deferred-163 AC1.1/1.6: the waiter now parks on a BOUNDED tryLock(timeout), so it
+        // observes TIMED_WAITING, not the old uninterruptible lock()'s WAITING. Exercises the waiter
+        // loop's second pass: B must not accept A's load, which began before B's invalidate.
         AtomicInteger findAllCalls = new AtomicInteger();
         CountDownLatch loadEntered = new CountDownLatch(1);
         CountDownLatch releaseLoad = new CountDownLatch(1);
@@ -687,8 +690,9 @@ class ConfigServiceTest {
 
             configService.invalidate(); // lands after the leader's load observed its epoch
             waiterThread.start();
-            // the must-be-fresh waiter parks on refreshLock.lock() behind the in-flight load
-            await().atMost(5, TimeUnit.SECONDS).until(() -> waiterThread.getState() == Thread.State.WAITING);
+            // the must-be-fresh waiter parks on the bounded refreshLock.tryLock(timeout) behind the
+            // in-flight load
+            await().atMost(5, TimeUnit.SECONDS).until(() -> waiterThread.getState() == Thread.State.TIMED_WAITING);
 
             releaseLoad.countDown();
             leader.get(5, TimeUnit.SECONDS);
@@ -698,6 +702,232 @@ class ConfigServiceTest {
             releaseLoad.countDown();
             pool.shutdownNow();
             waiterThread.interrupt();
+        }
+    }
+
+    @Test
+    void mustBeFreshWaiter_boundedTimeoutWithRecentRecordedFailure_rethrowsWithoutItsOwnFindAll() throws Exception {
+        // skillars-deferred-163 AC1.1/1.6: L1 fails synchronously (records lastMustBeFreshFailure,
+        // releases the lock). L2 then grabs the now-free lock and holds it mid-load past W's own
+        // bounded tryLock timeout. W must rethrow L1's recorded failure instead of attempting a
+        // third, redundant findAll() once L2 eventually frees the lock.
+        AtomicInteger findAllCalls = new AtomicInteger();
+        CountDownLatch l2LoadEntered = new CountDownLatch(1);
+        CountDownLatch releaseL2Load = new CountDownLatch(1);
+        when(configRepository.findAll()).thenAnswer(inv -> {
+            int call = findAllCalls.incrementAndGet();
+            if (call == 1) {
+                return List.of(entry("k", "v1", ConfigValueType.STRING));
+            }
+            if (call == 2) {
+                throw new IllegalStateException("db down");
+            }
+            l2LoadEntered.countDown();
+            assertThat(releaseL2Load.await(10, TimeUnit.SECONDS)).isTrue();
+            return List.of(entry("k", "v2", ConfigValueType.STRING));
+        });
+        configService.init();
+        configService.invalidate();
+
+        // L1: synchronous on the test thread, fails immediately and records the failure.
+        assertThatThrownBy(() -> configService.find("k"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("db down");
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Optional<String>> l2 = pool.submit(() -> configService.find("k"));
+            assertThat(l2LoadEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            // W's bounded wait (4s) times out while L2 still holds the lock.
+            Future<Optional<String>> waiter = pool.submit(() -> configService.find("k"));
+            assertThatThrownBy(() -> waiter.get(8, TimeUnit.SECONDS))
+                    .cause()
+                    .isInstanceOf(ConfigRefreshException.class)
+                    .cause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("db down");
+
+            releaseL2Load.countDown();
+            l2.get(5, TimeUnit.SECONDS);
+            // L1's failure (call 2) + L2's successful load (call 3): W's rethrow made no findAll() of its own.
+            assertThat(findAllCalls.get()).isEqualTo(3);
+        } finally {
+            releaseL2Load.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void mustBeFreshWaiter_acquiringTheLockRightAfterTheLeaderFailed_rethrowsWithoutItsOwnFindAll() throws Exception {
+        // skillars-deferred-163 code review (2026-10-27, AC1.1): W is parked on the bounded tryLock while
+        // the leader's load fails; W then ACQUIRES the freed lock. It must rethrow the failure it waited
+        // out, not run a second findAll() (in an outage: a second full Hikari connection timeout).
+        AtomicInteger findAllCalls = new AtomicInteger();
+        CountDownLatch loadEntered = new CountDownLatch(1);
+        CountDownLatch releaseLoad = new CountDownLatch(1);
+        when(configRepository.findAll()).thenAnswer(inv -> {
+            if (findAllCalls.incrementAndGet() == 1) {
+                return List.of(entry("k", "v1", ConfigValueType.STRING));
+            }
+            loadEntered.countDown();
+            assertThat(releaseLoad.await(10, TimeUnit.SECONDS)).isTrue();
+            throw new IllegalStateException("db down");
+        });
+        configService.init();
+        configService.invalidate();
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Optional<String>> leader = pool.submit(() -> configService.find("k"));
+            assertThat(loadEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            AtomicReference<Thread> waiterThread = new AtomicReference<>();
+            Future<Optional<String>> waiter = pool.submit(() -> {
+                waiterThread.set(Thread.currentThread());
+                return configService.find("k");
+            });
+            await().atMost(5, TimeUnit.SECONDS).until(() -> waiterThread.get() != null
+                && waiterThread.get().getState() == Thread.State.TIMED_WAITING);
+
+            releaseLoad.countDown();
+            assertThatThrownBy(() -> leader.get(5, TimeUnit.SECONDS))
+                    .cause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("db down");
+            assertThatThrownBy(() -> waiter.get(5, TimeUnit.SECONDS))
+                    .cause()
+                    .isInstanceOf(ConfigRefreshException.class)
+                    .cause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("db down");
+            // init's load + the leader's failed load: the waiter made no findAll() of its own.
+            assertThat(findAllCalls.get()).isEqualTo(2);
+        } finally {
+            releaseLoad.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void mustBeFreshWaiter_boundedTimeoutWithNoRecordedFailure_makesAnotherBoundedAttemptAndGetsTheFreshLoad()
+            throws Exception {
+        // skillars-deferred-163 AC1.6: a timed-out tryLock with no recent recorded failure does not fail the
+        // reader — it loops for another bounded attempt. Here the leader's load outlasts W's first 4s wait,
+        // then succeeds; W's second attempt finds the cache fresh and returns the new value with no
+        // findAll() of its own.
+        AtomicInteger findAllCalls = new AtomicInteger();
+        CountDownLatch loadEntered = new CountDownLatch(1);
+        CountDownLatch releaseLoad = new CountDownLatch(1);
+        when(configRepository.findAll()).thenAnswer(inv -> {
+            if (findAllCalls.incrementAndGet() == 1) {
+                return List.of(entry("k", "v1", ConfigValueType.STRING));
+            }
+            loadEntered.countDown();
+            assertThat(releaseLoad.await(15, TimeUnit.SECONDS)).isTrue();
+            return List.of(entry("k", "v2", ConfigValueType.STRING));
+        });
+        configService.init();
+        configService.invalidate();
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Optional<String>> leader = pool.submit(() -> configService.find("k"));
+            assertThat(loadEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            long startNanos = System.nanoTime();
+            Future<Optional<String>> waiter = pool.submit(() -> configService.find("k"));
+            // hold the leader's load past W's first bounded wait (4s)
+            await().atMost(10, TimeUnit.SECONDS)
+                .until(() -> (System.nanoTime() - startNanos) / 1_000_000 > 4_500);
+            assertThat(waiter.isDone()).isFalse();
+
+            releaseLoad.countDown();
+            assertThat(leader.get(5, TimeUnit.SECONDS)).contains("v2");
+            assertThat(waiter.get(5, TimeUnit.SECONDS)).contains("v2");
+            assertThat(findAllCalls.get()).isEqualTo(2);
+        } finally {
+            releaseLoad.countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void reloadUnderConcurrentReaders_neverExposesAGapOrAPartialMap() throws Exception {
+        // skillars-deferred-163 AC1.4/AC1.6 (behavioral, no reflection): load() swaps one immutable map in a
+        // single volatile write. Every read is served from exactly the old or the new snapshot: a key present
+        // in both is never momentarily missing (a clear-then-put load would expose that gap), a removed key
+        // is gone and an added key present once the reload returns.
+        AtomicInteger findAllCalls = new AtomicInteger();
+        when(configRepository.findAll()).thenAnswer(inv -> findAllCalls.incrementAndGet() % 2 == 1
+            ? List.of(entry("stable", "v1", ConfigValueType.STRING), entry("removed", "x", ConfigValueType.STRING))
+            : List.of(entry("stable", "v2", ConfigValueType.STRING), entry("added", "y", ConfigValueType.STRING)));
+        configService.init();
+
+        AtomicInteger gaps = new AtomicInteger();
+        java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> reader = pool.submit(() -> {
+                while (!stop.get()) {
+                    Optional<String> v = configService.find("stable");
+                    if (v.isEmpty() || !(v.get().equals("v1") || v.get().equals("v2"))) gaps.incrementAndGet();
+                }
+            });
+            for (int i = 0; i < 200; i++) {
+                configService.invalidate();
+                configService.find("stable"); // must-be-fresh: reloads on this thread
+            }
+            stop.set(true);
+            reader.get(5, TimeUnit.SECONDS);
+        } finally {
+            stop.set(true);
+            pool.shutdownNow();
+        }
+
+        assertThat(gaps.get()).isZero();
+        // 1 (init) + 200 reloads = 201 loads; odd count → the last load is the v1/"removed" shape.
+        assertThat(findAllCalls.get()).isEqualTo(201);
+        assertThat(configService.find("stable")).contains("v1");
+        assertThat(configService.find("removed")).contains("x");
+        assertThat(configService.find("added")).isEmpty();
+    }
+
+    @Test
+    void scheduledRefresh_skipsTickWithoutBlocking_whenARefreshIsAlreadyInFlight() throws Exception {
+        // skillars-deferred-163 AC1.2: the @Scheduled tick must never park the shared scheduler
+        // thread behind a concurrent must-be-fresh load — it tries the lock once and returns.
+        when(configProperties.getCacheTtlSeconds()).thenReturn(0L);
+        CountDownLatch loadEntered = new CountDownLatch(1);
+        CountDownLatch releaseLoad = new CountDownLatch(1);
+        AtomicInteger findAllCalls = new AtomicInteger();
+        when(configRepository.findAll()).thenAnswer(inv -> {
+            if (findAllCalls.incrementAndGet() == 1) {
+                return List.of(entry("k", "v1", ConfigValueType.STRING));
+            }
+            loadEntered.countDown();
+            assertThat(releaseLoad.await(10, TimeUnit.SECONDS)).isTrue();
+            return List.of(entry("k", "v2", ConfigValueType.STRING));
+        });
+        configService.init();
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> inFlight = pool.submit(configService::scheduledRefresh);
+            assertThat(loadEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            long startNanos = System.nanoTime();
+            configService.scheduledRefresh();
+            long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
+            assertThat(elapsedMs).isLessThan(500);
+
+            releaseLoad.countDown();
+            inFlight.get(5, TimeUnit.SECONDS);
+            // the skipped tick never called findAll() itself: only the in-flight load's own call.
+            assertThat(findAllCalls.get()).isEqualTo(2);
+        } finally {
+            releaseLoad.countDown();
+            pool.shutdownNow();
         }
     }
 

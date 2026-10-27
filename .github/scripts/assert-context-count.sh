@@ -189,9 +189,34 @@ fi
 # so without it grep decides the file is binary and prints "binary file matches" INSTEAD of the
 # match -- making this gate silently find nothing. That single missing flag is what made three
 # successive attempts at this gate look like a file-plumbing problem.
-# Every number below comes from ONE line: the final cache statistics line. Reading missCount and
-# size with separate greps could pair values from different lines.
-stats=$(grep -aoE 'size = [0-9]+, maxSize = [0-9]+, parentContextCount = [0-9]+, hitCount = [0-9]+, missCount = [0-9]+' "$LOG" | tail -1)
+#
+# skillars-deferred-163 AC5.2: scope the stats grep to the section of the log AFTER the failsafe
+# integration-test execution banner. Before this, a failsafe crash that happens BEFORE its own
+# "cache statistics" DEBUG line prints (e.g. a fork death during context startup) would leave the
+# surefire (unit-test) phase's own, unrelated statistics line as the last match in the WHOLE log --
+# this gate would then silently evaluate the wrong phase's numbers instead of catching the crash.
+# The banner is Maven 3.9's real short plugin-prefix format -- confirmed against a captured CI log
+# (run 40338236660): "[INFO] --- failsafe:3.5.6:integration-test (default) @ skillars ---", NOT
+# the full "maven-failsafe-plugin:..." name the pattern below also tolerates (older Maven), which
+# does not appear in this project's actual CI output.
+BANNER_PATTERN='--- (maven-)?failsafe[^[:space:]]*:integration-test'
+banner_line=$(grep -anE -- "$BANNER_PATTERN" "$LOG" | tail -1 | cut -d: -f1)
+
+if [ -z "$banner_line" ]; then
+  echo "assert-context-count: no failsafe integration-test banner found in $LOG." >&2
+  echo "Expected a line matching '$BANNER_PATTERN', e.g.:" >&2
+  echo "  [INFO] --- failsafe:3.5.6:integration-test (default) @ skillars ---" >&2
+  echo "Failing rather than scoping to the whole log: a gate that cannot find its own input" >&2
+  echo "section is not a gate -- see this script's missCount check below for the same principle." >&2
+  exit 1
+fi
+
+# Every number below comes from ONE line: the final cache statistics line, taken only from the
+# failsafe section found above. Reading missCount and size with separate greps could pair values
+# from different lines; reading from the whole log could pair them with the wrong phase entirely.
+stats=$(tail -n "+${banner_line}" "$LOG" \
+  | grep -aoE 'size = [0-9]+, maxSize = [0-9]+, parentContextCount = [0-9]+, hitCount = [0-9]+, missCount = [0-9]+' \
+  | tail -1)
 last=$(echo "$stats" | sed -nE 's/.*missCount = ([0-9]+)$/\1/p')
 
 if [ -z "$last" ]; then

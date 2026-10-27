@@ -61,6 +61,15 @@ public class SessionCompletionData {
     @Column(name = "homework_drill_ids")
     private String homeworkDrillIds;
 
+    // skillars-deferred-163 AC2.4: a snapshot of the QUICK-mode session plan's blocks, taken at
+    // wrap-up time (JSON List<SessionBlockData>, the same shape as session.sessions.blocks) — the
+    // plan stays editable until the delayed BookingCompletedEvent fires, so the live plan is not a
+    // reliable source for "what was planned at completion" by the time the timeline/SLU listeners
+    // run. Both listeners compute from these blocks, so they cannot disagree. Every QUICK wrap-up
+    // writes one ("[]" when there was no plan); null only for LIVE-mode and pre-V170 rows.
+    @Column(name = "plan_blocks_snapshot")
+    private String planBlocksSnapshot;
+
     @Column(name = "completion_mode", nullable = false, length = 10)
     private String completionMode;
 

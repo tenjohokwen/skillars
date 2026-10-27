@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.booking.contract.SessionRecapUpdatedEvent;
+import com.softropic.skillars.platform.booking.repo.Booking;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.SessionCompletionData;
 import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
 import com.softropic.skillars.platform.development.contract.PlayerTimelineEventType;
@@ -53,6 +55,7 @@ public class TimelineEventListener {
     private final ObjectMapper objectMapper;
     private final TimelineDrillSnapshotResolver drillSnapshotResolver;
     private final DevelopmentDataErasureGuard erasureGuard;
+    private final BookingRepository bookingRepository;
 
     @Autowired
     @Lazy
@@ -91,7 +94,7 @@ public class TimelineEventListener {
                 // The resolver already never throws; this guard keeps that guarantee local, so a future resolver
                 // change cannot cost the SESSION_COMPLETED row (code review 2026-10-23).
                 try {
-                    List<Map<String, Object>> drills = drillSnapshotResolver.forBooking(event.getBookingId());
+                    List<Map<String, Object>> drills = resolveDrills(event.getBookingId(), event.getCoachId(), scd);
                     if (!drills.isEmpty()) metadata.put(METADATA_KEY_DRILLS, drills);
                 } catch (Exception e) {
                     log.warn("Drill enrichment failed for booking {} -- writing SESSION_COMPLETED without drills",
@@ -105,10 +108,35 @@ public class TimelineEventListener {
             // more than it earns an SLU row today — mirrors SluCalculationService.onBookingCompleted's
             // own !event.isPlayerAttended() early return exactly.
             UUID coachIdForClock = event.isPlayerAttended() ? event.getCoachId() : null;
-            self.writeSessionCompleted(event.getPlayerId(), event.getBookingId(), metadata, coachIdForClock);
+            // skillars-deferred-163 AC3.1: the SESSION_COMPLETED row is labelled by the session's own
+            // end time, not wall-clock Instant.now() — a sweeper/force-complete/timeout-driven
+            // completion can land long after the session actually happened. requestedEndTime is the
+            // only available anchor (BookingCompletedEvent itself carries no booking times); falls
+            // back to wall-clock only in the defensive case of a booking row that has since vanished.
+            // Code review 2026-10-27: capped at now — a session ended (LIVE) or quick-completed before its
+            // scheduled end would otherwise be stamped in the future and sort above later events.
+            Instant now = Instant.now();
+            Instant sessionEndTime = bookingRepository.findById(event.getBookingId())
+                .map(Booking::getRequestedEndTime)
+                .filter(end -> end.isBefore(now))
+                .orElse(now);
+            self.writeSessionCompleted(event.getPlayerId(), event.getBookingId(), metadata, coachIdForClock, sessionEndTime);
         } catch (Exception e) {
             log.error("Failed to write SESSION_COMPLETED timeline event: playerId={}", event.getPlayerId(), e);
         }
+    }
+
+    /**
+     * skillars-deferred-163 AC2.4: a QUICK-mode booking's session plan stays editable until this delayed
+     * event finally fires, so the live plan is not a reliable "what was planned" source by now — read the
+     * blocks snapshot captured at wrap-up time instead, through the same {@link QuickPlanSnapshot} reader
+     * SluCalculationService uses, so the two can never disagree. LIVE mode (and pre-V170 rows) keep
+     * reading the live plan.
+     */
+    private List<Map<String, Object>> resolveDrills(UUID bookingId, UUID coachId, SessionCompletionData scd) {
+        return QuickPlanSnapshot.blocksOf(scd, objectMapper)
+            .map(blocks -> drillSnapshotResolver.forBlocks(blocks, coachId))
+            .orElseGet(() -> drillSnapshotResolver.forBooking(bookingId));
     }
 
     /**
@@ -118,7 +146,8 @@ public class TimelineEventListener {
      * completion or with HomeworkAssignmentService's separately committed rows. A replay is a quiet no-op.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void writeSessionCompleted(Long playerId, UUID bookingId, Map<String, Object> metadata, UUID coachId) {
+    public void writeSessionCompleted(Long playerId, UUID bookingId, Map<String, Object> metadata, UUID coachId,
+                                      Instant occurredAt) {
         if (erasureGuard.isErasedUnderLock(playerId, "TimelineEventListener.onBookingCompleted")) {
             return;
         }
@@ -128,7 +157,7 @@ public class TimelineEventListener {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Cannot serialise SESSION_COMPLETED metadata for booking " + bookingId, e);
         }
-        int inserted = timelineRepository.insertSessionCompletedIfAbsent(playerId, bookingId, Instant.now(), json, coachId);
+        int inserted = timelineRepository.insertSessionCompletedIfAbsent(playerId, bookingId, occurredAt, json, coachId);
         if (inserted == 0) {
             log.info("SESSION_COMPLETED for booking {} is already on player {}'s timeline -- replay ignored",
                 bookingId, playerId);

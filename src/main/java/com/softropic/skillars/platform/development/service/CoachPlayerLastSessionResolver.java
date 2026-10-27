@@ -26,7 +26,7 @@ public class CoachPlayerLastSessionResolver {
     private final PlayerTimelineRepository playerTimelineRepository;
 
     public LastCoachSessionSignal resolve(Long playerId, UUID coachId) {
-        // Raw processing-time signals: ONLY for the recap-attribution decision below (isRecapAttributable).
+        // Raw processing-time presence signals: whether an SLU row / timeline event exists at all.
         Instant sluDate = sluRepository.findLastSessionDate(playerId, coachId);
         Optional<PlayerTimelineEvent> timelineEvent = playerTimelineRepository
             .findTopByPlayerIdAndCoachIdAndEventTypeOrderByOccurredAtDesc(
@@ -44,7 +44,7 @@ public class CoachPlayerLastSessionResolver {
         Instant lastSessionDate = laterOf(sluEnd, timelineEnd);
 
         PlayerTimelineEvent recapSourceEventOrNull = timelineEvent
-            .filter(evt -> isRecapAttributable(evt, sluDate, playerId, coachId))
+            .filter(evt -> isRecapAttributable(evt, sluEnd, playerId, coachId))
             .orElse(null);
 
         return new LastCoachSessionSignal(lastSessionDate, recapSourceEventOrNull);
@@ -60,8 +60,15 @@ public class CoachPlayerLastSessionResolver {
     // correlating on booking identity instead of a timing tolerance: only when the SLU row that
     // nominally "wins" the timestamp race belongs to a DIFFERENT booking than the one that produced
     // this timeline event do we treat it as a genuinely newer, recap-less session and null the recap.
-    private boolean isRecapAttributable(PlayerTimelineEvent timelineEvent, Instant sluDate, Long playerId, UUID coachId) {
-        if (sluDate == null || !timelineEvent.getOccurredAt().isBefore(sluDate)) {
+    //
+    // skillars-deferred-163 code review (2026-10-27, Decision 2): compared in SESSION time on both sides.
+    // AC3.1 made occurredAt the session's end (capped at write time), so comparing it against the raw
+    // processing-time sluDate let an older booking confirmed late (SLU processed last) look newer than a
+    // genuinely newer session and null that session's recap. sluEnd (MAX booking end over SLU rows) and
+    // findLastSessionBookingId (now ordered by booking end too) are the session-time counterparts; for one
+    // and the same session the two ends are equal, so the fast path is again the common case.
+    private boolean isRecapAttributable(PlayerTimelineEvent timelineEvent, Instant sluEnd, Long playerId, UUID coachId) {
+        if (sluEnd == null || !timelineEvent.getOccurredAt().isBefore(sluEnd)) {
             return true;
         }
         return sluRepository.findLastSessionBookingId(playerId, coachId)

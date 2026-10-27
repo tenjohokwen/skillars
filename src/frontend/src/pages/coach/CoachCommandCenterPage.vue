@@ -20,6 +20,7 @@
       :is-live-mode="isLiveMode"
       @wrap-up-complete="onWrapUpComplete"
       @cancelled="showWrapUp = false"
+      @recap-still-editable="onRecapStillEditable"
     />
 
     <!-- Post wrap-up summary overlay -->
@@ -408,6 +409,7 @@
       v-model="showRecapDialog"
       :booking-id="recapBookingId"
       :player-name="recapPlayerName"
+      :prefill="recapPrefill"
       @saved="onRecapSaved"
     />
 
@@ -475,6 +477,9 @@ const showSessionPrep = ref(false)
 const showRecapDialog = ref(false)
 const recapBookingId = ref(null)
 const recapPlayerName = ref('')
+// skillars-deferred-163 AC2.2: text recovered from a wrap-up the coach could no longer submit
+// (the booking was already force-completed) -- carried into SessionRecapDialog's prefill prop.
+const recapPrefill = ref(null)
 const missingRecaps = ref({ count: 0, items: [] })
 const showMissingRecaps = ref(false)
 const missingRecapsLoading = ref(true)
@@ -883,7 +888,28 @@ async function loadMissingRecaps() {
 function openRecapDialog(booking) {
   recapBookingId.value = String(booking.bookingId)
   recapPlayerName.value = booking.playerName ?? ''
+  recapPrefill.value = null
   showRecapDialog.value = true
+}
+
+// skillars-deferred-163 AC2.1/AC2.2: the wrap-up wizard caught a dedicated error (the booking was
+// already force-completed) and handed back the coach's typed-but-unsubmittable recap text. Close
+// the wizard and redirect into the recap dialog -- this booking's recap can still be saved there.
+function onRecapStillEditable(payload) {
+  showWrapUp.value = false
+  recapBookingId.value = String(payload.bookingId)
+  recapPlayerName.value = payload.playerName ?? ''
+  recapPrefill.value = {
+    whatWeDid: payload.whatWeDid,
+    whatsNext: payload.whatsNext,
+    whatWentWell: payload.whatWentWell,
+  }
+  showRecapDialog.value = true
+  $q.notify({ type: 'warning', message: t('booking.errors.recapStillEditableAfterForceComplete') })
+  // Code review 2026-10-27: the booking is already COMPLETED -- refresh now, not only on save, so a coach
+  // who closes the dialog unsaved is not left with a stale "resume wrap-up" pointing at the same dead end.
+  loadMissingRecaps()
+  bookingStore.loadCoachSchedule(selectedWeek.value)
 }
 
 async function onRecapSaved() {

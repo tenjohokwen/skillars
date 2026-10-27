@@ -234,7 +234,10 @@ const props = defineProps({
   isLiveMode: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['wrap-up-complete', 'cancelled'])
+// skillars-deferred-163 AC2.2: 'recap-still-editable' carries the typed-but-unsubmittable recap text
+// over to the parent, which redirects the coach to SessionRecapDialog (this booking's recap can still
+// be saved through PUT /recap even though the wrap-up wizard itself can no longer submit).
+const emit = defineEmits(['wrap-up-complete', 'cancelled', 'recap-still-editable'])
 
 const { t } = useI18n()
 const $q = useQuasar()
@@ -300,6 +303,18 @@ async function handleSubmitWrapUp() {
     const errorKey = err?.response?.data?.errorMsg?.errorKey
     if (errorKey === 'booking.concurrentModification') {
       $q.notify({ type: 'negative', message: t('booking.errors.concurrentModification') })
+    } else if (errorKey === 'booking.recapStillEditableAfterForceComplete') {
+      // skillars-deferred-163 AC2.1/AC2.2: this booking was already force-completed (sweeper or
+      // admin) before the coach finished the wizard. The wrap-up itself can no longer be submitted,
+      // but the recap text they just typed is not lost — PUT /recap can still save it. Hand the
+      // typed text to the parent so it can redirect into SessionRecapDialog instead of a dead end.
+      emit('recap-still-editable', {
+        bookingId: props.bookingId,
+        playerName: props.playerName,
+        whatWeDid: recapWhatWeDid.value.trim(),
+        whatsNext: recapWhatsNext.value.trim(),
+        whatWentWell: recapWhatWentWell.value.trim() || null,
+      })
     } else {
       $q.notify({ type: 'negative', message: t('booking.wrapUp.step5SubmitError') })
     }

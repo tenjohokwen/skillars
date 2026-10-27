@@ -906,7 +906,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - W7: No CSP header coverage for `fonts.googleapis.com` — infrastructure/deployment concern outside story scope
 
 ## Deferred from: code review of skillars-1-1-feature-gate-configuration-layer (2026-06-11)
-- `refreshCache()` failure after `invalidate()` causes all subsequent config gets to throw 409 instead of serving stale data during DB outage; acceptable design choice for this scope [ConfigService.java]
 - Scheduled refresh + lazy TTL `ensureFresh()` can both fire near-simultaneously, causing ~2x DB polls per TTL period; minor efficiency concern, spec-designed dual-refresh pattern [ConfigService.java]
 - IT test fixture hardcodes bcrypt hash for test user seed SQL; follows existing project IT test pattern [ConfigResourceIT.java:setUp]
 
@@ -3190,38 +3189,18 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 
 - **`@JsonIgnore` on `Booking.coachPlanNote` also omits the note from the coach's OWN GDPR export.** `GdprExportService.buildBookings` serialises the `Booking` entity directly for PARENT, PLAYER and COACH, so the only way to keep the coach's private note out of a parent's or player's zip was to ignore it everywhere. Strictly the note is the coach's authored data and belongs in the coach's export. Fixing it needs a DTO projection of `bookings.json` (coach branch only) — out of scope for 12.6 (owner may veto the interim omission).
 - **`SessionPlanService.isBookingPlannable` accepts only `CONFIRMED`.** `createSession` for an `UPCOMING` booking with no existing plan is rejected with `SESSION_BOOKING_NOT_OWNED` (a misleading code), so "Plan this session" on an `UPCOMING` booking with no prior plan fails at save. Pre-existing; 12.6 G6 makes it more reachable by showing Prep on `CONFIRMED` bookings. Not changed in 12.6.
-- **`setPlayerRequest` still uses bare `Instant.now()` (`BookingService`) while `setCoachPlanNote` uses `ClockProvider`.** Left alone to avoid changing an existing guard; routing it through `Booking.isPrepNoteEditable` would unify them once no IT depends on the wall clock.
 - **No page-level spec for `SessionBuilderPage` mount ordering.** The `await fetchExistingPlan` then `fetchPrep` ordering and the "gated pages never fetch prep" rule are covered at store level (`sessionBuilderStoreSpec.js`) but the page's `onMounted` itself is not mounted in a spec (heavy dependency graph: draggable, drill library, DNA chart).
 
 ## Deferred from: code review of skillars-12-6-session-prep-completeness-and-feed-forward (2026-10-22)
 
-- **`findLatestWhatsNextSuggestion` is not time-bounded to before the prepped booking.** Prepping/opening the builder for an older booking can show a later session's whatsNext as "carried over from last time" (Apply is locked there, so read-only). A naive `occurred_at < requestedStartTime` bound would drop back-to-back sessions whose SESSION_COMPLETED is stamped after the next booking starts — needs a booking-time-based bound instead.
 - **Plan-note panel/Apply stay active after a locked 403.** `planNoteErrorMessage` maps `booking.notEditable`/`booking.sessionAlreadyEnded` to a toast only; nothing flips `coachPlanNoteEditable`, so a page left open past the end time keeps offering a write that always fails.
 - **`CoachPlanNoteResourceIT.patchNote` builds the body with `Map.of`** (NPE on null), so the `planNote: null` clears-the-note contract is only covered via blank input and the unit tests, never end-to-end.
 - **Coach plan note is last-write-wins across surfaces (owner decision: accepted, deferred).** `PATCH /api/bookings/{id}/coach-plan-note` carries no expected version, so a stale tab/surface (Command Center prep card vs Session Builder) can silently overwrite a newer note, and "Add to plan note" appends onto the stale client copy. `saveAndFlush` only detects races inside the server load→flush window. Reason: same LWW model as `setPlayerRequest`; single-author note. Fix if it bites: carry the booking version in the request (409 on mismatch) or move the append server-side.
 
 ## Deferred from: dev of skillars-12-7-recap-lifecycle-edit-resume-nudge-and-report-visibility (2026-10-22)
 
-- **Drop `booking.session_completion_data.voice_note_text` (contract migration).** 12.7 stopped writing it (D3) but kept the column, the entity field, `isSweeperPlaceholder`'s null check and both GDPR scrubs. Legacy rows may hold real coach-typed free text (the wizard step had a text input), so the drop must follow the migration-conventions contract step and keep the erasure scrubs until the column is gone.
 - **Orphaned voice-note audio uploads.** Past wizard runs uploaded `audio/webm` blobs under `entity: 'booking'` that nothing reads and no row links to. Nothing to migrate in 12.7; decide on a storage clean-up separately.
-- **Recovered recaps are timestamped at write time (Open Question 3).** `TimelineEventListener.writeTimelineEvent` stamps `occurredAt = Instant.now()`, so a swept session's event carries the sweep time (>= the stuck-completion timeout after the session). A recovered older `whatsNext` can outrank a newer normal one in `findLatestWhatsNextSuggestion` and is labelled with the sweep date; the report's Session Notes date has the same skew. Fix by putting the session end time into the event metadata and ordering/labelling by it.
 - **Recap attendance on recovery (Open Question 1).** `updateRecap` deliberately leaves `playerAttended=false` on a swept placeholder, so a recovered recap shows in the timeline, report and feed-forward suggestion but not as the prep card's last-session recap. Letting the coach confirm attendance touches the access clock and SLU; its own story.
-- **Recap text is stored and reported raw (unsanitised).** Pre-existing: `submitWrapUp` never ran `ContactDetailSanitizer` on the recap, and D1(a) documents that recaps reach the player and parent through the report PDF. Revisit if contact details in recaps become a concern.
-
-
-## Deferred from: code review of skillars-12-7-recap-lifecycle-edit-resume-nudge-and-report-visibility (2026-10-22)
-
-- **Sweeper-vs-resume race loses typed wrap-up text.** If the stuck-completion sweeper force-completes a booking while the coach has a resumed wrap-up open, `submitWrapUp` throws MISSING_RIGHTS "can no longer be edited" (`BookingCompletionService.java:157-161`); `WrapUpSequence.vue` only branches on `concurrentModification`, so the coach sees the generic `step5SubmitError` and loses the text. Since 12.7 the recap CAN still be added via `PUT /recap`, so the message is also inaccurate. Fix: dedicated error key + redirect to the recap dialog with the typed text prefilled.
-
-## Deferred from: code review of skillars-12-8-timeline-enrichment-session-content-and-event-producers (2026-10-23)
-
-- **QUICK-mode drill snapshot reflects plan at parent confirmation.** The session plan stays editable (`SessionPlanService.java:129` blocks only COMPLETED/CANCELLED) until `confirmCompletion` fires BookingCompletedEvent, so post-session plan edits appear as "Drills" on the timeline. Fix: lock the plan on QUICK wrap-up submit, or snapshot drill ids into session_completion_data at wrap-up.
-
-## Deferred from: code review of skillars-12-9-coach-player-workspace-parity (2026-10-23)
-
-- **Radar-preference flush on `pagehide` may be cancelled.** `CoachRadarCard.vue` flushes the pending debounced save on `pagehide` with a normal axios PUT; browsers may cancel in-flight XHRs on unload, so a selection made <300 ms before closing the tab can be lost. Needs `fetch(..., { keepalive: true })` or `sendBeacon`. Carried over unchanged from the old player dashboard.
-- **Radar-preference PUTs are unordered.** Two saves more than 300 ms apart can resolve out of order and leave the older selection on the server. Pre-existing pattern.
-- **`fetchCoachTier` has no timeout.** A request that never settles keeps every tier-gated tool on the coach player page hidden with no message (`tierSettled` stays false). Pre-existing: no app-wide axios timeout.
 
 ## Deferred from: skillars-deferred-159 (2026-10-23)
 
@@ -3230,11 +3209,6 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 ## Deferred from: skillars-deferred-160 (2026-10-24)
 
 - **`SimultaneousExpiryIT` / `YearlyExemptionRenewalIT` are dead tests.** Both are class-level `@Disabled` ("Deferred from 6.4 …") and their `@BeforeEach` inserts into `main.platform_config (id, config_key, value)` with `ON CONFLICT (config_key)`; the column is `key` (`V138__baseline_schema.sql:2678`), so neither could pass if re-enabled. deferred-160 AC6 only removed their no-op `@TestPropertySource`. Fix the SQL and re-enable, or delete them.
-
-## Deferred from: code review of skillars-deferred-160-spring-test-context-consolidation (2026-10-24)
-
-- **Convention-test class loading swallows failures.** `integrationTestClasses()` catches `Throwable` on `Class.forName`, so an IT that fails to load drops out of `distinctContextKeyCountIsPinned`'s model and the floor is only `> 100`. Collect load failures and assert none.
-- **Gate evaluates the last statistics line of the whole build log.** `assert-context-count.sh` uses `tail -1` over surefire+failsafe output; if failsafe crashes before logging, surefire's line is checked against the failsafe ceiling. Scope the match to the failsafe section.
 
 ## Deferred from: ses-1-5 (2026-10-24)
 
@@ -3247,10 +3221,6 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 
 ## Deferred from: code review of skillars-deferred-161-alert-recipient-config-user-cleanup-index-email-it-isolation-and-tooling-ledger-residuals (2026-10-25)
 
-- **`ConfigService` must-be-fresh waiters have no wait bound and retry serially on load failure.** After `invalidate()` (or on a never-loaded cache) a reader that loses `refreshLock.tryLock()` parks in an uninterruptible `lock()`. If the in-flight `findAll()` then fails, each queued waiter runs its own `findAll()` one after another, so with the DB down the Nth waiter waits ~N × `connection-timeout`. Same shape as the pre-161 `synchronized` monitor, not a regression. Fix shape: `tryLock(timeout)` + short failure backoff that rethrows the last failure. [`src/main/java/com/softropic/skillars/platform/config/service/ConfigService.java` `refreshCache()`]
-- **`ConfigService.scheduledRefresh()` can park the shared `@Scheduled` thread.** With an invalidation pending and a request thread mid-load, the scheduled tick takes the must-be-fresh path and blocks in `lock()`, delaying other scheduled jobs. It blocked on the monitor identically before. Fix shape: `scheduledRefresh` uses `tryLock()` only and skips if busy. [`ConfigService.java:73-75`]
-- **`ConfigService.invalidate()` is per-JVM and not deferred to after-commit.** If a caller ever wraps `updateConfig` in an outer transaction, a concurrent reader can reload before commit and stamp the old value with the new epoch for a full TTL. Other instances keep serving the old value until their TTL lapses. Pre-existing. [`ConfigService.java` `updateConfig` / `invalidate`]
-- **`ConfigService.load()` `putAll`+`retainAll` is not an atomic swap.** A reader can observe a cross-key mix of old and new rows mid-load. This was rarer before because TTL-stale readers queued on the monitor; now they read immediately. Fix shape: swap one immutable map via a `volatile` reference. [`ConfigService.java` `load()`]
 - **`AlertNotificationListener` hardening.** Three gaps, all moot while `AlertEvaluationService.computeMetricValue` returns -1 (no `AlertFiredEvent` is ever published); revisit when real metrics land:
   - A blank `platform.admin_alert_email` logs ERROR on every 30 s tick per breaching EMAIL rule, with no throttle.
   - The value is not trimmed or validated; sibling `VideoModerationEmailListener` doesn't either.
@@ -3270,3 +3240,13 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 - **Bank chargebacks and Stripe-dashboard refunds are not handled.** No `charge.dispute.*` or `charge.refunded` webhook handling exists (`StripeWebhookService`), so such a session never gets a `Dispute` row and its recap stays editable and nudged. Needs a PaymentIntent-to-booking lookup that copes with batch and pack charges.
 - **HOMEWORK_ASSIGNED is still check-then-insert.** `TimelineEventListener.writeHomeworkAssigned` does exists-then-insert-or-merge. Since skillars-deferred-162 it runs under the `player_profiles` lock, which serializes it per player, but there is no unique index backing it. Possible follow-up: the V169 pattern (partial unique index on `(player_id, reference_id) WHERE event_type = 'HOMEWORK_ASSIGNED'` plus `ON CONFLICT ... DO UPDATE` merging drills).
 - **A busy profile lock drops a development write.** `DevelopmentDataErasureGuard` uses NOWAIT plus `PessimisticLockRetryer` (~3.2 s budget). If another transaction holds the `player_profiles` row longer (an erasure, where losing the write is correct, or an unusually slow radar recalculation), the SESSION_COMPLETED/HOMEWORK_ASSIGNED write or the remaining homework drill is lost with an ERROR log and no retry. Watch `persistence.lock_retry.exhausted{lock="TimelineEventListener.*|HomeworkAssignmentService.*"}`; add a retry/DLQ only if it is ever non-zero.
+
+## Deferred from: skillars-deferred-163 (2026-10-26)
+
+- **`voice_note_text` drop, steps 2 and 3 of 3.** AC6.1 (this story) removed `isSweeperPlaceholder`'s last read of the column; the entity field, both GDPR scrub references (`SessionCompletionDataRepository.java` `anonymizeByPlayerId`/`anonymizeByCoachId`) and the `GdprErasureService.java:413` comment are deliberately left untouched. Per `migration-conventions.md` rule 2, the remaining sequence is **two further releases**, not one: **(2)** remove the `SessionCompletionData.voiceNoteText` entity field and both GDPR scrub references — pure Java, no migration; **(3)** a further release adds `ALTER TABLE booking.session_completion_data DROP COLUMN IF EXISTS voice_note_text` with `-- migration-lint: drop-prepared-in: V<n>` naming a migration version already on disk by then. Compressing (2) and (3) into one release would drop the column while a prior release's pods still have it JPA-mapped, breaking them mid-rolling-deploy.
+- **`CoachPlayerLastSessionResolver`'s `lastWhatWeDid`/`lastWhatsNext` source is still unbounded against the prepped booking.** skillars-deferred-163 AC3.2 added a booking-time bound to `findLatestWhatsNextSuggestion` (the feed-forward suggestion), but deliberately left this resolver's OTHER two prep-card fields (`lastWhatWeDid`/`lastWhatsNext`, sourced via `CoachPlayerLastSessionResolver.resolve`) unbounded — same class of bug (a later-scheduled booking's recap could pair with an earlier-scheduled booking's suggestion), deferred rather than attempted alongside this story's own time/effort budget. If picked up, apply the same `requested_start_time`-bounded join shape `findLatestWhatsNextSuggestion` now uses.
+
+## Deferred from: code review of skillars-deferred-163 (2026-10-27)
+
+- **CoachRadarCard pagehide keepalive PUT can be overtaken by an older save.** `flushPendingSave` (`CoachRadarCard.vue:135`) sends the pending selection via `fetch keepalive` outside the `pendingSave` chain (AC4.1/AC4.2). An older axios PUT already on the wire, or one still queued in the chain when the page is bfcache-restored, can reach the server after it and win. Inherent to pagehide; a real fix needs server-side ordering (e.g. a client sequence number / If-Match).
+- **Recovered recap prefill is lost when SessionRecapDialog's GET fails.** After the AC2.2 force-complete redirect, `applyPrefillIntoEmptyFields` only runs on load success (`SessionRecapDialog.vue:189`); the dialog has no retry and the wrap-up wizard is already closed, so the typed text is gone. Pre-existing: the dialog's load-error state has never offered a retry.

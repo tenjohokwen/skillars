@@ -15,6 +15,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
@@ -23,7 +25,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
@@ -44,7 +45,9 @@ public class ConfigService {
     private final ConfigMapper configMapper;
     private final MeterRegistry meterRegistry;
 
-    private final ConcurrentHashMap<String, PlatformConfig> cache = new ConcurrentHashMap<>();
+    // skillars-deferred-163 AC1.4: a single volatile reference to an immutable map, swapped
+    // atomically by load() — no reader can ever observe a cross-key mix of old and new values.
+    private volatile Map<String, PlatformConfig> cache = Map.of();
     private volatile Instant lastRefreshed = Instant.MIN;
 
     // skillars-deferred-161 AC6: refresh bookkeeping. invalidate() bumps invalidationEpoch; a load stamps
@@ -54,6 +57,23 @@ public class ConfigService {
     private final AtomicLong invalidationEpoch = new AtomicLong();
     private volatile long loadedEpoch = -1;
     private final ReentrantLock refreshLock = new ReentrantLock();
+
+    // skillars-deferred-163 AC1.1: bound on how long a must-be-fresh reader waits on an in-flight
+    // load before giving up on that attempt — a fraction of Hikari's own connection-timeout
+    // (application.yaml:187, 30000ms), not equal to or longer than it.
+    private static final Duration MUST_BE_FRESH_LOCK_TIMEOUT = Duration.ofMillis(4_000);
+    // How recent a recorded must-be-fresh failure must be for a timed-out waiter to rethrow it
+    // instead of making its own bounded attempt — deliberately wider than the lock timeout above so
+    // a waiter that just finished waiting out a failed leader's attempt still treats it as "recent".
+    private static final Duration MUST_BE_FRESH_FAILURE_BACKOFF = Duration.ofMillis(15_000);
+
+    private record RefreshFailure(RuntimeException cause, Instant failedAt) {}
+
+    // skillars-deferred-163 AC1.1: populated by whichever thread's must-be-fresh load fails, so a
+    // waiter whose own bounded tryLock times out can rethrow the same failure instead of every
+    // waiter running its own sequential findAll() once the lock frees up (N waiters would otherwise
+    // mean up to N sequential Hikari connection-timeout waits).
+    private volatile RefreshFailure lastMustBeFreshFailure;
 
     public ConfigService(PlatformConfigRepository configRepository,
                          ConfigProperties configProperties,
@@ -70,9 +90,26 @@ public class ConfigService {
         refreshCache();
     }
 
+    /**
+     * skillars-deferred-163 AC1.2: non-blocking by construction — tries the lock once and skips
+     * (logs) the tick if a refresh is already in flight, rather than parking one of this pool's 8
+     * shared {@code @Scheduled} threads (application.yaml:117-119) behind a concurrent
+     * must-be-fresh load.
+     */
     @Scheduled(fixedDelayString = "${app.config.cache-ttl-seconds:300}", timeUnit = TimeUnit.SECONDS)
     public void scheduledRefresh() {
-        refreshCache();
+        if (!isStale()) {
+            return;
+        }
+        if (!refreshLock.tryLock()) {
+            log.debug("Platform config refresh tick skipped; a refresh is already in flight");
+            return;
+        }
+        try {
+            runLoadIfStale(mustBeFresh());
+        } finally {
+            refreshLock.unlock();
+        }
     }
 
     public String getString(String key) {
@@ -377,7 +414,29 @@ public class ConfigService {
             .orElse(boundedKey.defaultValue());
     }
 
+    /**
+     * skillars-deferred-163 AC1.3: if a transaction is active, defers the invalidation to after it
+     * commits — following {@code EmailRetryScheduler.dispatchAfterCommit}'s pattern, not
+     * {@code OutboxService}'s unrelated {@code afterCompletion}-based dedup unbind — so a caller
+     * whose write later rolls back never invalidates a cache that still reflects the committed
+     * truth. This is defensive/future-proofing: {@link #updateConfig} (this method's only current
+     * production caller) is not {@code @Transactional} today, so the immediate-invalidate path below
+     * is what actually runs in production right now.
+     */
     public void invalidate() {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    invalidateNow();
+                }
+            });
+        } else {
+            invalidateNow();
+        }
+    }
+
+    private void invalidateNow() {
         invalidationEpoch.incrementAndGet();
     }
 
@@ -414,30 +473,60 @@ public class ConfigService {
      * </ul>
      */
     private void refreshCache() {
+        // Code review 2026-10-27: the failure (if any) already on record when this reader arrived. A
+        // DIFFERENT one recorded later can only be the attempt this reader just waited out — see below.
+        RefreshFailure failureAtEntry = lastMustBeFreshFailure;
         while (isStale()) {
-            if (refreshLock.tryLock()) {
-                try {
-                    if (isStale()) {
-                        boolean ttlOnly = !mustBeFresh();
-                        try {
-                            load();
-                        } catch (RuntimeException e) {
-                            if (!ttlOnly) {
-                                throw e;
-                            }
-                            log.warn("Platform config cache refresh failed; serving the cached snapshot", e);
-                        }
+            boolean mustBeFreshNow = mustBeFresh();
+
+            if (!mustBeFreshNow) {
+                if (refreshLock.tryLock()) {
+                    try {
+                        runLoadIfStale(false);
+                    } finally {
+                        refreshLock.unlock();
                     }
+                }
+                return; // TTL-only staleness: serve the (never-empty) cached snapshot either way
+            }
+
+            boolean acquired;
+            try {
+                acquired = refreshLock.tryLock(MUST_BE_FRESH_LOCK_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new ConfigRefreshException("Interrupted while waiting for a platform config refresh", e);
+            }
+            if (acquired) {
+                try {
+                    // Code review 2026-10-27 (AC1.1): a waiter that ACQUIRES the lock right after the
+                    // leader's must-be-fresh load failed must not run its own findAll() — in an outage that
+                    // is exactly the N-sequential-Hikari-timeouts pile-up AC1.1 removes. It rethrows the
+                    // failure it waited out instead. A reader arriving after that failure (failureAtEntry
+                    // is the same record) still makes its own attempt, so recovery is never blocked.
+                    RefreshFailure waitedOut = lastMustBeFreshFailure;
+                    if (waitedOut != null && waitedOut != failureAtEntry && isStale()) {
+                        throw new ConfigRefreshException(
+                            "Platform config refresh failed while this reader waited; not retrying", waitedOut.cause());
+                    }
+                    runLoadIfStale(true);
                 } finally {
                     refreshLock.unlock();
                 }
                 return;
             }
-            if (!mustBeFresh()) {
-                return; // TTL-only staleness and a load is in flight: serve the cached snapshot
+
+            // Bounded wait timed out while another thread holds the lock. Rather than let every
+            // waiter run its own sequential findAll() once the lock frees up (N waiters would
+            // otherwise mean up to N sequential Hikari connection-timeout waits), rethrow a
+            // recently-recorded failure from the leader instead of attempting another DB call.
+            RefreshFailure recorded = lastMustBeFreshFailure;
+            if (recorded != null && Duration.between(recorded.failedAt(), Instant.now())
+                    .compareTo(MUST_BE_FRESH_FAILURE_BACKOFF) <= 0) {
+                throw new ConfigRefreshException("Platform config refresh recently failed; not retrying yet",
+                    recorded.cause());
             }
-            refreshLock.lock();
-            refreshLock.unlock(); // wait for the in-flight load, then re-check staleness
+            // No recent failure recorded: loop back for one more bounded attempt of our own.
         }
     }
 
@@ -446,14 +535,36 @@ public class ConfigService {
         return loadedEpoch < invalidationEpoch.get() || lastRefreshed == Instant.MIN;
     }
 
+    /**
+     * Re-checks staleness under the lock (another thread may have just finished loading) and, if
+     * still stale, loads. A must-be-fresh failure is recorded for waiters and rethrown; a TTL-only
+     * failure is logged at WARN and swallowed, serving the stale cached snapshot.
+     */
+    private void runLoadIfStale(boolean mustBeFreshNow) {
+        if (!isStale()) {
+            return;
+        }
+        try {
+            load();
+            lastMustBeFreshFailure = null;
+        } catch (RuntimeException e) {
+            if (!mustBeFreshNow) {
+                log.warn("Platform config cache refresh failed; serving the cached snapshot", e);
+                return;
+            }
+            lastMustBeFreshFailure = new RefreshFailure(e, Instant.now());
+            throw e;
+        }
+    }
+
     private void load() {
         long epochAtStart = invalidationEpoch.get();
         List<PlatformConfig> all = configRepository.findAll();
         Map<String, PlatformConfig> newData = new HashMap<>(all.size());
         all.forEach(pc -> newData.put(pc.getKey(), pc));
-        // putAll then retainAll: cache is never empty, no reader sees a gap
-        cache.putAll(newData);
-        cache.keySet().retainAll(newData.keySet());
+        // skillars-deferred-163 AC1.4: one atomic reference swap to an immutable map — no reader
+        // can ever observe a cross-key mix of old and new values mid-load.
+        cache = Map.copyOf(newData);
         loadedEpoch = epochAtStart;
         lastRefreshed = Instant.now();
         log.debug("Platform config cache refreshed: {} entries", cache.size());

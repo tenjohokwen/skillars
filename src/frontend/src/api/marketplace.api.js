@@ -2,6 +2,12 @@ import { api } from 'src/boot/axios'
 
 export const getProfileBuilderStatus = () => api.get('/api/marketplace/coaches/me/profile/status')
 
+// skillars-deferred-163 AC4.3: moved out of auth.store.js's direct api.get call (it bypassed this
+// project's centralized-API-call convention) and given the same per-call timeout shape as
+// booking.api.js's precedents, so a hung request settles instead of leaving the caller's
+// tierSettled gate stuck forever.
+export const getCoachTier = () => api.get('/api/marketplace/coaches/me/tier', { timeout: 20000 })
+
 // AC1: the coach's own full profile (every builder-collected field, works pre-publish) — for "My
 // Profile"'s edit dialogs. Distinct from getProfileBuilderStatus (no field values) and
 // getCoachProfile below (public view, 404s for DRAFT, omits several builder-only fields).
