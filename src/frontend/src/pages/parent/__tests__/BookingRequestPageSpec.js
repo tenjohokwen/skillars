@@ -55,12 +55,18 @@ const STUB = { template: '<div />' }
 
 const mounted = []
 
-async function mountPage(bookingState, queryPlayerId = '5', playerState) {
+async function mountPage(
+  bookingState,
+  queryPlayerId = '5',
+  playerState,
+  role = 'PARENT',
+  { beforeMount, extraStubs } = {},
+) {
   const pinia = createTestingPinia({
     createSpy: vi.fn,
     initialState: {
       booking: { batchBasket: [], availabilitySignature: 'sig-1', ...bookingState },
-      auth: { role: 'PARENT' },
+      auth: { role },
       ...(playerState ? { player: playerState } : {}),
     },
   })
@@ -74,12 +80,18 @@ async function mountPage(bookingState, queryPlayerId = '5', playerState) {
   })
   router.push(`/parent/coaches/77?playerId=${queryPlayerId}`)
   await router.isReady()
+  if (beforeMount) beforeMount(pinia)
 
   const wrapper = mount(BookingRequestPage, {
     shallow: true,
     global: {
       plugins: [pinia, router],
-      stubs: { SessionPackTracker: true, BookingStateChip: true, PaymentMethodCard: true },
+      stubs: {
+        SessionPackTracker: true,
+        BookingStateChip: true,
+        PaymentMethodCard: true,
+        ...extraStubs,
+      },
     },
   })
   mounted.push(wrapper)
@@ -262,5 +274,75 @@ describe('BookingRequestPage.vue — slot/timezone regression (deferred-108 AC2)
       expect(wrapper.vm.playerId).toBe(FALLBACK_ID)
       expect(wrapper.vm.playerId).not.toBe('abc')
     })
+  })
+})
+
+// Self-registered players can buy packs and see their pack dashboard (routes.js Deferred-81/82), so
+// the booking page must show them their pack credits and the buy-sessions banner like a parent.
+describe('BookingRequestPage.vue — self-booking PLAYER sees their packs', () => {
+  const SELF_PLAYER_ID = '893573203704170001'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getBatchConfig.mockResolvedValue({ maxSize: 4 })
+    getBookingRequestConfig.mockResolvedValue({ activeSlotStatuses: ['REQUESTED', 'CONFIRMED'] })
+  })
+
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+  })
+
+  it("loads the player's own packs and renders the pack tracker + buy-sessions banner", async () => {
+    const { usePlayerStore } = await import('src/stores/playerStore')
+    const { wrapper, bookingStore } = await mountPage(
+      { computedSlots: [SLOT], coachTimezone: 'UTC', sessionPacks: [] },
+      '',
+      undefined,
+      'PLAYER',
+      {
+        beforeMount: (pinia) =>
+          usePlayerStore(pinia).fetchSelfPlayerId.mockResolvedValue(SELF_PLAYER_ID),
+        extraStubs: { QPage: { template: '<div><slot /></div>' } },
+      },
+    )
+
+    // Was skipped for players (stale UAT.5 gating) — the packs they bought never loaded.
+    expect(bookingStore.loadPlayerPacks).toHaveBeenCalledWith(SELF_PLAYER_ID)
+    expect(wrapper.find('session-pack-tracker-stub').exists()).toBe(true)
+    // The no-credits banner (with its buy-sessions action) — the only q-banner on this page.
+    expect(wrapper.find('q-banner-stub').exists()).toBe(true)
+  })
+})
+
+// A coach's shared-slot link (CoachCommandCenterPage → profile → here) forwards
+// ?slot=<coach-local YYYY-MM-DDTHH:mm>; the matching available slot is preselected.
+describe('BookingRequestPage.vue — shared slot preselect', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getBatchConfig.mockResolvedValue({ maxSize: 4 })
+    getBookingRequestConfig.mockResolvedValue({ activeSlotStatuses: ['REQUESTED', 'CONFIRMED'] })
+  })
+
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+  })
+
+  it('preselects the slot whose coach-local start matches ?slot', async () => {
+    // SLOT starts 15:00Z = 11:00 in New York (EDT, UTC-4: DST began 2026-03-08).
+    const { wrapper, bookingStore } = await mountPage(
+      { computedSlots: [SLOT], coachTimezone: 'America/New_York' },
+      '5&slot=2026-03-10T11:00',
+    )
+    // The availability for the shared slot's week (Monday 2026-03-09) is what gets loaded.
+    expect(bookingStore.loadAvailability).toHaveBeenCalledWith('77', '2026-03-09')
+    expect(wrapper.vm.selectedSlot).toEqual(SLOT)
+  })
+
+  it('selects nothing when the shared slot is not in the loaded availability', async () => {
+    const { wrapper } = await mountPage(
+      { computedSlots: [SLOT], coachTimezone: 'America/New_York' },
+      '5&slot=2026-03-10T15:00',
+    )
+    expect(wrapper.vm.selectedSlot).toBeNull()
   })
 })

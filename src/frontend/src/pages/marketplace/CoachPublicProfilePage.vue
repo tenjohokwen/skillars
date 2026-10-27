@@ -291,6 +291,14 @@
             @buy-sessions="handleBuySessions"
           />
 
+          <!-- A coach's shared-slot link (?slot=…, see CoachCommandCenterPage generateSlotLink) -->
+          <q-banner v-if="sharedSlot" dense rounded class="shared-slot-banner q-mb-md">
+            <template #avatar>
+              <q-icon name="event" color="primary" />
+            </template>
+            {{ t('marketplace.sharedSlot', { slot: sharedSlot.replace('T', ' ') }) }}
+          </q-banner>
+
           <!-- CTA -->
           <q-btn
             unelevated
@@ -394,6 +402,7 @@ import {
   updateReview,
 } from 'src/api/reviews.api'
 import { parseApiError } from 'src/utils/errorHandler'
+import { parseSharedSlot } from 'src/utils/sharedSlot'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
 import { useAuthStore } from 'src/stores/auth.store'
 import { useBookingStore } from 'src/stores/booking.store'
@@ -444,6 +453,7 @@ const {
 } = useErrorHandler()
 
 const coachId = route.params.coachId
+const sharedSlot = computed(() => parseSharedSlot(route.query.slot))
 // UAT.5 AC4: resolved once for a self-registered player caller — the player's own player-profile
 // id, via the same GET /api/security/players/me call PlayerHomeRedirectPage.vue already uses.
 // Not sourced from playerStore, which is a parent's linked-children store and meaningless here.
@@ -556,6 +566,7 @@ function handleCta() {
       const params = new URLSearchParams()
       if (selfPlayerId.value) params.set('playerId', selfPlayerId.value)
       if (profile.value?.displayName) params.set('coachName', profile.value.displayName)
+      if (sharedSlot.value) params.set('slot', sharedSlot.value)
       const qs = params.toString()
       router.push(`/parent/coaches/${coachId}/request-booking${qs ? `?${qs}` : ''}`)
     } else {
@@ -567,6 +578,7 @@ function handleCta() {
       const params = new URLSearchParams()
       if (playerId) params.set('playerId', playerId)
       if (profile.value?.displayName) params.set('coachName', profile.value.displayName)
+      if (sharedSlot.value) params.set('slot', sharedSlot.value)
       const qs = params.toString()
       router.push(`/parent/coaches/${coachId}/request-booking${qs ? `?${qs}` : ''}`)
     } else {

@@ -37,7 +37,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -87,9 +89,6 @@ class PlayerUploadResourceWebMvcTest {
     @WithMockUser(roles = "USER")
     void initiatePlayerUpload_homeworkType_returns201() throws Exception {
         stubPlayerPrincipal(PLAYER_PROFILE_ID);
-        PlayerProfile profile = new PlayerProfile();
-        profile.setId(PLAYER_PROFILE_ID);
-        when(playerProfileRepository.findById(PLAYER_PROFILE_ID)).thenReturn(Optional.of(profile));
         when(videoService.initializeUpload(any())).thenReturn(STUB_RESPONSE);
 
         String body = objectMapper.writeValueAsString(Map.of(
@@ -105,6 +104,35 @@ class PlayerUploadResourceWebMvcTest {
             .andExpect(status().isCreated())
             .andExpect(jsonPath("$.videoId").isNotEmpty())
             .andExpect(jsonPath("$.providerUploadId").value("bunny-player-guid"));
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void initiatePlayerUpload_selfRegisteredPlayerRole_ownerIsOwnProfileId() throws Exception {
+        // Self-registered players carry ROLE_PLAYER only (PlayerRegistrationService) — used to 403.
+        stubPlayerPrincipal(PLAYER_PROFILE_ID);
+        when(videoService.initializeUpload(any())).thenReturn(STUB_RESPONSE);
+
+        mockMvc.perform(post(PLAYER_UPLOAD_URL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(homeworkBody()))
+            .andExpect(status().isCreated());
+
+        // ownerId must be the PlayerProfile id (what the minor gate / quota tier / lifecycle read),
+        // never the caller's user id.
+        verify(videoService).initializeUpload(argThat(r -> String.valueOf(PLAYER_PROFILE_ID).equals(r.ownerId())));
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void initiatePlayerUpload_noOwnPlayerProfile_returns403() throws Exception {
+        when(securityUtil.requireCurrentUserId()).thenReturn(PLAYER_USER_ID);
+        when(playerProfileRepository.findByUserId(PLAYER_USER_ID)).thenReturn(Optional.empty());
+
+        mockMvc.perform(post(PLAYER_UPLOAD_URL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(homeworkBody()))
+            .andExpect(status().isForbidden());
     }
 
     @Test
@@ -177,10 +205,25 @@ class PlayerUploadResourceWebMvcTest {
 
     // ─── helpers ─────────────────────────────────────────────────────────────
 
-    private void stubPlayerPrincipal(Long playerId) {
+    // businessId is the caller's USER id, distinct from the PlayerProfile id on purpose.
+    private static final long PLAYER_USER_ID = 77_000_002L;
+
+    private void stubPlayerPrincipal(Long playerProfileId) {
         Principal principal = mock(Principal.class);
-        when(principal.getBusinessId()).thenReturn(String.valueOf(playerId));
+        when(principal.getBusinessId()).thenReturn(String.valueOf(PLAYER_USER_ID));
         when(securityUtil.getCurrentUser()).thenReturn(principal);
-        when(securityUtil.requireCurrentUserId()).thenReturn(playerId);
+        when(securityUtil.requireCurrentUserId()).thenReturn(PLAYER_USER_ID);
+        PlayerProfile profile = new PlayerProfile();
+        profile.setId(playerProfileId);
+        when(playerProfileRepository.findByUserId(PLAYER_USER_ID)).thenReturn(Optional.of(profile));
+    }
+
+    private String homeworkBody() throws Exception {
+        return objectMapper.writeValueAsString(Map.of(
+            "fileName", "homework.mp4",
+            "fileSizeBytes", 10_485_760,
+            "mimeType", "video/mp4",
+            "videoType", "HOMEWORK"
+        ));
     }
 }

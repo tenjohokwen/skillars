@@ -1,7 +1,7 @@
 <template>
   <q-page class="q-pa-md">
     <div class="row items-center q-mb-md">
-      <q-btn flat round icon="arrow_back" :to="{ name: 'coach-dashboard' }" />
+      <q-btn flat round icon="arrow_back" :to="{ name: 'coach-command-center' }" />
       <div class="text-h6 q-ml-sm">{{ t('session.templates.title') }}</div>
     </div>
 

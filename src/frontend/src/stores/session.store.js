@@ -138,8 +138,28 @@ export const useSessionStore = defineStore('session', () => {
         durationSeconds: durationSeconds ?? 0,
       }
       const res = await sessionApi.initiateVideoUpload(drillId, payload)
-      const { videoId, uploadSessionId, signedUploadUrl, expiresAt } = res
-      return { videoId, uploadSessionId, signedUploadUrl, expiresAt }
+      // The Bunny TUS auth fields are required by videoApi.createTusUpload — without them every
+      // drill demo upload was rejected by Bunny.
+      const {
+        videoId,
+        uploadSessionId,
+        signedUploadUrl,
+        expiresAt,
+        providerUploadId,
+        tusAuthorizationSignature,
+        tusAuthorizationExpire,
+        tusLibraryId,
+      } = res
+      return {
+        videoId,
+        uploadSessionId,
+        signedUploadUrl,
+        expiresAt,
+        providerUploadId,
+        tusAuthorizationSignature,
+        tusAuthorizationExpire,
+        tusLibraryId,
+      }
     } catch (e) {
       error.value = e
       throw e

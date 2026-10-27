@@ -92,33 +92,40 @@ public class SubscriptionResource {
     @PreAuthorize("@playerOwnershipGuard.check(authentication, #playerId)")
     public ResponseEntity<PlayerSubscriptionResponse> getMyPlayerSubscription(
             @RequestParam Long playerId) {
-        Long parentId = currentParentId();
-        return ResponseEntity.ok(subscriptionService.getPlayerSubscription(parentId, playerId));
+        Long callerUserId = currentCallerUserId();
+        return ResponseEntity.ok(subscriptionService.getPlayerSubscription(callerUserId, playerId));
     }
 
+    // Player-subscription mutations are owner-scoped, not parent-only: the parent of a minor's
+    // profile OR a self-registered adult player on their OWN profile (PlayerProfile.userId — such a
+    // profile has no parent, chk_pp_owner) may subscribe / re-tier / cancel. PlayerOwnershipGuard
+    // admits exactly those two callers; SubscriptionService.assertPlayerOwnership re-checks the same
+    // pair in the service layer. Previously HAS_PARENT_ROLE, which left a self-registered player
+    // with no way at all to manage the subscription they pay for. (A @Valid body is bound before
+    // @PreAuthorize runs, so #request is safe to dereference here.)
     @PostMapping("/player/subscribe")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize("@playerOwnershipGuard.check(authentication, #request.playerId())")
     public ResponseEntity<PlayerSubscriptionResponse> subscribePlayer(
             @Valid @RequestBody PlayerSubscribeRequest request) {
-        Long parentId = currentParentId();
+        Long callerUserId = currentCallerUserId();
         PlayerSubscriptionResponse response = subscriptionService.subscribePlayer(
-            parentId, request.playerId(), request.tier(), request.billingInterval());
+            callerUserId, request.playerId(), request.tier(), request.billingInterval());
         return ResponseEntity.ok(response);
     }
 
     @PostMapping("/player/change-tier")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize("@playerOwnershipGuard.check(authentication, #request.playerId())")
     public ResponseEntity<Void> changePlayerTier(@Valid @RequestBody PlayerChangeTierRequest request) {
-        Long parentId = currentParentId();
-        subscriptionService.changePlayerTier(parentId, request.playerId(), request.newTier());
+        Long callerUserId = currentCallerUserId();
+        subscriptionService.changePlayerTier(callerUserId, request.playerId(), request.newTier());
         return ResponseEntity.noContent().build();
     }
 
     @DeleteMapping("/player")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize("@playerOwnershipGuard.check(authentication, #playerId)")
     public ResponseEntity<Void> cancelPlayerSubscription(@RequestParam Long playerId) {
-        Long parentId = currentParentId();
-        subscriptionService.cancelPlayerSubscription(parentId, playerId);
+        Long callerUserId = currentCallerUserId();
+        subscriptionService.cancelPlayerSubscription(callerUserId, playerId);
         return ResponseEntity.noContent().build();
     }
 
@@ -131,7 +138,8 @@ public class SubscriptionResource {
         return coach.getId();
     }
 
-    private Long currentParentId() {
+    /** The caller's user id — a parent's, or a self-registered player's own (Principal.businessId). */
+    private Long currentCallerUserId() {
         return securityUtil.requireCurrentUserId();
     }
 }

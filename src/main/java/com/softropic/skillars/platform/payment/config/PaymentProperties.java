@@ -13,7 +13,11 @@ public class PaymentProperties {
     private String oauthClientId = "";
     /** URL Stripe redirects to after OAuth authorisation — must be the backend callback endpoint. */
     private String oauthCallbackUrl = "/api/payment/coaches/me/stripe/callback";
-    /** URL the backend sends the coach to after processing the OAuth code (frontend settings page). */
+    /**
+     * Where the backend sends the coach after processing the OAuth code: a FRONTEND ROUTE path
+     * (resolved against {@code app.frontend-url} with the hash router's {@code #/} by
+     * FrontendLinkBuilder), or an absolute http(s) URL used verbatim.
+     */
     private String callbackSuccessUrl = "/coach/payment-settings";
     /** Stripe processing fee rate for credit cash-outs (e.g. 0.025 = 2.5%). */
     private String feeRate = "0.025";

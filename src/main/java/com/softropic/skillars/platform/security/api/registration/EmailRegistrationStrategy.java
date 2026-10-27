@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.security.api.registration;
 
 import com.softropic.skillars.infrastructure.util.ClockProvider;
+import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
@@ -11,7 +12,6 @@ import com.softropic.skillars.platform.security.repo.User;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,10 +48,10 @@ public class EmailRegistrationStrategy implements RegistrationNotificationStrate
     private final String host;
 
     public EmailRegistrationStrategy(final ApplicationEventPublisher publisher,
-                                     @Value("${baseurl}") final String baseurl,
-                                     @Value("${server.port}") final String serverPort) {
+                                     final FrontendLinkBuilder frontendLinks) {
         this.publisher = publisher;
-        this.host = baseurl + ":" + serverPort;
+        // Frontend origin: activation.html / creationDup.html append '/#/activate?…', '/#/login'.
+        this.host = frontendLinks.base();
     }
 
     /**

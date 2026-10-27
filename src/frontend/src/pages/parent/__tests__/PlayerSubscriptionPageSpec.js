@@ -32,8 +32,10 @@ const mounted = []
 const LARGE_PLAYER_ID = '893573203704173564'
 const CORRUPTED_PLAYER_ID = '893573203704173600'
 
-async function mountPage(playerId = LARGE_PLAYER_ID) {
-  const pinia = createTestingPinia({ createSpy: vi.fn, initialState: { auth: { role: 'PARENT' } } })
+async function mountPage(playerId = LARGE_PLAYER_ID, role = 'PARENT', payment = undefined) {
+  const initialState = { auth: { role } }
+  if (payment) initialState.payment = payment
+  const pinia = createTestingPinia({ createSpy: vi.fn, initialState })
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -49,7 +51,8 @@ async function mountPage(playerId = LARGE_PLAYER_ID) {
 
   const wrapper = mount(PlayerSubscriptionPage, {
     shallow: true,
-    global: { plugins: [pinia, router] },
+    // QPage is a pass-through so the page body renders under shallow mounting.
+    global: { plugins: [pinia, router], stubs: { QPage: { template: '<div><slot /></div>' } } },
   })
   mounted.push(wrapper)
   await flushPromises()
@@ -73,5 +76,33 @@ describe('PlayerSubscriptionPage.vue — playerId precision (deferred-148 AC1)',
     expect(typeof calledWithId).toBe('string')
     expect(calledWithId).toBe(LARGE_PLAYER_ID)
     expect(calledWithId).not.toBe(CORRUPTED_PLAYER_ID)
+  })
+})
+
+// A self-registered adult PLAYER owns their profile and pays for it themselves — the mutating
+// controls used to be authStore.isParent-only, leaving them a read-only page.
+describe('PlayerSubscriptionPage.vue — mutating controls by role', () => {
+  const payment = {
+    playerTiers: [
+      { tier: 'ATHLETE', features: [] },
+      { tier: 'SEMI_PRO', features: [] },
+      { tier: 'PRO', features: [] },
+    ],
+    playerSubscription: { tier: 'SEMI_PRO', status: 'ACTIVE', cancelAtPeriodEnd: false },
+  }
+
+  function actionButtons(wrapper) {
+    return wrapper.findAll('.tier-actions q-btn-stub')
+  }
+
+  it.each(['PARENT', 'PLAYER'])('%s sees upgrade/cancel controls', async (role) => {
+    const { wrapper } = await mountPage(LARGE_PLAYER_ID, role, payment)
+    // SEMI_PRO (current) → cancel; PRO → upgrade; ATHLETE → free-plan caption, no button.
+    expect(actionButtons(wrapper)).toHaveLength(2)
+  })
+
+  it('a COACH (not an owner) sees no mutating controls', async () => {
+    const { wrapper } = await mountPage(LARGE_PLAYER_ID, 'COACH', payment)
+    expect(actionButtons(wrapper)).toHaveLength(0)
   })
 })

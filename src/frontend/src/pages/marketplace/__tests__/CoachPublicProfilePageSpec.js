@@ -62,17 +62,23 @@ const PROFILE = {
   },
 }
 
-async function mountPage(coachId = 'coach-1', role = 'PARENT') {
+let lastRouter = null
+
+async function mountPage(coachId = 'coach-1', role = 'PARENT', { query = '', booking } = {}) {
   const pinia = createTestingPinia({
     createSpy: vi.fn,
-    initialState: { auth: { role } },
+    initialState: { auth: { role }, ...(booking ? { booking } : {}) },
   })
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/marketplace/coaches/:coachId', component: CoachPublicProfilePage }],
+    routes: [
+      { path: '/marketplace/coaches/:coachId', component: CoachPublicProfilePage },
+      { path: '/parent/coaches/:coachId/request-booking', component: { template: '<div />' } },
+    ],
   })
-  router.push(`/marketplace/coaches/${coachId}`)
+  router.push(`/marketplace/coaches/${coachId}${query}`)
   await router.isReady()
+  lastRouter = router
 
   const wrapper = mount(CoachPublicProfilePage, {
     shallow: true,
@@ -179,5 +185,45 @@ describe('CoachPublicProfilePage.vue — own-profile reliability link (navigatio
     const wrapper = await mountPage('coach-1', 'COACH')
 
     expect(coachContextOf(wrapper)).toBe(false)
+  })
+})
+
+// A coach's shared-slot link lands here with ?slot=<coach-local YYYY-MM-DDTHH:mm>: the slot is
+// shown and forwarded to the booking request page (which preselects it).
+describe('CoachPublicProfilePage.vue — shared slot', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  it('shows the shared slot and forwards it to request-booking', async () => {
+    getCoachProfile.mockResolvedValue(PROFILE)
+    getMyReviewForCoach.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'reviews.reviewNotFound' } } },
+    })
+    const wrapper = await mountPage('coach-1', 'PARENT', {
+      query: '?slot=2026-11-04T09:30',
+      booking: {
+        sessionPacks: [
+          { coachId: 'coach-1', status: 'ACTIVE', creditsRemaining: 2, sessionCount: 5 },
+        ],
+      },
+    })
+
+    expect(wrapper.find('.shared-slot-banner').exists()).toBe(true)
+
+    wrapper.vm.handleCta()
+    await flushPromises()
+    expect(lastRouter.currentRoute.value.path).toBe('/parent/coaches/coach-1/request-booking')
+    expect(lastRouter.currentRoute.value.query.slot).toBe('2026-11-04T09:30')
+  })
+
+  it('ignores a malformed slot value', async () => {
+    getCoachProfile.mockResolvedValue(PROFILE)
+    getMyReviewForCoach.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'reviews.reviewNotFound' } } },
+    })
+    const wrapper = await mountPage('coach-1', 'PARENT', { query: '?slot=garbage' })
+    expect(wrapper.find('.shared-slot-banner').exists()).toBe(false)
   })
 })

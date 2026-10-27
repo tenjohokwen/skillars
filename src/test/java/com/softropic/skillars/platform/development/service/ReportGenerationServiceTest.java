@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.development.service;
 import com.lowagie.text.pdf.PdfReader;
 import com.lowagie.text.pdf.parser.PdfTextExtractor;
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
+import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.development.contract.PlayerTimelineEventType;
 import com.softropic.skillars.platform.development.contract.ReportGeneratedEvent;
 import com.softropic.skillars.platform.development.contract.ReportStatus;
@@ -35,7 +36,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -102,9 +102,8 @@ class ReportGenerationServiceTest {
             reportRepository, brandingRepository, fileStorageService,
             timelineEventListener, publisher, coachPlayerAuthorizationService,
             rateLimitingService, new CoachAccessWindow(configService), securityUtil, playerProfileRepository,
-            playerTimelineRepository
+            playerTimelineRepository, new FrontendLinkBuilder("http://app.test")
         );
-        ReflectionTestUtils.setField(service, "baseUrl", "http://app.test");
         // skillars-deferred-153 AC7: a bare @Mock ConfigService does not throw on an unstubbed call —
         // getBoundedLong returns Mockito's default 0L, which would make every existing happy-path
         // generateReport test (lastSessionDate stubbed as "1 hour ago") start throwing
@@ -527,6 +526,11 @@ class ReportGenerationServiceTest {
         verify(publisher).publishEvent(notifyCaptor.capture());
         assertThat(notifyCaptor.getValue()).isInstanceOf(Envelope.class);
         assertThat(((Envelope) notifyCaptor.getValue()).emailTemplate()).isEqualTo(EmailTemplate.PERFORMANCE_REPORT_SHARED);
+        // Frontend origin + hash router + a route that exists (the parent development portal hosts
+        // the reports panel) — was baseurl + "/portal/players/{id}/reports", a non-route on the
+        // backend's own origin.
+        assertThat(((Envelope) notifyCaptor.getValue()).data().get("reportsPageUrl"))
+            .isEqualTo("http://app.test/#/parent/players/" + PLAYER_ID + "/development");
     }
 
     @Test
@@ -764,9 +768,8 @@ class ReportGenerationServiceTest {
             reportRepository, brandingRepository, realFileStorageService,
             timelineEventListener, publisher, coachPlayerAuthorizationService,
             rateLimitingService, new CoachAccessWindow(configService), securityUtil, playerProfileRepository,
-            playerTimelineRepository
+            playerTimelineRepository, new FrontendLinkBuilder("http://app.test")
         );
-        ReflectionTestUtils.setField(realService, "baseUrl", "http://app.test");
 
         when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.ACADEMY);
         when(brandingRepository.findById(COACH_ID)).thenReturn(Optional.empty());

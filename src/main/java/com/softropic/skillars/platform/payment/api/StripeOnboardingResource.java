@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.payment.api;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.config.PaymentProperties;
@@ -36,6 +37,7 @@ public class StripeOnboardingResource {
     private final CoachProfileRepository coachProfileRepository;
     private final PaymentProperties paymentProperties;
     private final SecurityUtil securityUtil;
+    private final FrontendLinkBuilder frontendLinks;
 
     @GetMapping("/coaches/me/stripe/onboard")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
@@ -55,23 +57,39 @@ public class StripeOnboardingResource {
         if (error != null) {
             log.warn("[STRIPE_OAUTH_DENIED coachId=unknown error={}]", error);
             // P19: URL-encode attacker-controlled error value before appending to Location header
-            response.sendRedirect(paymentProperties.getCallbackSuccessUrl()
-                + "?stripe_error=" + URLEncoder.encode(error, StandardCharsets.UTF_8));
+            response.sendRedirect(withStripeError(URLEncoder.encode(error, StandardCharsets.UTF_8)));
             return;
         }
         if (code == null || code.isBlank()) {
-            response.sendRedirect(paymentProperties.getCallbackSuccessUrl() + "?stripe_error=missing_code");
+            response.sendRedirect(withStripeError("missing_code"));
             return;
         }
         UUID coachId = resolveCoachId();
         // P18: Validate state param matches authenticated coach to prevent CSRF account-linking
         if (state == null || !coachId.toString().equals(state)) {
             log.warn("[STRIPE_OAUTH_STATE_MISMATCH coachId={} state={}]", coachId, state);
-            response.sendRedirect(paymentProperties.getCallbackSuccessUrl() + "?stripe_error=state_mismatch");
+            response.sendRedirect(withStripeError("state_mismatch"));
             return;
         }
         onboardingService.handleOAuthCallback(coachId, code);
-        response.sendRedirect(paymentProperties.getCallbackSuccessUrl());
+        response.sendRedirect(settingsPageUrl());
+    }
+
+    /**
+     * Absolute frontend URL of the coach payment-settings page. The configured value is a frontend
+     * route path (default {@code /coach/payment-settings}); it used to be sent as a bare relative
+     * redirect, which resolved against the BACKEND origin and skipped the hash router's {@code #/}.
+     * The {@code ?stripe_error=} query appended by the callers lands inside the hash fragment, where
+     * vue-router (hash mode) reads it as {@code route.query.stripe_error}.
+     */
+    private String settingsPageUrl() {
+        return frontendLinks.resolve(paymentProperties.getCallbackSuccessUrl());
+    }
+
+    /** Appends {@code stripe_error} with '&' when the configured URL already carries a query. */
+    private String withStripeError(String encodedCode) {
+        String url = settingsPageUrl();
+        return url + (url.contains("?") ? "&" : "?") + "stripe_error=" + encodedCode;
     }
 
     @GetMapping("/coaches/me/stripe/status")

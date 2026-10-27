@@ -156,7 +156,8 @@ public class DrillUploadService {
             drillVideoRefRepository.upsertVideoId(drillId, resp.videoId());
         }
 
-        return new DrillUploadInitiateResponse(resp.videoId(), resp.sessionId(), resp.signedUploadUrl(), resp.expiresAt());
+        return new DrillUploadInitiateResponse(resp.videoId(), resp.sessionId(), resp.signedUploadUrl(), resp.expiresAt(),
+            resp.providerUploadId(), resp.tusAuthorizationSignature(), resp.tusAuthorizationExpire(), resp.tusLibraryId());
     }
 
     /**

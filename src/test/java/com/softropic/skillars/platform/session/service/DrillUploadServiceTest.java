@@ -113,6 +113,11 @@ class DrillUploadServiceTest {
         assertThat(resp.videoId()).isEqualTo(videoId);
         assertThat(resp.uploadSessionId()).isEqualTo(sessionId);
         assertThat(resp.signedUploadUrl()).isEqualTo("https://tus.example.com/upload");
+        // Bunny TUS auth fields must be forwarded — the browser cannot upload without them.
+        assertThat(resp.providerUploadId()).isEqualTo("provider-id");
+        assertThat(resp.tusAuthorizationSignature()).isEqualTo("test-sig");
+        assertThat(resp.tusAuthorizationExpire()).isEqualTo(9_999_999_999L);
+        assertThat(resp.tusLibraryId()).isEqualTo(12345L);
 
         verify(drillVideoRefRepository).upsertVideoId(DRILL_ID, videoId);
     }

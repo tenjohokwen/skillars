@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
+import com.softropic.skillars.platform.security.service.PlayerOwnershipGuard;
 import com.softropic.skillars.platform.session.contract.DrillResponse;
 import com.softropic.skillars.platform.session.contract.HomeworkAssignedEvent;
 import com.softropic.skillars.platform.session.contract.HomeworkAssignmentResponse;
@@ -13,7 +14,6 @@ import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
 import com.softropic.skillars.platform.session.repo.HomeworkAssignment;
 import com.softropic.skillars.platform.session.repo.HomeworkAssignmentRepository;
-import com.softropic.skillars.platform.session.repo.HomeworkCompletion;
 import com.softropic.skillars.platform.session.repo.HomeworkCompletionRepository;
 import com.softropic.skillars.platform.session.repo.SessionRepository;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -57,6 +57,7 @@ public class HomeworkAssignmentService {
     private final ApplicationEventPublisher eventPublisher;
     private final DevelopmentDataErasureGuard erasureGuard;
     private final PlatformTransactionManager transactionManager;
+    private final PlayerOwnershipGuard playerOwnershipGuard;
 
     private static final String LOCKER_ROOM_DRILLS_LATENCY = "session.homework.locker_room_drills.latency";
 
@@ -201,23 +202,26 @@ public class HomeworkAssignmentService {
         }
     }
 
+    /**
+     * Marks a homework assignment complete on behalf of {@code callerUserId} — the authenticated
+     * user's id (Principal.businessId), which is either the parent of the assignment's player
+     * profile or, for a self-registered adult player, the profile's own {@code user_id}. Anyone
+     * else gets a 404 (not a 403) so assignment ids cannot be probed.
+     *
+     * <p>Idempotent and race-safe: the completion row is written with
+     * {@code INSERT ... ON CONFLICT (assignment_id) DO NOTHING}, so concurrent double-taps neither
+     * create a second row nor poison the transaction with a caught constraint violation (a caught
+     * flush failure used to leave the JPA transaction rollback-only → 500 on commit).
+     */
     @Transactional
-    public void markComplete(UUID assignmentId, Long parentId) {
+    public void markComplete(UUID assignmentId, Long callerUserId) {
         HomeworkAssignment assignment = homeworkAssignmentRepository.findById(assignmentId)
             .orElseThrow(() -> new ResourceNotFoundException("Assignment not found", "homework_assignment"));
-        playerProfileRepository.findByIdAndParentId(assignment.getPlayerId(), parentId)
-            .orElseThrow(() -> new ResourceNotFoundException("Assignment not found", "homework_assignment"));
-        if (homeworkCompletionRepository.existsByAssignmentId(assignmentId)) {
-            return;
+        Long playerId = assignment.getPlayerId();
+        if (!playerOwnershipGuard.owns(callerUserId, playerId)) {
+            throw new ResourceNotFoundException("Assignment not found", "homework_assignment");
         }
-        HomeworkCompletion completion = new HomeworkCompletion();
-        completion.setAssignmentId(assignmentId);
-        completion.setPlayerId(assignment.getPlayerId());
-        try {
-            homeworkCompletionRepository.saveAndFlush(completion);
-        } catch (DataIntegrityViolationException e) {
-            // UNIQUE(assignment_id) race condition — idempotent, ignore
-        }
+        homeworkCompletionRepository.insertIfAbsent(UUID.randomUUID(), assignmentId, playerId);
     }
 
     private UUID resolvePackId(Long playerId, UUID coachId) {

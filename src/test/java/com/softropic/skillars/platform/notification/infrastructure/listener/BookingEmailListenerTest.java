@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingExpiredEvent;
 import com.softropic.skillars.platform.booking.contract.BookingReminderEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
+import com.softropic.skillars.platform.booking.contract.QuickCompleteConfirmationRequiredEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleDeclinedByParentEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleRequestedByCoachEvent;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
@@ -25,6 +26,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -32,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -52,11 +55,26 @@ class BookingEmailListenerTest {
 
     @BeforeEach
     void setUp() {
-        listener = new BookingEmailListener(notificationOutboxSupport, "http://localhost", "8080");
+        listener = new BookingEmailListener(notificationOutboxSupport, new com.softropic.skillars.infrastructure.web.FrontendLinkBuilder("http://localhost:9000"));
     }
 
     private void verifyNoEmailEnqueued() {
         verify(notificationOutboxSupport, never()).enqueueEmail(any(), any(), anyMap(), anyString());
+    }
+
+    @Captor
+    private ArgumentCaptor<Map<String, Object>> dataCaptor;
+
+    @Test
+    void onQuickCompleteConfirmationRequired_bookingsUrl_isFrontendHashRoute() {
+        // Was baseurl:server.port + "/bookings": the backend origin and a path the hash router
+        // does not have. Must be the frontend origin + "/#/" + an existing route.
+        listener.onQuickCompleteConfirmationRequired(new QuickCompleteConfirmationRequiredEvent(
+            this, UUID.randomUUID(), 1L, "parent@example.com", "Coach", Instant.now(), "UTC", "Player"));
+
+        verify(notificationOutboxSupport).enqueueEmail(
+            eq(EmailTemplate.BOOKING_QUICK_COMPLETE_CONFIRM), any(), dataCaptor.capture(), anyString());
+        assertThat(dataCaptor.getValue()).containsEntry("bookingsUrl", "http://localhost:9000/#/parent/bookings");
     }
 
     @Test

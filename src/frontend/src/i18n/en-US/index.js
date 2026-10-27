@@ -357,6 +357,7 @@ export default {
     },
   },
   marketplace: {
+    sharedSlot: 'Your coach shared this time slot: {slot} (coach local time)',
     // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
     duplicateSessionPackCount:
       'That pack size is listed twice. Each session pack must have a different number of sessions.',
@@ -1546,6 +1547,13 @@ export default {
       providerUnavailable: 'Payment service unavailable. Please try again.',
       statusLoadFailed: 'Could not load your payment status. Please refresh the page.',
       connectFailed: 'Could not start Stripe onboarding. Please try again.',
+      stripeCallback: {
+        accessDenied:
+          'Stripe connection was cancelled. Connect your account to start receiving payments.',
+        stateMismatch:
+          'Stripe connection could not be verified for this account. Please start the connection again.',
+        generic: 'Stripe connection failed. Please try again.',
+      },
     },
     credits: {
       title: 'Credit Wallet',

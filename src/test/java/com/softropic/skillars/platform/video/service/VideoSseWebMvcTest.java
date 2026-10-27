@@ -64,6 +64,7 @@ class VideoSseWebMvcTest {
     @MockitoBean SecurityUtil securityUtil;
     @MockitoBean VideoMetrics videoMetrics;
     @MockitoBean JwtSecretService jwtSecretService;
+    @MockitoBean com.softropic.skillars.platform.security.repo.PlayerProfileRepository playerProfileRepository;
 
     private static final UUID VIDEO_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
     private static final String OWNER = "owner@example.com";
@@ -163,6 +164,39 @@ class VideoSseWebMvcTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.operationalState").value("PURGED"))
             .andExpect(jsonPath("$.displayState").value("DELETED"));
+    }
+
+    // A player video's ownerId is the PlayerProfile id; the caller's businessId is their USER id.
+    @Test
+    @WithMockUser(username = OWNER)
+    void getStatus_playerOwnsVideoViaOwnProfile_returns200() throws Exception {
+        long profileId = 555_000_001L;
+        long userId = 777_000_001L;
+        com.softropic.skillars.platform.security.contract.Principal principal =
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.security.contract.Principal.class);
+        when(principal.getBusinessId()).thenReturn(String.valueOf(userId));
+        when(securityUtil.getCurrentUser()).thenReturn(principal);
+        when(videoService.findById(VIDEO_ID)).thenReturn(videoWithOwner(String.valueOf(profileId)));
+        when(playerProfileRepository.existsByIdAndUserId(profileId, userId)).thenReturn(true);
+
+        mockMvc.perform(get("/api/video/{id}/status", VIDEO_ID))
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(username = OWNER)
+    void getStatus_playerVideoOfAnotherProfile_returns403() throws Exception {
+        long profileId = 555_000_001L;
+        long userId = 777_000_001L;
+        com.softropic.skillars.platform.security.contract.Principal principal =
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.security.contract.Principal.class);
+        when(principal.getBusinessId()).thenReturn(String.valueOf(userId));
+        when(securityUtil.getCurrentUser()).thenReturn(principal);
+        when(videoService.findById(VIDEO_ID)).thenReturn(videoWithOwner(String.valueOf(profileId)));
+        when(playerProfileRepository.existsByIdAndUserId(profileId, userId)).thenReturn(false);
+
+        mockMvc.perform(get("/api/video/{id}/status", VIDEO_ID))
+            .andExpect(status().isForbidden());
     }
 
     private Video videoWithOwner(String ownerId) {

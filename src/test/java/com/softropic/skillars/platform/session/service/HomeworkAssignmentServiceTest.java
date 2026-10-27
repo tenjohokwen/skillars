@@ -4,7 +4,6 @@ import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
-import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import com.softropic.skillars.platform.session.contract.HomeworkAssignedEvent;
@@ -64,6 +63,7 @@ class HomeworkAssignmentServiceTest {
     // are no-ops); an unstubbed guard returns false, i.e. "not erased".
     @Mock private DevelopmentDataErasureGuard erasureGuard;
     @Mock private PlatformTransactionManager transactionManager;
+    @Mock private com.softropic.skillars.platform.security.service.PlayerOwnershipGuard playerOwnershipGuard;
     @Spy private MeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     @InjectMocks private HomeworkAssignmentService service;
@@ -365,33 +365,48 @@ class HomeworkAssignmentServiceTest {
     }
 
     @Test
-    void markComplete_idempotent_doesNotThrowOnDuplicate() {
+    void markComplete_parentOwner_insertsCompletionIdempotently() {
         UUID assignmentId = UUID.randomUUID();
         Long parentId = 2001L;
         HomeworkAssignment assignment = buildAssignment(1001L, UUID.randomUUID(), UUID.randomUUID());
 
         when(homeworkAssignmentRepository.findById(assignmentId)).thenReturn(Optional.of(assignment));
-        when(playerProfileRepository.findByIdAndParentId(assignment.getPlayerId(), parentId))
-            .thenReturn(Optional.of(new PlayerProfile()));
-        when(homeworkCompletionRepository.existsByAssignmentId(assignmentId)).thenReturn(true);
+        when(playerOwnershipGuard.owns(parentId, assignment.getPlayerId())).thenReturn(true);
+        // 0 rows = already completed (ON CONFLICT DO NOTHING) — must not throw.
+        when(homeworkCompletionRepository.insertIfAbsent(any(), eq(assignmentId), eq(1001L))).thenReturn(0);
 
         service.markComplete(assignmentId, parentId);
 
-        verify(homeworkCompletionRepository, never()).save(any());
+        verify(homeworkCompletionRepository).insertIfAbsent(any(), eq(assignmentId), eq(1001L));
+        verify(homeworkCompletionRepository, never()).saveAndFlush(any());
     }
 
     @Test
-    void markComplete_wrongParent_throws404() {
+    void markComplete_selfRegisteredPlayerOwner_insertsCompletion() {
         UUID assignmentId = UUID.randomUUID();
-        Long parentId = 9999L;
+        Long playerUserId = 3001L;
         HomeworkAssignment assignment = buildAssignment(1001L, UUID.randomUUID(), UUID.randomUUID());
 
         when(homeworkAssignmentRepository.findById(assignmentId)).thenReturn(Optional.of(assignment));
-        when(playerProfileRepository.findByIdAndParentId(assignment.getPlayerId(), parentId))
-            .thenReturn(Optional.empty());
+        when(playerOwnershipGuard.owns(playerUserId, 1001L)).thenReturn(true);
 
-        assertThatThrownBy(() -> service.markComplete(assignmentId, parentId))
+        service.markComplete(assignmentId, playerUserId);
+
+        verify(homeworkCompletionRepository).insertIfAbsent(any(), eq(assignmentId), eq(1001L));
+    }
+
+    @Test
+    void markComplete_notOwner_throws404AndWritesNothing() {
+        UUID assignmentId = UUID.randomUUID();
+        Long callerId = 9999L;
+        HomeworkAssignment assignment = buildAssignment(1001L, UUID.randomUUID(), UUID.randomUUID());
+
+        when(homeworkAssignmentRepository.findById(assignmentId)).thenReturn(Optional.of(assignment));
+        when(playerOwnershipGuard.owns(callerId, 1001L)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.markComplete(assignmentId, callerId))
             .isInstanceOf(ResourceNotFoundException.class);
+        verify(homeworkCompletionRepository, never()).insertIfAbsent(any(), any(), any());
     }
 
     private HomeworkAssignment buildAssignment(Long playerId, UUID coachId, UUID drillId) {

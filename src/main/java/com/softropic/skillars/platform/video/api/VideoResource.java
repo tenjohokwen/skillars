@@ -91,19 +91,17 @@ public class VideoResource {
     // ownerId for player HOMEWORK videos: PlayerProfile.id (Long TSID) as String — see Story 6.6 Task 0
     // Minor players are allowed to upload; the minor safety gate (Layer 3 moderation) handles
     // parental approval after content moderation passes. No server-side 403 for minor uploads.
+    // ROLE_PLAYER is admitted alongside the legacy ROLE_USER: self-registered players only carry
+    // ROLE_PLAYER (PlayerRegistrationService), so ROLE_USER alone 403'd the whole /player/videos page.
     @PostMapping("/player/uploads/initiate")
-    @PreAuthorize("hasAnyRole('ROLE_USER')")
+    @PreAuthorize("hasAnyRole('ROLE_USER', 'ROLE_PLAYER')")
     @Observed(name = "video.player.upload.initiate")
     public ResponseEntity<InitializeUploadResponse> initiatePlayerUpload(
             @Valid @RequestBody VideoUploadInitiateRequest req) {
         if (req.videoType() != VideoType.HOMEWORK) {
             throw new VideoValidationException("Players may only upload HOMEWORK videos");
         }
-        Long playerId = currentPlayerProfileId();
-        PlayerProfile profile = playerProfileRepository.findById(playerId)
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN,
-                "Player profile not found — complete account registration before uploading"));
-        String ownerId = String.valueOf(profile.getId());
+        String ownerId = String.valueOf(currentPlayerProfileId());
         InitializeUploadResponse resp = videoService.initializeUpload(
             new InitializeUploadRequest(
                 ownerId, req.fileName(), req.fileSizeBytes(),
@@ -112,7 +110,7 @@ public class VideoResource {
     }
 
     @GetMapping("/quotas/me")
-    @PreAuthorize("hasAnyRole('ROLE_USER', 'ROLE_COACH')")
+    @PreAuthorize("hasAnyRole('ROLE_USER', 'ROLE_PLAYER', 'ROLE_COACH')")
     @Observed(name = "video.quota.query")
     public ResponseEntity<VideoQuotaResponse> getMyQuota() {
         String ownerId = resolveCurrentOwnerId();
@@ -127,7 +125,7 @@ public class VideoResource {
     }
 
     @GetMapping("/my")
-    @PreAuthorize("hasAnyRole('ROLE_USER', 'ROLE_COACH')")
+    @PreAuthorize("hasAnyRole('ROLE_USER', 'ROLE_PLAYER', 'ROLE_COACH')")
     @Observed(name = "video.list.my")
     public ResponseEntity<List<VideoSummaryResponse>> getMyVideos() {
         String ownerId = resolveCurrentOwnerId();
@@ -160,7 +158,9 @@ public class VideoResource {
     /**
      * Resolves the current user's ownerId for video storage queries.
      * Coaches (ROLE_COACH): businessId = user Long ID → look up coach profile UUID → return UUID string.
-     * Players (ROLE_USER): businessId = PlayerProfile.id Long → return as String.
+     * Players (ROLE_PLAYER / legacy ROLE_USER): businessId = the caller's USER id → resolve the
+     * PlayerProfile they own (PlayerProfile.userId) → return its id as String. Player video ownerIds
+     * are PlayerProfile ids everywhere downstream (minor gate, quota tier, subscription lifecycle).
      */
     private String resolveCurrentOwnerId() {
         if (securityUtil.isCurrentUserInRole(SecurityConstants.ROLE_COACH)) {
@@ -173,11 +173,20 @@ public class VideoResource {
                     "Coach profile not found");
             }
         }
-        // Player path: businessId = PlayerProfile.id (Long TSID) as String
-        return String.valueOf(securityUtil.requireCurrentUserId());
+        return String.valueOf(currentPlayerProfileId());
     }
 
+    /**
+     * The caller's own PlayerProfile id. Principal.businessId is the USER id for every role, never a
+     * PlayerProfile id, so it must be resolved through PlayerProfile.userId (a self-registered
+     * player's own profile). A caller without one — e.g. a parent, whose children's profiles are
+     * not "theirs" to upload into — is refused rather than given a user-id-keyed video space.
+     */
     private Long currentPlayerProfileId() {
-        return securityUtil.requireCurrentUserId();
+        Long userId = securityUtil.requireCurrentUserId();
+        return playerProfileRepository.findByUserId(userId)
+            .map(PlayerProfile::getId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN,
+                "Player profile not found — complete account registration first"));
     }
 }

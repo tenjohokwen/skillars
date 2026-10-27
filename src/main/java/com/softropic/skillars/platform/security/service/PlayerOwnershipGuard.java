@@ -29,12 +29,23 @@ public class PlayerOwnershipGuard {
             // — skillars-deferred-147: the self-owned branch was missing entirely, so a self-registered
             // PLAYER was unconditionally denied every development/session/payment resource about
             // themselves, caught via manual testing of the new Player Development Dashboard nav link.
-            Long callerId = Long.parseLong(skillarsP.getBusinessId());
-            return playerProfileRepository.existsByIdAndParentId(playerId, callerId)
-                || playerProfileRepository.existsByIdAndUserId(playerId, callerId);
+            return owns(Long.parseLong(skillarsP.getBusinessId()), playerId);
         } catch (NumberFormatException e) {
             log.warn("Ownership guard denied: malformed businessId in principal for playerId={}", playerId);
             return false;
         }
+    }
+
+    /**
+     * Whether {@code callerUserId} owns player profile {@code playerId}: as the parent of a minor's
+     * profile, or as the self-registered player whose own profile it is. For service-layer checks
+     * where the player id is only known after loading a row (e.g. a homework assignment).
+     */
+    public boolean owns(Long callerUserId, Long playerId) {
+        if (callerUserId == null || playerId == null) {
+            return false;
+        }
+        return playerProfileRepository.existsByIdAndParentId(playerId, callerUserId)
+            || playerProfileRepository.existsByIdAndUserId(playerId, callerUserId);
     }
 }

@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.notification.infrastructure.listener;
 
+import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.booking.contract.BatchBookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
@@ -24,7 +25,6 @@ import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -47,14 +47,13 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
 public class BookingEmailListener {
 
     private final com.softropic.skillars.platform.notification.service.NotificationOutboxSupport notificationOutboxSupport;
-    private final String appBaseUrl;
+    private final FrontendLinkBuilder frontendLinks;
 
     public BookingEmailListener(
             com.softropic.skillars.platform.notification.service.NotificationOutboxSupport notificationOutboxSupport,
-            @Value("${baseurl}") String baseUrl,
-            @Value("${server.port}") String serverPort) {
+            FrontendLinkBuilder frontendLinks) {
         this.notificationOutboxSupport = notificationOutboxSupport;
-        this.appBaseUrl = baseUrl + ":" + serverPort;
+        this.frontendLinks = frontendLinks;
     }
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
@@ -166,7 +165,9 @@ public class BookingEmailListener {
             data.put("playerName", event.getPlayerName());
             data.put("requestedStartTime", event.getSessionStartTime().toString());
             data.put("canonicalTimezone", event.getCanonicalTimezone());
-            data.put("bookingsUrl", appBaseUrl + "/bookings");
+            // The recipient is the booking's parent — or a self-registered player booking for
+            // themselves; the parent-bookings route serves both roles.
+            data.put("bookingsUrl", frontendLinks.route("parent/bookings"));
 
             Recipient recipient = new Recipient();
             recipient.setEmail(event.getParentEmail());

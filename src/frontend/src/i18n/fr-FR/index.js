@@ -359,6 +359,7 @@ export default {
     },
   },
   marketplace: {
+    sharedSlot: 'Votre coach a partagé ce créneau : {slot} (heure locale du coach)',
     // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
     duplicateSessionPackCount:
       'Ce nombre de séances est indiqué deux fois. Chaque pack doit avoir un nombre de séances différent.',
@@ -1247,6 +1248,13 @@ export default {
       statusLoadFailed:
         'Impossible de charger votre statut de paiement. Veuillez actualiser la page.',
       connectFailed: "Impossible de démarrer l'intégration Stripe. Veuillez réessayer.",
+      stripeCallback: {
+        accessDenied:
+          'La connexion à Stripe a été annulée. Connectez votre compte pour commencer à recevoir des paiements.',
+        stateMismatch:
+          "La connexion à Stripe n'a pas pu être vérifiée pour ce compte. Veuillez relancer la connexion.",
+        generic: 'La connexion à Stripe a échoué. Veuillez réessayer.',
+      },
     },
     credits: {
       title: 'Portefeuille de crédits',

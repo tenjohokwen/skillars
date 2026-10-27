@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLink;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLinkRepository;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.exception.PlaybackDeniedException;
@@ -44,6 +45,7 @@ class VideoAccessGuardTest {
     @Mock CoachProfileService coachProfileService;
     @Mock ConfigService configService;
     @Mock VideoAccessCache videoAccessCache;
+    @Mock PlayerProfileRepository playerProfileRepository;
     @Mock Principal mockPrincipal;
 
     @InjectMocks VideoAccessGuard guard;
@@ -51,6 +53,8 @@ class VideoAccessGuardTest {
     private static final UUID VIDEO_ID = UUID.randomUUID();
     private static final Long PLAYER_LONG_ID = 42L;
     private static final String PLAYER_OWNER_ID = "42";     // Long as string → player video
+    // The owning player's USER id — player video ownerIds are PlayerProfile ids, never user ids.
+    private static final Long PLAYER_USER_ID = 4242L;
     private static final UUID COACH_UUID = UUID.randomUUID();
     private static final String COACH_OWNER_ID = COACH_UUID.toString(); // UUID string → coach video
     private static final Long PARENT_LONG_ID = 99L;
@@ -88,9 +92,24 @@ class VideoAccessGuardTest {
         Video video = videoWithState(OperationalState.READY, PLAYER_OWNER_ID);
         when(videoService.findById(VIDEO_ID)).thenReturn(video);
         when(securityUtil.isAdmin()).thenReturn(false);
-        stubPlayerCurrentUser(PLAYER_LONG_ID);
+        stubPlayerCurrentUser(PLAYER_USER_ID);
+        when(playerProfileRepository.existsByIdAndUserId(PLAYER_LONG_ID, PLAYER_USER_ID)).thenReturn(true);
 
         assertThat(guard.canPlay(null, VIDEO_ID)).isTrue();
+    }
+
+    @Test
+    void canDelete_callerWhoseUserIdEqualsOwnerProfileIdButDoesNotOwnIt_denied() {
+        // Regression: the old check compared the caller's user id string to the PlayerProfile id.
+        Video video = videoWithState(OperationalState.READY, PLAYER_OWNER_ID);
+        when(videoService.findById(VIDEO_ID)).thenReturn(video);
+        when(securityUtil.isAdmin()).thenReturn(false);
+        stubPlayerCurrentUser(PLAYER_LONG_ID);
+        when(playerProfileRepository.existsByIdAndUserId(PLAYER_LONG_ID, PLAYER_LONG_ID)).thenReturn(false);
+        when(parentPlayerLinkRepository.findAllByPlayerId(PLAYER_LONG_ID)).thenReturn(List.of());
+
+        assertThatThrownBy(() -> guard.canDelete(null, VIDEO_ID))
+            .isInstanceOf(VideoDeletionNotAuthorisedException.class);
     }
 
     @Test
@@ -178,7 +197,8 @@ class VideoAccessGuardTest {
         Video video = videoWithState(OperationalState.READY, PLAYER_OWNER_ID);
         when(videoService.findById(VIDEO_ID)).thenReturn(video);
         when(securityUtil.isAdmin()).thenReturn(false);
-        stubPlayerCurrentUser(PLAYER_LONG_ID);
+        stubPlayerCurrentUser(PLAYER_USER_ID);
+        when(playerProfileRepository.existsByIdAndUserId(PLAYER_LONG_ID, PLAYER_USER_ID)).thenReturn(true);
 
         assertThat(guard.canDelete(null, VIDEO_ID)).isTrue();
     }
