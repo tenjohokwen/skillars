@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.messaging.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.messaging.contract.MessagesPurgedEvent;
 import com.softropic.skillars.platform.messaging.repo.ConversationRepository;
@@ -49,7 +50,7 @@ public class MessageRetentionScheduler {
         // future), so deleteOldMessagesWithNoOpenReports would delete EVERY message with no open
         // report on the next run. Data-destructive → clamps to 24 + WARN here, and
         // ConfigStartupAssertion refuses to boot on a bad stored value (failFast key).
-        int retentionMonths = configService.getBoundedInt("platform.message_retention_months", 24, 1, 600);
+        int retentionMonths = configService.getBoundedInt(ConfigBounds.MESSAGE_RETENTION_MONTHS);
         Instant cutoff = Instant.now().atZone(ZoneOffset.UTC).minusMonths(retentionMonths).toInstant();
 
         int messageCount;

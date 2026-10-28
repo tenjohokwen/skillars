@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.booking.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
@@ -852,7 +854,7 @@ class BookingCompletionServiceTest {
         lenient().when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(coachUser));
         PlayerProfile player = new PlayerProfile();
         lenient().when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
-        lenient().when(configService.getBoundedLong(eq("booking.recap.editWindowDays"), eq(30L), eq(7L), eq(365L)))
+        lenient().when(configService.getBoundedLong(ConfigBounds.BOOKING_RECAP_EDIT_WINDOW_DAYS))
             .thenReturn(30L);
         SessionCompletionData scd = new SessionCompletionData();
         scd.setBookingId(BOOKING_ID);
@@ -1022,7 +1024,7 @@ class BookingCompletionServiceTest {
 
     @Test
     void getMissingRecaps_zeroCount_skipsTheListQuery() {
-        when(configService.getBoundedLong(eq("booking.recap.editWindowDays"), eq(30L), eq(7L), eq(365L))).thenReturn(30L);
+        when(configService.getBoundedLong(ConfigBounds.BOOKING_RECAP_EDIT_WINDOW_DAYS)).thenReturn(30L);
         when(bookingRepository.countBookingsMissingRecap(eq(COACH_ID), any())).thenReturn(0L);
 
         var response = service.getMissingRecaps(COACH_USER_ID);
@@ -1034,7 +1036,7 @@ class BookingCompletionServiceTest {
 
     @Test
     void getMissingRecaps_returnsItemsWithBatchedNames() {
-        when(configService.getBoundedLong(eq("booking.recap.editWindowDays"), eq(30L), eq(7L), eq(365L))).thenReturn(30L);
+        when(configService.getBoundedLong(ConfigBounds.BOOKING_RECAP_EDIT_WINDOW_DAYS)).thenReturn(30L);
         when(bookingRepository.countBookingsMissingRecap(eq(COACH_ID), any())).thenReturn(1L);
         booking.setId(BOOKING_ID);
         booking.setRequestedEndTime(Instant.now().minusSeconds(3600));

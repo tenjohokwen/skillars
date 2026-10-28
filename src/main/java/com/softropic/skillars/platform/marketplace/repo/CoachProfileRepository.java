@@ -41,10 +41,25 @@ public interface CoachProfileRepository
     // which retries that failure from a JDBC savepoint with a short backoff (~3.2s budget across 8
     // attempts) so a brief, legitimate overlap between two requests still succeeds — contention that
     // outlasts the budget surfaces as ApiAdvice's PessimisticLockingFailureException handler's 409.
+    //
+    // C5 (V188, @Version): the lock is taken by a SCALAR query and the entity is then read with findById.
+    // A locked ENTITY query that hits an instance already managed from an earlier unlocked read (the
+    // findByUserId-then-lock shape most call sites have) makes Hibernate "upgrade" its lock mode, and for
+    // a @Version entity that upgrade checks the row's version against the stale snapshot — a concurrent
+    // commit in between (exactly the race the lock + entityManager.refresh exists to absorb) would throw
+    // StaleObjectStateException (a 409) instead of handing the caller the instance to refresh. The id
+    // projection never hydrates an entity, so it never upgrades one; findById then returns the managed
+    // instance unchanged (callers refresh it, as before) or loads it fresh from the row this transaction
+    // now holds. Same lock statement as before (PESSIMISTIC_WRITE + NOWAIT), same retry contract.
+    default Optional<CoachProfile> findByIdForUpdate(UUID id) {
+        return lockByIdForUpdate(id).flatMap(this::findById);
+    }
+
+    /** Row lock only (see {@link #findByIdForUpdate}); NOWAIT, so callers wrap it in PessimisticLockRetryer. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0"))
-    @Query("SELECT c FROM CoachProfile c WHERE c.id = :id")
-    Optional<CoachProfile> findByIdForUpdate(@Param("id") UUID id);
+    @Query("SELECT c.id FROM CoachProfile c WHERE c.id = :id")
+    Optional<UUID> lockByIdForUpdate(@Param("id") UUID id);
 
     /**
      * Language filter via native query — PostgreSQL array ANY() is not expressible through the JPA
@@ -67,30 +82,36 @@ public interface CoachProfileRepository
     /**
      * Admin console D6: the sole post-insert writer of {@code verification_tier} (the column is
      * {@code updatable = false} on the entity — see {@code CoachProfile.verificationTier}). Callers
-     * take {@link #findByIdForUpdate} first so concurrent tier changes serialise.
+     * take {@link #findByIdForUpdate} first so concurrent tier changes serialise. Bumps
+     * {@code version} (C5): a bulk UPDATE bypasses the optimistic-lock check, so without the bump a
+     * concurrent holder of a pre-change snapshot could still save over the row unnoticed.
      */
     @Modifying(flushAutomatically = true)
-    @Query("UPDATE CoachProfile p SET p.verificationTier = :tier WHERE p.id = :coachId")
+    @Query("UPDATE CoachProfile p SET p.verificationTier = :tier, p.version = p.version + 1 WHERE p.id = :coachId")
     int updateVerificationTier(@Param("coachId") UUID coachId, @Param("tier") String tier);
 
     /**
      * fix/content-consistency-and-lost-updates: targeted single-column write for the two photo-key
      * writers ({@code CoachProfileService.saveStep5} and {@code CoachProfilePhotoEventListener}).
-     * {@code CoachProfile} has no {@code @Version}/{@code @DynamicUpdate}, so their former
-     * load-then-{@code save()} rewrote every column from a possibly stale snapshot and could silently
-     * revert a concurrent status write (e.g. {@code suspendCoach}). This UPDATE touches only
-     * {@code photo_url}, so it cannot. Not {@code clearAutomatically}: the listener runs inside the
-     * file-storage confirm transaction and must not detach that caller's entities; callers do not read
-     * {@code photoUrl} back from a managed instance after calling this.
+     * Their former load-then-{@code save()} rewrote every column from a possibly stale, unlocked
+     * snapshot and could silently revert a concurrent status write (e.g. {@code suspendCoach}). This
+     * UPDATE touches only {@code photo_url}, so it cannot; kept after C5 added {@code @Version} because
+     * it also needs neither the row lock nor a retry. It bumps {@code version} (C5) so a concurrent
+     * stale full-row save fails instead of reverting the new photo. Not {@code clearAutomatically}: the
+     * listener must not detach a caller's entities; callers neither read {@code photoUrl} back from
+     * nor save a managed instance after calling this (its version is now behind the row's).
      *
      * @return rows updated (0 when the user has no coach profile)
      */
     @Modifying(flushAutomatically = true)
-    @Query("UPDATE CoachProfile p SET p.photoUrl = :photoUrl WHERE p.userId = :userId")
+    @Query("UPDATE CoachProfile p SET p.photoUrl = :photoUrl, p.version = p.version + 1 WHERE p.userId = :userId")
     int updatePhotoUrlByUserId(@Param("userId") Long userId, @Param("photoUrl") String photoUrl);
 
+    // C5: bumps version — no entity path writes the aggregate, so a concurrent stale full-row save would
+    // otherwise silently write the previous rating/count back.
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE CoachProfile p SET p.averageRating = :avgRating, p.reviewCount = :reviewCount WHERE p.id = :coachId")
+    @Query("UPDATE CoachProfile p SET p.averageRating = :avgRating, p.reviewCount = :reviewCount, "
+           + "p.version = p.version + 1 WHERE p.id = :coachId")
     void updateRatingAggregate(@Param("coachId") UUID coachId,
                                @Param("avgRating") Double avgRating,
                                @Param("reviewCount") int reviewCount);
@@ -98,6 +119,10 @@ public interface CoachProfileRepository
     // skillars-12-7 code review (Decision 1(a)): the coach-side recap erasure tombstone (V166). Native and
     // unmapped on purpose -- see V166's header: the entity's own flush would otherwise null it again.
     // COALESCE keeps the first erasure time when the retry scheduler re-runs the scrub.
+    // C5: deliberately does NOT bump version (allow-listed in NativeModifyingVersionAuditTest): the column
+    // is unmapped, so no entity save can revert it, and GdprErasureService calls this from a REQUIRES_NEW
+    // transaction while the OUTER erasure transaction holds a managed snapshot of the same row — a bump
+    // would make any pending change to that snapshot fail its version check at the outer commit.
     @Modifying
     @Query(value = "UPDATE marketplace.coach_profiles SET recap_data_erased_at = COALESCE(recap_data_erased_at, now()) "
                    + "WHERE id = :coachId", nativeQuery = true)

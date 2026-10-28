@@ -65,7 +65,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * re-stamp serializes against the same per-coach lock {@code saveStep4}/{@code AvailabilityService}
  * already take -- same {@code findByIdForUpdate}+{@code orElseThrow}+{@code entityManager.refresh}
  * read-only shape as every other site here; the profile/window writes all run after {@code
- * withBoundedRetry} returns.
+ * withBoundedRetry} returns. Now 55 (master 54 after C3/C4) as of C5's {@code GdprErasureService.scrubCoachProfile}: the
+ * coach-profile scrub of a COACH erasure (CoachProfile is {@code @Version}ed since V188) locks and
+ * refreshes the row ({@code findByIdForUpdate}+{@code orElseThrow}+{@code entityManager.refresh}) after
+ * the recap scrub's REQUIRES_NEW block has committed; the field writes and {@code save} run after
+ * {@code withBoundedRetry} returns.
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
  * building this scan against the real call sites (28 at story-creation time) surfaced one genuine violation —
@@ -157,7 +161,7 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 54;
+    private static final int EXPECTED_CALL_SITE_COUNT = 55;
 
     private record CallSite(String file, int line, String argument) {
     }
@@ -315,12 +319,23 @@ class PessimisticLockRetryerCallSiteAuditTest {
         Map.entry("BookingRepository", "findByIdForUpdate"),
         Map.entry("BookingBatchRepository", "findByIdForUpdate"),
         Map.entry("SessionPackPurchaseRepository", "findByIdForUpdate"),
-        Map.entry("CoachProfileRepository", "findByIdForUpdate"),
+        Map.entry("CoachProfileRepository", "lockByIdForUpdate"),
         Map.entry("DrillRepository", "findByIdForUpdate"),
         Map.entry("CoachReviewRepository", "findByIdForUpdateNoWait"),
         Map.entry("StripeCustomerRepository", "findByIdForUpdate"),
-        Map.entry("SessionRepository", "findByIdForUpdate"),
+        Map.entry("SessionRepository", "lockByIdForUpdate"),
         Map.entry("UserRepository", "findByIdForUpdate")
+    );
+
+    /**
+     * C5: repository type → a {@code default} method that delegates to that repository's registered
+     * NOWAIT lock method (scalar lock + {@code findById}, so a {@code @Version} entity that is already
+     * managed is never version-checked by a lock upgrade). Callers use the delegating name, so the
+     * unwrapped-call scan checks it too — it takes the same NOWAIT lock.
+     */
+    private static final Map<String, String> NOWAIT_DELEGATING_DEFAULT_METHODS = Map.of(
+        "CoachProfileRepository", "findByIdForUpdate",
+        "SessionRepository", "findByIdForUpdate"
     );
 
     private static List<String> findUnwrappedNoWaitLockCallsInFile(Path file) throws IOException {
@@ -331,7 +346,9 @@ class PessimisticLockRetryerCallSiteAuditTest {
         List<String> offenders = new ArrayList<>();
         for (Map.Entry<String, String> entry : NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE.entrySet()) {
             String repoType = entry.getKey();
-            String lockMethod = entry.getValue();
+            List<String> lockMethods = NOWAIT_DELEGATING_DEFAULT_METHODS.containsKey(repoType)
+                ? List.of(entry.getValue(), NOWAIT_DELEGATING_DEFAULT_METHODS.get(repoType))
+                : List.of(entry.getValue());
 
             // Field/param declarations of this repository type, e.g. "CoachProfileRepository
             // coachProfileRepository" — captures the local variable name this file calls it through.
@@ -339,11 +356,13 @@ class PessimisticLockRetryerCallSiteAuditTest {
                 "\\b" + Pattern.quote(repoType) + "\\s+(\\w+)\\s*[;,)]").matcher(scanned);
             while (fieldMatcher.find()) {
                 String varName = fieldMatcher.group(1);
-                Pattern callPattern = Pattern.compile(
-                    Pattern.quote(varName) + "\\." + Pattern.quote(lockMethod) + "\\(");
-                if (callPattern.matcher(scanned).find() && !fileHasWrapper) {
-                    offenders.add(file + ": declares " + repoType + " " + varName + " and calls ."
-                        + lockMethod + "( but the file contains no .withBoundedRetry( anywhere");
+                for (String lockMethod : lockMethods) {
+                    Pattern callPattern = Pattern.compile(
+                        Pattern.quote(varName) + "\\." + Pattern.quote(lockMethod) + "\\(");
+                    if (callPattern.matcher(scanned).find() && !fileHasWrapper) {
+                        offenders.add(file + ": declares " + repoType + " " + varName + " and calls ."
+                            + lockMethod + "( but the file contains no .withBoundedRetry( anywhere");
+                    }
                 }
             }
         }

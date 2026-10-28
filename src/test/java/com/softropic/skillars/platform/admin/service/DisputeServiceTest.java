@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -124,7 +126,7 @@ class DisputeServiceTest {
 
         when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findById(booking.getCoachId())).thenReturn(Optional.of(coachProfile));
-        when(configService.getBoundedLong("disputes.submissionWindowDays", 14L, 1L, 365L)).thenReturn(14L);
+        when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
         when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
         when(disputeRepository.save(any(Dispute.class))).thenAnswer(inv -> {
             Dispute d = inv.getArgument(0);
@@ -192,7 +194,7 @@ class DisputeServiceTest {
 
         when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
         when(playerProfileRepository.findById(booking.getPlayerId())).thenReturn(Optional.of(playerProfile));
-        when(configService.getBoundedLong("disputes.submissionWindowDays", 14L, 1L, 365L)).thenReturn(14L);
+        when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
         when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
         when(disputeRepository.save(any(Dispute.class))).thenAnswer(inv -> {
             Dispute d = inv.getArgument(0);
@@ -248,7 +250,7 @@ class DisputeServiceTest {
         when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
         when(playerProfileRepository.findById(booking.getPlayerId())).thenReturn(Optional.empty());
         when(coachProfileRepository.findById(booking.getCoachId())).thenReturn(Optional.of(coachProfile));
-        when(configService.getBoundedLong("disputes.submissionWindowDays", 14L, 1L, 365L)).thenReturn(14L);
+        when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
         when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
         when(disputeRepository.save(any(Dispute.class))).thenAnswer(inv -> {
             Dispute d = inv.getArgument(0);

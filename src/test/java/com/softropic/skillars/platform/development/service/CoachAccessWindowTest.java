@@ -38,7 +38,7 @@ class CoachAccessWindowTest {
     @Test
     void windowDays_readsTheBoundedKeyWithItsCodeDefault() {
         ConfigService config = mock(ConfigService.class);
-        when(config.getBoundedLong(eq("development.timeline.coachAccessExpiryDays"), eq(90L), eq(1L), eq(3650L)))
+        when(config.getBoundedLong(ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS))
             .thenReturn(30L);
         assertThat(new CoachAccessWindow(config).windowDays()).isEqualTo(30L);
         assertThat(ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS.defaultValue()).isEqualTo(90L);
@@ -47,7 +47,7 @@ class CoachAccessWindowTest {
     @Test
     void instanceIsOpen_usesTheConfiguredWindow() {
         ConfigService config = mock(ConfigService.class);
-        when(config.getBoundedLong(eq("development.timeline.coachAccessExpiryDays"), anyLong(), anyLong(), anyLong()))
+        when(config.getBoundedLong(ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS))
             .thenReturn(7L);
         CoachAccessWindow window = new CoachAccessWindow(config);
         assertThat(window.isOpen(window.now().minus(Duration.ofDays(6)))).isTrue();

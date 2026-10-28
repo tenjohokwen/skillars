@@ -63,11 +63,7 @@ class StuckCompletionSweeperServiceTest {
             }
         };
         service = new StuckCompletionSweeperService(bookingRepository, bookingCompletionService, configService, txTemplate);
-        lenient().when(configService.getBoundedLong(
-                eq(ConfigBounds.BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS.key()),
-                eq(ConfigBounds.BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS.defaultValue()),
-                eq(ConfigBounds.BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS.min()),
-                eq(ConfigBounds.BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS.max())))
+        lenient().when(configService.getBoundedLong(ConfigBounds.BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS))
             .thenReturn(TIMEOUT_HOURS);
     }
 

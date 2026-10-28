@@ -200,16 +200,11 @@ public class RadarCompositeCalculationService {
         // see ConfigBounds.RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS's own Javadoc for why that overload
         // (not the 3-arg, throwing one) is required here.
         //
-        // /bmad-code-review fix (2026-09-21): min/max passed as the same LITERAL numbers
-        // ConfigBounds.RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS declares (2L, 120L), not `.min()`/`.max()`
-        // accessor calls — matching this codebase's own documented ConfigBounds convention ("each call
-        // site still passes its [min, max] literally... Mockito verify(...) pins the exact numbers" —
-        // see ConfigBounds's own class Javadoc). Reading the bound through its own accessors defeats
-        // that convention: a unit test asserting via `verify(...).getBoundedLong(key, default, 2L,
-        // 120L)` would still pass if ConfigBounds's stored min/max silently drifted from what this call
-        // site's own literals are supposed to be cross-checked against.
-        long lockTimeoutSeconds = configService.getBoundedLong(
-            ConfigBounds.RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
+        // C5: the BoundedKey overload (ConfigService.getBoundedLong(BoundedKey)) supersedes the
+        // literal-[min, max] convention the 2026-09-21 review applied here: key, default and range now
+        // come from the one registry entry that ConfigService.updateConfig and ConfigStartupAssertion
+        // also read, so the call site cannot drift from it at all.
+        long lockTimeoutSeconds = configService.getBoundedLong(ConfigBounds.RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS);
 
         // Deferred-77 AC10 Phase 1: two concurrent submissions for the same player both used to
         // read aggregates before either upserted, so the later commit silently clobbered the

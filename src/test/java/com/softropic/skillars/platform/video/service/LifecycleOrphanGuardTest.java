@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.video.contract.PlayerSubscriptionQueryPort;
@@ -41,9 +43,9 @@ class LifecycleOrphanGuardTest {
                 return action.doInTransaction(null);
             }
         };
-        when(configService.getBoundedLong("platform.video.lifecycle.blocked_to_archived_days", 30L, 1L, 3650L)).thenReturn(30L);
-        when(configService.getBoundedLong("platform.video.lifecycle.archived_to_deleted_days", 90L, 1L, 36500L)).thenReturn(90L);
-        when(configService.getBoundedInt("platform.video.lifecycle.batch_size", 100, 1, 10000)).thenReturn(100);
+        when(configService.getBoundedLong(ConfigBounds.VIDEO_LIFECYCLE_BLOCKED_TO_ARCHIVED_DAYS)).thenReturn(30L);
+        when(configService.getBoundedLong(ConfigBounds.VIDEO_LIFECYCLE_ARCHIVED_TO_DELETED_DAYS)).thenReturn(90L);
+        when(configService.getBoundedInt(ConfigBounds.VIDEO_LIFECYCLE_BATCH_SIZE)).thenReturn(100);
 
         scheduler = new VideoLifecycleScheduler(videoRepository, videoLifecycleLogRepository,
             videoLifecycleService, videoProviderAdapter, configService, txTemplate, quotaService, playerSubscriptionQueryPort);

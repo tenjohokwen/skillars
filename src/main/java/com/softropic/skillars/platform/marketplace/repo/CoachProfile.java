@@ -10,6 +10,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -60,12 +61,11 @@ public class CoachProfile {
 
     /**
      * {@code updatable = false}: the only writer after insert is the admin console
-     * ({@code CoachProfileRepository.updateVerificationTier}, a bulk UPDATE). Several coach-side paths
-     * ({@code CoachProfileService.saveStep5}, {@code CoachProfilePhotoEventListener}) save a managed
-     * CoachProfile they loaded without the row lock, and this entity has no {@code @Version} or
-     * {@code @DynamicUpdate} — so a static full-row UPDATE from such a save, racing an admin tier
-     * change, would silently write the stale tier back. Excluding the column from entity UPDATEs makes
-     * that impossible by construction (same technique as {@code User.securitySessionInvalidatedAt}).
+     * ({@code CoachProfileRepository.updateVerificationTier}, a bulk UPDATE that also bumps
+     * {@link #version}). Excluding the column from entity UPDATEs means no entity save can ever write a
+     * stale tier back, independently of the optimistic-lock check (same technique as
+     * {@code User.securitySessionInvalidatedAt}); kept as defence-in-depth now that {@link #version}
+     * exists.
      */
     @Column(name = "verification_tier", nullable = false, updatable = false)
     private String verificationTier = "BASIC";
@@ -81,4 +81,17 @@ public class CoachProfile {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
+
+    /**
+     * C5 (V188): optimistic lock. Every entity save is a static full-row UPDATE (no
+     * {@code @DynamicUpdate}), so before this column a save from a stale snapshot silently reverted a
+     * concurrent write — e.g. the GDPR coach scrub vs. a suspension. Now the stale save fails with
+     * {@code ObjectOptimisticLockingFailureException} (ApiAdvice: 409). Every bulk {@code @Modifying}
+     * UPDATE on {@code coach_profiles} must {@code SET version = version + 1} or be allow-listed in
+     * {@code NativeModifyingVersionAuditTest}. Primitive on purpose: Spring Data's {@code isNew} then
+     * keeps deciding by the (generated) id, exactly as before the column existed.
+     */
+    @Version
+    @Column(nullable = false)
+    private long version;
 }

@@ -31,22 +31,32 @@ public interface SessionRepository extends JpaRepository<Session, UUID> {
     Optional<Session> findByBookingId(UUID bookingId);
 
     /**
-     * fix/content-consistency-and-lost-updates: {@code Session} has no {@code @Version}, so
-     * {@code SessionPlanService.updateSession}'s full-row save must hold the row lock while it
-     * re-checks the status, or a coach edit racing {@code handleBookingCompleted} could flip a
-     * COMPLETED plan back to SAVED. NOWAIT (lock.timeout 0) + {@code PessimisticLockRetryer}, the
+     * fix/content-consistency-and-lost-updates: {@code SessionPlanService.updateSession}'s full-row
+     * save holds the row lock while it re-checks the status, or a coach edit racing
+     * {@code handleBookingCompleted} could flip a COMPLETED plan back to SAVED. (C5 added
+     * {@code @Version}, which would now turn that race into a 409; the lock keeps it a clean
+     * re-check against fresh state instead.) NOWAIT (lock.timeout 0) + {@code PessimisticLockRetryer}, the
      * project's standard shape — see {@code CoachProfileRepository.findByIdForUpdate}.
      */
+    // C5: scalar lock + findById, not a locked entity query — see CoachProfileRepository.findByIdForUpdate.
+    // updateSession reads the plan unlocked first, so a locked entity query would version-check that
+    // stale managed instance and throw StaleObjectStateException on the very race the refresh absorbs.
+    default Optional<Session> findByIdForUpdate(UUID id) {
+        return lockByIdForUpdate(id).flatMap(this::findById);
+    }
+
+    /** Row lock only (see {@link #findByIdForUpdate}); NOWAIT, so callers wrap it in PessimisticLockRetryer. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0"))
-    @Query("SELECT s FROM Session s WHERE s.id = :id")
-    Optional<Session> findByIdForUpdate(@Param("id") UUID id);
+    @Query("SELECT s.id FROM Session s WHERE s.id = :id")
+    Optional<UUID> lockByIdForUpdate(@Param("id") UUID id);
 
     /**
      * Booking-completed transition as one atomic conditional UPDATE (no read-modify-write): it
      * takes the row lock itself, so it waits for an in-flight {@code updateSession} to commit and
      * then applies on top of it, and an {@code updateSession} that locks afterwards sees COMPLETED
-     * and refuses. Bulk JPQL skips {@code @PreUpdate}, hence the explicit {@code updatedAt}.
+     * and refuses. Bulk JPQL skips {@code @PreUpdate} and the optimistic-lock check, hence the explicit
+     * {@code updatedAt} and {@code version} bump (C5: a stale managed save must fail, not revert this).
      *
      * Only an open (DRAFT/SAVED) plan moves, matching {@link #markCancelledIfOpenByBookingId}: a
      * CANCELLED plan stays locked rather than being revived by a later completion event.
@@ -54,7 +64,7 @@ public interface SessionRepository extends JpaRepository<Session, UUID> {
      * @return 1 if this call completed the plan, 0 if there is none or it is no longer open
      */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
-    @Query("UPDATE Session s SET s.status = 'COMPLETED', s.updatedAt = :now "
+    @Query("UPDATE Session s SET s.status = 'COMPLETED', s.updatedAt = :now, s.version = s.version + 1 "
            + "WHERE s.bookingId = :bookingId AND s.status IN ('DRAFT', 'SAVED')")
     int markCompletedByBookingId(@Param("bookingId") UUID bookingId, @Param("now") Instant now);
 
@@ -65,7 +75,7 @@ public interface SessionRepository extends JpaRepository<Session, UUID> {
      * @return 1 if this call cancelled the plan, else 0
      */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
-    @Query("UPDATE Session s SET s.status = 'CANCELLED', s.updatedAt = :now "
+    @Query("UPDATE Session s SET s.status = 'CANCELLED', s.updatedAt = :now, s.version = s.version + 1 "
            + "WHERE s.bookingId = :bookingId AND s.status IN ('DRAFT', 'SAVED')")
     int markCancelledIfOpenByBookingId(@Param("bookingId") UUID bookingId, @Param("now") Instant now);
 

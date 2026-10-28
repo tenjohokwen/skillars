@@ -134,8 +134,9 @@
         <code>video.quota.&lt;tier&gt;.*</code> and <code>video.&lt;type&gt;.*</code> keys. <code>ALL</code> is the full list;
         <code>HAS_CODE_DEFAULT</code> (24 keys) marks keys whose call site has a code default. Also holds
         <code>MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS</code> (7), the one definition of the review-window gap.
-        The review keys and the rate-limit TTL are read straight from their <code>BoundedKey</code>; most other call
-        sites still pass their <code>[min, max]</code> literally &mdash; for those, change a bound in both places.</td></tr>
+        Since C5 every <code>HAS_CODE_DEFAULT</code> key is read straight from its <code>BoundedKey</code>
+        (<code>getBoundedLong/Int(BoundedKey)</code>), so its default and range live only here. Only the no-code-default
+        (3-arg, clamping) reads still pass <code>[min, max]</code> literally &mdash; for those, change a bound in both places.</td></tr>
       <tr><td><code>ConfigStartupAssertion</code></td><td><code>ApplicationListener&lt;ApplicationReadyEvent&gt;</code>.
         For every <code>ConfigBounds.ALL</code> key reads the raw stored value and logs ERROR + increments
         <code>config.value.misconfigured{key,reason}</code> for missing / non-numeric / out-of-range values; also
@@ -277,8 +278,8 @@ sequenceDiagram
       <p><strong>A new bounded key touches three places.</strong> Seed it in a migration (unless it belongs in
       <code>HAS_CODE_DEFAULT</code>), add a <code>BoundedKey</code> to <code>ConfigBounds</code> and to
       <code>ALL</code> (and to <code>HAS_CODE_DEFAULT</code> if the call site has a default), and read it with
-      <code>getBoundedInt(BoundedKey)</code> (or pass the entry's own <code>key()/defaultValue()/min()/max()</code>)
-      rather than retyping the range. Without the <code>ConfigBounds</code> entry the <code>PUT</code> path
+      <code>getBoundedLong(BoundedKey)</code>/<code>getBoundedInt(BoundedKey)</code> rather than retyping the range
+      (unit tests then stub that overload, e.g. <code>when(configService.getBoundedLong(ConfigBounds.X))</code>). Without the <code>ConfigBounds</code> entry the <code>PUT</code> path
       accepts any string and the boot check never sees the key. Pick <code>failFast</code> only when a bad value loses
       data or halts a core flow &mdash; it blocks production boot.</p>
     </div>
@@ -325,7 +326,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>be46d7bb</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>deefa90f</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

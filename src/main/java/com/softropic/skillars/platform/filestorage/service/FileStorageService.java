@@ -172,18 +172,22 @@ public class FileStorageService {
                 throw new StorageValidationException("upload incomplete: ETag absent for key " + key);
             }
             // The presigned PUT does not bind the length, so re-apply the size and quota limits to the REAL size
-            // here; sign-time checks only saw the client's declared size.
+            // here; sign-time checks only saw the client's declared size. The quota check itself runs inside the
+            // insert transaction, under the owner's quota lock (see persistConfirmedWithinQuota).
             if (head.contentLength() > fileStorageProperties.getValidation().getMaxSizeBytes()) {
                 throw new StorageValidationException("file exceeds maximum size: " + head.contentLength());
-            }
-            long usage = fileStorageObjectRepository.sumSizeBytesByOwnerId(ownerId);
-            if (usage + head.contentLength() > fileStorageProperties.getQuota().getDefaultBytes()) {
-                throw new QuotaExceededException(ownerId, usage, head.contentLength());
             }
 
             FileStorageObject saved;
             try {
-                saved = transactionTemplate.execute(status -> persistConfirmed(key, ownerId, request, head));
+                saved = transactionTemplate.execute(status -> persistConfirmedWithinQuota(key, ownerId, request, head));
+                if (saved == null) {
+                    // A parallel confirm of this same key committed while this one waited for the owner lock: the
+                    // idempotent retry, not a second upload to charge against the quota.
+                    FileStorageObject winner = fileStorageObjectRepository.findByKey(key)
+                        .orElseThrow(() -> new StorageObjectNotFoundException(key));
+                    return reconfirm(winner, ownerId);
+                }
             } catch (DataIntegrityViolationException race) {
                 // A concurrent confirm of the same key won the unique index (idx_storage_objects_key): treat
                 // this one as the idempotent retry it is. Any other constraint failure is a real error.
@@ -429,6 +433,27 @@ public class FileStorageService {
             }
         }
         return false;
+    }
+
+    /**
+     * C5: quota check and insert as one critical section per owner. Without the lock, two parallel confirms
+     * by the same owner each read the pre-insert usage and both pass, overshooting the quota by up to one
+     * file per concurrent request. The lock is the transaction's first statement; the usage sum is read
+     * after it, so it includes every confirm that committed while this one waited.
+     *
+     * @return the new row, or {@code null} when a parallel confirm of the same key already committed it
+     */
+    private FileStorageObject persistConfirmedWithinQuota(String key, String ownerId, ConfirmUploadRequest request,
+                                                          HeadObjectResponse head) {
+        fileStorageObjectRepository.acquireOwnerQuotaLock(ownerId);
+        if (fileStorageObjectRepository.findByKey(key).isPresent()) {
+            return null;
+        }
+        long usage = fileStorageObjectRepository.sumSizeBytesByOwnerId(ownerId);
+        if (usage + head.contentLength() > fileStorageProperties.getQuota().getDefaultBytes()) {
+            throw new QuotaExceededException(ownerId, usage, head.contentLength());
+        }
+        return persistConfirmed(key, ownerId, request, head);
     }
 
     private FileStorageObject persistConfirmed(String key, String ownerId, ConfirmUploadRequest request,

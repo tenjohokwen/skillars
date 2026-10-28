@@ -30,9 +30,11 @@ import java.util.Set;
  * non-numeric or out-of-range value for a bounded key is rejected with 400 (skillars-deferred-107
  * code review) so the boot assertion is not the only guard.
  *
- * <p>Each call site still passes its {@code [min, max]} literally (Mockito {@code verify(...)} in the
- * per-site unit tests pins the exact numbers), but the numbers here and at the call site are kept
- * identical and cross-referenced. If you change a bound, change it in both places.
+ * <p>Every {@link #HAS_CODE_DEFAULT} key is read through {@code ConfigService.getBoundedLong(BoundedKey)} /
+ * {@code getBoundedInt(BoundedKey)} (#325, call sites migrated by C5), so key, default and range live
+ * only here — change a bound here and every reader follows. The remaining literal call sites are the
+ * no-code-default (3-arg, clamping) reads, which that overload deliberately rejects; their
+ * {@code [min, max]} is still kept identical to the entry here by hand.
  *
  * <h2>Fail-fast principle</h2>
  * <ul>
@@ -67,15 +69,10 @@ public final class ConfigBounds {
      *                     no-code-default call site — absent/blank there is an {@code
      *                     IllegalStateException}, not a fallback), this is the not-applicable sentinel
      *                     {@code 0L} — not a real default, since none exists to record.
-     *                     <p><strong>Registry-only, per the owner decision: this is documentation, not
-     *                     a verified contract.</strong> Unlike {@code min}/{@code max} (pinned at most
-     *                     call sites by a {@code verify(...)} in that call site's own unit test), the
-     *                     call-site literal remains the sole source of truth for what actually runs —
-     *                     a future edit to a call site's own default literal that forgets to update
-     *                     this field will not be caught by anything mechanical (only 4 of the 18 keys
-     *                     even reference their constant via {@code .key()} at the call site; a range
-     *                     check here can only catch a default falling outside its own key's
-     *                     {@code min}/{@code max}, not a drift from what the call site actually passes).
+     *                     <p><strong>Since C5 this IS the value that runs:</strong> every call site
+     *                     of a {@code HAS_CODE_DEFAULT} key reads it through the {@code BoundedKey}
+     *                     overload, which passes this field as the fallback (it used to be
+     *                     documentation only, with each call site's own literal the source of truth).
      */
     public record BoundedKey(String key, long min, long max, boolean failFast, String note, long defaultValue) {
     }

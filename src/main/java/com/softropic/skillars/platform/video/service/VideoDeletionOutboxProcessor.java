@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.session.repo.DrillVideoRef;
 import com.softropic.skillars.platform.session.repo.DrillVideoRefRepository;
@@ -369,7 +370,7 @@ public class VideoDeletionOutboxProcessor {
             row.setAttempts(row.getAttempts() + 1);
             row.setLastError(e.getMessage());
             // skillars-deferred-107 AC2: 0/neg would dead-letter on the first attempt (or never).
-            int maxAttempts = (int) configService.getBoundedLong("platform.video.deletion.max_attempts", 5L, 1L, 100L);
+            int maxAttempts = configService.getBoundedInt(ConfigBounds.VIDEO_DELETION_MAX_ATTEMPTS);
             // skillars-deferred-123 AC3 / skillars-deferred-124 AC4: claimed_at/claimed_by cleared on
             // BOTH outcomes below — DEAD as well as PENDING. A DEAD row keeping a stale non-null
             // claimed_at/claimed_by would give a false claim-age/identity reading if the row were ever

@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.video.contract.PlayerSubscriptionQueryPort;
 import com.softropic.skillars.platform.video.repo.SubscriptionLifecycleOutbox;
@@ -48,7 +50,7 @@ class VideoSubscriptionLifecycleListenerTest {
     void setUp() {
         listener = new VideoSubscriptionLifecycleListener(
             outboxRepository, playerSubscriptionQueryPort, videoRepository, videoLifecycleService, configService);
-        lenient().when(configService.getBoundedInt(eq("platform.video.lifecycle.batch_size"), anyInt(), anyInt(), anyInt()))
+        lenient().when(configService.getBoundedInt(ConfigBounds.VIDEO_LIFECYCLE_BATCH_SIZE))
             .thenReturn(100);
     }
 

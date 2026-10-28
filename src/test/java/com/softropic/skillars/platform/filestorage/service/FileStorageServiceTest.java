@@ -217,11 +217,43 @@ class FileStorageServiceTest {
         String key = keyGenerator.generate("documents", "42", "pdf");
         when(repo.findByKey(key)).thenReturn(Optional.empty());
         stubHead();
+        stubTransactionTemplate();
         when(repo.sumSizeBytesByOwnerId(OWNER)).thenReturn(new FileStorageProperties().getQuota().getDefaultBytes());
 
         assertThatThrownBy(() -> service.confirmUpload(key, confirmRequest()))
             .isInstanceOf(com.softropic.skillars.platform.filestorage.contract.exception.QuotaExceededException.class);
-        verify(transactionTemplate, never()).execute(any());
+        verify(repo, never()).saveAndFlush(any());
+    }
+
+    // C5: the usage sum must be read under the owner's quota lock, or parallel confirms both pass it.
+    @Test
+    void confirm_quotaIsCheckedUnderTheOwnersLock_thenInserted() {
+        String key = keyGenerator.generate("documents", "42", "pdf");
+        when(repo.findByKey(key)).thenReturn(Optional.empty());
+        stubHead();
+        stubTransactionTemplate();
+        when(repo.saveAndFlush(any(FileStorageObject.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.confirmUpload(key, confirmRequest());
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(repo);
+        order.verify(repo).acquireOwnerQuotaLock(OWNER);
+        order.verify(repo).sumSizeBytesByOwnerId(OWNER);
+        order.verify(repo).saveAndFlush(any(FileStorageObject.class));
+    }
+
+    // C5: a parallel confirm of the SAME key that committed while this one waited for the lock is the
+    // idempotent retry — it must not be charged against the quota a second time or inserted twice.
+    @Test
+    void confirm_sameKeyCommittedWhileWaitingForTheLock_isTheIdempotentPath() {
+        String key = keyGenerator.generate("documents", "42", "pdf");
+        when(repo.findByKey(key)).thenReturn(Optional.empty(), Optional.of(fso(key, OWNER)));
+        stubHead();
+        stubTransactionTemplate();
+
+        assertThat(service.confirmUpload(key, confirmRequest()).key()).isEqualTo(key);
+        verify(repo, never()).sumSizeBytesByOwnerId(any());
+        verify(repo, never()).saveAndFlush(any());
     }
 
     @Test

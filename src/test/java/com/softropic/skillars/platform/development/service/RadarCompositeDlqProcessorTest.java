@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.development.repo.RadarCompositeDlqEntry;
 import com.softropic.skillars.platform.development.repo.RadarCompositeDlqRepository;
@@ -107,7 +109,7 @@ class RadarCompositeDlqProcessorTest {
     void process_failureBelowMaxAttempts_writesPendingThroughTheClaimGuard() {
         RadarCompositeDlqEntry row = entry();
         when(dlqRepository.findClaimedBatch(any(), anyInt())).thenReturn(List.of(row));
-        when(configService.getBoundedLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong(), anyLong(), anyLong())).thenReturn(5L);
+        when(configService.getBoundedInt(ConfigBounds.RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS)).thenReturn(5);
         when(dlqRepository.failClaimed(eq(row.getId()), any(), eq("PENDING"), eq(1), any(), any())).thenReturn(1);
         doThrow(new RuntimeException("still failing")).when(compositeCalculationService)
             .recalculateComposite(500L, 600L, Set.of("PAC"));
@@ -123,7 +125,7 @@ class RadarCompositeDlqProcessorTest {
     void process_failureBelowMaxAttempts_reschedulesAsPending() {
         RadarCompositeDlqEntry row = entry();
         when(dlqRepository.findClaimedBatch(any(), anyInt())).thenReturn(List.of(row));
-        when(configService.getBoundedLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong(), anyLong(), anyLong())).thenReturn(5L);
+        when(configService.getBoundedInt(ConfigBounds.RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS)).thenReturn(5);
         doThrow(new RuntimeException("still failing")).when(compositeCalculationService)
             .recalculateComposite(500L, 600L, Set.of("PAC"));
 
@@ -139,7 +141,7 @@ class RadarCompositeDlqProcessorTest {
         RadarCompositeDlqEntry row = entry();
         row.setAttempts(4);
         when(dlqRepository.findClaimedBatch(any(), anyInt())).thenReturn(List.of(row));
-        when(configService.getBoundedLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong(), anyLong(), anyLong())).thenReturn(5L);
+        when(configService.getBoundedInt(ConfigBounds.RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS)).thenReturn(5);
         doThrow(new RuntimeException("still failing")).when(compositeCalculationService)
             .recalculateComposite(500L, 600L, Set.of("PAC"));
 
@@ -155,13 +157,13 @@ class RadarCompositeDlqProcessorTest {
         // a 0/negative stored value must not be able to dead-letter every row on its first attempt.
         RadarCompositeDlqEntry row = entry();
         when(dlqRepository.findClaimedBatch(any(), anyInt())).thenReturn(List.of(row));
-        when(configService.getBoundedLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong(), anyLong(), anyLong())).thenReturn(5L);
+        when(configService.getBoundedInt(ConfigBounds.RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS)).thenReturn(5);
         doThrow(new RuntimeException("boom")).when(compositeCalculationService)
             .recalculateComposite(500L, 600L, Set.of("PAC"));
 
         processor.process();
 
-        verify(configService).getBoundedLong("platform.development.radar_composite_dlq.max_attempts", 5L, 1L, 100L);
+        verify(configService).getBoundedInt(ConfigBounds.RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS);
     }
 
     /**
@@ -181,7 +183,7 @@ class RadarCompositeDlqProcessorTest {
         when(dlqRepository.findClaimedBatch(any(), anyInt())).thenReturn(List.of(rowA, rowMiddle, rowC));
         when(dlqRepository.completeClaimed(eq(rowA.getId()), any())).thenReturn(1);
         when(dlqRepository.completeClaimed(eq(rowC.getId()), any())).thenReturn(1);
-        when(configService.getBoundedLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong(), anyLong(), anyLong())).thenReturn(5L);
+        when(configService.getBoundedInt(ConfigBounds.RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS)).thenReturn(5);
         when(dlqRepository.failClaimed(eq(rowMiddle.getId()), any(), eq("PENDING"), eq(1), any(), any())).thenReturn(1);
         lenient().doThrow(new RuntimeException("middle row recalculation failure"))
             .when(compositeCalculationService).recalculateComposite(501L, 600L, Set.of("PAC"));
@@ -222,7 +224,7 @@ class RadarCompositeDlqProcessorTest {
         // configService.getBoundedLong is the first call inside handleFailure's own
         // transactionTemplate.execute — throwing here means handleFailure itself never completes,
         // exactly the gap the outer guard's inner catch exists for.
-        when(configService.getBoundedLong(eq("platform.development.radar_composite_dlq.max_attempts"), anyLong(), anyLong(), anyLong()))
+        when(configService.getBoundedInt(ConfigBounds.RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS))
             .thenThrow(new IllegalStateException("config lookup boom"));
 
         assertThatCode(() -> processor.process())

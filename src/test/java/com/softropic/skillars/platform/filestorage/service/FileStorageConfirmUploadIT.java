@@ -10,7 +10,10 @@ import com.softropic.skillars.platform.filestorage.contract.ConfirmUploadRequest
 import com.softropic.skillars.platform.filestorage.contract.ConfirmUploadResponse;
 import com.softropic.skillars.platform.filestorage.contract.SignUploadRequest;
 import com.softropic.skillars.platform.filestorage.contract.SignUploadResponse;
+import com.softropic.skillars.platform.filestorage.config.FileStorageProperties;
+import com.softropic.skillars.platform.filestorage.contract.exception.QuotaExceededException;
 import com.softropic.skillars.platform.filestorage.contract.exception.StorageValidationException;
+import com.softropic.skillars.platform.filestorage.repo.FileStorageObject;
 import com.softropic.skillars.platform.security.WithMockPrincipal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,11 +22,22 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestTemplate;
 
 import java.net.URI;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -51,6 +65,14 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
 
     @Autowired
     private jakarta.persistence.EntityManager em;
+
+    @Autowired
+    private FileStorageProperties fileStorageProperties;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    private static final String OWNER = "675373350208068096";
 
     @BeforeEach
     void setUp() {
@@ -126,6 +148,137 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
             new ConfirmUploadRequest("application/pdf", (long) pdf.length, null, null, null)))
             .isInstanceOf(StorageObjectNotFoundException.class);
         assertThat(fileStorageObjectRepository.findByKey(reportKey)).isEmpty();
+    }
+
+    /**
+     * C5: parallel confirms by one owner used to each read the pre-insert usage outside any lock and all
+     * pass the quota check. Quota 7 bytes, four 3-byte uploads confirmed at once: exactly two fit.
+     */
+    @Test
+    void confirmUpload_parallelConfirmsBySameOwner_neverOvershootTheQuota() throws Exception {
+        byte[] content = new byte[]{1, 2, 3};
+        List<SignUploadResponse> uploads = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            uploads.add(signAndPut("documents", "42", "application/pdf", "pdf", content));
+        }
+        ConfirmUploadRequest confirmRequest = new ConfirmUploadRequest(
+            "application/pdf", (long) content.length, null, null, null);
+
+        long originalQuota = fileStorageProperties.getQuota().getDefaultBytes();
+        fileStorageProperties.getQuota().setDefaultBytes(7L);
+        SecurityContext principal = SecurityContextHolder.getContext();
+        ExecutorService executor = Executors.newFixedThreadPool(uploads.size());
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<Throwable>> results = new ArrayList<>();
+            for (SignUploadResponse upload : uploads) {
+                results.add(executor.submit(asOwner(principal, () -> {
+                    assertThat(start.await(10, TimeUnit.SECONDS)).isTrue();
+                    fileStorageService.confirmUpload(upload.key(), confirmRequest);
+                    return null;
+                })));
+            }
+            start.countDown();
+
+            List<Throwable> outcomes = new ArrayList<>();
+            for (Future<Throwable> f : results) {
+                outcomes.add(f.get(60, TimeUnit.SECONDS));
+            }
+            assertThat(outcomes.stream().filter(java.util.Objects::isNull).count())
+                .as("exactly two 3-byte files fit a 7-byte quota, however the confirms interleave").isEqualTo(2);
+            assertThat(outcomes.stream().filter(java.util.Objects::nonNull))
+                .allMatch(QuotaExceededException.class::isInstance);
+            assertThat(fileStorageObjectRepository.sumSizeBytesByOwnerId(OWNER)).isEqualTo(6L);
+        } finally {
+            executor.shutdownNow();
+            fileStorageProperties.getQuota().setDefaultBytes(originalQuota);
+        }
+    }
+
+    /**
+     * C5, deterministic half: another transaction holds the owner's quota lock with an uncommitted 3-byte
+     * row. The confirm must WAIT for it (visible as an ungranted advisory lock) and then count that row —
+     * an unlocked usage read would see 0 and let a second 3-byte file into a 5-byte quota.
+     */
+    @Test
+    void confirmUpload_waitsForAConcurrentQuotaHolderAndCountsItsCommittedUsage() throws Exception {
+        byte[] content = new byte[]{1, 2, 3};
+        SignUploadResponse upload = signAndPut("documents", "42", "application/pdf", "pdf", content);
+        ConfirmUploadRequest confirmRequest = new ConfirmUploadRequest(
+            "application/pdf", (long) content.length, null, null, null);
+
+        long originalQuota = fileStorageProperties.getQuota().getDefaultBytes();
+        fileStorageProperties.getQuota().setDefaultBytes(5L);
+        SecurityContext principal = SecurityContextHolder.getContext();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch holderLocked = new CountDownLatch(1);
+        CountDownLatch releaseHolder = new CountDownLatch(1);
+        try {
+            Future<Throwable> holder = executor.submit(() -> {
+                transactionTemplate.executeWithoutResult(status -> {
+                    fileStorageObjectRepository.acquireOwnerQuotaLock(OWNER);
+                    fileStorageObjectRepository.saveAndFlush(FileStorageObject.builder()
+                        .key("documents/42/held-" + System.nanoTime() + ".pdf").ownerId(OWNER)
+                        .originalFilename("held.pdf").contentType("application/pdf").sizeBytes(3L)
+                        .provider(blobstoreProperties.getProvider()).bucket(blobstoreProperties.getBucket())
+                        .uploadConfirmedAt(Instant.now()).build());
+                    holderLocked.countDown();
+                    try {
+                        assertThat(releaseHolder.await(30, TimeUnit.SECONDS)).isTrue();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(e);
+                    }
+                });
+                return null;
+            });
+            assertThat(holderLocked.await(30, TimeUnit.SECONDS)).isTrue();
+
+            Future<Throwable> confirm = executor.submit(asOwner(principal, () -> {
+                fileStorageService.confirmUpload(upload.key(), confirmRequest);
+                return null;
+            }));
+
+            awaitUngrantedAdvisoryLock();
+            assertThat(confirm.isDone()).as("the confirm must block on the owner's quota lock").isFalse();
+            releaseHolder.countDown();
+
+            assertThat(holder.get(30, TimeUnit.SECONDS)).isNull();
+            assertThat(confirm.get(30, TimeUnit.SECONDS)).isInstanceOf(QuotaExceededException.class);
+            assertThat(fileStorageObjectRepository.findByKey(upload.key())).isEmpty();
+        } finally {
+            releaseHolder.countDown();
+            executor.shutdownNow();
+            fileStorageProperties.getQuota().setDefaultBytes(originalQuota);
+        }
+    }
+
+    private static Callable<Throwable> asOwner(SecurityContext principal, Callable<Void> body) {
+        return () -> {
+            SecurityContextHolder.setContext(principal);
+            try {
+                body.call();
+                return null;
+            } catch (Throwable t) {
+                return t;
+            } finally {
+                SecurityContextHolder.clearContext();
+            }
+        };
+    }
+
+    private void awaitUngrantedAdvisoryLock() throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (System.nanoTime() < deadline) {
+            Integer waiting = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND objsubid = 2 AND classid::bigint = ?",
+                Integer.class, (long) FileStorageObjectRepository.QUOTA_LOCK_NAMESPACE);
+            if (waiting != null && waiting > 0) {
+                return;
+            }
+            Thread.sleep(25);
+        }
+        throw new AssertionError("no confirm ever waited on the owner's quota advisory lock");
     }
 
     private void reassignOwner(String key, String ownerId) {

@@ -88,6 +88,9 @@ import static org.mockito.Mockito.when;
  * already establishes for the sibling {@code RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS} call site. The
  * actual gap: unlike that sibling, no such pinning test existed for this call site. This test closes
  * it — no production code changes with it.
+ *
+ * <p>C5: the call sites now read through {@code getBoundedLong(BoundedKey)}, so the pin is on the
+ * registry entry itself and the literal-bounds convention described above no longer applies.
  */
 @ExtendWith(MockitoExtension.class)
 class GdprErasureServiceTest {
@@ -140,6 +143,9 @@ class GdprErasureServiceTest {
         lenient().when(lockTimeoutQuery.getSingleResult()).thenReturn("on");
         lenient().when(lockRetryer.withBoundedRetry(anyString(), org.mockito.ArgumentMatchers.<java.util.function.Supplier<PlayerProfile>>any()))
             .thenAnswer(inv -> inv.getArgument(1, java.util.function.Supplier.class).get());
+        // C5: the COACH branch's final profile scrub re-reads the row under its lock (findByIdForUpdate).
+        lenient().when(coachProfileRepository.findByIdForUpdate(any()))
+            .thenAnswer(inv -> Optional.of(new com.softropic.skillars.platform.marketplace.repo.CoachProfile()));
         // skillars-deferred-137 AC1: without this, configService.getBoundedLong(...) falls back to
         // Mockito's unstubbed-primitive default of 0L, which the new cumulative-budget floor check in
         // deletePlayerDevelopmentDataInDedicatedPool now treats as an immediate budget-exhausted
@@ -147,7 +153,7 @@ class GdprErasureServiceTest {
         // every test below instead of exercising the happy path these tests otherwise assume. Real
         // ConfigService.getBoundedLong always returns a value inside [2, 120] by construction, so this
         // stub only restores that already-true production invariant to the mock.
-        lenient().when(configService.getBoundedLong(anyString(), anyLong(), anyLong(), anyLong())).thenReturn(5L);
+        lenient().when(configService.getBoundedLong(any(ConfigBounds.BoundedKey.class))).thenReturn(5L);
 
         service = new GdprErasureService(
             gdprRequestRepository, adminAlertRepository, userRepository, coachProfileRepository,
@@ -195,8 +201,7 @@ class GdprErasureServiceTest {
         // assertion (code review 2026-09-23: verify(...) only pins values, not the expression that
         // produces them — rewriting the call site to read the same values via .min()/.max() accessors
         // would pass identically; this test detects VALUE drift only, not a switch to accessor calls).
-        verify(configService).getBoundedLong(
-            eq(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key()), eq(5L), eq(2L), eq(120L));
+        verify(configService).getBoundedLong(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS);
     }
 
     // ---- skillars-deferred-137 AC1: cumulative lock-wait budget -------------------------------
@@ -411,8 +416,7 @@ class GdprErasureServiceTest {
 
         service.erase(REQUEST_ID, USER_ID);
 
-        verify(configService, times(1)).getBoundedLong(
-            eq(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key()), eq(5L), eq(2L), eq(120L));
+        verify(configService, times(1)).getBoundedLong(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS);
     }
 
     @Test
@@ -423,8 +427,7 @@ class GdprErasureServiceTest {
 
         service.erase(REQUEST_ID, USER_ID);
 
-        verify(configService, times(1)).getBoundedLong(
-            eq(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key()), eq(5L), eq(2L), eq(120L));
+        verify(configService, times(1)).getBoundedLong(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS);
     }
 
     @Test
@@ -438,8 +441,7 @@ class GdprErasureServiceTest {
 
         service.erase(REQUEST_ID, USER_ID);
 
-        verify(configService, times(1)).getBoundedLong(
-            eq(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key()), eq(5L), eq(2L), eq(120L));
+        verify(configService, times(1)).getBoundedLong(ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS);
     }
 
     private PlayerProfile parentChild(long id) {

@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.repo.Video;
@@ -58,7 +60,7 @@ class ModerationSlaMonitorServiceTest {
         ReflectionTestUtils.setField(service, "requiresNewTemplate", transactionTemplate);
         lenient().when(configService.getBoundedLong("platform.moderation_sla_minutes", 1L, 10080L)).thenReturn(30L);
         lenient().when(configService.getBoundedLong("platform.moderation_max_retries", 0L, 100L)).thenReturn(5L);
-        lenient().when(configService.getBoundedInt("platform.moderation_sla_batch_size", 50, 1, 500)).thenReturn(50);
+        lenient().when(configService.getBoundedInt(ConfigBounds.MODERATION_SLA_BATCH_SIZE)).thenReturn(50);
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {
             TransactionCallback<?> cb = inv.getArgument(0);
             Object result = cb.doInTransaction(null);
@@ -190,7 +192,7 @@ class ModerationSlaMonitorServiceTest {
     // configured value, not 50, is what reaches findScanningOlderThan.
     @Test
     void detectSlaViolations_passesConfiguredBatchSizeToRepository() {
-        when(configService.getBoundedInt("platform.moderation_sla_batch_size", 50, 1, 500)).thenReturn(7);
+        when(configService.getBoundedInt(ConfigBounds.MODERATION_SLA_BATCH_SIZE)).thenReturn(7);
         when(videoRepository.findScanningOlderThan(any(), any(), anyInt())).thenReturn(List.of());
 
         service.detectSlaViolations();

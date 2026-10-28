@@ -17,6 +17,24 @@ public interface FileStorageObjectRepository extends JpaRepository<FileStorageOb
     @Query("SELECT COALESCE(SUM(f.sizeBytes), 0) FROM FileStorageObject f WHERE f.ownerId = :ownerId AND f.deletedAt IS NULL")
     long sumSizeBytesByOwnerId(@Param("ownerId") String ownerId);
 
+    /**
+     * C5: per-owner serialisation of quota-consuming confirms. {@code FileStorageService.confirmUpload}
+     * takes this as the first statement of its insert transaction and only then re-reads
+     * {@link #sumSizeBytesByOwnerId}, so two parallel confirms by one owner can no longer both read the
+     * pre-insert usage and together overshoot the quota (READ COMMITTED: the second sees the first's
+     * committed row once it gets the lock). A transaction-scoped advisory lock rather than a row lock
+     * because there is no per-owner quota row to lock; released automatically at commit/rollback, and
+     * held only for the insert itself (the S3 HEAD runs before the transaction). The two-int form
+     * {@code (namespace, hashtext(owner))} keeps it out of the single-bigint key space other advisory
+     * locks use ({@code EnvelopeEntityRepository.acquireSendIdLock}). Not {@code @Modifying}: a SELECT of a
+     * void function, same shape as that method.
+     */
+    @Query(value = "SELECT pg_advisory_xact_lock(" + QUOTA_LOCK_NAMESPACE + ", hashtext(:ownerId))", nativeQuery = true)
+    void acquireOwnerQuotaLock(@Param("ownerId") String ownerId);
+
+    /** {@code pg_advisory_xact_lock(int, int)} namespace for {@link #acquireOwnerQuotaLock} ("FSOQ"). */
+    int QUOTA_LOCK_NAMESPACE = 0x46534F51;
+
     Optional<FileStorageObject> findByKey(String key);
 
     Optional<FileStorageObject> findByKeyAndDeletedAtIsNull(String key);

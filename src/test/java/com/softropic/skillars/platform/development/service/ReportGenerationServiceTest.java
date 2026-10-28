@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+
 import com.lowagie.text.pdf.PdfReader;
 import com.lowagie.text.pdf.parser.PdfTextExtractor;
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
@@ -107,8 +109,7 @@ class ReportGenerationServiceTest {
         // getBoundedLong returns Mockito's default 0L, which would make every existing happy-path
         // generateReport test (lastSessionDate stubbed as "1 hour ago") start throwing
         // AccessDeniedException. lenient() — the stale-signal test below overrides with its own value.
-        org.mockito.Mockito.lenient().when(configService.getBoundedLong(
-            "development.timeline.coachAccessExpiryDays", 90L, 1L, 3650L)).thenReturn(90L);
+        org.mockito.Mockito.lenient().when(configService.getBoundedLong(ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS)).thenReturn(90L);
     }
 
     private CoachProfileDto coachDto() {

@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.video.PlaybackTokenClaims;
 import com.softropic.skillars.infrastructure.video.SignedPlaybackUrl;
@@ -86,7 +88,7 @@ class PlaybackServiceTest {
         savedToken.setViewerId(viewerId);
         savedToken.setExpiresAt(Instant.now().plusSeconds(900));
 
-        when(configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L)).thenReturn(120L);
+        when(configService.getBoundedLong(ConfigBounds.VIDEO_PLAYBACK_SIGNED_URL_TTL_MINUTES)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
         when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
@@ -139,7 +141,7 @@ class PlaybackServiceTest {
         savedToken.setViewerId(viewerId);
         savedToken.setExpiresAt(Instant.now().plusSeconds(900));
 
-        when(configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L)).thenReturn(120L);
+        when(configService.getBoundedLong(ConfigBounds.VIDEO_PLAYBACK_SIGNED_URL_TTL_MINUTES)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
         when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
@@ -174,7 +176,7 @@ class PlaybackServiceTest {
         savedToken.setViewerId(viewerId);
         savedToken.setExpiresAt(Instant.now().plusSeconds(900));
 
-        when(configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L)).thenReturn(120L);
+        when(configService.getBoundedLong(ConfigBounds.VIDEO_PLAYBACK_SIGNED_URL_TTL_MINUTES)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
         when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
@@ -216,7 +218,7 @@ class PlaybackServiceTest {
         savedToken.setViewerId(viewerId);
         savedToken.setExpiresAt(Instant.now().plusSeconds(900));
 
-        when(configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L)).thenReturn(120L);
+        when(configService.getBoundedLong(ConfigBounds.VIDEO_PLAYBACK_SIGNED_URL_TTL_MINUTES)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
         when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
@@ -247,7 +249,7 @@ class PlaybackServiceTest {
     private void stubIssue(UUID videoId, Video video) {
         PlaybackToken savedToken = new PlaybackToken();
         savedToken.setId(UUID.randomUUID());
-        when(configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L)).thenReturn(120L);
+        when(configService.getBoundedLong(ConfigBounds.VIDEO_PLAYBACK_SIGNED_URL_TTL_MINUTES)).thenReturn(120L);
         when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
         when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));

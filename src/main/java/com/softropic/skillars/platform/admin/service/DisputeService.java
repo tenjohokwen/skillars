@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.admin.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.admin.contract.AdminDisputeDetailDto;
 import com.softropic.skillars.platform.admin.contract.AdminDisputeQueueDto;
 import com.softropic.skillars.platform.admin.contract.AdminActionType;
@@ -131,7 +132,7 @@ public class DisputeService {
         }
 
         // skillars-deferred-107 AC2: 0/neg → no dispute can ever be filed (failFast). Clamps to 14 + WARN.
-        long windowDays = configService.getBoundedLong("disputes.submissionWindowDays", 14L, 1L, 365L);
+        long windowDays = configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS);
         // B2: anchored on when the booking reached its (terminal) status, not updatedAt — any later
         // write (recap edit, reminder stamp, GDPR anonymisation) bumps updatedAt and used to reopen
         // an expired window. getStatusAnchor falls back to updatedAt only for pre-V178 rows.

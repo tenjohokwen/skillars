@@ -147,14 +147,10 @@ public class ReviewFlagService {
         // this lock) — code review 2026-09-23.
         long openFlagCount = reviewFlagRepository.countByReviewIdAndResolvedAtIsNull(reviewId);
         // skillars-deferred-107 AC2: 0 → the first flag on any review auto-holds it. Clamps to 3 + WARN.
-        // skillars-deferred-132 AC3 Fix 10: references the existing ConfigBounds constant's key
-        // instead of the raw string literal — future typo-drift protection at this call site (a typo'd
-        // literal would silently create an unrelated, always-defaulted key with no compile-time signal;
-        // ConfigStartupAssertion boot-protects by string lookup either way, so this is not a fail-fast
-        // fix). Bounds (1, 1000) stay re-typed as literals, per this codebase's own documented
-        // drift-detector convention.
-        int threshold = configService.getBoundedInt(
-            ConfigBounds.REVIEWS_AUTO_HOLD_FLAG_THRESHOLD.key(), 3, 1, 1000);
+        // skillars-deferred-132 AC3 Fix 10 / C5: key, default and bounds all come from the registry entry
+        // (BoundedKey overload), so this call site cannot drift from what ConfigService.updateConfig and
+        // ConfigStartupAssertion enforce.
+        int threshold = configService.getBoundedInt(ConfigBounds.REVIEWS_AUTO_HOLD_FLAG_THRESHOLD);
 
         boolean autoHeld = false;
         if (openFlagCount >= threshold && review.getModerationStatus() == ReviewModerationStatus.APPROVED) {

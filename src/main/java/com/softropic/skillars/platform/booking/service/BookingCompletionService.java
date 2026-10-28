@@ -386,8 +386,7 @@ public class BookingCompletionService {
     private record Editability(boolean editable, BookingError reason) {}
 
     private long recapEditWindowDays() {
-        return configService.getBoundedLong(
-            ConfigBounds.BOOKING_RECAP_EDIT_WINDOW_DAYS.key(), 30L, 7L, 365L);
+        return configService.getBoundedLong(ConfigBounds.BOOKING_RECAP_EDIT_WINDOW_DAYS);
     }
 
     /**

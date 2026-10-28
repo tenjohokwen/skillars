@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLink;
@@ -103,9 +104,9 @@ public class VideoAccessGuard {
                 // skillars-deferred-107 AC2: 0/neg → a coach with a recent completed booking can no
                 // longer view player videos. Upper bound is a *business* cap (3650d ≈ 10y), chosen
                 // well under the Math.toIntExact ceiling; widen it (still < Integer.MAX_VALUE) rather
-                // than let a legitimate >10y window clamp. Mirrors ConfigBounds.VIDEO_ACCESS_COACH_WINDOW_DAYS.
+                // than let a legitimate >10y window clamp. Range and default come from ConfigBounds.VIDEO_ACCESS_COACH_WINDOW_DAYS.
                 int windowDays = Math.toIntExact(
-                    configService.getBoundedLong("platform.video.access.coach_window_days", 90L, 1L, 3650L));
+                    configService.getBoundedLong(ConfigBounds.VIDEO_ACCESS_COACH_WINDOW_DAYS));
                 Instant windowStart = Instant.now().minus(windowDays, ChronoUnit.DAYS);
                 if (bookingRepository.existsRecentCompletedBooking(coachId, playerId, windowStart)) {
                     return true;

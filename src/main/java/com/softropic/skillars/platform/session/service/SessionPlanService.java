@@ -134,7 +134,7 @@ public class SessionPlanService {
 
         requireOpen(session);
 
-        // fix/content-consistency-and-lost-updates: Session has no @Version and the save() below
+        // fix/content-consistency-and-lost-updates: Session had no @Version (C5 added one) and the save() below
         // rewrites every column, status included. Without the row lock, handleBookingCompleted
         // committing COMPLETED after the read above was overwritten with this request's stale
         // DRAFT/SAVED. Lock AFTER the ownership check (an unauthorised caller must not be able to pin
