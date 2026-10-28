@@ -145,6 +145,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { adminApi } from 'src/api/admin.api'
+import { formatDateTime } from 'src/utils/adminFormat'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()
@@ -206,7 +207,7 @@ const canSave = computed(
   () =>
     !clientError.value &&
     !!editing.value &&
-    (!editing.value.stored || draft.value.trim() !== editing.value.value),
+    (!editing.value.stored || (draft.value ?? '').trim() !== editing.value.value),
 )
 
 function typeLabel(type) {
@@ -253,14 +254,14 @@ async function loadList() {
 
 function openEdit(row) {
   editing.value = row
-  draft.value = row.stored ? row.value : String(row.codeDefault ?? '')
+  draft.value = (row.stored ? row.value : String(row.codeDefault ?? '')) ?? ''
   serverError.value = ''
   editOpen.value = true
 }
 
 async function save() {
   const row = editing.value
-  const value = draft.value.trim()
+  const value = (draft.value ?? '').trim()
   saving.value = true
   serverError.value = ''
   try {
@@ -296,10 +297,7 @@ async function save() {
 }
 
 function formatDate(iso) {
-  if (!iso) return '—'
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(
-    new Date(iso),
-  )
+  return formatDateTime(iso, locale.value)
 }
 </script>
 

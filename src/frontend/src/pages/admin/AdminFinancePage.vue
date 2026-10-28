@@ -28,7 +28,7 @@
             stack-label
             :label="t('admin.finance.toLabel')"
             :error="rangeInvalid"
-            :error-message="t('admin.finance.rangeInvalid')"
+            :error-message="rangeError"
             data-testid="finance-to-input"
           />
         </div>
@@ -214,10 +214,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminApi } from 'src/api/admin.api'
+import { isUuid } from 'src/utils/adminFormat'
 
 const { t, locale } = useI18n()
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const fromDate = ref('')
 const toDate = ref('')
@@ -244,10 +243,16 @@ const revenue = ref(null)
 const selectedCoachId = ref(null)
 const selectedCoachName = ref('')
 
+// The backend defaults a missing 'from' to the start of the CURRENT month, so 'to' alone (e.g. the
+// end of last month) would silently query an empty range and show zeros. Require 'from' with 'to'.
+const fromMissing = computed(() => !!toDate.value && !fromDate.value)
 const rangeInvalid = computed(
-  () => !!fromDate.value && !!toDate.value && fromDate.value > toDate.value,
+  () => fromMissing.value || (!!fromDate.value && !!toDate.value && fromDate.value > toDate.value),
 )
-const coachIdValid = computed(() => UUID_RE.test(coachIdInput.value.trim()))
+const rangeError = computed(() =>
+  fromMissing.value ? t('admin.finance.fromRequired') : t('admin.finance.rangeInvalid'),
+)
+const coachIdValid = computed(() => isUuid(coachIdInput.value.trim()))
 
 const periodLabel = computed(() => {
   if (!appliedFrom.value && !appliedTo.value) return t('admin.finance.periodDefault')
@@ -364,7 +369,6 @@ onMounted(async () => {
 async function applyPeriod() {
   if (rangeInvalid.value) return
   await loadOverview()
-  if (revenueDialogOpen.value && selectedCoachId.value) await loadRevenue()
 }
 
 async function loadOverview() {

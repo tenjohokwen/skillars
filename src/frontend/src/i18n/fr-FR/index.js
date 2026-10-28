@@ -1440,6 +1440,7 @@ export default {
         'Volume brut, commission et remboursements de la plateforme, avec le chiffre d’affaires par coach',
       fromLabel: 'Du',
       toLabel: 'Au',
+      fromRequired: 'Indiquez aussi une date de début',
       rangeInvalid: 'La date de fin ne peut pas précéder la date de début',
       apply: 'Appliquer',
       periodHint: 'Dates en UTC, incluses. Laissez les deux vides pour le mois en cours.',
@@ -1586,6 +1587,8 @@ export default {
       updatedLabel: 'Dernière modification',
       blockedSinceLabel: 'Bloquée depuis',
       archivedAtLabel: 'Archivée le',
+      archivedHint:
+        'Les vidéos archivées sont supprimées automatiquement après la période configurée. La lecture ne peut pas être modifiée ici.',
       goneHint: "Cette vidéo a été supprimée. Aucune autre action n'est possible.",
       blockAction: 'Bloquer la lecture',
       restoreAction: 'Rétablir la lecture',

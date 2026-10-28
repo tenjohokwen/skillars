@@ -157,7 +157,7 @@
                 <q-item-section>{{ t('admin.videos.updatedLabel') }}</q-item-section>
                 <q-item-section side>{{ formatDate(video.updatedAt) }}</q-item-section>
               </q-item>
-              <q-item v-if="video.lifecycleLockedAt">
+              <q-item v-if="video.accessState === 'BLOCKED' && video.lifecycleLockedAt">
                 <q-item-section>{{ t('admin.videos.blockedSinceLabel') }}</q-item-section>
                 <q-item-section side>{{ formatDate(video.lifecycleLockedAt) }}</q-item-section>
               </q-item>
@@ -168,12 +168,19 @@
             </q-list>
           </q-card-section>
 
+          <q-card-section
+            v-if="!isGone && video.accessState === 'ARCHIVED'"
+            class="text-meta"
+            data-testid="video-archived-hint"
+          >
+            {{ t('admin.videos.archivedHint') }}
+          </q-card-section>
           <q-card-section v-if="isGone" class="text-meta">
             {{ t('admin.videos.goneHint') }}
           </q-card-section>
           <q-card-actions v-else align="left" class="q-px-md q-gutter-sm">
             <q-btn
-              v-if="video.accessState !== 'BLOCKED'"
+              v-if="video.accessState === 'ACTIVE'"
               unelevated
               color="warning"
               text-color="dark"
@@ -182,7 +189,7 @@
               @click="openAction('block')"
             />
             <q-btn
-              v-else
+              v-if="video.accessState === 'BLOCKED'"
               unelevated
               color="positive"
               :label="t('admin.videos.restoreAction')"
@@ -280,12 +287,12 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
 import { adminApi } from 'src/api/admin.api'
+import { formatDateTime, isUuid } from 'src/utils/adminFormat'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()
 const route = useRoute()
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const GONE_STATES = ['DELETED', 'PURGED']
 
 const rows = ref([])
@@ -310,7 +317,7 @@ const actionOpen = ref(false)
 const actionMode = ref(null)
 const submitting = ref(false)
 
-const videoIdValid = computed(() => UUID_RE.test(videoIdInput.value.trim()))
+const videoIdValid = computed(() => isUuid(videoIdInput.value.trim()))
 const isGone = computed(() => GONE_STATES.includes(video.value?.operationalState))
 
 const filterOptions = computed(() => [
@@ -417,7 +424,7 @@ function accessColor(s) {
 onMounted(async () => {
   await loadList()
   const id = route?.query?.videoId
-  if (typeof id === 'string' && UUID_RE.test(id)) {
+  if (typeof id === 'string' && isUuid(id)) {
     await openDetailById(id)
   }
 })
@@ -534,6 +541,9 @@ async function submitAction() {
     else if (status === 502) message = t('admin.videos.providerUnavailable')
     else if (status === 404) message = t('admin.videos.notFound')
     $q.notify({ message, type: 'negative' })
+    // A failure can still leave a partial effect behind (deleteVideo commits DELETED before it
+    // releases quota, and rethrows a release failure), so always re-read what is really there.
+    await Promise.all([reloadDetail(), loadList()])
   } finally {
     submitting.value = false
   }
@@ -547,10 +557,7 @@ function formatBytes(bytes) {
 }
 
 function formatDate(iso) {
-  if (!iso) return '—'
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(
-    new Date(iso),
-  )
+  return formatDateTime(iso, locale.value)
 }
 </script>
 

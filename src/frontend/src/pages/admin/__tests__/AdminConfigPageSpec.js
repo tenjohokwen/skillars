@@ -214,4 +214,13 @@ describe('AdminConfigPage.vue', () => {
       expect.objectContaining({ message: 'admin.config.saveFailed', type: 'negative' }),
     )
   })
+
+  it('tolerates a stored row with a null value', async () => {
+    const wrapper = await mountPage()
+    wrapper.vm.openEdit({ ...FLAG, value: null })
+
+    expect(wrapper.vm.draft).toBe('')
+    expect(wrapper.vm.canSave).toBe(false)
+    expect(wrapper.vm.fieldError).toBe('admin.config.errorRequired')
+  })
 })

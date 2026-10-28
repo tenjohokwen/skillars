@@ -1525,6 +1525,7 @@ export default {
       subtitle: 'Platform gross volume, commission and refunds, with per-coach revenue',
       fromLabel: 'From',
       toLabel: 'To',
+      fromRequired: 'Set a start date as well',
       rangeInvalid: 'The end date must not be before the start date',
       apply: 'Apply',
       periodHint: 'Dates are in UTC and inclusive. Leave both empty for the current month to date.',
@@ -1667,6 +1668,8 @@ export default {
       updatedLabel: 'Last changed',
       blockedSinceLabel: 'Blocked since',
       archivedAtLabel: 'Archived',
+      archivedHint:
+        'Archived videos are deleted automatically after the configured period. Playback cannot be changed here.',
       goneHint: 'This video has been deleted. No further actions are available.',
       blockAction: 'Block playback',
       restoreAction: 'Restore playback',

@@ -138,4 +138,16 @@ describe('AdminGdprRequestsPage.vue', () => {
     expect(adminApi.getGdprRequests).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1 }))
     expect(wrapper.vm.currentPage).toBe(2)
   })
+
+  it('flags an old FAILED request as overdue too (it was never answered)', async () => {
+    adminApi.getGdprRequests.mockResolvedValue({
+      content: [
+        row({ status: 'FAILED', createdAt: new Date(Date.now() - 45 * DAY).toISOString() }),
+      ],
+      totalPages: 1,
+    })
+    const wrapper = await mountPage()
+
+    expect(wrapper.vm.isOverdue(wrapper.vm.rows[0])).toBe(true)
+  })
 })

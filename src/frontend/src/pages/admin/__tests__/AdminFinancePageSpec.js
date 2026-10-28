@@ -150,4 +150,15 @@ describe('AdminFinancePage.vue', () => {
 
     expect(adminApi.getEnforcementCoaches).toHaveBeenLastCalledWith('SUSPENDED', 0)
   })
+
+  it("requires a start date when only 'to' is set (the backend would default 'from' to this month)", async () => {
+    const wrapper = await mountPage()
+    wrapper.vm.toDate = '2026-09-30'
+
+    await wrapper.vm.applyPeriod()
+
+    expect(wrapper.vm.rangeInvalid).toBe(true)
+    expect(wrapper.vm.rangeError).toBe('admin.finance.fromRequired')
+    expect(adminApi.getFinanceOverview).toHaveBeenCalledTimes(1)
+  })
 })

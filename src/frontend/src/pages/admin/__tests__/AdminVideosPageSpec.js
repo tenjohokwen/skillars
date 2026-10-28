@@ -222,4 +222,40 @@ describe('AdminVideosPage.vue', () => {
     expect(adminApi.getVideoUploadSessions).toHaveBeenCalledWith(VIDEO_ID)
     expect(wrapper.find('[data-testid="video-sessions-list"]').text()).toContain('5.0 MB')
   })
+
+  it('offers neither block nor restore for an archived video, and explains why', async () => {
+    adminApi.getAdminVideo.mockResolvedValue({
+      ...LOCKED,
+      operationalState: 'READY',
+      accessState: 'ARCHIVED',
+      archivedAt: '2026-10-03T10:00:00Z',
+    })
+    const wrapper = await mountPage({ videoId: VIDEO_ID })
+
+    expect(wrapper.find('[data-testid="video-block-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="video-restore-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="video-archived-hint"]').exists()).toBe(true)
+  })
+
+  it('shows "blocked since" only while the video is blocked', async () => {
+    adminApi.getAdminVideo.mockResolvedValue({
+      ...LOCKED,
+      accessState: 'ACTIVE',
+      lifecycleLockedAt: '2026-09-01T10:00:00Z',
+    })
+    const wrapper = await mountPage({ videoId: VIDEO_ID })
+
+    expect(wrapper.text()).not.toContain('admin.videos.blockedSinceLabel')
+  })
+
+  it('re-reads the video and the queue after a failed action (it may have partly applied)', async () => {
+    adminApi.deleteVideo.mockRejectedValue({ response: { status: 500 } })
+    const wrapper = await mountPage({ videoId: VIDEO_ID })
+
+    wrapper.vm.openAction('delete')
+    await wrapper.vm.submitAction()
+
+    expect(adminApi.getAdminVideo).toHaveBeenCalledTimes(2)
+    expect(adminApi.getVideoReviewQueue).toHaveBeenCalledTimes(2)
+  })
 })

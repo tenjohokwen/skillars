@@ -166,6 +166,37 @@ class AdminVideoIT extends BaseVideoIT {
 
     // ── helpers ────────────────────────────────────────────────────────────
 
+    @Test
+    void setVideoAccessState_reblockAfterRestore_startsAFreshLifecycleClock() {
+        Video video = seedVideo(OperationalState.READY, AccessState.ACTIVE, "asset-admin-reblock");
+        adminVideoService.setVideoAccessState(video.getId(), AccessState.BLOCKED);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("UPDATE main.videos SET lifecycle_locked_at = now() - interval '90 days' WHERE id = ?",
+                    video.getId());
+            return null;
+        });
+        adminVideoService.setVideoAccessState(video.getId(), AccessState.ACTIVE);
+
+        Video reblocked = adminVideoService.setVideoAccessState(video.getId(), AccessState.BLOCKED);
+
+        assertThat(reblocked.getLifecycleLockedAt()).isAfter(Instant.now().minusSeconds(60));
+    }
+
+    @Test
+    void setVideoAccessState_repeatedBlock_keepsTheExistingClock() {
+        Video video = seedVideo(OperationalState.READY, AccessState.ACTIVE, "asset-admin-block-twice");
+        adminVideoService.setVideoAccessState(video.getId(), AccessState.BLOCKED);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("UPDATE main.videos SET lifecycle_locked_at = now() - interval '10 days' WHERE id = ?",
+                    video.getId());
+            return null;
+        });
+
+        Video again = adminVideoService.setVideoAccessState(video.getId(), AccessState.BLOCKED);
+
+        assertThat(again.getLifecycleLockedAt()).isBefore(Instant.now().minus(java.time.Duration.ofDays(9)));
+    }
+
     // ---- admin video review queue (story 6.3 / FR-ADM-002) ----
 
     @Test

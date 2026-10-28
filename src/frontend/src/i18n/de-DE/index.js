@@ -1841,6 +1841,7 @@ export default {
       subtitle: 'Bruttovolumen, Provision und Erstattungen der Plattform, mit Umsatz pro Coach',
       fromLabel: 'Von',
       toLabel: 'Bis',
+      fromRequired: 'Lege auch ein Startdatum fest',
       rangeInvalid: 'Das Enddatum darf nicht vor dem Startdatum liegen',
       apply: 'Anwenden',
       periodHint:
@@ -1989,6 +1990,8 @@ export default {
       updatedLabel: 'Zuletzt geändert',
       blockedSinceLabel: 'Blockiert seit',
       archivedAtLabel: 'Archiviert',
+      archivedHint:
+        'Archivierte Videos werden nach dem konfigurierten Zeitraum automatisch gelöscht. Die Wiedergabe kann hier nicht geändert werden.',
       goneHint: 'Dieses Video wurde gelöscht. Es sind keine weiteren Aktionen möglich.',
       blockAction: 'Wiedergabe blockieren',
       restoreAction: 'Wiedergabe freigeben',

@@ -164,12 +164,11 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
 import { adminApi } from 'src/api/admin.api'
+import { formatDateTime, isUuid } from 'src/utils/adminFormat'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()
 const route = useRoute()
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const bookingIdInput = ref('')
 const booking = ref(null)
@@ -180,7 +179,7 @@ const confirmOpen = ref(false)
 const note = ref('')
 const submitting = ref(false)
 
-const bookingIdValid = computed(() => UUID_RE.test(bookingIdInput.value.trim()))
+const bookingIdValid = computed(() => isUuid(bookingIdInput.value.trim()))
 
 const statusLabels = computed(() => ({
   REQUESTED: t('booking.requests.statusRequested'),
@@ -201,7 +200,7 @@ function statusLabel(status) {
 
 onMounted(async () => {
   const id = route?.query?.bookingId
-  if (typeof id === 'string' && UUID_RE.test(id)) {
+  if (typeof id === 'string' && isUuid(id)) {
     bookingIdInput.value = id
     await lookup()
   }
@@ -265,10 +264,7 @@ async function submitForceComplete() {
 }
 
 function formatDate(iso) {
-  if (!iso) return '—'
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(
-    new Date(iso),
-  )
+  return formatDateTime(iso, locale.value)
 }
 </script>
 

@@ -99,13 +99,15 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminApi } from 'src/api/admin.api'
+import { formatDateTime } from 'src/utils/adminFormat'
 
 const { t, locale } = useI18n()
 
 const PAGE_SIZE = 20
-// GDPR Art. 12(3): a request must be answered within one month. Flag open requests past 30 days.
+// GDPR Art. 12(3): a request must be answered within one month. Flag every unanswered request
+// (still open, or FAILED — a failed export/erasure has not been answered either) past 30 days.
 const OVERDUE_DAYS = 30
-const OPEN_STATUSES = ['PENDING', 'PROCESSING']
+const UNANSWERED_STATUSES = ['PENDING', 'PROCESSING', 'FAILED']
 
 const rows = ref([])
 const loading = ref(false)
@@ -178,7 +180,7 @@ function statusColor(status) {
 }
 
 function isOverdue(row) {
-  if (!OPEN_STATUSES.includes(row.status) || !row.createdAt) return false
+  if (!UNANSWERED_STATUSES.includes(row.status) || !row.createdAt) return false
   return Date.now() - new Date(row.createdAt).getTime() > OVERDUE_DAYS * 24 * 60 * 60 * 1000
 }
 
@@ -222,10 +224,7 @@ async function onFilterChange() {
 }
 
 function formatDate(iso) {
-  if (!iso) return '—'
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(
-    new Date(iso),
-  )
+  return formatDateTime(iso, locale.value)
 }
 </script>
 
