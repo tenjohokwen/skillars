@@ -44,6 +44,8 @@ replay_pid*
 # We explicitly ignore the large node binary.
 src/frontend/node/node
 src/frontend/node_modules/
+# Also match it as a symlink (worktrees symlink node_modules; a trailing-slash pattern only matches directories).
+src/frontend/node_modules
 src/frontend/.quasar
 src/frontend/dist/
 src/frontend/npm-debug.log*
@@ -74,6 +76,7 @@ Thumbs.db
 .env.*
 !.env.example
 node_modules/
+node_modules
 .next/
 dist/
 __pycache__/
