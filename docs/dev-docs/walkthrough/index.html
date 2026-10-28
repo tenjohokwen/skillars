@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anatomy of a Request — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
+    <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Anatomy of a Request</div>
+    <h1>Anatomy of a Request</h1>
+    <p class="subtitle">One real user action traced end to end, with a file:line pointer at every hop: a parent requests a session with a coach, and the coach accepts it. Read this once and you know where to look for almost any other request.</p>
+
+    <div class="callout">
+      <p><strong>Path conventions.</strong> Frontend paths are relative to the repo root. Java paths omit the common
+      prefix <code>src/main/java/com/softropic/skillars/</code>, so <code>platform/booking/service/BookingService.java:196</code>
+      means <code>src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java</code>, line 196.
+      Line numbers are from master as of this page; if one has drifted, search for the method name.</p>
+    </div>
+
+    <h2 id="the-whole-trace">The whole trace</h2>
+    <pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant P as Parent browser
+  participant AX as axios (boot/axios.js)
+  participant F as JWTAuthorizationFilter
+  participant R as BookingResource
+  participant BS as BookingService
+  participant DB as Postgres
+  participant L as BookingEmailListener (BEFORE_COMMIT)
+  participant O as OutboxService / outboxDrainPool
+  participant M as MailManager / OutboundEmailSender
+  participant C as Coach browser
+  participant PL as PaymentLifecycleService (AFTER_COMMIT)
+
+  P->>AX: bookingStore.submitBookingRequest(...)
+  AX->>F: POST /api/bookings/requests (cookies potc, bcookie)
+  F->>F: verify JWT, every 5 min re-auth against DB + revocation check
+  F->>R: authenticated request
+  R->>R: @PreAuthorize parent-or-player, @Valid CreateBookingRequest
+  R->>BS: createBookingRequest(callerId, req)
+  BS->>DB: ownership, coach status, Stripe-ready, duration checks
+  BS->>DB: SELECT coach_profiles FOR UPDATE NOWAIT (PessimisticLockRetryer)
+  BS->>DB: windows, signature, block, overlap checks
+  BS->>DB: INSERT booking (status REQUESTED)
+  BS-->>L: publish BookingRequestedEvent
+  L->>DB: INSERT outbox_messages (NOTIFICATION_EMAIL)
+  L->>DB: INSERT user_notifications (coach inbox row, savepoint)
+  Note over BS,DB: COMMIT - booking + outbox row + inbox row together
+  R-->>P: 201 BookingResponse, then router.push /parent/bookings
+  O->>DB: AFTER_COMMIT async drain claims row (SKIP LOCKED)
+  O->>M: NotificationEmailOutboxHandler.handle - sendEmailSync
+  M-->>M: dev log transport writes target/mails/(correlationId).html
+  C->>C: NotificationBell refreshes unread count (mount, route change, focus)
+  C->>R: PUT /api/bookings/requests/{id}/accept
+  R->>BS: acceptBooking - lock coach, re-check overlap
+  BS->>DB: REQUESTED to ACCEPTED to PAYMENT_PENDING (one event)
+  Note over BS,DB: COMMIT
+  BS-->>PL: BookingAcceptedEvent (AFTER_COMMIT, same request thread)
+  PL->>DB: pack deduction, or credit wallet + Stripe platform charge
+  PL->>DB: PAYMENT_CAPTURED to CONFIRMED + BOOKING_CONFIRMED email/inbox via outbox
+  BS-->>P: SSE status events PAYMENT_PENDING then CONFIRMED (BookingSseService, after each commit)
+  R-->>C: 200 re-fetched BookingResponse (already CONFIRMED or DECLINED)
+    </pre>
+
+    <h2 id="part-1-the-parent-requests-a-session">Part 1 — the parent requests a session</h2>
+
+    <h3 id="1-the-page">1. The page</h3>
+    <p>The route <code>parent/coaches/:coachId/request-booking</code> (<code>src/frontend/src/router/routes.js:156-162</code>,
+      <code>meta.roles: ['PARENT', 'PLAYER']</code> — the first dual-role route) renders
+      <code>src/frontend/src/pages/parent/BookingRequestPage.vue</code>. The confirm button (<code>:146-153</code>) calls
+      <code>submit()</code> (<code>:565</code>), which posts the slot chosen from the availability calendar plus the
+      store's <code>availabilitySignature</code> (the stale-view guard), an optional <code>sessionPackPurchaseId</code> and notes.
+      On success it navigates to <code>/parent/bookings</code> (<code>:627</code>).</p>
+    <div class="callout warn">
+      <p><strong>The error toast is chosen from <code>err.response.data.errorMsg.errorKey</code></strong>
+      (<code>:581-623</code>), one <code>if</code> branch per wire code. A new backend error code is invisible to the user
+      until you add a branch here — it falls through to the generic <code>booking.requests.submitError</code> toast
+      and a <code>console.warn</code>. Per the comment at <code>:582-586</code>, the i18n key lives under the
+      <em>wire code's</em> namespace (<code>payment.*</code> codes resolve under <code>payment.*</code> even on this booking page).</p>
+    </div>
+
+    <h3 id="2-store-and-api-module">2. Store and API module</h3>
+    <p><code>src/frontend/src/stores/booking.store.js:485</code> <code>submitBookingRequest</code> calls
+      <code>createBookingRequest</code> and then reloads the parent's list (<code>loadParentBookings</code>, <code>:350</code>).
+      <code>src/frontend/src/api/booking.api.js:21</code> is a one-liner:
+      <code>api.post('/api/bookings/requests', request)</code>. API modules contain no logic — they only bind URLs to the shared
+      axios instance.</p>
+
+    <h3 id="3-the-axios-boot-file">3. The axios boot file</h3>
+    <p><code>src/frontend/src/boot/axios.js</code> builds the single instance (<code>:94-97</code>): empty
+      <code>baseURL</code> (the Quasar dev server proxies <code>/api</code> to <code>localhost:9990</code>,
+      <code>src/frontend/quasar.config.js:111</code>) and <code>withCredentials: true</code>.</p>
+    <ul>
+      <li><strong>No <code>Authorization</code> header.</strong> Auth is entirely cookie-based: the browser sends the
+        HttpOnly JWT cookie <code>potc</code> (<code>SecurityConstants.JWT_COOKIE_NAME</code>) and friends automatically.
+        The request interceptor (<code>:100-127</code>) only adds <code>Accept-Language</code> (backend error messages are
+        localised from it) and records activity for the idle-session monitor.</li>
+      <li><strong>The response interceptor unwraps <code>response.data</code></strong> (<code>:142</code>), so callers
+        receive the body, not the axios response. Errors are rejected with the <em>original</em> axios error
+        (<code>:251</code>), which is why pages read <code>err.response.data.errorMsg.errorKey</code>.</li>
+      <li>On 401 with <code>security.sessionExpired</code>/<code>security.unauthorized</code> it tears down the session and
+        redirects to <code>/#/login</code> (<code>:163-224</code>); 403 and 5xx are only logged (<code>:227-241</code>) —
+        the page decides what the user sees.</li>
+    </ul>
+
+    <h3 id="4-security-filter-chain">4. Security filter chain</h3>
+    <p>The chain is assembled in <code>platform/security/config/SecurityConfiguration.java:133-197</code>. CSRF is
+      disabled (<code>:155</code>); the custom filters are <code>JWTAuthenticationFilter</code> (legacy
+      <code>/authenticate</code> login), <code>JWTAuthorizationFilter</code> (every secured request),
+      <code>SecondFactorLoginFilter</code> and <code>SessionRefreshFilter</code>.</p>
+    <p><code>platform/security/infrastructure/jwt/filter/JWTAuthorizationFilter.java</code>:</p>
+    <ul>
+      <li><code>doFilterInternal</code> (<code>:142</code>) skips unrestricted endpoints, otherwise calls
+        <code>attemptAuthorization</code> (<code>:193</code>).</li>
+      <li><strong>Fast path</strong> (<code>:221-247</code>): the principal comes straight from the JWT claims — no DB
+        read — and URL-level authorities are checked; <code>extendTtlOfToken</code> re-issues the 15-minute cookies
+        (sliding window).</li>
+      <li><strong>DB path</strong> (<code>:205-220</code>): once the token's embedded DB-refresh stamp is older than
+        <code>DB_REFRESH_TOKEN_INTERVAL</code> (5 min), <code>daoAuthProvider.authorize</code> reloads the user (catching
+        locked/disabled accounts) and <code>assertSessionNotRevoked</code> (<code>:258-268</code>) rejects a JWT issued
+        before the account's <code>securitySessionInvalidatedAt</code> (refresh-token-theft revocation).</li>
+      <li>Any auth failure is written as a 401 <code>ErrorDto</code> directly by the filter (<code>:148-179</code>) —
+        it never reaches a controller or <code>ApiAdvice</code>.</li>
+    </ul>
+    <div class="callout warn">
+      <p><strong>Locking an account is not instant.</strong> Between DB re-auth cycles the filter trusts the JWT, so a
+      just-locked or just-erased account keeps working for up to 5 minutes. See
+      <a href="../security/index.html">Security</a> for the full cookie set (<code>potc</code>, <code>rtkn</code>,
+      <code>skp</code>, <code>rint</code>, <code>bcookie</code>) and the second, still-wired legacy login stack.</p>
+    </div>
+
+    <h3 id="5-controller">5. Controller</h3>
+    <p><code>platform/booking/api/BookingResource.java:36-41</code>:
+      <code>@PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)</code> and
+      <code>@RequestBody @Valid CreateBookingRequest</code>. The caller id comes from
+      <code>securityUtil.requireCurrentUserId()</code> (<code>:79</code>) — never from the body. Returns 201.</p>
+    <p><code>platform/booking/contract/CreateBookingRequest.java</code> is a record with Bean Validation:
+      <code>@NotNull</code> ids, <code>@Future</code> start, <code>@Size(max = 500)</code> notes, and an
+      <code>@AssertTrue isEndAfterStart()</code> so a reversed range is a 400 before the service runs.</p>
+    <div class="callout">
+      <p><strong>Controllers are thin by convention.</strong> Ownership (does this parent own this player profile? this
+      pack?) is checked in the service, not with <code>@PreAuthorize</code> SpEL. The role annotation only answers
+      "may this kind of user call this endpoint at all".</p>
+    </div>
+
+    <h3 id="6-service-transaction">6. Service transaction</h3>
+    <p><code>platform/booking/service/BookingService.java:196</code> <code>createBookingRequest</code> is one
+      <code>@Transactional</code> method. In order:</p>
+    <ol>
+      <li><strong>Cheap checks first, unlocked</strong> (<code>:198-247</code>): player ownership (parent via
+        <code>player.parentId</code>, adult player via <code>player.userId</code>), coach status, Stripe-readiness
+        (<code>paymentGateway.isCoachPaymentReady</code> — throws <code>PaymentGatewayException</code>), future start, and
+        exact session length (<code>SessionDurationResolver</code>).</li>
+      <li><strong>Lock the coach row</strong> (<code>:263-271</code>): <code>lockRetryer.withBoundedRetry(...)</code> around
+        <code>coachProfileRepository.findByIdForUpdate</code>, followed by
+        <code>entityManager.refresh(c, PESSIMISTIC_WRITE)</code>. The coach profile row is the per-coach mutex that
+        serialises every slot-changing write. The status is then <em>re-checked</em> under the lock (<code>:272-279</code>).</li>
+      <li><strong>Availability</strong> (<code>:281-303</code>): windows read <em>after</em> the lock, signature compared,
+        slot must fit a window in the coach's timezone and not hit a blackout block.</li>
+      <li><strong>Overlap</strong> (<code>:305-313</code>): <code>findOverlappingBookings</code> against
+        <code>ACTIVE_SLOT_STATUSES</code> (includes <code>REQUESTED</code>).</li>
+      <li><strong>Pack validation</strong> if a pack was chosen (<code>:316-340</code>) — ownership deliberately first so
+        the error can't be used as an oracle.</li>
+      <li><strong>Insert</strong> (<code>:344-359</code>): notes sanitised by <code>ContactDetailSanitizer</code>; status
+        defaults to <code>REQUESTED</code> in <code>Booking.onCreate</code> (<code>platform/booking/repo/Booking.java:105</code>).
+        Creation does not go through <code>transition()</code>.</li>
+      <li><strong>Publish</strong> <code>BookingRequestedEvent</code> (<code>:362</code>) — still inside the transaction.</li>
+    </ol>
+    <div class="callout warn">
+      <p><strong>The <code>refresh</code> after <code>findByIdForUpdate</code> is required, not defensive.</strong> The coach
+      was already loaded unlocked a few lines earlier; a JPQL locked read returns that managed instance <em>without</em>
+      overwriting its fields, so without the refresh the "re-check status under lock" would re-read the stale value
+      (comment at <code>:266-269</code>). Copy this pattern whenever you lock an entity you have already loaded.</p>
+    </div>
+
+    <h3 id="7-locking-nowait-bounded-retry">7. Locking: NOWAIT + bounded retry</h3>
+    <p><code>platform/marketplace/repo/CoachProfileRepository.java:44-47</code>: <code>@Lock(PESSIMISTIC_WRITE)</code> with
+      <code>jakarta.persistence.lock.timeout = 0</code>, i.e. <code>FOR UPDATE NOWAIT</code>: if another transaction holds the
+      row, Postgres fails immediately with 55P03. <code>infrastructure/persistence/PessimisticLockRetryer.java:150</code>
+      <code>withBoundedRetry</code> catches that, rolls back to a JDBC savepoint it took before the attempt
+      (<code>:157-159</code>, <code>:175</code>), sleeps with jittered backoff and tries again — 8 attempts, 100 ms growing
+      ×1.6 to 800 ms, ~3.2 s worst case (<code>app.locking.retry.*</code>, <code>:89-99</code>). After the last attempt the
+      <code>PessimisticLockingFailureException</code> escapes and becomes a 409 (see <a href="#error-paths">Error paths</a>).</p>
+    <div class="callout warn">
+      <p><strong>Only reads go inside the retried lambda.</strong> The savepoint rollback discards whatever the lambda did.
+      The retryer also flushes before each savepoint and holds the pooled connection while sleeping.
+      <code>PessimisticLockRetryerCallSiteAuditTest</code> pins the number of call sites (currently 50), so adding one
+      means updating that test. Why NOWAIT at all: see <a href="../decisions/index.html#adr-nowait">Decisions</a>.</p>
+    </div>
+
+    <h3 id="8-repository-and-sql">8. Repository and SQL</h3>
+    <p><code>platform/booking/repo/BookingRepository.java:22-35</code> <code>findOverlappingBookings</code> is plain JPQL
+      (half-open interval test, optional self-exclusion) — unlocked, because the coach-row lock already serialises
+      writers. The DB backstop is the exclusion constraint <code>excl_bkg_coach_slot_overlap</code>
+      (<code>src/main/resources/db/migration/V138__baseline_schema.sql:2188</code>): a GiST
+      <code>tstzrange</code> overlap per <code>coach_id</code>, but only for <code>ACCEPTED</code> through
+      <code>PAUSED</code> — two overlapping <code>REQUESTED</code> rows are legal in the database and kept apart only
+      by the app check. Tables live in the <code>booking</code> schema; see <a href="../database/index.html">Database</a>.</p>
+
+    <h3 id="9-events-and-listeners">9. Events and listeners</h3>
+    <p>Spring's <code>ApplicationEventPublisher</code> is the module bus. For <code>BookingRequestedEvent</code> exactly one
+      listener runs: <code>platform/notification/infrastructure/listener/BookingEmailListener.java:59</code>
+      <code>onBookingRequested</code>, <code>@TransactionalEventListener(BEFORE_COMMIT)</code>. It builds the template data
+      and calls <code>NotificationOutboxSupport.enqueueEmail</code>.</p>
+    <table>
+      <thead><tr><th>Phase</th><th>Runs</th><th>Use it for</th></tr></thead>
+      <tbody>
+        <tr><td><code>BEFORE_COMMIT</code></td><td>Inside the producer's transaction, just before commit. A throw rolls the business change back.</td><td>Writing outbox rows and inbox rows atomically with the business change.</td></tr>
+        <tr><td><code>AFTER_COMMIT</code></td><td>After commit, synchronously on the same thread (unless <code>@Async</code>). A throw is only logged — the request already succeeded.</td><td>Reactors that need committed data: payment settlement, SSE push, batch roll-up, the outbox drain trigger.</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn">
+      <p><strong>The <code>try/catch</code> in the listener does not make an enqueue failure harmless.</strong>
+      <code>enqueueEmail</code> is <code>@Transactional(propagation = MANDATORY)</code>; if it throws, Spring marks the shared
+      transaction rollback-only even though the listener catches, and the booking insert rolls back
+      (<code>UnexpectedRollbackException</code>). That is intended: no booking without its email. See
+      <a href="../outbox/index.html">Outbox</a>.</p>
+    </div>
+
+    <h3 id="10-outbox-row-and-inbox-row">10. Outbox row and inbox row</h3>
+    <p><code>platform/notification/service/NotificationOutboxSupport.java:125-142</code>:</p>
+    <ul>
+      <li><code>outboxService.enqueue("NOTIFICATION_EMAIL", json)</code> — a plain insert into
+        <code>main.outbox_messages</code> in the current transaction (<code>platform/outbox/service/OutboxService.java:56</code>).</li>
+      <li><code>outboxService.requestDrainAfterCommit()</code> (<code>OutboxService.java:77</code>) — registers one drain
+        per transaction.</li>
+      <li><code>inAppNotificationService.recordForEmail(...)</code>
+        (<code>platform/notification/service/InAppNotificationService.java:80</code>) — writes the coach's in-app inbox row
+        if the template's catalog entry is in-app (<code>BOOKING_REQUESTED</code> is, recipient coach:
+        <code>NotificationCatalog.java:76-78</code>). It runs in a JDBC savepoint (<code>:93</code>) and never throws, so a
+        broken inbox write cannot fail the booking.</li>
+    </ul>
+
+    <h3 id="11-commit-then-drain">11. Commit, then drain</h3>
+    <p>The commit makes the booking, the outbox row and the inbox row visible together. Then
+      <code>OutboxService.onOutboxDrainRequested</code> (<code>:108-110</code>, <code>@Async("outboxDrainPool")</code> +
+      <code>AFTER_COMMIT</code>) drains on a background thread: <code>OutboxRowProcessor.claimAndHandle</code>
+      (<code>platform/outbox/service/OutboxRowProcessor.java:100-116</code>, <code>REQUIRES_NEW</code>) claims one row with
+      <code>FOR UPDATE SKIP LOCKED</code>, calls the handler and deletes the row. If the JVM dies first, the 5-minute
+      <code>sweep()</code> picks it up.</p>
+    <div class="callout">
+      <p><strong>In tests the drain is synchronous</strong> (<code>app.outbox.drain-async: false</code> in
+      <code>application-test.yaml</code>), so an IT can assert on the email right after the call. In dev it is async —
+      the file in <code>target/mails</code> appears a moment after the HTTP response.</p>
+    </div>
+
+    <h3 id="12-email-transport">12. Email transport</h3>
+    <p><code>platform/notification/service/NotificationEmailOutboxHandler.java:59</code> deserialises the payload and calls
+      <code>MailManager.sendEmailSync</code> (<code>platform/notification/service/MailManager.java:101</code>,
+      its own <code>REQUIRES_NEW</code> + per-<code>sendId</code> advisory lock for de-duplication), which renders the
+      Thymeleaf template and calls <code>MailService.sendEmailFromTemplate</code> →
+      <code>outboundEmailSender.send(request)</code> (<code>MailService.java:126</code>). The
+      <code>OutboundEmailSender</code> bean is chosen by <code>app.email.transport</code>:</p>
+    <table>
+      <thead><tr><th>Value</th><th>Bean</th><th>Profile</th></tr></thead>
+      <tbody>
+        <tr><td><code>log</code></td><td><code>infrastructure/email/log/LoggingEmailSender.java</code> (also the default if unset)</td><td>dev, test — logs a masked line and, with <code>app.email.log.dump-dir: target/mails</code> (<code>application-dev.yaml:24</code>), writes <code>&lt;correlationId&gt;.html</code> (<code>:115-123</code>)</td></tr>
+        <tr><td><code>smtp</code></td><td><code>infrastructure/email/smtp/SmtpEmailSender.java</code></td><td>uat</td></tr>
+        <tr><td><code>ses</code></td><td><code>infrastructure/ses/SesEmailSender.java</code></td><td>prod</td></tr>
+      </tbody>
+    </table>
+    <p>The handler throws only for a <em>retryable</em> failure, which leaves the outbox row to be retried with backoff.</p>
+
+    <h3 id="13-how-the-coach-finds-out">13. How the coach finds out</h3>
+    <div class="callout warn">
+      <p><strong>There is no push to the coach for a new request.</strong> <code>createBookingRequest</code> publishes no
+      <code>BookingStatusChangedEvent</code>, and <code>BookingSseService</code> streams are per <em>existing</em> booking
+      id, opened by a page that already shows that booking. Nor is there a user-level push channel:
+      <code>src/frontend/src/components/notification/NotificationBell.vue:67-70</code> says so explicitly. The coach sees
+      the request through (a) the email, (b) the bell's unread count, refreshed on mount, on every route change and on window
+      focus (<code>:89-100</code>), and (c) the inbox list on <code>coach/booking-requests</code>
+      (<code>GET /api/bookings/requests/coach</code>).</p>
+    </div>
+
+    <h2 id="part-2-the-coach-accepts">Part 2 — the coach accepts</h2>
+
+    <h3 id="frontend">Frontend</h3>
+    <p><code>src/frontend/src/pages/coach/CoachBookingRequestsPage.vue:164</code> <code>handleAccept</code> →
+      <code>bookingStore.approveBooking</code> (<code>booking.store.js:492</code>) →
+      <code>acceptBooking</code> (<code>booking.api.js:26-27</code>) — note the per-call <code>timeout: 20000</code>:
+      the response is not sent until payment has settled (below).</p>
+
+    <h3 id="controller-and-state-transition">Controller and state transition</h3>
+    <p><code>BookingResource.java:62-69</code> (<code>HAS_COACH_ROLE</code>) calls
+      <code>BookingService.acceptBooking</code> (<code>BookingService.java:371</code>), which:</p>
+    <ol>
+      <li>checks the caller's coach profile owns the booking;</li>
+      <li>locks the coach row exactly as in step 6 and rejects a <code>SUSPENDED</code> coach (<code>:384-399</code>);</li>
+      <li>re-checks overlap against <code>ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED</code>, excluding itself (<code>:403-411</code>)
+        — another overlapping request may have been accepted meanwhile;</li>
+      <li>calls <code>acceptAndInitiatePayment</code> (<code>:452-456</code>): <code>ACCEPT</code> silently, then
+        <code>INITIATE_PAYMENT</code> with a <code>BookingStatusChangedEvent</code>, so observers see one change:
+        <code>REQUESTED → PAYMENT_PENDING</code>. Each leg goes through <code>transitionInternal</code>
+        (<code>:174-194</code>): booking row locked (NOWAIT + retry), <code>BookingStateMachine.validate</code> /
+        <code>targetStatus</code> (<code>platform/booking/service/BookingStateMachine.java:87-95</code>), actor-role check, save;</li>
+      <li>publishes <code>BookingAcceptedEvent</code> (<code>:427</code>).</li>
+    </ol>
+    <div class="callout warn">
+      <p><strong>Never set <code>booking.status</code> directly.</strong> <code>transition()</code> is the only sanctioned path:
+      it validates the transition table and the actor's role (<code>EVENT_ROLES</code>) and publishes the event that SSE,
+      batch roll-up and session plans depend on. See <a href="../booking/index.html">Booking</a>.</p>
+    </div>
+
+    <h3 id="payment-capture-or-credits">Payment capture or credits</h3>
+    <p>After commit, <code>platform/payment/service/PaymentLifecycleService.java:141-160</code>
+      <code>onBookingAccepted</code> (<code>AFTER_COMMIT</code> + <code>REQUIRES_NEW</code>) runs <strong>synchronously on the
+      coach's request thread</strong>:</p>
+    <ul>
+      <li>duplicate delivery or an outstanding <code>CAPTURE_PENDING</code> reservation → abort, never re-charge;</li>
+      <li>pack-funded → <code>PackSessionService.deductSession</code> (<code>:165-197</code>);</li>
+      <li>otherwise (<code>:199-242</code>) credit wallet first, Stripe for the remainder: <code>reserveCapture</code> writes a
+        <code>CAPTURE_PENDING</code> row on the dedicated payment pool <em>before</em> calling Stripe
+        (<code>BookingPaymentPersistenceService.java:116</code>), then
+        <code>StripePaymentGateway.chargeAndCapture</code> (<code>platform/payment/service/StripePaymentGateway.java:57</code>)
+        charges the <strong>platform</strong> account (no destination charge — the coach is paid only after completion);</li>
+      <li><code>persistPaymentSuccess</code> (<code>BookingPaymentPersistenceService.java:248-279</code>) writes the ledger
+        deduction, the <code>CAPTURED</code> payment row (locking the commission rate), transitions
+        <code>PAYMENT_CAPTURED → CONFIRMED</code> and publishes <code>BookingConfirmedEvent</code>;
+        failure → <code>PAYMENT_FAILED → DECLINED</code> + <code>BookingDeclinedEvent</code> (<code>:298-314</code>).</li>
+    </ul>
+    <p>That is why <code>BookingResource.acceptBooking</code> re-fetches the booking before responding (<code>:66-68</code>):
+      by then it is already <code>CONFIRMED</code> or <code>DECLINED</code>. A crash between the accept commit and settlement
+      leaves <code>PAYMENT_PENDING</code>, which <code>payment.PaymentPendingSweeper</code> resolves. Details:
+      <a href="../payment/index.html">Payment</a>.</p>
+
+    <h3 id="notifications-and-live-updates">Notifications and live updates</h3>
+    <ul>
+      <li><code>BookingEmailListener.onBookingConfirmed</code> (<code>:85</code>, <code>BEFORE_COMMIT</code>) enqueues
+        <code>BOOKING_CONFIRMED</code> to the parent plus a parent inbox row — the same outbox path as Part 1. There is no
+        email at the accept step itself.</li>
+      <li><code>platform/booking/service/BookingSseService.java:58-73</code> pushes each committed
+        <code>BookingStatusChangedEvent</code> to subscribers of that booking id. The parent's
+        <code>ParentBookingsPage.vue:200</code> renders <code>BookingStateChip</code> with a booking id; for a non-terminal
+        status the chip opens <code>useBookingSse</code> (<code>src/frontend/src/stores/booking.store.js:58-110</code>,
+        <code>EventSource /api/bookings/{id}/events</code>, endpoint <code>BookingEventResource.java:48-61</code>), so the
+        parent's chip flips to <code>PAYMENT_PENDING</code> and then <code>CONFIRMED</code> without a reload.</li>
+      <li>The coach's payout is not touched here: it is enqueued on <code>BookingCompletedEvent</code> with a hold window
+        (<code>CoachPayoutEnqueueListener</code>, outbox <code>COACH_PAYOUT_TRANSFER</code>).</li>
+    </ul>
+    <div class="callout warn">
+      <p><strong>SSE is node-local and per row.</strong> The emitter registry is an in-memory map, so a client only hears
+      about transitions committed on the instance it is connected to; the client falls back to reconnect-with-backoff and
+      then polling (<code>booking.store.js:89-101</code>). Each non-terminal chip on a list opens its own
+      <code>EventSource</code>.</p>
+    </div>
+
+    <h2 id="error-paths">Error paths</h2>
+    <p>All controller exceptions are mapped by <code>platform/security/api/ApiAdvice.java</code> (plus the package-scoped
+      <code>platform/booking/api/BookingApiAdvice.java</code>) into an <code>ErrorDto</code>:
+      <code>{ helpCode, errorMsg: { errorKey, message } }</code>, with <code>message</code> localised from
+      <code>Accept-Language</code>. The frontend switches on <code>errorKey</code>; quote the <code>helpCode</code> when
+      searching logs.</p>
+    <table>
+      <thead><tr><th>Situation</th><th>Thrown</th><th>Mapped by</th><th>HTTP / errorKey</th><th>What the parent sees</th></tr></thead>
+      <tbody>
+        <tr><td>Malformed body (null id, past start, end before start, notes &gt; 500)</td><td><code>MethodArgumentNotValidException</code></td><td><code>ApiAdvice.java:477-483</code></td><td>400 <code>validation.invalidData</code>, plus a per-field list (<code>invalid.&lt;field&gt;</code>)</td><td>Generic submit-error toast (no branch for it)</td></tr>
+        <tr><td>Business rule broken (slot taken, outside availability, coach suspended, wrong owner)</td><td><code>OperationNotAllowedException</code> with a <code>BookingError</code>/<code>SecurityError</code></td><td><code>ApiAdvice.java:335-345</code></td><td><strong>403</strong> with the specific key, e.g. <code>booking.slotUnavailable</code>, <code>MISSING_RIGHTS</code></td><td>The matching toast; <code>availabilityChanged</code> also reloads the calendar</td></tr>
+        <tr><td>Coach not Stripe-ready, pack expired/mismatch/exhausted</td><td><code>PaymentGatewayException</code></td><td><code>BookingApiAdvice</code> (highest precedence, booking.api only)</td><td>422 <code>payment.*</code></td><td>The matching <code>payment.*</code> toast</td></tr>
+        <tr><td>Coach row still locked after ~3.2 s of retries</td><td><code>PessimisticLockingFailureException</code></td><td><code>ApiAdvice.java:676-682</code></td><td>409 <code>generic.conflict</code></td><td>Generic submit-error toast — retrying is safe</td></tr>
+        <tr><td>Concurrent writer slipped past (exclusion constraint)</td><td><code>DataIntegrityViolationException</code> (23P01)</td><td><code>ApiAdvice.java:187-213</code>, constraint name recovered at <code>:222-241</code></td><td>409 <code>booking.slotUnavailable</code></td><td>"Slot unavailable" toast</td></tr>
+        <tr><td>Accept on a booking no longer <code>REQUESTED</code></td><td><code>BookingStateTransitionException</code></td><td><code>ApiAdvice.java:401-406</code></td><td>409</td><td>Coach: generic accept-error toast, list refreshed</td></tr>
+        <tr><td>Missing booking/player/coach</td><td><code>ResourceNotFoundException</code></td><td><code>ApiAdvice.java:617-623</code></td><td>404</td><td>Generic toast</td></tr>
+        <tr><td>Expired/invalid JWT</td><td>caught in <code>JWTAuthorizationFilter</code></td><td>the filter itself, not <code>ApiAdvice</code></td><td>401 <code>security.sessionExpired</code> / <code>security.unauthorized</code></td><td>axios interceptor redirects to <code>/#/login</code></td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn">
+      <p><strong>Business-rule violations are 403, not 409/422.</strong> <code>OperationNotAllowedException</code> extends
+      <code>AuthorizationException</code>, so every "slot unavailable" is a 403 that axios logs as <code>[403 Forbidden]</code>
+      and that also publishes a <code>SecurityAlertEvent</code> (<code>ApiAdvice.java:698-702</code>). Don't build
+      frontend logic on the status code — switch on <code>errorKey</code>.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Errors after commit are invisible to the caller.</strong> An exception in an <code>AFTER_COMMIT</code>
+      listener (payment settlement, SSE) is logged and swallowed; the HTTP response is still 2xx. That is why payment
+      records failures as data (<code>CHARGE_FAILED</code> row + <code>DECLINED</code>) and why durable side effects go
+      through the outbox instead.</p>
+    </div>
+
+    <h2 id="gotchas-hop-by-hop">Gotchas, hop by hop</h2>
+    <table>
+      <thead><tr><th>Hop</th><th>What bites newcomers</th><th>Go deeper</th></tr></thead>
+      <tbody>
+        <tr><td>Router</td><td>Hash mode: every SPA URL is <code>/#/...</code>. Backend-built links must use <code>FrontendLinkBuilder</code>.</td><td><a href="../frontend/index.html">Frontend</a></td></tr>
+        <tr><td>axios</td><td>Callers get <code>response.data</code>; errors are the raw axios error. No auth header — cookies only.</td><td><a href="../frontend/index.html">Frontend</a></td></tr>
+        <tr><td>Security filter</td><td>Lock/erasure takes effect within 5 min, not instantly. Filter 401s bypass <code>ApiAdvice</code>.</td><td><a href="../security/index.html">Security</a></td></tr>
+        <tr><td>Controller</td><td>Take the caller id from <code>SecurityUtil</code>; <code>Booking.playerId</code> is a <code>PlayerProfile</code> id, <code>parentId</code> is the paying user's id.</td><td><a href="../booking/index.html">Booking</a></td></tr>
+        <tr><td>Service</td><td>Lock the per-coach row before reading anything you validate against; <code>refresh</code> after locking an already-loaded entity.</td><td><a href="../database/index.html">Database</a></td></tr>
+        <tr><td>Lock retry</td><td>No writes in the retried lambda; update the call-site audit test.</td><td><a href="../infrastructure/index.html">Infrastructure</a></td></tr>
+        <tr><td>Events</td><td>Durable side effect → <code>BEFORE_COMMIT</code> + outbox. <code>AFTER_COMMIT</code> runs on the request thread and its failures are silent.</td><td><a href="../outbox/index.html">Outbox</a></td></tr>
+        <tr><td>Email</td><td>Dev never sends mail: read <code>target/mails</code>. Handlers must be idempotent (at-least-once).</td><td><a href="../notification/index.html">Notification</a></td></tr>
+        <tr><td>SSE</td><td>Per booking, node-local, no channel for "you have a new request".</td><td><a href="../booking/index.html">Booking</a></td></tr>
+        <tr><td>Payment</td><td>The accept response waits for Stripe; money sits on the platform account until completion.</td><td><a href="../payment/index.html">Payment</a></td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="related">Related</h2>
+    <ul>
+      <li><a href="../decisions/index.html">Why it's built this way</a> — the reasoning behind the outbox, NOWAIT locking, platform charges and the rest of what you just walked through.</li>
+      <li><a href="../booking/index.html">Booking</a>, <a href="../payment/index.html">Payment</a>, <a href="../notification/index.html">Notification</a>, <a href="../outbox/index.html">Outbox</a>, <a href="../security/index.html">Security</a>, <a href="../frontend/index.html">Frontend</a></li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

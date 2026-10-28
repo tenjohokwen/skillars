@@ -479,8 +479,9 @@ fixture is required.
 If you specifically want an admin account, use the `AdminBootstrapRunner`
 environment variables instead (`APP_BOOTSTRAP_ADMIN_EMAIL`,
 `APP_BOOTSTRAP_ADMIN_PASSWORD`, `APP_BOOTSTRAP_ADMIN_PHONE` — see
-`.env.example`), adding them to `app.environment` in
-`docker-compose.local.yml`, since `.env.local` alone does not reach the JVM.
+`.env.example`). Put them in `.env.local`: the base `docker-compose.yml` already
+passes all three through to the app container (`app.environment`), so no compose
+edit is needed — just run compose with `--env-file .env.local`.
 
 For the full manual-testing path — getting a paid coach and a paid
 parent/player through every workflow without Stripe — see

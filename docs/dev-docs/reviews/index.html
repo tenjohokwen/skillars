@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Reviews</h1>
     <p class="subtitle">Post-session coach ratings and written feedback from Players/Parents, gated by AI + human moderation before they ever reach the marketplace.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>
       The <code>reviews</code> module is how Skillars builds trust in the coach marketplace. After a session, the
       Player or Parent behind it can leave a 1&ndash;5 star rating and an optional written review for the coach.
@@ -101,8 +114,8 @@
       <code>pages/admin/AdminAppealsPage.vue</code>.
     </p>
 
-    <h2>Technical Overview</h2>
-    <h3>Package layout</h3>
+    <h2 id="technical-overview">Technical Overview</h2>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <tr><th>Package</th><th>Purpose</th></tr>
       <tr><td><code>api</code></td><td><code>ReviewResource</code> (all player, parent and coach endpoints under <code>/api/reviews</code>) and <code>ReviewApiAdvice</code>, a <code>@RestControllerAdvice</code> scoped to this package <em>and</em> <code>admin.api.AdminReviewResource</code>. It maps <code>OperationNotAllowedException</code>/<code>ReviewErrorCode</code> to HTTP status and turns bean-validation failures into <code>reviews.bodyTooLong</code>/<code>reviews.responseTooLong</code>/<code>reviews.validationError</code>.</td></tr>
@@ -111,7 +124,7 @@
       <tr><td><code>service</code></td><td><code>ReviewSubmissionService</code> (submit, update, coach response, eligibility), <code>ReviewModerationService</code> (async AI moderation), <code>ReviewFlagService</code> (flagging and auto-hold), <code>ReviewQueryService</code> (read-only listings), and <code>CoachRatingService</code> (aggregate recompute, shared with <code>admin</code>). No scheduled jobs.</td></tr>
     </table>
 
-    <h3>Key entities &amp; tables</h3>
+    <h3 id="key-entities-tables">Key entities &amp; tables</h3>
     <p>Schema <code>reviews</code>, baseline <code>V138__baseline_schema.sql</code>. Later migrations: <code>V156__reviews_eligibility_config_rework.sql</code> (drops <code>reviews.submissionWindowDays</code>, seeds <code>reviews.minSessionAgeDays</code>=7 and <code>reviews.updateCooldownDays</code>=30) and <code>V157__coach_reviews_author_last_edited_at.sql</code> (adds and backfills <code>author_last_edited_at</code>). <code>reviews.autoHoldFlagThreshold</code> is seeded in <code>V139</code>.</p>
     <table>
       <tr><th>Entity</th><th>Table</th><th>Notes</th></tr>
@@ -120,7 +133,7 @@
       <tr><td><em>(admin)</em> <code>ReviewModerationLog</code></td><td><code>reviews.review_moderation_log</code></td><td>The entity lives in <code>admin.repo</code> even though the table is in this schema. It records one row per admin approve/block (<code>action</code> CHECK APPROVED/BLOCKED, plus an optional <code>reason</code>).</td></tr>
     </table>
 
-    <h3>Key services</h3>
+    <h3 id="key-services">Key services</h3>
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
       <tr><td><code>ReviewSubmissionService</code></td><td>Checks the coach exists and runs eligibility (maturity floor, parent/self ownership, active-dispute gate). Enforces one review per pair and the edit cooldown, saves <code>PENDING</code> reviews and edits, and publishes <code>ReviewSubmittedEvent</code> carrying the <code>moderationEpoch</code>. Also handles the one-time coach response. <code>submitReview</code> runs <code>REQUIRES_NEW</code> so that a caught duplicate-key violation can never surface as <code>UnexpectedRollbackException</code>. <code>checkWriteEligibility</code> backs the read-only pre-check endpoint.</td></tr>
@@ -130,7 +143,7 @@
       <tr><td><code>CoachRatingService</code></td><td>The only writer of a coach's rating aggregate. One <code>COUNT+AVG</code> query over <code>APPROVED</code> rows, average rounded to one decimal, then <code>CoachProfileRepository.updateRatingAggregate</code>. Called by this module and by <code>admin.AdminReviewService</code>.</td></tr>
     </table>
 
-    <h3>REST endpoints</h3>
+    <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr>
       <tr><td>GET</td><td><code>/api/reviews/coaches/me</code></td><td>The coach's own reviews in any moderation status, <code>?page</code></td><td><code>HAS_COACH_ROLE</code></td></tr>
@@ -146,7 +159,7 @@
       <tr><td>POST</td><td><code>/api/admin/reviews/{reviewId}/block</code></td><td>Block the review (<code>{reason}</code>, 1&ndash;500 characters) and resolve its open flags. Recomputes the aggregate only if the review was APPROVED.</td><td><code>HAS_ADMIN_ROLE</code></td></tr>
     </table>
 
-    <h3>Error mapping (<code>ReviewApiAdvice</code>)</h3>
+    <h3 id="error-mapping-reviewapiadvice">Error mapping (<code>ReviewApiAdvice</code>)</h3>
     <table>
       <tr><th>HTTP</th><th>Codes</th></tr>
       <tr><td>409</td><td><code>alreadySubmitted</code>, <code>responseAlreadySubmitted</code>, <code>alreadyFlagged</code>, <code>alreadyApproved</code>, <code>alreadyBlocked</code></td></tr>
@@ -157,7 +170,7 @@
       <tr><td>409 (global)</td><td>Lock contention after <code>PessimisticLockRetryer</code> runs out of retries</td></tr>
     </table>
 
-    <h3>Domain events</h3>
+    <h3 id="domain-events">Domain events</h3>
     <ul>
       <li><strong><code>ReviewSubmittedEvent</code></strong> <code>(reviewId, coachId, authorId, rating, body, moderationEpoch)</code>: published by
         <code>submitReview</code>/<code>updateReview</code> and consumed by this module's <code>ReviewModerationService</code>
@@ -185,9 +198,9 @@
       profile.
     </p>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>Player/Parent submits a review, AI moderates it asynchronously</h3>
+    <h3 id="player-parent-submits-a-review-ai-moderates-it">Player/Parent submits a review, AI moderates it asynchronously</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant U as Player/Parent
@@ -237,7 +250,7 @@ sequenceDiagram
       <code>APPROVED</code>/<code>BLOCKED</code> transition, never on every write.
     </p>
 
-    <h3>Community flag escalates a review, admin resolves it</h3>
+    <h3 id="community-flag-escalates-a-review-admin-resolves-it">Community flag escalates a review, admin resolves it</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant U as Flagging user
@@ -283,7 +296,7 @@ sequenceDiagram
       <em>lists</em> <code>UNDER_REVIEW</code> rows, though.
     </p>
 
-    <h3>Coach responds once to an approved review</h3>
+    <h3 id="coach-responds-once-to-an-approved-review">Coach responds once to an approved review</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant C as Coach
@@ -314,7 +327,7 @@ sequenceDiagram
       author editing the review.
     </p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>Every locked read of <code>coach_reviews</code> is NOWAIT + bounded retry.</strong> Six call sites
       (<code>ReviewFlagService.flag</code>, <code>ReviewSubmissionService.updateReview</code>/<code>submitCoachResponse</code>,
@@ -389,7 +402,7 @@ sequenceDiagram
       that same erasure path.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <ul>
       <li><a href="../booking/index.html">Booking</a> &mdash; <code>findQualifyingCompletedBookings</code> provides the
         "matured completed session with this coach" check that gates submission and edits.</li>
@@ -409,9 +422,12 @@ sequenceDiagram
         <code>PessimisticLockRetryer</code>, and <code>ResourceNotFoundException</code>.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

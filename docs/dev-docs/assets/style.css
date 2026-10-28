@@ -100,6 +100,45 @@ pre code { background: none; padding: 0; }
   margin-top: 0.15rem;
 }
 
+/* Sidebar search (assets/docs.js + assets/search-index.js) */
+.sidebar .search { margin: 0 0 1.25rem; }
+.search-input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+}
+.search-input::placeholder { color: var(--text-dim); }
+.search-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-bg); }
+.search-results {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.search-results li a {
+  display: block;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  color: var(--text);
+}
+.search-results li a:hover,
+.search-results li.active a { background: var(--accent-bg); text-decoration: none; }
+.search-results .search-title { display: block; font-size: 0.85rem; font-weight: 600; line-height: 1.35; }
+.search-results li.active .search-title { color: var(--accent); }
+.search-results .search-sep { color: var(--text-dim); font-weight: 400; }
+.search-results .search-snippet { display: block; overflow-wrap: anywhere; font-size: 0.78rem; color: var(--text-dim); line-height: 1.4; margin-top: 0.15rem; }
+.search-results mark { background: var(--warn-bg); color: inherit; border-radius: 2px; padding: 0 0.1em; }
+.search-results .search-empty { padding: 0.4rem 0.5rem; font-size: 0.85rem; color: var(--text-dim); }
+
 .sidebar nav ul {
   list-style: none;
   margin: 0 0 1.25rem 0;

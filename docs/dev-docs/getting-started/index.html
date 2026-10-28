@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your First Day — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
+    <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Your First Day</div>
+    <h1>Your First Day</h1>
+    <p class="subtitle">One linear path from <code>git clone</code> to your first merged PR: run the stack, create the four personas, click through the core booking loop while reading the code behind each step, run one test of each kind, and ship through CI.</p>
+
+    <h2 id="day-one-checklist">Day-one checklist</h2>
+    <div class="card-grid">
+      <div class="card"><h4>1. Install the toolchain</h4><p>JDK 17, Maven 3.9, Docker with the Compose plugin, Node 22. <a href="#prerequisites">Prerequisites</a></p></div>
+      <div class="card"><h4>2. Run the stack</h4><p><code>docs/deployment/local/setup.sh</code>, then <code>start.sh</code>. Health is green on <code>:8367</code>. <a href="#run-locally">Run locally</a></p></div>
+      <div class="card"><h4>3. Find your email</h4><p>Dev sends nothing. OTPs and verification links land in <code>target/mails/</code>. <a href="#email">Email in dev</a></p></div>
+      <div class="card"><h4>4. Create the personas</h4><p>Register a coach, parent (+ child) and adult player, bootstrap an admin, run <code>seed-accounts.sql</code>. <a href="#accounts">Accounts</a></p></div>
+      <div class="card"><h4>5. Walk the core loop</h4><p>Publish &rarr; book &rarr; accept &rarr; deliver &rarr; wrap up &rarr; review &rarr; admin view. <a href="#tour">Guided tour</a></p></div>
+      <div class="card"><h4>6. Run three tests</h4><p>One unit test, one Testcontainers IT, one Vitest spec. <a href="#tests">Tests</a></p></div>
+      <div class="card"><h4>7. Ship a PR</h4><p>Branch, conventional commit, PR, green CI, squash merge. <a href="#workflow">Workflow</a></p></div>
+      <div class="card"><h4>8. Read on</h4><p>A suggested order through the module pages. <a href="#read-next">What to read next</a></p></div>
+    </div>
+    <div class="callout">
+      <p>Keep the <a href="../glossary/index.html">Glossary</a> open in another tab. Booker, shadow profile, SLU, wrap-up, payout hold, tombstone and similar terms are used on every page and defined there.</p>
+    </div>
+
+    <h2 id="prerequisites">Prerequisites</h2>
+    <table>
+      <thead><tr><th>Tool</th><th>Version</th><th>Where it is pinned</th></tr></thead>
+      <tbody>
+        <tr><td>JDK</td><td>17 (Temurin in CI)</td><td><code>&lt;java.version&gt;17</code> in <code>pom.xml</code>; <code>actions/setup-java</code> <code>java-version: '17'</code> in <code>.github/workflows/pr-build.yml</code>. The runtime image is <code>eclipse-temurin:17-jre-alpine</code>. Do not take dependency bumps whose bytecode needs Java 21.</td></tr>
+        <tr><td>Maven</td><td>3.9</td><td>The <code>Dockerfile</code> builder stage is <code>maven:3.9-eclipse-temurin-17</code>. Use a system <code>mvn</code>: <code>mvnw</code> is checked in but <code>.mvn/wrapper/</code> is not, so <code>./mvnw</code> does not work.</td></tr>
+        <tr><td>Docker</td><td>Engine + <code>docker compose</code> plugin</td><td>Needed both for the local stack and for every <code>*IT</code> test (Testcontainers: <code>postgres:17-alpine</code>, <code>redis:7-alpine</code>, <code>chrislusf/seaweedfs:3.97</code>, see <code>SharedContainers</code>).</td></tr>
+        <tr><td>Node / npm</td><td>Node <code>v22.16.0</code>, npm <code>11.4.2</code></td><td><code>&lt;node.version&gt;</code> / <code>&lt;npmVersion&gt;</code> in <code>pom.xml</code> (the Maven build downloads its own copy); CI's <code>setup-node</code> uses <code>22.16.0</code>. <code>src/frontend/package.json</code> <code>engines</code> accepts 20–28, but match 22 so Prettier/ESLint behave as in CI. There is no <code>.nvmrc</code>.</td></tr>
+        <tr><td>Hosts entry</td><td><code>127.0.0.1 storage</code></td><td>Browser uploads use presigned URLs pointing at <code>http://storage:9500</code> (SeaweedFS). <code>setup.sh</code> tells you the exact <code>sudo tee</code> command.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="run-locally">Clone &amp; run locally</h2>
+    <p>The detail behind every step lives in <a href="../../deployment/local/deployment.md">docs/deployment/local/deployment.md</a> (infrastructure) and <a href="../../deployment/local/manual-testing.md">manual-testing.md</a> (run modes, accounts, seeding payment state). The short version:</p>
+<pre>git clone git@github.com:tenjohokwen/skillars.git &amp;&amp; cd skillars
+docs/deployment/local/setup.sh     # interactive, idempotent wizard
+docs/deployment/local/start.sh     # starts app postgres redis storage-init grafana
+curl -s http://localhost:8367/manage/health   # {"status":"UP"} once Flyway has run
+docs/deployment/local/stop.sh      # docker compose ... down (volumes kept)</pre>
+    <p><code>setup.sh</code> checks and fixes, in order: Docker daemon + Compose plugin; <code>.env.local</code> (copied from <code>.env.example</code>, placeholders filled, the generated Grafana admin password printed); the checked-in <code>docker-compose.local.yml</code>; <code>deploy/seaweedfs/s3-identity.json</code>; the <code>/etc/hosts</code> entry (it prints the command and waits, it never sudo-s for you); a world-writable <code>target/mails/</code>; the <code>skillars:local</code> image build (Maven + Quasar inside Docker, several minutes the first time); and finally that <code>start.sh</code> exists. Re-run it any time as a status check.</p>
+    <table>
+      <thead><tr><th></th><th>Mode A: all-Docker</th><th>Mode B: infra in Docker, app on host</th></tr></thead>
+      <tbody>
+        <tr><td>Use for</td><td>Clicking through the product</td><td>Changing code (hot reload, debugger)</td></tr>
+        <tr><td>Start</td><td><code>docs/deployment/local/start.sh</code></td><td><code>docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local up -d postgres redis storage storage-init</code><br><code>export APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder</code><br><code>mvn spring-boot:run -Dspring-boot.run.profiles=dev -DskipFrontend</code><br><code>cd src/frontend &amp;&amp; npx quasar dev</code></td></tr>
+        <tr><td>UI</td><td><code>http://localhost:9990</code> (the jar serves the SPA)</td><td><code>http://localhost:9000</code>, proxying <code>/api</code> to <code>:9990</code> (<code>devServer.proxy</code> in <code>quasar.config.js</code>)</td></tr>
+        <tr><td>Picking up changes</td><td>Nothing rebuilds automatically: <code>docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local up -d --build app</code></td><td>Restart the backend; the frontend hot-reloads</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn">
+      <p><strong>Things that bite on day one.</strong> <code>docker compose build app</code> <em>without</em> <code>-f docker-compose.local.yml</code> silently builds nothing (the base file has no <code>build:</code> key). <code>start.sh</code> never builds, so after a <code>git pull</code> rebuild first. Do <em>not</em> run <code>secData.sql</code> or <code>initTestData.sql</code> under the <code>dev</code> profile: <code>JwtSecretBootstrapRunner</code> already created the JWT key row (<code>app.bootstrap.jwt-secret.enabled: true</code> in <code>application-dev.yaml</code>) and both scripts fail on <code>sec_version_bus_id_key</code>. <code>-DskipFrontend</code> produces a jar with no UI: fine for Mode B, never for anything deployed.</p>
+    </div>
+
+    <h2 id="email">Where email goes in dev</h2>
+    <p><code>application-dev.yaml</code> sets <code>app.email.transport: log</code>. No mail is sent. <code>LoggingEmailSender</code> logs <code>Sending email (log transport)</code> and writes the rendered HTML to <code>target/mails/&lt;correlationId&gt;.html</code>. File names are random UUIDs: open the newest file, or <code>grep -l you@example.com target/mails/*</code>. In Mode A the folder is bind-mounted from the container; if Docker created it root-owned (Linux) the app cannot write there, so re-run <code>setup.sh</code> (and <code>sudo rm -rf target/mails</code> first on Linux). <code>mvn clean</code> deletes it; <code>start.sh</code> recreates it.</p>
+    <p>Verification links can also be fetched from <code>main.email_verification_tokens</code> (SQL in <a href="../../deployment/local/manual-testing.md">manual-testing.md</a>, "Fetch the token"). OTP codes cannot: only a hash is stored, so <code>target/mails/</code> is the only source. In practice you rarely need the OTP, because <code>V139__baseline_seed_data.sql</code> seeds <code>security.registration.phone-otp-required=false</code> and email verification alone activates the account. See <a href="../notification/index.html">Notification</a> for the transports.</p>
+
+    <h2 id="accounts">Accounts and seed data</h2>
+    <p><strong>There are no pre-built login accounts.</strong> Flyway seeds roles, config and 20 platform drills, but no users. You register each persona through the UI, and <a href="../../deployment/local/seed-accounts.sql">docs/deployment/local/seed-accounts.sql</a> then <em>upgrades</em> existing accounts to a paid state without calling Stripe. It contains no passwords: you choose them at registration. Use <code>example.com</code> addresses: the <code>User</code> entity's email regex only accepts 2–3 letter TLDs, and a longer one fails as an opaque HTTP 500 at persist time.</p>
+    <table>
+      <thead><tr><th>Persona</th><th>How to create it locally</th><th>What it can do</th></tr></thead>
+      <tbody>
+        <tr><td><span class="tag">Coach</span></td><td><code>/#/coach-register</code> &rarr; verify via <code>target/mails</code> &rarr; <code>/#/login</code> &rarr; finish all five steps of <code>/#/coach/profile-builder</code> and <strong>publish</strong>. Publishing (<code>CoachProfileService.publishProfile</code>) sets status <code>ACTIVE</code> and creates the <code>SCOUT</code> subscription row.</td><td>Availability, accept/decline, Command Center (start/pause/end, wrap-up, recap), drill library, session builder and templates, roster and player development, videos, revenue, reviews reply, reliability page.</td></tr>
+        <tr><td><span class="tag">Parent</span></td><td><code>/#/parent-register</code> &rarr; verify &rarr; login &rarr; <code>/#/parent/create-player</code> to create a child (a <em>shadow</em> <code>PlayerProfile</code> with no login; a minor needs the consent checkbox).</td><td>Search and book for a child, pay from the credit wallet or a pack, cancel/reschedule, confirm a quick-complete, review, dispute, homework and development views, video approvals, GDPR export/erasure for self or child.</td></tr>
+        <tr><td><span class="tag">Player (adult)</span></td><td><code>/#/player-register</code> (18+ only, enforced by <code>PlayerRegistrationService</code>) &rarr; verify &rarr; <code>/#/player/profile-builder</code>.</td><td>The same booker flows as a parent, for their own profile. Minors never log in.</td></tr>
+        <tr><td><span class="tag">Admin</span></td><td>No admin is seeded and there is no admin registration. Set <code>APP_BOOTSTRAP_ADMIN_EMAIL</code>, <code>APP_BOOTSTRAP_ADMIN_PASSWORD</code> and <code>APP_BOOTSTRAP_ADMIN_PHONE</code> (all three) in <code>.env.local</code> (the base <code>docker-compose.yml</code> passes them through to the app) and restart; <code>AdminBootstrapRunner</code> creates the account once. In Mode B export the same variables before <code>mvn spring-boot:run</code>.</td><td>Everything under <code>/#/admin/*</code>: moderation queue, users, coach enforcement, disputes, appeals, GDPR, finance, bookings (force-complete), videos, config editor.</td></tr>
+      </tbody>
+    </table>
+    <p>Then make the coach bookable and the parent solvent, still without Stripe:</p>
+<pre>docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local \
+  exec -T postgres psql -U postgres -d skillars \
+  -v coach_email=coach@example.com -v owner_email=parent@example.com \
+  &lt; docs/deployment/local/seed-accounts.sql</pre>
+    <p>It writes a <code>COMPLETE</code> <code>payment.coach_stripe_accounts</code> row (the booking payment-readiness gate is a pure DB read), sets the coach tier (<code>ACADEMY</code> by default, <code>-v coach_tier=INSTRUCTOR</code> to override), adds 5000.00 of wallet credit to the owner (so bookings settle to <code>CONFIRMED</code> with no gateway call), and an active <code>PRO</code> player subscription. The credit ledger is append-only: <strong>every re-run adds more credit</strong> and cannot be undone. The script refuses to run on any database other than <code>skillars</code>, <code>skillars_dev</code> or <code>skillars_local</code>.</p>
+
+    <h2 id="tour">Guided tour of the core loop</h2>
+    <p>Do this once with the code open beside the browser. All routes are hash routes (<code>http://localhost:9990/#/...</code> in Mode A). Each row names the entry point to read and the doc page that explains the rest.</p>
+    <pre class="mermaid">
+sequenceDiagram
+  actor C as Coach
+  actor P as Parent
+  participant B as booking
+  participant Pay as payment
+  participant S as session
+  participant D as development
+  actor A as Admin
+  C->>B: publish profile and availability windows
+  P->>B: POST /api/bookings/requests (REQUESTED)
+  C->>B: PUT /api/bookings/requests/{id}/accept
+  B-->>Pay: BookingAcceptedEvent (after commit)
+  Pay->>B: credit covers price, booking CONFIRMED
+  C->>S: build session plan (booking must be CONFIRMED)
+  C->>B: start, end, POST /api/bookings/{id}/complete (wrap-up)
+  B-->>Pay: BookingCompletedEvent, payout row + outbox (hold 48h)
+  B-->>D: SLU and timeline (async)
+  B-->>S: homework materialised
+  P->>B: review on the coach profile (after reviews.minSessionAgeDays)
+  A->>Pay: /admin/finance and /admin/bookings
+    </pre>
+    <table>
+      <thead><tr><th>#</th><th>Persona and route</th><th>What happens / entry point</th><th>Read</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><span class="tag">Coach</span> <code>/coach/profile-builder</code>, then <code>/coach/availability</code></td><td><code>POST /api/marketplace/coaches/me/profile/publish</code> (<code>ProfileBuilderResource.java:152</code>) &rarr; <code>CoachProfileService.java:476</code> <code>publishProfile</code>, which requires display name, specialty, age group, pricing and one availability window. Weekly windows: <code>AvailabilityResource.java:73</code> (stored in marketplace's <code>CoachAvailabilityWindow</code>, written by booking's <code>AvailabilityService</code>).</td><td><a href="../marketplace/index.html">Marketplace</a></td></tr>
+        <tr><td>2</td><td><span class="tag">Parent</span> <code>/parent/create-player</code></td><td><code>POST /api/security/players</code> &rarr; <code>ShadowAccountService.java:43</code> <code>createPlayerProfile</code>. The age tier is derived from date of birth by <code>AgePolicyService</code>.</td><td><a href="../security/index.html">Security</a></td></tr>
+        <tr><td>3</td><td><span class="tag">Parent</span> <code>/marketplace</code> &rarr; <code>/coaches/:coachId</code></td><td><code>GET /api/marketplace/coaches</code> &rarr; <code>CoachSearchService.java:45</code> (city-scoped search).</td><td><a href="../marketplace/index.html">Marketplace</a></td></tr>
+        <tr><td>4</td><td><span class="tag">Parent</span> <code>/parent/coaches/:coachId/request-booking</code></td><td><code>POST /api/bookings/requests</code> (<code>BookingResource.java:36</code>) &rarr; <code>BookingService.java:197</code> <code>createBookingRequest</code>: slot must sit inside a window, not cross midnight, match the coach's session length, and the coach must be payment-ready. Status <code>REQUESTED</code>. Pick a slot a little in the future: start and wrap-up are rejected before the start time.</td><td><a href="../booking/index.html">Booking</a></td></tr>
+        <tr><td>5</td><td><span class="tag">Coach</span> <code>/coach/booking-requests</code></td><td><code>PUT /api/bookings/requests/{id}/accept</code> &rarr; <code>BookingService.java:372</code> <code>acceptBooking</code> publishes <code>BookingAcceptedEvent</code>; <code>PaymentLifecycleService.java:143</code> <code>onBookingAccepted</code> (after commit) chooses pack, credit or card. With seeded credit no Stripe call happens and the booking settles to <code>CONFIRMED</code>.</td><td><a href="../payment/index.html">Payment</a></td></tr>
+        <tr><td>6</td><td><span class="tag">Coach</span> <code>/coach/session-builder/:bookingId</code> (optional)</td><td><code>POST /api/session/sessions</code> &rarr; <code>SessionPlanService.java:63</code> <code>createSession</code>. Only a <code>CONFIRMED</code> booking is plannable; the reminder scheduler moves it to <code>UPCOMING</code> about 24h before the start (<code>platform.reminder_interval_primary_hours</code>), after which you can no longer plan it.</td><td><a href="../session/index.html">Session</a></td></tr>
+        <tr><td>7</td><td><span class="tag">Coach</span> <code>/coach/command-center</code></td><td>Start/end the live session (<code>SessionCompletionResource.java:51</code> &rarr; <code>BookingCompletionService.java:82</code>), then the wrap-up dialog (<code>WrapUpSequence.vue</code>) posts <code>/api/bookings/{id}/complete</code> &rarr; <code>BookingCompletionService.java:162</code> <code>submitWrapUp</code>. <code>LIVE</code> completes immediately; <code>QUICK</code> waits for the booker to confirm. Completion fans out: payout row + outbox (<code>CoachPayoutEnqueueListener.java:39</code>), SLU (<code>SluCalculationService.java:54</code>), timeline, homework (<code>HomeworkAssignmentService.java:64</code>).</td><td><a href="../booking/index.html">Booking</a>, <a href="../development/index.html">Development</a>, <a href="../outbox/index.html">Outbox</a></td></tr>
+        <tr><td>8</td><td><span class="tag">Parent</span> <code>/parent/bookings</code>, <code>/player/locker-room/:playerId</code>, <code>/parent/players/:playerId/development</code></td><td>Confirm a quick-complete (<code>PUT /api/bookings/{id}/confirm-completion</code> &rarr; <code>BookingCompletionService.java:493</code>), see homework and the development timeline.</td><td><a href="../session/index.html">Session</a>, <a href="../development/index.html">Development</a></td></tr>
+        <tr><td>9</td><td><span class="tag">Parent</span> <code>/coaches/:coachId</code> &rarr; "Write a review"</td><td><code>POST /api/reviews/coaches/{coachId}</code> &rarr; <code>ReviewSubmissionService.java:69</code>. Only shown when the eligibility check passes, which needs a <code>COMPLETED</code> booking whose <code>updated_at</code> is at least <code>reviews.minSessionAgeDays</code> old (seeded 7, minimum 1). Locally, wait or back-date that one row: <code>UPDATE booking.bookings SET updated_at = now() - interval '8 days' WHERE id = '&lt;bookingId&gt;';</code> (local DB only).</td><td><a href="../reviews/index.html">Reviews</a></td></tr>
+        <tr><td>10</td><td><span class="tag">Admin</span> <code>/admin/finance</code>, <code>/admin/bookings</code>, <code>/admin/moderation</code></td><td><code>AdminFinanceResource</code> (<code>/api/admin/payment</code>) shows the revenue and the payout held for <code>payment.payout.hold_hours</code> (48); <code>AdminBookingResource</code> (<code>/api/admin/bookings</code>) looks up the booking and can force-complete a stuck one; the moderation queue shows anything flagged along the way.</td><td><a href="../admin/index.html">Admin</a>, <a href="../payment/index.html">Payment</a></td></tr>
+      </tbody>
+    </table>
+    <p>To watch the backend while you click: <code>docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local logs -f app</code> (JSON lines; pipe through <code>jq</code>), or Grafana on <code>http://localhost:3000</code>. What you cannot do locally without real Stripe test keys: card entry, Connect onboarding, pack purchase, real refunds and cash-out (see "What you can and cannot exercise" in <a href="../../deployment/local/manual-testing.md">manual-testing.md</a>).</p>
+
+    <h2 id="tests">Run one test of each kind</h2>
+    <p>The full backend suite (<code>mvn -B verify</code>, over ten minutes on CI runners) is GitHub's job, not yours. Locally, run what you touched:</p>
+    <h3 id="backend-unit-test-surefire-no-docker">Backend unit test (surefire, no Docker)</h3>
+<pre>mvn -DskipFrontend -Dtest=AgePolicyServiceTest test</pre>
+    <p><code>src/test/java/com/softropic/skillars/platform/security/service/AgePolicyServiceTest.java</code> is a plain Mockito test of the age-tier boundaries. Unit tests are anything not named <code>*IT</code>; slice tests are named <code>*WebMvcTest</code>.</p>
+    <h3 id="integration-test-failsafe-docker-must-be-running">Integration test (failsafe, Docker must be running)</h3>
+<pre>mvn -DskipFrontend -Dtest=NoUnitTests -Dsurefire.failIfNoSpecifiedTests=false \
+    -Dit.test=ConfigResourceIT verify</pre>
+    <p><code>-Dtest=NoUnitTests</code> with <code>failIfNoSpecifiedTests=false</code> skips the unit phase; <code>-Dit.test</code> picks the IT. <code>ConfigResourceIT</code> extends <code>AbstractIntegrationTest</code> (<code>src/test/java/com/softropic/skillars/config/</code>), which carries <code>@SpringBootTest</code>, profiles <code>dev</code>,<code>test</code> and the JVM-static Testcontainers. Before writing your own IT read <a href="../../testing/readme.md">docs/testing/readme.md</a>: extend the base class, add no class-level Spring annotations, seed your own data (every table is reset per test method), claim an id range, and reuse an existing mock set. Every new <code>@MockitoBean</code> combination forks a Spring context, and CI fails above 17 contexts. Add <code>-o</code> once your <code>~/.m2</code> is warm.</p>
+    <h3 id="frontend-unit-test-vitest">Frontend unit test (Vitest)</h3>
+<pre>cd src/frontend
+npm ci                                                   # postinstall runs quasar prepare (.quasar/)
+npx vitest run src/utils/__tests__/timelineLinksSpec.js  # one spec
+npm run test:unit                                        # the whole suite</pre>
+    <p>Specs live beside the code in <code>__tests__/</code> folders and import <code>describe</code>/<code>it</code>/<code>expect</code> explicitly (no globals). The suite is not part of <code>mvn verify</code>: <code>npm test</code> is a deliberate no-op stub. Import aliases resolve through <code>.quasar/tsconfig.json</code>, so in a git worktree make sure that worktree has its own <code>.quasar/</code> (run <code>npm ci</code> there), otherwise specs can run against another checkout's code. See <a href="../../testing/frontend-unit-tests.md">frontend-unit-tests.md</a>.</p>
+
+    <h2 id="workflow">The dev workflow</h2>
+    <h3 id="branches-and-commits">Branches and commits</h3>
+    <p><code>master</code> is protected by the <code>NoDirectPush</code> ruleset (<code>.github/rulesets/no-direct-push.json</code>): no direct pushes, no force-push, no deletion, changes only through a PR. Branch names in use are <code>feat/…</code>, <code>fix/…</code>, <code>chore/…</code>, <code>docs/…</code> and <code>story/&lt;story-id&gt;-&lt;slug&gt;</code> for planned stories (e.g. <code>story/12-4-coach-facing-player-detail-page</code>). Commit subjects follow Conventional Commits with the touched modules as scope, as <code>git log</code> shows:</p>
+<pre>feat(admin): GDPR tracker, finance overview, stuck-booking force-complete, ... (#314)
+fix(session,video,payment,notification,frontend): role guards for self-registered players, ... (#307)
+docs(dev-docs): refresh every page against current master, add Outbox and Frontend pages (#315)
+build(deps): bump actions/setup-java from 6.0.1 to 6.1.0 (#285)
+chore(deps): bump tomcat-embed-core to 10.1.59 and guava to 33.7.2 for new Trivy CVEs (#308)</pre>
+    <p>PRs are squash-merged, so the PR title becomes the single commit on <code>master</code> with <code>(#NNN)</code> appended: write the PR title as a conventional commit. Story work often also references its story id (<code>deferred-165</code>, <code>12.10</code>) in the title.</p>
+    <h3 id="ci-jobs">CI jobs</h3>
+    <table>
+      <thead><tr><th>Workflow</th><th>Trigger</th><th>Job</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td rowspan="3"><code>pr-build.yml</code></td><td rowspan="3">PR to <code>master</code></td><td><code>build</code> <span class="tag">required</span></td><td><code>mvn -B verify</code> (frontend build, all unit tests, all ITs), then <code>assert-context-count.sh build.log 17</code> (fails if the IT JVM builds more than 17 Spring contexts) and <code>container-sampler.sh</code> (at most one Postgres/Redis/storage container alive at once). Uploads surefire/failsafe reports as an artifact.</td></tr>
+        <tr><td><code>docker-image</code> <span class="tag">required</span></td><td>Builds the image without pushing, asserts its embedded <code>git.properties</code> matches the commit, and fails on CRITICAL/HIGH Trivy findings not listed in <code>.trivyignore</code>.</td></tr>
+        <tr><td><code>frontend-quality</code></td><td><code>.github/actions/frontend-quality</code>: <code>prettier --check "**/*.{js,vue,scss,json}"</code> and <code>eslint .</code> (with <code>NODE_ENV=production</code>, so a stray <code>debugger</code> fails). Not a required check, but the same action gates the image publish on <code>master</code>, so treat red as blocking. Run <code>npx prettier --write</code> on what you touched.</td></tr>
+        <tr><td><code>frontend-unit-tests.yml</code></td><td>PR touching <code>src/frontend/**</code>, the <code>frontend-tests</code> label, or manual</td><td><code>frontend-unit</code></td><td><code>npm run test:unit:ci</code> twice, with <code>TZ=UTC</code> and <code>TZ=America/New_York</code>. Not required, but do not merge red.</td></tr>
+        <tr><td rowspan="3"><code>ci.yml</code></td><td rowspan="3">Push to <code>master</code></td><td><code>test</code></td><td><code>mvn -B verify</code> again on the merged commit.</td></tr>
+        <tr><td><code>frontend-quality</code></td><td>Same composite action as on PRs.</td></tr>
+        <tr><td><code>build-and-push</code></td><td><code>needs: [test, frontend-quality]</code>. Pushes the image to GHCR (<code>sha-&lt;short&gt;</code> tag, plus <code>:latest</code> behind an ordering guard) and verifies its provenance.</td></tr>
+        <tr><td><code>deploy.yml</code></td><td>Manual</td><td><code>deploy</code></td><td>Deploys a given image tag to production over SSH, smoke-tests it and auto-reverts on failure.</td></tr>
+        <tr><td><code>apply-branch-ruleset.yml</code></td><td>Manual</td><td><code>apply</code></td><td>Re-applies the <code>NoDirectPush</code> ruleset from the repo file.</td></tr>
+      </tbody>
+    </table>
+    <div class="callout warn">
+      <p><strong>GitHub CI is the full gate. Do not run the full <code>mvn verify</code> locally before pushing.</strong> It is slow, ties up Docker, and is exactly what <code>pr-build.yml</code> runs anyway, along with the context-count and container-ceiling checks you cannot reproduce locally. Run the targeted unit/IT/Vitest commands above for what you changed, plus Prettier/ESLint on touched frontend files, push, and let CI do the rest. If CI goes red, download the <code>test-reports-pr-&lt;n&gt;</code> artifact.</p>
+    </div>
+    <h3 id="your-first-pr-end-to-end">Your first PR, end to end</h3>
+<pre>git switch master &amp;&amp; git pull
+git switch -c fix/short-description
+# ...change code, run the targeted tests...
+git commit -m "fix(booking): reject reschedule into a blocked slot"
+git push -u origin fix/short-description
+gh pr create --base master --title "fix(booking): reject reschedule into a blocked slot" --body "..."
+# wait for build + docker-image (and frontend-quality / frontend-unit if they ran), get review,
+# then squash-merge, delete the branch, and git pull master</pre>
+    <p>If your change adds a Flyway migration, read <a href="../database/index.html">Database</a> first: the next version follows the current highest (<code>ls src/main/resources/db/migration | sort -V | tail -1</code>) and lint tests run in the build. If it adds a lock call site or an <code>@Scheduled</code> method, read the NOWAIT and ShedLock sections of <a href="../database/index.html">Database</a> and <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>; audit tests pin those counts.</p>
+
+    <h2 id="read-next">What to read next</h2>
+    <ol>
+      <li><a href="../index.html">Home</a>: the module map and the platform-wide gotchas (ID spaces, NOWAIT, outbox, hash-routed links).</li>
+      <li><a href="../glossary/index.html">Glossary</a>: the vocabulary used everywhere below.</li>
+      <li><a href="../security/index.html">Security</a>: users, the four registration pipelines, shadow profiles, age tiers, JWT/refresh.</li>
+      <li><a href="../booking/index.html">Booking</a>: the state machine at the heart of everything.</li>
+      <li><a href="../payment/index.html">Payment</a>: charges, credit wallet, packs, payout hold, strikes.</li>
+      <li><a href="../session/index.html">Session</a> and <a href="../development/index.html">Development</a>: what happens inside and after a session.</li>
+      <li><a href="../outbox/index.html">Outbox</a> and <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>: how side effects and background work survive crashes.</li>
+      <li><a href="../database/index.html">Database &amp; Migrations</a>: schemas, Flyway, locking conventions, tombstones.</li>
+      <li><a href="../frontend/index.html">Frontend</a>: router guards, stores, the axios/session layer.</li>
+      <li>Then whichever of <a href="../marketplace/index.html">Marketplace</a>, <a href="../video/index.html">Video</a>, <a href="../messaging/index.html">Messaging</a>, <a href="../reviews/index.html">Reviews</a>, <a href="../notification/index.html">Notification</a>, <a href="../admin/index.html">Admin</a>, <a href="../filestorage/index.html">Filestorage</a>, <a href="../config/index.html">Config</a>, <a href="../infrastructure/index.html">Infrastructure</a> your first ticket touches.</li>
+    </ol>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

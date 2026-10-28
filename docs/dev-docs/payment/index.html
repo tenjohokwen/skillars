@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Payment</h1>
     <p class="subtitle">Moves money between parents, coaches, and the platform: card charges on the platform account, completion-gated Stripe Connect transfers to coaches, the credit wallet, subscriptions, session packs, finance reporting, and the reliability-strike system that keeps coach supply honest.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>
       Skillars is a two-sided marketplace: parents (or self-registered adult players) pay for coaching
       sessions, and coaches need to get paid reliably without the platform touching card numbers or bank
@@ -85,7 +98,7 @@
       </div>
     </div>
 
-    <h3>Key business rules found in the code</h3>
+    <h3 id="key-business-rules-found-in-the-code">Key business rules found in the code</h3>
     <div class="callout">
       <p><strong>Commission is locked at capture and applied at payout.</strong> The PaymentIntent no longer
       carries <code>application_fee_amount</code> or <code>transfer_data</code>. When the payment is
@@ -164,8 +177,8 @@
       <code>CANCELLED</code>).</p>
     </div>
 
-    <h2>Technical Overview</h2>
-    <h3>Package layout</h3>
+    <h2 id="technical-overview">Technical Overview</h2>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
       <tbody>
@@ -180,7 +193,7 @@
       </tbody>
     </table>
 
-    <h3>Key entities &amp; DB tables</h3>
+    <h3 id="key-entities-db-tables">Key entities &amp; DB tables</h3>
     <p>The <code>payment</code> schema is created by the V138 pre-production baseline (<code>V138__baseline_schema.sql</code>, skillars-deferred-112). The pre-squash V02–V137 files no longer exist, so look at V138 for the current DDL rather than older migration numbers in code comments. No later migration changes payment tables. The payment-related <code>platform_config</code> rows are seeded in <code>V139__baseline_seed_data.sql</code>.</p>
     <table>
       <thead><tr><th>Entity</th><th>Table (schema <code>payment</code>)</th><th>Purpose</th></tr></thead>
@@ -202,7 +215,7 @@
     </table>
     <p>Reliability strikes (<code>CoachReliabilityStrike</code>) and the coach status they change belong to the <code>marketplace</code> module's repo package. Payment writes them through <code>CoachReliabilityStrikeRepository</code> / <code>CoachProfileRepository</code>.</p>
 
-    <h3>Key services</h3>
+    <h3 id="key-services">Key services</h3>
     <table>
       <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
       <tbody>
@@ -231,7 +244,7 @@
       </tbody>
     </table>
 
-    <h3>REST endpoints</h3>
+    <h3 id="rest-endpoints">REST endpoints</h3>
     <p>Role constants come from <code>SecurityConstants</code>: <code>PARENT|PLAYER</code> = <code>HAS_PARENT_OR_PLAYER_ROLE</code> (a self-registered adult player pays for themselves, UAT.5), and <code>PARENT|PLAYER|COACH</code> = <code>HAS_PARENT_PLAYER_OR_COACH_ROLE</code>. Date params are <code>LocalDate</code>, interpreted in UTC, with <code>to</code> inclusive. If omitted, reports default to the current month up to now.</p>
     <table>
       <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
@@ -292,7 +305,7 @@
       <li><code>pages/admin/AdminFinancePage.vue</code>: via <code>api/admin.api.js</code></li>
     </ul>
 
-    <h3>Domain events</h3>
+    <h3 id="domain-events">Domain events</h3>
     <table>
       <thead><tr><th>Event</th><th>Direction</th><th>Notes</th></tr></thead>
       <tbody>
@@ -312,7 +325,7 @@
       </tbody>
     </table>
 
-    <h3>Outbox message types owned by payment</h3>
+    <h3 id="outbox-message-types-owned-by-payment">Outbox message types owned by payment</h3>
     <p>These use the generic <code>platform.outbox</code> machinery: <code>OutboxService.enqueue(...)</code> + <code>requestDrainAfterCommit()</code>, and handlers implementing <code>OutboxMessageHandler</code>. Handlers run inside <code>OutboxRowProcessor</code>'s <code>REQUIRES_NEW</code> transaction. If a handler throws, the row is retried with backoff and <code>[OUTBOX_STUCK]</code> is logged after 10 attempts. Rows are never dropped.</p>
     <table>
       <thead><tr><th>Aggregate type</th><th>Enqueued by</th><th>Handler</th><th>Idempotency anchor</th></tr></thead>
@@ -323,7 +336,7 @@
       </tbody>
     </table>
 
-    <h3>Scheduled jobs</h3>
+    <h3 id="scheduled-jobs">Scheduled jobs</h3>
     <p>All seven are ShedLock-guarded (<code>@SchedulerLock</code>), and each processes one row per transaction so a single bad row can't abort the run.</p>
     <table>
       <thead><tr><th>Class</th><th>Schedule</th><th>Lock name</th><th>Does</th></tr></thead>
@@ -338,9 +351,9 @@
       </tbody>
     </table>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>Coach Stripe Connect onboarding</h3>
+    <h3 id="coach-stripe-connect-onboarding">Coach Stripe Connect onboarding</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Coach as Coach (browser)
@@ -373,7 +386,7 @@ sequenceDiagram
       both require <code>COMPLETE</code> with <code>charges_enabled</code>.
     </p>
 
-    <h3>Stripe webhook: idempotent, signature-verified event processing</h3>
+    <h3 id="stripe-webhook-idempotent-signature-verified-event">Stripe webhook: idempotent, signature-verified event processing</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Stripe
@@ -411,7 +424,7 @@ sequenceDiagram
       ignored (logged at DEBUG).
     </p>
 
-    <h3>Booking settlement: reserve, then charge the platform account</h3>
+    <h3 id="booking-settlement-reserve-then-charge-the-platform-account">Booking settlement: reserve, then charge the platform account</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Booking as BookingService
@@ -452,7 +465,7 @@ sequenceDiagram
       and every reserved booking is declined.
     </p>
 
-    <h3>Coach payout lifecycle (completion-gated transfer)</h3>
+    <h3 id="coach-payout-lifecycle-completion-gated-transfer">Coach payout lifecycle (completion-gated transfer)</h3>
     <pre class="mermaid">
 stateDiagram-v2
   [*] --> PENDING_RELEASE: BookingCompletedEvent, stripe_charged above 0
@@ -479,7 +492,7 @@ stateDiagram-v2
       <code>coach.payout.reversal_failed</code> metrics).
     </p>
 
-    <h3>Stuck PAYMENT_PENDING recovery</h3>
+    <h3 id="stuck-payment-pending-recovery">Stuck PAYMENT_PENDING recovery</h3>
     <p><code>PaymentPendingSweeper.sweepOne</code> takes the booking row lock (the same lock <code>reserveCapture</code> takes), re-checks <code>PAYMENT_PENDING</code>, and then decides based on the payment row:</p>
     <table>
       <thead><tr><th>Payment row</th><th>Action</th></tr></thead>
@@ -491,7 +504,7 @@ stateDiagram-v2
       </tbody>
     </table>
 
-    <h3>Cancellation refund (durable)</h3>
+    <h3 id="cancellation-refund-durable">Cancellation refund (durable)</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Booking as BookingService (cancel TX)
@@ -510,7 +523,7 @@ sequenceDiagram
     </pre>
     <p>If the enqueue fails, the cancellation itself rolls back, so a committed cancellation always has its refund recorded (skillars-deferred-101). Pack-session restores still run inline in the AFTER_COMMIT listener, without retry.</p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>Never skip webhook signature verification or idempotency.</strong> <code>/api/payment/webhooks/stripe</code>
       has to be <code>permitAll</code> (Stripe sends no session cookies), so <code>Webhook.constructEvent(...)</code>
@@ -636,7 +649,7 @@ sequenceDiagram
       registered in the Stripe Dashboard.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <ul>
       <li><a href="../booking/index.html">Booking</a>: payment listens for accept, cancel, no-show and <code>BookingCompletedEvent</code>, and calls back into <code>BookingService.transition(...)</code>. Booking reads <code>BookingPaymentStatus</code> for its cancel interlock. The pack lifecycle events and <code>BookingPaymentUnresolvedEvent</code> are declared in <code>booking.contract</code> but published by payment.</li>
       <li><a href="../outbox/index.html">Outbox</a>: carries the durable refund, payout-transfer and payout-reversal messages listed above.</li>
@@ -650,9 +663,12 @@ sequenceDiagram
       <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a>: the cross-module catalogue that includes this module's seven jobs.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

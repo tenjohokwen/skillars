@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Messaging</h1>
     <p class="subtitle">In-app conversations between coaches, parents, and players — gated by a real booking, moderated by an LLM before delivery, and age-policy-aware so minors are never left unsupervised.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>
       Skillars lets coaches and families coordinate around a session — scheduling changes, drill feedback,
       encouragement — without exchanging personal contact details. The <code>messaging</code> module is the
@@ -94,8 +107,8 @@
       <code>composables/useStartConversation.js</code>. Admin moderation lives in <code>pages/admin/AdminModerationPage.vue</code>.
     </p>
 
-    <h2>Technical Overview</h2>
-    <h3>Package layout</h3>
+    <h2 id="technical-overview">Technical Overview</h2>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
       <tbody>
@@ -107,7 +120,7 @@
       </tbody>
     </table>
 
-    <h3>Key entities &amp; tables</h3>
+    <h3 id="key-entities-tables">Key entities &amp; tables</h3>
     <p>All four tables live in the <code>messaging</code> schema and are defined in the squashed baseline <code>V138__baseline_schema.sql</code>. No later migration touches them. Both config keys are seeded in <code>V139__baseline_seed_data.sql</code>.</p>
     <table>
       <thead><tr><th>Entity</th><th>Table</th><th>Notes</th></tr></thead>
@@ -119,7 +132,7 @@
       </tbody>
     </table>
 
-    <h3>Key services</h3>
+    <h3 id="key-services">Key services</h3>
     <table>
       <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
       <tbody>
@@ -136,7 +149,7 @@
       </tbody>
     </table>
 
-    <h3>REST endpoints</h3>
+    <h3 id="rest-endpoints">REST endpoints</h3>
     <p>
       Everything is under <code>/api/messaging</code>. Most endpoints accept an optional <code>?role=PARENT|PLAYER</code> hint
       (see "Role resolution" in the gotchas). Party authorization is enforced in the service layer, not by
@@ -165,7 +178,7 @@
       BLOCKED or UNDER_REVIEW.
     </p>
 
-    <h3>Error mapping (<code>MessagingApiAdvice</code>)</h3>
+    <h3 id="error-mapping-messagingapiadvice">Error mapping (<code>MessagingApiAdvice</code>)</h3>
     <table>
       <thead><tr><th>HTTP</th><th>Codes</th></tr></thead>
       <tbody>
@@ -176,7 +189,7 @@
       </tbody>
     </table>
 
-    <h3>Domain events</h3>
+    <h3 id="domain-events">Domain events</h3>
     <table>
       <thead><tr><th>Event</th><th>Published by</th><th>Consumed by</th></tr></thead>
       <tbody>
@@ -208,9 +221,9 @@
       messaging either, so a new message produces no email or in-app notification, only the SSE push.
     </p>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>Starting a conversation</h3>
+    <h3 id="starting-a-conversation">Starting a conversation</h3>
     <pre class="mermaid">
 flowchart TD
   A["POST /conversations {coachId?, playerId}"] --> B{"coachId given?"}
@@ -231,7 +244,7 @@ flowchart TD
   J --> K
     </pre>
 
-    <h3>Sending a message through moderation</h3>
+    <h3 id="sending-a-message-through-moderation">Sending a message through moderation</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Sender
@@ -271,7 +284,7 @@ sequenceDiagram
       client never hears about a message that a rollback erases.
     </p>
 
-    <h3>Reporting a message and the parental oversight view</h3>
+    <h3 id="reporting-a-message-and-the-parental-oversight-view">Reporting a message and the parental oversight view</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Reporter
@@ -306,7 +319,7 @@ sequenceDiagram
       not for taking part in the chat. The frontend shows them as a read-only per-child view.
     </p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong><code>PENDING</code> content is <em>not</em> hidden.</strong> <code>toMessageDto</code> hides content
       only for <code>BLOCKED</code> and <code>UNDER_REVIEW</code>, and <code>findByConversationIdAndNotDeleted</code>
@@ -384,7 +397,7 @@ sequenceDiagram
       <code>REQUIRES_NEW</code> insert that catches <code>DataIntegrityViolationException</code> and re-queries.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <table>
       <thead><tr><th>Module</th><th>Why it's related</th></tr></thead>
       <tbody>
@@ -398,9 +411,12 @@ sequenceDiagram
       </tbody>
     </table>
     <p><a href="../index.html">&larr; Back to Home</a></p>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

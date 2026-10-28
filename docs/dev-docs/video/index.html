@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Video</h1>
     <p class="subtitle">Owns the full lifecycle of an uploaded video — upload, quota enforcement, three-layer content moderation, minor-safety parental approval, transcoding, playback authorization, and eventual archival/deletion — behind a Bunny.net provider adapter.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>Skillars videos are the raw material behind drill review and skill assessment: a <strong>Coach</strong> uploads a <code>DRILL_DEMO</code> or <code>COACH_REVIEW</code> clip, and a <strong>Player</strong> (frequently a minor) uploads <code>HOMEWORK</code> footage responding to an assigned drill. Because a large share of players are minors, this module is one of the most compliance-sensitive parts of the platform: every uploaded video passes through a three-layer moderation pipeline — CSAM matching (Arachnid), explicit-content detection (VideoIntel), and a minor-safety gate that routes any minor's video to their linked <strong>Parent</strong> for explicit approval before it is ever transcoded or made playable. Parents can also list, play and delete a linked child's videos. <strong>Admins</strong> get a review queue (moderation-locked, failed and playback-blocked videos) plus block/restore, hard-delete and reconcile actions for when the pipeline or the Bunny.net provider gets out of sync.</p>
     <p>Key business rules baked into the code:</p>
     <ul>
@@ -58,8 +71,8 @@
       <li>Subscription expiry cascades into video access: a player's <code>READY</code> videos get <code>BLOCKED</code> when their subscription lapses (unless another active subscription covers them), then <code>ARCHIVED</code> after 30 days, then physically purged after 90 — with a special "yearly exemption" that pauses the archival clock for YEARLY-tier subscribers.</li>
     </ul>
 
-    <h2>Technical Overview</h2>
-    <h3>Package layout</h3>
+    <h2 id="technical-overview">Technical Overview</h2>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
       <tbody>
@@ -74,7 +87,7 @@
       </tbody>
     </table>
 
-    <h3>Key entities &amp; tables</h3>
+    <h3 id="key-entities-tables">Key entities &amp; tables</h3>
     <table>
       <thead><tr><th>Entity / table</th><th>Purpose</th></tr></thead>
       <tbody>
@@ -95,7 +108,7 @@
       </tbody>
     </table>
 
-    <h3>Key services</h3>
+    <h3 id="key-services">Key services</h3>
     <table>
       <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
       <tbody>
@@ -124,7 +137,7 @@
       </tbody>
     </table>
 
-    <h3>REST endpoints</h3>
+    <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
       <tbody>
@@ -151,7 +164,7 @@
       </tbody>
     </table>
 
-    <h3>Domain events</h3>
+    <h3 id="domain-events">Domain events</h3>
     <table>
       <thead><tr><th>Event</th><th>Published when</th><th>Consumed by</th></tr></thead>
       <tbody>
@@ -169,12 +182,12 @@
     </table>
     <p>Consumed events: <code>VideoUploadedEvent</code>/<code>VideoModerationRetryEvent</code> (self, above); <code>AccountDeletionRequestedEvent</code> (published by <code>admin.service.GdprErasureService</code>; cascades video purge — <code>AccountDeletionCascadeListener</code>); <code>SubscriptionExpiredEvent</code> from <code>payment.service.SubscriptionService</code> (drives BLOCKED transitions — <code>VideoSubscriptionLifecycleListener</code>, which writes an outbox row AFTER_COMMIT and drains it every 60&nbsp;s under ShedLock: YEARLY → reset the lifecycle clock on all BLOCKED videos; otherwise block the player's ACTIVE videos unless <code>PlayerSubscriptionQueryPort.hasAnyActiveSubscription</code>).</p>
 
-    <h3>Dependencies on infrastructure and other modules</h3>
+    <h3 id="dependencies-on-infrastructure-and-other-modules">Dependencies on infrastructure and other modules</h3>
     <p><code>infrastructure.video</code> supplies the <code>VideoProviderAdapter</code> SPI (implemented by <code>BunnyVideoProviderAdapter</code>) covering upload credential issuance, playback/download URL signing, asset status, transcoding triggers, and webhook signature verification — this module never talks to Bunny.net directly. <code>infrastructure.videointel</code> supplies <code>VideoIntelClient</code>, used only by <code>ModerationOrchestrationService</code> for Layer&nbsp;2 explicit-content scanning. The module also depends on <code>infrastructure.arachnid</code> (CSAM matching, Layer&nbsp;1) and <code>infrastructure.feature</code> (<code>FeatureToggleService</code> gating whether each moderation layer runs). Cross-module platform dependencies: <code>marketplace</code> (<code>CoachProfileService</code>: coach id and subscription tier), <code>security</code> (<code>PlayerProfileRepository</code>, <code>ParentPlayerLinkRepository</code>, <code>SecurityUtil</code>, <code>playerOwnershipGuard</code>, account suspension), <code>booking</code> (<code>BookingRepository.existsRecentCompletedBooking</code> for the coach playback window), <code>session</code> (<code>DrillVideoRefRepository</code> ref-counting so shared drill assets aren't prematurely purged), <code>payment</code> (<code>SubscriptionExpiredEvent</code>; player subscription rows for the quota tier; <code>payment.adapter.PlayerSubscriptionQueryAdapter</code> implements <code>PlayerSubscriptionQueryPort</code>), <code>outbox</code> (generic outbox for moderation retry/alert), and <code>config</code> (<code>ConfigService</code> runtime values).</p>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>Upload → moderation → transcoding → playback</h3>
+    <h3 id="upload-moderation-transcoding-playback">Upload → moderation → transcoding → playback</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Coach as Coach/Player
@@ -216,13 +229,13 @@ sequenceDiagram
     </pre>
     <p>A single upload passes through four operational states before it is playable: <code>UPLOADING</code> → <code>PROCESSING</code> → <code>SCANNING</code> → <code>TRANSCODING</code> → <code>READY</code>. The quota reservation made at initiate-time is only committed (storage counted against the owner) once transcoding completes, and is released on any failure path. If the owner is a minor, the pipeline diverts to <code>HIDDEN</code> and creates a <code>VideoApprovalRequest</code> instead of calling Bunny immediately — the actual <code>triggerTranscoding()</code> call is deferred until a parent approves, and happens strictly after the DB transaction commits so the external HTTP call never holds a connection open. Webhook delivery is asynchronous and can arrive out of order (encoding.success before upload.success, or while moderation is still SCANNING), which <code>WebhookEventProcessorScheduler</code> compensates for by recording <code>Video.encodingCompletedAt</code> and letting moderation's advance-to-TRANSCODING take a fast path to READY, rather than calling <code>completeTranscoding()</code> early. The webhook inbox itself is idempotent: <code>WebhookEventOutboxService</code> inserts with <code>ON CONFLICT DO NOTHING</code> on the derived <code>event_id</code>.</p>
 
-    <h3>Failed upload → owner retry</h3>
+    <h3 id="failed-upload-owner-retry">Failed upload → owner retry</h3>
     <p>A video lands in <code>FAILED</code> from an expired upload session (<code>UploadSessionExpiryScheduler</code>), a provider upload/encoding failure webhook, SLA-exhausted moderation, or reconciliation (provider asset missing, or provider READY while still UPLOADING). The owner sees it in <code>GET /api/video/my</code> (or the parent in <code>/players/{id}/videos</code>) and calls <code>POST /api/video/{id}/retry</code>: owner check (404) → state check (422) → atomic FAILED→UPLOADING claim (409 for the loser) → new quota reservation + new Bunny asset + new <code>UploadSession</code>, same <code>videoId</code>. The claim happens <em>before</em> the new session so <code>ReconciliationWorkerScheduler</code> doesn't re-fail the video mid-retry. Frontend: <code>VideoManagementPage.vue</code> (mounted at both <code>player/videos</code> and <code>coach/videos</code>) shows a Retry action on FAILED rows.</p>
 
-    <h3>Admin review queue → action</h3>
+    <h3 id="admin-review-queue-action">Admin review queue → action</h3>
     <p><code>GET /api/video/admin/videos</code> is read-only and lock-free; every action re-reads the row through its own existing mutation. Typical paths: <strong>LOCKED</strong> (moderation flagged; <code>flaggedLayers</code> says which layer) → hard delete, or leave locked (LOCKED is terminal in <code>VALID_TRANSITIONS</code>); <strong>FAILED</strong> → reconcile against Bunny, or delete; <strong>BLOCKED</strong> → restore to ACTIVE, or leave it for the lifecycle scheduler to archive. Block/restore is <code>PATCH .../access-state</code> → <code>VideoLifecycleService.setAccessState</code>: a block from any non-BLOCKED state (or with a null clock) stamps a fresh <code>lifecycleLockedAt</code>; a repeat BLOCKED→BLOCKED keeps the existing clock. Frontend: <code>src/frontend/src/pages/admin/AdminVideosPage.vue</code> (only offers block from ACTIVE, and no block/restore on ARCHIVED — the backend itself accepts any target state except on a DELETED video).</p>
 
-    <h3>Quota check → reserve → commit/release</h3>
+    <h3 id="quota-check-reserve-commit-release">Quota check → reserve → commit/release</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant VS as VideoService
@@ -246,7 +259,7 @@ sequenceDiagram
     </pre>
     <p><code>check()</code> is advisory only — it holds no lock, so a concurrent reservation can drain quota between the check and a subsequent <code>reserve()</code> call; <code>reserve()</code> is the authoritative gate because it takes a <code>SELECT ... FOR UPDATE</code> row lock on the owner's quota row. <code>commit()</code> and <code>release()</code> are both single atomic SQL statements guarded by a <code>WHERE status = 'ACTIVE'</code> clause, which is what makes them idempotent under retries or races. Reservations that are neither committed nor released within their TTL (e.g. an abandoned upload) are cleaned up by <code>QuotaReservationTimeoutService</code>'s ShedLock-guarded reaper — without this, quota would leak indefinitely.</p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>Visibility is stored here but not enforced here.</strong> The <code>Visibility</code> enum (PRIVATE/GROUP/UNLISTED) lives on the <code>Video</code> entity purely as data. Per <code>contract/package-info.java</code>, gating access based on Visibility is explicitly the <em>consuming application's</em> responsibility. Do not assume calling <code>PlaybackService</code> or <code>VideoAccessGuard</code> enforces Visibility — it doesn't. If a new caller needs Visibility-based access control, it must implement that check itself before reaching this module's playback/list APIs.</p>
     </div>
@@ -275,7 +288,7 @@ sequenceDiagram
       <p><strong>Known identity mismatches still in the code.</strong> Two places still compare <code>ownerId</code> against <code>SecurityUtil.getCurrentUserName()</code> (an email), so they never match. <code>PlaybackService</code> only issues a <code>downloadUrl</code> when <code>viewerId.equals(video.getOwnerId())</code>, and <code>VideoPlayResource</code> passes the username, so no download URL is ever returned. <code>VideoEventResource.isCurrentUserOwner</code> uses the same username comparison for coach (UUID-owned) videos, so a coach gets 403 on <code>/events</code> and <code>/status</code> for their own uploads. Fix both by resolving the caller's coach id or <code>PlayerProfile</code> id, not by changing what <code>ownerId</code> stores.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <ul>
       <li><a href="../marketplace/index.html">Marketplace</a> — coach and player profile lookups used to resolve <code>ownerId</code> and validate coach identity at upload time.</li>
       <li><a href="../security/index.html">Security</a> — age policy (minor detection), parent-player links (approval routing, guardian playback bypass), account-deletion cascade, and CSAM-triggered account suspension.</li>
@@ -288,9 +301,12 @@ sequenceDiagram
       <li><a href="../infrastructure/index.html">Infrastructure</a> — <code>infrastructure.video</code> (Bunny.net provider adapter) and <code>infrastructure.videointel</code> (explicit-content scanning) that this module builds directly on top of.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

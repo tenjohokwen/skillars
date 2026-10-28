@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Filestorage</h1>
     <p class="subtitle">The single, audited front door every platform module must use to upload, download, and delete files — nobody talks to S3 directly except this module.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>
       Skillars stores files for almost every persona: a coach's profile photo and gallery images, a coach's report
       branding logo, a branded session-report PDF, and a GDPR data-export ZIP. None of those modules knows whether the
@@ -93,9 +106,9 @@
         (<code>app.storage.replication.enabled: false</code>).</li>
     </ul>
 
-    <h2>Technical Overview</h2>
+    <h2 id="technical-overview">Technical Overview</h2>
 
-    <h3>Package layout</h3>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <tr><th>Package</th><th>Purpose</th></tr>
       <tr><td><code>filestorage.api</code></td><td>One REST controller, <code>StorageResource</code> (<code>/api/storage</code>): sign-upload, confirm, sign-download and delete, used directly by frontends.</td></tr>
@@ -108,7 +121,7 @@
       <tr><td><code>filestorage.service.validation</code></td><td>Five ordered <code>ValidationStep</code> components that <code>ValidationChain</code> runs on every sign-upload request.</td></tr>
     </table>
 
-    <h3>Key entities &amp; DB tables</h3>
+    <h3 id="key-entities-db-tables">Key entities &amp; DB tables</h3>
     <p>All three tables are in the <code>main</code> schema, defined in <code>V138__baseline_schema.sql</code>. No later migration changes them.</p>
     <table>
       <tr><th>Entity</th><th>Table</th><th>Notes</th></tr>
@@ -117,7 +130,7 @@
       <tr><td><code>StorageAccessEvent</code></td><td><code>main.storage_access_events</code></td><td>Append-only audit row for every REST sign-download (key, owner, size, timestamp). There is no read API. The programmatic <code>signedDownloadUrl</code> does <em>not</em> write one.</td></tr>
     </table>
 
-    <h3>Key services</h3>
+    <h3 id="key-services">Key services</h3>
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
       <tr><td><code>FileStorageService</code></td><td>The main entry point. It has two separate surfaces.
@@ -132,7 +145,7 @@
       <tr><td><code>ValidationChain</code> + <code>ValidationStep</code>s</td><td>Ordered pipeline on every sign-upload: <code>FilenameSanitizationStep</code> (1), <code>MimeTypeValidationStep</code> (10), <code>ExtensionValidationStep</code> (20), <code>FileSizeValidationStep</code> (30), and <code>ChecksumValidationStep</code> (40, which requires a 64-character lowercase SHA-256 hex if a checksum is given).</td></tr>
     </table>
 
-    <h3>REST endpoints</h3>
+    <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth/Role</th></tr>
       <tr><td>POST</td><td><code>/api/storage/sign/upload</code></td><td>Validate and quota-check a proposed upload (<code>{entity, entityId, contentType, extension, fileSizeBytes, checksum?, tags?}</code>) and return <code>{key, uploadUrl, expiresAt}</code>.</td><td><code>HAS_ANY_ROLE</code>. For the owner-bound entities <code>coach_profile</code>, <code>coach_branding</code> and <code>coach_gallery</code>, <code>entityId</code> must equal the caller's business id (otherwise <code>AccessDeniedException</code>).</td></tr>
@@ -148,7 +161,7 @@
       variable.
     </p>
 
-    <h3>Domain events</h3>
+    <h3 id="domain-events">Domain events</h3>
     <p>
       <code>filestorage.event.StorageObjectConfirmedEvent</code> is published by <code>FileStorageService.confirmUpload()</code>
       <strong>after</strong> the FSO and outbox transaction has committed, not inside it. Listeners run synchronously on the
@@ -170,9 +183,9 @@
       (this module: validation, quota).</p>
     </div>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>Uploading a file (presigned two-phase upload)</h3>
+    <h3 id="uploading-a-file-presigned-two-phase-upload">Uploading a file (presigned two-phase upload)</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Browser as Browser (Coach/Parent)
@@ -219,7 +232,7 @@ sequenceDiagram
       the idempotent short-circuit and never re-fires the event (see gotchas).
     </p>
 
-    <h3>Downloading a file</h3>
+    <h3 id="downloading-a-file">Downloading a file</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Caller as Browser
@@ -248,7 +261,7 @@ sequenceDiagram
       writes an access event.
     </p>
 
-    <h3>Soft delete, retention, replication and raw-blob deletion</h3>
+    <h3 id="soft-delete-retention-replication-and-raw-blob-deletion">Soft delete, retention, replication and raw-blob deletion</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Caller as Caller
@@ -293,7 +306,7 @@ sequenceDiagram
       immediately (<code>deleteRawBytes</code>) or through the re-drivable <code>BLOB_DELETION</code> outbox.
     </p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>Never call <code>infrastructure.blobstore</code> storage beans from another platform module. Always go
       through <code>filestorage</code>.</strong> Other modules must use the <code>/api/storage/**</code> endpoints (browser
@@ -355,7 +368,7 @@ sequenceDiagram
       Stream pipeline, which is also why the coach gallery accepts images only.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <ul>
       <li><a href="../marketplace/index.html">Marketplace</a> — <code>CoachProfilePhotoEventListener</code> (profile photo via
         <code>StorageObjectConfirmedEvent</code>), <code>CoachGalleryService</code> (gallery link and remove via
@@ -377,9 +390,12 @@ sequenceDiagram
         drains the <code>BLOB_DELETION</code> rows handled by <code>BlobDeletionOutboxHandler</code>.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

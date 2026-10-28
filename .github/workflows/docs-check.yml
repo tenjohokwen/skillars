@@ -1,0 +1,55 @@
+# Health check for the static developer docs in docs/dev-docs: tag balance, relative links and
+# #anchors, identical sidebars, Mermaid syntax (rendered in headless Chrome), freshness stamps and a
+# stale search index. See docs/dev-docs/README.md.
+#
+# Cheap by design: no JDK, no Maven, no `npm install`. The checker is a Node script using only
+# built-ins, and Chrome is preinstalled on GitHub's ubuntu runners.
+#
+# Path filtering uses the native `paths:` trigger rather than the detect-frontend-changes.sh job
+# pattern (frontend-unit-tests.yml): that pattern exists so one workflow can combine a diff trigger
+# with a label override, which this job doesn't need. NOT a required status check. If it is ever
+# made one in the branch ruleset, switch to the detect-job pattern first: a required check from a
+# `paths:`-filtered workflow never reports on PRs that don't touch the docs and blocks their merge.
+name: Docs Check
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'docs/dev-docs/**'
+      - '.github/workflows/docs-check.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'docs/dev-docs/**'
+      - '.github/workflows/docs-check.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-check-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  check-docs:
+    runs-on: ubuntu-latest
+    # Measured locally at ~40 s for 26 pages (static checks + 4 parallel headless renders).
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6.5.0
+        with:
+          # Same version as .github/actions/frontend-quality (pinned to <node.version> in pom.xml).
+          node-version: '22.16.0'
+
+      - name: Check docs (static + Mermaid render)
+        run: |
+          export CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium)"
+          echo "Using Chrome: ${CHROME_BIN:-<none found>}"
+          node docs/dev-docs/tools/check-docs.mjs --render

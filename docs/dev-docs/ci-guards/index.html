@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CI Guards — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
+    <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / CI Guards</div>
+    <h1>CI Guards: tests that will fail your PR</h1>
+    <p class="subtitle">The CI jobs, and every convention, audit, lint and parity test in the repo: what each protects, what usually trips it, what the failure looks like, how to fix it and how to run it alone. Ordered by how likely a newcomer is to hit it.</p>
+
+    <h2 id="what-actually-blocks-a-merge">What actually blocks a merge</h2>
+    <p>
+      <code>master</code> is protected by the <code>NoDirectPush</code> ruleset, versioned in
+      <code>.github/rulesets/no-direct-push.json</code> (re-applied by the manual <code>apply-branch-ruleset.yml</code> workflow): no
+      direct push, no force-push, a PR is required, and the <strong>required status checks are <code>build</code> and
+      <code>docker-image</code></strong> (both from <code>pr-build.yml</code>).
+    </p>
+    <div class="callout warn">
+      <p><strong><code>frontend-quality</code> (Prettier + ESLint) is not a required check on a PR, but it gates the image.</strong>
+      On the push to <code>master</code>, <code>ci.yml</code>'s <code>build-and-push</code> has
+      <code>needs: [test, frontend-quality]</code>, so a formatting miss that you merge anyway means <em>no image is published</em> for
+      that commit. Treat it as required. The Vitest suite (<code>frontend-unit-tests.yml</code>) is opt-in and never required — a red
+      i18n spec does not block a merge, which is exactly why it is easy to merge one.</p>
+    </div>
+
+    <h2 id="ci-jobs">CI jobs</h2>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>Workflow → job</th><th>Trigger</th><th>Runs</th><th>Blocks</th></tr></thead>
+      <tbody>
+        <tr><td><code>pr-build.yml</code> → <code>build</code></td><td>PR to <code>master</code></td><td>JDK 17, <code>mvn -B verify</code> (frontend build via <code>frontend-maven-plugin</code>, surefire unit tests incl. every <code>*Test</code> guard below, failsafe <code>*IT</code>s against Testcontainers). In the same shell: <code>.github/scripts/assert-context-count.sh build.log 17</code>. Around it: <code>container-sampler.sh</code> start/assert (at most one Postgres / Redis / SeaweedFS container alive at once). Uploads surefire/failsafe reports. 35-min timeout.</td><td>Merge (required)</td></tr>
+        <tr><td><code>pr-build.yml</code> → <code>docker-image</code></td><td>PR to <code>master</code></td><td><code>.github/actions/docker-build</code> (no push, <code>load: true</code>), <code>.github/scripts/assert-git-provenance.sh</code>, Trivy scan <code>CRITICAL,HIGH</code>, <code>exit-code: 1</code>, ignores from <code>.trivyignore</code>. Runs in parallel with <code>build</code>.</td><td>Merge (required)</td></tr>
+        <tr><td><code>pr-build.yml</code> → <code>frontend-quality</code></td><td>PR to <code>master</code></td><td><code>.github/actions/frontend-quality</code>: Node 22.16.0, <code>npm ci</code>, <code>npx prettier --check "**/*.{js,vue,scss,json}" --ignore-path ../../.gitignore</code>, then <code>NODE_ENV=production npx eslint .</code> (both run even if the first fails).</td><td>Nothing on the PR (not required)</td></tr>
+        <tr><td><code>ci.yml</code> → <code>test</code></td><td>push to <code>master</code>, manual</td><td><code>mvn -B verify</code> (no context-count gate, no container sampler — those live only in <code>pr-build</code>).</td><td>Image publish</td></tr>
+        <tr><td><code>ci.yml</code> → <code>frontend-quality</code></td><td>push to <code>master</code></td><td>Same composite action as the PR copy.</td><td>Image publish</td></tr>
+        <tr><td><code>ci.yml</code> → <code>build-and-push</code></td><td>after <code>test</code> + <code>frontend-quality</code></td><td>":latest ordering guard", build + push <code>ghcr.io/…:sha-&lt;short&gt;</code> (and <code>:latest</code> if newer), then pulls the pushed image and runs <code>assert-git-provenance.sh</code> (a post-push detector, not a gate).</td><td>—</td></tr>
+        <tr><td><code>frontend-unit-tests.yml</code> → <code>frontend-unit</code></td><td>PR whose diff touches <code>src/frontend/**</code> (<code>detect-frontend-changes.sh</code>), the <code>frontend-tests</code> label, or manual</td><td><code>npm run test:unit:ci</code> (Vitest + coverage) on a matrix of <code>TZ=UTC</code> and <code>TZ=America/New_York</code>.</td><td>Nothing (not required)</td></tr>
+        <tr><td><code>deploy.yml</code></td><td>manual, <code>image_tag</code> input</td><td>SSH deploy, smoke test on <code>/manage/health/smoke</code>, auto-revert on failure, Slack + email.</td><td>—</td></tr>
+        <tr><td><code>apply-branch-ruleset.yml</code></td><td>manual</td><td>PUT/POST <code>.github/rulesets/no-direct-push.json</code> with <code>RULESETS_PAT</code>.</td><td>—</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2 id="before-you-push-the-cheap-ones">Before you push: the cheap ones</h2>
+    <p>The <code>*Test</code> guards run in the surefire phase with no Spring context and no container, in seconds. Most of this page is
+      covered by:</p>
+<pre>
+# backend guards (from the repo root; drop -o on the very first run)
+mvn -o test -DskipFrontend -Dtest='IntegrationTestConventionTest,MigrationConventionLintTest,PessimisticLockRetryerCallSiteAuditTest,NativeModifyingVersionAuditTest,MessageBundleParityTest,MessageCodeBaseBundleCompletenessTest,EmailTemplateSubjectKeyParityTest,AppEndpointsConventionTest,AsyncExecutorQualifierTest'
+
+# frontend gates (from src/frontend, after npm ci)
+npx prettier --check "**/*.{js,vue,scss,json}" --ignore-path ../../.gitignore
+NODE_ENV=production npx eslint .
+npx vitest run src/i18n/__tests__
+</pre>
+    <p>Reading failures: backend guards are AssertJ assertions whose <code>.as(…)</code> text is the explanation, so the shape is always
+      <code>java.lang.AssertionError: [&lt;why this guard exists and what to do&gt;]</code> followed by
+      <code>Expecting empty but was: [&lt;offenders&gt;]</code> or <code>Expected size: N but was: M in: [&lt;items&gt;]</code>. Read the
+      bracketed text first; it usually names the fix.</p>
+
+    <h2 id="contents">Contents</h2>
+    <ol>
+      <li><a href="#prettier">Prettier gate</a></li>
+      <li><a href="#eslint">ESLint</a></li>
+      <li><a href="#i18n-fe">Frontend i18n specs (localeKeyParitySpec, i18nTemplateKeyResolutionSpec)</a></li>
+      <li><a href="#itconv">IntegrationTestConventionTest</a></li>
+      <li><a href="#ctxcount">Context-count gate (assert-context-count.sh)</a></li>
+      <li><a href="#lockaudit">PessimisticLockRetryerCallSiteAuditTest</a></li>
+      <li><a href="#miglint">MigrationConventionLintTest</a></li>
+      <li><a href="#bundles">MessageBundleParityTest</a></li>
+      <li><a href="#envelope">EnvelopeEntitySchemaIT</a></li>
+      <li><a href="#emaillisteners">EmailListenerAnnotationCoverageTest + EmailDataRoundTripContractTest</a></li>
+      <li><a href="#subjectkeys">EmailTemplateSubjectKeyParityTest + MessageCodeBaseBundleCompletenessTest</a></li>
+      <li><a href="#appendpoints">AppEndpointsConventionTest</a></li>
+      <li><a href="#version">NativeModifyingVersionAuditTest</a></li>
+      <li><a href="#partialindex">StatusScopedPartialIndexConventionIT</a></li>
+      <li><a href="#async">AsyncExecutorQualifierTest + ExecutorShutdownConfigurationTest</a></li>
+      <li><a href="#configbounds">ConfigBoundsEnumCoverageTest</a></li>
+      <li><a href="#trivy">Trivy image scan</a></li>
+      <li><a href="#routerguard">routerGuardSpec</a></li>
+      <li><a href="#schedorder">SchedulerLockTransactionOrderingIT + *SchedulerLockTest</a></li>
+      <li><a href="#schemaassume">SchemaAssumptionsTest + UserSchemaWidthIT</a></li>
+      <li><a href="#provenance">Git-provenance assertion and container sampler</a></li>
+      <li><a href="#emailtransport">Email-transport config guards</a></li>
+      <li><a href="#alerts">AlertDocumentationParityTest</a></li>
+      <li><a href="#small">Small contract pins</a></li>
+      <li><a href="#notci">Not CI, but will stop a deploy</a></li>
+    </ol>
+
+    <!-- ================================================================ -->
+    <h2 id="prettier">1. Prettier gate <span class="tag">frontend-quality</span></h2>
+    <ul>
+      <li><strong>Protects:</strong> the Prettier mandate for <code>.js/.vue/.scss/.json</code> under <code>src/frontend</code>
+        (config <code>src/frontend/.prettierrc.json</code>: no semicolons, single quotes, width 100). Before skillars-deferred-92 gated it,
+        130 of ~150 files had drifted.</li>
+      <li><strong>Trips it:</strong> any hand-edited frontend file you didn't run Prettier on, including <code>package.json</code>,
+        <code>eslint.config.js</code>, and locale files. Not <code>.html</code>/<code>.md</code>.</li>
+      <li><strong>Looks like:</strong> <code>[warn] src/pages/Foo.vue</code> lines, then
+        <code>[warn] Code style issues found in N files. Run Prettier with --write to fix.</code></li>
+      <li><strong>Fix:</strong> <code>cd src/frontend &amp;&amp; npx prettier --write "**/*.{js,vue,scss,json}" --ignore-path ../../.gitignore</code>.
+        Note <code>npm run format</code> uses <code>--ignore-path .gitignore</code> (no such file in <code>src/frontend</code>) and also
+        formats <code>.html/.md</code> — prefer the CI command.</li>
+      <li><strong>Run alone:</strong> the same command with <code>--check</code>.</li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="eslint">2. ESLint <span class="tag">frontend-quality</span></h2>
+    <ul>
+      <li><strong>Protects:</strong> <code>src/frontend/eslint.config.js</code> — Quasar + <code>eslint-plugin-vue</code>
+        <code>flat/essential</code>, plus <code>vue/no-bare-strings-in-template</code> (user-visible text that never reached i18n,
+        including <code>q-*</code> <code>label</code>/<code>hint</code>/<code>placeholder</code>/<code>no-data-label</code>/
+        <code>error-message</code> props) and <code>no-debugger</code> (error only when <code>NODE_ENV=production</code>, which CI sets).</li>
+      <li><strong>Trips it:</strong> a literal string in a template or a <code>q-btn label="Save"</code>; a leftover
+        <code>debugger</code>; unused variables/imports.</li>
+      <li><strong>Looks like:</strong> <code>path:line:col  error  …  vue/no-bare-strings-in-template</code> (rule id at the end of each line).</li>
+      <li><strong>Fix:</strong> move the text to <code>src/frontend/src/i18n/{en-US,de-DE,fr-FR}/index.js</code> and use
+        <code>t('…')</code>/<code>$t('…')</code>. Only genuinely untranslatable tokens (brand, symbols) go in the rule's allowlist.
+        The rule cannot see strings inside <code>&lt;script&gt;</code> — <code>Notify.create({ message: '…' })</code> still needs
+        <code>t()</code> by convention.</li>
+      <li><strong>Run alone:</strong> <code>cd src/frontend &amp;&amp; NODE_ENV=production npx eslint .</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="i18n-fe">3. Frontend i18n specs <span class="tag">frontend-unit-tests</span></h2>
+    <p>Both live in <code>src/frontend/src/i18n/__tests__/</code>. They exist because the Vitest setup
+      (<code>src/frontend/test/vitest/setup-file.js</code>) installs an empty catalogue, so every other spec renders and asserts raw keys
+      and would pass with a typo.</p>
+    <ul>
+      <li><strong><code>localeKeyParitySpec.js</code></strong> — en-US, de-DE and fr-FR have identical key sets (skillars-deferred-155).
+        <em>Trips:</em> adding a key to one locale. <em>Looks like:</em> <code>de-DE has no keys missing relative to en-US</code> failing with
+        <code>expected [ 'admin.finance.title' ] to deeply equal []</code>. <em>Fix:</em> add the key to the other two files.</li>
+      <li><strong><code>i18nTemplateKeyResolutionSpec.js</code></strong> — the most-edited guard in the repo (14 commits since September). Statically
+        scans every <code>.vue</code>/<code>.js</code> under <code>src/</code> for <code>$t(</code>/<code>$te(</code>/<code>t(</code>/
+        <code>i18n.global.t(</code> and asserts each literal key is a real en-US leaf (skillars-deferred-156). Four tests:
+        <ol>
+          <li><em>every statically-resolved key exists</em> — output <code>src/…/Foo.vue:42 -&gt; "admin.foo.titel"</code>. Fix the key or add it.</li>
+          <li><em>every dynamic call site is recorded</em> — a template literal, concatenation or variable key not in
+            <code>DYNAMIC_KEY_CALL_SITES</code>. Add <code>{ at: 'src/…/Foo.vue:&lt;line&gt;', reason: '…' }</code>.</li>
+          <li><em>no translation call is wrapped across lines</em> — Prettier sometimes splits a long <code>t(</code> call; the line-based scan
+            cannot read it. Shorten the call (extract the params to a variable) so it fits on one line.</li>
+          <li><em>every exception-list entry is still live</em> — the list is keyed by <code>file:line</code>, so <strong>adding or removing a line
+            above a listed call breaks it</strong>. Update the line numbers in the same change.</li>
+        </ol></li>
+      <li><strong>Run alone:</strong> <code>cd src/frontend &amp;&amp; npx vitest run src/i18n/__tests__</code>.</li>
+    </ul>
+    <div class="callout">
+      <p>The job runs only when your PR touches <code>src/frontend/**</code> (or carries the <code>frontend-tests</code> label) and is not a
+      required check — so check its result yourself before merging. Backend error keys are looked up as frontend i18n keys too, so a backend
+      PR that introduces a new <code>errorKey</code> shown in the UI should add the frontend key and label the PR.</p>
+    </div>
+
+    <!-- ================================================================ -->
+    <h2 id="itconv">4. IntegrationTestConventionTest <span class="tag">build · unit phase</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/config/IntegrationTestConventionTest.java</code>. Reads compiled
+        classes in <code>target/test-classes</code> reflectively; named <code>*Test</code> on purpose so it fails before any container starts.</li>
+      <li><strong>Protects:</strong> Spring-context fragmentation. Hand-copied <code>@SpringBootTest</code> stacks once produced 37+ contexts out of
+        7 real configurations (each a full Boot startup, and then a Postgres + Redis pair). skillars-deferred-160 cut the failsafe JVM to 17.</li>
+      <li><strong>Checks:</strong> every <code>*IT</code> extends <code>AbstractIntegrationTest</code> unless in <code>ALLOWLIST</code> (line 58);
+        no <code>*IT</code> re-declares <code>@SpringBootTest</code>/<code>@ActiveProfiles</code>/<code>@Import(TestConfig.class)</code>;
+        <code>EXPECTED_TEST_PROPERTY_SOURCE_COUNT = 4</code> (line 89); <code>EXPECTED_DISTINCT_CONTEXT_KEYS = 14</code> (line 109); no
+        slice test (<code>@WebMvcTest</code> etc.) is named <code>*IT</code>; no <code>*IT</code> class silently failed to load.</li>
+      <li><strong>Trips it:</strong> a new <code>@MockitoBean</code>/<code>@MockitoSpyBean</code> field in an IT (the <em>field name</em> is part of
+        the key — <code>@MockitoBean FileStorageService storage</code> and <code>… fileStorageService</code> are two contexts); a
+        <code>@TestPropertySource</code>; a nested <code>@TestConfiguration</code>; naming a <code>@WebMvcTest</code> <code>FooResourceIT</code>.</li>
+      <li><strong>Looks like:</strong> <code>[Each distinct configuration below is a separate Spring ApplicationContext … Configurations (difference
+        from AbstractIntegrationTest): 3 class(es): [AIT, BIT, CIT] field com.….FileStorageService fileStorageService [@…MockitoBean(…)] …]
+        Expected size: 14 but was: 15</code> — the table lists every configuration and its classes, so find the one containing yours.</li>
+      <li><strong>Fix:</strong> reuse an existing configuration (inherit a base spy, or match a peer's mock set with the same field names); rename a
+        slice to <code>*WebMvcTest</code>. Only if a fork is genuinely needed, bump the constant with a <code>// context-fork:</code> reason.
+        A <code>LinkageError</code> entry locally after a rename is a stale class file — <code>mvn clean</code>.</li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest=IntegrationTestConventionTest</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="ctxcount">5. Context-count gate <span class="tag">build · pr-build only</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>.github/scripts/assert-context-count.sh build.log 17</code>, invoked from <code>pr-build.yml</code>'s build step.
+        Parses the last <code>Spring test ApplicationContext cache statistics</code> DEBUG line after the failsafe banner (logger enabled in
+        <code>src/test/resources/logback-test.xml</code>).</li>
+      <li><strong>Protects:</strong> the same thing as the test above, measured for real: <code>missCount</code> (contexts built) ≤ 17, the cache
+        (<code>maxSize = 32</code>) not full, and no rebuilds beyond the one <code>@DirtiesContext</code> allowance
+        (<code>RateLimitingAspectIT</code>). A full cache evicts and rebuilds, making the count depend on test order.</li>
+      <li><strong>Trips it:</strong> a fork the reflective model cannot see, or a new <code>@DirtiesContext</code>. Also fails closed if the log has
+        no failsafe banner or no statistics line (a crashed failsafe fork).</li>
+      <li><strong>Looks like:</strong> <code>FAIL: the suite built 18 Spring contexts, above the ceiling of 17.</code>, or
+        <code>FAIL: N contexts were built but only M are held (allowance: 1).</code>, or
+        <code>FAIL: the Spring test-context cache is full (size = 32, maxSize = 32).</code></li>
+      <li><strong>Fix:</strong> run <code>IntegrationTestConventionTest</code> to see the configurations; remove the fork or the
+        <code>@DirtiesContext</code>. Raising the ceiling is a deliberate decision recorded in the script header and in
+        <code>pr-build.yml</code>'s comment.</li>
+      <li><strong>Run alone:</strong> needs a full build log: <code>mvn -B verify 2&gt;&amp;1 | tee build.log; .github/scripts/assert-context-count.sh build.log 17</code>.
+        In practice, rely on <code>IntegrationTestConventionTest</code> locally and let CI run this.</li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="lockaudit">6. PessimisticLockRetryerCallSiteAuditTest <span class="tag">build · unit phase</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/infrastructure/persistence/PessimisticLockRetryerCallSiteAuditTest.java</code>.
+        Comment- and string-aware source scan of <code>src/main/java</code>.</li>
+      <li><strong>Protects:</strong> <code>PessimisticLockRetryer.withBoundedRetry</code> re-runs its supplier after rolling back to a savepoint, so a write
+        inside it can execute twice (skillars-deferred-117; the scan's first run found <code>DrillUploadService.initiateUpload/deleteVideo</code>
+        writing and publishing inside the lambda). Also: a NOWAIT lock with no retry wrapper turns ordinary contention into errors.</li>
+      <li><strong>Checks:</strong> exactly <code>EXPECTED_CALL_SITE_COUNT = 50</code> <code>.withBoundedRetry(</code> sites (line 149); no
+        <code>.save(</code>, <code>.saveAndFlush(</code>, <code>.delete(</code>, <code>.deleteAll</code>, <code>publishEvent(</code>,
+        <code>new …Event(</code>, <code>.send(</code>, <code>RestTemplate</code>, <code>.enqueue(</code> inside a retried lambda; every file calling a
+        lock method listed in <code>NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE</code> (line 243) also contains a <code>.withBoundedRetry(</code>.</li>
+      <li><strong>Trips it:</strong> adding or removing a call site (every new lock site does); writing inside the lambda.</li>
+      <li><strong>Looks like:</strong> <code>[expected exactly 50 real .withBoundedRetry( call sites under src/main/java. If this count changed … Found: [CallSite[file=…, line=…, argument=…], …]]</code>,
+        or <code>Foo.java:123 — matched '\.save\(' inside the retried lambda: …</code>.</li>
+      <li><strong>Fix:</strong> move writes after <code>withBoundedRetry</code> returns (the row lock lasts until commit). For a new site, bump the
+        count <em>and</em> append a sentence to the Javadoc history naming the method. New NOWAIT repository → add it to the map.</li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest=PessimisticLockRetryerCallSiteAuditTest</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="miglint">7. MigrationConventionLintTest <span class="tag">build · unit phase</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/db/MigrationConventionLintTest.java</code> driving the text linter
+        <code>MigrationLint.java</code>; fixtures in <code>src/test/resources/migration-lint/</code>. Authority:
+        <code>docs/deployment/migration-conventions.md</code>.</li>
+      <li><strong>Protects:</strong> rolling-deploy safety for every migration above <code>V139</code> (the squashed baseline).</li>
+      <li><strong>Rules (enum <code>MigrationLint.Rule</code>) and opt-out markers</strong> (each marker scopes to the statement that follows it):
+        <table>
+          <thead><tr><th>Rule</th><th>Fires on</th><th>Opt-out / fix</th></tr></thead>
+          <tbody>
+            <tr><td><code>MISSING_LOCK_TIMEOUT</code></td><td>lock-taking DDL with no bounded lock_timeout in effect (<code>= 0</code>/<code>DEFAULT</code> don't count)</td><td><code>SET LOCAL lock_timeout = '5s';</code> or <code>allow-unbounded-lock-wait</code></td></tr>
+            <tr><td><code>SESSION_SCOPED_LOCK_TIMEOUT</code></td><td>plain <code>SET</code>/<code>SET SESSION lock_timeout</code> above V150</td><td>use <code>SET LOCAL</code>; <code>allow-session-lock-timeout</code></td></tr>
+            <tr><td><code>SIDECAR_LOCK_TIMEOUT_NOT_RESET</code></td><td><code>executeInTransaction=false</code> migration setting lock_timeout with no later <code>RESET</code></td><td>add <code>RESET lock_timeout</code></td></tr>
+            <tr><td><code>BLOCKING_INDEX</code></td><td><code>CREATE INDEX</code> without <code>CONCURRENTLY</code></td><td><code>allow-blocking-index &lt;reason&gt;</code> (CONCURRENTLY does not work here)</td></tr>
+            <tr><td><code>VALIDATING_CONSTRAINT</code> / <code>INLINE_FK_ADD_COLUMN</code></td><td><code>ADD CONSTRAINT … FOREIGN KEY|CHECK</code> or inline <code>REFERENCES</code> without <code>NOT VALID</code></td><td><code>NOT VALID</code>, or <code>allow-validating-constraint</code></td></tr>
+            <tr><td><code>DROP_WITHOUT_IF_EXISTS</code> / <code>BARE_DROP_NO_HEADER</code></td><td>unguarded drop; a drop with no header comment</td><td><code>IF EXISTS</code>; header comment</td></tr>
+            <tr><td><code>DROP_WITHOUT_PRIOR_RELEASE_PREP</code></td><td><code>DROP TABLE/COLUMN</code> with no <code>drop-prepared-in: V&lt;n&gt;</code> naming an earlier version, or a live reference left in <code>src/main</code></td><td>add the marker; remove the reader first (<code>allow-drop-reference-scan</code> exists)</td></tr>
+            <tr><td><code>UNBATCHED_DML</code></td><td><code>UPDATE</code>/<code>DELETE</code>/<code>TRUNCATE</code> with no bounding <code>WHERE</code></td><td><code>allow-full-table-dml</code>, or batch in a sidecar</td></tr>
+            <tr><td><code>PLATFORM_CONFIG_EXPLICIT_ID</code></td><td><code>INSERT INTO main.platform_config</code> supplying <code>id</code> (explicitly or by omitting the column list)</td><td>name the columns, omit <code>id</code></td></tr>
+            <tr><td><code>REPEATABLE_HAZARD</code></td><td>drop / validating constraint / blocking index in an <code>R__</code> file</td><td><code>allow-unconditional-drop</code> for drops</td></tr>
+            <tr><td><code>BACKPORT_BELOW_BASELINE</code>, <code>UNPARSEABLE_VERSION</code></td><td>a new file at or below V139; an unparseable version</td><td>use the next version number</td></tr>
+          </tbody>
+        </table>
+        Markers are written <code>-- migration-lint: &lt;marker&gt; &lt;reason&gt;</code>.</li>
+      <li><strong>Looks like:</strong> <code>[New migration(s) break docs/deployment/migration-conventions.md. Fix the migration, or add a '-- migration-lint: allow-*' opt-out with a reason. Violations: [V176__x.sql :: BLOCKING_INDEX — …]]</code>
+        (format <code>file :: RULE — detail</code>).</li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest=MigrationConventionLintTest</code>. The other tests in the class lint the
+        fixtures and only fail if you change <code>MigrationLint</code> itself.</li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="bundles">8. MessageBundleParityTest <span class="tag">build · unit phase</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/i18n/MessageBundleParityTest.java</code>, over
+        <code>src/main/resources/i18n/messages{,_en,_de,_fr}.properties</code>.</li>
+      <li><strong>Protects:</strong> <code>messages.properties</code> is the only fallback (<code>setFallbackToSystemLocale(false)</code>); it once held
+        84 of 130 keys, and a missing key was a request-time 500 (skillars-deferred-92 AC12).</li>
+      <li><strong>Checks:</strong> same key set as <code>messages_en</code> in de, fr and the default bundle; identical
+        <code>{placeholder}</code> multiset and <code>|</code> count; no de/fr value left identical to English (unless in
+        <code>LEGITIMATELY_IDENTICAL_TO_ENGLISH</code>); a value with a <code>{n}</code> placeholder escapes apostrophes as <code>''</code>
+        (MessageFormat); default bundle wording equals <code>messages_en</code>.</li>
+      <li><strong>Trips it:</strong> adding a key (email subject, error key) to fewer than four files; pasting the English text into de/fr;
+        <code>l'utilisateur {0}</code> with a single apostrophe.</li>
+      <li><strong>Looks like:</strong> <code>[messages_de.properties is missing keys present in messages_en] Expecting empty but was: [email.foo.title]</code>.</li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest=MessageBundleParityTest</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="envelope">9. EnvelopeEntitySchemaIT <span class="tag">build · failsafe</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/platform/notification/repo/EnvelopeEntitySchemaIT.java</code>.</li>
+      <li><strong>Protects:</strong> <code>main.envelope_entity</code>'s CHECK constraints stay in two-way parity with <code>EmailTemplate</code>
+        (<code>envelope_entity_email_template_check</code>) and <code>EmailDeliveryStatus</code> (<code>envelope_entity_status_check</code>);
+        plus exactly one UNIQUE and one recipients FK under the names Hibernate expects. <code>SES_CUTOVER_PREFLIGHT</code> shipped without the
+        CHECK widening; every other test mocks <code>MailManager</code>, so only a real insert would have failed — in production.</li>
+      <li><strong>Trips it:</strong> a new <code>EmailTemplate</code> constant without a migration.</li>
+      <li><strong>Looks like:</strong> <code>[EmailTemplate values the DB CHECK would reject - add a Flyway migration widening envelope_entity_email_template_check (see V168)] Expecting empty but was: [MY_NEW_TEMPLATE]</code></li>
+      <li><strong>Fix:</strong> a migration that drops and re-adds the constraint with the full list — copy
+        <code>V168__envelope_entity_email_template_check_ses_cutover_preflight.sql</code>.</li>
+      <li><strong>Run alone:</strong> <code>mvn -o verify -DskipFrontend -Dit.test=EnvelopeEntitySchemaIT</code> (needs Docker; also runs the unit phase first).</li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="emaillisteners">10. EmailListenerAnnotationCoverageTest + EmailDataRoundTripContractTest <span class="tag">build · unit phase</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>…/platform/notification/infrastructure/listener/EmailListenerAnnotationCoverageTest.java</code> and
+        <code>…/platform/notification/service/EmailDataRoundTripContractTest.java</code> (under <code>src/test/java/com/softropic/skillars/</code>).</li>
+      <li><strong>Protects:</strong> (a) <code>BookingEmailListener.onBookingReminder</code> once shipped with no listener annotation, so no reminder was
+        ever sent — every <code>public void on*(Event)</code> on the two email listeners must carry
+        <code>@TransactionalEventListener</code> or <code>@EventListener</code>. (b) The email data map survives the outbox JSON round trip with value
+        types intact (an <code>Instant</code> comes back a <code>String</code>, <code>BigDecimal</code> a <code>Double</code>, small <code>Long</code>
+        an <code>Integer</code>).</li>
+      <li><strong>Trips it:</strong> adding a handler — both pin the count (<code>BookingEmailListener</code> 20, <code>SessionPackEmailListener</code>
+        3, total "all 23 on*(Event) handlers"); putting a non-String value in the data map.</li>
+      <li><strong>Looks like:</strong> <code>[BookingEmailListener's on*(Event) handlers] expected: 20 but was: 21</code>; or
+        <code>[…: 'amount' went into the outbox as a BigDecimal and came back as a Double …]</code>.</li>
+      <li><strong>Fix:</strong> annotate the handler, bump both counts, format values to strings before <code>data.put</code>.</li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest='EmailListenerAnnotationCoverageTest,EmailDataRoundTripContractTest'</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="subjectkeys">11. EmailTemplateSubjectKeyParityTest + MessageCodeBaseBundleCompletenessTest <span class="tag">build · unit phase</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/i18n/</code>.</li>
+      <li><strong>Protects:</strong> enum ↔ bundle drift that <code>MessageBundleParityTest</code> (bundles vs each other) cannot see. The first asserts
+        every non-<code>NONE</code> <code>EmailTemplate.subjectKey()</code> exists in all four bundles. The second (skillars-deferred-99) asserts every
+        <em>string-literal</em> message code in <code>src/main</code> — a dotted literal passed to <code>.getMessage(</code>, a bean-validation
+        <code>message = "{key}"</code>, an <code>EmailTemplate</code> subject key — exists in base <code>messages.properties</code>. Dynamic keys are
+        out of its reach by design.</li>
+      <li><strong>Trips it:</strong> a new email template or <code>@NotBlank(message = "{x.y}")</code> without the bundle entry.</li>
+      <li><strong>Looks like:</strong> <code>[These message codes are resolved as string literals in src/main but are missing from src/main/resources/i18n/messages.properties …] Expecting empty but was: [x.y]</code></li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest='EmailTemplateSubjectKeyParityTest,MessageCodeBaseBundleCompletenessTest'</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="appendpoints">12. AppEndpointsConventionTest <span class="tag">build · unit phase</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/platform/security/config/AppEndpointsConventionTest.java</code>.</li>
+      <li><strong>Protects:</strong> <code>permitAll()</code> patterns like <code>resend-otp**</code> matched within a segment, so
+        <code>…/resend-otp-admin</code> would have been silently public (skillars-deferred-91 AC15). Also asserts every pattern in
+        <code>PUBLIC_ENDPOINTS</code>/<code>PUBLIC_STATIC_RESOURCES</code>/<code>PUBLIC_MGMT_ENDPOINTS</code> matches identically under
+        <code>PathPatternRequestMatcher</code> and <code>AntPathRequestMatcher</code>, since which one Spring picks depends on a bean.</li>
+      <li><strong>Trips it:</strong> a new public pattern ending in <code>**</code> without a preceding <code>/</code>, or any <code>**</code> that is not
+        a single trailing <code>/**</code>.</li>
+      <li><strong>Looks like:</strong> <code>[permitAll() patterns must end in an exact segment or a '/'-preceded '/**' …] Expecting empty but was: ["/api/foo**"]</code></li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest=AppEndpointsConventionTest</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="version">13. NativeModifyingVersionAuditTest <span class="tag">build · unit phase</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/infrastructure/persistence/NativeModifyingVersionAuditTest.java</code>.</li>
+      <li><strong>Protects:</strong> a <code>@Modifying</code> bulk <code>UPDATE</code> (JPQL or native) never touches <code>@Version</code>, so a
+        concurrent stale managed <code>save()</code> silently overwrites it with no <code>OptimisticLockingFailureException</code>
+        (skillars-deferred-100 AC3). Two scans: by repository domain type, and by write target table (catches a cross-module repo writing
+        <code>main.videos</code>).</li>
+      <li><strong>Trips it:</strong> a <code>@Modifying @Query("UPDATE …")</code> against a table whose entity has <code>@Version</code>, or an
+        <code>INSERT … ON CONFLICT DO UPDATE</code> on one.</li>
+      <li><strong>Looks like:</strong> <code>[A @Modifying UPDATE against a @Version table must either SET version = version + 1 … or be added to ALLOWED_WITHOUT_BUMP …] Expecting empty but was: [ModSite[…]]</code></li>
+      <li><strong>Fix:</strong> add <code>v.version = v.version + 1</code> to the <code>SET</code> (see <code>VideoRepository</code>), or add the method to
+        <code>ALLOWED_WITHOUT_BUMP</code> with a written reason. <code>DELETE</code>s are exempt.</li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest=NativeModifyingVersionAuditTest</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="partialindex">14. StatusScopedPartialIndexConventionIT <span class="tag">build · failsafe</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/config/StatusScopedPartialIndexConventionIT.java</code> — queries the live
+        migrated schema.</li>
+      <li><strong>Protects:</strong> a status-scoped partial index written as a blacklist (<code>status &lt;&gt; 'X'</code>, <code>NOT IN</code>)
+        silently widens the day a new status is added. Only <code>admin.idx_disputes_unique_open_per_booking</code> is allowlisted.</li>
+      <li><strong>Looks like:</strong> <code>[status-scoped partial index idx_x on y uses a BLACKLIST predicate `…` — a future status would silently fall inside it. Rewrite as a whitelist …]</code></li>
+      <li><strong>Fix:</strong> <code>WHERE status IN ('A','B')</code>; if the blacklist is intentional, add it to <code>BLACKLIST_ALLOWLIST</code>
+        with a rationale on the migration.</li>
+      <li><strong>Run alone:</strong> <code>mvn -o verify -DskipFrontend -Dit.test=StatusScopedPartialIndexConventionIT</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="async">15. AsyncExecutorQualifierTest + ExecutorShutdownConfigurationTest <span class="tag">build · unit phase</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/infrastructure/threadpool/</code>.</li>
+      <li><strong>Protects:</strong> a bare <code>@Async</code> resolves through a bean-<em>name</em> fallback that can silently become the unbounded
+        <code>SimpleAsyncTaskExecutor</code>; a qualifier naming a missing pool fails only at invocation, on a background thread
+        (skillars-deferred-92 AC17). The second test: every <code>ThreadPoolTaskExecutor</code> drains on shutdown with the
+        <code>ExecutorShutdown</code> budget instead of <code>shutdownNow()</code>, and the pool inventory is known (AC3).</li>
+      <li><strong>Trips it:</strong> <code>@Async</code> with no value; a new executor bean.</li>
+      <li><strong>Looks like:</strong> <code>[A bare @Async resolves through AsyncExecutionAspectSupport's bean-NAME fallback … Name the pool: @Async("taskExecutor").]</code></li>
+      <li><strong>Fix:</strong> <code>@Async("taskExecutor")</code> (or the right pool). A new pool goes in <code>KNOWN_POOLS</code>,
+        <code>ExecutorShutdownConfigurationTest</code>'s inventory and an <code>ExecutorShutdown</code> budget constant.</li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest='AsyncExecutorQualifierTest,ExecutorShutdownConfigurationTest'</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="configbounds">16. ConfigBoundsEnumCoverageTest <span class="tag">build · unit phase</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/platform/config/service/ConfigBoundsEnumCoverageTest.java</code>.</li>
+      <li><strong>Protects:</strong> <code>ConfigBounds</code> generates <code>video.quota.&lt;tier&gt;.*</code> and <code>video.&lt;type&gt;.*</code>
+        bounds from hand-listed segments; a new <code>CoachSubscriptionTier</code>/<code>VideoType</code> constant without a segment would be
+        unbounded (skillars-deferred-107 AC3). Also: every bound has <code>min ≤ max</code>, a non-blank note, and a default inside range.</li>
+      <li><strong>Looks like:</strong> <code>[storage bound for tier X] Expecting … to contain: ["video.quota.x.storageBytes"]</code></li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest=ConfigBoundsEnumCoverageTest</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="trivy">17. Trivy image scan <span class="tag">docker-image</span></h2>
+    <ul>
+      <li><strong>Protects:</strong> no <code>CRITICAL</code>/<code>HIGH</code> CVE in the runtime image (OS packages and jars).</li>
+      <li><strong>Trips it:</strong> usually not your change — a new CVE published against an existing dependency or the Alpine base. A dependency bump
+        can also introduce one.</li>
+      <li><strong>Looks like:</strong> Trivy's table of findings (library, CVE id, severity, installed/fixed version) and a non-zero exit.</li>
+      <li><strong>Fix:</strong> bump to the fixed version if one exists (the Dockerfile's <code>apk upgrade</code> layer is cache-busted every run, so
+        published OS fixes are picked up automatically). If no fix exists anywhere, add the single CVE id to <code>.trivyignore</code> with a dated
+        comment explaining why and when to remove it — that file's existing entries are the template; it needs owner sign-off. Never suppress
+        a whole package.</li>
+      <li><strong>Run alone:</strong> <code>docker build -t skillars-app:local . &amp;&amp; trivy image --severity CRITICAL,HIGH --ignorefile .trivyignore skillars-app:local</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="routerguard">18. routerGuardSpec <span class="tag">frontend-unit-tests</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/frontend/src/router/__tests__/routerGuardSpec.js</code> — builds the real router and drives
+        <code>router/index.js</code>'s <code>beforeEach</code> (skillars-deferred-148).</li>
+      <li><strong>Trips it:</strong> changing a route's <code>meta</code> semantics or the guard; it stubs page components, so adding an ordinary page
+        doesn't.</li>
+      <li><strong>Run alone:</strong> <code>cd src/frontend &amp;&amp; npx vitest run src/router/__tests__/routerGuardSpec.js</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="schedorder">19. SchedulerLockTransactionOrderingIT + *SchedulerLockTest <span class="tag">build</span></h2>
+    <ul>
+      <li><strong><code>SchedulerLockTransactionOrderingIT</code></strong> (<code>…/platform/scheduler/</code>, failsafe): pins that the ShedLock advisor
+        is outermost and that <code>BookingReminderScheduler.processReminderWindows</code>, <code>BandwidthResetService.resetMonthlyBandwidth</code>
+        and <code>BookingExpiryScheduler.expireStaleRequests</code> carry no method- or type-level <code>@Transactional</code> (they use per-item
+        <code>TransactionTemplate</code>). Trips if you add <code>@Transactional</code> to one of them.</li>
+      <li><strong><code>VideoDeletionOutboxProcessorSchedulerLockTest</code></strong>, <code>SubscriptionSchedulerLockTest</code>,
+        <code>VideoSubscriptionLifecycleListenerSchedulerLockTest</code> (unit): pin the <code>@SchedulerLock</code> declarations, and for the video
+        drainer that <code>MAX_RUN_DURATION &lt; lockAtMostFor &lt; STALE_CLAIM_WINDOW</code>. Trips if you change those constants.</li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest='*SchedulerLockTest'</code>;
+        <code>mvn -o verify -DskipFrontend -Dit.test=SchedulerLockTransactionOrderingIT</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="schemaassume">20. SchemaAssumptionsTest + UserSchemaWidthIT <span class="tag">build</span></h2>
+    <ul>
+      <li><strong><code>SchemaAssumptionsTest</code></strong> (<code>…/db/</code>, unit): exactly one <code>EXCLUDE</code> constraint exists in the migrations
+        (<code>excl_bkg_coach_slot_overlap</code>), because <code>ApiAdvice.resolveConstraintName</code>'s 23P01 fallback hard-codes it. Adding a second
+        means fixing that fallback first, or its violations would read "this time slot is no longer available".</li>
+      <li><strong><code>UserSchemaWidthIT</code></strong> (<code>…/platform/security/repo/</code>, failsafe): pins <code>"user".skillars_role</code>/
+        <code>verification_status</code> column widths reconciled by <code>V149</code>.</li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="provenance">21. Git-provenance assertion and container sampler <span class="tag">docker-image · build</span></h2>
+    <ul>
+      <li><strong><code>.github/scripts/assert-git-provenance.sh</code></strong>: the image's embedded <code>git.properties</code> must show
+        <code>dirty=false</code> and this run's commit (skillars-deferred-149/150). Trips only if you touch the Dockerfile, the
+        <code>docker-build</code> action's <code>commit-sha</code> input, or <code>git-commit-id-maven-plugin</code>.</li>
+      <li><strong><code>.github/scripts/container-sampler.sh</code></strong>: at most one container per image (Postgres, Redis, SeaweedFS) alive during the
+        suite — containers are JVM-static in <code>SharedContainers</code>. Trips if a test starts its own container or rebinds one to a Spring
+        context (<code>StorageMigrationServiceIT</code>'s second SeaweedFS is a known exception the script accounts for).</li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="emailtransport">22. Email-transport config guards <span class="tag">build · unit phase</span></h2>
+    <p>All under <code>src/test/java/com/softropic/skillars/infrastructure/</code>; they only trip if you edit email-transport code or
+      <code>application*.yaml</code>.</p>
+    <table>
+      <thead><tr><th>Test</th><th>Rule</th></tr></thead>
+      <tbody>
+        <tr><td><code>email/EmailTransportArchitectureTest</code></td><td>Only <code>infrastructure/email/smtp</code> may reference <code>jakarta.mail</code>/<code>javax.mail</code>/<code>org.springframework.mail</code> or SMTP internals; only <code>infrastructure/ses</code> may reference the SES v2 SDK.</td></tr>
+        <tr><td><code>email/TransportHealthGroupConsistencyTest</code></td><td>Each profile's <code>app.email.transport</code> agrees with <code>management.endpoint.health.group.notification.include</code> (a mismatch aborts boot in that environment, invisible to ITs).</td></tr>
+        <tr><td><code>email/EmailTransportProfileDeclarationTest</code></td><td>Every profile file declares <code>app.email.transport</code> explicitly.</td></tr>
+        <tr><td><code>email/smtp/NoStraySmtpConfigTest</code></td><td>No <code>spring.mail:</code> block; <code>provider-configs</code> only at <code>app.email.smtp.provider-configs</code>.</td></tr>
+        <tr><td><code>ses/NoHardcodedSenderTest</code></td><td><code>app.ses.from-address</code> uses the <code>${APP_SES_FROM_ADDRESS:…}</code> placeholder; no literal domain.</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ================================================================ -->
+    <h2 id="alerts">23. AlertDocumentationParityTest <span class="tag">build · unit phase</span></h2>
+    <ul>
+      <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/db/AlertDocumentationParityTest.java</code>.</li>
+      <li><strong>Protects:</strong> alert rules in <code>deploy/lgtm/alerts.yml</code> and <code>deploy/lgtm/grafana-alerts.yml</code> and the runbook
+        <code>docs/deployment/monitoring.md</code> name the same set (the old doc listed nine alerts inherited from another project, none of which
+        existed — skillars-deferred-92 AC27.4).</li>
+      <li><strong>Trips it:</strong> adding or renaming an alert without a <code>#### &lt;AlertName&gt;</code> section in <code>monitoring.md</code>, or vice versa;
+        a duplicate alert name.</li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest=AlertDocumentationParityTest</code></li>
+    </ul>
+
+    <!-- ================================================================ -->
+    <h2 id="small">24. Small contract pins</h2>
+    <p>Rarely hit; each fails with a message naming the pinned value.</p>
+    <table>
+      <thead><tr><th>Test</th><th>Pins</th></tr></thead>
+      <tbody>
+        <tr><td><code>OutboxMessageRepositoryContractTest</code> (<code>…/platform/outbox/repo/</code>)</td><td><code>claimNextDue</code> keeps <code>@Lock(PESSIMISTIC_WRITE)</code> + lock timeout <code>-2</code> (SKIP LOCKED), so two drainers never claim the same row.</td></tr>
+        <tr><td><code>OtpDeadlineParityTest</code> (<code>…/platform/notification/contract/</code>)</td><td>Outbox-routed OTP templates' delivery deadline (8 min) stays inside the 10-minute OTP TTL.</td></tr>
+        <tr><td><code>SessionCookieContractTest</code> (<code>…/platform/security/api/</code>)</td><td><code>SecurityConstants.BLANK_DISPLAY_NAME_SENTINEL</code> equals <code>USER_COOKIE_SENTINEL</code> in <code>src/frontend/src/utils/sessionCookies.js</code>.</td></tr>
+        <tr><td><code>ShedLockConfigIT</code> (<code>…/infrastructure/config/</code>)</td><td><code>main.shedlock</code> exists and the JDBC lock provider is wired.</td></tr>
+      </tbody>
+    </table>
+    <p>Tests named <code>*GuardTest</code> (<code>PlayerOwnershipGuardTest</code>, <code>VideoAccessGuardTest</code>,
+      <code>DevelopmentDataErasureGuardTest</code>, <code>LifecycleOrphanGuardTest</code>) are ordinary unit tests of runtime guard beans, not
+      codebase conventions.</p>
+
+    <!-- ================================================================ -->
+    <h2 id="notci">Not CI, but will stop a deploy</h2>
+    <ul>
+      <li><strong><code>ConfigStartupAssertion</code></strong> validates every <code>ConfigBounds</code> key and every <code>@SchedulerLock</code>'s
+        <code>lockAtLeastFor ≤ lockAtMostFor</code> on <code>ApplicationReadyEvent</code>. ITs run with the <code>dev</code> profile, where it only logs —
+        so a bad seed value or lock pair passes CI and refuses to boot in uat/prod. See <a href="../config/index.html">Config</a>.</li>
+      <li><strong>Flyway</strong> validates on startup (<code>validateMigrationNaming: true</code>; <code>DbSchemaChecker</code> fails on pending migrations);
+        an edited, already-applied migration fails checksum validation in every environment that ran it.</li>
+    </ul>
+
+    <h2 id="related">Related</h2>
+    <ul>
+      <li><a href="../cookbook/index.html">Cookbook</a> — which guards each kind of change touches.</li>
+      <li><a href="../../testing/readme.md">docs/testing/</a> and <a href="../../testing/frontend-unit-tests.md">frontend-unit-tests.md</a>.</li>
+      <li><code>docs/deployment/migration-conventions.md</code>, <code>docs/deployment/scheduler-lock-tuning.md</code>.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

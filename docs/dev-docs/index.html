@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="getting-started/index.html">Your First Day</a></li>
+        <li><a href="glossary/index.html">Glossary</a></li>
+        <li><a href="walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="ci-guards/index.html">CI Guards</a></li>
+        <li><a href="decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="marketplace/index.html">Marketplace</a></li>
@@ -42,8 +55,11 @@
     <div class="breadcrumb">Home</div>
     <h1>Skillars — Developer Documentation</h1>
     <p class="subtitle">Everything a new engineer needs to understand what Skillars is, how the backend and frontend are organized, and where to go deeper.</p>
+    <div class="callout">
+      <p><strong>New to the team? Start with <a href="getting-started/index.html">Your First Day</a>.</strong> It is one linear path from clone to first merged PR: run the stack locally, create a coach, parent, player and admin, walk the booking loop with the code open, run one test of each kind, and get through CI. Keep the <a href="glossary/index.html">Glossary</a> open alongside it for terms like booker, shadow profile, SLU, wrap-up, payout hold and tombstone.</p>
+    </div>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>Skillars is a youth sports skill-development and coaching marketplace. It connects <strong>Coaches</strong> with <strong>Players</strong> — many of whom are minors — for one-on-one and small-group training. Because a large share of players are minors, the product is built around a <strong>Parent</strong> account that supervises, consents on behalf of, and pays for a child's participation, with special handling for messaging, GDPR data rights, and content moderation. Adult players can also self-register and book for themselves. <strong>Admins</strong> run trust-and-safety, finance, and support operations behind the scenes.</p>
     <p>The core loop a family goes through looks like this:</p>
     <div class="card-grid">
@@ -59,10 +75,11 @@
       <p><strong>There is no multi-tenancy.</strong> A <code>tenant</code> module (a B2B API-key integration layer, not per-club data partitioning) was removed entirely in commit <code>a170e69</code>. No <code>tenant_id</code> column, <code>TenantContext</code>, or <code>ROLE_TENANT</code> principal remains. If you find a reference to any of those, it is stale — please delete it.</p>
     </div>
 
-    <h2>Technical Overview</h2>
+    <h2 id="technical-overview">Technical Overview</h2>
     <p>The backend is a single Spring Boot application (Java 17), package root <code>com.softropic.skillars</code>, organized as domain modules under <code>com.softropic.skillars.platform.&lt;module&gt;</code> (each with <code>api</code> / <code>service</code> / <code>repo</code> / <code>contract</code> / <code>config</code> subpackages). A cross-cutting <code>com.softropic.skillars.infrastructure.*</code> layer provides shared technical primitives (blob storage, email transport, provider clients, routing DataSource, lock retry, rate limiting, exceptions, validation) that platform modules build on rather than reimplement. Side effects that must survive a crash (emails, refunds, payouts, blob deletion, moderation retries) go through the transactional <a href="outbox/index.html">outbox</a>. The <a href="frontend/index.html">frontend</a> is a Vue&nbsp;3 + Quasar hash-routed SPA under <code>src/frontend</code>. Data lives in Postgres (Flyway-managed, see <a href="database/index.html">Database</a>).</p>
+    <p>To see these layers working together, follow one booking from the Vue page to the email and SSE push in <a href="walkthrough/index.html">Anatomy of a request</a>; for the reasoning behind the outbox, NOWAIT locking, platform charges and other non-obvious choices, read <a href="decisions/index.html">Why it's built this way</a>.</p>
 
-    <h3>Layered architecture</h3>
+    <h3 id="layered-architecture">Layered architecture</h3>
     <pre class="mermaid">
 flowchart TB
     FE["Vue 3 / Quasar SPA (src/frontend)"]
@@ -93,7 +110,7 @@ flowchart TB
     </pre>
     <p>New engineers most often get confused by two boundaries: <strong>booking vs. session</strong> (booking owns scheduling/calendar/lifecycle; session owns training content — drills, plans, templates, homework) and <strong>filestorage vs. infrastructure.blobstore</strong> (filestorage is the gateway for files — other modules go through its API rather than calling blobstore). Both are explained in depth on their respective pages.</p>
 
-    <h3>Module dependencies</h3>
+    <h3 id="module-dependencies">Module dependencies</h3>
     <p>An arrow <code>A --&gt; B</code> means <em>A imports from B</em> (compile-time dependency, derived from <code>import</code> statements). <code>security</code> and <code>config</code> are imported by almost every module and are left out to keep the diagram readable; see each module's page for its full list.</p>
     <pre class="mermaid">
 flowchart LR
@@ -139,7 +156,7 @@ flowchart LR
     </pre>
     <p>Several edges are two-way (booking ↔ session, booking ↔ payment, video ↔ payment, marketplace ↔ reviews). Most reverse edges are a port interface declared in one module's <code>contract</code> package and implemented in the other (e.g. booking's <code>BookingDisputeLookup</code> is implemented by admin; video's <code>ModerationAdminAlertSender</code> by notification), or a Spring event listener.</p>
 
-    <h3>Module index</h3>
+    <h3 id="module-index">Module index</h3>
     <table>
       <thead><tr><th>Module</th><th>What it owns</th></tr></thead>
       <tbody>
@@ -165,8 +182,10 @@ flowchart LR
       </tbody>
     </table>
 
-    <h2>Getting Started</h2>
+    <h2 id="getting-started">Getting Started</h2>
     <div class="card-grid">
+      <div class="card"><h4>Cookbook</h4><p><a href="cookbook/index.html">How do I add…</a> — step-by-step checklists for a REST endpoint, migration, entity, row lock, scheduled job, event, outbox type, email, config key, tier gate, integration test, frontend page and admin page, each with an example commit and the guard that catches a miss.</p></div>
+      <div class="card"><h4>CI guards</h4><p><a href="ci-guards/index.html">Tests that will fail your PR</a> — the CI jobs, which checks block a merge, and every convention/audit/lint/parity test with its error message, fix and single-test command.</p></div>
       <div class="card"><h4>Run it locally</h4><p><a href="../deployment/local/deployment.md">docs/deployment/local/deployment.md</a> — Docker Compose stack, env vars, seed accounts, and the local observability setup.</p></div>
       <div class="card"><h4>Observability</h4><p><a href="../lgtm-observability.md">docs/lgtm-observability.md</a> — how to query the Loki/Grafana/Tempo/Prometheus stack. The authoritative <strong>alert inventory and response actions</strong> live in <a href="../deployment/monitoring.md">docs/deployment/monitoring.md</a>. Loki shipping defaults to off (<code>${LOKI_ENABLED:false}</code> in <code>application.yaml</code>) and is enabled in prod; see <a href="monitoring/index.html">Monitoring</a>.</p></div>
       <div class="card"><h4>Security API reference</h4><p><a href="../security-api-endpoints.md">docs/security-api-endpoints.md</a> covers only the <em>legacy</em> <code>/v1/account</code> + <code>/authenticate</code>/<code>/otp</code> surface. For the current <code>/api/auth/*</code> and registration endpoints use <a href="security/index.html">Security</a>.</p></div>
@@ -176,7 +195,7 @@ flowchart LR
       <div class="card"><h4>Writing integration tests</h4><p><a href="../testing/readme.md">docs/testing/</a> — why tests extend <code>AbstractIntegrationTest</code>, how the shared Testcontainers instances work, and the per-test database reset. <strong>Read before adding an <code>*IT</code> class.</strong> The number of Spring test contexts is pinned by a convention test.</p></div>
     </div>
 
-    <h2>Conventions &amp; Gotchas (platform-wide)</h2>
+    <h2 id="conventions-gotchas-platform-wide">Conventions &amp; Gotchas (platform-wide)</h2>
     <div class="callout warn">
       <p><strong>Never call <code>infrastructure.blobstore</code> directly from a feature module.</strong> Go through <code>filestorage</code>'s API; only its <code>contract</code> exception types (e.g. <code>StorageObjectNotFoundException</code>) may be referenced elsewhere. Video is separate again: it stores media in Bunny.net via <code>infrastructure.video</code>. See <a href="filestorage/index.html">Filestorage</a> and <a href="infrastructure/index.html">Infrastructure</a>.</p>
     </div>
@@ -208,10 +227,11 @@ flowchart LR
       <p><strong>Email links are hash-routed.</strong> The frontend uses hash-mode routing, so backend links into the app must be built with <code>FrontendLinkBuilder</code> (<code>&lt;frontendUrl&gt;/#/...</code>), never by string concatenation.</p>
     </div>
 
-    <footer class="page-footer">Skillars developer documentation — generated for onboarding; last refreshed against master <code>afb977a7</code> (2026-10-28).</footer>
+    <footer class="page-footer">Skillars developer documentation. Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="assets/mermaid.min.js"></script>
+<script src="assets/search-index.js"></script>
 <script src="assets/docs.js"></script>
 </body>
 </html>

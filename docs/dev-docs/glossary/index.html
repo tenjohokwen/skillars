@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glossary — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
+    <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Glossary</div>
+    <h1>Glossary</h1>
+    <p class="subtitle">Domain and codebase jargon, A–Z. Each entry gives a short definition, the page that covers it in depth, and the main class or table to grep for. Link to an entry with <code>glossary/index.html#&lt;term-slug&gt;</code>.</p>
+
+    <p>
+      <a href="#admin-alert">A</a> ·
+      <a href="#batch-booking">B</a> ·
+      <a href="#canonical-timezone">C</a> ·
+      <a href="#dispute">D</a> ·
+      <a href="#envelope">E</a> ·
+      <a href="#feature-gate">F</a> ·
+      <a href="#gdpr">G</a> ·
+      <a href="#homework">H</a> ·
+      <a href="#id-spaces">I</a> ·
+      <a href="#live-vs-quick">L</a> ·
+      <a href="#messaging-policy">M</a> ·
+      <a href="#neglected-skill">N</a> ·
+      <a href="#outbox">O</a> ·
+      <a href="#payout-hold">P</a> ·
+      <a href="#recap">R</a> ·
+      <a href="#self-registered-player">S</a> ·
+      <a href="#template">T</a> ·
+      <a href="#verification-status">V</a> ·
+      <a href="#wrap-up">W</a>
+    </p>
+    <div class="callout">
+      <p>New here? The <a href="../getting-started/index.html">Your First Day</a> page walks the core loop in which most of these terms appear, in order.</p>
+    </div>
+
+    <h2 id="a">A</h2>
+    <h3 id="admin-alert">Admin alert / moderation queue</h3>
+    <p>The admin back office's single work queue. Events from other modules (reported messages, AI-moderation holds, flagged reviews, strike thresholds, disputes, GDPR deadline overruns, orphaned subscriptions) become one de-duplicated <code>OPEN</code> alert row each, served at <code>/admin/moderation</code>.</p>
+    <p><strong>See</strong> <a href="../admin/index.html">Admin</a> · <strong>Code</strong> <code>AdminAlertEventListener</code>, <code>AdminQueueService</code>, table <code>admin.admin_alerts</code></p>
+
+    <h3 id="age-tier">Age tier</h3>
+    <p>A player's age bracket, derived from date of birth: <code>U10</code> (age &le; 9), <code>AGE_10_12</code> (&le; 12), <code>AGE_13_17</code> (&le; 17) and <code>ADULT</code>. The boundaries are inclusive maxima read from <code>platform_config</code> keys <code>security.age-policy.u10-max-age</code> (9), <code>security.age-policy.young-teen-max-age</code> (12) and <code>security.age-policy.teen-max-age</code> (17), seeded in <code>V139</code>, with the same values hard-coded in <code>AgePolicy.defaults()</code> as fallback. The tier drives the <a href="#messaging-policy">messaging policy</a>, whether self-registration is allowed (18+ only) and the <a href="#minor-safety-gate">minor-safety gate</a>. Not to be confused with <a href="#player-tier">player subscription tiers</a>.</p>
+    <p><strong>See</strong> <a href="../security/index.html">Security</a> · <strong>Code</strong> <code>AgePolicyService.getAgeTier</code>, enum <code>AgeTier</code>, column <code>main.player_profiles.age_tier</code></p>
+
+    <h3 id="appeal">Appeal</h3>
+    <p>A user's one-time challenge to an enforcement action: a reliability strike, a coach suspension, a blocked review, or a dispute resolution. It must be filed within 14 days. An admin decides it <code>UPHELD</code> or <code>OVERTURNED</code>, the decision is final, and an overturn applies the reversal in the same transaction.</p>
+    <p><strong>See</strong> <a href="../admin/index.html">Admin</a> · <strong>Code</strong> <code>AppealService</code>, <code>AppealSubjectType</code>, <code>/api/appeals</code>, table <code>admin.appeals</code> (V172)</p>
+
+    <h3 id="availability-window">Availability window / block</h3>
+    <p>A <em>window</em> is a recurring weekly slot a coach is bookable in (e.g. Tuesdays 16:00–19:00), interpreted in the coach's <a href="#canonical-timezone">canonical timezone</a>. A <em>block</em> is a one-off blackout period. Every booking, reschedule and duplicate must fall inside a window and outside every block.</p>
+    <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>AvailabilityService</code>, <code>CoachAvailabilityWindow</code> (marketplace table), <code>CoachAvailabilityBlock</code> (<code>booking.coach_availability_blocks</code>)</p>
+
+    <h3 id="availability-signature">Availability signature</h3>
+    <p>A hash of the coach's windows that the client sends back with a create, batch-create or reschedule request. If the coach changed their availability since the calendar was loaded, the request fails with <code>booking.availabilityChanged</code> instead of booking against a stale view.</p>
+    <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>AvailabilityService.computeAvailabilitySignature</code></p>
+
+    <h2 id="b">B</h2>
+    <h3 id="batch-booking">Batch booking</h3>
+    <p>Several slots with one coach requested in a single submission (up to <code>booking.batch.maxSize</code>, seeded 5, bounded 1–100). The coach can accept the whole batch at once. The batch status rolls up from its members (<code>PENDING</code>, <code>PARTIALLY_ACCEPTED</code>, <code>FULLY_ACCEPTED</code>, <code>DECLINED</code>), and payment settles each member in its own transaction.</p>
+    <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>BookingBatchService</code>, <code>BookingBatch</code>, table <code>booking.booking_batches</code></p>
+
+    <h3 id="booker">Booker</h3>
+    <p>The paying account on a booking: a parent booking for their child, or a self-registered adult player booking for themselves. Either way its user id is stored in <code>Booking.parentId</code>, so "parent" in booking and payment code usually means "booker". Booker endpoints are guarded by <code>HAS_PARENT_OR_PLAYER_ROLE</code>.</p>
+    <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>Booking.parentId</code>, <code>SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE</code></p>
+
+    <h3 id="booking-status">Booking status</h3>
+    <p>The booking lifecycle, enforced by a state machine. The happy path is <code>REQUESTED</code> &rarr; <code>ACCEPTED</code>/<code>PAYMENT_PENDING</code> &rarr; <code>CONFIRMED</code> &rarr; <code>UPCOMING</code> (reminder window) &rarr; <code>IN_PROGRESS</code>/<code>PAUSED</code> &rarr; <code>COMPLETED</code>, with <code>COMPLETED_PENDING_CONFIRMATION</code> for a <a href="#live-vs-quick">QUICK</a> wrap-up and terminal side states for declines, cancellations, no-shows and disputes. All status changes go through <code>BookingService.transition()</code>.</p>
+    <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> enum <code>BookingStatus</code>, <code>BookingStateMachine</code>, CHECK <code>chk_bkg_status</code></p>
+
+    <h3 id="bunny">Bunny</h3>
+    <p>Bunny.net Stream, the third-party video host. Clients upload directly to Bunny over TUS, Bunny transcodes and stores the media, and its webhooks report upload and encoding results. Video is stored there, not in S3 through <code>filestorage</code>.</p>
+    <p><strong>See</strong> <a href="../video/index.html">Video</a>, <a href="../infrastructure/index.html">Infrastructure</a> · <strong>Code</strong> <code>infrastructure.video.BunnyVideoProviderAdapter</code>, <code>VideoProviderAdapter</code>, webhook inbox <code>main.video_webhook_events</code></p>
+
+    <h2 id="c">C</h2>
+    <h3 id="canonical-timezone">Canonical timezone</h3>
+    <p>The coach profile's IANA zone. Availability windows and the "no booking across local midnight" rule are evaluated in it, and each booking copies it at creation (UTC fallback) so later profile edits don't shift existing bookings.</p>
+    <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>CoachProfile.canonicalTimezone</code>, <code>Booking.canonicalTimezone</code></p>
+
+    <h3 id="coach-access-window">Coach access window</h3>
+    <p>How long after the last attended session a coach may still read and write a player's development data (and play their videos). Development uses <code>development.timeline.coachAccessExpiryDays</code> (90); video uses <code>platform.video.access.coach_window_days</code> (90).</p>
+    <p><strong>See</strong> <a href="../development/index.html">Development</a>, <a href="../video/index.html">Video</a> · <strong>Code</strong> <code>CoachAccessWindow</code>, <code>CoachPlayerAuthorizationService</code>, <code>VideoAccessGuard</code></p>
+
+    <h3 id="coach-status">Coach status</h3>
+    <p>The marketplace state of a coach profile: <code>DRAFT</code> (profile builder not published), <code>ACTIVE</code> (listed and bookable), <code>REDUCED</code> (bookable but with reduced search visibility after reaching the strike visibility threshold), <code>PENDING_REVIEW</code> (strike suspension threshold reached, waiting for an admin), <code>SUSPENDED</code> (admin action, cannot accept bookings) and <code>DEACTIVATED</code>. New requests are allowed for <code>ACTIVE</code>, <code>REDUCED</code> and <code>PENDING_REVIEW</code>. There is no automatic suspension.</p>
+    <p><strong>See</strong> <a href="../marketplace/index.html">Marketplace</a>, <a href="../admin/index.html">Admin</a> · <strong>Code</strong> enum <code>CoachProfileStatus</code>, column <code>marketplace.coach_profiles.status</code></p>
+
+    <h3 id="coach-subscription-tier">Coach subscription tier</h3>
+    <p>The coach's paid plan: <code>SCOUT</code> (the default at publish: drill library and session builder), <code>INSTRUCTOR</code> (adds Skills Radar, performance reports, drill video upload, more storage) and <code>ACADEMY</code> (adds report branding and the SLU/Radar correlation engine). Feature gates read the marketplace projection; payment holds the billing truth and syncs the tier across. A missing marketplace row reads as <code>SCOUT</code>.</p>
+    <p><strong>See</strong> <a href="../payment/index.html">Payment</a>, <a href="../marketplace/index.html">Marketplace</a> · <strong>Code</strong> enum <code>CoachSubscriptionTier</code>, <code>CoachProfileService.getCoachSubscriptionTier</code>, tables <code>marketplace.coach_subscriptions</code> / <code>payment.coach_subscriptions</code></p>
+
+    <h3 id="command-center">Command Center</h3>
+    <p>The coach's day-of-session page (<code>/coach/command-center</code>): schedule, start/pause/resume/end of a live session, the wrap-up sequence and recap prompts.</p>
+    <p><strong>See</strong> <a href="../frontend/index.html">Frontend</a>, <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>CoachCommandCenterPage.vue</code>, <code>WrapUpSequence.vue</code>, <code>BookingCompletionService</code></p>
+
+    <h3 id="contact-detail-sanitizer">Contact-detail sanitizer</h3>
+    <p>The filter that strips phone numbers, emails and similar off-platform contact details from free text (booking notes, recaps, registration names) before it is stored, so users cannot route around the platform or reach minors directly.</p>
+    <p><strong>See</strong> <a href="../infrastructure/index.html">Infrastructure</a> · <strong>Code</strong> <code>infrastructure.sanitizer.ContactDetailSanitizer</code></p>
+
+    <h3 id="credit-wallet">Credit wallet</h3>
+    <p>A booker's euro balance on the platform. Refunds never go back to a card: they land here as credit, which is spent first on later bookings. A parent can cash credit out to their card minus a Stripe fee. The balance is the sum of an append-only ledger (UPDATE/DELETE are rejected by triggers) whose entry types are <code>BOOKING_DEDUCTION</code>, <code>BOOKING_DEDUCTION_REVERSAL</code>, <code>BOOKING_REFUND</code>, <code>CASH_OUT_DEBIT</code>, <code>STRIPE_FEE_DEBIT</code> and <code>CASH_OUT_REVERSAL</code>.</p>
+    <p><strong>See</strong> <a href="../payment/index.html">Payment</a> · <strong>Code</strong> <code>CreditWalletService</code>, <code>ParentCreditLedger</code>, table <code>payment.parent_credit_ledger</code>, view <code>payment.parent_credit_balance</code></p>
+
+    <h2 id="d">D</h2>
+    <h3 id="dispute">Dispute</h3>
+    <p>A complaint about a terminal booking, raised by the booker or the coach within <code>disputes.submissionWindowDays</code> (14). An admin resolves it with <code>FULL_CREDIT</code>, <code>PARTIAL_CREDIT</code>, <code>NO_ACTION</code> or <code>COACH_WARNING</code>, or dismisses it. A resolution that credits the booker also reaches the coach in the same transaction: a payout still inside the <a href="#payout-hold">hold</a> is set to <code>CANCELLED</code>, and an already released one gets a proportional transfer reversal through the outbox. A dispute also locks the booking's recap.</p>
+    <p><strong>See</strong> <a href="../admin/index.html">Admin</a>, <a href="../payment/index.html">Payment</a> · <strong>Code</strong> <code>DisputeService</code>, <code>/api/disputes</code>, table <code>admin.disputes</code></p>
+
+    <h3 id="drill">Drill (PLATFORM vs PRIVATE)</h3>
+    <p>A training exercise with JSONB metadata (skills, weighting, intensity, equipment, coaching points). <code>PLATFORM</code> drills are curated and owner-less (20 are seeded); <code>PRIVATE</code> drills belong to one coach, either authored from scratch or cloned from a platform drill. A coach may use every platform drill and their own private ones, never another coach's. Older comments say <code>COACH</code>; the DB value is <code>PRIVATE</code>.</p>
+    <p><strong>See</strong> <a href="../session/index.html">Session</a> · <strong>Code</strong> <code>Drill</code>, <code>DrillUsagePolicy</code>, table <code>session.drills</code> (CHECK <code>chk_drill_owner</code>)</p>
+
+    <h2 id="e">E</h2>
+    <h3 id="envelope">Envelope (email)</h3>
+    <p>The in-memory model of one outbound email: recipients, an <code>EmailTemplate</code>, a delivery deadline, template data and an idempotent <code>sendId</code>. It is persisted for retry and per-recipient delivery tracking, so a resend cannot double-deliver.</p>
+    <p><strong>See</strong> <a href="../notification/index.html">Notification</a> · <strong>Code</strong> record <code>notification.contract.Envelope</code>, <code>EnvelopeEntity</code>, table <code>main.envelope_entity</code>, <code>EmailRetryScheduler</code></p>
+
+    <h2 id="f">F</h2>
+    <h3 id="feature-gate">Feature gate</h3>
+    <p>A check that a coach's or player's subscription tier allows a feature, read from per-tier <code>platform_config</code> booleans (e.g. <code>coach.tier.scout.video_upload</code>) or the tier itself. A denied call throws <code>FeatureGatedException</code> and the frontend shows a teaser. Separate global switches for external integrations live in <code>AppFeature</code> (e.g. <code>ARACHNID_ENABLED</code>).</p>
+    <p><strong>See</strong> <a href="../config/index.html">Config</a>, <a href="../development/index.html">Development</a> · <strong>Code</strong> <code>FeatureGatedException</code>, <code>infrastructure.feature.AppFeature</code></p>
+
+    <h3 id="force-complete">Force-complete</h3>
+    <p>Completing a booking that got stuck at wrap-up by writing placeholder completion data, so payout and downstream processing can proceed. It is done automatically by a sweeper after <code>booking.stuck_completion_timeout_hours</code> or by an admin from <code>/admin/bookings</code>. Both share one code path.</p>
+    <p><strong>See</strong> <a href="../booking/index.html">Booking</a>, <a href="../admin/index.html">Admin</a> · <strong>Code</strong> <code>BookingCompletionService.forceCompleteWithPlaceholderData</code>, <code>StuckCompletionSweeperService</code>, <code>AdminBookingCompletionService</code></p>
+
+    <h3 id="frontend-link-builder">FrontendLinkBuilder / hash routing</h3>
+    <p>The SPA uses Vue Router hash mode (<code>vueRouterMode: 'hash'</code>), so every in-app URL looks like <code>&lt;frontendUrl&gt;/#/coach/...</code>. Links the backend puts in emails and notifications must be built with <code>FrontendLinkBuilder</code> (<code>base()</code>, <code>route(path)</code>, <code>resolve(pathOrUrl)</code>), never by string concatenation. The base URL comes from <code>app.frontend-url</code>.</p>
+    <p><strong>See</strong> <a href="../infrastructure/index.html">Infrastructure</a>, <a href="../frontend/index.html">Frontend</a> · <strong>Code</strong> <code>infrastructure.web.FrontendLinkBuilder</code>, <code>src/frontend/quasar.config.js</code></p>
+
+    <h2 id="g">G</h2>
+    <h3 id="gdpr">GDPR export / erasure (self vs child scope)</h3>
+    <p>Data-subject requests. Any user can request an export (a ZIP behind a signed, time-limited URL) or an erasure of their own data (<code>/api/gdpr/export</code>, <code>/api/gdpr/erasure</code>). A parent can do the same for a child's shadow profile (<code>/api/gdpr/players/{playerId}/export|erasure</code>). Such a request carries the parent's <code>user_id</code> plus a non-null <code>player_id</code>, and must never be routed to the self-erasure path, which would anonymise the parent. Erasure runs on its own connection pool, cascades through every module, leaves <a href="#tombstone">tombstones</a>, and failed runs are retried daily.</p>
+    <p><strong>See</strong> <a href="../admin/index.html">Admin</a> · <strong>Code</strong> <code>GdprRequestService</code>, <code>GdprExportService</code>, <code>GdprErasureService.erase</code> / <code>eraseChild</code>, <code>GdprErasureRetryScheduler</code>, table <code>admin.gdpr_requests</code></p>
+
+    <h2 id="h">H</h2>
+    <h3 id="homework">Homework (Locker Room)</h3>
+    <p>Up to two drills the coach picks at wrap-up for the player to practise before the next session. It is materialised in the session module once the booking completes; there is no separate "create homework" endpoint. Players and parents see and tick it off in the Locker Room (<code>/player/locker-room/:playerId</code>).</p>
+    <p><strong>See</strong> <a href="../session/index.html">Session</a> · <strong>Code</strong> <code>HomeworkAssignmentService</code>, <code>HomeworkAssignment</code>, table <code>session.homework_assignments</code></p>
+
+    <h2 id="i">I</h2>
+    <h3 id="id-spaces">ID spaces</h3>
+    <p>Several id types look alike but are not interchangeable. <code>User</code> ids and <code>PlayerProfile</code> ids are both <code>Long</code>, and <code>Booking.playerId</code> is a <code>PlayerProfile</code> PK, not a user id: resolve the human via <code>PlayerProfile.userId</code> / <code>parentId</code>. Coach ids in booking, payment and session are <code>CoachProfile</code> UUIDs, not the coach's user id.</p>
+    <p><strong>See</strong> <a href="../index.html">Home</a> (Conventions), <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>Booking</code>, <code>PlayerProfile</code>, <code>CoachProfile</code></p>
+
+    <h2 id="l">L</h2>
+    <h3 id="live-vs-quick">LIVE vs QUICK completion</h3>
+    <p>The two ways to finish a session, carried in <code>WrapUpRequest.mode</code>. <code>LIVE</code>: the coach ran the session in the Command Center (start/end) and the wrap-up completes the booking immediately. <code>QUICK</code>: the coach marks it done afterwards. The booking waits in <code>COMPLETED_PENDING_CONFIRMATION</code> for the booker to confirm and is auto-confirmed after <code>booking.quick_complete_timeout_hours</code> (24). A QUICK wrap-up freezes the session plan's blocks into <code>plan_blocks_snapshot</code>, so SLU and the timeline compute from what was planned at that moment.</p>
+    <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>BookingCompletionService.submitWrapUp</code>, <code>SessionCompletionData.completionMode</code>, <code>QuickCompleteTimeoutService</code>, <code>QuickPlanSnapshot</code></p>
+
+    <h3 id="log-transport">Log transport (<code>target/mails</code>)</h3>
+    <p>The <code>dev</code> profile's email transport (<code>app.email.transport: log</code>). Nothing is sent; each rendered email is logged and written to <code>target/mails/&lt;correlationId&gt;.html</code>, which is where you find verification links and OTP codes locally. UAT uses <code>smtp</code>, production <code>ses</code>.</p>
+    <p><strong>See</strong> <a href="../notification/index.html">Notification</a>, <a href="../getting-started/index.html#email">Your First Day</a> · <strong>Code</strong> <code>infrastructure.email.log.LoggingEmailSender</code>, <code>application-dev.yaml</code></p>
+
+    <h2 id="m">M</h2>
+    <h3 id="messaging-policy">Messaging policy</h3>
+    <p>What a player may do in messaging, derived from their <a href="#age-tier">age tier</a>: <code>U10</code> prohibited, <code>AGE_10_12</code> parent-managed, <code>AGE_13_17</code> supervised, <code>ADULT</code> unrestricted. Security computes it and messaging consumes it; never re-derive age rules locally.</p>
+    <p><strong>See</strong> <a href="../messaging/index.html">Messaging</a>, <a href="../security/index.html">Security</a> · <strong>Code</strong> <code>MessagingPolicy</code>, <code>AgePolicyService.getMessagingPolicy</code></p>
+
+    <h3 id="minor-safety-gate">Minor-safety gate / parental approval</h3>
+    <p>The third layer of <a href="#three-layer-moderation">video moderation</a>. A video owned by a minor is kept hidden and not transcoded until the linked parent approves it at <code>/parent/approvals</code>. Approval triggers the deferred transcoding call. Minors may always start an upload; the gate defers visibility.</p>
+    <p><strong>See</strong> <a href="../video/index.html">Video</a> · <strong>Code</strong> <code>ModerationOrchestrationService</code>, <code>VideoApprovalService</code>, <code>VideoApprovalRequest</code> (<code>main.video_approval_requests</code>)</p>
+
+    <h2 id="n">N</h2>
+    <h3 id="neglected-skill">Neglected skill</h3>
+    <p>A skill whose actual weekly <a href="#slu">SLU</a> fell more than <code>slu.neglected.threshold</code> below the highest weekly target any of the player's coaches set for it. A ShedLock-guarded job runs Mondays 06:00 UTC, opens a flag, and auto-resolves it when training recovers. It measures training volume only, not ability.</p>
+    <p><strong>See</strong> <a href="../development/index.html">Development</a> · <strong>Code</strong> <code>NeglectedSkillDetectionService</code>, <code>NeglectedSkillProcessor</code>, <code>NeglectedSkillFlag</code> (<code>development.neglected_skill_flags</code>), <code>PlayerSluTarget</code></p>
+
+    <h3 id="nowait">NOWAIT + PessimisticLockRetryer</h3>
+    <p>The row-locking convention for hot rows (coach profile, booking, wallet, drill, review…). <code>findByIdForUpdate</code> issues <code>SELECT … FOR UPDATE NOWAIT</code>, which fails immediately on contention instead of blocking, and the call is wrapped in <code>PessimisticLockRetryer.withBoundedRetry</code>, which retries behind a savepoint with jittered backoff and maps exhaustion to a 409. The retried lambda must only read; <code>PessimisticLockRetryerCallSiteAuditTest</code> pins the call-site count and rejects writes inside it. Inside a <code>REQUIRES_NEW</code> transaction, NOWAIT-locking a row the suspended caller already wrote always fails (Postgres <code>55P03</code>).</p>
+    <p><strong>See</strong> <a href="../database/index.html">Database</a>, <a href="../infrastructure/index.html">Infrastructure</a> · <strong>Code</strong> <code>infrastructure.persistence.PessimisticLockRetryer</code></p>
+
+    <h3 id="notification-category">Notification category / opt-out</h3>
+    <p>Every email template is classified into one <code>NotificationCategory</code> (<code>BOOKING</code>, <code>REMINDER</code>, <code>SESSION_PACK</code>, <code>DEVELOPMENT</code>, <code>MODERATION</code>, <code>ACCOUNT</code>, <code>SYSTEM</code>). Only <code>REMINDER</code> and <code>DEVELOPMENT</code> can be opted out of; the rest are transactional. Opt-out is checked at send time, carries a one-click unsubscribe link plus <code>List-Unsubscribe</code> headers, and never suppresses the in-app inbox row.</p>
+    <p><strong>See</strong> <a href="../notification/index.html">Notification</a> · <strong>Code</strong> <code>NotificationCategory</code>, <code>NotificationCatalog</code>, <code>NotificationPreferenceService</code>, tables <code>main.notification_email_preferences</code>, <code>main.user_notifications</code></p>
+
+    <h2 id="o">O</h2>
+    <h3 id="outbox">Outbox</h3>
+    <p>The generic transactional outbox. A producer inserts an intent row (refund, payout transfer, email, blob deletion…) in the same transaction as its business change; after commit, and again every five minutes, a drainer claims due rows with <code>SKIP LOCKED</code> and runs the matching handler, retrying with backoff forever. Handlers must be idempotent. Several module-private queues are also called "outbox"; they are separate tables.</p>
+    <p><strong>See</strong> <a href="../outbox/index.html">Outbox</a> · <strong>Code</strong> <code>OutboxService</code>, <code>OutboxMessageHandler</code>, table <code>main.outbox_messages</code></p>
+
+    <h2 id="p">P</h2>
+    <h3 id="payout-hold">Payout hold</h3>
+    <p>The delay between session completion and paying the coach. Completion writes a <code>PENDING_RELEASE</code> payout row with <code>release_after = now + payment.payout.hold_hours</code> (48, bounded 0–336) and an outbox transfer message not due before then, so a dispute can stop the payout before money reaches the coach. A non-retryable Stripe error moves the row to <code>HOLD</code>, which needs manual follow-up. A booking paid entirely by credit or a pack has no card charge to share, so no transfer happens.</p>
+    <p><strong>See</strong> <a href="../payment/index.html">Payment</a>, <a href="../outbox/index.html">Outbox</a> · <strong>Code</strong> <code>CoachPayoutEnqueueListener</code>, <code>CoachPayoutOutboxSupport</code>, <code>CoachPayoutTransferHandler</code>, table <code>payment.coach_payouts</code></p>
+
+    <h3 id="platform-config">platform_config</h3>
+    <p>The database-backed key/value store for business knobs: per-tier feature gates, quotas, thresholds, timers and age-tier cutoffs. Values are typed strings, cached per node, editable at <code>/admin/config</code> within ranges defined in <code>ConfigBounds</code>, and validated at boot by <code>ConfigStartupAssertion</code>. Seeds live in <code>V139__baseline_seed_data.sql</code> and later migrations. (Not to be confused with <code>admin.config.PlatformConfig</code>, an unrelated <code>@Configuration</code> class.)</p>
+    <p><strong>See</strong> <a href="../config/index.html">Config</a> · <strong>Code</strong> <code>ConfigService</code>, <code>config.repo.PlatformConfig</code>, table <code>main.platform_config</code></p>
+
+    <h3 id="player-tier">Player subscription tier</h3>
+    <p>A player's paid plan: <code>ATHLETE</code>, <code>SEMI_PRO</code> or <code>PRO</code>, which unlock video and Skills Radar features. <code>SEMI_PRO</code> and <code>PRO</code> are billed yearly only (CHECK constraints). Video retention is the main consumer: when a subscription lapses the player's videos are blocked, then archived and purged, except that a <code>YEARLY</code> subscription pauses the archival clock. Not required for booking.</p>
+    <p><strong>See</strong> <a href="../payment/index.html">Payment</a>, <a href="../video/index.html">Video</a> · <strong>Code</strong> <code>PlayerSubscriptionTierBilling</code>, <code>PlayerSubscriptionQueryAdapter</code>, table <code>payment.player_subscriptions</code></p>
+
+    <h3 id="profile-builder">Profile builder / publish</h3>
+    <p>The coach's five-step onboarding wizard (<code>/coach/profile-builder</code>): identity, specialties, age groups, pricing, availability. Publishing validates all steps, flips the profile from <code>DRAFT</code> to <code>ACTIVE</code> (visible in search) and creates the <code>SCOUT</code> subscription row. Nothing is bookable until it has been published.</p>
+    <p><strong>See</strong> <a href="../marketplace/index.html">Marketplace</a> · <strong>Code</strong> <code>ProfileBuilderResource</code>, <code>CoachProfileService.publishProfile</code></p>
+
+    <h2 id="r">R</h2>
+    <h3 id="recap">Recap</h3>
+    <p>The coach's short post-session summary in three fields: "what we did", "what's next" and "what went well". It is written at wrap-up and editable until <code>booking.recap.editWindowDays</code> (30) after the session, unless the coach or player was GDPR-erased or a dispute locks it. Recaps appear on the player's timeline and Session Prep Card and in reports.</p>
+    <p><strong>See</strong> <a href="../booking/index.html">Booking</a>, <a href="../development/index.html">Development</a> · <strong>Code</strong> <code>BookingCompletionService.updateRecap</code>, <code>SessionCompletionData</code> (<code>booking.session_completion_data</code>)</p>
+
+    <h3 id="reliability-strike">Reliability strike</h3>
+    <p>A mark against a coach for a no-show, or for a coach cancellation whose reason is not exempt (<code>MUTUAL_AGREEMENT</code>, <code>HEALTH_MEDICAL</code>, <code>FAMILY_EMERGENCY</code> and <code>WEATHER</code> are). Strikes are counted over the trailing 30 days: reaching <code>reliability.strike.visibilityThreshold</code> (3) sets the coach to <code>REDUCED</code>, and reaching <code>reliability.strike.suspensionThreshold</code> (5) sets <code>PENDING_REVIEW</code> and raises an admin alert. Admins can also issue and delete strikes, and coaches can <a href="#appeal">appeal</a> them.</p>
+    <p><strong>See</strong> <a href="../payment/index.html">Payment</a>, <a href="../admin/index.html">Admin</a> · <strong>Code</strong> <code>ReliabilityStrikeService</code>, <code>ReliabilityStrikeConfig</code>, <code>CoachReliabilityStrike</code> (<code>marketplace.coach_reliability_strikes</code>)</p>
+
+    <h3 id="routing-datasource">Routing DataSource</h3>
+    <p>One <code>AbstractRoutingDataSource</code> over three Hikari pools on the same database: the default pool, <code>gdpr-erasure-pool</code> and <code>payment-requires-new-pool</code>. A caller sets a thread-local key right before opening a <code>REQUIRES_NEW</code> transaction (and clears it in <code>finally</code>), so the inner transaction can't starve on the pool its own suspended outer transaction holds. Today only GDPR erasure and payment persistence use it.</p>
+    <p><strong>See</strong> <a href="../infrastructure/index.html">Infrastructure</a> · <strong>Code</strong> <code>DataSourceConfig</code>, <code>RoutingDataSourceContext</code></p>
+
+    <h2 id="s">S</h2>
+    <h3 id="self-registered-player">Self-registered player</h3>
+    <p>An adult (18+) who signs up as a player with their own login and books for themselves, acting as their own <a href="#booker">booker</a>. Their <code>PlayerProfile</code> has <code>user_id</code> set and <code>parent_id</code> null. Registration under 18 is rejected outright, because minors must be created by a parent as <a href="#shadow-profile">shadow profiles</a>.</p>
+    <p><strong>See</strong> <a href="../security/index.html">Security</a> · <strong>Code</strong> <code>PlayerRegistrationService</code>, <code>ShadowAccountService.createSelfOwnedPlayerProfile</code>, CHECK <code>chk_pp_owner</code></p>
+
+    <h3 id="session-dna">Session DNA</h3>
+    <p>A computed 0–100 profile of a session plan or template across technical, physical, cognitive, match-realism and weak-foot focus, derived from the drills' metadata together with an equipment checklist.</p>
+    <p><strong>See</strong> <a href="../session/index.html">Session</a> · <strong>Code</strong> <code>SessionDnaCalculator</code>, column <code>session.sessions.session_dna</code></p>
+
+    <h3 id="session-pack">Session pack</h3>
+    <p>A coach-defined bundle of prepaid sessions at a fixed per-session price. Bookings funded by a pack decrement its remaining count instead of charging. Packs expire after 60 days, can be extended once by 30 days within the last 14, paused once, and unused sessions are forfeited at expiry. Packs live entirely in <code>payment</code>; booking only stores <code>sessionPackPurchaseId</code>.</p>
+    <p><strong>See</strong> <a href="../payment/index.html">Payment</a> · <strong>Code</strong> <code>PackSessionService</code>, <code>SessionPackPaymentService</code>, <code>SessionPackTier</code>, <code>SessionPackPurchase</code> (<code>payment.session_pack_purchases</code>)</p>
+
+    <h3 id="session-plan">Session plan</h3>
+    <p>What the coach intends to run in one booked session: up to four ordered blocks of drills plus a development focus, Session DNA and equipment list. It is one-to-one with a booking and can only be created while the booking is <code>CONFIRMED</code>. Status goes <code>DRAFT</code> &rarr; <code>SAVED</code> &rarr; <code>COMPLETED</code> (or <code>CANCELLED</code>). SLU is only computed for sessions with a saved or completed plan. Called "session" in the code (<code>session.sessions</code>), which is easy to confuse with the booking.</p>
+    <p><strong>See</strong> <a href="../session/index.html">Session</a> · <strong>Code</strong> <code>SessionPlanService</code>, <code>Session</code> (<code>session.sessions</code>), <code>/coach/session-builder/:bookingId</code></p>
+
+    <h3 id="session-prep-card">Session Prep Card</h3>
+    <p>A pre-session briefing for one upcoming booking: the last attended session and its recap, a suggested "what's next", focus-thread skills, open neglected skills, the player's own request and the coach's private plan note.</p>
+    <p><strong>See</strong> <a href="../development/index.html">Development</a> · <strong>Code</strong> <code>SessionPrepService</code>, <code>SessionFocusThreadCalculator</code></p>
+
+    <h3 id="shadow-profile">Shadow (player) profile</h3>
+    <p>A <code>PlayerProfile</code> a parent creates for their child. It is not a <code>User</code> and has no login. It is owned through <code>parent_id</code> and linked by <code>ParentPlayerLink</code>, and a minor's profile requires explicit parental consent at creation. Every minor on the platform is a shadow profile; the parent books, pays, approves videos and exercises GDPR rights on the child's behalf.</p>
+    <p><strong>See</strong> <a href="../security/index.html">Security</a> · <strong>Code</strong> <code>ShadowAccountService.createPlayerProfile</code>, <code>ParentPlayerLink</code>, table <code>main.player_profiles</code> (CHECK <code>chk_pp_owner</code>)</p>
+
+    <h3 id="shedlock">ShedLock</h3>
+    <p>The library that makes a <code>@Scheduled</code> job run on only one instance at a time. Methods annotated with <code>@SchedulerLock(name = …)</code> take a row lock in <code>main.shedlock</code>, using DB time. 31 of the 40 scheduled methods use it; the rest are safe per instance by design (per-node caches, or <code>SKIP LOCKED</code> claims). Scheduling is off under the test profile.</p>
+    <p><strong>See</strong> <a href="../scheduled-jobs/index.html">Scheduled Jobs</a> · <strong>Code</strong> <code>infrastructure.config.ShedLockConfig</code>, table <code>main.shedlock</code></p>
+
+    <h3 id="signed-playback">Signed playback</h3>
+    <p>Video is never served by a public URL. After <code>VideoAccessGuard</code> authorises the viewer (owner, parent, admin, or a coach inside the access window), <code>PlaybackService</code> issues a short-lived signed streaming URL plus a playback token that can be revoked. <code>COACH_REVIEW</code> videos never get a download URL.</p>
+    <p><strong>See</strong> <a href="../video/index.html">Video</a> · <strong>Code</strong> <code>PlaybackService</code>, <code>VideoAccessGuard</code>, <code>PlaybackToken</code> (<code>main.playback_tokens</code>), <code>app.video.playback.signing-secret</code></p>
+
+    <h3 id="skills-radar">Skills Radar</h3>
+    <p>A coach-judged 0–100 ability score per skill, the weighted composite of up to three assessment types: <code>OBJECTIVE</code> (50%), <code>MATCH_OBSERVATION</code> (30%) and <code>COACH_EVALUATION</code> (20%). The composite is recomputed asynchronously after each submission, and the first composite per skill is frozen as a baseline for measuring improvement. Requires an <code>INSTRUCTOR</code> or <code>ACADEMY</code> coach. Deliberately separate from SLU.</p>
+    <p><strong>See</strong> <a href="../development/index.html">Development</a> · <strong>Code</strong> <code>RadarAssessmentService</code>, <code>RadarCompositeCalculationService</code>, tables <code>development.player_radar_composites</code>, <code>development.player_radar_baselines</code></p>
+
+    <h3 id="skip-locked">SKIP LOCKED claim</h3>
+    <p>The queue-draining pattern: <code>SELECT … FOR UPDATE SKIP LOCKED</code> so concurrent workers on different pods each take different rows instead of waiting. Used by the outbox, the webhook inboxes and several sweepers. It provides concurrency safety without ShedLock.</p>
+    <p><strong>See</strong> <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>, <a href="../outbox/index.html">Outbox</a> · <strong>Code</strong> <code>OutboxMessageRepository.claimNextDue</code></p>
+
+    <h3 id="slu">SLU (Skill Load Units)</h3>
+    <p>An objective training-volume metric computed per skill and drill when a session completes: rep density &times; skill weight &times; scaled intensity, pressure and match realism &times; duration. It is only computed for attended sessions with a saved or completed plan. Detail rows are append-only, and weekly snapshots feed the exposure dashboard and <a href="#neglected-skill">neglected-skill</a> detection. It measures volume, not ability.</p>
+    <p><strong>See</strong> <a href="../development/index.html">Development</a> · <strong>Code</strong> <code>SluFormula</code>, <code>SluCalculationService</code>, tables <code>development.player_skill_stats</code>, <code>development.player_slu_weekly_snapshot</code></p>
+
+    <h2 id="t">T</h2>
+    <h3 id="template">Template</h3>
+    <p>A coach's reusable copy of a session plan's blocks, DNA, equipment and focus. It can be deployed onto a <code>CONFIRMED</code> booking picked from a list, which creates that booking's plan. Templates are <code>ACTIVE</code> or <code>ARCHIVED</code> and track a deploy count.</p>
+    <p><strong>See</strong> <a href="../session/index.html">Session</a> · <strong>Code</strong> <code>SessionTemplateService</code>, <code>SessionTemplate</code> (<code>session.session_templates</code>), <code>/coach/session-templates</code></p>
+
+    <h3 id="three-layer-moderation">Three-layer video moderation</h3>
+    <p>Every uploaded video passes, in order: (1) <strong>Arachnid</strong>, CSAM hash matching, where a match locks the video, alerts admins and suspends the account; (2) <strong>VideoIntel</strong>, Google Video Intelligence explicit-content detection, where a flag locks the video; (3) the <a href="#minor-safety-gate">minor-safety gate</a>. Each layer's latest outcome is stored per video. A layer outage leaves the video in <code>SCANNING</code> for an SLA monitor to retry through the outbox. Layers 1 and 2 can be switched off via <code>AppFeature</code>.</p>
+    <p><strong>See</strong> <a href="../video/index.html">Video</a> · <strong>Code</strong> <code>ModerationOrchestrationService</code>, <code>VideoModerationScan</code> (<code>main.video_moderation_scans</code>), <code>ModerationSlaMonitorService</code></p>
+
+    <h3 id="timeline">Timeline</h3>
+    <p>The player's chronological development feed: completed sessions (with drills, ratings and recap), homework assigned, radar assessments and shared reports. Written by event listeners in their own transactions, replay-safe (one <code>SESSION_COMPLETED</code> per player and booking), and scrubbed on coach erasure.</p>
+    <p><strong>See</strong> <a href="../development/index.html">Development</a> · <strong>Code</strong> <code>TimelineEventListener</code>, <code>TimelineQueryService</code>, <code>PlayerTimelineEvent</code> (<code>development.player_timeline_events</code>)</p>
+
+    <h3 id="tombstone">Tombstone</h3>
+    <p>A sticky "this subject was GDPR-erased" marker that stops late writers from recreating scrubbed data. <code>main.player_profiles.development_data_erased_at</code> (V151) is checked under lock by development listeners. <code>marketplace.coach_profiles.recap_data_erased_at</code> (V166) is set inside the coach scrub and blocks recap edits. Writers must check the tombstone after taking their own row lock. A coach's account lock alone is not a reliable erasure signal.</p>
+    <p><strong>See</strong> <a href="../database/index.html">Database</a>, <a href="../admin/index.html">Admin</a> · <strong>Code</strong> <code>DevelopmentDataErasureGuard</code>, <code>BookingCompletionService</code> (recap editability)</p>
+
+    <h2 id="v">V</h2>
+    <h3 id="verification-status">Verification status</h3>
+    <p>How far a user got through registration: <code>UNVERIFIED</code> &rarr; <code>EMAIL_VERIFIED</code> &rarr; <code>BASIC_VERIFIED</code> (phone OTP done), or <code>SUSPENDED</code>. Login requires <code>BASIC_VERIFIED</code> only when <code>security.registration.phone-otp-required</code> is true; it is seeded <code>false</code>, so email verification is enough. This describes the account, unlike the coach's <a href="#verification-tier">verification tier</a>.</p>
+    <p><strong>See</strong> <a href="../security/index.html">Security</a> · <strong>Code</strong> enum <code>SkillarsVerificationStatus</code>, <code>AuthService.login</code></p>
+
+    <h3 id="verification-tier">Verification tier</h3>
+    <p>An admin-assigned trust badge on a coach's marketplace profile: <code>BASIC</code> (default), <code>TRUSTED</code> or <code>FEATURED</code>. It is shown on coach cards, the public profile and reports. The column is <code>updatable = false</code> on the entity and is written only by the admin's bulk update.</p>
+    <p><strong>See</strong> <a href="../admin/index.html">Admin</a>, <a href="../marketplace/index.html">Marketplace</a> · <strong>Code</strong> <code>AdminCoachEnforcementService</code>, <code>CoachProfileRepository.updateVerificationTier</code>, column <code>marketplace.coach_profiles.verification_tier</code> (CHECK <code>chk_verification_tier</code>)</p>
+
+    <h2 id="w">W</h2>
+    <h3 id="wrap-up">Wrap-up</h3>
+    <p>The coach's end-of-session form: attendance, effort/focus/technique ratings, up to two homework drills, the recap, and the <a href="#live-vs-quick">LIVE or QUICK</a> mode. Submitting it completes the booking (or moves it to pending confirmation) and publishes <code>BookingCompletedEvent</code>. That event starts the payout hold, SLU, timeline, homework and plan completion. Abandoned wrap-ups are <a href="#force-complete">force-completed</a>.</p>
+    <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>BookingCompletionService.submitWrapUp</code>, <code>WrapUpRequest</code>, <code>POST /api/bookings/{id}/complete</code>, <code>WrapUpSequence.vue</code></p>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

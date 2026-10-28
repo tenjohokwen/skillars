@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Outbox</h1>
     <p class="subtitle">The generic transactional outbox: a single <code>main.outbox_messages</code> table that lets any module commit "do this side effect later" atomically with its business change, then drains it off the request path with per-row transactions, exponential backoff, and no row ever dropped.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>
       Many Skillars operations promise a side effect that can't run inside the database transaction: a Stripe refund
       or coach payout transfer, a transactional email, an S3 object deletion after GDPR erasure, an operator alert. If
@@ -61,8 +74,8 @@
       reported as <code>[OUTBOX_STUCK]</code> for a human.
     </p>
 
-    <h2>Technical Overview</h2>
-    <h3>Package layout</h3>
+    <h2 id="technical-overview">Technical Overview</h2>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <thead><tr><th>Package</th><th>Classes</th><th>Purpose</th></tr></thead>
       <tbody>
@@ -73,7 +86,7 @@
       </tbody>
     </table>
 
-    <h3>Table: <code>main.outbox_messages</code></h3>
+    <h3 id="table-main-outbox-messages">Table: <code>main.outbox_messages</code></h3>
     <p>Defined in <code>V138__baseline_schema.sql</code> (the deferred-112 rebaseline that folded in the original
       deferred-91 migration and the later <code>next_attempt_at</code> column, originally <code>V126</code>). Mapped by <code>OutboxMessage</code>.</p>
     <table>
@@ -92,7 +105,7 @@
       rows are <strong>deleted</strong>; the table only ever holds pending or failing work, so a non-empty table at rest
       means something is backing off.</p>
 
-    <h3>Key classes</h3>
+    <h3 id="key-classes">Key classes</h3>
     <table>
       <thead><tr><th>Class</th><th>What it does</th></tr></thead>
       <tbody>
@@ -104,7 +117,7 @@
       </tbody>
     </table>
 
-    <h3>Retry, backoff and locking</h3>
+    <h3 id="retry-backoff-and-locking">Retry, backoff and locking</h3>
     <ul>
       <li><strong>Backoff</strong> (<code>OutboxRowProcessor.backoffFor</code>): 30 s after the first failure, doubling per attempt
         (30 s, 1 m, 2 m, 4 m, …) capped at 1 h. Deterministic, no jitter — SKIP LOCKED already spreads pods.</li>
@@ -122,7 +135,7 @@
         now have a future <code>next_attempt_at</code>), or 200 chunks.</li>
     </ul>
 
-    <h3>Who uses it</h3>
+    <h3 id="who-uses-it">Who uses it</h3>
     <table>
       <thead><tr><th><code>aggregate_type</code></th><th>Producer (enqueue side)</th><th>Handler</th><th>Idempotency</th></tr></thead>
       <tbody>
@@ -139,8 +152,8 @@
     <p>Eight handlers and eight aggregate types, owned by notification, payment, development, filestorage and video; producers additionally live in security (registration emails) and admin (dispute reversals, GDPR blob deletion). Check the startup log line
       <code>[OUTBOX] registered N handler(s): [...]</code> to see what a running instance knows.</p>
 
-    <h2>Key Flows</h2>
-    <h3>Enqueue in the business transaction → post-commit drain</h3>
+    <h2 id="key-flows">Key Flows</h2>
+    <h3 id="enqueue-in-the-business-transaction-post-commit-drain">Enqueue in the business transaction → post-commit drain</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Biz as Business service (@Transactional)
@@ -180,7 +193,7 @@ sequenceDiagram
       never existed and the <code>AFTER_COMMIT</code> listener never fires.
     </p>
 
-    <h3>Why two transactions per row</h3>
+    <h3 id="why-two-transactions-per-row">Why two transactions per row</h3>
     <p>
       The handler runs <em>inside</em> the claim transaction, so a handler's own <code>@Transactional</code> (REQUIRED)
       collaborators — <code>CreditWalletService.writeLedgerEntry</code>, <code>SnapshotBatchWriter.writeAllDeltas</code>,
@@ -190,7 +203,7 @@ sequenceDiagram
       in one transaction; one constraint violation rolled back all 25 and the <code>attempts</code> counter never moved.
     </p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>Enqueue inside the business transaction, from a <code>BEFORE_COMMIT</code> listener or the service itself
       — never <code>AFTER_COMMIT</code>.</strong> Make your <code>*OutboxSupport</code> method
@@ -258,7 +271,7 @@ sequenceDiagram
       promise (a refund, an email) — only do it after doing the work by hand.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <ul>
       <li><a href="../notification/index.html">Notification</a> — <code>NOTIFICATION_EMAIL</code> producer and handler; the
         sender behind the moderation admin alert.</li>
@@ -270,9 +283,12 @@ sequenceDiagram
       <li><a href="../infrastructure/index.html">Infrastructure</a> — <code>ExecutorShutdown</code>, <code>MdcDecorator</code>, <code>SchedulingConfig</code>, ShedLock.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

@@ -8,6 +8,7 @@
 
 - [ ] Tests added or updated for the change; targeted tests pass locally.
 - [ ] No new Spring test context (reuse an existing IT base).
+- [ ] If this changes a flow documented in `docs/dev-docs`, I updated the page and its "verified against" stamp.
 
 ### Database migrations (only if this PR touches `src/main/resources/db/migration/`)
 

@@ -72,11 +72,19 @@ class MyFeatureResourceIT extends AbstractIntegrationTest {
 
 ## Running the suite
 
+**Do not run the full suite locally** — GitHub CI is the full verification gate. Locally, run only
+what you touched:
+
 ```bash
-mvn -o verify                    # everything, including the frontend build
-mvn -o verify -DskipFrontend     # backend + tests only
-mvn -o verify -Dit.test=MyIT     # one integration test class
+# one unit / WebMvcTest class
+mvn -o -DskipFrontend -Dtest=MyServiceTest test
+# one or more integration test classes (Docker required); -Dtest=none skips the unit tests
+mvn -o verify -DskipFrontend -Dit.test=MyIT,OtherIT -Dtest=none \
+    -Dsurefire.failIfNoSpecifiedTests=false -Dfailsafe.failIfNoSpecifiedTests=false
 ```
+
+Note `mvn verify -Dit.test=MyIT` on its own still runs **every unit test** first. When you add an IT, also run
+`IntegrationTestConventionTest` (the Spring test-context count is pinned).
 
 ## Known gaps
 

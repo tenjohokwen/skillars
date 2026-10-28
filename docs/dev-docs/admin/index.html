@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Admin</h1>
     <p class="subtitle">Admin-only tooling for trust &amp; safety moderation, account and coach enforcement, dispute resolution, appeals, stuck-booking remediation, and GDPR data-subject requests.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>
       Skillars is a two-sided marketplace connecting minors (Players), their Parents, and Coaches, so the platform
       needs a back office that lets <strong>Admins</strong> keep the marketplace safe and legally compliant without
@@ -115,8 +128,8 @@
       <code>GdprErasureRetryScheduler</code>. Get the wiring wrong and you silently miss the regulatory deadline.</p>
     </div>
 
-    <h2>Technical Overview</h2>
-    <h3>Package layout</h3>
+    <h2 id="technical-overview">Technical Overview</h2>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
       <tbody>
@@ -128,7 +141,7 @@
       </tbody>
     </table>
 
-    <h3>Key entities &amp; tables</h3>
+    <h3 id="key-entities-tables">Key entities &amp; tables</h3>
     <table>
       <thead><tr><th>Entity</th><th>Table</th><th>Purpose</th></tr></thead>
       <tbody>
@@ -141,7 +154,7 @@
       </tbody>
     </table>
 
-    <h3>Key services</h3>
+    <h3 id="key-services">Key services</h3>
     <table>
       <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
       <tbody>
@@ -162,7 +175,7 @@
       </tbody>
     </table>
 
-    <h3>REST endpoints</h3>
+    <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
       <tbody>
@@ -224,7 +237,7 @@
       live in this module.
     </p>
 
-    <h3>Domain events</h3>
+    <h3 id="domain-events">Domain events</h3>
     <table>
       <thead><tr><th>Event</th><th>Direction</th><th>Notes</th></tr></thead>
       <tbody>
@@ -255,9 +268,9 @@
       <code>DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY</code>, and feature properties.
     </p>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>Coach enforcement: strike threshold to suspension</h3>
+    <h3 id="coach-enforcement-strike-threshold-to-suspension">Coach enforcement: strike threshold to suspension</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Payment as payment.ReliabilityStrikeService
@@ -290,7 +303,7 @@ sequenceDiagram
       reinstate proceeds even if another admin just suspended.
     </p>
 
-    <h3>Account suspension</h3>
+    <h3 id="account-suspension">Account suspension</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Admin as Admin (console)
@@ -316,7 +329,7 @@ sequenceDiagram
       erasure request exists for the user — a parent's erasure of a child does not block it.
     </p>
 
-    <h3>Dispute resolution</h3>
+    <h3 id="dispute-resolution">Dispute resolution</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Party as Parent / Player / Coach
@@ -350,7 +363,7 @@ sequenceDiagram
       exposed to booking via <code>DisputeRecapLockLookup</code>).
     </p>
 
-    <h3>Appeal decision</h3>
+    <h3 id="appeal-decision">Appeal decision</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant User as Appellant
@@ -377,7 +390,7 @@ sequenceDiagram
       automatically — the admin corrects it by hand. A reversal failure rolls back the decision too.
     </p>
 
-    <h3>GDPR erasure (self or child)</h3>
+    <h3 id="gdpr-erasure-self-or-child">GDPR erasure (self or child)</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant User as User / Parent
@@ -411,7 +424,7 @@ sequenceDiagram
       bookings, payment/credit rows, messages and videos are deliberately kept.
     </p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>GDPR work runs synchronously on the HTTP request thread.</strong> <code>GdprEventListener</code> is a
       plain (non-<code>@Async</code>) <code>@TransactionalEventListener(phase = AFTER_COMMIT)</code>, so the export
@@ -498,7 +511,7 @@ sequenceDiagram
       entity is in <code>admin.repo</code>.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <div class="card-grid">
       <div class="card"><h4><a href="../security/index.html">Security</a></h4><p>Principal/roles, user lock and session invalidation, refresh tokens, login-attempt rate limit, player ownership guard.</p></div>
       <div class="card"><h4><a href="../booking/index.html">Booking</a></h4><p>Bookings disputed, cancelled on suspension, force-completed, or blocking erasure; recap lock via <code>BookingDisputeLookup</code>.</p></div>
@@ -515,9 +528,12 @@ sequenceDiagram
       <div class="card"><h4><a href="../infrastructure/index.html">Infrastructure</a></h4><p>Security constants, <code>PessimisticLockRetryer</code>, routing datasource, exceptions, feature properties.</p></div>
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

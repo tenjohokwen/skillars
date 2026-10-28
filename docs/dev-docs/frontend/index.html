@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Frontend</h1>
     <p class="subtitle">The Vue&nbsp;3 + Quasar&nbsp;2 single-page app in <code>src/frontend</code> &mdash; one hash-routed SPA serving all four personas (Player, Parent, Coach, Admin), built into the Spring Boot jar.</p>
 
-    <h2>Why / What It Is</h2>
+    <h2 id="why-what-it-is">Why / What It Is</h2>
     <p>
       Every Skillars persona uses the same SPA. There is no separate admin app and no server-side rendering: the
       Quasar build (<code>quasar build</code> &rarr; <code>src/frontend/dist/spa</code>) is copied into
@@ -60,9 +73,9 @@
       <code>src/stores/</code>.
     </p>
 
-    <h2>Technical Overview</h2>
+    <h2 id="technical-overview">Technical Overview</h2>
 
-    <h3>Build &amp; tooling</h3>
+    <h3 id="build-tooling">Build &amp; tooling</h3>
     <table>
       <tr><th>Concern</th><th>What is used</th></tr>
       <tr><td>Framework</td><td>Vue <code>^3.5</code>, Quasar <code>^2.16</code> via Quasar CLI (<code>@quasar/app-vite ^2.4</code>, Vite under the hood). Composition API / <code>&lt;script setup&gt;</code>, plain JavaScript (no TypeScript; <code>jsconfig.json</code> only).</td></tr>
@@ -84,7 +97,7 @@
       <tr><td><code>postinstall</code></td><td><code>quasar prepare</code> &mdash; regenerates <code>.quasar/</code> (including <code>.quasar/tsconfig.json</code>, which the Vitest alias resolution depends on).</td></tr>
     </table>
 
-    <h3>Directory layout (<code>src/frontend/src</code>)</h3>
+    <h3 id="directory-layout-src-frontend-src">Directory layout (<code>src/frontend/src</code>)</h3>
     <table>
       <tr><th>Path</th><th>Contents</th></tr>
       <tr><td><code>App.vue</code></td><td>Root: <code>GlobalLoadingBar</code>, <code>SessionWarningDialog</code>, <code>&lt;router-view&gt;</code>; registers the <code>session:expired</code> window listener and starts session monitoring.</td></tr>
@@ -103,7 +116,7 @@
     </table>
     <p>Tests live in sibling <code>__tests__/</code> folders (<code>*Spec.js</code>, 105 files today); shared test setup is in <code>src/frontend/test/vitest/</code>.</p>
 
-    <h3>Layers</h3>
+    <h3 id="layers">Layers</h3>
     <pre class="mermaid">
 flowchart TD
   subgraph Browser["SPA (hash-routed, same origin as API)"]
@@ -138,7 +151,7 @@ flowchart TD
       401 teardown. SSE streams are the one exception (native <code>EventSource</code>, see below).
     </p>
 
-    <h3>Router &amp; route guards</h3>
+    <h3 id="router-route-guards">Router &amp; route guards</h3>
     <p>
       <code>quasar.config.js</code> sets <code>vueRouterMode: 'hash'</code>, so every SPA URL is
       <code>https://host/#/path</code>. All routes are children of <code>/</code> (<code>MainLayout.vue</code>);
@@ -199,7 +212,7 @@ flowchart TD
       historically unreachable because only one of the two was done.
     </p>
 
-    <h3>Pinia stores</h3>
+    <h3 id="pinia-stores">Pinia stores</h3>
     <p>All stores are setup-style (<code>defineStore('id', () =&gt; { ... })</code>).</p>
     <table>
       <tr><th>Store</th><th>Holds</th></tr>
@@ -212,7 +225,7 @@ flowchart TD
       <tr><td>others</td><td><code>appeal</code>, <code>development</code>, <code>homework</code>, <code>marketplace</code>, <code>payment</code>, <code>profileBuilder</code>, <code>session</code>, <code>sessionBuilder</code>, <code>sessionTemplate</code>.</td></tr>
     </table>
 
-    <h3>API layer &amp; auth</h3>
+    <h3 id="api-layer-auth">API layer &amp; auth</h3>
     <p>
       <code>boot/axios.js</code> creates <code>api = axios.create({ baseURL: '', withCredentials: true })</code>. API
       modules are thin: either an exported object (<code>authApi</code>, <code>sessionApi</code>,
@@ -242,7 +255,7 @@ flowchart TD
       Pages show <code>errorMessage</code> in a <code>q-banner</code> or via <code>$q.notify</code>.
     </p>
 
-    <h3>Server-Sent Events</h3>
+    <h3 id="server-sent-events">Server-Sent Events</h3>
     <p>
       SSE uses the native <code>EventSource</code>, not axios, so none of the interceptors run on it (no
       loading-bar tick, no <code>rint</code> refresh, no 401 teardown). Each stream implements its own
@@ -261,7 +274,7 @@ flowchart TD
       <code>safeDeepLink</code> (app-relative paths only) before <code>router.push</code>.
     </p>
 
-    <h3>i18n</h3>
+    <h3 id="i18n">i18n</h3>
     <ul>
       <li>Three locales: <code>en-US</code> (default), <code>fr-FR</code>, <code>de-DE</code> (<code>src/i18n/index.js</code>). Fallback for every locale is <code>en-US</code>. The language menu in <code>MainLayout.vue</code> persists the choice in <code>localStorage['locale']</code> and clears any backend <code>lang</code> cookie so <code>Accept-Language</code> wins again.</li>
       <li>Keys are nested by domain namespace, e.g. <code>auth.*</code>, <code>coach.*</code>, <code>parent.*</code>, <code>player.*</code>, <code>admin.*</code>, <code>booking.*</code>, <code>messaging.*</code>, <code>notifications.*</code>, <code>nav.*</code>, <code>common.*</code>, <code>error.*</code>, <code>security.*</code>, <code>validation.*</code>. Backend <code>errorKey</code> values (<code>security.sessionExpired</code>, <code>error.notFound</code>, ...) are looked up directly as i18n keys, so backend error keys and frontend catalogue keys share one namespace.</li>
@@ -270,7 +283,7 @@ flowchart TD
       <li><code>i18n/__tests__/i18nTemplateKeyResolutionSpec.js</code> statically scans every <code>.vue</code> and <code>.js</code> under <code>src/</code> for <code>$t(</code>/<code>$te(</code>/<code>t(</code>/<code>i18n.global.t(</code> calls and asserts each literal key exists in en-US. Calls whose key is dynamic (template literal, concatenation, variable) must be listed in its <code>DYNAMIC_KEY_CALL_SITES</code> array, keyed by <code>'src/...File.vue:&lt;line&gt;'</code> with a reason (56 entries today). Because entries are <code>file:line</code>, <strong>any edit that shifts lines above a dynamic-key call breaks this spec</strong> &mdash; update the line numbers in the same change.</li>
     </ul>
 
-    <h3>Design system</h3>
+    <h3 id="design-system">Design system</h3>
     <p>
       Dark-first glassmorphism with a light theme. <code>css/app.scss</code> imports, in order:
       <code>tokens/colors</code> (CSS custom properties), <code>typography</code>, <code>animations</code>
@@ -285,7 +298,7 @@ flowchart TD
       <code>:root</code> blocks and use <code>var(--token)</code> &mdash; never hard-code hex in a component.
     </p>
 
-    <h3>Testing</h3>
+    <h3 id="testing">Testing</h3>
     <ul>
       <li>Vitest 4 + <code>@vue/test-utils</code> + <code>happy-dom</code>, config in <code>vitest.config.mjs</code> (<code>globals: false</code> &mdash; import <code>describe/it/expect/vi</code> explicitly; <code>testTimeout: 10000</code>). Specs: <code>src/**/__tests__/**/*.{js,mjs}</code> and <code>src/**/*.{spec,test}.{js,mjs}</code>.</li>
       <li><code>test/vitest/setup-file.js</code> installs the Quasar plugin, a real <code>createI18n</code> with an <strong>empty</strong> en-US catalogue (so <code>t('key')</code> renders the key), and a global <code>$t</code> mock that echoes keys. Specs therefore assert raw keys &mdash; which is why the two i18n specs above exist. Pinia is not global: specs opt in with <code>createTestingPinia()</code>.</li>
@@ -295,9 +308,9 @@ flowchart TD
       <li><strong>Prettier + ESLint gate.</strong> The composite action <code>.github/actions/frontend-quality/action.yml</code> (used by both <code>ci.yml</code> and <code>pr-build.yml</code>) runs <code>npx prettier --check "**/*.{js,vue,scss,json}"</code> and ESLint. In <code>ci.yml</code> the image build has <code>needs: [test, frontend-quality]</code>, so an unformatted file blocks build-and-push. Run <code>npm run format</code> before pushing.</li>
     </ul>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>Navigating to a protected route</h3>
+    <h3 id="navigating-to-a-protected-route">Navigating to a protected route</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant U as User
@@ -323,7 +336,7 @@ sequenceDiagram
   end
     </pre>
 
-    <h3>Session expiry</h3>
+    <h3 id="session-expiry">Session expiry</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant SM as sessionManager
@@ -346,7 +359,7 @@ sequenceDiagram
   end
     </pre>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>Hash routing leaks into the backend.</strong> Every link to the SPA must contain <code>/#/</code>.
       Emails and notifications built on the server use <code>infrastructure.web.FrontendLinkBuilder</code>
@@ -392,7 +405,7 @@ sequenceDiagram
       actually prevents off-origin redirects; if you ever switch to history mode, harden the shape check first.</p>
     </div>
 
-    <h2>Related Docs</h2>
+    <h2 id="related-docs">Related Docs</h2>
     <ul>
       <li><a href="../security/index.html">Security</a> &mdash; JWT cookie, <code>skp</code>/<code>rint</code>/<code>user</code> cookies, <code>/authenticate</code>, <code>/otp</code>, <code>/refresh</code>, <code>/api/auth/*</code>.</li>
       <li><a href="../messaging/index.html">Messaging</a>, <a href="../booking/index.html">Booking</a>, <a href="../video/index.html">Video</a> &mdash; the backends of the three SSE streams.</li>
@@ -404,9 +417,12 @@ sequenceDiagram
       <li><a href="../../frontend-integration-guide.md">docs/frontend-integration-guide.md</a> and <a href="../../frontend-implementation-spec.md">docs/frontend-implementation-spec.md</a> &mdash; original Story 1.x design documents for the auth/session cross-cutting layer (last updated 2026-09-02). Useful history, but partly stale: they describe composables (<code>useAuth</code>, <code>useApi</code>) that were never built and a cookie table without <code>skp</code>. Trust this page and the code where they differ.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

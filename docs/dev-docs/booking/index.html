@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Booking</h1>
     <p class="subtitle">Turns a marketplace browse into a scheduled, paid, delivered coaching session — and manages everything that can happen to it in between.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>
       The <code>booking</code> module is the transactional heart of Skillars: it owns the full lifecycle of a
       coaching session from the moment a slot is requested to the moment the session is marked complete (or
@@ -99,8 +112,8 @@
       <li><strong>Free text is sanitized:</strong> booking <code>notes</code>, <code>playerRequest</code>, <code>coachPlanNote</code> and all three recap fields go through <code>ContactDetailSanitizer</code> then are truncated to 500 chars (<code>BookingService.sanitizeAndTruncate</code>), so off-platform contact details can't leak via the DB or the emails built from them.</li>
     </ul>
 
-    <h2>Technical Overview</h2>
-    <h3>Package layout</h3>
+    <h2 id="technical-overview">Technical Overview</h2>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <tr><th>Package</th><th>Purpose</th></tr>
       <tr><td><code>booking.api</code></td><td>12 REST controllers (availability, batch, events/SSE + single-booking read, requests, cancellation/no-show, reschedule/duplicate, schedule views, session completion, recap, coach plan note, player request) plus <code>BookingApiAdvice</code>, a package-scoped <code>@RestControllerAdvice</code> mapping <code>PaymentGatewayException</code> to 422.</td></tr>
@@ -110,7 +123,7 @@
       <tr><td><code>booking.service</code></td><td>Business logic: the state machine, lifecycle services, four schedulers, SSE push, and read services consumed by other modules.</td></tr>
     </table>
 
-    <h3>Key entities &amp; tables</h3>
+    <h3 id="key-entities-tables">Key entities &amp; tables</h3>
     <table>
       <tr><th>Entity</th><th>Table (schema <code>booking</code>)</th><th>Purpose</th></tr>
       <tr><td><code>Booking</code></td><td><code>bookings</code></td><td>The core aggregate. Optimistic-locked (<code>@Version</code>). <code>parentId</code> = booker's user id; <code>playerId</code> = a <code>PlayerProfile</code> PK (not a user id); <code>coachId</code> = <code>CoachProfile</code> UUID. Also carries <code>canonicalTimezone</code> (coach profile zone at creation, UTC fallback), write-once <code>notes</code>, <code>playerRequest</code> (V163), <code>coachPlanNote</code> (V164, <code>@JsonIgnore</code>), <code>cancelReason</code>, <code>batchId</code>, <code>sessionPackPurchaseId</code>, <code>primary/secondaryReminderSentAt</code>, and <code>liveStartedAt</code> (V167, set by <code>startSession</code>; distinguishes a LIVE from a QUICK wrap-up to resume). Indexed by <code>idx_bkg_coach_status_time</code>; guarded by the <code>excl_bkg_coach_slot_overlap</code> exclusion constraint.</td></tr>
@@ -122,7 +135,7 @@
     <p>There is no pack entity here. <code>Booking.sessionPackPurchaseId</code> is a plain <code>UUID</code> pointing at
     <code>payment.session_pack_purchases</code> — deliberately not a JPA association.</p>
 
-    <h3>Key services</h3>
+    <h3 id="key-services">Key services</h3>
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
       <tr><td><code>BookingService</code></td><td>Core lifecycle: create/accept/decline requests, parent/coach cancellation, both no-shows, <code>cancelDueToPause</code> (called by payment when a pack is paused), schedule &amp; inbox queries, <code>setPlayerRequest</code>, <code>setCoachPlanNote</code>. Owns <code>transition()</code> — the only sanctioned way to change status — and the <code>EVENT_ROLES</code> actor map. Exposes package-private shared checks (<code>ACTIVE_SLOT_STATUSES</code>, <code>requireSlotWithinAvailabilityWindow</code>, <code>isSlotBlocked</code>) reused by the batch/reschedule/duplication/availability services.</td></tr>
@@ -144,7 +157,7 @@
       <tr><td><code>HomeworkDrillIds</code></td><td>Static helper parsing the JSON <code>homeworkDrillIds</code> column into a <code>List&lt;UUID&gt;</code> for <code>BookingCompletedEvent</code>.</td></tr>
     </table>
 
-    <h3>Scheduled jobs</h3>
+    <h3 id="scheduled-jobs">Scheduled jobs</h3>
     <p>All four run every 5 minutes (<code>fixedDelay</code>) under ShedLock (<code>lockAtMostFor = PT15M</code>, <code>lockAtLeastFor = PT2M</code>) and use one <code>TransactionTemplate</code> per booking — never a method-level <code>@Transactional</code> (pinned by <code>SchedulerLockTransactionOrderingIT</code>), so one row's failure can't roll back the batch.</p>
     <table>
       <tr><th>Job (ShedLock name)</th><th>Selects</th><th>Does</th><th>Config</th></tr>
@@ -154,7 +167,7 @@
       <tr><td><code>StuckCompletionSweeperService_processStuckCompletions</code></td><td><code>COMPLETED_PENDING_CONFIRMATION</code>, <code>updatedAt</code> before cutoff, no completion row (page of 200)</td><td><code>forceCompleteWithPlaceholderData(SYSTEM)</code></td><td><code>booking.stuck_completion_timeout_hours</code> (default 72, bounded 6–720)</td></tr>
     </table>
 
-    <h3>REST endpoints</h3>
+    <h3 id="rest-endpoints">REST endpoints</h3>
     <p>All paths are under <code>/api/bookings</code>. "Booker" = <code>HAS_PARENT_OR_PLAYER_ROLE</code>; ownership is then checked in the service (<code>booking.parentId == caller</code> or coach profile id == <code>booking.coachId</code>).</p>
     <table>
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Role</th></tr>
@@ -200,7 +213,7 @@
     and receipts (<code>payment</code>; <code>BookingResponse.receiptAvailable</code> is true when a <code>CAPTURED</code>
     <code>BookingPayment</code> exists — only computed in <code>GET /requests</code>).</p>
 
-    <h3>Domain events</h3>
+    <h3 id="domain-events">Domain events</h3>
     <p>Booking publishes on Spring's <code>ApplicationEventPublisher</code>, always inside the transaction that changed state. Listener phase matters:
     <strong>outbox writers</strong> (<code>notification.BookingEmailListener</code>, <code>payment.RefundEnqueueListener</code>,
     <code>payment.CoachPayoutEnqueueListener</code>) are <code>BEFORE_COMMIT</code>, so the outbox row commits atomically with the
@@ -232,7 +245,7 @@
     <code>notification.SessionPackEmailListener</code>; <code>SessionPackExhaustedEvent</code> currently has no listener.
     <code>CoachReliabilityStrikeQueuedEvent</code> is declared but neither published nor consumed anywhere — dead code.</p>
 
-    <h3>Dependencies on other modules</h3>
+    <h3 id="dependencies-on-other-modules">Dependencies on other modules</h3>
     <p>From the module's actual imports:</p>
     <ul>
       <li><strong>marketplace</strong> — <code>CoachProfile</code>/<code>CoachProfileRepository</code> (incl. <code>findByIdForUpdate</code>, <code>isRecapDataErased</code>), <code>CoachProfileStatus</code>, <code>CoachAvailabilityWindow</code>/<code>Repository</code> (booking writes this table through <code>AvailabilityService</code>), <code>CoachPricing</code>/<code>Repository</code>.</li>
@@ -245,9 +258,9 @@
     </ul>
     <p>Reverse direction: <code>BookingRepository</code>/<code>Booking</code> are read directly by admin (disputes, GDPR erasure/export/requests, enforcement, force-complete), development (roster, prep, coach-player authorization, SLU, timeline), reviews (eligibility), messaging (booking-gated conversations), video (<code>VideoAccessGuard</code>), marketplace (<code>CoachProfileService</code>), session (plans/templates) and payment.</p>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>Booking a session (request → accept → payment → confirmed)</h3>
+    <h3 id="booking-a-session-request-accept-payment-confirmed">Booking a session (request → accept → payment → confirmed)</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Booker
@@ -323,7 +336,7 @@ sequenceDiagram
       <em>current profile</em> zone, falls in the window). Delete does not compute it, and no frontend code reads it yet.
     </p>
 
-    <h3>Cancellation and reschedule</h3>
+    <h3 id="cancellation-and-reschedule">Cancellation and reschedule</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Booker
@@ -391,7 +404,7 @@ sequenceDiagram
       <code>submitWrapUp</code> is idempotent (the UNIQUE <code>booking_id</code> violation is swallowed).
     </p>
 
-    <h3>Abandoned wrap-ups: sweeper and admin force-complete</h3>
+    <h3 id="abandoned-wrap-ups-sweeper-and-admin-force-complete">Abandoned wrap-ups: sweeper and admin force-complete</h3>
     <p>
       <code>BookingCompletionService.forceCompleteWithPlaceholderData(bookingId, actorRole, actorUserId)</code> writes a
       placeholder <code>SessionCompletionData</code> (<code>playerAttended = false</code>, mode <code>QUICK</code>, all
@@ -411,7 +424,7 @@ sequenceDiagram
       editable) so the UI can redirect to the recap dialog, or the specific not-editable reason otherwise.
     </p>
 
-    <h3>Recap lifecycle</h3>
+    <h3 id="recap-lifecycle">Recap lifecycle</h3>
     <p>
       <code>recapEditability()</code> is the single verdict used by both <code>GET</code> and <code>PUT /{id}/recap</code>,
       checked in this order: coach erased (<code>coach_profiles.recap_data_erased_at</code> tombstone from V166 <em>or</em> the
@@ -424,7 +437,7 @@ sequenceDiagram
       in sync with <code>admin.DisputeRecapLockLookup</code>.
     </p>
 
-    <h3>Session prep notes</h3>
+    <h3 id="session-prep-notes">Session prep notes</h3>
     <p>
       Two independent free-text fields feed the coach's Session Prep Card (<code>development.SessionPrepService</code>):
       the booker's <code>playerRequest</code> (<code>PATCH /{id}/player-request</code>) and the coach's private
@@ -435,7 +448,7 @@ sequenceDiagram
       maps to <code>booking.concurrentModification</code> inside the method.
     </p>
 
-    <h3>GDPR touch-points</h3>
+    <h3 id="gdpr-touch-points">GDPR touch-points</h3>
     <ul>
       <li>Player/child erasure: <code>BookingRepository.anonymizeNotesAndPlayerRequestByPlayerId</code> and
       <code>SessionCompletionDataRepository.anonymizeByPlayerId</code>. Coach erasure:
@@ -448,7 +461,7 @@ sequenceDiagram
       <code>@JsonIgnore</code> for exactly that reason; never add it to <code>BookingResponse</code> either.</li>
     </ul>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout">
       <p><strong>Status changes go through <code>BookingService.transition()</code>.</strong> It locks the booking row
       (<code>findByIdForUpdate</code>, NO_WAIT + retry, then refresh), validates the actor against <code>EVENT_ROLES</code>,
@@ -520,7 +533,7 @@ sequenceDiagram
       Admin: <code>pages/admin/AdminBookingsPage.vue</code>. State lives in <code>stores/booking.store.js</code>.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <ul>
       <li><a href="../marketplace/index.html">Marketplace</a> — coach profiles (also the per-coach lock row), pricing and session length, and the weekly availability window table booking reads and writes.</li>
       <li><a href="../payment/index.html">Payment</a> — Stripe charge/capture/refund, credit wallet, session packs, refund and payout outboxes, batch price quote, receipts; drives <code>PAYMENT_CAPTURED</code>/<code>PAYMENT_FAILED</code> and sweeps stranded <code>PAYMENT_PENDING</code> bookings.</li>
@@ -534,9 +547,12 @@ sequenceDiagram
       <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a> — the four booking schedulers alongside the rest of the platform's jobs.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why It's Built This Way — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
+    <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Why It's Built This Way</div>
+    <h1>Why It's Built This Way</h1>
+    <p class="subtitle">Short decision records for the choices that surprise newcomers most. Each says what problem forced the choice, what was decided, what it costs, and where the code enforces it, with the story or commit that made it.</p>
+
+    <div class="callout">
+      <p><strong>Where these come from.</strong> Story files under <code>_bmad-output/implementation-artifacts/</code>
+      (named by story key, e.g. <code>skillars-deferred-62-*.md</code>), <code>_bmad-output/planning-artifacts/architecture.md</code>,
+      <code>docs/</code>, commit messages and javadoc. Where no rationale was ever recorded, the record says so instead of
+      inventing one. Java paths omit <code>src/main/java/com/softropic/skillars/</code>.</p>
+    </div>
+
+    <h2 id="index">Index</h2>
+    <table>
+      <thead><tr><th>#</th><th>Decision</th><th>Source</th></tr></thead>
+      <tbody>
+        <tr><td><a href="#adr-outbox">1</a></td><td>Transactional outbox instead of <code>AFTER_COMMIT</code> listeners for durable side effects</td><td>deferred-90/91 (<code>c2c47c1e</code>), deferred-92</td></tr>
+        <tr><td><a href="#adr-nowait">2</a></td><td>NOWAIT row locks + <code>PessimisticLockRetryer</code> instead of lock timeouts</td><td>deferred-62 (<code>0f3221ce</code>), deferred-99</td></tr>
+        <tr><td><a href="#adr-shedlock">3</a></td><td>ShedLock on shared-state jobs, nine jobs deliberately unguarded</td><td><code>7e697d4a</code>, deferred-19, deferred-123</td></tr>
+        <tr><td><a href="#adr-routing-ds">4</a></td><td>Routing DataSource with isolated pools (GDPR erasure, payment <code>REQUIRES_NEW</code>)</td><td>deferred-136 (<code>a7d2b91b</code>), deferred-137 (<code>0d5897a8</code>)</td></tr>
+        <tr><td><a href="#adr-rebaseline">5</a></td><td>Flyway history squashed into V138 + V139</td><td>deferred-112 (<code>7db0c3b7</code>, PR #191)</td></tr>
+        <tr><td><a href="#adr-hash-router">6</a></td><td>Hash-mode router, so backend links go through <code>FrontendLinkBuilder</code></td><td>PR #307 (<code>513fa082</code>)</td></tr>
+        <tr><td><a href="#adr-payouts">7</a></td><td>Platform charges + completion-gated payouts, not destination charges</td><td>deferred-106 (PR #163)</td></tr>
+        <tr><td><a href="#adr-capture-pending">8</a></td><td><code>CAPTURE_PENDING</code> reservation written before every Stripe charge</td><td>UAT.3 (<code>63862bcd</code>), deferred-91 AC5</td></tr>
+        <tr><td><a href="#adr-slot">9</a></td><td>Slot exclusivity: per-coach row lock + DB exclusion constraint</td><td>V87, Deferred-14, -78, -79</td></tr>
+        <tr><td><a href="#adr-legacy-auth">10</a></td><td>Legacy <code>/authenticate</code> → <code>/otp</code> stack still wired next to <code>/api/auth/*</code></td><td>skillars-1.5</td></tr>
+        <tr><td><a href="#adr-filestorage">11</a></td><td><code>filestorage</code> is the only gateway to the blobstore (video excepted)</td><td>project-context, file-storage architecture</td></tr>
+        <tr><td><a href="#adr-config">12</a></td><td>Business config in <code>platform_config</code>, not properties</td><td>architecture.md (FR-PLT-001), deferred-107</td></tr>
+        <tr><td><a href="#adr-email-port">13</a></td><td>One outbound email port with <code>log</code> / <code>smtp</code> / <code>ses</code> transports</td><td>ses-1.1 (<code>9e07b386</code>) to ses-1.5 (<code>4317b019</code>)</td></tr>
+        <tr><td><a href="#adr-inbox">14</a></td><td>In-app inbox written <code>BEFORE_COMMIT</code> in a savepoint, no push channel</td><td>PR #313 (<code>e350d169</code>)</td></tr>
+        <tr><td><a href="#adr-it-base">15</a></td><td><code>AbstractIntegrationTest</code> inheritance + a pinned context count</td><td>deferred-19 (<code>b1d8c831</code>), deferred-160 (<code>4869338a</code>)</td></tr>
+        <tr><td><a href="#adr-tenant">16</a></td><td>The <code>tenant</code> module was removed</td><td><code>a170e69d</code> (PR #37)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="adr-outbox">1. Transactional outbox instead of AFTER_COMMIT listeners</h2>
+    <p><strong>Context.</strong> Refunds, payout transfers, emails and SLU snapshot writes used to run in
+      <code>@TransactionalEventListener(AFTER_COMMIT)</code>. A throw there is only logged, and a JVM death between commit and
+      listener loses the work with no retry. The deferred-91 story counted the same defect recurring six times across stories
+      (a dropped refund, a dropped cancellation email, an SLU under-report). deferred-90 had already built a one-off durable queue
+      for blob deletion.</p>
+    <p><strong>Decision.</strong> Generalise that queue into <code>platform.outbox</code>: producers insert an intent row in their
+      own transaction (from a <code>BEFORE_COMMIT</code> listener, through a <code>MANDATORY</code> <code>*OutboxSupport</code>),
+      and a post-commit async drain plus a 5-minute sweep execute it. deferred-92 closed the gap where an enqueue could open its
+      own transaction.</p>
+    <p><strong>Consequences.</strong> At-least-once delivery, so every handler must be idempotent. Rows retry forever (no dead
+      letter), surfaced as <code>[OUTBOX_STUCK]</code>. An enqueue failure fails the business operation. <code>AFTER_COMMIT</code> is
+      still used for reactors that may be lost or are recovered elsewhere (SSE push, payment settlement backed by
+      <code>PaymentPendingSweeper</code>).</p>
+    <p><strong>Where enforced.</strong> <code>platform/outbox/service/OutboxService.java</code>,
+      <code>OutboxRowProcessor.java</code>; the <code>*OutboxSupport</code> classes; <code>NotificationEmailOutboxAtomicityIT</code>.
+      See <a href="../outbox/index.html">Outbox</a>.</p>
+
+    <h2 id="adr-nowait">2. NOWAIT row locks + PessimisticLockRetryer instead of lock timeouts</h2>
+    <p><strong>Context.</strong> Four <code>findByIdForUpdate</code> repositories carried
+      <code>jakarta.persistence.lock.timeout = 5000</code> and comments promising a bounded ~5 s wait. deferred-62 proved this does
+      nothing on PostgreSQL under Hibernate 6.6: the dialect only honours the <code>NO_WAIT</code> and <code>SKIP_LOCKED</code>
+      sentinels, so a contended request blocked indefinitely (a throwaway IT held a lock for 12 s and the caller waited all 12).</p>
+    <p><strong>Decision.</strong> Owner decision 2026-08-24: switch to <code>PESSIMISTIC_WRITE</code> + <code>lock.timeout = 0</code>
+      (<code>FOR UPDATE NOWAIT</code>, which Postgres honours) wrapped in an application retry. Plain NOWAIT without retry was
+      rejected because every brief overlap would become a 409.</p>
+    <p><strong>Consequences.</strong> <code>PessimisticLockRetryer.withBoundedRetry</code> retries from a JDBC savepoint
+      (Spring's <code>NESTED</code> is unavailable with <code>DefaultJpaDialect</code>): 8 attempts, ~3.2 s worst case, then 409
+      <code>generic.conflict</code>. It holds the pooled connection while sleeping (accepted and sized in deferred-99). Only
+      locked reads may go inside the lambda. A plain <code>UPDATE</code> still ignores NOWAIT, which is why the payment
+      <code>REQUIRES_NEW</code> code carries explicit deadlock warnings.</p>
+    <p><strong>Where enforced.</strong> <code>infrastructure/persistence/PessimisticLockRetryer.java</code>;
+      <code>PessimisticLockRetryerCallSiteAuditTest</code> (pins 50 call sites); <code>ApiAdvice.pessimisticLockExceptionHandler</code>;
+      <code>docs/persistence/pessimistic-lock-retry.md</code>.</p>
+
+    <h2 id="adr-shedlock">3. ShedLock on shared-state jobs, nine deliberately unguarded</h2>
+    <p><strong>Context.</strong> The code is written to be safe on more than one instance (scale-out, and two JVMs overlapping during a rolling
+      deploy), and every <code>@Scheduled</code> method runs on each instance. A job that writes shared rows without a row claim
+      would do its work once per instance.</p>
+    <p><strong>Decision.</strong> Every job that writes shared state without a row claim carries <code>@SchedulerLock</code>
+      (31 of 40). The nine unguarded ones are deliberate: five touch only per-instance state (<code>ConfigService</code>,
+      <code>AlertRuleCache</code>, <code>AlertEvaluationService</code>, <code>MessagingEmitterRegistry</code>,
+      <code>RateLimitingService</code>), and four claim rows with <code>FOR UPDATE [SKIP LOCKED]</code> instead
+      (<code>UploadSessionExpiryScheduler</code>, <code>ReconciliationWorkerScheduler</code>,
+      <code>WebhookEventProcessorScheduler</code>, <code>ModerationSlaMonitorService</code>). The lock advisor is ordered outermost
+      (<code>7e697d4a</code>) so the transaction finishes before the lock is released. Lock expiry uses DB time.</p>
+    <p><strong>Consequences.</strong> Jobs use one <code>TransactionTemplate</code> per row, never a method-level
+      <code>@Transactional</code>. Lock floors must be retuned with cadence (<code>docs/deployment/scheduler-lock-tuning.md</code>,
+      deferred-123). Scheduling is off under the test profile (deferred-19) but ShedLock stays on, because ITs call jobs through
+      the proxy.</p>
+    <p><strong>Where enforced.</strong> <code>platform/notification/config/AsyncConfig.java</code> (<code>@EnableSchedulerLock</code>),
+      <code>infrastructure/config/ShedLockConfig.java</code>, <code>SchedulerLockTransactionOrderingIT</code>. See
+      <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>.</p>
+
+    <h2 id="adr-routing-ds">4. Routing DataSource with isolated pools</h2>
+    <p><strong>Context.</strong> Some code opens a <code>REQUIRES_NEW</code> transaction while its caller still holds a connection:
+      GDPR erasure (admin-triggered, per-child transactions) and payment settlement (<code>reserveCapture</code>,
+      <code>persistPaymentFailure</code>, batch decline). With one pool, enough concurrent callers each holding one connection and
+      waiting for a second can starve the pool.</p>
+    <p><strong>Decision.</strong> Give those acquisitions their own small Hikari pools. A second <code>PlatformTransactionManager</code>
+      was tried and empirically disproved: the app has one <code>EntityManagerFactory</code>, which ignores any other DataSource.
+      So routing happens <em>inside</em> the single DataSource bean: <code>RoutingDataSource</code> keyed by a thread-local
+      <code>RoutingDataSourceContext</code>.</p>
+    <p><strong>Consequences.</strong> The key must be set <em>before</em> the <code>@Transactional(REQUIRES_NEW)</code> proxy opens
+      its connection, hence the "thin non-transactional wrapper + <code>self</code> call" pattern. Extra pools must match the primary
+      pool's auto-commit setting, or statements silently run outside a transaction.</p>
+    <p><strong>Where enforced.</strong> <code>infrastructure/config/DataSourceConfig.java</code> (<code>GDPR_ERASURE_DATASOURCE_KEY</code>,
+      <code>PAYMENT_REQUIRES_NEW_DATASOURCE_KEY</code>), <code>RoutingDataSource.java</code>;
+      <code>BookingPaymentPersistenceService.reserveCapture</code>, <code>GdprErasureService</code>.</p>
+
+    <h2 id="adr-rebaseline">5. Flyway history squashed into V138 + V139</h2>
+    <p><strong>Context.</strong> Before the first production deploy, history held several lock-unsafe <code>ACCESS EXCLUSIVE</code>
+      migrations (V60, V94, V97, V98, V117, V124) grandfathered past <code>MigrationLint</code>, plus checksum-frozen files.
+      Rewriting them online-safe would produce a byte-identical end state that only costs fresh installs.</p>
+    <p><strong>Decision.</strong> True squash, not a Flyway <code>baselineVersion</code>: delete V02–V137, add
+      <code>V138__baseline_schema.sql</code> (pure DDL) and <code>V139__baseline_seed_data.sql</code> (seed rows). Expand/contract
+      rules bind every migration from V140 on.</p>
+    <p><strong>Consequences.</strong> Every dev/UAT database had to be dropped and recreated. Migration numbers below 138 in old
+      commits and comments exist only in git history. <code>CREATE INDEX CONCURRENTLY</code> is still not safe here even with the
+      <code>.sql.conf</code> <code>executeInTransaction=false</code> sidecar (found during implementation).</p>
+    <p><strong>Where enforced.</strong> <code>src/main/resources/db/migration/</code>; <code>MigrationConventionLintTest</code>;
+      <code>docs/deployment/migration-rebaseline.md</code>, <code>docs/deployment/migration-conventions.md</code>. See
+      <a href="../database/index.html">Database</a>.</p>
+
+    <h2 id="adr-hash-router">6. Hash-mode router, so backend links go through FrontendLinkBuilder</h2>
+    <p><strong>Context.</strong> The SPA runs <code>vueRouterMode: 'hash'</code> (<code>src/frontend/quasar.config.js:40</code>).
+      No reason for choosing hash over history mode was recorded. The consequence was: hand-built backend links such as
+      <code>https://host/coach/payment-settings</code> 404'd or landed on the SPA root, and some used the backend origin instead
+      of the frontend's. The axios 401 redirect had the same bug (deferred-126).</p>
+    <p><strong>Decision.</strong> Every backend-generated link into the app (booking, report and account emails, the Stripe
+      callback redirect) is built by <code>FrontendLinkBuilder</code> from <code>app.frontend-url</code> + <code>/#/</code>.</p>
+    <p><strong>Consequences.</strong> Query strings land inside the fragment, where vue-router reads them. Switching to history
+      mode would need server-side SPA fallback and a sweep of this builder's callers and <code>sessionRedirect.js</code>.</p>
+    <p><strong>Where enforced.</strong> <code>infrastructure/web/FrontendLinkBuilder.java</code>;
+      <code>src/frontend/src/utils/sessionRedirect.js</code>.</p>
+
+    <h2 id="adr-payouts">7. Platform charges + completion-gated payouts, not destination charges</h2>
+    <p><strong>Context.</strong> Payment used Stripe destination charges (<code>transfer_data.destination</code> +
+      <code>application_fee_amount</code>), so the coach was paid at capture, days before the session. A cancellation, coach
+      no-show or dispute then meant clawing money back from a connected account. deferred-63 asked for completion-gated payout.</p>
+    <p><strong>Decision.</strong> B-1, separate charges and transfers (owner sign-off 2026-09-09): charge the full price to the
+      <strong>platform</strong> account with <code>transfer_group = bookingId</code>; on <code>BookingCompletedEvent</code> enqueue a
+      <code>COACH_PAYOUT_TRANSFER</code> outbox row due after <code>payment.payout.hold_hours</code> (default 48). B-2 (manual
+      capture) breaks on bookings more than 7 days out; B-3 (reversal on cancel) kept the problem.</p>
+    <p><strong>Consequences.</strong> Pre-completion cancellations are plain refunds of platform-held funds. There is no
+      post-completion cancellation (disputes only, with <code>COACH_PAYOUT_REVERSAL</code>). Commission is locked at capture.
+      Coach revenue reports are based on <code>coach_payouts</code> <code>RELEASED</code>.</p>
+    <p><strong>Where enforced.</strong> <code>platform/payment/contract/PaymentGateway.java</code> javadoc,
+      <code>StripePaymentGateway.chargeAndCapture</code>, <code>CoachPayoutOutboxSupport</code>, <code>CoachPayoutTransferHandler</code>;
+      <code>docs/architecture/payout-and-capture-pending.md</code>.</p>
+
+    <h2 id="adr-capture-pending">8. CAPTURE_PENDING reservation before every Stripe charge</h2>
+    <p><strong>Context.</strong> Settlement runs in an <code>AFTER_COMMIT</code> listener after accept. If it dies mid-capture,
+      a later sweep cannot tell "never charged" from "charged, outcome unknown", and charging again risks a double charge.</p>
+    <p><strong>Decision.</strong> Before calling Stripe, <code>reserveCapture</code> commits a <code>CAPTURE_PENDING</code>
+      <code>booking_payments</code> row in its own <code>REQUIRES_NEW</code> transaction. Invariant: for a <code>PAYMENT_PENDING</code>
+      booking, no row means no Stripe call was attempted. Pack-funded and fully credit-covered settlements deliberately do not reserve.</p>
+    <p><strong>Consequences.</strong> A duplicate event landing on a reserved row is escalated (<code>CAPTURE_UNCONFIRMED</code>,
+      reconcile by hand), never re-charged. Stale reservations exit via <code>CAPTURE_ABANDONED</code> (deferred-91 Part A). The
+      caller must hold no lock or write on the booking row, or the second connection self-deadlocks.</p>
+    <p><strong>Where enforced.</strong> <code>platform/payment/service/BookingPaymentPersistenceService.java</code> (javadoc on
+      <code>reserveCapture</code>), <code>PaymentLifecycleService.java</code>, <code>PaymentPendingSweeper</code>.</p>
+
+    <h2 id="adr-slot">9. Slot exclusivity: per-coach row lock + DB exclusion constraint</h2>
+    <p><strong>Context.</strong> Two parents booking the same coach slot, a coach accepting two overlapping requests, or a window
+      edit racing a booking can all double-book a coach. A check-then-insert is a TOCTOU race unless writers serialise.</p>
+    <p><strong>Decision.</strong> Every slot-changing write path locks the coach's <code>coach_profiles</code> row first
+      (<code>findByIdForUpdate</code>, NOWAIT + retry), then reads windows and blocks and runs the overlap query (Deferred-78 moved
+      the lock before the window read). The exclusion constraint <code>excl_bkg_coach_slot_overlap</code> is the backstop for
+      accepted-and-later statuses.</p>
+    <p><strong>Consequences.</strong> Overlapping <code>REQUESTED</code> rows are legal in the DB, so the app check is the only
+      guard at creation. The constraint violation (SQLSTATE 23P01) maps to 409 <code>booking.slotUnavailable</code>. New write paths
+      must take the same lock.</p>
+    <p><strong>Where enforced.</strong> <code>BookingService.createBookingRequest</code> / <code>acceptBooking</code>,
+      <code>RescheduleService</code>, <code>BookingBatchService</code>, <code>AvailabilityService</code>;
+      <code>V138__baseline_schema.sql</code>; <code>ApiAdvice.resolveConstraintName</code>. See
+      <a href="../booking/index.html#slot-exclusivity">Booking</a> and the <a href="../walkthrough/index.html">walkthrough</a>.</p>
+
+    <h2 id="adr-legacy-auth">10. Legacy /authenticate → /otp stack still wired</h2>
+    <p><strong>Context.</strong> The original login was <code>POST /authenticate</code> (<code>JWTAuthenticationFilter</code>) plus an
+      email OTP at <code>POST /otp</code>, with in-memory brute-force counters. Story skillars-1.5 (2026-06-12) needed DB-backed rate
+      limiting, refresh-token rotation with theft detection and an account-verification gate.</p>
+    <p><strong>Decision.</strong> Add the <code>/api/auth/*</code> family <em>alongside</em> the legacy stack, removing nothing
+      (the story's own change log). Both issue the same <code>potc</code> JWT checked by <code>JWTAuthorizationFilter</code>.</p>
+    <p><strong>Consequences.</strong> The SPA uses only <code>/api/auth/login</code>, but <code>/authenticate</code> and
+      <code>/otp</code> remain live, public endpoints with their own lockout counters, so admin unlock must clear both stores.
+      No decision to retire the legacy stack has been recorded.</p>
+    <p><strong>Where enforced.</strong> <code>platform/security/config/SecurityConfiguration.java</code> (<code>filterChain</code>).
+      See <a href="../security/index.html#the-two-login-stacks">Security</a>.</p>
+
+    <h2 id="adr-filestorage">11. filestorage is the only gateway to the blobstore</h2>
+    <p><strong>Context.</strong> Quota, validation, presigned upload/confirm, soft-delete retention, audit and replication are
+      domain rules. If feature modules call the S3 adapter directly, each reimplements or bypasses them.</p>
+    <p><strong>Decision.</strong> The provider-adapter pattern (<code>_bmad-output/project-context.md</code>):
+      <code>infrastructure.blobstore</code> holds only the <code>StorageService</code> port, provider implementations, transport
+      types and provider exceptions. <code>platform.filestorage</code> owns all file domain logic. Other modules go through
+      <code>FileStorageService</code> and may import only blobstore <code>contract</code> exception types.</p>
+    <p><strong>Consequences.</strong> Video is the exception: it stores media in Bunny.net through
+      <code>infrastructure.video.VideoProviderAdapter</code>, because it needs TUS upload, transcoding webhooks and signed playback
+      (<code>architecture.md</code>). The rule is convention plus review — no architecture test enforces it today.</p>
+    <p><strong>Where enforced.</strong> Today the only blobstore imports outside filestorage/infrastructure are
+      <code>contract.exception</code> types (<code>ApiAdvice</code>, <code>CoachProfileService</code>, <code>CoachGalleryService</code>).
+      See <a href="../filestorage/index.html">Filestorage</a>.</p>
+
+    <h2 id="adr-config">12. Business config in platform_config, not properties</h2>
+    <p><strong>Context.</strong> Tier entitlements, quotas, expiry windows, reminder intervals and commission are business knobs
+      that admins must change without a deploy (FR-PLT-001).</p>
+    <p><strong>Decision.</strong> A typed key/value <code>platform_config</code> table behind <code>ConfigService</code>, with a
+      per-node cache (default TTL 300 s). "No module reads <code>application.yml</code> for business rules"
+      (<code>architecture.md</code>). <code>application*.yaml</code> keeps only infrastructure settings.</p>
+    <p><strong>Consequences.</strong> A change is not instant on other nodes: <code>invalidate()</code> clears only the serving
+      instance's cache, and the rest wait for <code>scheduledRefresh</code>. Bad values are clamped at read time and, for
+      <code>ConfigBounds</code> keys, fail startup (<code>ConfigStartupAssertion</code>, deferred-107). Seeds live in
+      migrations. Read per use, never cache in a field.</p>
+    <p><strong>Where enforced.</strong> <code>platform/config/service/ConfigService.java</code>, <code>ConfigBounds.java</code>,
+      admin edit API <code>ConfigResource</code>. See <a href="../config/index.html">Config</a>.</p>
+
+    <h2 id="adr-email-port">13. One outbound email port with log / smtp / ses transports</h2>
+    <p><strong>Context.</strong> Email had two stacks: a <code>SesEmailService</code> interface with one real implementation, a no-op
+      and a dev-only bridge into SMTP. Registration/OTP mail was silently dropped in dev at one point (D4).</p>
+    <p><strong>Decision.</strong> A seven-phase plan (<code>requirements/ses-email-consolidation.md</code>): ses-1.1 introduced the
+      transport-neutral <code>OutboundEmailSender</code> port with a neutral exception taxonomy, selected by
+      <code>app.email.transport</code>; later phases put SMTP behind it and moved dev to <code>log</code> (ses-1.5).</p>
+    <p><strong>Consequences.</strong> An unknown transport value aborts startup (<code>EmailTransportPropertyValidator</code>). Dev never
+      sends mail: it writes <code>target/mails/&lt;correlationId&gt;.html</code>. uat uses SMTP, prod SES. SMTP internals must not
+      leak out of <code>infrastructure/email/smtp</code>.</p>
+    <p><strong>Where enforced.</strong> <code>infrastructure/email/</code> (<code>OutboundEmailSender</code>, <code>EmailTransport</code>),
+      <code>@ConditionalOnProperty</code> on each sender; <code>EmailTransportArchitectureTest</code>. See
+      <a href="../notification/index.html">Notification</a>.</p>
+
+    <h2 id="adr-inbox">14. In-app inbox written BEFORE_COMMIT in a savepoint, with no push channel</h2>
+    <p><strong>Context.</strong> The notification centre needed an inbox row for most transactional emails. The row must not exist if
+      the business change rolls back, but a broken inbox write must never fail a booking.</p>
+    <p><strong>Decision.</strong> The inbox row is written next to the outbox enqueue, inside the producing transaction
+      (<code>NotificationOutboxSupport.enqueueEmail</code>, or <code>InAppEnvelopeListener</code> for directly-published envelopes),
+      wrapped in a JDBC savepoint and never thrown. No user-level push channel was built: messaging's SSE is per conversation, and
+      none was built just for this (<code>NotificationBell.vue</code> comment).</p>
+    <p><strong>Consequences.</strong> The unread badge refreshes on mount, route change and window focus — not live. Which
+      templates appear in-app, and for whom, is defined in one place (<code>NotificationCatalog</code>).</p>
+    <p><strong>Where enforced.</strong> <code>platform/notification/service/InAppNotificationService.java</code>,
+      <code>NotificationCatalog.java</code>, <code>src/frontend/src/components/notification/NotificationBell.vue</code>.</p>
+
+    <h2 id="adr-it-base">15. AbstractIntegrationTest inheritance + a pinned context count</h2>
+    <p><strong>Context.</strong> About 88 ITs copied an annotation header (<code>@SpringBootTest</code>, <code>@ActiveProfiles</code>,
+      <code>@Import(TestConfig)</code>, <code>@TestPropertySource</code>). Any drift in it forked a new Spring context cache key,
+      silently costing a full startup plus containers. By deferred-160 the failsafe JVM had 47 distinct contexts against a cache of 32,
+      so contexts were evicted and rebuilt, and the count depended on class order (flaky gates).</p>
+    <p><strong>Decision.</strong> Every IT extends <code>AbstractIntegrationTest</code> (deferred-19). deferred-160 hoisted common
+      mocks and spies onto it, renamed <code>@WebMvcTest</code> slices to <code>*WebMvcTest</code> so surefire runs them, and pinned the
+      result: 14 base configurations + 3 allowlisted sliced classes = 17 contexts.</p>
+    <p><strong>Consequences.</strong> Adding a field-level <code>@MockitoBean</code> or a new <code>@Import</code>/property set in a
+      subclass forks a context and fails CI. The gate also fails on a full cache or on rebuilds. The honest cost (one inheritance
+      slot, less explicit test headers) is written up in <code>docs/testing/why-inheritance-over-import.md</code>.</p>
+    <p><strong>Where enforced.</strong> <code>IntegrationTestConventionTest</code> (<code>EXPECTED_DISTINCT_CONTEXT_KEYS = 14</code>),
+      <code>.github/scripts/assert-context-count.sh</code> (ceiling 17, called from <code>.github/workflows/pr-build.yml</code>);
+      <code>docs/testing/readme.md</code>.</p>
+
+    <h2 id="adr-tenant">16. The tenant module was removed</h2>
+    <p><strong>Context.</strong> A multi-tenant API-key module (<code>/v1/admin/tenants</code> and an API-key authentication chain)
+      existed but was never used by the product. Every application endpoint is under <code>/api/**</code>, and its tests were
+      already disabled.</p>
+    <p><strong>Decision.</strong> Delete it entirely (2026-08-08): the module, <code>ApiKeyAuthenticationFilter</code>,
+      <code>TenantSecurityConfig</code>, <code>TenantContext</code>, its emails, i18n keys and migrations. Before deleting, the team
+      checked that the removed <code>@Order(1)</code> <code>/v1/**</code> filter chain did not change protection for any surviving
+      endpoint.</p>
+    <p><strong>Consequences.</strong> Skillars is single-tenant: no <code>tenant_id</code>, <code>TenantContext</code> or
+      <code>ROLE_TENANT</code>. Any surviving reference is stale. The old Envers <code>revinfo</code> tables were kept because
+      other audited entities depend on them.</p>
+    <p><strong>Where enforced.</strong> Nothing to enforce — the code is gone. See the callout on <a href="../index.html">Home</a>.</p>
+
+    <h2 id="related">Related</h2>
+    <ul>
+      <li><a href="../walkthrough/index.html">Anatomy of a request</a> — several of these decisions seen in one booking flow.</li>
+      <li><a href="../outbox/index.html">Outbox</a>, <a href="../database/index.html">Database</a>, <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>, <a href="../payment/index.html">Payment</a>, <a href="../infrastructure/index.html">Infrastructure</a></li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>
