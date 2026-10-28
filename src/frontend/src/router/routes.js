@@ -390,6 +390,20 @@ const routes = [
         component: () => import('pages/ProfilePage.vue'),
         meta: { requiresAuth: true },
       },
+      // Notification centre (UI-gap chunk C9): full inbox, every authenticated role.
+      {
+        path: 'notifications',
+        name: 'notifications',
+        component: () => import('pages/NotificationsPage.vue'),
+        meta: { requiresAuth: true },
+      },
+      // Public landing page for the unsubscribe link in opt-out-able emails — no meta, so it works
+      // both logged in and logged out (the signed token is the credential).
+      {
+        path: 'unsubscribe',
+        name: 'unsubscribe',
+        component: () => import('pages/UnsubscribePage.vue'),
+      },
 
       // Admin pages (auth required)
       {

@@ -5,6 +5,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -66,5 +67,36 @@ class OutboundEmailRequestValidationTest {
     void bothBodiesPresent_isAccepted() {
         assertThatCode(() -> new OutboundEmailRequest("to@x.com", "subject", "<html/>", "plain text", "cid"))
             .doesNotThrowAnyException();
+    }
+
+    // Notification centre (UI-gap chunk C9): extra headers (List-Unsubscribe) must not be an
+    // injection vector.
+
+    @Test
+    void fiveArgConstructor_hasNoHeaders() {
+        assertThat(new OutboundEmailRequest("to@x.com", "s", "<html/>", null, "cid").headers()).isEmpty();
+    }
+
+    @Test
+    void headerValueWithCrLf_isRejected() {
+        assertThatThrownBy(() -> new OutboundEmailRequest("to@x.com", "s", "<html/>", null, "cid",
+                java.util.Map.of("List-Unsubscribe", "<https://x>\r\nBcc: victim@x.com")))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void headerNameWithColonOrSpace_isRejected() {
+        assertThatThrownBy(() -> new OutboundEmailRequest("to@x.com", "s", "<html/>", null, "cid",
+                java.util.Map.of("Bad Name:", "v")))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void wellFormedHeaders_areAcceptedAndDefensivelyCopied() {
+        java.util.Map<String, String> headers = new java.util.HashMap<>();
+        headers.put("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
+        OutboundEmailRequest request = new OutboundEmailRequest("to@x.com", "s", "<html/>", null, "cid", headers);
+        headers.put("X-Late", "added after construction");
+        assertThat(request.headers()).containsOnlyKeys("List-Unsubscribe-Post");
     }
 }

@@ -103,6 +103,7 @@ public class NotificationOutboxSupport {
 
     private final OutboxService outboxService;
     private final ObjectMapper objectMapper;
+    private final InAppNotificationService inAppNotificationService;
 
     /**
      * MUST be a cross-bean call (the producing listeners live in a separate {@code ...infrastructure
@@ -135,6 +136,10 @@ public class NotificationOutboxSupport {
         try {
             outboxService.enqueue(AGGREGATE_TYPE, objectMapper.writeValueAsString(payload));
             outboxService.requestDrainAfterCommit();
+            // Notification centre (UI-gap chunk C9): the in-app inbox row is written here, in the
+            // same transaction as the outbox row, so the two commit or roll back together. A no-op
+            // (no DB access) for templates NotificationCatalog marks email-only (registration, OTP).
+            inAppNotificationService.recordForEmail(template, recipient.getEmail(), data, sendId);
         } catch (JsonProcessingException e) {
             // AC4.2 — this used to log and return normally. That was right under AFTER_COMMIT: the
             // business transaction had already committed, so a loud log was the only move left. Under

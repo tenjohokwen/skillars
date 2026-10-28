@@ -11,6 +11,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.sesv2.SesV2Client;
+import software.amazon.awssdk.services.sesv2.model.MessageHeader;
 import software.amazon.awssdk.services.sesv2.model.SendEmailResponse;
 
 import java.util.regex.Pattern;
@@ -71,6 +72,13 @@ public class SesEmailSender implements OutboundEmailSender {
                                 b.text(t -> t.data(request.textBody()));
                             }
                         });
+                        // SESv2 simple content carries custom headers (e.g. List-Unsubscribe /
+                        // List-Unsubscribe-Post for RFC 8058 one-click unsubscribe).
+                        if (!request.headers().isEmpty()) {
+                            m.headers(request.headers().entrySet().stream()
+                                .map(h -> MessageHeader.builder().name(h.getKey()).value(h.getValue()).build())
+                                .toList());
+                        }
                     }))
                     .emailTags(t -> t.name(CORRELATION_ID_TAG_NAME)
                         .value(sanitiseTagValue(request.correlationId())));

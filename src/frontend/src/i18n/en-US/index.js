@@ -2188,6 +2188,86 @@ export default {
       OTHER: 'Other',
     },
   },
+  notifications: {
+    title: 'Notifications',
+    subtitle: 'Updates about your bookings, sessions and account.',
+    bellLabel: 'Notifications',
+    empty: "You're all caught up — no notifications yet.",
+    viewAll: 'View all notifications',
+    markAllRead: 'Mark all as read',
+    markAllReadError: 'Could not mark your notifications as read. Please try again.',
+    unread: 'Unread',
+    loadError: 'Could not load your notifications. Please try again.',
+    typeFallback: 'You have a new notification.',
+    types: {
+      BOOKING_REQUESTED: 'New booking request for {requestedStartTime}.',
+      BOOKING_CONFIRMED: '{coachDisplayName} confirmed your session on {requestedStartTime}.',
+      BOOKING_DECLINED:
+        '{coachDisplayName} declined your session request for {requestedStartTime}.',
+      BOOKING_PAYMENT_UNRESOLVED:
+        'Your booking with {coachDisplayName} could not be completed — the payment outcome is still being checked.',
+      BOOKING_EXPIRED: 'Your session request with {coachDisplayName} expired without a response.',
+      BOOKING_QUICK_COMPLETE_CONFIRM:
+        '{coachDisplayName} marked a session as complete — please confirm it.',
+      BOOKING_RESCHEDULE_REQUESTED: '{parentName} asked to move a session to {proposedStartTime}.',
+      BOOKING_RESCHEDULE_ACCEPTED: 'The reschedule was accepted — the new time is {newStartTime}.',
+      BOOKING_RESCHEDULE_DECLINED: '{coachDisplayName} declined your reschedule request.',
+      BOOKING_RESCHEDULE_REQUESTED_BY_COACH:
+        '{coachDisplayName} proposed a new time: {proposedStartTime}.',
+      BOOKING_RESCHEDULE_DECLINED_BY_PARENT: '{parentName} declined your proposed new time.',
+      BOOKING_DUPLICATE_PROPOSED:
+        '{coachDisplayName} proposed another session on {proposedStartTime}.',
+      BOOKING_BATCH_REQUESTED: '{parentName} requested {requestedCount} sessions.',
+      BOOKING_BATCH_ACCEPTED:
+        '{coachDisplayName} accepted {acceptedCount} of your session requests.',
+      BOOKING_CANCELLED_DUE_TO_PAUSE:
+        'The session on {requestedStartTime} was cancelled because the session pack was paused.',
+      BOOKING_CANCELLED_BY_PARENT:
+        'The session on {requestedStartTime} was cancelled by the parent.',
+      BOOKING_CANCELLED_BY_COACH: 'Your coach cancelled the session on {requestedStartTime}.',
+      COACH_NO_SHOW: 'A coach no-show was recorded for the session on {requestedStartTime}.',
+      PLAYER_NO_SHOW: 'A player no-show was recorded for the session on {requestedStartTime}.',
+      BOOKING_REMINDER: 'Reminder: session with {coachDisplayName} on {requestedStartTime}.',
+      SESSION_PACK_EXPIRY_WARNING:
+        '{creditsRemaining} session(s) with {coachDisplayName} expire on {expiresAt}.',
+      SESSION_PACK_EXPIRED: 'Your session pack with {coachDisplayName} has expired.',
+      PACK_PAUSED: 'Your session pack with {coachDisplayName} was paused.',
+      PERFORMANCE_REPORT_SHARED: '{coachName} shared a performance report for {playerName}.',
+      VIDEO_MODERATION_OWNER_FLAGGED: 'One of your videos was flagged for review.',
+      COACH_VISIBILITY_REDUCED: 'Your marketplace visibility was reduced.',
+    },
+    preferences: {
+      title: 'Email notifications',
+      description:
+        'Choose which optional emails you receive. Everything also appears in your notification inbox.',
+      transactionalNote:
+        'Emails about your account, security, bookings, payments and session packs are always sent.',
+      loadError: 'Could not load your email preferences.',
+      saved: 'Email preference saved.',
+      saveError: 'Could not save your email preference. Please try again.',
+      reminder: {
+        label: 'Reminders',
+        description: 'Upcoming session reminders and session-pack expiry warnings.',
+      },
+      development: {
+        label: 'Development updates',
+        description: 'Performance reports your coach shares.',
+      },
+    },
+    unsubscribe: {
+      title: 'Unsubscribe',
+      prompt:
+        'Stop receiving this type of email? You can turn it back on at any time from your profile page.',
+      confirm: 'Unsubscribe',
+      success: 'Done — you will no longer receive “{category}” emails.',
+      manageHint:
+        'You can change this at any time in the email notifications section of your profile page.',
+      invalid:
+        'This unsubscribe link is invalid or has expired. You can manage your emails from your profile page.',
+      missingToken:
+        'This unsubscribe link is incomplete. Please use the link from the email, or manage your emails from your profile page.',
+    },
+  },
   errorPage: {
     notFoundTitle: 'Page not found',
     notFoundBody: "The page you're looking for doesn't exist or has been moved.",

@@ -1,5 +1,8 @@
 package com.softropic.skillars.infrastructure.email;
 
+import java.util.Map;
+import java.util.regex.Pattern;
+
 /**
  * A transport-neutral request to send one email.
  *
@@ -18,13 +21,19 @@ package com.softropic.skillars.infrastructure.email;
  *     but which one(s) is not fixed: html-only and text-only requests are both valid
  * @param correlationId an opaque id echoed into logs, the SES message tag, and the
  *     {@code LoggingEmailSender} filename. It carries no idempotency contract.
+ * @param headers extra RFC 5322 header fields to set on the message (e.g. {@code List-Unsubscribe}),
+ *     never {@code null} — empty when there are none. Names must be RFC 5322 field-name characters
+ *     and values must not contain CR/LF, so a value can never inject a second header.
  */
 public record OutboundEmailRequest(
     String toAddress,
     String subject,
     String htmlBody,
     String textBody,
-    String correlationId) {
+    String correlationId,
+    Map<String, String> headers) {
+
+    private static final Pattern HEADER_NAME = Pattern.compile("[!-9;-~]+");
 
     public OutboundEmailRequest {
         requireNonBlank(toAddress, "toAddress");
@@ -34,6 +43,21 @@ public record OutboundEmailRequest(
             throw new IllegalArgumentException(
                 "at least one of htmlBody/textBody must be non-blank");
         }
+        headers = headers == null ? Map.of() : Map.copyOf(headers);
+        headers.forEach((name, value) -> {
+            if (!HEADER_NAME.matcher(name).matches()) {
+                throw new IllegalArgumentException("invalid header name: " + name);
+            }
+            if (value == null || value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0) {
+                throw new IllegalArgumentException("invalid value for header " + name);
+            }
+        });
+    }
+
+    /** A request with no extra headers — the shape every caller used before headers existed. */
+    public OutboundEmailRequest(String toAddress, String subject, String htmlBody, String textBody,
+                                String correlationId) {
+        this(toAddress, subject, htmlBody, textBody, correlationId, Map.of());
     }
 
     private static void requireNonBlank(String value, String fieldName) {

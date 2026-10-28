@@ -105,7 +105,11 @@ class AdapterWrapDepthTest {
         // safe here — see that class's own NONE special-case.
         EmailContentRenderer contentRenderer = new EmailContentRenderer(null, null);
         MailMetrics mailMetrics = new MailMetrics(new SimpleMeterRegistry());
-        return new MailService(contentRenderer, outboundEmailSender, mailMetrics, new EmailTransportProperties());
+        // NONE is a transactional (SYSTEM) template, so the preference gate returns before touching
+        // its (null) collaborators.
+        return new MailService(contentRenderer, outboundEmailSender, mailMetrics, new EmailTransportProperties(),
+            new com.softropic.skillars.platform.notification.service.NotificationPreferenceService(null, null, null, null),
+            new com.softropic.skillars.infrastructure.web.FrontendLinkBuilder("http://localhost:9000"));
     }
 
     private FakeSmtpServer fakeSmtp;

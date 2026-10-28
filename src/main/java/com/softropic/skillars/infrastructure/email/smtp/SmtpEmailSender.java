@@ -54,6 +54,11 @@ public class SmtpEmailSender implements OutboundEmailSender {
             helper.setFrom(javaMailSender.getUsername());
             helper.setSubject(request.subject());
             helper.setText(content, isHtml);
+            // e.g. List-Unsubscribe / List-Unsubscribe-Post; OutboundEmailRequest has already
+            // rejected CR/LF in values and non-field-name characters in names.
+            for (var header : request.headers().entrySet()) {
+                mimeMessage.setHeader(header.getKey(), header.getValue());
+            }
 
             // Any MessagingException (quota, network, SMTP auth) or MailException (Spring's
             // unchecked wrapper) propagates via SmtpErrorClassifier, which decides
