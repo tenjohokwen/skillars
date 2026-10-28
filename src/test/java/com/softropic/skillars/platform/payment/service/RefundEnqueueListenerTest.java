@@ -221,7 +221,7 @@ class RefundEnqueueListenerTest {
     private BookingCancelledByAdminEvent adminCancelEvent(UUID packId, boolean captured, boolean packExpired) {
         return new BookingCancelledByAdminEvent(
             this, BOOKING_ID, PARENT_ID, COACH_ID, packId, SESSION_PRICE, captured, packExpired,
-            "parent@test.com", "Coach", BookingCancelledByAdminEvent.REASON_COACH_UNAVAILABLE, Instant.now(), "UTC"
+            "parent@test.com", "coach@test.com", "Coach", BookingCancelledByAdminEvent.REASON_COACH_UNAVAILABLE, Instant.now(), "UTC"
         );
     }
 }

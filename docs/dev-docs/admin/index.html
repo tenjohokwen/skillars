@@ -119,9 +119,12 @@
       <code>StuckCompletionSweeperService</code>. The same page can <strong>cancel one booking</strong>
       (<code>AdminBookingCancellationService</code>, C6) with the suspension sweep's semantics: it calls
       <code>BookingService.cancelBookingAsAdmin</code> (reason <code>ADMIN_SUPPORT</code>), so captured money is refunded
-      in full, the coach gets no strike and the parent gets a neutral "cancelled by the Skillars team" notice. Live
+      in full, the coach gets no strike, the parent gets a neutral "cancelled by the Skillars team" notice and the coach
+      gets <code>BOOKING_CANCELLED_BY_SKILLARS</code> so they do not turn up (a suspension sweep sends the coach nothing
+      per booking; they get <code>COACH_SUSPENDED</code>). The refund's credit-statement line reads "Cancelled by
+      Skillars", not "Coach unavailable". Live
       (<code>IN_PROGRESS</code>/<code>PAUSED</code>) and in-flight-capture bookings are refused with the outcome as the
-      reason (always a 200, like force-complete). Every attempt is audited as <code>BOOKING_ADMIN_CANCEL</code> (V189) with the
+      reason (always a 200, like force-complete). Every attempt is audited as <code>BOOKING_ADMIN_CANCEL</code> (V189, which also widens the envelope template CHECK) with the
       outcome appended, and a cancellation resolves the booking's open <code>SAFETY_HOLD_BOOKING</code> alert in the same
       transaction. That alert's row in the moderation queue links to the booking page, which is how an admin follows up
       on a safety hold that could not cancel a booking at hold time.
@@ -618,7 +621,7 @@ sequenceDiagram
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>7a950883</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

@@ -46,6 +46,7 @@ class BookingCancellationRefundIT extends AbstractIntegrationTest {
     private static final long PARENT_ID = 9189_000_001L;
     private static final long PLAYER_ID = 9189_000_002L;
     private static final String PARENT_EMAIL = "parent.c6cancel9189@skillars-test.com";
+    private static final String COACH_EMAIL = "coach.c6cancel9189@skillars-test.com";
     private static final String PASSWORD_HASH = "$2a$10$" + "a".repeat(53);
 
     @Autowired private AdminBookingCancellationService adminBookingCancellationService;
@@ -68,7 +69,7 @@ class BookingCancellationRefundIT extends AbstractIntegrationTest {
         slot = 0;
         testMailManager.clear();
         transactionTemplate.execute(status -> {
-            insertUser(COACH_USER_ID, "coach.c6cancel9189@skillars-test.com", "COACH");
+            insertUser(COACH_USER_ID, COACH_EMAIL, "COACH");
             insertUser(ADMIN_ID, "admin.c6cancel9189@skillars-test.com", "ADMIN");
             insertUser(PARENT_ID, PARENT_EMAIL, "PARENT");
             jdbcTemplate.update(
@@ -221,6 +222,15 @@ class BookingCancellationRefundIT extends AbstractIntegrationTest {
             assertThat(mailsToParent(EmailTemplate.BOOKING_CANCELLED_COACH_UNAVAILABLE)).singleElement()
                 .satisfies(e -> assertThat(e.data())
                     .containsEntry("cancelledBy", "SKILLARS").containsEntry("refundType", "CREDIT")));
+        // The coach is told too, so they do not turn up for a session that no longer exists.
+        assertThat(testMailManager.getEnvelopes().values().stream()
+            .filter(e -> e.emailTemplate() == EmailTemplate.BOOKING_CANCELLED_BY_SKILLARS)
+            .filter(e -> e.recipients().stream().anyMatch(r -> COACH_EMAIL.equalsIgnoreCase(r.getEmail()))))
+            .hasSize(1);
+        // The credit statement line matches the notice: a Skillars cancellation, not "coach unavailable".
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT description FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'BOOKING_REFUND'",
+            String.class, confirmed)).startsWith("Cancelled by Skillars");
         assertThat(auditReasons(confirmed)).containsExactly("safety-hold follow-up [outcome: CANCELLED]");
         assertThat(jdbcTemplate.queryForMap(
             "SELECT status, resolved_by FROM admin.admin_alerts WHERE alert_id = ?", alertId))

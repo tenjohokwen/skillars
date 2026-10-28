@@ -1528,13 +1528,17 @@ export default {
         'ne pas compter contre le coach (aucun avertissement de fiabilité) ;',
       cancelConsequenceNotice:
         "informer le parent par e-mail que l'équipe Skillars a annulé la séance, sans en donner la raison ;",
+      cancelConsequenceCoachNotice:
+        "informer le coach par e-mail que l'équipe Skillars a annulé la séance, pour qu'il ne se déplace pas ;",
       cancelConsequenceAlert:
         "clôturer l'alerte de suspension de sécurité ouverte pour cette réservation, s'il y en a une ;",
-      cancelOutcomeCancelled: 'Réservation annulée. Le parent a été remboursé et informé.',
+      cancelOutcomeCancelled:
+        'Réservation annulée. Le parent a été informé, et tout ce qui avait été payé est intégralement remboursé.',
       cancelOutcomeLiveSession: 'Non annulée : la séance est en cours ou en pause.',
       cancelOutcomePaymentInProgress:
         'Non annulée : un paiement par carte pour cette réservation est en cours de traitement. Réessayez dans une minute.',
       cancelOutcomeNotCancellable: 'Non annulée : la réservation est déjà terminée ou annulée.',
+      cancelConflict: 'La réservation a été modifiée entre-temps. Recherchez-la à nouveau.',
       cancelFailed: "L'annulation a échoué. Veuillez réessayer.",
     },
     videos: {
@@ -2520,6 +2524,8 @@ export default {
         '{coachDisplayName} a accepté {acceptedCount} de vos demandes de séance.',
       BOOKING_CANCELLED_DUE_TO_PAUSE:
         'La séance du {requestedStartTime} a été annulée car le forfait a été mis en pause.',
+      BOOKING_CANCELLED_BY_SKILLARS:
+        "La séance du {requestedStartTime} a été annulée par l'équipe Skillars.",
       BOOKING_CANCELLED_BY_PARENT: 'La séance du {requestedStartTime} a été annulée par le parent.',
       BOOKING_CANCELLED_COACH_UNAVAILABLE:
         'Votre séance avec {coachDisplayName} du {requestedStartTime} a été annulée. Tout paiement a été intégralement remboursé.',

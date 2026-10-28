@@ -1967,14 +1967,18 @@ export default {
       cancelConsequenceNoStrike: 'nicht gegen den Coach zählen (keine Zuverlässigkeitsverwarnung);',
       cancelConsequenceNotice:
         'den Eltern per E-Mail mitteilen, dass das Skillars-Team die Einheit storniert hat, ohne einen Grund zu nennen;',
+      cancelConsequenceCoachNotice:
+        'den Coach per E-Mail informieren, dass das Skillars-Team die Einheit storniert hat, damit er nicht erscheint;',
       cancelConsequenceAlert:
         'die offene Sicherheitssperre-Meldung zu dieser Buchung schließen, falls es eine gibt;',
-      cancelOutcomeCancelled: 'Buchung storniert. Die Eltern wurden erstattet und benachrichtigt.',
+      cancelOutcomeCancelled:
+        'Buchung storniert. Die Eltern wurden benachrichtigt; alles bereits Gezahlte wird vollständig erstattet.',
       cancelOutcomeLiveSession: 'Nicht storniert: Die Einheit läuft gerade oder ist pausiert.',
       cancelOutcomePaymentInProgress:
         'Nicht storniert: Eine Kartenzahlung für diese Buchung wird gerade verarbeitet. Versuche es in einer Minute erneut.',
       cancelOutcomeNotCancellable:
         'Nicht storniert: Die Buchung ist bereits beendet oder storniert.',
+      cancelConflict: 'Die Buchung wurde in der Zwischenzeit geändert. Schlage sie erneut nach.',
       cancelFailed: 'Die Stornierung ist fehlgeschlagen. Bitte versuche es erneut.',
     },
     videos: {
@@ -2542,6 +2546,8 @@ export default {
       BOOKING_BATCH_ACCEPTED: '{coachDisplayName} hat {acceptedCount} Ihrer Anfragen angenommen.',
       BOOKING_CANCELLED_DUE_TO_PAUSE:
         'Die Trainingseinheit am {requestedStartTime} wurde storniert, weil das Paket pausiert wurde.',
+      BOOKING_CANCELLED_BY_SKILLARS:
+        'Die Trainingseinheit am {requestedStartTime} wurde vom Skillars-Team storniert.',
       BOOKING_CANCELLED_BY_PARENT:
         'Die Trainingseinheit am {requestedStartTime} wurde von den Eltern storniert.',
       BOOKING_CANCELLED_COACH_UNAVAILABLE:

@@ -1620,13 +1620,17 @@ export default {
       cancelConsequenceNoStrike: 'not count against the coach (no reliability strike);',
       cancelConsequenceNotice:
         'email the parent that the Skillars team cancelled the session, without giving a reason;',
+      cancelConsequenceCoachNotice:
+        'email the coach that the Skillars team cancelled the session, so they do not attend;',
       cancelConsequenceAlert: "close the booking's open safety-hold alert, if there is one;",
-      cancelOutcomeCancelled: 'Booking cancelled. The parent has been refunded and notified.',
+      cancelOutcomeCancelled:
+        'Booking cancelled. The parent has been notified, and anything they had paid is refunded in full.',
       cancelOutcomeLiveSession: 'Not cancelled: the session is in progress or paused.',
       cancelOutcomePaymentInProgress:
         'Not cancelled: a card payment for this booking is being processed. Try again in a minute.',
       cancelOutcomeNotCancellable:
         'Not cancelled: the booking has already ended or been cancelled.',
+      cancelConflict: 'The booking changed while you were working on it. Look it up again.',
       cancelFailed: 'Cancelling failed. Please try again.',
     },
     videos: {
@@ -2504,6 +2508,8 @@ export default {
         '{coachDisplayName} accepted {acceptedCount} of your session requests.',
       BOOKING_CANCELLED_DUE_TO_PAUSE:
         'The session on {requestedStartTime} was cancelled because the session pack was paused.',
+      BOOKING_CANCELLED_BY_SKILLARS:
+        'The session on {requestedStartTime} was cancelled by the Skillars team.',
       BOOKING_CANCELLED_BY_PARENT:
         'The session on {requestedStartTime} was cancelled by the parent.',
       BOOKING_CANCELLED_COACH_UNAVAILABLE:

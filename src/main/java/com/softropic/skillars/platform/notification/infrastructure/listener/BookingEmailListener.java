@@ -521,6 +521,39 @@ public class BookingEmailListener {
         }
     }
 
+    /**
+     * C6: a single booking an admin cancelled from the admin bookings page (ADMIN_SUPPORT) also tells the
+     * coach — otherwise they would turn up for a session that no longer exists. A suspension / safety-hold
+     * sweep does not: the coach is suspended and told by COACH_SUSPENDED (or, for a safety hold, nothing).
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onBookingCancelledByAdminNotifyCoach(BookingCancelledByAdminEvent event) {
+        if (!BookingCancelledByAdminEvent.REASON_ADMIN_SUPPORT.equals(event.getCancelReason())) {
+            return;
+        }
+        try {
+            if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+                log.warn("Cannot send cancelled-by-Skillars email: coach email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+            data.put("bookingsUrl", frontendLinks.route("coach/booking-requests"));
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getCoachEmail());
+            recipient.setLangKey("en");
+
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_CANCELLED_BY_SKILLARS, recipient, data, UUID.randomUUID().toString());
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_CANCELLED_BY_SKILLARS),
+                kv("bookingId", event.getBookingId()), e);
+        }
+    }
+
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onCoachNoShow(CoachNoShowEvent event) {
         try {
@@ -532,10 +565,7 @@ public class BookingEmailListener {
             Map<String, Object> data = new HashMap<>();
             data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
             data.put("canonicalTimezone", event.getCanonicalTimezone());
-            // NO_SHOW_COACH only leaves UPCOMING, so payment was always captured.
-            boolean pack = event.getSessionPackPurchaseId() != null;
-            putRefund(data, pack && !event.isPackExpiredAtCancellation(),
-                !pack || event.isPackExpiredAtCancellation(), event.getSessionPrice());
+            putRefund(data, event.isPackRestore(), event.isWalletRefund(), event.getSessionPrice());
             data.put("bookingsUrl", frontendLinks.route("parent/bookings"));
 
             Recipient recipient = new Recipient();

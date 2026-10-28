@@ -43,4 +43,16 @@ public class CoachNoShowEvent extends ApplicationEvent {
     public String getParentEmail() { return parentEmail; }
     public Instant getRequestedStartTime() { return requestedStartTime; }
     public String getCanonicalTimezone() { return canonicalTimezone; }
+
+    // NO_SHOW_COACH only leaves UPCOMING, so payment was always captured.
+
+    /** True when the payer gets a credit-wallet refund: a card/credit booking, or one on a pack that has since expired. */
+    public boolean isWalletRefund() {
+        return sessionPackPurchaseId == null || packExpiredAtCancellation;
+    }
+
+    /** True when the payer's (unexpired) pack gets its session back. */
+    public boolean isPackRestore() {
+        return sessionPackPurchaseId != null && !packExpiredAtCancellation;
+    }
 }

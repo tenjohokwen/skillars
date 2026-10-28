@@ -41,6 +41,7 @@ public class BookingCancelledByAdminEvent extends ApplicationEvent {
     private final boolean refundEligible;
     private final boolean packExpiredAtCancellation;
     private final String parentEmail;
+    private final String coachEmail;
     private final String coachDisplayName;
     private final String cancelReason;
     private final Instant requestedStartTime;
@@ -48,7 +49,7 @@ public class BookingCancelledByAdminEvent extends ApplicationEvent {
 
     public BookingCancelledByAdminEvent(Object source, UUID bookingId, Long parentId, UUID coachId,
             UUID sessionPackPurchaseId, BigDecimal refundAmount, boolean refundEligible,
-            boolean packExpiredAtCancellation, String parentEmail, String coachDisplayName,
+            boolean packExpiredAtCancellation, String parentEmail, String coachEmail, String coachDisplayName,
             String cancelReason, Instant requestedStartTime, String canonicalTimezone) {
         super(source);
         this.bookingId = bookingId;
@@ -59,6 +60,7 @@ public class BookingCancelledByAdminEvent extends ApplicationEvent {
         this.refundEligible = refundEligible;
         this.packExpiredAtCancellation = packExpiredAtCancellation;
         this.parentEmail = parentEmail;
+        this.coachEmail = coachEmail;
         this.coachDisplayName = coachDisplayName;
         this.cancelReason = cancelReason;
         this.requestedStartTime = requestedStartTime;
@@ -75,6 +77,11 @@ public class BookingCancelledByAdminEvent extends ApplicationEvent {
     public boolean isRefundEligible() { return refundEligible; }
     public boolean isPackExpiredAtCancellation() { return packExpiredAtCancellation; }
     public String getParentEmail() { return parentEmail; }
+    /**
+     * C6: the coach's address, for the coach's own notice of a single admin cancellation
+     * ({@code ADMIN_SUPPORT}). Unused for a suspension sweep — the coach gets COACH_SUSPENDED instead.
+     */
+    public String getCoachEmail() { return coachEmail; }
     public String getCoachDisplayName() { return coachDisplayName; }
     /**
      * {@code COACH_UNAVAILABLE} (a coach suspension / safety-hold sweep) or {@code ADMIN_SUPPORT} (C6: an

@@ -189,6 +189,7 @@
             <li>{{ t('admin.bookings.cancelConsequenceRefund') }}</li>
             <li>{{ t('admin.bookings.cancelConsequenceNoStrike') }}</li>
             <li>{{ t('admin.bookings.cancelConsequenceNotice') }}</li>
+            <li>{{ t('admin.bookings.cancelConsequenceCoachNotice') }}</li>
             <li>{{ t('admin.bookings.cancelConsequenceAlert') }}</li>
             <li>{{ t('admin.bookings.consequenceIrreversible') }}</li>
             <li>{{ t('admin.bookings.consequenceAudit') }}</li>
@@ -369,7 +370,7 @@ async function submitCancel() {
     $q.notify({
       message:
         err?.response?.status === 409
-          ? t('admin.bookings.forceCompleteConflict')
+          ? t('admin.bookings.cancelConflict')
           : t('admin.bookings.cancelFailed'),
       type: 'negative',
     })

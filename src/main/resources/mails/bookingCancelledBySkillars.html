@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.cancelled_by_skillars.title}">Session Cancelled by Skillars</title>
+</head>
+<body>
+    <h2 th:text="#{email.booking.cancelled_by_skillars.title}">Session Cancelled by Skillars</h2>
+    <p>The Skillars team has cancelled your session on <strong th:text="${map.requestedStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>). Please do not attend it. This cancellation does not count against your reliability record.</p>
+    <p>This slot is now free for new bookings. You can review your bookings on Skillars: <a th:href="${map.bookingsUrl}" th:text="${map.bookingsUrl}">bookings</a></p>
+</body>
+</html>

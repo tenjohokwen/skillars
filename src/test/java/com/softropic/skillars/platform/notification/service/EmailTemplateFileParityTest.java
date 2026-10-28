@@ -39,7 +39,12 @@ class EmailTemplateFileParityTest {
         // No producer sends these (NotificationCatalog / AccountManagementFacade, which sends an email change
         // as PROFILE_CHANGE); give one a body together with its producer.
         EmailTemplate.COACH_VISIBILITY_REDUCED, "no producer",
-        EmailTemplate.EMAIL_CHANGE, "no producer");
+        EmailTemplate.EMAIL_CHANGE, "no producer",
+        // V184 (#328): the minor-video approval gate was removed; the constants stay @Deprecated so old
+        // envelope rows still map, but nothing sends them and their bodies were deleted.
+        EmailTemplate.VIDEO_APPROVAL_REQUESTED, "deprecated, no producer",
+        EmailTemplate.VIDEO_APPROVAL_APPROVED, "deprecated, no producer",
+        EmailTemplate.VIDEO_APPROVAL_REJECTED, "deprecated, no producer");
 
     static String fileName(EmailTemplate template) {
         return CaseFormat.UPPER_UNDERSCORE.to(CaseFormat.LOWER_CAMEL, template.name()) + ".html";

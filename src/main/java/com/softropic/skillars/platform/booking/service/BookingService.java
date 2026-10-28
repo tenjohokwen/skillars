@@ -271,10 +271,11 @@ public class BookingService {
                 .map(p -> p.getExpiresAt().isBefore(Instant.now()))
                 .orElse(false);
         }
-        BigDecimal refundAmount = paymentCaptured ? resolveAmountPaid(booking) : BigDecimal.ZERO;
+        BigDecimal refundAmount = paymentCaptured ? resolveAmountPaidOrZero(booking) : BigDecimal.ZERO;
         CoachProfile coach = coachProfileRepository.findById(booking.getCoachId()).orElse(null);
         String coachDisplayName = coach != null ? coach.getDisplayName() : "";
         String parentEmail = resolveEmail(booking.getParentId(), bookingId);
+        String coachEmail = coach != null ? resolveEmail(coach.getUserId(), bookingId) : "";
 
         transitionInternal(bookingId, BookingEvent.CANCEL_ADMIN, ctx, true);
         // After the transition, never before: transitionInternal refreshes this same managed instance,
@@ -284,7 +285,7 @@ public class BookingService {
 
         eventPublisher.publishEvent(new BookingCancelledByAdminEvent(
             this, bookingId, booking.getParentId(), booking.getCoachId(), booking.getSessionPackPurchaseId(),
-            refundAmount, paymentCaptured, packExpired, parentEmail, coachDisplayName, cancelReason,
+            refundAmount, paymentCaptured, packExpired, parentEmail, coachEmail, coachDisplayName, cancelReason,
             booking.getRequestedStartTime(), booking.getCanonicalTimezone()));
         return AdminBookingCancellationOutcome.CANCELLED;
     }
@@ -295,6 +296,10 @@ public class BookingService {
      * coach's current price is only a fallback for a row-less legacy booking (and is wrong once the
      * coach has re-priced, which is why it is not the primary source). A pack booking refunds the
      * pack's per-session price (its row records zero — the pack was charged at purchase).
+     *
+     * <p>Throws {@link ResourceNotFoundException} when neither a captured payment row nor a price exists,
+     * failing the cancellation: the coach / parent / no-show paths (C6) must never commit a refund of 0
+     * while telling the parent they were "fully refunded".
      */
     private BigDecimal resolveAmountPaid(Booking booking) {
         if (booking.getSessionPackPurchaseId() == null) {
@@ -306,8 +311,17 @@ public class BookingService {
                 return paid;
             }
         }
+        return resolveSessionPrice(booking);
+    }
+
+    /**
+     * {@link #resolveAmountPaid}, but never throws: {@link #cancelBookingAsAdmin} joins a suspension's
+     * transaction, where one unpriceable legacy booking must not roll back the whole suspension. The
+     * amount is recorded as 0 and logged for manual reconciliation.
+     */
+    private BigDecimal resolveAmountPaidOrZero(Booking booking) {
         try {
-            return resolveSessionPrice(booking);
+            return resolveAmountPaid(booking);
         } catch (ResourceNotFoundException e) {
             log.error("[ADMIN_CANCEL_REFUND_AMOUNT_UNKNOWN] bookingId={} — no payment row and no price; "
                 + "refund recorded as 0, reconcile by hand", booking.getId());

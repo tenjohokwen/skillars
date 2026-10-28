@@ -69,10 +69,8 @@ public class CancellationRefundService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onCoachNoShow(CoachNoShowEvent event) {
         // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT)
-        if (event.getSessionPackPurchaseId() != null) {
-            if (!event.isPackExpiredAtCancellation()) {
-                packSessionService.restoreSession(event.getSessionPackPurchaseId());
-            }
+        if (event.isPackRestore()) {
+            packSessionService.restoreSession(event.getSessionPackPurchaseId());
         }
 
         issueStrikeSafely(event.getCoachId(), event.getBookingId(), "COACH_NO_SHOW");

@@ -488,7 +488,13 @@ sequenceDiagram
       <code>CONFIRMED</code>/<code>UPCOMING</code> (plus <code>PAUSED</code> for the coach). Before C6 the coach path read the
       status unlocked and carried no capture flag, so a coach cancelling an <code>ACCEPTED</code> booking refunded a card
       booking that was never charged and restored a pack session that was never deducted. The refund amount is
-      <code>resolveAmountPaid</code> (what <code>booking_payments</code> recorded), not the coach's current price.</p>
+      <code>resolveAmountPaid</code> (what <code>booking_payments</code> recorded, else the pack's or coach's price), not the
+      coach's current price; it throws when there is no price at all, so a coach / parent / no-show cancellation fails
+      rather than commit a 0.00 "full refund". Only <code>cancelBookingAsAdmin</code> uses the non-throwing
+      <code>resolveAmountPaidOrZero</code> (it joins a suspension's transaction) and logs
+      <code>[ADMIN_CANCEL_REFUND_AMOUNT_UNKNOWN]</code>. <code>PAUSED</code> counts as captured for the coach (calling off a
+      paused session refunds the family) but not for the parent: a parent cancel from <code>PAUSED</code> is after the
+      start and has always been non-refundable; C6 kept that.</p>
     </div>
     <div class="callout warn">
       <p><strong><code>DISPUTED</code>, <code>REFUND_PENDING</code> and <code>REFUNDED</code> are unreachable today.</strong> The state
@@ -570,7 +576,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>993c6f57</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>fa9928ce</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

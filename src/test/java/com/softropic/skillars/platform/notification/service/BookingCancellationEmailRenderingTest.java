@@ -60,7 +60,8 @@ class BookingCancellationEmailRenderingTest {
 
     @ParameterizedTest
     @EnumSource(value = EmailTemplate.class, names = {
-        "BOOKING_CANCELLED_BY_PARENT", "BOOKING_CANCELLED_BY_COACH", "COACH_NO_SHOW", "PLAYER_NO_SHOW"})
+        "BOOKING_CANCELLED_BY_PARENT", "BOOKING_CANCELLED_BY_COACH", "COACH_NO_SHOW", "PLAYER_NO_SHOW",
+        "BOOKING_CANCELLED_BY_SKILLARS"})
     void rendersInEveryBundledLocale(EmailTemplate template) {
         for (String lang : List.of("en", "de", "fr")) {
             Recipient recipient = new Recipient();

@@ -264,4 +264,17 @@ describe('AdminBookingsPage.vue', () => {
       expect.objectContaining({ message: 'admin.bookings.cancelFailed', type: 'negative' }),
     )
   })
+
+  it('maps a 409 on cancel to the cancel conflict message', async () => {
+    adminApi.getAdminBooking.mockResolvedValue(CONFIRMED)
+    adminApi.cancelBookingAsAdmin.mockRejectedValue({ response: { status: 409 } })
+    const wrapper = await mountPage({ bookingId: BOOKING_ID })
+    wrapper.vm.cancelNote = 'x'
+
+    await wrapper.vm.submitCancel()
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'admin.bookings.cancelConflict', type: 'negative' }),
+    )
+  })
 })
