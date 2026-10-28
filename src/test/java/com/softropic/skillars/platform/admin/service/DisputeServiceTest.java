@@ -317,6 +317,43 @@ class DisputeServiceTest {
             eq(booking.getId()), any());
     }
 
+    /**
+     * feat/coach-payouts-pack-and-credit: a pack session has no per-booking charge, so its price is the
+     * pack share its coach payout was computed from — the parent is refunded that, and the payout
+     * (here frozen by a safety hold) is cancelled, never released later.
+     */
+    @Test
+    void resolveDispute_packSession_fullCreditRefundsPackShare_andCancelsFrozenPayout() {
+        Dispute dispute = buildDispute();
+        Booking booking = buildBooking();
+        booking.setSessionPackPurchaseId(UUID.randomUUID());
+        BookingPayment packPayment = buildPayment("CAPTURED");
+        packPayment.setCreditDebited(BigDecimal.ZERO);
+        packPayment.setStripeCharged(BigDecimal.ZERO);
+        com.softropic.skillars.platform.payment.repo.CoachPayout payout =
+            new com.softropic.skillars.platform.payment.repo.CoachPayout();
+        payout.setBookingId(bookingId);
+        payout.setGrossAmount(new BigDecimal("33.33"));
+        payout.setNetAmount(new BigDecimal("30.00"));
+        payout.setStatus(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.FROZEN);
+        when(disputeRepository.findById(disputeId)).thenReturn(Optional.of(dispute));
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(packPayment));
+        when(coachPayoutRepository.findGrossAmountByBookingId(bookingId)).thenReturn(Optional.of(new BigDecimal("33.33")));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(payout));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(any(), any(), any()))
+            .thenReturn(Optional.empty());
+
+        service.resolveDispute(disputeId, "FULL_CREDIT", null, "note", 99L);
+
+        verify(creditWalletService).writeLedgerEntry(
+            eq(booking.getParentId()), eq(new BigDecimal("33.33")), eq("BOOKING_REFUND"),
+            eq(booking.getId()), any());
+        assertThat(payout.getStatus())
+            .isEqualTo(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.CANCELLED);
+        verify(coachPayoutOutboxSupport, never()).enqueueReversal(any(), any());
+    }
+
     @Test
     void resolveDispute_nonCapturedPayment_fullCreditIssuesNoRefund() {
         Dispute dispute = buildDispute();

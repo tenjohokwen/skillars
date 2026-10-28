@@ -150,11 +150,14 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * findByIdForUpdate read (the SUSPENDED/lock writes and session revocation run after it returns) -- now 53
      * after fix/content-consistency-and-lost-updates added {@code SessionPlanService.updateSession} (a
      * SessionRepository.findByIdForUpdate+orElseThrow plus entityManager.refresh; the plan save runs
+     * after withBoundedRetry returns) -- now 54 after feat/coach-payouts-pack-and-credit added {@code
+     * CoachPayoutOutboxSupport.allocatePackShare} (a
+     * SessionPackPurchaseRepository.findByIdForUpdate+orElse(null) read; the pack allocation write runs
      * after withBoundedRetry returns). Asserted explicitly so an
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 53;
+    private static final int EXPECTED_CALL_SITE_COUNT = 54;
 
     private record CallSite(String file, int line, String argument) {
     }

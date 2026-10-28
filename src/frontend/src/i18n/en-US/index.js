@@ -1341,6 +1341,7 @@ export default {
         GDPR_ERASURE_DEADLINE: 'GDPR erasure overdue',
         SAFETY_HOLD_BOOKING: 'Urgent: booking under a safety hold',
         SUBSCRIPTION_ORPHANED: 'Orphaned subscription',
+        CASH_OUT_UNRESOLVED: 'Unconfirmed cash-out refund',
       },
     },
     reviewModeration: {
@@ -1540,6 +1541,8 @@ export default {
       totalStripeFees: 'Stripe fees (estimated)',
       totalRefundCredit: 'Refunds issued as credit',
       totalCashOuts: 'Credit cash-outs',
+      unresolvedCashOuts:
+        "Credit cash-outs awaiting Stripe confirmation: {count} ({amount}). The payers' wallets are debited; they are re-checked automatically, and the ones Stripe has not answered are raised in the admin queue.",
       coachSubscriptions: 'Active coach subscriptions',
       playerSubscriptions: 'Active player subscriptions',
       noSubscriptions: 'None',

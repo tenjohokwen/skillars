@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.payment.contract.CoachPayoutTransferPaylo
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException;
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
+import com.softropic.skillars.platform.payment.repo.CoachPayoutFreezeRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
 
 import io.micrometer.core.instrument.MeterRegistry;
@@ -37,8 +38,11 @@ import java.time.Instant;
 public class CoachPayoutTransferHandler implements OutboxMessageHandler {
 
     static final String METRIC_HELD = "coach.payout.held";
+    static final String METRIC_TRANSFER_RETRY = "coach.payout.transfer_retry";
+    static final String METRIC_FROZEN = "coach.payout.frozen";
 
     private final CoachPayoutRepository coachPayoutRepository;
+    private final CoachPayoutFreezeRepository coachPayoutFreezeRepository;
     private final PaymentGateway paymentGateway;
     private final MeterRegistry meterRegistry;
     private final ObjectMapper objectMapper;
@@ -73,6 +77,22 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
                 p.bookingId(), row.getStatus());
             return;
         }
+        // feat/coach-payouts-pack-and-credit (DECISIONS.md item 2): the release-time gate for a CSAM
+        // safety hold. Read under this row's lock, immediately before the transfer, so a hold that landed
+        // after the payout was enqueued (or a freeze UPDATE that skipped a row it could not see yet) still
+        // stops the money here. FROZEN is not payable, so this outbox message is consumed; an admin
+        // reinstatement re-enqueues one (CoachPayoutFreezeService.liftOnReinstatement).
+        // FOR SHARE (see CoachPayoutFreezeRepository.findActiveForShare): a concurrent reinstatement waits
+        // for this transaction, so the FROZEN row written below is never missed by its re-enqueue.
+        if (coachPayoutFreezeRepository.isFrozenForShare(row.getCoachId())) {
+            row.setStatus(CoachPayoutStatus.FROZEN);
+            row.setLastError(CoachPayoutFreezeService.REASON_SAFETY_HOLD);
+            coachPayoutRepository.save(row);
+            meterRegistry.counter(METRIC_FROZEN).increment();
+            log.warn("[COACH_PAYOUT_FROZEN] booking={} coach={} — coach is under a safety hold, transfer NOT "
+                + "made; the payout is FROZEN until an admin reinstates the coach", row.getBookingId(), row.getCoachId());
+            return;
+        }
         if (row.getReleaseAfter() != null && row.getReleaseAfter().isAfter(Instant.now())) {
             // AC4.3: still inside the hold window — throw so the outbox backoff re-drives it later.
             throw new IllegalStateException("coach payout for booking " + p.bookingId()
@@ -91,6 +111,12 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
         } catch (CoachPayoutTransferException e) {
             if (e.isRetryable()) {
                 // AC8.1: throw so the outbox backoff re-drives; [OUTBOX_STUCK] ERROR after 10 attempts.
+                // A transfer with no charge behind it (a credit-funded session) draws on the platform's
+                // AVAILABLE balance, so BALANCE_INSUFFICIENT is expected while charges settle — counted
+                // per reason so a persistent shortfall is visible before [OUTBOX_STUCK] fires.
+                meterRegistry.counter(METRIC_TRANSFER_RETRY, "reason", e.getReason()).increment();
+                log.warn("[COACH_PAYOUT_RETRY] booking={} coach={} reason={} — transfer will be re-driven",
+                    row.getBookingId(), row.getCoachId(), e.getReason());
                 throw e;
             }
             // AC8.2: non-retryable — the destination account cannot receive. HOLD the row, emit the

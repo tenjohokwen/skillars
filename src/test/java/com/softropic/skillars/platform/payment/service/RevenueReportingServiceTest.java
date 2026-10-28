@@ -58,6 +58,7 @@ class RevenueReportingServiceTest {
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private ConfigService configService;
     @Mock private com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository sessionPackPurchaseRepository;
+    @Mock private com.softropic.skillars.platform.payment.repo.CashOutReconciliationRepository cashOutReconciliationRepository;
 
     private RevenueReportingService service;
 
@@ -71,7 +72,7 @@ class RevenueReportingServiceTest {
             bookingPaymentRepository, coachPayoutRepository, parentCreditLedgerRepository, bookingRepository,
             paymentCoachSubscriptionRepository, paymentPlayerSubscriptionRepository,
             coachReliabilityStrikeRepository, playerProfileRepository, coachProfileRepository,
-            sessionPackPurchaseRepository, configService
+            sessionPackPurchaseRepository, cashOutReconciliationRepository, configService
         );
     }
 

@@ -16,6 +16,7 @@ class CoachPayoutStatusTest {
         assertThat(CoachPayoutStatus.isPayable(CoachPayoutStatus.REVERSED)).isFalse();
         assertThat(CoachPayoutStatus.isPayable(CoachPayoutStatus.REVERSAL_FAILED)).isFalse();
         assertThat(CoachPayoutStatus.isPayable(CoachPayoutStatus.FAILED_PERMANENT)).isFalse();
+        assertThat(CoachPayoutStatus.isPayable(CoachPayoutStatus.FROZEN)).as("a safety-hold freeze is never payable").isFalse();
         assertThat(CoachPayoutStatus.isPayable(null)).isFalse();
     }
 
@@ -25,6 +26,7 @@ class CoachPayoutStatusTest {
         assertThat(CoachPayoutStatus.isTerminal(CoachPayoutStatus.PENDING_RELEASE)).isFalse();
         assertThat(CoachPayoutStatus.isTerminal(CoachPayoutStatus.HOLD)).isFalse();
         assertThat(CoachPayoutStatus.isTerminal(CoachPayoutStatus.REVERSAL_FAILED)).isFalse();
+        assertThat(CoachPayoutStatus.isTerminal(CoachPayoutStatus.FROZEN)).as("reinstatement unfreezes it").isFalse();
 
         assertThat(CoachPayoutStatus.isTerminal(CoachPayoutStatus.REVERSED)).isTrue();
         assertThat(CoachPayoutStatus.isTerminal(CoachPayoutStatus.CANCELLED)).isTrue();

@@ -1,0 +1,26 @@
+package com.softropic.skillars.platform.payment.contract.event;
+
+import org.springframework.context.ApplicationEvent;
+
+import java.util.UUID;
+
+/**
+ * feat/coach-payouts-pack-and-credit: an open credit cash-out settled itself — its refund was confirmed
+ * ({@code COMPLETED}) or rejected and the credit restored ({@code REVERSED}). Resolves the
+ * {@code CASH_OUT_UNRESOLVED} admin alert, if one was raised, so no admin acts on a cash-out the system
+ * already settled (re-crediting or re-refunding it would pay the payer twice).
+ */
+public class CashOutRefundResolvedEvent extends ApplicationEvent {
+
+    private final UUID cashOutId;
+    private final String outcome;
+
+    public CashOutRefundResolvedEvent(Object source, UUID cashOutId, String outcome) {
+        super(source);
+        this.cashOutId = cashOutId;
+        this.outcome = outcome;
+    }
+
+    public UUID getCashOutId() { return cashOutId; }
+    public String getOutcome() { return outcome; }
+}

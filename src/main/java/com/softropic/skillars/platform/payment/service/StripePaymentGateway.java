@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.stripe.exception.ApiConnectionException;
+import com.stripe.exception.IdempotencyException;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Charge;
 import com.stripe.model.PaymentIntent;
@@ -205,9 +206,12 @@ public class StripePaymentGateway implements PaymentGateway {
             // not treat that as a failure and restore credit — it retries under the same key
             // (Stripe replays an executed refund) or leaves it for reconciliation.
             // ApiConnectionException carries status 0 (no HTTP response at all).
+            // feat/coach-payouts-pack-and-credit: an idempotency conflict (409 — another request with
+            // the same key still executing, or IdempotencyException) is NOT a rejection either: that
+            // other request may be refunding right now, so restoring credit on it could pay twice.
             Integer status = e.getStatusCode();
-            boolean outcomeUnknown = e instanceof ApiConnectionException
-                || status == null || status == 0 || status >= 500;
+            boolean outcomeUnknown = e instanceof ApiConnectionException || e instanceof IdempotencyException
+                || status == null || status == 0 || status == 409 || status >= 500;
             log.error("Stripe refund {}: intentId={} key={} status={} error={}",
                 outcomeUnknown ? "outcome unknown" : "rejected", stripePaymentIntentId, idempotencyKey,
                 status, e.getMessage());

@@ -1240,6 +1240,7 @@ export default {
         GDPR_ERASURE_DEADLINE: 'Effacement RGPD en retard',
         SAFETY_HOLD_BOOKING: 'Urgent : réservation sous suspension de sécurité',
         SUBSCRIPTION_ORPHANED: 'Abonnement orphelin',
+        CASH_OUT_UNRESOLVED: 'Remboursement de retrait non confirmé',
       },
     },
     reviewModeration: {
@@ -1445,6 +1446,8 @@ export default {
       totalStripeFees: 'Frais Stripe (estimés)',
       totalRefundCredit: 'Remboursements en crédit',
       totalCashOuts: 'Retraits de crédit',
+      unresolvedCashOuts:
+        "Retraits de crédit en attente de confirmation Stripe : {count} ({amount}). Les portefeuilles des payeurs sont débités ; ils sont revérifiés automatiquement, et ceux sans réponse de Stripe sont signalés dans la file d'administration.",
       coachSubscriptions: 'Abonnements coach actifs',
       playerSubscriptions: 'Abonnements joueur actifs',
       noSubscriptions: 'Aucun',

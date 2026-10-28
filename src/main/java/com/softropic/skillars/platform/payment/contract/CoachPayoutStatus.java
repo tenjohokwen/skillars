@@ -1,8 +1,9 @@
 package com.softropic.skillars.platform.payment.contract;
 
 /**
- * The seven values permitted by {@code chk_coach_payouts_status} on {@code payment.coach_payouts}
- * (V133). skillars-deferred-106: the coach's share of a session fee is no longer moved at capture
+ * The eight values permitted by {@code chk_coach_payouts_status} on {@code payment.coach_payouts}
+ * (V133; {@link #FROZEN} added by V186). skillars-deferred-106: the coach's share of a session fee
+ * is no longer moved at capture
  * (as a Stripe destination charge did); it is transferred to the coach's connected account only
  * after {@code BookingCompletedEvent}, through the durable outbox. This class names the states of
  * that payout.
@@ -22,6 +23,9 @@ package com.softropic.skillars.platform.payment.contract;
  *   RELEASED        --non-retryable reversal err-> REVERSAL_FAILED
  *   HOLD            --operator "coach reconnected"-> PENDING_RELEASE (re-enqueues one outbox message)
  *   HOLD / REVERSAL_FAILED --explicit operator SQL-> FAILED_PERMANENT (unrecoverable; runbook only)
+ *   PENDING_RELEASE --coach under CSAM safety hold-> FROZEN       (CoachPayoutFreezeService / transfer handler)
+ *   FROZEN          --admin reinstates the coach---> PENDING_RELEASE (re-enqueues one outbox message)
+ *   FROZEN          --dispute resolved------------> CANCELLED
  * </pre>
  *
  * <p>There is <strong>no</strong> automatic/scheduled transition into {@link #FAILED_PERMANENT} —
@@ -51,8 +55,9 @@ public final class CoachPayoutStatus {
 
     /**
      * A dispute resolved inside the hold window before the transfer fired, so the pending payout was
-     * cancelled outright — no money ever moved. Also the {@code stripe_charged = 0} audit case
-     * (reason {@code NO_STRIPE_CHARGE}).
+     * cancelled outright — no money ever moved. Also the audit case of a completed booking nothing was
+     * paid for (reason {@code NOTHING_CHARGED}), and a pack session the pack's payout allocation could
+     * not cover ({@code PACK_FULLY_ALLOCATED} / {@code PACK_AMOUNT_UNKNOWN}).
      */
     public static final String CANCELLED = "CANCELLED";
 
@@ -70,6 +75,15 @@ public final class CoachPayoutStatus {
      * booking is a no-op.
      */
     public static final String FAILED_PERMANENT = "FAILED_PERMANENT";
+
+    /**
+     * feat/coach-payouts-pack-and-credit (DECISIONS.md item 2): the coach is under a CSAM safety hold
+     * ({@code payment.coach_payout_freezes}), so the transfer must not fire while the hold stands. Not
+     * payable; an admin reinstatement flips it back to {@link #PENDING_RELEASE} and re-enqueues one
+     * transfer message. A dispute resolved meanwhile cancels it like a pending payout. Normal (non
+     * safety) suspensions never freeze payouts.
+     */
+    public static final String FROZEN = "FROZEN";
 
     private CoachPayoutStatus() {
     }

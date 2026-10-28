@@ -41,6 +41,7 @@ class PackPriceLockedOnPurchaseTest {
     @Mock CoachProfileRepository coachProfileRepository;
     @Mock PlayerProfileRepository playerProfileRepository;
     @Mock PaymentGateway paymentGateway;
+    @Mock com.softropic.skillars.platform.config.service.ConfigService configService;
 
     @InjectMocks SessionPackPaymentService sessionPackPaymentService;
 
@@ -71,6 +72,7 @@ class PackPriceLockedOnPurchaseTest {
         when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(customer));
 
         when(paymentGateway.chargeAndCapture(any(), any(), any(), any())).thenReturn("pi_stub_123");
+        when(configService.getString("platform.commission.rate")).thenReturn("0.12");
 
         ArgumentCaptor<SessionPackPurchase> purchaseCaptor = ArgumentCaptor.forClass(SessionPackPurchase.class);
         SessionPackPurchase savedPurchase = new SessionPackPurchase();
@@ -88,6 +90,10 @@ class PackPriceLockedOnPurchaseTest {
             .as("pricePerSession must be locked from tier at purchase time")
             .isEqualByComparingTo(PRICE_PER_SESSION);
         assertThat(purchase.getRemainingSessions()).isEqualTo(10);
+        // feat/coach-payouts-pack-and-credit: the payout basis is stamped at purchase too.
+        assertThat(purchase.getAmountCharged()).isEqualByComparingTo(TOTAL_PRICE);
+        assertThat(purchase.getSessionCount()).isEqualTo(10);
+        assertThat(purchase.getCommissionRate()).isEqualByComparingTo("0.12");
     }
 
     @Test

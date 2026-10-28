@@ -85,6 +85,7 @@
         <tr><td><a href="#adr-tenant">16</a></td><td>The <code>tenant</code> module was removed</td><td><code>a170e69d</code> (PR #37)</td></tr>
         <tr><td><a href="#adr-suspension-cancels">17</a></td><td>A coach suspension / safety hold cancels upcoming bookings with a full refund and no strike</td><td>Owner decision 2026-10-28 (item 2), chunk C2</td></tr>
         <tr><td><a href="#adr-minors-never-upload">18</a></td><td>Minors never upload; coach videos of a child are linked to the session</td><td>Product decision 2026-10-28, V184</td></tr>
+        <tr><td><a href="#adr-pack-credit-payouts">19</a></td><td>Pack- and credit-funded sessions paid per completed session; payouts frozen during a CSAM safety hold</td><td>owner decisions 2026-10-28 (items 2 + 3), feat/coach-payouts-pack-and-credit (V186)</td></tr>
       </tbody>
     </table>
 
@@ -365,6 +366,25 @@
       <code>chk_videos_subject_pair</code> (V184), <code>AccountDeletionCascadeListener</code>; tests <code>MinorUploadPolicyTest</code>,
       <code>MinorSafetyGateIT</code>, <code>VideoSubjectServiceTest</code>, <code>AccountDeletionCascadeIT</code>, <code>GdprChildScopeIT</code>.
       See <a href="../video/index.html">Video</a>.</p>
+
+    <h2 id="adr-pack-credit-payouts">19. Pack- and credit-funded sessions are paid per completed session; a safety hold freezes payouts</h2>
+    <p><strong>Context.</strong> ADR 7's payout only covered the card-charged part of a booking, so a coach was never paid
+      for a session funded by a session pack or by wallet credit, although the platform held that money. A CSAM safety hold
+      (B6) took the coach's profile down but left their pending payouts to release on schedule.</p>
+    <p><strong>Decision.</strong> (Owner, 2026-10-28.) Pay every completed session through the existing completion-gated
+      payout, held <code>payment.payout.hold_hours</code> from completion: card + credit at the rate stamped at capture
+      (one row, one transfer for a mixed booking); a pack session gets <code>amount_charged / session_count</code> (rounded
+      down, the last session takes the remainder) at the rate stamped at <em>pack purchase</em>, allocated under the pack row
+      lock so the total never exceeds what the pack was charged. Unused sessions of an expired pack are not paid out: the
+      platform keeps that money. While a coach is under a CSAM safety hold their payouts are <code>FROZEN</code> and are
+      released only when an admin reinstates the coach. Normal suspensions do not freeze payouts.</p>
+    <p><strong>Consequences.</strong> A dispute on a pack session treats the pack share as the session price. Credit-funded
+      transfers have no charge behind them and draw on the platform's available balance (<code>BALANCE_INSUFFICIENT</code>
+      is retried). The admin finance commission figure is computed from <code>coach_payouts.commission_amount</code>, so it covers card, credit and pack sessions.
+      Sessions completed before V186 are not paid retroactively.</p>
+    <p><strong>Where enforced.</strong> <code>CoachPayoutOutboxSupport.enqueuePayout</code> / <code>allocatePackShare</code>,
+      <code>CoachPayoutFreezeService</code>, the freeze check in <code>CoachPayoutTransferHandler</code>,
+      <code>DisputeService.paidForSession</code>; <code>CoachPayoutPackCreditIT</code>.</p>
 
     <h2 id="related">Related</h2>
     <ul>

@@ -35,4 +35,16 @@ public interface StripeCustomerRepository extends JpaRepository<StripeCustomer, 
     @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0"))
     @Query("SELECT c FROM StripeCustomer c WHERE c.parentId = :parentId")
     Optional<StripeCustomer> findByIdForUpdate(@Param("parentId") Long parentId);
+
+    /**
+     * feat/coach-payouts-pack-and-credit: the same per-payer wallet lock, but BLOCKING (no NOWAIT) — for
+     * booking settlement only ({@code CreditWalletService.lockAndGetBalance}). Settlement runs in
+     * AFTER_COMMIT listeners with no retry of their own, and the lock can legitimately be held for the
+     * length of another settlement's Stripe charge; a NOWAIT budget (~3s) running out there would strand
+     * an accepted booking in PAYMENT_PENDING. Waiting is safe: every holder of this row (cash-out,
+     * settlement) takes it first and holds no other lock a waiter could need.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT c FROM StripeCustomer c WHERE c.parentId = :parentId")
+    Optional<StripeCustomer> findByIdForUpdateWaiting(@Param("parentId") Long parentId);
 }

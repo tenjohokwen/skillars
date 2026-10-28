@@ -18,12 +18,13 @@ import java.util.UUID;
  *
  * <p>Deliberately NOT {@code @Transactional}: the Stripe refund is an external call and must not run
  * while a DB transaction (and the per-payer wallet lock) is held. The shape is
- * validate → {@link CreditWalletService#debitForCashOut} (its own transaction, locked balance check +
- * debit) → refund → on a refund Stripe REJECTED, compensating {@code CASH_OUT_REVERSAL} rows
- * ({@link CreditWalletService#reverseCashOut}, one transaction). On an AMBIGUOUS refund outcome
- * (network failure / 5xx — the refund may have been executed) it retries under the same idempotency
- * key, and if still unknown leaves the debit in place for manual reconciliation rather than risk
- * paying the payer twice.
+ * validate → {@link CreditWalletService#debitForCashOut} (its own transaction: locked balance check +
+ * debit + a PENDING {@code cash_out_reconciliations} record) → refund → record COMPLETED; on a refund
+ * Stripe REJECTED, compensating {@code CASH_OUT_REVERSAL} rows written together with closing the record
+ * ({@link CashOutReconciliationService#reverseAfterRejection}). On an AMBIGUOUS refund outcome (network
+ * failure / 5xx — the refund may have been executed) it retries under the same idempotency key, and if
+ * still unknown leaves the debit in place and the record UNKNOWN (admin alert, automatic re-check)
+ * rather than risk paying the payer twice.
  *
  * <p>fix/payment-money-integrity: the payer asks for {@code requestedAmount}; the wallet is debited
  * exactly that ({@code net} as {@code CASH_OUT_DEBIT} + {@code fee} as {@code STRIPE_FEE_DEBIT}) and
@@ -39,6 +40,7 @@ public class CashOutService {
     private final StripeCustomerRepository stripeCustomerRepository;
     private final PaymentGateway paymentGateway;
     private final ConfigService configService;
+    private final CashOutReconciliationService cashOutReconciliationService;
 
     static final String REFUND_OUTCOME_UNKNOWN = "payment.refundOutcomeUnknown";
     /** Total refund attempts under one idempotency key when Stripe's answer is ambiguous. */
@@ -80,49 +82,72 @@ public class CashOutService {
         }
 
         UUID cashOutId = UUID.randomUUID();
-        creditWalletService.debitForCashOut(parentId, cashOutId, netAmount, feeAmount);
+        // The debit and its PENDING cash_out_reconciliations record commit together: from here on, a crash
+        // or an unconfirmed refund always leaves a durable row (CashOutReconciliationService re-checks it).
+        creditWalletService.debitForCashOut(parentId, cashOutId, netAmount, feeAmount, paymentIntentId);
 
         // Per-cash-out idempotency key: unique per logical cash-out, so two cash-outs against the
         // same PaymentIntent are two refunds at Stripe — never a replay of the first. The same key
-        // makes the retries below safe: Stripe replays a refund it already executed.
+        // makes the retries below (and the re-check job's) safe: Stripe replays a refund it already executed.
         String idempotencyKey = "cashout-" + cashOutId;
         for (int attempt = 1; ; attempt++) {
             try {
                 paymentGateway.refund(paymentIntentId, netAmount, idempotencyKey);
-                return;
             } catch (PaymentGatewayException e) {
                 if (REFUND_OUTCOME_UNKNOWN.equals(e.getErrorCode())) {
                     if (attempt < MAX_REFUND_ATTEMPTS) {
                         continue;
                     }
                     // The refund may have reached the card. Restoring the credit now could pay the
-                    // payer twice, so the debit stands and the cash-out is left for reconciliation
-                    // against Stripe by its idempotency key.
-                    log.error("Cash-out refund outcome UNKNOWN after {} attempts — MANUAL RECONCILIATION "
-                        + "REQUIRED (credit NOT restored): parentId={} cashOutId={} intentId={} net={} fee={} "
+                    // payer twice, so the debit stands; the record goes UNKNOWN (admin alert) and the
+                    // re-check job retries it under the same key.
+                    log.error("Cash-out refund outcome UNKNOWN after {} attempts — credit NOT restored, "
+                        + "reconciliation record UNKNOWN: parentId={} cashOutId={} intentId={} net={} fee={} "
                         + "stripeIdempotencyKey={}", attempt, parentId, cashOutId, paymentIntentId,
                         netAmount, feeAmount, idempotencyKey);
+                    recordUnknown(cashOutId, e.getErrorCode());
                     throw e;
                 }
-                // Stripe rejected the refund (4xx): no money moved, so restore the credit.
+                // Stripe rejected the refund (4xx): no money moved, so restore the credit — together with
+                // closing the record, so neither this request nor the re-check job can restore it twice.
                 log.error("Cash-out refund rejected for parentId={} cashOutId={}, compensating credit", parentId, cashOutId);
                 try {
-                    creditWalletService.reverseCashOut(parentId, cashOutId, netAmount, feeAmount);
+                    cashOutReconciliationService.reverseAfterRejection(cashOutId, e.getErrorCode());
                 } catch (RuntimeException reversalFailure) {
-                    log.error("Cash-out reversal FAILED after a rejected refund — MANUAL RECONCILIATION "
-                        + "REQUIRED (wallet debited, card not refunded): parentId={} cashOutId={} net={} fee={}",
-                        parentId, cashOutId, netAmount, feeAmount, reversalFailure);
+                    log.error("Cash-out reversal FAILED after a rejected refund — wallet debited, card not refunded; "
+                        + "the PENDING reconciliation record is re-checked automatically: parentId={} cashOutId={} "
+                        + "net={} fee={}", parentId, cashOutId, netAmount, feeAmount, reversalFailure);
                     throw reversalFailure;
                 }
                 throw new PaymentGatewayException("payment.refundFailed");
             } catch (RuntimeException e) {
                 // Anything that is not a classified gateway result: the outcome is unknown, so the
                 // same rule applies — never restore credit for a refund that may have happened.
-                log.error("Cash-out refund threw unexpectedly — MANUAL RECONCILIATION REQUIRED (credit NOT "
-                    + "restored): parentId={} cashOutId={} intentId={} net={} fee={} stripeIdempotencyKey={}",
+                log.error("Cash-out refund threw unexpectedly — credit NOT restored, reconciliation record UNKNOWN: "
+                    + "parentId={} cashOutId={} intentId={} net={} fee={} stripeIdempotencyKey={}",
                     parentId, cashOutId, paymentIntentId, netAmount, feeAmount, idempotencyKey, e);
+                recordUnknown(cashOutId, String.valueOf(e));
                 throw new PaymentGatewayException(REFUND_OUTCOME_UNKNOWN);
             }
+            try {
+                cashOutReconciliationService.markCompleted(cashOutId);
+            } catch (RuntimeException e) {
+                // The refund went through; only the bookkeeping failed. The record stays PENDING and the
+                // re-check job confirms it by replaying the refund under the same key (a no-op at Stripe).
+                log.warn("Cash-out refund succeeded but its reconciliation record could not be closed — the "
+                    + "re-check job will confirm it: cashOutId={}", cashOutId, e);
+            }
+            return;
+        }
+    }
+
+    /** Best effort: if even this write fails, the record stays PENDING and the re-check job escalates it. */
+    private void recordUnknown(UUID cashOutId, String error) {
+        try {
+            cashOutReconciliationService.markUnknown(cashOutId, error);
+        } catch (RuntimeException e) {
+            log.error("Could not mark cash-out {} UNKNOWN — the re-check job will pick up its PENDING record",
+                cashOutId, e);
         }
     }
 }

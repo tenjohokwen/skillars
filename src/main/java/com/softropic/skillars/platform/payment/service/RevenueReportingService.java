@@ -24,6 +24,7 @@ import com.softropic.skillars.platform.payment.repo.ParentCreditLedger;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
 import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscriptionRepository;
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscriptionRepository;
+import com.softropic.skillars.platform.payment.repo.CashOutReconciliationRepository;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
@@ -67,6 +68,7 @@ public class RevenueReportingService {
     private final PlayerProfileRepository playerProfileRepository;
     private final CoachProfileRepository coachProfileRepository;
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
+    private final CashOutReconciliationRepository cashOutReconciliationRepository;
     private final ConfigService configService;
 
     public RevenueSummaryDto getCoachRevenueSummary(UUID coachId, Instant from, Instant to) {
@@ -269,8 +271,10 @@ public class RevenueReportingService {
      *       this is booking/sales value, not cash charged to cards;</li>
      *   <li>commission = each captured, non-refunded booking's card-charged amount × the rate STAMPED
      *       on that row at capture, rounded per row — the same figure the coach payout deducts
-     *       ({@code CoachPayoutOutboxSupport}). Credit- and pack-funded sessions carry no commission:
-     *       no coach payout is made for them (deferred-106 scope);</li>
+     *       ({@code CoachPayoutOutboxSupport}) on the card portion. Since feat/coach-payouts-pack-and-credit
+     *       credit- and pack-funded sessions are paid out too and the payout deducts commission on them
+     *       as well, so this figure UNDERSTATES commission by those parts (follow-up: report it from
+     *       {@code coach_payouts});</li>
      *   <li>Stripe fees = an ESTIMATE (config rate/fixed fee) over card money only — card-charged
      *       booking money + pack purchases, one fixed fee per distinct charge.</li>
      * </ul>
@@ -302,6 +306,8 @@ public class RevenueReportingService {
             .setScale(2, RoundingMode.HALF_UP);
 
         BigDecimal totalRefundCredit = parentCreditLedgerRepository.sumTotalRefundCredit(effectiveFrom, effectiveTo);
+        // Same staleness rule the re-check job uses: a PENDING cash-out younger than this is mid-refund.
+        Instant staleCashOutCutoff = Instant.now().minus(CashOutReconciliationService.STALE_PENDING_AFTER);
         BigDecimal totalCashOuts = parentCreditLedgerRepository.sumTotalCashOuts(effectiveFrom, effectiveTo);
 
         Map<String, Long> activeCoachSubscriptions = toTierCountMap(paymentCoachSubscriptionRepository.countActiveByTier());
@@ -314,7 +320,9 @@ public class RevenueReportingService {
             totalCashOuts,
             totalStripeFees,
             activeCoachSubscriptions,
-            activePlayerSubscriptions
+            activePlayerSubscriptions,
+            cashOutReconciliationRepository.countUnresolved(staleCashOutCutoff),
+            cashOutReconciliationRepository.sumUnresolvedNet(staleCashOutCutoff)
         );
     }
 

@@ -38,6 +38,7 @@ const SUMMARY = {
   gdprErasureDeadlines: 0,
   subscriptionOrphaned: 0,
   safetyHoldBookings: 0,
+  cashOutUnresolved: 0,
   total: 5,
 }
 

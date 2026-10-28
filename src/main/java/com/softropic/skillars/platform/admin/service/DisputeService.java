@@ -200,7 +200,7 @@ public class DisputeService {
             .filter(bp -> "CAPTURED".equals(bp.getStatus()));
         BigDecimal creditDebited = paymentOpt.map(BookingPayment::getCreditDebited).orElse(BigDecimal.ZERO);
         BigDecimal stripeCharged = paymentOpt.map(BookingPayment::getStripeCharged).orElse(BigDecimal.ZERO);
-        BigDecimal sessionPrice = creditDebited.add(stripeCharged);
+        BigDecimal sessionPrice = paidForSession(booking, paymentOpt);
 
         List<CoachCancellationHistoryEntryDto> cancellationHistory =
             coachCancellationHistoryRepository.findByBookingId(dispute.getBookingId())
@@ -240,10 +240,8 @@ public class DisputeService {
                     + "for disputeId={} bookingId={} — automated credit/refund is not possible for a "
                     + "non-CAPTURED payment until non-CAPTURED handling is designed",
                 bp.getStatus(), disputeId, dispute.getBookingId()));
-        BigDecimal sessionPrice = paymentLookup
-            .filter(bp -> BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
-            .map(p -> p.getCreditDebited().add(p.getStripeCharged()))
-            .orElse(BigDecimal.ZERO);
+        BigDecimal sessionPrice = paidForSession(booking,
+            paymentLookup.filter(bp -> BookingPaymentStatus.CAPTURED.equals(bp.getStatus())));
         // B6: what was actually credited, for the raiser's notice — never the requested outcome alone
         // (FULL_CREDIT on a sessionPrice=0 booking credits nothing, and the email must say so).
         BigDecimal credited = BigDecimal.ZERO;
@@ -291,9 +289,10 @@ public class DisputeService {
         // skillars-deferred-106 AC10.2: reconcile the coach payout, in THIS transaction (resolveDispute
         // is @Transactional). A dispute that returns money to the parent must also reach the coach:
         //   - payout RELEASED  -> enqueue a COACH_PAYOUT_REVERSAL for the coach's proportional share
-        //   - payout PENDING_RELEASE / HOLD (dispute inside the 48h hold) -> flip it CANCELLED here;
+        //   - payout PENDING_RELEASE / HOLD / FROZEN (dispute inside the 48h hold, or while a safety-hold
+        //     freeze stands) -> flip it CANCELLED here;
         //     the pending COACH_PAYOUT_TRANSFER outbox row is LEFT in place and no-ops on next drain
-        //   - no row (stripe_charged = 0) -> nothing on the coach side
+        //   - no row (session not completed, or nothing charged) -> nothing on the coach side
         reconcileCoachPayout(dispute.getBookingId(), resolution, creditAmount, sessionPrice);
 
         Instant now = Instant.now();
@@ -371,7 +370,7 @@ public class DisputeService {
 
         CoachPayout row = coachPayoutRepository.findByIdForUpdate(bookingId).orElse(null);
         if (row == null) {
-            // stripe_charged = 0 / non-card booking — nothing was transferred to the coach.
+            // No payout row (session not completed yet) — nothing has been transferred to the coach.
             return;
         }
 
@@ -384,7 +383,7 @@ public class DisputeService {
                         resolution, bookingId, reverseAmount);
                 }
             }
-            case CoachPayoutStatus.PENDING_RELEASE, CoachPayoutStatus.HOLD -> {
+            case CoachPayoutStatus.PENDING_RELEASE, CoachPayoutStatus.HOLD, CoachPayoutStatus.FROZEN -> {
                 String was = row.getStatus();
                 row.setStatus(CoachPayoutStatus.CANCELLED);
                 row.setLastError("DISPUTE_RESOLVED_" + resolution + " (was " + was + ")");
@@ -398,6 +397,27 @@ public class DisputeService {
                     resolution, bookingId, row.getStatus());
             }
         }
+    }
+
+    /**
+     * What the payer paid for this one session: card + wallet credit for a card/credit-funded booking.
+     * feat/coach-payouts-pack-and-credit: a pack-funded booking has no per-booking charge
+     * ({@code booking_payments} holds zeros), so its price is the session's share of the pack — the
+     * gross its coach payout was computed from ({@code CoachPayoutOutboxSupport}). That makes a dispute
+     * on a pack session refund the parent and cancel/reverse the coach payout exactly as for a card
+     * session. Zero when the session has no payout row yet (not completed) — as before.
+     */
+    private BigDecimal paidForSession(Booking booking, Optional<BookingPayment> captured) {
+        BigDecimal direct = captured.map(p -> p.getCreditDebited().add(p.getStripeCharged())).orElse(BigDecimal.ZERO);
+        if (direct.signum() > 0 || captured.isEmpty() || booking.getSessionPackPurchaseId() == null) {
+            return direct;
+        }
+        // A scalar read, not findById: an entity loaded here would be returned as-is (unrefreshed) by
+        // reconcileCoachPayout's findByIdForUpdate later in this transaction, and its status switch would
+        // then act on a stale PENDING_RELEASE that a drain has since turned RELEASED.
+        return coachPayoutRepository.findGrossAmountByBookingId(booking.getId())
+            .filter(gross -> gross.signum() > 0)
+            .orElse(BigDecimal.ZERO);
     }
 
     private static BigDecimal coachShareOfRefund(BigDecimal coachNet, BigDecimal parentRefund, BigDecimal parentPrice) {

@@ -83,9 +83,41 @@ class CreditRoutingTest {
             .thenReturn(CaptureReservation.RESERVED);
     }
 
+    /**
+     * feat/coach-payouts-pack-and-credit: the split is decided by the balance re-read UNDER the wallet
+     * lock — a cash-out that committed after the unlocked read (100 -> 10) must shrink the credit part.
+     */
+    @Test
+    void lockedBalanceDecidesTheSplit_notTheUnlockedRead() {
+        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("100.00"));
+        when(creditWalletService.lockAndGetBalance(PARENT_ID)).thenReturn(new BigDecimal("10.00"));
+        when(persistenceService.reserveCapture(any(), any(), any(), any())).thenReturn(CaptureReservation.RESERVED);
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any())).thenReturn("pi_locked");
+
+        service.onBookingAccepted(event(null));
+
+        verify(paymentGateway).chargeAndCapture(eq(BOOKING_ID), eq(PARENT_ID), any(), eq(new BigDecimal("40.00")));
+        verify(persistenceService).persistPaymentSuccess(
+            eq(BOOKING_ID), eq(new BigDecimal("10.00")), eq(new BigDecimal("40.00")),
+            eq("pi_locked"), isNull(),
+            eq(PARENT_ID), anyString(), anyString(), any(Instant.class), anyString());
+    }
+
+    @Test
+    void noCredit_takesNoWalletLock() {
+        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(BigDecimal.ZERO);
+        when(persistenceService.reserveCapture(any(), any(), any(), any())).thenReturn(CaptureReservation.RESERVED);
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any())).thenReturn("pi_card");
+
+        service.onBookingAccepted(event(null));
+
+        verify(creditWalletService, never()).lockAndGetBalance(any());
+    }
+
     @Test
     void caseA_fullCreditCoversBooking_noStripeCall() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("100.00"));
+        lenient().when(creditWalletService.lockAndGetBalance(PARENT_ID)).thenReturn(new BigDecimal("100.00"));
 
         service.onBookingAccepted(event(null));
 
@@ -100,6 +132,7 @@ class CreditRoutingTest {
     @Test
     void caseAB_boundary_balanceExactlyEqualsSessionPrice_zeroStripeCharge() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("50.00"));
+        lenient().when(creditWalletService.lockAndGetBalance(PARENT_ID)).thenReturn(new BigDecimal("50.00"));
 
         service.onBookingAccepted(event(null));
 
@@ -114,6 +147,7 @@ class CreditRoutingTest {
     @Test
     void caseB_partialCredit_stripeChargedForDeficit() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
+        lenient().when(creditWalletService.lockAndGetBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
         reservationGranted();
         when(paymentGateway.chargeAndCapture(BOOKING_ID, PARENT_ID, COACH_ID, new BigDecimal("30.00")))
             .thenReturn("pi_test_123");
@@ -221,6 +255,7 @@ class CreditRoutingTest {
     void stripeDecline_chargesCaptureFails_callsPersistFailureWithZeroReversal() {
         // Case B: balance 20, price 50 → Stripe for 30 → Stripe fails
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
+        lenient().when(creditWalletService.lockAndGetBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
         reservationGranted();
         when(paymentGateway.chargeAndCapture(any(), any(), any(), any()))
             .thenThrow(new PaymentGatewayException("payment.lifecycleFailure"));

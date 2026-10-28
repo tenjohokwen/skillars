@@ -56,6 +56,35 @@ public class SessionPackPurchase {
     private int remainingSessions;
 
     /**
+     * feat/coach-payouts-pack-and-credit (V186): {@code platform.commission.rate} in force when the pack
+     * was bought. Each completed pack session's coach payout deducts THIS rate, never the live one.
+     * Nullable only for packs sold before V186 — the payout falls back to the live rate for those, as
+     * it does for a pre-V133 {@code booking_payments} row.
+     */
+    @Column(name = "commission_rate", updatable = false, precision = 5, scale = 4)
+    private BigDecimal commissionRate;
+
+    /**
+     * feat/coach-payouts-pack-and-credit (V186): sessions sold in this pack, stamped at purchase (the
+     * tier's {@code session_count} is coach-editable afterwards). The per-session payout share is
+     * {@code amountCharged / sessionCount}. Nullable only for rows V186 could not backfill.
+     */
+    @Column(name = "session_count", updatable = false)
+    private Integer sessionCount;
+
+    /**
+     * feat/coach-payouts-pack-and-credit (V186): how many of this pack's completed sessions have had a
+     * coach payout allocated, and the gross allocated to them so far. Written only by
+     * {@code CoachPayoutOutboxSupport} under this row's lock, so the last session takes the remainder
+     * and the allocated gross never exceeds {@link #amountCharged}.
+     */
+    @Column(name = "payout_sessions_allocated", nullable = false)
+    private int payoutSessionsAllocated;
+
+    @Column(name = "payout_gross_allocated", nullable = false, precision = 10, scale = 2)
+    private BigDecimal payoutGrossAllocated = BigDecimal.ZERO;
+
+    /**
      * skillars-deferred-164 AC5. Mutable by design — deliberately NOT {@code updatable = false}.
      * Three service-layer call sites mutate this outside the entity: {@code PackSessionService}
      * (pause, extends by the pause duration) and {@code SessionPackPaymentService} (both

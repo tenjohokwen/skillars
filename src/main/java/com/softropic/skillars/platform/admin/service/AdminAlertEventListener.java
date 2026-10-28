@@ -11,6 +11,8 @@ import com.softropic.skillars.platform.messaging.contract.MessageHeldForReviewEv
 import com.softropic.skillars.platform.messaging.contract.ModerationFailureEvent;
 import com.softropic.skillars.platform.messaging.contract.MessageReportedEvent;
 import com.softropic.skillars.platform.messaging.contract.MessagesPurgedEvent;
+import com.softropic.skillars.platform.payment.contract.event.CashOutRefundResolvedEvent;
+import com.softropic.skillars.platform.payment.contract.event.CashOutRefundUnresolvedEvent;
 import com.softropic.skillars.platform.payment.contract.event.CoachSubscriptionOrphanedEvent;
 import com.softropic.skillars.platform.payment.contract.event.StrikeThresholdReachedEvent;
 import com.softropic.skillars.platform.reviews.contract.ReviewFlaggedEvent;
@@ -24,6 +26,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Component
@@ -168,6 +172,44 @@ public class AdminAlertEventListener {
         insertAlert(AdminAlertType.SUBSCRIPTION_ORPHANED,
             event.getCoachProfileId().toString(),
             AdminAlertReferenceType.COACH);
+    }
+
+    /**
+     * feat/coach-payouts-pack-and-credit (C3 item 4): a credit cash-out refund Stripe never confirmed —
+     * the payer's wallet is debited and the money may or may not have reached their card. Same isolation
+     * as {@link #onCoachSubscriptionOrphaned}: the publisher's (CashOutReconciliationService) transaction
+     * is never affected by this insert. AFTER_COMMIT: the alert exists only once the UNKNOWN status it
+     * describes has committed.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onCashOutRefundUnresolved(CashOutRefundUnresolvedEvent event) {
+        insertAlert(AdminAlertType.CASH_OUT_UNRESOLVED,
+            event.getCashOutId().toString(),
+            AdminAlertReferenceType.CASH_OUT,
+            truncateReason(event.getReason()));
+    }
+
+    /**
+     * feat/coach-payouts-pack-and-credit: the cash-out settled itself (refund confirmed, or rejected and
+     * credit restored) — close its open alert so no admin re-credits or re-refunds it by hand.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onCashOutRefundResolved(CashOutRefundResolvedEvent event) {
+        adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
+                event.getCashOutId().toString(), AdminAlertType.CASH_OUT_UNRESOLVED, AdminAlertStatus.OPEN)
+            .ifPresent(alert -> {
+                alert.setStatus(AdminAlertStatus.RESOLVED);
+                alert.setResolvedAt(java.time.Instant.now());
+                adminAlertRepository.save(alert);
+                log.info("CASH_OUT_UNRESOLVED alert for cash-out {} resolved automatically ({})",
+                    event.getCashOutId(), event.getOutcome());
+            });
+    }
+
+    private static String truncateReason(String reason) {
+        return reason != null && reason.length() > 64 ? reason.substring(0, 64) : reason;
     }
 
     private void insertAlert(AdminAlertType type, String referenceId, AdminAlertReferenceType referenceType) {
