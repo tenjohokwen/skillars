@@ -18,6 +18,7 @@ import com.softropic.skillars.platform.filestorage.contract.ConfirmUploadRespons
 import com.softropic.skillars.platform.filestorage.contract.SignDownloadResponse;
 import com.softropic.skillars.platform.filestorage.contract.SignUploadRequest;
 import com.softropic.skillars.platform.filestorage.contract.SignUploadResponse;
+import com.softropic.skillars.platform.filestorage.contract.StorageObjectDto;
 import com.softropic.skillars.platform.filestorage.contract.ValidationRequest;
 import com.softropic.skillars.platform.filestorage.contract.exception.QuotaExceededException;
 import com.softropic.skillars.platform.filestorage.contract.exception.StorageValidationException;
@@ -329,6 +330,19 @@ public class FileStorageService {
             log.error("Failed to delete raw S3 object: key={}", storageKey, e);
             throw new RuntimeException("Failed to delete S3 object: " + storageKey, e);
         }
+    }
+
+    /**
+     * feat/coach-workflow-gaps D9: the confirmed, not-deleted storage object for {@code key}, if any. Lets a
+     * domain module validate an uploaded file's real (HEAD-verified at confirm time) owner, content type and
+     * size before linking it, instead of trusting what the client declared.
+     */
+    public Optional<StorageObjectDto> findActiveObject(String key) {
+        return fileStorageObjectRepository.findByKeyAndDeletedAtIsNull(key)
+            .map(fso -> new StorageObjectDto(
+                fso.getKey(), fso.getOwnerId(), fso.getOriginalFilename(), fso.getContentType(),
+                fso.getSizeBytes(), formatChecksum(fso.getChecksum()), fso.getTags(), fso.getProvider(),
+                fso.getBucket(), fso.getUploadConfirmedAt()));
     }
 
     public void assertOwnership(String key, String expectedOwnerId) {

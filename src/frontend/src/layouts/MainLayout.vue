@@ -423,6 +423,16 @@
             </q-item-section>
           </q-item>
 
+          <!-- feat/coach-workflow-gaps A23: a self-booking player's own credit statement + receipts -->
+          <q-item clickable to="/parent/credit-statement" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="receipt_long" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('creditStatement.pageTitle') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
           <q-item v-if="packsRoute" clickable :to="packsRoute" class="nav-item">
             <q-item-section avatar>
               <q-icon name="confirmation_number" class="nav-icon" />

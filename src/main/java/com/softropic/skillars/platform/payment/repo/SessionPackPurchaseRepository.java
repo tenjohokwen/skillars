@@ -29,6 +29,10 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
 
     List<SessionPackPurchase> findByParentIdOrderByCreatedAtDesc(Long parentId);
 
+    /** feat/coach-workflow-gaps A20: a coach's sold packs, latest expiry first, paged. */
+    org.springframework.data.domain.Page<SessionPackPurchase> findByCoachIdOrderByExpiresAtDesc(
+        UUID coachId, org.springframework.data.domain.Pageable pageable);
+
     List<SessionPackPurchase> findByParentIdAndCoachIdOrderByCreatedAtDesc(Long parentId, UUID coachId);
 
     @Query("SELECT p FROM SessionPackPurchase p WHERE p.expiresAt < :now AND p.expiredNotifiedAt IS NULL AND p.remainingSessions > 0")

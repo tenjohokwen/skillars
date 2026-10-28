@@ -31,6 +31,8 @@ public interface DrillRepository extends JpaRepository<Drill, UUID> {
         UUID getCloneId();
     }
 
-    @Query("SELECT d.sourceDrillId as sourceId, d.id as cloneId FROM Drill d WHERE d.sourceDrillId IN :sourceIds AND d.ownerCoachId = :coachId")
+    // ACTIVE only (feat/coach-workflow-gaps D1): a deleted (ARCHIVED) clone must not keep the PLATFORM card
+    // showing "In your library" — V173 lets the coach clone that drill again.
+    @Query("SELECT d.sourceDrillId as sourceId, d.id as cloneId FROM Drill d WHERE d.sourceDrillId IN :sourceIds AND d.ownerCoachId = :coachId AND d.status = 'ACTIVE'")
     List<CloneProjection> findClonesBySourceIdsAndCoach(@Param("sourceIds") List<UUID> sourceIds, @Param("coachId") UUID coachId);
 }

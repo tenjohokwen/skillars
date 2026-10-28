@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.session.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.booking.contract.PlannableBookingSummary;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.session.contract.CreateTemplateRequest;
 import com.softropic.skillars.platform.session.contract.RenameTemplateRequest;
@@ -65,6 +66,13 @@ public class SessionTemplateResource {
     public ResponseEntity<Void> deleteTemplate(@PathVariable UUID templateId) {
         sessionTemplateService.deleteTemplate(templateId, currentCoachUserId());
         return ResponseEntity.noContent().build();
+    }
+
+    /** feat/coach-workflow-gaps A19: candidate bookings for the "Use for this session" picker. */
+    @GetMapping("/deployable-bookings")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<List<PlannableBookingSummary>> listDeployableBookings() {
+        return ResponseEntity.ok(sessionTemplateService.listDeployableBookings(currentCoachUserId()));
     }
 
     @PostMapping("/{templateId}/deploy")

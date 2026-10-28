@@ -1,6 +1,9 @@
 package com.softropic.skillars.platform.session.service;
 
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
+import jakarta.persistence.EntityManager;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.session.contract.DrillMetadata;
@@ -39,6 +42,8 @@ class DrillSearchServiceTest {
     @Mock private CoachProfileService coachProfileService;
     @Mock private VideoRepository videoRepository;
     @Mock private VideoProviderAdapter videoProviderAdapter;
+    @Mock private PessimisticLockRetryer lockRetryer;
+    @Mock private EntityManager entityManager;
     @Mock private MeterRegistry meterRegistry;
 
     private DrillLibraryService service;
@@ -48,7 +53,8 @@ class DrillSearchServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService, videoRepository, videoProviderAdapter, meterRegistry);
+        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService, videoRepository, videoProviderAdapter, meterRegistry,
+            new ContactDetailSanitizer(), lockRetryer, entityManager);
         when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_PROFILE_ID);
         lenient().when(drillVideoRefRepository.findByDrillIdIn(anyList())).thenReturn(List.of());
     }

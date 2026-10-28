@@ -38,8 +38,9 @@ public class StorageResource {
     // skillars-deferred-151 AC3: coach_branding added alongside coach_profile — same shape (a coach
     // uploading their own asset, keyed by their own user id), and this is a cheap, earlier line of
     // defense than relying on saveBranding's own post-upload assertOwnership check alone.
+    // feat/coach-workflow-gaps D9: coach_gallery (public profile media gallery) — same shape again.
     private static final java.util.Set<String> OWNER_BOUND_ENTITIES =
-        java.util.Set.of("coach_profile", "coach_branding");
+        java.util.Set.of("coach_profile", "coach_branding", "coach_gallery");
 
     @PostMapping("/sign/upload")
     @PreAuthorize(SecurityConstants.HAS_ANY_ROLE)

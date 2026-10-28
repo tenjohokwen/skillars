@@ -334,9 +334,12 @@ public class PaymentLifecycleService {
         // charge, so a batch of already-cancelled bookings cannot debit the parent.
         if (reserved.isEmpty()) return;
 
+        // feat/coach-workflow-gaps A22: the split rule lives in CreditCardSplit so the parent's pre-submit
+        // batch quote (BatchPaymentQuoteService) computes exactly this figure.
         BigDecimal balance = creditWalletService.getBalance(event.getParentId());
-        BigDecimal creditToUse = balance.min(creditSubtotal);
-        BigDecimal stripeAmount = creditSubtotal.subtract(creditToUse);
+        CreditCardSplit split = CreditCardSplit.of(balance, creditSubtotal);
+        BigDecimal creditToUse = split.creditApplied();
+        BigDecimal stripeAmount = split.cardCharge();
 
         if (creditToUse.compareTo(BigDecimal.ZERO) > 0) {
             creditWalletService.writeLedgerEntry(event.getParentId(), creditToUse.negate(),

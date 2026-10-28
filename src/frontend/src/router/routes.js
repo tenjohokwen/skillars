@@ -333,16 +333,20 @@ const routes = [
         meta: { requiresAuth: true, role: 'PARENT' },
       },
       {
+        // Dual-role (feat/coach-workflow-gaps A23): a self-registered adult player pays for their own
+        // sessions, so their credit statement and receipts are theirs to read. The backend scopes both
+        // to the caller's own user id (GET /api/revenue/credits/statement, .../receipt). Cash-out
+        // (parent-credit-wallet) stays PARENT-only per the UAT.5 scope.
         path: 'parent/credit-statement',
         name: 'parent-credit-statement',
         component: () => import('pages/parent/CreditStatementPage.vue'),
-        meta: { requiresAuth: true, role: 'PARENT' },
+        meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
       },
       {
         path: 'parent/bookings/:bookingId/receipt',
         name: 'parent-receipt',
         component: () => import('pages/parent/ParentReceiptView.vue'),
-        meta: { requiresAuth: true, role: 'PARENT' },
+        meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
       },
       {
         path: 'coach/revenue',

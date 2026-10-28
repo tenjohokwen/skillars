@@ -64,6 +64,44 @@ class CreditWalletResourceWebMvcTest {
     @MockitoBean SecurityUtil securityUtil;
     @MockitoBean JwtSecretService jwtSecretService;
     @MockitoBean VideoMetrics videoMetrics;
+    @MockitoBean com.softropic.skillars.platform.payment.service.BatchPaymentQuoteService batchPaymentQuoteService;
+
+    // ─── GET /api/payment/credits/batch-quote (feat/coach-workflow-gaps A22) ──
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void getBatchQuote_player_returnsCallersSplit() throws Exception {
+        java.util.UUID coachId = java.util.UUID.randomUUID();
+        when(securityUtil.requireCurrentUserId()).thenReturn(CALLER_ID);
+        when(batchPaymentQuoteService.quote(CALLER_ID, coachId, 3)).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.BatchPaymentQuoteDto(
+                new BigDecimal("40.00"), 3, new BigDecimal("120.00"), new BigDecimal("25.00"),
+                new BigDecimal("25.00"), new BigDecimal("95.00"), "EUR"));
+
+        mockMvc.perform(get("/api/payment/credits/batch-quote")
+                .param("coachId", coachId.toString()).param("sessionCount", "3"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.creditApplied").value(25.00))
+            .andExpect(jsonPath("$.cardCharge").value(95.00))
+            .andExpect(jsonPath("$.total").value(120.00));
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void getBatchQuote_sessionCountAboveBatchMax_returns400() throws Exception {
+        mockMvc.perform(get("/api/payment/credits/batch-quote")
+                .param("coachId", java.util.UUID.randomUUID().toString()).param("sessionCount", "11"))
+            .andExpect(status().is4xxClientError());
+        org.mockito.Mockito.verifyNoInteractions(batchPaymentQuoteService);
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void getBatchQuote_coach_returns403() throws Exception {
+        mockMvc.perform(get("/api/payment/credits/batch-quote")
+                .param("coachId", java.util.UUID.randomUUID().toString()).param("sessionCount", "2"))
+            .andExpect(status().isForbidden());
+    }
 
     // ─── GET /api/payment/credits/balance ─────────────────────────────────────
 

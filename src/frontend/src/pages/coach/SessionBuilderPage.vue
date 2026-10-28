@@ -24,6 +24,17 @@
           :to="{ name: 'coach-session-templates' }"
           class="q-mr-xs"
         />
+        <!-- feat/coach-workflow-gaps A19: start this booking's plan from a saved template. Only
+             before a plan exists — deploy refuses a booking that already has one. -->
+        <q-btn
+          v-if="!builderStore.sessionId && !builderStore.loading"
+          flat
+          icon="content_copy"
+          :label="t('session.templates.useTemplate')"
+          class="q-mr-xs"
+          data-test="use-template"
+          @click="openUseTemplate"
+        />
         <q-btn
           v-if="builderStore.sessionId && !builderStore.isGated"
           flat
@@ -232,6 +243,48 @@
       @video-error="handleVideoError"
     />
 
+    <!-- Use template dialog (A19) -->
+    <q-dialog v-model="useTemplateDialog">
+      <q-card style="min-width: 320px; max-width: 480px; width: 100%">
+        <q-card-section>
+          <div class="text-subtitle1">{{ t('session.templates.useTemplate') }}</div>
+          <div class="text-caption text-secondary q-mt-xs">
+            {{ t('session.templates.useTemplateSubtitle') }}
+          </div>
+        </q-card-section>
+        <q-card-section>
+          <div v-if="templateStore.loading" class="flex flex-center q-pa-md">
+            <q-spinner-dots size="28px" color="primary" />
+          </div>
+          <div v-else-if="!templateStore.templates.length" class="text-body2 text-secondary">
+            {{ t('session.templates.emptyTitle') }}
+          </div>
+          <q-list v-else separator>
+            <q-item
+              v-for="tmpl in templateStore.templates"
+              :key="tmpl.id"
+              clickable
+              :disable="deployingTemplateId !== null"
+              @click="useTemplate(tmpl)"
+            >
+              <q-item-section>
+                <q-item-label>{{ tmpl.name }}</q-item-label>
+                <q-item-label caption>
+                  {{ t('session.templates.drillCount', { count: tmpl.drillCount }) }}
+                </q-item-label>
+              </q-item-section>
+              <q-item-section v-if="deployingTemplateId === tmpl.id" side>
+                <q-spinner size="20px" />
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <!-- Save as Template dialog -->
     <q-dialog v-model="saveAsTemplateDialog">
       <q-card style="min-width: 320px">
@@ -291,6 +344,8 @@ const selectedDrill = ref(null)
 const isDrillDetailOpen = ref(false)
 const saveAsTemplateDialog = ref(false)
 const templateNameInput = ref('')
+const useTemplateDialog = ref(false)
+const deployingTemplateId = ref(null)
 let hasUnsavedChanges = false
 
 const focusAxisMap = {
@@ -347,6 +402,54 @@ function addDrillToActiveBlock(drill) {
   $q.notify({ type: 'positive', message: t('session.builder.drillAdded'), timeout: 1500 })
 }
 
+function openUseTemplate() {
+  useTemplateDialog.value = true
+  templateStore.fetchTemplates()
+}
+
+// Unsaved blocks/drills would be replaced by the template's plan — confirm first, matching the
+// page's own unsaved-changes guard on navigation.
+function useTemplate(tmpl) {
+  if (deployingTemplateId.value) return
+  if (!hasUnsavedChanges) return deployFromTemplate(tmpl)
+  $q.dialog({
+    title: t('session.builder.unsavedChangesTitle'),
+    message: t('session.templates.useTemplateDiscardConfirm'),
+    ok: { label: t('session.templates.useTemplate'), color: 'negative' },
+    cancel: { label: t('common.stay') },
+  }).onOk(() => deployFromTemplate(tmpl))
+}
+
+async function deployFromTemplate(tmpl) {
+  deployingTemplateId.value = tmpl.id
+  try {
+    await templateStore.deployTemplate(tmpl.id, bookingId)
+    useTemplateDialog.value = false
+    hasUnsavedChanges = false
+    // Load the plan the deploy just created (blocks, focus, template provenance banner).
+    await builderStore.fetchExistingPlan(bookingId)
+    $q.notify({ type: 'positive', message: t('session.templates.deployed') })
+  } catch (e) {
+    const code = errorCodeOf(e)
+    if (code === 'SESSION_ALREADY_EXISTS') {
+      $q.notify({ type: 'negative', message: t('session.templates.deployAlreadyExists') })
+    } else if (code === 'SESSION_BOOKING_NOT_OWNED') {
+      $q.notify({ type: 'negative', message: t('session.templates.deployBookingInvalid') })
+    } else {
+      $q.notify({ type: 'negative', message: t('common.errorGeneric') })
+    }
+  } finally {
+    deployingTemplateId.value = null
+  }
+}
+
+// OperationNotAllowedException's SessionErrorCode arrives as errorMsg.errorKey (helpCode is the
+// request's log correlation id); helpCode kept as a fallback for older error shapes.
+function errorCodeOf(e) {
+  const data = e?.response?.data
+  return data?.errorMsg?.errorKey ?? data?.helpCode
+}
+
 async function saveTemplate() {
   if (!templateNameInput.value.trim()) return
   try {
@@ -388,7 +491,7 @@ async function save(status) {
     hasUnsavedChanges = false
     $q.notify({ type: 'positive', message: t('session.builder.saved') })
   } catch (e) {
-    const helpCode = e?.response?.data?.helpCode
+    const helpCode = errorCodeOf(e)
     if (helpCode === 'SESSION_PLAN_LOCKED') {
       $q.notify({ type: 'negative', message: t('session.builder.planLocked') })
     } else if (helpCode === 'SESSION_ALREADY_EXISTS') {

@@ -152,14 +152,20 @@ public class ApiAdvice {
         // a backstop — a direct API call, or a second tab resubmitting a stale pack list, still
         // reaches the constraint. Unmapped it surfaced as an untranslated "Data integrity error"
         // (generic.dataError) with no indication which pack row was at fault.
-        "uq_session_pack", "marketplace.duplicateSessionPackCount"
+        "uq_session_pack", "marketplace.duplicateSessionPackCount",
+        // feat/coach-workflow-gaps D1 (V173): a coach creating or renaming a private drill to the
+        // name of another of their ACTIVE private drills. The unique index is the only guard (no
+        // read-then-write pre-check), so this mapping is what the editor dialog branches on.
+        "idx_drills_coach_name_unique_active", "session.drillNameTaken"
     );
 
     // Unique constraints that represent idempotent-retry collisions → 409 Conflict (not 400 Bad Request)
     private static final Set<String> CONFLICT_CONSTRAINTS = Set.of(
         "uq_radar_entries_group_coach_skill",
-        "idx_drills_coach_name_unique",
-        "idx_drills_clone_uniqueness",
+        // V173 replaced idx_drills_coach_name_unique / idx_drills_clone_uniqueness with ACTIVE-only
+        // partial indexes (an archived private drill no longer reserves its name or clone slot).
+        "idx_drills_coach_name_unique_active",
+        "idx_drills_clone_uniqueness_active",
         "uq_sessions_booking_id",
         "idx_videos_provider_asset_id_unique",
         "excl_bkg_coach_slot_overlap",

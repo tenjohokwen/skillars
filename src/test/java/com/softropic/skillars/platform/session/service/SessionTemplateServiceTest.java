@@ -67,6 +67,44 @@ class SessionTemplateServiceTest {
             coachProfileService, drillLibraryService, bookingQueryService);
     }
 
+    // ── feat/coach-workflow-gaps A19: listDeployableBookings ─────────────────
+
+    @Test
+    void listDeployableBookings_returnsConfirmedUpcomingWithoutPlan() {
+        org.mockito.Mockito.when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        java.time.Instant start = java.time.Instant.now().plusSeconds(86400);
+        UUID planned = UUID.randomUUID();
+        UUID free = UUID.randomUUID();
+        var a = new com.softropic.skillars.platform.booking.contract.PlannableBookingSummary(
+            planned, 1L, "A", start, start.plusSeconds(3600), "UTC");
+        var b = new com.softropic.skillars.platform.booking.contract.PlannableBookingSummary(
+            free, 2L, "B", start, start.plusSeconds(3600), "UTC");
+        org.mockito.Mockito.when(bookingQueryService.findCoachBookings(
+                org.mockito.ArgumentMatchers.eq(COACH_ID), org.mockito.ArgumentMatchers.eq(List.of("CONFIRMED")),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(List.of(a, b));
+        org.mockito.Mockito.when(sessionRepository.findBookingIdsWithPlan(org.mockito.ArgumentMatchers.anyCollection()))
+            .thenReturn(List.of(planned));
+
+        var result = service.listDeployableBookings(COACH_USER_ID);
+
+        org.assertj.core.api.Assertions.assertThat(result).extracting(r -> r.bookingId()).containsExactly(free);
+        org.mockito.Mockito.verify(drillLibraryService).checkSessionBuilderGate(COACH_USER_ID);
+    }
+
+    @Test
+    void listDeployableBookings_noCandidates_skipsPlanLookup() {
+        org.mockito.Mockito.when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        org.mockito.Mockito.when(bookingQueryService.findCoachBookings(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(List.of());
+
+        org.assertj.core.api.Assertions.assertThat(service.listDeployableBookings(COACH_USER_ID)).isEmpty();
+        org.mockito.Mockito.verify(sessionRepository, org.mockito.Mockito.never())
+            .findBookingIdsWithPlan(org.mockito.ArgumentMatchers.anyCollection());
+    }
+
     private static DrillMetadata metadata() {
         return new DrillMetadata(List.of("PASSING"), List.of(), Map.of(), 5, 3, 2, 2, 3, false,
             "INTERMEDIATE", List.of("cones"), "SMALL", List.of("keep it tight"), null);

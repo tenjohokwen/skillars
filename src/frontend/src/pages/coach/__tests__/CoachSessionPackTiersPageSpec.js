@@ -8,6 +8,20 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mount, flushPromises, DOMWrapper } from '@vue/test-utils'
 import { createTestingPinia } from '@pinia/testing'
 
+const { notifyMock } = vi.hoisted(() => ({ notifyMock: vi.fn() }))
+vi.mock('quasar', async (importOriginal) => {
+  const actual = await importOriginal()
+  const real = actual.useQuasar
+  return {
+    ...actual,
+    useQuasar: () => {
+      const $q = real()
+      $q.notify = notifyMock
+      return $q
+    },
+  }
+})
+
 import CoachSessionPackTiersPage from 'src/pages/coach/CoachSessionPackTiersPage.vue'
 
 /** Read the component's paymentStore instance regardless of <script setup> expose shape. */
@@ -199,20 +213,82 @@ describe('CoachSessionPackTiersPage.vue (deferred-151 AC2)', () => {
     })
   })
 
-  it('extend widget shows one generic failure message on error, not a branched backend reason', async () => {
+  // feat/coach-workflow-gaps A20: the raw purchase-UUID input is gone — the coach extends from the
+  // list of packs they sold, and only where the backend says the pack is extendable.
+  const SOLD_EXTENDABLE = {
+    purchaseId: 'p-1',
+    buyerName: 'Pat Parent',
+    playerId: 7,
+    playerName: 'Mia',
+    tierLabel: 'Standard pack',
+    sessionCount: 10,
+    remainingSessions: 3,
+    expiresAt: '2026-11-05T00:00:00Z',
+    extendedAt: null,
+    status: 'ACTIVE',
+    expiringSoon: true,
+    extendable: true,
+  }
+  const SOLD_NOT_EXTENDABLE = {
+    ...SOLD_EXTENDABLE,
+    purchaseId: 'p-2',
+    playerName: 'Leo',
+    buyerName: 'Leo',
+    expiringSoon: false,
+    extendable: false,
+  }
+
+  function mountWithSold(soldPacks) {
+    const pinia = createTestingPinia({
+      createSpy: vi.fn,
+      initialState: { payment: { sessionPackTiers: [], soldPacks, loading: {}, error: {} } },
+    })
+    const wrapper = mount(CoachSessionPackTiersPage, { global: { plugins: [pinia] } })
+    mounted.push(wrapper)
+    return wrapper
+  }
+
+  it('loads the first page of sold packs on mount and has no raw purchase-ID input', () => {
     const wrapper = mountPage([])
+    expect(storeOf(wrapper).fetchSoldPacks).toHaveBeenCalledWith(0)
+    expect(wrapper.text()).not.toContain('payment.myTiers.extendPurchaseId')
+  })
+
+  it('lists sold packs with player, buyer and an expiring-soon flag; Extend only on extendable rows', () => {
+    const wrapper = mountWithSold([SOLD_EXTENDABLE, SOLD_NOT_EXTENDABLE])
+    const rows = wrapper.findAll('[data-test="sold-pack"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('Mia')
+    expect(rows[0].text()).toContain('payment.myTiers.boughtBy')
+    expect(rows[0].text()).toContain('payment.myTiers.expiringSoon')
+    expect(rows[0].find('[data-test="extend-pack"]').exists()).toBe(true)
+    // buyer == player (self-purchase): no redundant "bought by" line
+    expect(rows[1].text()).not.toContain('payment.myTiers.boughtBy')
+    expect(rows[1].find('[data-test="extend-pack"]').exists()).toBe(false)
+  })
+
+  it('Extend calls the existing extend endpoint for that row and re-reads the list', async () => {
+    const wrapper = mountWithSold([SOLD_EXTENDABLE])
+    const store = storeOf(wrapper)
+    store.extendSessionPack.mockResolvedValue()
+    store.fetchSoldPacks.mockClear()
+
+    await wrapper.find('[data-test="extend-pack"]').trigger('click')
+    await flushPromises()
+
+    expect(store.extendSessionPack).toHaveBeenCalledWith('p-1')
+    expect(store.fetchSoldPacks).toHaveBeenCalledWith(0)
+  })
+
+  it('extend shows one generic failure message on error, not a branched backend reason', async () => {
+    const wrapper = mountWithSold([SOLD_EXTENDABLE])
     const store = storeOf(wrapper)
     store.extendSessionPack.mockRejectedValue(new Error('409'))
 
-    const purchaseIdInput = wrapper.find('input')
-    await purchaseIdInput.setValue('purchase-123')
-    const extendBtn = wrapper
-      .findAll('button')
-      .find((b) => b.text() === 'payment.myTiers.extendCta')
-    await extendBtn.trigger('click')
+    await wrapper.find('[data-test="extend-pack"]').trigger('click')
     await flushPromises()
 
-    expect(store.extendSessionPack).toHaveBeenCalledWith('purchase-123')
+    expect(store.extendSessionPack).toHaveBeenCalledWith('p-1')
     expect(wrapper.text()).toContain('payment.myTiers.extendFailed')
   })
 })

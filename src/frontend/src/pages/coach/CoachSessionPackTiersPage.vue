@@ -81,30 +81,92 @@
           </q-list>
         </div>
 
-        <!-- Manual-extend widget -->
+        <!-- feat/coach-workflow-gaps A20: sold packs, with Extend where the backend allows it
+             (replaces a widget that asked the coach for a raw purchase UUID nothing ever showed). -->
         <div class="glass-card q-pa-md">
-          <div class="text-subtitle1 q-mb-xs">{{ t('payment.myTiers.extendTitle') }}</div>
+          <div class="text-subtitle1 q-mb-xs">{{ t('payment.myTiers.soldPacksTitle') }}</div>
           <div class="text-caption q-mb-sm" style="color: var(--text-secondary)">
             {{ t('payment.myTiers.extendHelp') }}
           </div>
-          <q-input
-            v-model="extendPurchaseId"
-            dense
-            filled
-            :label="t('payment.myTiers.extendPurchaseId')"
-            class="q-mb-sm"
-          />
-          <div v-if="extendError" class="text-negative text-caption q-mb-sm">
-            {{ extendError }}
+          <div v-if="paymentStore.loading.soldPacks" class="flex flex-center q-py-md">
+            <q-spinner size="32px" />
           </div>
-          <q-btn
-            no-caps
-            color="primary"
-            :label="t('payment.myTiers.extendCta')"
-            :disable="!extendPurchaseId.trim()"
-            :loading="paymentStore.loading.extendSessionPack"
-            @click="submitExtend"
-          />
+          <div v-else-if="paymentStore.error.soldPacks" class="q-gutter-sm">
+            <span class="text-body2 text-negative">{{ t('payment.myTiers.soldPacksError') }}</span>
+            <q-btn flat dense no-caps :label="t('common.retry')" @click="loadSoldPacks(soldPage)" />
+          </div>
+          <div
+            v-else-if="!paymentStore.soldPacks.length"
+            class="text-body2"
+            style="color: var(--text-secondary)"
+          >
+            {{ t('payment.myTiers.soldPacksEmpty') }}
+          </div>
+          <template v-else>
+            <q-list separator>
+              <q-item
+                v-for="pack in paymentStore.soldPacks"
+                :key="pack.purchaseId"
+                data-test="sold-pack"
+              >
+                <q-item-section>
+                  <q-item-label class="text-weight-medium">
+                    {{ pack.playerName || t('payment.myTiers.unknownPlayer') }}
+                    <q-badge
+                      v-if="pack.expiringSoon"
+                      color="warning"
+                      text-color="dark"
+                      class="q-ml-xs"
+                      :label="t('payment.myTiers.expiringSoon')"
+                    />
+                  </q-item-label>
+                  <q-item-label v-if="pack.buyerName && pack.buyerName !== pack.playerName" caption>
+                    {{ t('payment.myTiers.boughtBy', { name: pack.buyerName }) }}
+                  </q-item-label>
+                  <q-item-label caption>
+                    {{ pack.tierLabel || '—' }} ·
+                    {{
+                      t('payment.myTiers.sessionsRemaining', {
+                        remaining: pack.remainingSessions,
+                        total: pack.sessionCount,
+                      })
+                    }}
+                  </q-item-label>
+                  <q-item-label caption>
+                    {{ t('payment.myTiers.expiresOn', { date: formatDate(pack.expiresAt) }) }}
+                    <template v-if="pack.extendedAt">
+                      · {{ t('payment.myTiers.alreadyExtended') }}
+                    </template>
+                  </q-item-label>
+                </q-item-section>
+                <q-item-section side class="items-end q-gutter-xs">
+                  <q-badge :color="statusColor(pack.status)" :label="statusLabel(pack.status)" />
+                  <q-btn
+                    v-if="pack.extendable"
+                    no-caps
+                    dense
+                    color="primary"
+                    :label="t('payment.myTiers.extendCta')"
+                    :loading="extendingId === pack.purchaseId"
+                    :disable="extendingId !== null"
+                    data-test="extend-pack"
+                    @click="submitExtend(pack)"
+                  />
+                </q-item-section>
+              </q-item>
+            </q-list>
+            <div v-if="extendError" class="text-negative text-caption q-mt-sm">
+              {{ extendError }}
+            </div>
+            <div v-if="soldTotalPages > 1" class="flex flex-center q-mt-sm">
+              <q-pagination
+                :model-value="soldPage + 1"
+                :max="soldTotalPages"
+                direction-links
+                @update:model-value="(p) => loadSoldPacks(p - 1)"
+              />
+            </div>
+          </template>
         </div>
       </template>
     </div>
@@ -208,9 +270,11 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useQuasar } from 'quasar'
 import { usePaymentStore } from 'src/stores/payment.store'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+const $q = useQuasar()
 const paymentStore = usePaymentStore()
 
 const createDialogOpen = ref(false)
@@ -219,8 +283,10 @@ const createSessionCount = ref(null)
 const createTotalPrice = ref(null)
 const createError = ref('')
 
-const extendPurchaseId = ref('')
 const extendError = ref('')
+const extendingId = ref(null)
+const soldPage = ref(0)
+const soldTotalPages = computed(() => paymentStore.soldPacksPage?.totalPages ?? 1)
 
 const withdrawDialogOpen = ref(false)
 const withdrawError = ref('')
@@ -259,7 +325,39 @@ const canSubmitCreate = computed(() => {
 
 onMounted(() => {
   paymentStore.fetchSessionPackTiers()
+  loadSoldPacks(0)
 })
+
+function loadSoldPacks(page) {
+  soldPage.value = page
+  extendError.value = ''
+  return paymentStore.fetchSoldPacks(page)
+}
+
+function formatDate(iso) {
+  return iso ? new Date(iso).toLocaleDateString(locale.value) : '—'
+}
+
+function statusLabel(status) {
+  switch (status) {
+    case 'ACTIVE':
+      return t('payment.myTiers.packStatus.ACTIVE')
+    case 'PAUSED':
+      return t('payment.myTiers.packStatus.PAUSED')
+    case 'EXPIRED':
+      return t('payment.myTiers.packStatus.EXPIRED')
+    case 'EXHAUSTED':
+      return t('payment.myTiers.packStatus.EXHAUSTED')
+    default:
+      return status
+  }
+}
+
+function statusColor(status) {
+  return (
+    { ACTIVE: 'positive', PAUSED: 'info', EXPIRED: 'grey-7', EXHAUSTED: 'grey-6' }[status] ?? 'grey'
+  )
+}
 
 function openCreateForm() {
   createLabel.value = ''
@@ -298,16 +396,21 @@ async function submitWithdraw() {
   }
 }
 
-async function submitExtend() {
+async function submitExtend(pack) {
   extendError.value = ''
+  extendingId.value = pack.purchaseId
   try {
-    await paymentStore.extendSessionPack(extendPurchaseId.value.trim())
-    extendPurchaseId.value = ''
+    await paymentStore.extendSessionPack(pack.purchaseId)
+    $q.notify({ type: 'positive', message: t('payment.myTiers.extendSuccess') })
+    // Re-read the page: the row's expiry, extendedAt and Extend eligibility all changed server-side.
+    await loadSoldPacks(soldPage.value)
   } catch {
     // Both real backend failure reasons (already-extended 409, outside the 14-day window)
     // collapse to the same unbranchable errorKey — a single generic message is correct here,
     // not an attempt to distinguish them (see Finding 2 / AC2).
     extendError.value = t('payment.myTiers.extendFailed')
+  } finally {
+    extendingId.value = null
   }
 }
 </script>

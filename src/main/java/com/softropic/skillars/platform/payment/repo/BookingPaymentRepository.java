@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -74,4 +75,12 @@ public interface BookingPaymentRepository extends JpaRepository<BookingPayment, 
     List<UUID> findBookingIdsByCoachAndPeriod(@Param("coachId") UUID coachId,
                                               @Param("from") Instant from,
                                               @Param("to") Instant to);
+
+    /**
+     * feat/coach-workflow-gaps A23: which of {@code bookingIds} have a CAPTURED payment — i.e. a receipt
+     * {@code RevenueReportingService.getParentReceipt} will actually render (it 404s on any other status).
+     * One query for a whole bookings list.
+     */
+    @Query("SELECT bp.bookingId FROM BookingPayment bp WHERE bp.bookingId IN :bookingIds AND bp.status = 'CAPTURED'")
+    List<UUID> findCapturedBookingIds(@Param("bookingIds") Collection<UUID> bookingIds);
 }

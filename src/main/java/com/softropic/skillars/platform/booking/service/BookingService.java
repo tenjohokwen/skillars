@@ -81,6 +81,7 @@ import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.Collection;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -535,6 +536,11 @@ public class BookingService {
                     arr -> ((Number) arr[1]).intValue(),
                     (a, b) -> a));
 
+        // feat/coach-workflow-gaps A23: one batched lookup drives the per-row "Receipt" link.
+        Set<UUID> receiptBookingIds = bookingIds.isEmpty()
+            ? Set.of()
+            : new HashSet<>(bookingPaymentRepository.findCapturedBookingIds(bookingIds));
+
         return bookings.stream().map(b -> {
             String coachName = coachNames.getOrDefault(b.getCoachId(), "Unknown Coach");
             String playerName = playerNames.getOrDefault(b.getPlayerId(), "Unknown Player");
@@ -542,7 +548,8 @@ public class BookingService {
             // the JDK's immutable maps, so only look up batch size when the booking is actually batched.
             Integer batchSize = b.getBatchId() != null ? batchSizeMap.get(b.getBatchId()) : null;
             return toResponse(b, coachName, playerName, null,
-                pendingReschedules.get(b.getId()), b.getBatchId(), batchSize);
+                pendingReschedules.get(b.getId()), b.getBatchId(), batchSize,
+                receiptBookingIds.contains(b.getId()));
         }).toList();
     }
 
@@ -1232,6 +1239,12 @@ public class BookingService {
     private BookingResponse toResponse(Booking b, String coachName, String playerName, String parentName,
                                         RescheduleRequestResponse pendingReschedule,
                                         UUID batchId, Integer batchSize) {
+        return toResponse(b, coachName, playerName, parentName, pendingReschedule, batchId, batchSize, false);
+    }
+
+    private BookingResponse toResponse(Booking b, String coachName, String playerName, String parentName,
+                                        RescheduleRequestResponse pendingReschedule,
+                                        UUID batchId, Integer batchSize, boolean receiptAvailable) {
         return new BookingResponse(
             b.getId(),
             b.getPlayerId(),
@@ -1248,7 +1261,8 @@ public class BookingService {
             pendingReschedule,
             batchId,
             batchSize,
-            b.getPlayerRequest()
+            b.getPlayerRequest(),
+            receiptAvailable
         );
     }
 }

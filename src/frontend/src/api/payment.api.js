@@ -17,6 +17,14 @@ export const pauseSessionPack = (purchaseId, data) =>
   api.post(`/api/payment/session-packs/${purchaseId}/pause`, data)
 export const extendSessionPack = (purchaseId) =>
   api.post(`/api/payment/session-packs/${purchaseId}/extend`)
+// Coach: the packs this coach has sold (Spring Page envelope), feeding the Extend action.
+export const fetchCoachSoldPacks = (page = 0, size = 20) =>
+  api.get('/api/payment/coaches/me/session-packs', { params: { page, size } })
+
+// Parent/player: pre-submit cost preview for a multi-session (batch) request — same price source and
+// wallet/card split rule the backend applies when the coach accepts.
+export const fetchBatchQuote = (coachId, sessionCount) =>
+  api.get('/api/payment/credits/batch-quote', { params: { coachId, sessionCount } })
 
 // Session pack — coach
 export const fetchCoachSessionPackTiers = (coachId) =>

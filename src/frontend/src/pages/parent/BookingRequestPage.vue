@@ -183,18 +183,44 @@
               </q-item-section>
             </q-item>
           </q-list>
-          <!-- A self-booking player with pack credits sees the same credit preview as a parent
-               (matching the pack tracker above); one paying per session by card, with no
-               credits, sees a plain session count instead of a misleading "0 credits". -->
-          <div class="q-mt-md text-caption" style="color: var(--text-secondary)">
-            {{
-              authStore.isPlayer && !hasCredits
-                ? t('booking.batch.sessionCountPreview', { count: bookingStore.batchBasketSize })
-                : t('booking.batch.creditPreview', {
-                    credits: creditsForCoach,
-                    count: bookingStore.batchBasketSize,
-                  })
-            }}
+          <!-- feat/coach-workflow-gaps A22 (story 3.9): per-session price, total and the € wallet /
+               card split, from the backend quote — the same price source and split rule the batch
+               settlement applies on acceptance. Session-pack credits are never applied to a batch
+               (batch bookings carry no pack), so the old pack-credit preview here was misleading. -->
+          <div class="q-mt-md" data-test="batch-quote">
+            <div v-if="batchQuoteLoading" class="flex flex-center q-py-sm">
+              <q-spinner-dots size="24px" />
+            </div>
+            <div
+              v-else-if="batchQuoteError || !batchQuote"
+              class="text-caption"
+              style="color: var(--text-secondary)"
+            >
+              {{ t('booking.batch.quoteUnavailable', { count: bookingStore.batchBasketSize }) }}
+            </div>
+            <template v-else>
+              <div class="row justify-between text-body2">
+                <span>{{ t('booking.batch.perSessionPrice') }}</span>
+                <span>{{ formatEuro(batchQuote.perSessionPrice) }}</span>
+              </div>
+              <div class="row justify-between text-body2 text-weight-bold q-mt-xs">
+                <span>{{ t('booking.batch.total', { count: batchQuote.sessionCount }) }}</span>
+                <span>{{ formatEuro(batchQuote.total) }}</span>
+              </div>
+              <div class="q-mt-sm text-caption" style="color: var(--text-secondary)">
+                {{
+                  hasWalletCredit
+                    ? t('booking.batch.creditSplit', {
+                        credit: formatEuro(batchQuote.creditApplied),
+                        card: formatEuro(batchQuote.cardCharge),
+                      })
+                    : t('booking.batch.cardOnly', { card: formatEuro(batchQuote.cardCharge) })
+                }}
+              </div>
+              <div class="q-mt-xs text-caption" style="color: var(--text-secondary)">
+                {{ t('booking.batch.quoteNote') }}
+              </div>
+            </template>
           </div>
         </q-card-section>
         <q-card-actions align="right">
@@ -214,7 +240,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
@@ -223,6 +249,7 @@ import { useBookingStore } from 'src/stores/booking.store'
 import { usePlayerStore } from 'src/stores/playerStore'
 import { getBatchConfig, getBookingRequestConfig } from 'src/api/booking.api'
 import { parseSharedSlot, sharedSlotWeekStart, toZonedLocalIso } from 'src/utils/sharedSlot'
+import { fetchBatchQuote } from 'src/api/payment.api'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
@@ -260,6 +287,52 @@ const maxBatchSize = ref(5) // populated from backend on mount
 // submit button is re-clickable while getBatchConfig() is still in flight, letting a second
 // overlapping re-fetch's out-of-order response clobber maxBatchSize.value with a stale number.
 const refetchingBatchMaxSize = ref(false)
+
+// ─── feat/coach-workflow-gaps A22: batch cost preview ───────────────────────────────────────
+const batchQuote = ref(null)
+const batchQuoteLoading = ref(false)
+const batchQuoteError = ref(null)
+// Non-reactive ordering token: a slot removed while a quote is in flight must not let the stale
+// response (for the previous count) overwrite the newer one.
+let batchQuoteSequence = 0
+
+async function loadBatchQuote(count) {
+  const requestId = ++batchQuoteSequence
+  batchQuoteLoading.value = true
+  batchQuoteError.value = null
+  try {
+    const quote = await fetchBatchQuote(coachId, count)
+    if (requestId !== batchQuoteSequence) return
+    batchQuote.value = quote
+  } catch (e) {
+    if (requestId !== batchQuoteSequence) return
+    batchQuote.value = null
+    batchQuoteError.value = e
+  } finally {
+    if (requestId === batchQuoteSequence) batchQuoteLoading.value = false
+  }
+}
+
+watch(
+  () => [batchReviewOpen.value, bookingStore.batchBasketSize],
+  ([open, count]) => {
+    if (open && count > 0) {
+      loadBatchQuote(count)
+    } else {
+      batchQuoteSequence++
+      batchQuote.value = null
+      batchQuoteLoading.value = false
+    }
+  },
+)
+
+const hasWalletCredit = computed(() => Number(batchQuote.value?.creditApplied ?? 0) > 0)
+
+function formatEuro(amount) {
+  return new Intl.NumberFormat(locale.value, { style: 'currency', currency: 'EUR' }).format(
+    Number(amount ?? 0),
+  )
+}
 
 const creditsForCoach = computed(() => bookingStore.creditsForCoach(coachId))
 const hasCredits = computed(() => creditsForCoach.value > 0)

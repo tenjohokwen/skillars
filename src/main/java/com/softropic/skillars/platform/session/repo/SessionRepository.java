@@ -26,6 +26,10 @@ public interface SessionRepository extends JpaRepository<Session, UUID> {
 
     boolean existsByBookingId(UUID bookingId);
 
+    /** feat/coach-workflow-gaps A19: which of {@code bookingIds} already carry a session plan (one query). */
+    @org.springframework.data.jpa.repository.Query("SELECT s.bookingId FROM Session s WHERE s.bookingId IN :bookingIds")
+    List<UUID> findBookingIdsWithPlan(@org.springframework.data.repository.query.Param("bookingIds") java.util.Collection<UUID> bookingIds);
+
     List<Session> findTop5ByPlayerIdOrderByCreatedAtDesc(Long playerId);
 
     List<Session> findByPlayerIdAndCoachIdAndStatusInOrderByCreatedAtDesc(

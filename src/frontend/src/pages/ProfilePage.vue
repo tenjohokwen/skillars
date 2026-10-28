@@ -266,6 +266,26 @@
                   <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
                 </q-btn>
               </div>
+
+              <!-- feat/coach-workflow-gaps D9: public-profile media gallery (story 2.3) -->
+              <div class="profile-row">
+                <div>
+                  <div class="text-label">{{ t('profile.coachGalleryTitle') }}</div>
+                  <div class="text-body q-mt-xs">{{ t('profile.coachGallerySummary') }}</div>
+                </div>
+                <q-btn
+                  v-if="!isCoachSuspended"
+                  flat
+                  dense
+                  icon="edit"
+                  round
+                  class="edit-btn"
+                  data-test="edit-coach-gallery"
+                  @click="showCoachGalleryDialog = true"
+                >
+                  <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
+                </q-btn>
+              </div>
             </template>
           </div>
 
@@ -500,6 +520,7 @@
       :current="coachProfile"
       @updated="loadProfile"
     />
+    <EditCoachGalleryDialog v-model="showCoachGalleryDialog" />
     <EditCoachBrandingDialog
       v-model="showCoachBrandingDialog"
       :current="coachBranding"
@@ -567,6 +588,7 @@ import EditCoachPricingDialog from 'src/components/profile/EditCoachPricingDialo
 import EditCoachAvailabilityDialog from 'src/components/profile/EditCoachAvailabilityDialog.vue'
 import EditCoachPhotoDialog from 'src/components/profile/EditCoachPhotoDialog.vue'
 import EditCoachBrandingDialog from 'src/components/profile/EditCoachBrandingDialog.vue'
+import EditCoachGalleryDialog from 'src/components/profile/EditCoachGalleryDialog.vue'
 import EditPlayerPositionDialog from 'src/components/profile/EditPlayerPositionDialog.vue'
 import FeatureGateOverlay from 'src/components/common/FeatureGateOverlay.vue'
 import PrivacyDataSection from 'src/components/profile/PrivacyDataSection.vue'
@@ -597,6 +619,7 @@ const showCoachSpecialtiesDialog = ref(false)
 const showCoachPricingDialog = ref(false)
 const showCoachAvailabilityDialog = ref(false)
 const showCoachPhotoDialog = ref(false)
+const showCoachGalleryDialog = ref(false)
 const showCoachBrandingDialog = ref(false)
 const coachBranding = ref(null)
 const brandingTierLoading = ref(true)

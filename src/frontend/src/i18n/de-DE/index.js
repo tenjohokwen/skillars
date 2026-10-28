@@ -634,6 +634,15 @@ export default {
       failed: 'Diese Sitzung konnte nicht storniert werden. Bitte erneut versuchen.',
     },
     batch: {
+      perSessionPrice: 'Preis pro Sitzung',
+      total: 'Gesamt ({count} Sitzungen)',
+      creditSplit:
+        '{credit} deines Guthabens werden angerechnet — {card} werden von deiner Karte abgebucht',
+      cardOnly: '{card} werden von deiner Karte abgebucht',
+      quoteNote:
+        'Guthaben aus Sitzungspaketen wird für Mehrfachanfragen nicht verwendet. Die Zahlung erfolgt, wenn der Coach annimmt.',
+      quoteUnavailable:
+        '{count} Sitzung(en) — der Preis konnte nicht geladen werden; die Zahlung erfolgt, wenn der Coach annimmt',
       enterBatchMode: 'Mehrfachauswahl',
       exitBatchMode: 'Einzelauswahl',
       added: 'Hinzugefügt',
@@ -967,6 +976,40 @@ export default {
     },
   },
   session: {
+    drillEditor: {
+      deleteHasVideo: 'Entferne das Demo-Video, bevor du diese Übung löschst.',
+      scaleValue: '{label}: {value}/10',
+      newDrill: 'Neue Übung',
+      createTitle: 'Neue Übung',
+      editTitle: 'Übung bearbeiten',
+      edit: 'Übung bearbeiten',
+      delete: 'Übung löschen',
+      name: 'Name der Übung',
+      description: 'Beschreibung',
+      primarySkills: 'Hauptfähigkeiten',
+      secondarySkills: 'Nebenfähigkeiten',
+      skillsHint: 'Aus der Liste wählen oder eigene eingeben und Enter drücken (max. 5)',
+      repDensity: 'Wiederholungen pro Spieler',
+      repDensityHint: 'Wird für die SLU-Schätzung verwendet (0–200)',
+      intensity: 'Intensität',
+      pressureLevel: 'Druck',
+      cognitiveLoad: 'Kognitive Belastung',
+      matchRealism: 'Spielnähe',
+      coachingPointsHint: 'Ein Coaching-Punkt pro Zeile (max. 8)',
+      coachingPointsTooMany: 'Höchstens {max} Coaching-Punkte mit je bis zu {length} Zeichen.',
+      videoAfterCreate:
+        'Ein Demo-Video kannst du nach dem Speichern im Detailbereich der Übung hinzufügen.',
+      created: 'Übung zu deiner Bibliothek hinzugefügt',
+      updated: 'Übung aktualisiert',
+      nameTaken: 'Du hast bereits eine Übung mit diesem Namen',
+      notFound: 'Diese Übung ist nicht mehr in deiner Bibliothek',
+      saveFailed: 'Die Übung konnte nicht gespeichert werden. Bitte erneut versuchen.',
+      deleteConfirmTitle: 'Übung löschen?',
+      deleteConfirmMsg:
+        'Die Übung wird aus deiner Bibliothek entfernt. Sessionpläne, Vorlagen und Hausaufgaben, die sie bereits nutzen, funktionieren weiter.',
+      deleted: 'Übung gelöscht',
+      deleteFailed: 'Die Übung konnte nicht gelöscht werden. Bitte erneut versuchen.',
+    },
     drillLibrary: {
       moreItems: '+{count} weitere',
       setupDiagram: 'Aufbauskizze',
@@ -1088,6 +1131,19 @@ export default {
       empty: 'Noch keine Vorschläge verfügbar',
     },
     templates: {
+      useTemplateDiscardConfirm:
+        'Eine Vorlage ersetzt die Blöcke und Übungen, die du noch nicht gespeichert hast. Fortfahren?',
+      deployDialogSubtitle:
+        'Wähle eine deiner anstehenden bestätigten Sessions, die noch keinen Plan hat.',
+      deployBookingLabel: 'Anstehende Session',
+      deployBookingRequired: 'Bitte eine Session auswählen',
+      deployNoBookings: 'Du hast keine anstehenden bestätigten Sessions ohne Plan.',
+      deployBookingsLoadFailed: 'Deine anstehenden Sessions konnten nicht geladen werden.',
+      deployUnknownPlayer: 'Spieler',
+      openPlan: 'Plan öffnen',
+      useTemplate: 'Vorlage verwenden',
+      useTemplateSubtitle:
+        'Erstellt den Plan dieser Session aus einer gespeicherten Vorlage. Ungespeicherte Änderungen auf dieser Seite werden ersetzt.',
       title: 'Session-Vorlagen',
       browseTemplates: 'Vorlagen',
       saveAsTemplate: 'Als Vorlage speichern',
@@ -1098,10 +1154,6 @@ export default {
       useThisSession: 'Für diese Session verwenden',
       templateIndicator: 'Basierend auf Vorlage: {name}',
       deployDialogTitle: 'Für diese Session verwenden',
-      deployDialogSubtitle: 'Geben Sie die Buchungs-ID für die zu planende Session ein.',
-      deployBookingIdLabel: 'Buchungs-ID',
-      deployBookingIdRequired: 'Bitte eine Buchungs-ID eingeben',
-      deployBookingIdInvalidFormat: 'Die Buchungs-ID muss eine gültige UUID sein',
       deployAction: 'Session-Plan erstellen',
       deployAlreadyExists: 'Für diese Buchung gibt es bereits einen Session-Plan',
       deployBookingInvalid: 'Buchung nicht gefunden oder nicht bestätigt',
@@ -1426,6 +1478,24 @@ export default {
     },
     sessionPackTiersTitle: 'Sitzungspaket-Angebot',
     myTiers: {
+      extendHelp:
+        'Pakete können einmalig um 30 Tage verlängert werden, innerhalb der 14 Tage vor Ablauf.',
+      soldPacksTitle: 'Verkaufte Sitzungspakete',
+      soldPacksEmpty: 'Du hast noch keine Sitzungspakete verkauft.',
+      soldPacksError: 'Deine verkauften Pakete konnten nicht geladen werden.',
+      unknownPlayer: 'Unbekannter Spieler',
+      expiringSoon: 'Läuft bald ab',
+      boughtBy: 'Gekauft von {name}',
+      sessionsRemaining: '{remaining} von {total} Sitzungen übrig',
+      expiresOn: 'Läuft ab am {date}',
+      alreadyExtended: 'Bereits verlängert',
+      extendSuccess: 'Paket um 30 Tage verlängert',
+      packStatus: {
+        ACTIVE: 'Aktiv',
+        PAUSED: 'Pausiert',
+        EXPIRED: 'Abgelaufen',
+        EXHAUSTED: 'Aufgebraucht',
+      },
       pageTitle: 'Mein Sitzungspaket-Angebot',
       currentOffer: 'Ihr aktuelles Angebot',
       noActiveOffer: 'Sie haben derzeit kein aktives Sitzungspaket-Angebot',
@@ -1450,10 +1520,6 @@ export default {
         'Dadurch werden keine neuen Käufe unter Ihrem aktuellen Angebot mehr möglich. Eltern, die bereits gekauft haben, behalten ihre Einheiten.',
       withdrawFailed:
         'Ihr Angebot konnte nicht zurückgezogen werden. Bitte versuchen Sie es erneut.',
-      extendTitle: 'Ein Sitzungspaket verlängern',
-      extendHelp:
-        'Geben Sie die Kauf-ID des zu verlängernden Sitzungspakets ein. Dies ist nur einmal pro Paket möglich, und nur innerhalb von 14 Tagen vor Ablauf.',
-      extendPurchaseId: 'Kauf-ID',
       extendCta: 'Verlängern',
       extendFailed:
         'Dieses Paket konnte nicht verlängert werden — prüfen Sie, ob es sich im gültigen Zeitfenster befindet und noch nicht verlängert wurde.',
@@ -2004,6 +2070,22 @@ export default {
   },
   profile: {
     sectionPrivacy: 'Datenschutz & Daten',
+    coachGalleryTitle: 'Mediengalerie',
+    coachGallerySummary: 'Fotos auf deinem öffentlichen Profil',
+    coachGalleryHelp:
+      'Bis zu {max} Bilder (JPEG, PNG oder WebP, je max. 5 MB) auf deinem öffentlichen Profil.',
+    coachGalleryEmpty: 'Noch keine Bilder.',
+    coachGalleryAdd: 'Bild auswählen',
+    coachGalleryUpload: 'Hochladen',
+    coachGalleryRemove: 'Bild entfernen',
+    coachGalleryFull:
+      'Deine Galerie ist voll ({max} Bilder). Entferne eines, um ein neues hinzuzufügen.',
+    coachGalleryInvalidType: 'Nur JPEG-, PNG- oder WebP-Bilder können hinzugefügt werden.',
+    coachGalleryTooLarge: 'Das Bild ist größer als 5 MB.',
+    coachGalleryRejected: 'Wähle ein JPEG-, PNG- oder WebP-Bild mit höchstens 5 MB.',
+    coachGalleryFailed: 'Bei deiner Galerie ist etwas schiefgelaufen. Bitte erneut versuchen.',
+    coachGalleryAdded: 'Bild zur Galerie hinzugefügt',
+    coachGalleryRemoved: 'Bild entfernt',
     subtitle: 'Verwalten Sie Ihre Kontodaten und Einstellungen.',
     sectionAccount: 'Konto',
     sectionPersonal: 'Persönliche Daten',

@@ -1,6 +1,18 @@
 <template>
   <q-page class="drill-library-page q-pa-md">
-    <h1 class="text-h5 q-mb-md">{{ t('session.drillLibrary.title') }}</h1>
+    <div class="row items-center q-mb-md">
+      <h1 class="text-h5 q-my-none">{{ t('session.drillLibrary.title') }}</h1>
+      <q-space />
+      <q-btn
+        unelevated
+        color="primary"
+        icon="add"
+        no-caps
+        :label="t('session.drillEditor.newDrill')"
+        data-test="new-drill"
+        @click="openCreate"
+      />
+    </div>
 
     <!-- Tab bar -->
     <q-tabs v-model="selectedLibrary" dense class="q-mb-md" @update:model-value="onTabChange">
@@ -76,12 +88,14 @@
       >
         <q-icon name="sports_soccer" size="64px" color="grey" class="q-mb-md" />
         <div class="text-h6 q-mb-md">{{ t('session.drillLibrary.emptyLibrary') }}</div>
-        <q-btn
-          v-if="selectedLibrary === 'PRIVATE'"
-          color="primary"
-          :label="t('session.drillLibrary.clonePlatformDrill')"
-          @click="selectedLibrary = 'PLATFORM'"
-        />
+        <div v-if="selectedLibrary === 'PRIVATE'" class="row q-gutter-sm justify-center">
+          <q-btn
+            color="primary"
+            :label="t('session.drillLibrary.clonePlatformDrill')"
+            @click="switchToPlatform"
+          />
+          <q-btn outline :label="t('session.drillEditor.newDrill')" @click="openCreate" />
+        </div>
       </div>
 
       <!-- Drill cards grid -->
@@ -152,7 +166,10 @@
       :is-open="!!sessionStore.selectedDrill"
       @close="sessionStore.selectedDrill = null"
       @video-error="handleVideoError"
+      @edit="openEdit"
     />
+
+    <DrillEditorDialog v-model="editorOpen" :drill="editingDrill" @saved="onDrillSaved" />
   </q-page>
 </template>
 
@@ -163,6 +180,7 @@ import { useQuasar } from 'quasar'
 import { useSessionStore } from 'src/stores/session.store'
 import DrillCard from 'src/components/session/DrillCard.vue'
 import DrillDetailPanel from 'src/components/session/DrillDetailPanel.vue'
+import DrillEditorDialog from 'src/components/session/DrillEditorDialog.vue'
 
 function useDebounce(fn, delay) {
   let timer
@@ -256,6 +274,47 @@ function applyFilters() {
 
 function openDetail(drill) {
   sessionStore.selectedDrill = drill
+}
+
+// ─── feat/coach-workflow-gaps D1: coach-authored PRIVATE drills ───────────────────────────────
+const editorOpen = ref(false)
+const editingDrill = ref(null)
+
+function openCreate() {
+  editingDrill.value = null
+  editorOpen.value = true
+}
+
+function openEdit(drill) {
+  editingDrill.value = drill
+  editorOpen.value = true
+}
+
+function resetSearchAndFilters() {
+  localSearchQuery.value = ''
+  sessionStore.searchQuery = ''
+  sessionStore.activeFilters = {
+    skill: null,
+    difficultyTier: null,
+    equipment: null,
+    weakFootBias: null,
+  }
+  localFilters.value = { skill: null, difficultyTier: null, equipment: null, weakFootBias: null }
+}
+
+function switchToPlatform() {
+  selectedLibrary.value = 'PLATFORM'
+  onTabChange('PLATFORM')
+}
+
+// A created drill lives in "My Library": switch there (clearing search/filters so it is visible) and
+// open it, so the coach can attach a demo video through the panel's existing upload flow.
+async function onDrillSaved(saved) {
+  if (editingDrill.value) return // updateDrill already replaced it in the list and the open panel
+  selectedLibrary.value = 'PRIVATE'
+  resetSearchAndFilters()
+  await sessionStore.fetchDrills('PRIVATE')
+  sessionStore.selectedDrill = sessionStore.drills.find((d) => d.id === saved?.id) ?? null
 }
 
 // skillars-deferred-99 AC14: the first video load failure is a silent one-shot retry — refetch

@@ -81,6 +81,28 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  // feat/coach-workflow-gaps D1: coach-authored PRIVATE drills. Unlike cloneDrill these do NOT write
+  // the store-wide `error` ref — the editor dialog / detail panel own their failure UX, and the
+  // drill-library page's initial-load watcher must not fire for a failed save.
+  async function createDrill(payload) {
+    const created = await sessionApi.createDrill(payload)
+    return created
+  }
+
+  async function updateDrill(drillId, payload) {
+    const updated = await sessionApi.updateDrill(drillId, payload)
+    const idx = drills.value.findIndex((d) => d.id === drillId)
+    if (idx !== -1) drills.value.splice(idx, 1, updated)
+    if (selectedDrill.value?.id === drillId) selectedDrill.value = updated
+    return updated
+  }
+
+  async function deleteDrill(drillId) {
+    await sessionApi.deleteDrill(drillId)
+    drills.value = drills.value.filter((d) => d.id !== drillId)
+    if (selectedDrill.value?.id === drillId) selectedDrill.value = null
+  }
+
   async function addTag(drillId, tag) {
     error.value = null
     try {
@@ -204,6 +226,9 @@ export const useSessionStore = defineStore('session', () => {
     fetchDrills,
     searchDrills,
     cloneDrill,
+    createDrill,
+    updateDrill,
+    deleteDrill,
     addTag,
     removeTag,
     fetchTagSuggestions,

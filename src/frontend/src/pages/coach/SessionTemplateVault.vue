@@ -86,13 +86,38 @@
           </div>
         </q-card-section>
         <q-card-section>
-          <q-input
+          <div v-if="templateStore.deployableBookingsLoading" class="flex flex-center q-pa-md">
+            <q-spinner-dots size="28px" color="primary" />
+          </div>
+          <div v-else-if="templateStore.deployableBookingsError" class="text-negative text-body2">
+            {{ t('session.templates.deployBookingsLoadFailed') }}
+            <q-btn
+              flat
+              dense
+              no-caps
+              :label="t('common.retry')"
+              @click="templateStore.fetchDeployableBookings()"
+            />
+          </div>
+          <div
+            v-else-if="!templateStore.deployableBookings.length"
+            class="text-body2 text-secondary"
+            data-test="no-deployable-bookings"
+          >
+            {{ t('session.templates.deployNoBookings') }}
+          </div>
+          <q-select
+            v-else
             v-model="deployBookingId"
+            :options="bookingOptions"
+            emit-value
+            map-options
+            outlined
             dense
-            autofocus
-            :label="t('session.templates.deployBookingIdLabel')"
+            :label="t('session.templates.deployBookingLabel')"
             :error="!!deployError"
             :error-message="deployError"
+            data-test="deploy-booking-select"
           />
         </q-card-section>
         <q-card-actions align="right">
@@ -101,6 +126,7 @@
             color="primary"
             :label="t('session.templates.deployAction')"
             :loading="deploying"
+            :disable="!deployBookingId"
             @click="confirmDeploy"
           />
         </q-card-actions>
@@ -110,9 +136,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
+import { useRouter } from 'vue-router'
 import { useSessionTemplateStore } from 'src/stores/sessionTemplate.store'
 import SessionDNAChart from 'src/components/booking/SessionDNAChart.vue'
 
@@ -121,12 +148,13 @@ defineOptions({ name: 'SessionTemplateVault' })
 const { t, locale } = useI18n()
 const $q = useQuasar()
 const templateStore = useSessionTemplateStore()
+const router = useRouter()
 
 const renameDialog = ref(false)
 const renameValue = ref('')
 const renamingTemplate = ref(null)
 const deployDialog = ref(false)
-const deployBookingId = ref('')
+const deployBookingId = ref(null)
 const deployingTemplate = ref(null)
 const deploying = ref(false)
 const deployError = ref('')
@@ -171,23 +199,44 @@ function confirmDelete(tmpl) {
   })
 }
 
-function startDeploy(tmpl) {
-  deployingTemplate.value = tmpl
-  deployBookingId.value = ''
-  deployError.value = ''
-  deployDialog.value = true
+function formatBookingSlot(iso, timezone) {
+  try {
+    return new Date(iso).toLocaleString(locale.value, {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: timezone || undefined,
+    })
+  } catch {
+    // An unknown IANA zone throws a RangeError — fall back to the viewer's own zone.
+    return new Date(iso).toLocaleString(locale.value)
+  }
 }
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+// feat/coach-workflow-gaps A19: pick one of the coach's upcoming bookings instead of typing a UUID.
+const bookingOptions = computed(() =>
+  templateStore.deployableBookings.map((b) => ({
+    value: b.bookingId,
+    label: `${formatBookingSlot(b.requestedStartTime, b.canonicalTimezone)} · ${
+      b.playerName || t('session.templates.deployUnknownPlayer')
+    }`,
+  })),
+)
+
+function startDeploy(tmpl) {
+  deployingTemplate.value = tmpl
+  deployBookingId.value = null
+  deployError.value = ''
+  deployDialog.value = true
+  templateStore.fetchDeployableBookings()
+}
 
 async function confirmDeploy() {
-  const bookingId = deployBookingId.value.trim()
+  const bookingId = deployBookingId.value
   if (!bookingId) {
-    deployError.value = t('session.templates.deployBookingIdRequired')
-    return
-  }
-  if (!UUID_REGEX.test(bookingId)) {
-    deployError.value = t('session.templates.deployBookingIdInvalidFormat')
+    deployError.value = t('session.templates.deployBookingRequired')
     return
   }
   deploying.value = true
@@ -195,12 +244,25 @@ async function confirmDeploy() {
   try {
     await templateStore.deployTemplate(deployingTemplate.value.id, bookingId)
     deployDialog.value = false
-    $q.notify({ type: 'positive', message: t('session.templates.deployed') })
+    $q.notify({
+      type: 'positive',
+      message: t('session.templates.deployed'),
+      actions: [
+        {
+          label: t('session.templates.openPlan'),
+          color: 'white',
+          handler: () => router.push({ name: 'coach-session-builder', params: { bookingId } }),
+        },
+      ],
+    })
   } catch (e) {
-    const code = e?.response?.data?.helpCode
+    // OperationNotAllowedException's SessionErrorCode arrives as errorMsg.errorKey; helpCode is the
+    // per-request log correlation id (reading it here never matched, so every failure was generic).
+    const data = e?.response?.data
+    const code = data?.errorMsg?.errorKey ?? data?.helpCode
     if (code === 'SESSION_ALREADY_EXISTS') {
       deployError.value = t('session.templates.deployAlreadyExists')
-    } else if (code === 'SESSION_BOOKING_NOT_OWNED') {
+    } else if (code === 'SESSION_BOOKING_NOT_OWNED' || e?.response?.status === 404) {
       deployError.value = t('session.templates.deployBookingInvalid')
     } else {
       deployError.value = t('common.errorGeneric')

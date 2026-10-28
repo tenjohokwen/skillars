@@ -214,6 +214,20 @@
             :loading="confirmingId === booking.id"
             @click="handleConfirmCompletion(booking.id)"
           />
+          <!-- feat/coach-workflow-gaps A23: receipt for a booking with a captured payment (the
+               backend sets receiptAvailable from the same CAPTURED check the receipt endpoint uses). -->
+          <q-btn
+            v-if="booking.receiptAvailable"
+            flat
+            dense
+            no-caps
+            size="sm"
+            icon="receipt_long"
+            class="q-mt-xs"
+            :label="t('creditStatement.receipt')"
+            :to="{ name: 'parent-receipt', params: { bookingId: booking.id } }"
+            data-test="booking-receipt"
+          />
         </q-item-section>
       </q-item>
     </q-list>

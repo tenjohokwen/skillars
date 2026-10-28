@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.booking.contract.PausePackRequest;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.config.PaymentProperties;
+import com.softropic.skillars.platform.payment.contract.CoachSoldPackDto;
 import com.softropic.skillars.platform.payment.contract.CreateSessionPackTierRequest;
 import com.softropic.skillars.platform.payment.contract.PurchaseSessionPackRequest;
 import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodRequest;
@@ -18,12 +19,15 @@ import com.softropic.skillars.platform.payment.contract.StripeConfigResponse;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
+import com.softropic.skillars.platform.payment.service.CoachSoldPackQueryService;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.payment.service.SessionPackPaymentService;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -54,6 +58,7 @@ public class SessionPackPaymentResource {
     private final CoachProfileRepository coachProfileRepository;
     private final SecurityUtil securityUtil;
     private final PaymentProperties paymentProperties;
+    private final CoachSoldPackQueryService coachSoldPackQueryService;
 
     // ─── Parent: purchase a session pack ──────────────────────────────────────
 
@@ -96,6 +101,22 @@ public class SessionPackPaymentResource {
         Long coachUserId = securityUtil.getCurrentCoachUserId();
         sessionPackPaymentService.extendPack(coachUserId, purchaseId);
         return ResponseEntity.noContent().build();
+    }
+
+    // ─── Coach: list sold packs (feat/coach-workflow-gaps A20) ─────────────────
+    // Scoped to the caller's own coach profile by construction (coachId is resolved from the principal,
+    // never taken from the request), so there is no ownership check to get wrong. Feeds the "Extend"
+    // action above, which re-checks ownership and eligibility itself under a row lock.
+
+    @GetMapping("/coaches/me/session-packs")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<Page<CoachSoldPackDto>> getMySoldPacks(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        UUID coachId = resolveCoachId();
+        int boundedSize = Math.max(1, Math.min(size, 100));
+        return ResponseEntity.ok(coachSoldPackQueryService.getSoldPacks(
+            coachId, PageRequest.of(Math.max(0, page), boundedSize)));
     }
 
     // ─── Coach: manage tiers ──────────────────────────────────────────────────
