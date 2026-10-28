@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.admin.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient;
 import com.softropic.skillars.platform.admin.repo.ReviewModerationLog;
 import com.softropic.skillars.platform.admin.repo.ReviewModerationLogRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -42,6 +43,7 @@ public class AdminReviewService {
     // skillars-deferred-135 AC3: converts approveReview/blockReview's own findByIdForUpdate calls
     // below to NOWAIT + bounded retry, mirroring ReviewFlagService.flag()'s own shipped pattern.
     private final PessimisticLockRetryer lockRetryer;
+    private final AdminNotificationRecipientResolver recipientResolver;
 
     @Transactional(readOnly = true)
     public Page<AdminReviewQueueEntryDto> getUnderReviewQueue(int page) {
@@ -120,9 +122,7 @@ public class AdminReviewService {
         entry.setAction("APPROVED");
         moderationLogRepository.save(entry);
 
-        eventPublisher.publishEvent(
-            new ReviewModerationResolvedEvent(reviewId, review.getCoachId(),
-                previousStatus, ReviewModerationStatus.APPROVED));
+        eventPublisher.publishEvent(outcomeEvent(review, previousStatus, ReviewModerationStatus.APPROVED));
         log.info("Review approved: reviewId={}, adminId={}", reviewId, adminId);
     }
 
@@ -164,9 +164,20 @@ public class AdminReviewService {
         entry.setReason(reason);
         moderationLogRepository.save(entry);
 
-        eventPublisher.publishEvent(
-            new ReviewModerationResolvedEvent(reviewId, review.getCoachId(),
-                previousStatus, ReviewModerationStatus.BLOCKED));
+        eventPublisher.publishEvent(outcomeEvent(review, previousStatus, ReviewModerationStatus.BLOCKED));
         log.info("Review blocked: reviewId={}, adminId={}", reviewId, adminId);
+    }
+
+    /**
+     * The author is told the outcome (AdminOutcomeEmailListener). {@code authorId} is a main."user" id
+     * (PARENT or PLAYER author); a minor player author's parent is addressed instead.
+     */
+    private ReviewModerationResolvedEvent outcomeEvent(CoachReview review, ReviewModerationStatus previousStatus,
+                                                       ReviewModerationStatus newStatus) {
+        AdminNotificationRecipient author = recipientResolver.forUser(review.getAuthorId()).orElse(null);
+        String coachName = coachProfileRepository.findById(review.getCoachId())
+            .map(c -> c.getDisplayName()).orElse(null);
+        return new ReviewModerationResolvedEvent(review.getReviewId(), review.getCoachId(), previousStatus, newStatus,
+            author == null ? null : author.email(), author == null ? null : author.langKey(), coachName);
     }
 }

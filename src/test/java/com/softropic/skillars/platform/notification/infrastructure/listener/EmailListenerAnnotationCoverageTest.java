@@ -34,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class EmailListenerAnnotationCoverageTest {
 
     private static final List<Class<?>> LISTENERS =
-        List.of(BookingEmailListener.class, SessionPackEmailListener.class);
+        List.of(BookingEmailListener.class, SessionPackEmailListener.class, AdminOutcomeEmailListener.class);
 
     private static Stream<Method> candidateHandlers(Class<?> listener) {
         return Stream.of(listener.getDeclaredMethods())
@@ -43,7 +43,9 @@ class EmailListenerAnnotationCoverageTest {
             .filter(m -> !m.isSynthetic())
             .filter(m -> m.getName().startsWith("on"))
             .filter(m -> m.getParameterCount() == 1)
-            .filter(m -> ApplicationEvent.class.isAssignableFrom(m.getParameterTypes()[0]));
+            // B6: record events (DisputeDismissedEvent, ReviewModerationResolvedEvent) are Spring events too.
+            .filter(m -> ApplicationEvent.class.isAssignableFrom(m.getParameterTypes()[0])
+                || m.getParameterTypes()[0].isRecord());
     }
 
     @Test
@@ -84,5 +86,8 @@ class EmailListenerAnnotationCoverageTest {
         assertThat(candidateHandlers(SessionPackEmailListener.class).count())
             .as("SessionPackEmailListener's on*(Event) handlers")
             .isEqualTo(3);
+        assertThat(candidateHandlers(AdminOutcomeEmailListener.class).count())
+            .as("AdminOutcomeEmailListener's on*(Event) handlers")
+            .isEqualTo(7);
     }
 }

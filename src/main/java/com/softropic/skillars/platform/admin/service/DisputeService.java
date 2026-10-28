@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.admin.contract.AdminAlertStatus;
 import com.softropic.skillars.platform.admin.contract.AdminAlertType;
 import com.softropic.skillars.platform.admin.contract.CoachCancellationHistoryEntryDto;
 import com.softropic.skillars.platform.admin.contract.CoachWarningIssuedEvent;
+import com.softropic.skillars.platform.admin.contract.DisputeDismissedEvent;
 import com.softropic.skillars.platform.admin.contract.DisputeError;
 import com.softropic.skillars.platform.admin.contract.DisputeRaisedEvent;
 import com.softropic.skillars.platform.admin.contract.DisputeResolvedEvent;
@@ -80,6 +81,7 @@ public class DisputeService {
     private final CoachPayoutOutboxSupport coachPayoutOutboxSupport;
     private final ApplicationEventPublisher eventPublisher;
     private final PlayerProfileRepository playerProfileRepository;
+    private final AdminNotificationRecipientResolver recipientResolver;
 
     @Transactional
     public UUID raiseDispute(UUID bookingId, String reason, String details, Long raisedBy, String raisedByRole) {
@@ -242,6 +244,9 @@ public class DisputeService {
             .filter(bp -> BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
             .map(p -> p.getCreditDebited().add(p.getStripeCharged()))
             .orElse(BigDecimal.ZERO);
+        // B6: what was actually credited, for the raiser's notice — never the requested outcome alone
+        // (FULL_CREDIT on a sessionPrice=0 booking credits nothing, and the email must say so).
+        BigDecimal credited = BigDecimal.ZERO;
 
         switch (resolution) {
             case "FULL_CREDIT" -> {
@@ -249,6 +254,7 @@ public class DisputeService {
                     creditWalletService.writeLedgerEntry(
                         booking.getParentId(), sessionPrice, CreditLedgerEntryType.BOOKING_REFUND,
                         booking.getId(), "Admin dispute resolution — full refund");
+                    credited = sessionPrice;
                 } else {
                     log.warn("FULL_CREDIT resolution for disputeId={} issued no credit — sessionPrice=0 (pack-based or missing payment record)", disputeId);
                 }
@@ -262,6 +268,7 @@ public class DisputeService {
                 creditWalletService.writeLedgerEntry(
                     booking.getParentId(), creditAmount, CreditLedgerEntryType.BOOKING_REFUND,
                     booking.getId(), "Admin dispute resolution — partial refund");
+                credited = creditAmount;
             }
             case "NO_ACTION" -> { /* no credit operation */ }
             case "COACH_WARNING" -> {
@@ -272,9 +279,11 @@ public class DisputeService {
                     creditWalletService.writeLedgerEntry(
                         booking.getParentId(), creditAmount, CreditLedgerEntryType.BOOKING_REFUND,
                         booking.getId(), "Admin dispute resolution — coach warning + partial refund");
+                    credited = creditAmount;
                 }
                 eventPublisher.publishEvent(
-                    new CoachWarningIssuedEvent(this, booking.getCoachId(), disputeId, dispute.getReason()));
+                    new CoachWarningIssuedEvent(this, booking.getCoachId(), disputeId, dispute.getReason(),
+                        recipientResolver.forCoach(booking.getCoachId()).orElse(null)));
             }
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid resolution");
         }
@@ -299,8 +308,11 @@ public class DisputeService {
         resolveDisputeAlert(dispute.getBookingId(), adminId, now);
         logAdminAction(adminId, AdminActionType.DISPUTE_RESOLVE, disputeId.toString(), resolutionNote);
 
+        // B6: the raiser is told the outcome (AdminOutcomeEmailListener, BEFORE_COMMIT in this transaction).
         eventPublisher.publishEvent(
-            new DisputeResolvedEvent(this, disputeId, dispute.getBookingId(), resolution, dispute.getRaisedBy()));
+            new DisputeResolvedEvent(this, disputeId, dispute.getBookingId(), resolution, dispute.getRaisedBy(),
+                credited, resolutionNote, coachDisplayName(booking), booking.getRequestedStartTime(),
+                recipientResolver.forUser(dispute.getRaisedBy()).orElse(null)));
 
         log.info("Dispute resolved: disputeId={} resolution={} adminId={}", disputeId, resolution, adminId);
     }
@@ -322,7 +334,16 @@ public class DisputeService {
         disputeRepository.save(dispute);
 
         resolveDisputeAlert(dispute.getBookingId(), adminId, now);
-        logAdminAction(adminId, AdminActionType.DISPUTE_RESOLVE, disputeId.toString(), reason);
+        // B6: its own action type — a dismissal used to be audited as DISPUTE_RESOLVE, indistinguishable
+        // from a resolution in admin_action_log.
+        logAdminAction(adminId, AdminActionType.DISPUTE_DISMISS, disputeId.toString(), reason);
+
+        // B6: the raiser is told the dispute was dismissed (AdminOutcomeEmailListener).
+        Booking booking = bookingRepository.findById(dispute.getBookingId()).orElse(null);
+        eventPublisher.publishEvent(new DisputeDismissedEvent(disputeId, dispute.getBookingId(), dispute.getRaisedBy(),
+            reason, booking == null ? null : coachDisplayName(booking),
+            booking == null ? null : booking.getRequestedStartTime(),
+            recipientResolver.forUser(dispute.getRaisedBy()).orElse(null)));
 
         log.info("Dispute dismissed: disputeId={} adminId={}", disputeId, adminId);
     }
@@ -387,6 +408,10 @@ public class DisputeService {
             return coachNet;
         }
         return coachNet.multiply(parentRefund).divide(parentPrice, 2, RoundingMode.HALF_UP);
+    }
+
+    private String coachDisplayName(Booking booking) {
+        return coachProfileRepository.findById(booking.getCoachId()).map(CoachProfile::getDisplayName).orElse(null);
     }
 
     private void resolveDisputeAlert(UUID bookingId, Long adminId, Instant now) {

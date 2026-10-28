@@ -2514,6 +2514,15 @@ export default {
       VIDEO_APPROVAL_APPROVED: 'Ihr Elternteil hat Ihr Video freigegeben.',
       VIDEO_APPROVAL_REJECTED: 'Ihr Elternteil hat Ihr Video nicht freigegeben.',
       COACH_VISIBILITY_REDUCED: 'Ihre Sichtbarkeit im Marktplatz wurde reduziert.',
+      COACH_SUSPENDED:
+        'Ihr Coach-Profil wurde gesperrt. Sie können auf Ihrer Profilseite Einspruch einlegen.',
+      COACH_REINSTATED: 'Die Sperre Ihres Coach-Profils wurde aufgehoben.',
+      COACH_WARNING_ISSUED: 'Sie haben nach einer Beschwerde eine förmliche Verwarnung erhalten.',
+      DISPUTE_RESOLVED: 'Ihre Beschwerde zur Sitzung am {requestedStartTime} wurde entschieden.',
+      DISPUTE_DISMISSED: 'Ihre Beschwerde zur Sitzung am {requestedStartTime} wurde abgewiesen.',
+      GDPR_EXPORT_READY: 'Ihr Datenexport kann bis {expiresAt} heruntergeladen werden.',
+      REVIEW_APPROVED: 'Ihre Bewertung von {coachDisplayName} wurde veröffentlicht.',
+      REVIEW_BLOCKED: 'Ihre Bewertung von {coachDisplayName} wurde nicht veröffentlicht.',
     },
     preferences: {
       title: 'E-Mail-Benachrichtigungen',
@@ -2648,6 +2657,8 @@ export default {
       alreadyAppealed: 'Gegen diese Entscheidung wurde bereits Einspruch eingelegt.',
       windowExpired: 'Die 14-tägige Einspruchsfrist ist abgelaufen.',
       notEnforced: 'Diese Entscheidung ist nicht mehr wirksam, daher gibt es nichts anzufechten.',
+      notAppealable:
+        'Gegen diese Entscheidung kann hier kein Einspruch eingelegt werden. Bitte wenden Sie sich an den Skillars-Support.',
       subjectNotFound: 'Dieser Eintrag wurde nicht gefunden.',
       generic: 'Der Einspruch konnte nicht eingereicht werden. Bitte versuche es erneut.',
     },

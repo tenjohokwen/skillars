@@ -1,10 +1,13 @@
 package com.softropic.skillars.platform.admin.service;
 
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.admin.contract.AdminActionType;
 import com.softropic.skillars.platform.admin.contract.AdminAppealDto;
 import com.softropic.skillars.platform.admin.contract.AppealDto;
 import com.softropic.skillars.platform.admin.contract.AppealStatus;
 import com.softropic.skillars.platform.admin.contract.AppealSubjectType;
+import com.softropic.skillars.platform.admin.repo.AdminActionLog;
+import com.softropic.skillars.platform.admin.repo.AdminActionLogRepository;
 import com.softropic.skillars.platform.admin.repo.Appeal;
 import com.softropic.skillars.platform.admin.repo.AppealRepository;
 import com.softropic.skillars.platform.admin.repo.Dispute;
@@ -58,6 +61,7 @@ public class AppealService {
     /** FR-TSC-003: "may submit one appeal within 14 days". */
     static final Duration APPEAL_WINDOW = Duration.ofDays(14);
     private static final int QUEUE_PAGE_SIZE = 20;
+    private static final int AUDIT_REASON_MAX = 500;
     private static final Set<String> APPEALABLE_DISPUTE_STATUSES = Set.of("RESOLVED", "DISMISSED");
 
     private final AppealRepository appealRepository;
@@ -69,6 +73,7 @@ public class AppealService {
     private final AdminCoachEnforcementService enforcementService;
     private final AdminReviewService adminReviewService;
     private final PessimisticLockRetryer lockRetryer;
+    private final AdminActionLogRepository adminActionLogRepository;
 
     private record EnforcedSubject(Long ownerUserId, Instant enforcedAt, boolean stillEnforced) {}
 
@@ -84,6 +89,11 @@ public class AppealService {
         }
         if (Instant.now().isAfter(subject.enforcedAt().plus(APPEAL_WINDOW))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "appeals.windowExpired");
+        }
+        // B6: a child-safety hold (CSAM match) is not an admin moderation decision and is not appealable
+        // through this flow. The generic message deliberately does not say why.
+        if (subjectType == AppealSubjectType.COACH_SUSPENSION && isSafetyHold(subjectId, subject.enforcedAt())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "appeals.notAppealable");
         }
 
         Appeal appeal = new Appeal();
@@ -151,13 +161,37 @@ public class AppealService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "appeals.alreadyDecided");
         }
 
+        Boolean reversalApplied = null;
         if (outcome == AppealStatus.OVERTURNED) {
             boolean applied = applyReversal(appealId, subjectType, subjectId, enforcedAt, adminId);
             appealRepository.markReversalApplied(appealId, applied);
+            reversalApplied = applied;
         }
+        auditDecision(appealId, outcome, subjectType, subjectId, reversalApplied, note.trim(), adminId);
         log.info("[APPEAL_DECIDED] appealId={} outcome={} subjectType={} subjectId={} adminId={}",
             appealId, outcome, subjectType, subjectId, adminId);
         return getDetail(appealId);
+    }
+
+    /**
+     * B6: appeal decisions are admin actions like any other and belong in {@code admin_action_log}
+     * (previously only {@code appeals.decided_by} recorded them). Written in the decision's transaction,
+     * after the conditional UPDATE won, so exactly one row per decided appeal. The reversal's own
+     * actions (COACH_REINSTATE, COACH_STRIKE_DELETED, the review approve) are logged by the services
+     * that perform them.
+     */
+    private void auditDecision(UUID appealId, AppealStatus outcome, AppealSubjectType subjectType, UUID subjectId,
+                               Boolean reversalApplied, String note, Long adminId) {
+        String reason = subjectType + " " + subjectId
+            + (reversalApplied == null ? "" : " reversalApplied=" + reversalApplied) + ": " + note;
+        AdminActionLog entry = new AdminActionLog();
+        entry.setAdminId(adminId);
+        entry.setActionType(outcome == AppealStatus.OVERTURNED
+            ? AdminActionType.APPEAL_OVERTURN : AdminActionType.APPEAL_UPHOLD);
+        entry.setReferenceId(appealId.toString());
+        // admin_action_log.reason is varchar(500); the decision note alone may be up to 1000.
+        entry.setReason(reason.length() > AUDIT_REASON_MAX ? reason.substring(0, AUDIT_REASON_MAX) : reason);
+        adminActionLogRepository.save(entry);
     }
 
     private boolean applyReversal(UUID appealId, AppealSubjectType type, UUID subjectId, Instant enforcedAt,
@@ -182,7 +216,8 @@ public class AppealService {
                 // Only reverse the suspension that was appealed: a coach since reinstated and suspended
                 // AGAIN carries a newer statusChangedAt — that is a different enforcement action.
                 if (coach == null || coach.getStatus() != CoachProfileStatus.SUSPENDED
-                        || !Objects.equals(coach.getStatusChangedAt(), enforcedAt)) {
+                        || !Objects.equals(coach.getStatusChangedAt(), enforcedAt)
+                        || isSafetyHold(subjectId, enforcedAt)) {
                     return false;
                 }
                 enforcementService.reinstateCoach(subjectId, auditReason, adminId);
@@ -209,6 +244,12 @@ public class AppealService {
             }
             default -> throw new IllegalStateException("Unhandled appeal subject type " + type);
         }
+    }
+
+    /** B6: the coach's current suspension (stamped at {@code suspendedAt}) is a child-safety hold. */
+    private boolean isSafetyHold(UUID coachId, Instant suspendedAt) {
+        return suspendedAt != null && adminActionLogRepository.existsByReferenceIdAndActionTypeAndCreatedAtGreaterThanEqual(
+            coachId.toString(), AdminActionType.COACH_SAFETY_HOLD, suspendedAt);
     }
 
     /** Null when the record does not exist. */

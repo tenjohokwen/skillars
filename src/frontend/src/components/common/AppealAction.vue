@@ -129,6 +129,7 @@ const ERROR_MESSAGES = {
   'appeals.alreadyAppealed': 'appeals.errors.alreadyAppealed',
   'appeals.windowExpired': 'appeals.errors.windowExpired',
   'appeals.notEnforced': 'appeals.errors.notEnforced',
+  'appeals.notAppealable': 'appeals.errors.notAppealable',
   'appeals.subjectNotFound': 'appeals.errors.subjectNotFound',
 }
 

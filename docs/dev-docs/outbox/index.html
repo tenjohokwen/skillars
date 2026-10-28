@@ -139,7 +139,7 @@
     <table>
       <thead><tr><th><code>aggregate_type</code></th><th>Producer (enqueue side)</th><th>Handler</th><th>Idempotency</th></tr></thead>
       <tbody>
-        <tr><td><code>NOTIFICATION_EMAIL</code></td><td><code>notification.NotificationOutboxSupport.enqueueEmail</code> (<code>MANDATORY</code>), called <code>BEFORE_COMMIT</code> by <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code> and the three security registration listeners</td><td><code>NotificationEmailOutboxHandler</code></td><td>Re-drive may resend; <code>MailManager</code>'s per-recipient delivered flags + sendId advisory lock limit it. Throws only on <code>FAILED</code>+retryable.</td></tr>
+        <tr><td><code>NOTIFICATION_EMAIL</code></td><td><code>notification.NotificationOutboxSupport.enqueueEmail</code> (<code>MANDATORY</code>), called <code>BEFORE_COMMIT</code> by <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code>, <code>AdminOutcomeEmailListener</code> and the three security registration listeners</td><td><code>NotificationEmailOutboxHandler</code></td><td>Re-drive may resend; <code>MailManager</code>'s per-recipient delivered flags + sendId advisory lock limit it. Throws only on <code>FAILED</code>+retryable.</td></tr>
         <tr><td><code>CREDIT_WALLET_REFUND</code></td><td><code>payment.RefundOutboxSupport.enqueueBookingRefund</code> (<code>MANDATORY</code>) from <code>RefundEnqueueListener</code> (<code>BEFORE_COMMIT</code>)</td><td><code>CreditWalletRefundOutboxHandler</code></td><td>No-op if a <code>BOOKING_REFUND</code> ledger row exists; <code>uq_pcl_booking_refund</code> backstop.</td></tr>
         <tr><td><code>COACH_PAYOUT_TRANSFER</code></td><td><code>payment.CoachPayoutOutboxSupport.enqueuePayout</code> (<code>MANDATORY</code>) from <code>CoachPayoutEnqueueListener</code> (<code>BEFORE_COMMIT</code>), with <code>notBefore = release_after</code> (payout hold window)</td><td><code>CoachPayoutTransferHandler</code></td><td>Proceeds only if <code>coach_payouts</code> row is <code>PENDING_RELEASE</code> and past <code>release_after</code>; Stripe idempotency key.</td></tr>
         <tr><td><code>COACH_PAYOUT_REVERSAL</code></td><td><code>CoachPayoutOutboxSupport.enqueueReversal</code> from <code>admin.DisputeService</code> (dispute upheld after release)</td><td><code>CoachPayoutReversalHandler</code></td><td>Only if row is <code>RELEASED</code>; deterministic <code>reversal-{stripeTransferId}</code> key.</td></tr>
@@ -284,7 +284,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

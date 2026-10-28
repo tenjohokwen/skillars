@@ -64,7 +64,8 @@ class AdminAlertEventListenerTest {
 
     @BeforeEach
     void setUp() {
-        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(any(), any(), any()))
+        // lenient: the B6 onModerationFailure tests never take the insertAlert path.
+        lenient().when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(any(), any(), any()))
             .thenReturn(Optional.empty());
         lenient().when(txManager.getTransaction(any())).thenReturn(transactionStatus);
         // @PostConstruct is not invoked by Mockito's @InjectMocks — call it directly, same as
@@ -187,5 +188,30 @@ class AdminAlertEventListenerTest {
         listener.onMessageReported(new MessageReportedEvent(1L, 12345L, 99L, 55L, "SPAM"));
 
         verify(adminAlertRepository, never()).saveAndFlush(any());
+    }
+
+    // ── B6, issue 2: ModerationFailureEvent ────────────────────────────────
+
+    @Test
+    void onModerationFailure_restampsTheOpenHoldAlertAsAProviderFailure() {
+        when(adminAlertRepository.updateOpenAlertReason("777", "MODERATION_UNRESOLVED", "MODERATION_PROVIDER_FAILED"))
+            .thenReturn(1);
+
+        listener.onModerationFailure(
+            new com.softropic.skillars.platform.messaging.contract.ModerationFailureEvent(777L, 5L, "timeout"));
+
+        org.mockito.Mockito.verify(adminAlertRepository)
+            .updateOpenAlertReason("777", "MODERATION_UNRESOLVED", "MODERATION_PROVIDER_FAILED");
+        // Never inserts a fresh alert: no open hold means the message was already resolved or deleted.
+        org.mockito.Mockito.verify(adminAlertRepository, org.mockito.Mockito.never()).saveAndFlush(any());
+    }
+
+    @Test
+    void onModerationFailure_neverThrows_soTheModerationCallerIsUnaffected() {
+        when(adminAlertRepository.updateOpenAlertReason(any(), any(), any()))
+            .thenThrow(new org.springframework.dao.QueryTimeoutException("db down"));
+
+        listener.onModerationFailure(
+            new com.softropic.skillars.platform.messaging.contract.ModerationFailureEvent(777L, 5L, "timeout"));
     }
 }

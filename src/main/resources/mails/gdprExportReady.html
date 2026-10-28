@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.admin.gdpr_export_ready.title}">Your Data Export Is Ready</title>
+</head>
+<body>
+    <h2 th:text="#{email.admin.gdpr_export_ready.title}">Your Data Export Is Ready</h2>
+    <p>The copy of your personal data you requested is ready. For your security it is not attached to this email: log in to Skillars and download it from the Privacy section of your profile page.</p>
+    <p><a th:href="${map.profileUrl}" th:text="${map.profileUrl}">profile</a></p>
+    <p th:if="${map.expiresAt != null and map.expiresAt != ''}">The download link expires at <strong th:text="${map.expiresAt}">date</strong> (UTC). After that you can request a new export.</p>
+</body>
+</html>

@@ -51,6 +51,7 @@ class DisputeDismissIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private com.softropic.skillars.utils.TestMailManager testMailManager;
 
     @LocalServerPort private int randomServerPort;
 
@@ -115,6 +116,7 @@ class DisputeDismissIT extends AbstractIntegrationTest {
     void tearDown() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM admin.admin_action_log WHERE reference_id = ?", disputeId.toString());
+            jdbcTemplate.update("DELETE FROM main.user_notifications WHERE recipient_user_id = ?", PARENT_ID);
             jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE alert_id = ?", alertId);
             jdbcTemplate.update("DELETE FROM admin.disputes WHERE id = ?", disputeId);
             // parent_credit_ledger is append-only (V79 triggers); bypass for test cleanup only
@@ -137,6 +139,7 @@ class DisputeDismissIT extends AbstractIntegrationTest {
 
     @Test
     void dismissDispute_setsDismissedAndResolvesAlert() {
+        testMailManager.clear();
         String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
         ResponseEntity<Void> resp = httpTestClient.makeHttpRequest(
             baseUrl() + ADMIN_DISP_BASE + "/" + disputeId + "/dismiss",
@@ -167,10 +170,29 @@ class DisputeDismissIT extends AbstractIntegrationTest {
             "SELECT status FROM admin.admin_alerts WHERE alert_id = ?", String.class, alertId);
         assertThat(alertStatus).isEqualTo("RESOLVED");
 
-        Integer logCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM admin.admin_action_log WHERE reference_id = ? AND action_type = 'DISPUTE_RESOLVE'",
-            Integer.class, disputeId.toString());
-        assertThat(logCount).isEqualTo(1);
+        // B6: a dismissal is audited as DISPUTE_DISMISS (it used to be logged as DISPUTE_RESOLVE,
+        // indistinguishable from a resolution).
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT action_type FROM admin.admin_action_log WHERE reference_id = ?",
+            String.class, disputeId.toString()))
+            .containsExactly("DISPUTE_DISMISS");
+
+        // B6: the raiser is told — the email went through the outbox (sync drain under the test
+        // profile) and an inbox row was written in the dismissal's own transaction.
+        assertThat(testMailManager.getEnvelopes().values().stream()
+                .filter(e -> e.emailTemplate()
+                    == com.softropic.skillars.platform.notification.contract.EmailTemplate.DISPUTE_DISMISSED)
+                .toList())
+            .singleElement()
+            .satisfies(e -> {
+                assertThat(e.recipients()).extracting(r -> r.getEmail()).containsExactly(PARENT_EMAIL);
+                assertThat(e.data()).containsEntry("reason", "Frivolous — no evidence provided")
+                    .containsEntry("coachDisplayName", "Dismiss Coach");
+            });
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT type || '|' || category || '|' || deep_link FROM main.user_notifications WHERE recipient_user_id = ?",
+            String.class, PARENT_ID))
+            .containsExactly("DISPUTE_DISMISSED|BOOKING|/parent/bookings");
 
         Integer ledgerCount = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM payment.parent_credit_ledger WHERE reference_id = ?",

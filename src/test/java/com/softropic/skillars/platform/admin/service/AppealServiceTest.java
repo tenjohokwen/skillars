@@ -53,6 +53,7 @@ class AppealServiceTest {
     @Mock AdminReviewService adminReviewService;
     @Mock com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer lockRetryer;
 
+    @Mock com.softropic.skillars.platform.admin.repo.AdminActionLogRepository adminActionLogRepository;
     @InjectMocks AppealService service;
 
     @Test
@@ -170,6 +171,54 @@ class AppealServiceTest {
 
         verify(adminReviewService, never()).approveReview(any(), any());
         verify(appealRepository, never()).markReversalApplied(any(), org.mockito.ArgumentMatchers.anyBoolean());
+        // B6: the decision itself is in the admin action log.
+        var logged = org.mockito.ArgumentCaptor.forClass(com.softropic.skillars.platform.admin.repo.AdminActionLog.class);
+        verify(adminActionLogRepository).save(logged.capture());
+        assertThat(logged.getValue().getActionType())
+            .isEqualTo(com.softropic.skillars.platform.admin.contract.AdminActionType.APPEAL_UPHOLD);
+        assertThat(logged.getValue().getReferenceId()).isEqualTo(appealId.toString());
+        assertThat(logged.getValue().getAdminId()).isEqualTo(ADMIN);
+    }
+
+    @Test
+    void submit_coachSuspensionThatIsASafetyHold_isNotAppealable() {
+        UUID coachId = UUID.randomUUID();
+        Instant heldAt = Instant.now().minus(1, ChronoUnit.DAYS);
+        CoachProfile coach = new CoachProfile();
+        coach.setId(coachId);
+        coach.setUserId(COACH_USER);
+        coach.setStatus(CoachProfileStatus.SUSPENDED);
+        coach.setStatusChangedAt(heldAt);
+        when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(coach));
+        when(adminActionLogRepository.existsByReferenceIdAndActionTypeAndCreatedAtGreaterThanEqual(
+            coachId.toString(), com.softropic.skillars.platform.admin.contract.AdminActionType.COACH_SAFETY_HOLD, heldAt))
+            .thenReturn(true);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service.submit(COACH_USER, AppealSubjectType.COACH_SUSPENSION, coachId, "unfair"))
+            .isInstanceOfSatisfying(org.springframework.web.server.ResponseStatusException.class,
+                e -> assertThat(e.getReason()).isEqualTo("appeals.notAppealable"));
+        verify(appealRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void decide_overturned_auditsAppealOverturnWithReversalOutcome_andCapsTheReasonAt500() {
+        UUID appealId = UUID.randomUUID();
+        UUID strikeId = UUID.randomUUID();
+        when(appealRepository.findById(appealId))
+            .thenReturn(Optional.of(appeal(appealId, AppealSubjectType.RELIABILITY_STRIKE, strikeId, Instant.now())));
+        when(appealRepository.decideIfOpen(eq(appealId), any(), anyString(), anyLong(), any())).thenReturn(1);
+        when(strikeRepository.findById(strikeId)).thenReturn(Optional.empty());
+
+        service.decide(appealId, AppealStatus.OVERTURNED, "x".repeat(1000), ADMIN);
+
+        var logged = org.mockito.ArgumentCaptor.forClass(com.softropic.skillars.platform.admin.repo.AdminActionLog.class);
+        verify(adminActionLogRepository).save(logged.capture());
+        assertThat(logged.getValue().getActionType())
+            .isEqualTo(com.softropic.skillars.platform.admin.contract.AdminActionType.APPEAL_OVERTURN);
+        assertThat(logged.getValue().getReason())
+            .startsWith("RELIABILITY_STRIKE " + strikeId + " reversalApplied=false: ")
+            .hasSize(500);
     }
 
     @Test

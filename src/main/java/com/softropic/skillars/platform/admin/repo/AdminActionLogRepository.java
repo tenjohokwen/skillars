@@ -16,4 +16,12 @@ public interface AdminActionLogRepository extends JpaRepository<AdminActionLog, 
      */
     List<AdminActionLog> findTop50ByReferenceIdAndActionTypeInOrderByCreatedAtDesc(
         String referenceId, Collection<AdminActionType> actionTypes);
+
+    /**
+     * B6: whether an action of this type was logged against the reference at or after {@code since} —
+     * used to tell a coach's current suspension apart as a child-safety hold (COACH_SAFETY_HOLD logged
+     * with the same instant as the profile's statusChangedAt).
+     */
+    boolean existsByReferenceIdAndActionTypeAndCreatedAtGreaterThanEqual(
+        String referenceId, AdminActionType actionType, java.time.Instant since);
 }

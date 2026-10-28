@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.admin.review_blocked.title}">Your Review Was Not Published</title>
+</head>
+<body>
+    <h2 th:text="#{email.admin.review_blocked.title}">Your Review Was Not Published</h2>
+    <p>A Skillars moderator reviewed your review of <strong th:text="${map.coachDisplayName}">Coach</strong> and blocked it because it does not meet our review guidelines. It is not visible on the coach's profile.</p>
+    <p>If you believe this is a mistake you can appeal within 14 days from the coach's profile page: <a th:href="${map.coachProfileUrl}" th:text="${map.coachProfileUrl}">coach profile</a></p>
+</body>
+</html>

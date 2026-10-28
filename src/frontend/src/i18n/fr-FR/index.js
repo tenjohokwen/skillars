@@ -2492,6 +2492,15 @@ export default {
       VIDEO_APPROVAL_APPROVED: 'Votre parent a approuvé votre vidéo.',
       VIDEO_APPROVAL_REJECTED: "Votre parent n'a pas approuvé votre vidéo.",
       COACH_VISIBILITY_REDUCED: 'Votre visibilité sur la place de marché a été réduite.',
+      COACH_SUSPENDED:
+        'Votre profil de coach a été suspendu. Vous pouvez faire appel depuis votre page de profil.',
+      COACH_REINSTATED: 'La suspension de votre profil de coach a été levée.',
+      COACH_WARNING_ISSUED: 'Vous avez reçu un avertissement formel à la suite d’un litige.',
+      DISPUTE_RESOLVED: 'Votre litige concernant la séance du {requestedStartTime} a été traité.',
+      DISPUTE_DISMISSED: 'Votre litige concernant la séance du {requestedStartTime} a été rejeté.',
+      GDPR_EXPORT_READY: 'Votre export de données peut être téléchargé jusqu’au {expiresAt}.',
+      REVIEW_APPROVED: 'Votre avis sur {coachDisplayName} a été publié.',
+      REVIEW_BLOCKED: 'Votre avis sur {coachDisplayName} n’a pas été publié.',
     },
     preferences: {
       title: 'Notifications par e-mail',
@@ -2624,6 +2633,8 @@ export default {
       alreadyAppealed: 'Cette décision a déjà fait l’objet d’un appel.',
       windowExpired: 'Le délai d’appel de 14 jours est écoulé.',
       notEnforced: 'Cette décision n’est plus en vigueur ; il n’y a rien à contester.',
+      notAppealable:
+        'Cette décision ne peut pas être contestée ici. Veuillez contacter le support Skillars.',
       subjectNotFound: 'Cet élément est introuvable.',
       generic: 'Impossible d’envoyer l’appel. Veuillez réessayer.',
     },

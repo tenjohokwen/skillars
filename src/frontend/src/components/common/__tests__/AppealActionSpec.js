@@ -165,4 +165,18 @@ describe('AppealAction.vue', () => {
       expect.objectContaining({ message: 'appeals.errors.windowExpired' }),
     )
   })
+
+  it('maps notAppealable (B6: a safety hold) to its message', async () => {
+    submitAppeal.mockRejectedValue({
+      response: { data: { errorMsg: { message: 'appeals.notAppealable' } } },
+    })
+    const wrapper = await mountAction()
+    wrapper.vm.$.setupState.reason = 'please'
+
+    await wrapper.vm.$.setupState.submitDialog()
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'appeals.errors.notAppealable' }),
+    )
+  })
 })

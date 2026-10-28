@@ -75,4 +75,22 @@ public interface AdminAlertRepository extends JpaRepository<AdminAlert, UUID> {
           )
         """, nativeQuery = true)
     int resolveOpenAlertsForDeletedMessages();
+
+    /**
+     * B6: stamps the cause onto an OPEN alert in one atomic statement (no load-check-write). Used to mark
+     * a MODERATION_UNRESOLVED hold as a moderation-provider failure: the hold is raised with the
+     * verdict-level reason MODERATION_UNCERTAIN, which reads as "the classifier was unsure" when in fact
+     * nothing assessed the content. A no-op (0) when no matching OPEN alert exists. AdminAlert has no
+     * {@code @Version}, so a native UPDATE needs no version bump.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+        UPDATE admin.admin_alerts
+        SET reason = :reason
+        WHERE reference_id = :referenceId
+          AND type = :type
+          AND status = 'OPEN'
+        """, nativeQuery = true)
+    int updateOpenAlertReason(@Param("referenceId") String referenceId, @Param("type") String type,
+                              @Param("reason") String reason);
 }

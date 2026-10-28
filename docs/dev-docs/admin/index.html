@@ -251,7 +251,10 @@
         <tr><td><code>BookingCancelledByAdminEvent</code></td><td>Published (to <code>payment</code>)</td><td>One per <code>REQUESTED</code> booking cancelled on coach suspension, carrying the price; consumed by <code>CancellationRefundService</code> / <code>RefundEnqueueListener</code>.</td></tr>
         <tr><td><code>GdprExportRequestedEvent</code>, <code>GdprErasureRequestedEvent</code></td><td>Published &amp; consumed (internal, <code>AFTER_COMMIT</code>)</td><td>Carry <code>requestId</code>, <code>userId</code> and nullable <code>playerId</code>.</td></tr>
         <tr><td><code>UserErasedEvent</code>, <code>AccountDeletionRequestedEvent</code></td><td>Published (to <code>security</code> and cascades)</td><td>Consumed by <code>UserErasedEventListener</code> and <code>AccountDeletionCascadeListener</code>.</td></tr>
-        <tr><td><code>CoachSuspendedEvent</code>, <code>CoachSuspensionNotificationEvent</code>, <code>CoachReinstatedEvent</code>, <code>CoachWarningIssuedEvent</code>, <code>DisputeResolvedEvent</code>, <code>GdprExportReadyEvent</code>, <code>ReviewModerationResolvedEvent</code></td><td>Published</td><td><strong>No listener exists today</strong> for any of these — see the gotcha below.</td></tr>
+        <tr><td><code>CoachSuspensionNotificationEvent</code>, <code>CoachReinstatedEvent</code>, <code>CoachWarningIssuedEvent</code>, <code>DisputeResolvedEvent</code>, <code>DisputeDismissedEvent</code>, <code>GdprExportReadyEvent</code>, <code>ReviewModerationResolvedEvent</code> (class in <code>reviews</code>)</td><td>Published (to <code>notification</code>)</td><td>Admin-outcome notices. Each carries an <code>AdminNotificationRecipient</code> (email + language) resolved by the publisher in its own transaction by <code>AdminNotificationRecipientResolver</code>; <code>notification.AdminOutcomeEmailListener</code> (<code>BEFORE_COMMIT</code>) turns it into an outbox email + inbox row. See the gotcha below.</td></tr>
+        <tr><td><code>CoachSuspendedEvent</code></td><td>Published</td><td>The always-published domain fact (also for a safety hold, <code>adminId</code> null). Deliberately not emailed — the "notify coach" choice lives on <code>CoachSuspensionNotificationEvent</code>.</td></tr>
+        <tr><td><code>AccountSuspensionRequestedEvent</code></td><td>Consumed (from <code>video</code>, CSAM match)</td><td><code>CoachSafetySuspensionListener</code>: when <code>ownerId</code> is a <code>CoachProfile</code> UUID, suspends the marketplace profile (<code>suspendCoachForSafetyHold</code>). The account side is <code>security.AccountSuspensionEventListener</code>.</td></tr>
+        <tr><td><code>ModerationFailureEvent</code></td><td>Consumed (from <code>messaging</code>)</td><td>Re-stamps the message's OPEN <code>MODERATION_UNRESOLVED</code> alert reason as <code>MODERATION_PROVIDER_FAILED</code> (the classifier call failed, nothing assessed the content). Creates no alert.</td></tr>
       </tbody>
     </table>
     <p>
@@ -289,9 +292,28 @@ sequenceDiagram
   Enforce->>Booking: findByCoachIdAndStatus(REQUESTED)
   Enforce->>Booking: cancelRequestedBookingAsAdmin per booking (CANCEL_ADMIN, publishes BookingStatusChangedEvent)
   Enforce-->>Payment: BookingCancelledByAdminEvent (per booking)
-  Enforce->>Enforce: CoachSuspendedEvent (+ notification event if notifyCoach)
+  Enforce->>Enforce: CoachSuspendedEvent (+ CoachSuspensionNotificationEvent if notifyCoach)
   Enforce->>Alerts: AdminActionLog(COACH_SUSPEND)
+  Note over Enforce: notifyCoach - AdminOutcomeEmailListener enqueues COACH_SUSPENDED (BEFORE_COMMIT)
     </pre>
+    <p>
+      <strong>Safety hold.</strong> A CSAM match on a coach's video publishes <code>AccountSuspensionRequestedEvent</code>
+      with the video's <code>ownerId</code>, which for a coach upload is the <code>CoachProfile</code> UUID.
+      <code>CoachSafetySuspensionListener</code> (<code>AFTER_COMMIT</code>, <code>fallbackExecution</code>, never
+      throws) calls <code>suspendCoachForSafetyHold</code> (<code>REQUIRES_NEW</code>), which runs the same locked
+      suspension as the admin path: profile SUSPENDED, REQUESTED bookings cancelled through the state machine
+      (<code>CANCEL_ADMIN</code>, actor id 0) with refunds. It is idempotent, does
+      not notify the coach, and is logged as <code>COACH_SAFETY_HOLD</code> with <code>admin_id = 0</code>
+      (<code>AdminActionLog.SYSTEM_ACTOR_ID</code>; the column is NOT NULL and has no FK) at the same instant as the
+      profile's <code>statusChangedAt</code>. That row is what makes the hold <strong>non-appealable</strong>:
+      <code>AppealService</code> answers <code>409 appeals.notAppealable</code> on submit and never reverses it on
+      overturn (an admin can still reinstate directly from the console). CONFIRMED upcoming sessions are
+      <em>not</em> cancelled — <code>CANCEL_ADMIN</code> exists only from REQUESTED, and <code>CANCEL_COACH</code> would
+      strike the coach and refund under the wrong actor, so there is no clean admin path yet — and are counted in
+      the <code>[COACH_SAFETY_SUSPENSION]</code> ERROR log for the admin handling the CSAM alert.
+      <code>CoachSafetySuspensionListener</code> runs at <code>HIGHEST_PRECEDENCE</code> because with no transaction
+      the multicaster stops at the first listener that throws, and this one never throws.
+    </p>
     <p>
       Suspension is not just a status flip: every <code>REQUESTED</code> booking for the coach is cancelled
       (<code>COACH_SUSPENDED_BY_ADMIN</code>) through the booking state machine
@@ -354,6 +376,7 @@ sequenceDiagram
   DisputeSvc->>Wallet: writeLedgerEntry(BOOKING_REFUND) for credit outcomes
   DisputeSvc->>Payout: findByIdForUpdate: RELEASED enqueue reversal, PENDING_RELEASE/HOLD cancel
   DisputeSvc->>DisputeSvc: RESOLVED, resolve alert, AdminActionLog(DISPUTE_RESOLVE)
+  DisputeSvc-->>Party: DisputeResolvedEvent - DISPUTE_RESOLVED email + inbox row (BEFORE_COMMIT)
     </pre>
     <p>
       Eligible reasons are <code>COACH_NO_SHOW</code>, <code>SESSION_QUALITY</code>, <code>SAFETY_CONCERN</code>,
@@ -364,8 +387,11 @@ sequenceDiagram
       <code>PlayerProfile.userId</code> (<code>Booking.playerId</code> is a profile id) and the coach through
       <code>CoachProfile.userId</code>. Credit is computed only from a <code>CAPTURED</code>
       <code>BookingPayment</code> (credit debited + Stripe charged); otherwise <code>FULL_CREDIT</code> issues nothing
-      and logs a warning. The coach's payout share of a partial refund is proportional. Dismissal uses the same
-      <code>DISPUTE_RESOLVE</code> action type. While a dispute is open — or after a RESOLVED outcome other than
+      and logs a warning. The coach's payout share of a partial refund is proportional. Dismissal is audited as
+      <code>DISPUTE_DISMISS</code> (V183; before that it was logged as <code>DISPUTE_RESOLVE</code>, so older dismissal
+      rows still carry that type — the dispute's own status tells them apart). Both outcomes notify the raiser
+      (<code>DISPUTE_RESOLVED</code> / <code>DISPUTE_DISMISSED</code>; a minor player raiser's parent instead), and a
+      <code>COACH_WARNING</code> resolution notifies the coach (<code>COACH_WARNING_ISSUED</code>). While a dispute is open — or after a RESOLVED outcome other than
       <code>NO_ACTION</code> — the booking's session recap is locked (<code>DisputeRepository.existsRecapLockingDispute</code>,
       exposed to booking via <code>DisputeRecapLockLookup</code>).
     </p>
@@ -387,6 +413,7 @@ sequenceDiagram
     Svc->>Enforce: deleteStrike / reinstateCoach / approveReview (same TX)
     Svc->>Svc: markReversalApplied(true or false)
   end
+  Svc->>Svc: AdminActionLog(APPEAL_UPHOLD or APPEAL_OVERTURN)
     </pre>
     <p>
       Overturning applies the reversal only if the appealed enforcement still stands: a strike already deleted, a
@@ -394,7 +421,10 @@ sequenceDiagram
       <code>BLOCKED</code> records <code>reversalApplied = false</code>. Suspension and review reversals take the row
       lock (<code>findByIdForUpdate</code> / <code>findByIdForUpdateNoWait</code>) before checking, so a concurrent
       edit cannot slip between the check and the reversal. <code>DISPUTE_RESOLUTION</code> appeals never reverse money
-      automatically — the admin corrects it by hand. A reversal failure rolls back the decision too.
+      automatically — the admin corrects it by hand. A reversal failure rolls back the decision too. Every decision is
+      written to <code>admin_action_log</code> as <code>APPEAL_UPHOLD</code> / <code>APPEAL_OVERTURN</code> (V183,
+      reference = appeal id, reason = subject + reversal outcome + note, capped at 500 chars); the reversal's own
+      actions are logged by the services that perform them, and a reinstated coach / approved review notifies its owner.
     </p>
 
     <h3 id="gdpr-erasure-self-or-child">GDPR erasure (self or child)</h3>
@@ -458,13 +488,18 @@ sequenceDiagram
       Self-scoped lookups use the <code>...PlayerIdIsNull...</code> repository methods for the same reason.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Many published admin events have no listener.</strong> <code>CoachSuspendedEvent</code>,
-      <code>CoachSuspensionNotificationEvent</code>, <code>CoachReinstatedEvent</code>,
-      <code>CoachWarningIssuedEvent</code>, <code>DisputeResolvedEvent</code>, <code>GdprExportReadyEvent</code> and
-      <code>ReviewModerationResolvedEvent</code> are published but nothing consumes them — the coach is not notified
-      of a suspension or warning, the disputer is not notified of the outcome, and the user is not told the export
-      is ready (the profile page polls <code>/api/gdpr/requests</code>). Wire a listener before relying on any of
-      them.</p>
+      <p><strong>Admin outcomes are notified through the outbox, with the recipient resolved by the publisher.</strong>
+      Suspension (only when the admin ticks "notify coach"), reinstatement, dispute warning, dispute resolved /
+      dismissed, GDPR export ready and review approved / blocked each publish an event carrying an
+      <code>AdminNotificationRecipient</code>; <code>notification.AdminOutcomeEmailListener</code> enqueues the email and
+      inbox row <code>BEFORE_COMMIT</code> in the decision's transaction (all eight templates are transactional, never
+      opt-out-able). The exception is <code>GdprExportReadyEvent</code>: handled <code>AFTER_COMMIT</code> in its own
+      transaction, so a failed notice can never roll the export back to PENDING. <code>DisputeResolvedEvent</code>
+      carries the amount actually credited (zero for a <code>FULL_CREDIT</code> on a zero-price booking), not the
+      requested outcome. Resolve recipients with <code>AdminNotificationRecipientResolver</code>: a coach by
+      <code>CoachProfile.userId</code>, a user id directly, a minor player with a linked parent redirected to the parent
+      (GDPR export is the exception — it goes to the requester, whose profile page holds the download). The signed export
+      URL is never emailed. A null recipient skips the email with a WARN.</p>
     </div>
     <div class="callout">
       <p><strong>Alert inserts are isolated on purpose.</strong> <code>AdminAlertEventListener.insertAlert</code>
@@ -539,7 +574,7 @@ sequenceDiagram
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

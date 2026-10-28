@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.admin.repo.AdminAlert;
 import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.messaging.contract.ConversationReportedEvent;
 import com.softropic.skillars.platform.messaging.contract.MessageHeldForReviewEvent;
+import com.softropic.skillars.platform.messaging.contract.ModerationFailureEvent;
 import com.softropic.skillars.platform.messaging.contract.MessageReportedEvent;
 import com.softropic.skillars.platform.messaging.contract.MessagesPurgedEvent;
 import com.softropic.skillars.platform.payment.contract.event.CoachSubscriptionOrphanedEvent;
@@ -29,6 +30,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 @RequiredArgsConstructor
 @Slf4j
 public class AdminAlertEventListener {
+
+    /** admin_alerts.reason value for a hold caused by a failed moderation call (fits varchar(64)). */
+    static final String REASON_PROVIDER_FAILED = "MODERATION_PROVIDER_FAILED";
 
     private final AdminAlertRepository adminAlertRepository;
     private final PlatformTransactionManager txManager;
@@ -92,6 +96,37 @@ public class AdminAlertEventListener {
         if (resolved > 0) {
             log.info("Resolved {} admin alert(s) referencing messages removed by retention "
                 + "({} messages purged)", resolved, event.deletedCount());
+        }
+    }
+
+    /**
+     * B6, issue 2: {@code GeminiModerationService} publishes {@link ModerationFailureEvent} when the
+     * classifier call itself failed (outage, timeout, bad response). The message was already held
+     * UNDER_REVIEW and {@link #onMessageHeldForReview} already raised the MODERATION_UNRESOLVED alert — but
+     * with the verdict-level reason MODERATION_UNCERTAIN, which tells the reviewer "the classifier was
+     * unsure", when nothing assessed the content at all. This re-stamps that open alert's reason as
+     * {@value #REASON_PROVIDER_FAILED} so the queue summary leads with the real cause. It does not create
+     * an alert when none is open: the hold path only skips the alert when the message was already
+     * resolved or deleted, and an alert for that would be noise.
+     *
+     * <p>Plain {@code @EventListener}: the publisher holds no transaction. The update runs in its own
+     * REQUIRES_NEW and every failure is caught here — the publisher does not wrap this publish, and the
+     * moderation verdict it follows has already committed; a lost reason re-stamp must not fail it.
+     */
+    @EventListener
+    public void onModerationFailure(ModerationFailureEvent event) {
+        if (event.messageId() == null) {
+            return;
+        }
+        try {
+            Integer updated = requiresNewTemplate.execute(status -> adminAlertRepository.updateOpenAlertReason(
+                String.valueOf(event.messageId()), AdminAlertType.MODERATION_UNRESOLVED.name(),
+                REASON_PROVIDER_FAILED));
+            log.warn("[MODERATION_PROVIDER_FAILED] messageId={} conversationId={} openAlertsMarked={}",
+                event.messageId(), event.conversationId(), updated);
+        } catch (RuntimeException e) {
+            log.error("Failed to mark MODERATION_UNRESOLVED alert as a provider failure for message {}",
+                event.messageId(), e);
         }
     }
 

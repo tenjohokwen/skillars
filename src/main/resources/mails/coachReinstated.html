@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.admin.coach_reinstated.title}">Your Coach Profile Has Been Reinstated</title>
+</head>
+<body>
+    <h2 th:text="#{email.admin.coach_reinstated.title}">Your Coach Profile Has Been Reinstated</h2>
+    <p>The suspension on your coach profile <strong th:text="${map.coachDisplayName}">Coach</strong> has been lifted.</p>
+    <p>If your profile is complete it is visible in the marketplace again; otherwise finish the remaining profile steps to publish it.</p>
+    <p><a th:href="${map.dashboardUrl}" th:text="${map.dashboardUrl}">dashboard</a></p>
+</body>
+</html>

@@ -125,8 +125,8 @@
       <tbody>
         <tr><td><code>api</code></td><td><code>NotificationResource</code> (current user's inbox + email preferences), <code>UnsubscribeResource</code> (public one-click unsubscribe), <code>AlertRuleAdminResource</code> (alert-rule CRUD), <code>SesCutoverPreflightResource</code> (admin SES readiness probe, only when <code>app.email.transport=ses</code>).</td></tr>
         <tr><td><code>config</code></td><td><code>ThymeleafConfiguration</code> (email template engine), <code>AsyncConfig</code> (<code>sendMailPool</code> and <code>moderationTaskExecutor</code> executors), <code>ComponentConfig</code> (<code>MailManager</code> bean, <code>RetryTemplate</code>, Resilience4j circuit-breaker customizer).</td></tr>
-        <tr><td><code>contract</code></td><td>Public API surface: <code>Envelope</code>/<code>Recipient</code>, the <code>EmailTemplate</code> enum (44 constants) exposing <code>subjectKey()</code>, <code>deliveryDeadline()</code> and <code>circuitBreakerName()</code>, <code>EmailDeliveryStatus</code>, <code>AlertFiredEvent</code>, <code>NotificationCategory</code>, and the notification-centre DTOs (<code>NotificationDto</code>, <code>UnreadCountDto</code>, <code>NotificationPreferenceDto</code>, <code>UpdateNotificationPreferenceRequest</code>, <code>UnsubscribeResultDto</code>).</td></tr>
-        <tr><td><code>infrastructure</code></td><td><code>EmailRetryScheduler</code> and <code>infrastructure.listener</code>: the five email listeners (<code>AccountChange</code>, <code>Booking</code>, <code>SessionPack</code>, <code>VideoModeration</code>, <code>VideoOwner</code><code>EmailListener</code>), <code>InAppEnvelopeListener</code> (inbox rows for direct-<code>Envelope</code> producers) and <code>NotificationUserErasedListener</code> (GDPR cleanup).</td></tr>
+        <tr><td><code>contract</code></td><td>Public API surface: <code>Envelope</code>/<code>Recipient</code>, the <code>EmailTemplate</code> enum (52 constants) exposing <code>subjectKey()</code>, <code>deliveryDeadline()</code> and <code>circuitBreakerName()</code>, <code>EmailDeliveryStatus</code>, <code>AlertFiredEvent</code>, <code>NotificationCategory</code>, and the notification-centre DTOs (<code>NotificationDto</code>, <code>UnreadCountDto</code>, <code>NotificationPreferenceDto</code>, <code>UpdateNotificationPreferenceRequest</code>, <code>UnsubscribeResultDto</code>).</td></tr>
+        <tr><td><code>infrastructure</code></td><td><code>EmailRetryScheduler</code> and <code>infrastructure.listener</code>: the six email listeners (<code>AccountChange</code>, <code>Booking</code>, <code>SessionPack</code>, <code>VideoModeration</code>, <code>VideoOwner</code>, <code>AdminOutcome</code><code>EmailListener</code>), <code>InAppEnvelopeListener</code> (inbox rows for direct-<code>Envelope</code> producers) and <code>NotificationUserErasedListener</code> (GDPR cleanup).</td></tr>
         <tr><td><code>repo</code></td><td>JPA: <code>AlertRule</code>, <code>EnvelopeEntity</code>/<code>RecipientEntity</code>, <code>UserNotification</code> (+ <code>UserNotificationRepository</code>). Plain JDBC: <code>UserNotificationWriter</code> (the one inbox INSERT), <code>NotificationEmailPreferenceRepository</code> (upsert/read of opt-outs), <code>NotificationRecipientLookup</code> (email address → <code>main."user"</code> id + coach flag).</td></tr>
         <tr><td><code>service</code></td><td>Send pipeline (<code>MailManager</code> → <code>MailService</code> → <code>EmailContentRenderer</code>), outbox producer/consumer (<code>NotificationOutboxSupport</code>, <code>NotificationEmailOutboxHandler</code>), notification centre (<code>NotificationCatalog</code>, <code>InAppNotificationService</code>, <code>NotificationPreferenceService</code>, <code>UnsubscribeTokenService</code>, <code>JdbcSavepoints</code>, <code>InAppNotificationRetentionScheduler</code>), alerting (<code>AlertEvaluationService</code>, <code>AlertRuleCache</code>, <code>AlertNotificationListener</code>), <code>MailMetrics</code>, <code>EnvelopeMapper</code>, <code>ResendEmailService</code>.</td></tr>
       </tbody>
@@ -137,7 +137,7 @@
       <thead><tr><th>Entity</th><th>Table</th><th>Purpose</th></tr></thead>
       <tbody>
         <tr><td><code>AlertRule</code></td><td><code>main.alert_rule</code></td><td>Admin-defined threshold rule: metric name, threshold ratio, window, channel (LOG/EMAIL), enabled flag, description. Audited (<code>main.alert_rule_aud</code>).</td></tr>
-        <tr><td><code>EnvelopeEntity</code></td><td><code>main.envelope_entity</code></td><td>Durable record of one send: recipients (element collection <code>envelope_entity_recipients</code>, each with a <code>delivered</code> flag since <code>V140</code>), template, JSON <code>data</code>, deadline, attempts, <code>EmailDeliveryStatus</code>, error text, retry flag, unique <code>send_id</code>. Polled by <code>EmailRetryScheduler</code>. <code>email_template</code> has a CHECK constraint listing every enum value (last widened by <code>V182</code> for the three <code>VIDEO_APPROVAL_*</code> templates; before that <code>V168</code> for <code>SES_CUTOVER_PREFLIGHT</code>).</td></tr>
+        <tr><td><code>EnvelopeEntity</code></td><td><code>main.envelope_entity</code></td><td>Durable record of one send: recipients (element collection <code>envelope_entity_recipients</code>, each with a <code>delivered</code> flag since <code>V140</code>), template, JSON <code>data</code>, deadline, attempts, <code>EmailDeliveryStatus</code>, error text, retry flag, unique <code>send_id</code>. Polled by <code>EmailRetryScheduler</code>. <code>email_template</code> has a CHECK constraint listing every enum value (last widened by <code>V183</code> for the eight admin-outcome templates; <code>V182</code> added the three <code>VIDEO_APPROVAL_*</code> templates and before that <code>V168</code> for <code>SES_CUTOVER_PREFLIGHT</code>).</td></tr>
         <tr><td><code>RecipientEntity</code></td><td>embedded</td><td>Persisted copy of <code>Recipient</code> (title, name, email, langKey, gender) + <code>delivered</code>, so a retry never re-sends to a recipient already reached.</td></tr>
         <tr><td><code>UserNotification</code></td><td><code>main.user_notifications</code> (<code>V175</code>)</td><td>One inbox row: <code>recipient_user_id</code> (a <code>main."user"</code> id, FK <code>ON DELETE CASCADE</code>), <code>category</code>, <code>type</code> (= <code>EmailTemplate</code> name; the frontend renders <code>notifications.types.&lt;type&gt;</code>), <code>params</code> jsonb (whitelisted strings only), <code>deep_link</code>, <code>source_send_id</code>, <code>created_at</code>, <code>read_at</code>. Unique partial index <code>uq_un_recipient_send_id</code> on <code>(recipient_user_id, source_send_id)</code> dedupes a double hook; <code>idx_un_recipient_unread</code> serves the badge.</td></tr>
         <tr><td>— (JDBC only)</td><td><code>main.notification_email_preferences</code> (<code>V175</code>)</td><td>Sparse opt-out rows, PK <code>(user_id, category)</code>, <code>email_enabled</code>. No row = email enabled. Written only by an atomic <code>INSERT ... ON CONFLICT DO UPDATE</code>.</td></tr>
@@ -153,7 +153,7 @@
         <tr><td><code>MailService</code></td><td>Per-recipient send: asks <code>NotificationPreferenceService.emailDecision</code> (suppress / send plain / send with unsubscribe token), renders via <code>EmailContentRenderer</code> (Thymeleaf template named after the lowerCamelCase enum constant, e.g. <code>BOOKING_CONFIRMED</code> → <code>mails/bookingConfirmed.html</code>, subject via <code>MessageSource</code>; <code>EmailTemplate.NONE</code> is the raw subject/body escape hatch used by alerts), adds <code>unsubscribeUrl</code> + <code>List-Unsubscribe</code> headers when a token was minted, then dispatches through the <code>OutboundEmailSender</code> port. Records the <code>mail.send</code> metric (not for suppressed sends). A failed preference lookup is thrown as <code>EmailTransportTransientException</code> (retryable); a malformed payload as <code>EmailTransportPermanentException</code>.</td></tr>
         <tr><td><code>NotificationOutboxSupport</code> / <code>NotificationEmailOutboxHandler</code></td><td>Outbox producer/consumer (aggregate type <code>NOTIFICATION_EMAIL</code>). <code>enqueueEmail</code> is <code>MANDATORY</code> — it joins the <code>BEFORE_COMMIT</code> listener's business transaction, stamps the deadline from <code>template.deliveryDeadline()</code>, writes the outbox row, requests a drain, and writes the in-app inbox row (<code>InAppNotificationService.recordForEmail</code>) in the same transaction. The handler re-checks the deadline (persists <code>DEADLINE_EXPIRED</code> and completes), calls <code>sendEmailSync</code>, reads the <code>EnvelopeEntity</code> back and throws on <code>FAILED</code>+<code>retry=true</code> so the outbox retries. See <a href="../outbox/index.html">Outbox</a>.</td></tr>
         <tr><td><code>NotificationCatalog</code></td><td>Static, exhaustive <code>switch</code> (no <code>default</code>) mapping each <code>EmailTemplate</code> to <code>Entry(category, inApp, coachLink, otherLink, linkDataKey)</code>. Deep links are hash-router paths (<code>/coach/booking-requests</code>, <code>/parent/bookings</code>, <code>/dashboard</code>, <code>/player/videos</code>, …); <code>PERFORMANCE_REPORT_SHARED</code> derives its link from the email's <code>reportsPageUrl</code>. Also holds <code>PARAM_WHITELIST</code>, the only email-data keys copied into an inbox row.</td></tr>
-        <tr><td><code>InAppNotificationService</code></td><td><code>recordForEmail</code> resolves the recipient address to a user (<code>NotificationRecipientLookup</code>, exact email match; no account → skipped), picks the deep link (coach vs other), whitelists params (strings ≤ 200 chars), and inserts via <code>UserNotificationWriter</code> (<code>ON CONFLICT DO NOTHING</code>) — all inside a JDBC savepoint, catching every failure, so the inbox can never fail the business transaction. Also list (page size capped at 50), unread count, mark-read and mark-all-read, each a single recipient-scoped statement.</td></tr>
+        <tr><td><code>InAppNotificationService</code></td><td><code>recordForEmail</code> resolves the recipient address to a user (<code>NotificationRecipientLookup</code>, case-insensitive email match; no account → skipped), picks the deep link (coach vs other), whitelists params (strings ≤ 200 chars), and inserts via <code>UserNotificationWriter</code> (<code>ON CONFLICT DO NOTHING</code>) — all inside a JDBC savepoint, catching every failure, so the inbox can never fail the business transaction. Also list (page size capped at 50), unread count, mark-read and mark-all-read, each a single recipient-scoped statement.</td></tr>
         <tr><td><code>NotificationPreferenceService</code></td><td><code>getPreferences</code>/<code>setPreference</code> (opt-out-able categories only), <code>unsubscribe(token)</code> (<code>@RateLimited</code> 120/min per IP; invalid token and deleted user both return the same 400), and <code>emailDecision</code> — the send-time check, run in a savepoint because it executes inside <code>sendEmailSync</code>'s <code>REQUIRES_NEW</code> transaction.</td></tr>
         <tr><td><code>UnsubscribeTokenService</code></td><td>Mints/verifies <code>v1.&lt;b64url(userId:CATEGORY)&gt;.&lt;b64url(HmacSHA256)&gt;</code>, constant-time compare, max 512 chars, opt-out-able categories only. Key derived from <code>skillars.platform.registration-verification-secret</code> with purpose label <code>skillars-email-unsubscribe-v1</code> (startup fails if the secret is blank).</td></tr>
         <tr><td><code>JdbcSavepoints</code></td><td>Runs a supplier inside a raw JDBC savepoint on the transaction's connection (rolls back to it on <code>RuntimeException</code> and rethrows). Exists because <code>JpaTransactionManager</code> cannot do <code>Propagation.NESTED</code> with Hibernate.</td></tr>
@@ -168,7 +168,7 @@
     <ul>
       <li><strong>Outbox shape</strong> (<code>@TransactionalEventListener(BEFORE_COMMIT)</code> +
         <code>NotificationOutboxSupport.enqueueEmail</code>; inbox row written by <code>enqueueEmail</code>):
-        <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code>, <code>VideoOwnerEmailListener</code> (this module —
+        <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code>, <code>VideoOwnerEmailListener</code>, <code>AdminOutcomeEmailListener</code> (this module —
         its owner-flagged handler is an <code>@EventListener</code> that opens its own <code>TransactionTemplate</code>
         transaction, because the async moderation pipeline publishes with none);
         <code>Coach</code>/<code>Parent</code>/<code>PlayerRegistrationEmailListener</code>
@@ -241,6 +241,13 @@
     <span class="tag">VideoModerationOwnerNotificationEvent</span>
     <span class="tag">VideoApprovalParentNotificationEvent</span>
     <span class="tag">VideoApprovalOwnerNotificationEvent</span> (video — recipient email resolved by the publisher)
+    <span class="tag">CoachSuspensionNotificationEvent</span>
+    <span class="tag">CoachReinstatedEvent</span>
+    <span class="tag">CoachWarningIssuedEvent</span>
+    <span class="tag">DisputeResolvedEvent</span>
+    <span class="tag">DisputeDismissedEvent</span>
+    <span class="tag">GdprExportReadyEvent</span> (admin)
+    <span class="tag">ReviewModerationResolvedEvent</span> (reviews, published by admin)
     <p>Internally: <code>Envelope</code> (published by direct-publish producers; consumed <code>BEFORE_COMMIT</code> by
       <code>InAppEnvelopeListener</code> and <code>AFTER_COMMIT</code> by <code>MailManager</code>) and
       <code>AlertFiredEvent</code> (<code>AlertEvaluationService</code> → <code>AlertNotificationListener</code>).</p>
@@ -416,8 +423,12 @@ sequenceDiagram
       inbox row can, rarely, be missing for an email that was sent.</p>
     </div>
     <div class="callout">
-      <p><strong>Recipients are resolved by exact email match.</strong> Producers address mail by email only, so both
-      the inbox and the opt-out check look the address up in <code>main."user".email</code> (unique index, case-sensitive).
+      <p><strong>Recipients are resolved by a case-insensitive email match.</strong> Producers address mail by email only, so both
+      the inbox and the opt-out check look the address up in <code>main."user".email</code>. Registration stores the
+      address as typed, so <code>NotificationRecipientLookup</code> tries the exact match first (the
+      <code>user_email_key</code> unique index) and only on a miss compares <code>lower(email)</code> — an unindexed scan
+      paid only by addresses that matched nothing exactly. If the folded address matches two accounts (addresses that
+      differ only by case are distinct under the unique constraint) it resolves to nobody rather than to the wrong inbox.
       An address that matches no user (an admin alias) gets no inbox row and an email with no unsubscribe link. The
       resolved user is the email owner — for a minor that is the parent, and <code>recipient_user_id</code> is always a <code>main."user"</code> id (never a <code>PlayerProfile</code> PK).</p>
     </div>
@@ -453,7 +464,8 @@ sequenceDiagram
     </div>
     <div class="callout">
       <p>Email template <code>data</code> is string-typed by contract: it is JSON round-tripped through the outbox, so
-      producers must format numbers/instants themselves. (<code>NotificationOutboxSupport</code>'s javadoc says <code>EmailDataStringContractTest</code> enforces this, but no such test exists in <code>src/test</code> today — it is convention only.) Some
+      producers must format numbers/instants themselves. <code>EmailDataRoundTripContractTest</code> pins the real property
+      (a value's type survives the JSON round trip) for the shapes the listeners use; it does not scan every producer. Some
       producers still put ints in (<code>creditsRemaining</code>, <code>requestedCount</code>,
       <code>acceptedCount</code>); the inbox param whitelister tolerates that.</p>
     </div>
@@ -480,7 +492,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>90b8cb80</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
