@@ -230,7 +230,10 @@ class SessionPlanCancellationLifecycleIT extends AbstractIntegrationTest {
             java.util.concurrent.Future<?> completer = executor.submit(() -> transactionTemplate.execute(tx -> {
                 jdbcTemplate.queryForObject("SELECT id FROM session.sessions WHERE id = ? FOR UPDATE",
                     UUID.class, created.id());
-                jdbcTemplate.update("UPDATE session.sessions SET status = 'COMPLETED' WHERE id = ?", created.id());
+                // C5: bumps version like the real markCompletedByBookingId, so this also proves the edit's
+                // unlocked-read-then-lock does not trip Hibernate's lock-upgrade version check.
+                jdbcTemplate.update("UPDATE session.sessions SET status = 'COMPLETED', version = version + 1 WHERE id = ?",
+                    created.id());
                 completionLocked.countDown();
                 try {
                     editStarted.await(10, java.util.concurrent.TimeUnit.SECONDS);
@@ -267,6 +270,28 @@ class SessionPlanCancellationLifecycleIT extends AbstractIntegrationTest {
         assertThat(jdbcTemplate.queryForObject(
             "SELECT status FROM session.sessions WHERE id = ?", String.class, created.id()))
             .isEqualTo("COMPLETED");
+    }
+
+    /**
+     * C5 (V188 @Version): the cancellation transition is a bulk UPDATE that now bumps the version, so a
+     * full-row save from a plan snapshot read before it is rejected instead of reopening the plan.
+     */
+    @Test
+    void staleSessionSave_afterCancellationTransition_isRejectedNotReverted() {
+        SessionBlockRequest block = new SessionBlockRequest("WARMUP", "Warmup", 10, List.of());
+        SessionPlanResponse created = sessionPlanService.createSession(
+            new CreateSessionPlanRequest(bookingId, List.of(block), List.of("PASSING")), COACH_USER_ID);
+        Session stale = sessionRepository.findById(created.id()).orElseThrow(); // detached, DRAFT
+
+        bookingService.cancelBookingAsParent(bookingId, PARENT_ID);              // plan -> CANCELLED, version + 1
+
+        stale.setStatus("SAVED");
+        assertThatThrownBy(() -> sessionRepository.save(stale))
+            .isInstanceOf(org.springframework.orm.ObjectOptimisticLockingFailureException.class);
+        assertThat(jdbcTemplate.queryForMap(
+            "SELECT status, version FROM session.sessions WHERE id = ?", created.id()))
+            .containsEntry("status", "CANCELLED")
+            .containsEntry("version", stale.getVersion() + 1);
     }
 
     /** The atomic completion UPDATE leaves an already-COMPLETED plan alone and completes an open one. */

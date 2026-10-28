@@ -54,6 +54,7 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private MeterRegistry meterRegistry;
     @Autowired private CoachProfilePhotoEventListener photoEventListener;
+    @Autowired private jakarta.persistence.EntityManager entityManager;
 
     private static final long COACH_USER_ID = 8070_000_001L;
     private static final long ADMIN_ID = 8070_000_099L;
@@ -446,6 +447,85 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
             "SELECT status, photo_url FROM marketplace.coach_profiles WHERE id = ?", profileId))
             .containsEntry("status", "SUSPENDED")
             .containsEntry("photo_url", "coach_profile/" + COACH_USER_ID + "/2026/10/confirmed.jpg");
+    }
+
+    /**
+     * C5 (V188 @Version): a full-row save from a snapshot taken before a concurrent status write used to
+     * silently revert it (CoachProfile had no @Version — e.g. the GDPR coach scrub's unlocked
+     * findByUserId + save racing a suspension). Now the stale save is rejected and the write survives.
+     */
+    @Test
+    void staleFullRowSave_afterConcurrentStatusWrite_isRejectedNotReverted() {
+        var stale = coachProfileRepository.findById(profileId).orElseThrow(); // detached, DRAFT, version n
+        coachProfileService.publishProfile(COACH_USER_ID);                    // DRAFT -> ACTIVE, version n+1
+
+        stale.setBio("written from a stale snapshot");
+        assertThatThrownBy(() -> coachProfileRepository.save(stale))
+            .isInstanceOf(org.springframework.orm.ObjectOptimisticLockingFailureException.class);
+
+        assertThat(jdbcTemplate.queryForMap(
+            "SELECT status, bio, version FROM marketplace.coach_profiles WHERE id = ?", profileId))
+            .containsEntry("status", "ACTIVE")
+            .containsEntry("bio", "Bio")
+            .containsEntry("version", stale.getVersion() + 1);
+    }
+
+    /**
+     * C5: the targeted photo UPDATE (and every other bulk UPDATE on coach_profiles but the unmapped
+     * recap tombstone) bumps the version, so a stale full-row save cannot write the old photo back.
+     */
+    @Test
+    void targetedPhotoUpdate_bumpsVersion_soAStaleSaveCannotRevertIt() {
+        var stale = coachProfileRepository.findById(profileId).orElseThrow();
+        String photo = "coach_profile/" + COACH_USER_ID + "/2026/10/new.jpg";
+        transactionTemplate.execute(tx -> coachProfileRepository.updatePhotoUrlByUserId(COACH_USER_ID, photo));
+
+        stale.setDistrict("Kreuzberg");
+        assertThatThrownBy(() -> coachProfileRepository.save(stale))
+            .isInstanceOf(org.springframework.orm.ObjectOptimisticLockingFailureException.class);
+        assertThat(jdbcTemplate.queryForMap(
+            "SELECT photo_url, district, version FROM marketplace.coach_profiles WHERE id = ?", profileId))
+            .containsEntry("photo_url", photo)
+            .containsEntry("district", "Mitte")
+            .containsEntry("version", stale.getVersion() + 1);
+    }
+
+    /**
+     * C5: the call sites' load-unlocked-then-lock-then-refresh shape must stay version-safe. A locked
+     * ENTITY query on an already-managed CoachProfile whose row version moved in between makes
+     * Hibernate's lock upgrade throw StaleObjectStateException; findByIdForUpdate locks with an id
+     * projection instead, so the caller gets its instance back, refreshes it and writes on top of the
+     * concurrent change.
+     */
+    @Test
+    void lockedReread_ofAManagedProfileWhoseVersionMoved_refreshesInsteadOfFailing() throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            transactionTemplate.executeWithoutResult(tx -> {
+                var managed = coachProfileRepository.findByUserId(COACH_USER_ID).orElseThrow();
+                long before = managed.getVersion();
+                try {
+                    executor.submit(() -> coachProfileService.publishProfile(COACH_USER_ID)).get(30, TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+
+                var locked = coachProfileRepository.findByIdForUpdate(profileId).orElseThrow();
+                assertThat(locked).isSameAs(managed);
+                entityManager.refresh(locked);
+                assertThat(locked.getVersion()).isEqualTo(before + 1);
+                assertThat(locked.getStatus()).isEqualTo(
+                    com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus.ACTIVE);
+                locked.setDistrict("Kreuzberg");
+                entityManager.flush();
+            });
+        } finally {
+            executor.shutdownNow();
+        }
+        assertThat(jdbcTemplate.queryForMap(
+            "SELECT status, district FROM marketplace.coach_profiles WHERE id = ?", profileId))
+            .containsEntry("status", "ACTIVE")
+            .containsEntry("district", "Kreuzberg");
     }
 
     /** The existing non-concurrent already-published pre-check must remain unaffected by AC1 Fix 3's new lock. */

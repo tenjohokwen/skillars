@@ -97,7 +97,7 @@ class RadarCompositeCalculatorTest {
         // skillars-deferred-126 AC2: recalculateComposite now reads the lock-timeout tunable and
         // issues a SELECT set_config(...) native query before the per-skill loop — stub both so the
         // pre-existing behavioral tests above are unaffected by this addition.
-        lenient().when(configService.getBoundedLong(anyString(), anyLong(), anyLong(), anyLong())).thenReturn(5L);
+        lenient().when(configService.getBoundedLong(any(ConfigBounds.BoundedKey.class))).thenReturn(5L);
         lenient().when(entityManager.createNativeQuery(anyString())).thenReturn(lockTimeoutQuery);
         lenient().when(lockTimeoutQuery.setParameter(anyInt(), any())).thenReturn(lockTimeoutQuery);
         lenient().when(lockTimeoutQuery.getSingleResult()).thenReturn("on");
@@ -351,7 +351,6 @@ class RadarCompositeCalculatorTest {
 
         service.onRadarEntrySubmitted(new RadarEntrySubmittedEvent(PLAYER_ID, PARENT_ID, Set.of("PAC")));
 
-        verify(configService).getBoundedLong(
-            eq(ConfigBounds.RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS.key()), eq(5L), eq(2L), eq(120L));
+        verify(configService).getBoundedLong(ConfigBounds.RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS);
     }
 }

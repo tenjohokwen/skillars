@@ -184,7 +184,7 @@ public class CoachProfileService {
             // that same value compute timezoneChanged=false, take no lock, and write the stale zone
             // after the first transaction re-stamped every window — leaving profile and windows
             // divergent, exactly the invariant AC1 exists to guarantee. CoachProfile carries no
-            // @Version, so nothing else catches it. This also matches the four sibling lock sites in
+            // @Version at the time (C5 added one; the lock stays, since a 409 is worse UX than waiting). This also matches the four sibling lock sites in
             // this class (saveStep4, deletePhoto, publishProfile) and AvailabilityService.lockProfile,
             // all of which lock unconditionally; saveStep1 was the only conditional one.
             lockRetryer.withBoundedRetry("CoachProfileService.saveStep1", () -> {
@@ -362,7 +362,7 @@ public class CoachProfileService {
             }
             // Targeted UPDATE of photo_url only (fix/content-consistency-and-lost-updates): the old
             // setPhotoUrl + full-row save() from requireProfile's unlocked snapshot could silently
-            // revert a concurrent suspendCoach/strike status write, CoachProfile having no @Version.
+            // revert a concurrent suspendCoach/strike status write (pre-C5, CoachProfile had no @Version).
             // The managed `profile` is deliberately left untouched so its stale snapshot is never
             // flushed over the row.
             coachProfileRepository.updatePhotoUrlByUserId(userId, req.photoUrl());
@@ -423,8 +423,9 @@ public class CoachProfileService {
      * <p>skillars-deferred-139 review Patch 4: locks and refreshes before mutating, mirroring
      * {@link #saveStep4}'s own lock-then-refresh pattern — without it, this method's unlocked
      * read-then-save could silently revert a concurrent {@code suspendCoach} (or any other concurrent
-     * status write) back to this request's stale pre-lock status, since {@code CoachProfile} has no
-     * {@code @Version}/{@code @DynamicUpdate} and a plain {@code save()} rewrites every column.
+     * status write) back to this request's stale pre-lock status, since {@code CoachProfile} had no
+     * {@code @Version}/{@code @DynamicUpdate} then and a plain {@code save()} rewrites every column. Since
+     * C5 the {@code @Version} would turn that race into a 409; the lock keeps it a wait-and-recheck.
      */
     @Transactional
     public void deletePhoto(Long userId, String currentUserLogin) {
@@ -475,7 +476,7 @@ public class CoachProfileService {
         // exact failure mode: two writers serialise only when BOTH take the lock, making a one-sided
         // lock decorative. Without this, a concurrent suspendCoach committed inside this method's
         // unlocked window would be silently reverted back to ACTIVE by the full-row save() below
-        // (CoachProfile has no @Version/@DynamicUpdate).
+        // (CoachProfile had no @Version then; since C5 it would be a 409 instead of a silent revert).
         lockRetryer.withBoundedRetry("CoachProfileService.publishProfile", () -> {
             coachProfileRepository.findByIdForUpdate(profile.getId())
                 .orElseThrow(() -> new MarketplaceException("marketplace.profileNotFound",

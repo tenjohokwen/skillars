@@ -79,11 +79,7 @@ public class CoachRosterService {
         // requirement (its own ORDER BY already orders most-recently-active first) and the accepted
         // recency-vs-attention-score trade-off this cap makes. `now` is passed so the cap ranks
         // past-only, matching the same past-only rule hasUpcomingBooking applies below.
-        long maxPlayers = configService.getBoundedLong(
-            ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.key(),
-            ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.defaultValue(),
-            ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.min(),
-            ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.max());
+        long maxPlayers = configService.getBoundedLong(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS);
 
         List<RosterPlayerActivityProjection> activities =
             bookingRepository.findRosterPlayerActivityByCoachIdAndStatusIn(
@@ -101,11 +97,7 @@ public class CoachRosterService {
         }
 
         long accessWindowDays = coachAccessWindow.windowDays();
-        long dormantAfterDays = configService.getBoundedLong(
-            ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.key(),
-            ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.defaultValue(),
-            ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.min(),
-            ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.max());
+        long dormantAfterDays = configService.getBoundedLong(ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS);
 
         // skillars-deferred-152 AC6: findAllById above silently returns fewer rows than requested
         // for any player_profiles row that's gone missing (latent today -- that table is NOT NULL

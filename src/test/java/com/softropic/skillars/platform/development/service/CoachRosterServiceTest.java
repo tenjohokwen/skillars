@@ -99,14 +99,11 @@ class CoachRosterServiceTest {
         // problem, setting the effective maxPlayers to the dormancy threshold. Each key now gets its
         // own value and the coupling is gone.
         // skillars-12-10: the shared coach-access window (default 90 days).
-        lenient().when(configService.getBoundedLong(
-                eq(ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS.key()), anyLong(), anyLong(), anyLong()))
+        lenient().when(configService.getBoundedLong(ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS))
             .thenReturn(ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS.defaultValue());
-        lenient().when(configService.getBoundedLong(
-                eq(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.key()), anyLong(), anyLong(), anyLong()))
+        lenient().when(configService.getBoundedLong(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS))
             .thenReturn(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.defaultValue());
-        lenient().when(configService.getBoundedLong(
-                eq(ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.key()), anyLong(), anyLong(), anyLong()))
+        lenient().when(configService.getBoundedLong(ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS))
             .thenReturn(ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.defaultValue());
     }
 
@@ -294,9 +291,7 @@ class CoachRosterServiceTest {
     // first — a sorted Pageable would be appended after it and silently do nothing).
     @Test
     void getRoster_candidateSetExceedsMaxPlayers_passesConfiguredCapAsUnsortedPageRequestSize() {
-        when(configService.getBoundedLong(
-                eq(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.key()),
-                anyLong(), anyLong(), anyLong()))
+        when(configService.getBoundedLong(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS))
             .thenReturn(200L);
         stubActivity(NOW.minusSeconds(3600));
         stubPlayerName("Capped Candidate");
@@ -344,9 +339,7 @@ class CoachRosterServiceTest {
     // as dormant (i.e. dormantAfterDays was NOT overwritten by the maxPlayers value).
     @Test
     void getRoster_maxPlayersAndDormantAfterDaysAreReadIndependently() {
-        when(configService.getBoundedLong(
-                eq(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS.key()),
-                anyLong(), anyLong(), anyLong()))
+        when(configService.getBoundedLong(ConfigBounds.DEVELOPMENT_ROSTER_MAX_PLAYERS))
             .thenReturn(500L);
         stubDormantAfterDays(5);
         stubActivity(NOW.minus(Duration.ofDays(60)));
@@ -491,8 +484,7 @@ class CoachRosterServiceTest {
     // stubDormantAfterDays(30) silently capped the candidate set at 30, and stubDormantAfterDays(0)
     // would have thrown from PageRequest.of(0, 0).
     private void stubDormantAfterDays(long days) {
-        when(configService.getBoundedLong(
-                eq(ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.key()), anyLong(), anyLong(), anyLong()))
+        when(configService.getBoundedLong(ConfigBounds.DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS))
             .thenReturn(days);
     }
 

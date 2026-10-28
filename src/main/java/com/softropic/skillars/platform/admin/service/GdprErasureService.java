@@ -429,24 +429,9 @@ public class GdprErasureService {
         AtomicBoolean skipped = new AtomicBoolean(false);
 
         // Anonymise coach_profiles (if coach)
+        // C5: the profile's own bio/city/district scrub runs LAST in this block, under the row lock — see
+        // the end of the lambda. cp is only read (its id) until then.
         coachProfileRepository.findByUserId(userId).ifPresent(cp -> {
-            cp.setBio(null);
-            cp.setCity(null);
-            cp.setDistrict(null);
-            // The coach's profile photo is a picture of them: clear the key and delete the blob
-            // (outbox, after commit). Read from this unlocked snapshot rather than with a row lock:
-            // a coach_profiles FOR UPDATE held by this outer transaction would self-deadlock the
-            // REQUIRES_NEW recap scrub below, whose first statement (markRecapDataErased) locks the
-            // same row. Residual, accepted: a new photo confirmed in the milliseconds between this
-            // read and the commit is unlinked by the full-row save but its blob is not enqueued.
-            // Only the coach's own upload keys are deleted — a legacy absolute URL has no blob of ours
-            // behind it.
-            String photoKey = cp.getPhotoUrl();
-            cp.setPhotoUrl(null);
-            coachProfileRepository.save(cp);
-            if (isCoachOwnUploadKey(photoKey, userId)) {
-                blobDeletionOutboxSupport.enqueue(List.of(photoKey));
-            }
 
             // feat/coach-workflow-gaps D9: gallery images are photos the coach uploaded of themselves /
             // their sessions — delete the rows and enqueue their coach_gallery/* blobs in THIS
@@ -522,7 +507,7 @@ public class GdprErasureService {
             // raiseErasureAlert must stay OUTSIDE the requiresNewTemplate boundary — see its own Javadoc
             // (skillars-deferred-135 AC1) for why catching inside it defeats the isolation entirely.
             long coachRecapLockTimeoutSeconds = configService.getBoundedLong(
-                ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
+                ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS);
             // skillars-deferred-156 AC7: identifies which of the five groups below was executing
             // when a PessimisticLockingFailureException propagated out of the transaction, so the
             // catch block can pick that group's own reason-code pair. All five groups still run
@@ -563,8 +548,9 @@ public class GdprErasureService {
                     // coach_profiles.id (AvailabilityService.addBlock). No lock-order cycle with
                     // AvailabilityService's writers: they lock coach_profiles FOR UPDATE first, and since
                     // skillars-12-7 so does this transaction (markRecapDataErased, its first statement)
-                    // -- same order. The outer save(cp) above is flushed only at the outer commit, so
-                    // that row lock is not held by the outer transaction while this one waits on it.
+                    // -- same order. The outer transaction takes the coach row lock only AFTER this block
+                    // commits (the C5 profile scrub at the end of the COACH block), so it never holds that
+                    // lock while this one waits on it.
                     coachRecapCurrentGroup.set(CoachRecapGroup.AVAILABILITY_BLOCK);
                     coachAvailabilityBlockRepository.anonymizeReasonByCoachId(cp.getId());
 
@@ -615,9 +601,9 @@ public class GdprErasureService {
             }
 
             // The coach's report-branding logo (ACADEMY tier). Deleted AFTER the REQUIRES_NEW recap
-            // scrub above, never before it: a native statement auto-flushes this transaction's
-            // pending coach_profiles UPDATE (save(cp) above), and that row lock, held until this
-            // outer transaction commits, would block markRecapDataErased into its lock_timeout.
+            // scrub above, never before it: a native statement auto-flushes this transaction, and any
+            // coach_profiles row lock this outer transaction held would block markRecapDataErased into
+            // its lock_timeout. (Since C5 the profile scrub itself runs after this, under its own lock.)
             // DELETE ... RETURNING removes the row and reports the exact key it held in one
             // statement. Only the coach's own uploads are deleted (any of their three slots — see
             // COACH_UPLOAD_SLOTS): saveBranding also accepts an unchanged server-written key (e.g. a
@@ -626,6 +612,33 @@ public class GdprErasureService {
                 .filter(k -> isCoachOwnUploadKey(k, userId))
                 .toList();
             blobDeletionOutboxSupport.enqueue(logoKeys);
+
+            // C5 (CoachProfile @Version, V188): scrub the profile under the coach row lock, on refreshed
+            // state. An unlocked findByUserId + save flushed at the outer commit would now fail its version
+            // check whenever any coach_profiles write (a rating recompute, a photo confirm, a strike or a
+            // suspension) commits during the erasure, rolling back the whole erasure. Taken only here, after
+            // the REQUIRES_NEW recap scrub above has committed: that transaction UPDATEs the same row
+            // (markRecapDataErased), so holding the lock before it would make it wait on its own suspended
+            // caller. The lock is held to the outer commit.
+            lockRetryer.withBoundedRetry("GdprErasureService.scrubCoachProfile", () -> {
+                coachProfileRepository.findByIdForUpdate(cp.getId())
+                    .orElseThrow(() -> new IllegalStateException("Coach profile vanished mid-erasure: " + cp.getId()));
+                entityManager.refresh(cp, LockModeType.PESSIMISTIC_WRITE);
+                return null;
+            });
+            cp.setBio(null);
+            cp.setCity(null);
+            cp.setDistrict(null);
+            // The coach's profile photo is a picture of them: clear the key and delete the blob (outbox,
+            // after commit). Read from the locked, refreshed row, so a photo confirmed during the
+            // erasure is caught too. Only the coach's own upload keys are deleted — a legacy absolute
+            // URL has no blob of ours behind it.
+            String photoKey = cp.getPhotoUrl();
+            cp.setPhotoUrl(null);
+            coachProfileRepository.save(cp);
+            if (isCoachOwnUploadKey(photoKey, userId)) {
+                blobDeletionOutboxSupport.enqueue(List.of(photoKey));
+            }
         });
 
         // Hard-delete messages (all rows including soft-deleted — Article 17)
@@ -674,7 +687,7 @@ public class GdprErasureService {
             // deletePlayerDevelopmentData's signature (lockTimeoutSeconds as a parameter, not read
             // internally) consistent across both callers.
             long playerBranchLockTimeoutSeconds = configService.getBoundedLong(
-                ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
+                ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS);
             playerProfileRepository.findByUserId(userId)
                 .ifPresentOrElse(
                     pp -> {
@@ -881,7 +894,7 @@ public class GdprErasureService {
                 + ": playerId=" + playerId + " is not owned by parentUserId=" + parentUserId);
         } else {
             long lockTimeoutSeconds = configService.getBoundedLong(
-                ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
+                ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS);
             // Detach BEFORE the inner REQUIRES_NEW transaction locks and rewrites the same row: this
             // outer persistence context must not hold (and later flush) a stale pre-scrub snapshot.
             entityManager.detach(child);
@@ -1137,7 +1150,7 @@ public class GdprErasureService {
         // read triggering configRepository.findAll() once per child, all on the outer transaction's
         // connection, which already holds the main."user" lock for this parent).
         long lockTimeoutSeconds = configService.getBoundedLong(
-            ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
+            ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS);
         // (story review, 2026-09-22, Decision 3): filter out children already tombstoned by an
         // earlier, since-failed run. developmentDataErasedAt is a one-way sticky tombstone (see
         // deletePlayerDevelopmentData's own Javadoc) — without this filter, a re-drive of a

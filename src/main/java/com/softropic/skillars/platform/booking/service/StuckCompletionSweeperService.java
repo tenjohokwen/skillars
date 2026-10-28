@@ -53,11 +53,7 @@ public class StuckCompletionSweeperService {
     @SchedulerLock(name = "StuckCompletionSweeperService_processStuckCompletions",
                    lockAtMostFor = "PT15M", lockAtLeastFor = "PT2M")
     public void processStuckCompletions() {
-        long timeoutHours = configService.getBoundedLong(
-            ConfigBounds.BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS.key(),
-            ConfigBounds.BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS.defaultValue(),
-            ConfigBounds.BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS.min(),
-            ConfigBounds.BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS.max());
+        long timeoutHours = configService.getBoundedLong(ConfigBounds.BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS);
         // skillars-deferred-153 code review (2026-10-17): ClockProvider, not a bare Instant.now(), so
         // the cutoff is pinnable by a fake clock in tests — the cutoff is the only business logic this
         // class computes, and it was previously unassertable.

@@ -119,7 +119,7 @@
     <h3 id="key-entities-db-tables">Key entities &amp; DB tables</h3>
     <table>
       <tr><th>Entity</th><th>Table (schema <code>marketplace</code>)</th><th>Notes</th></tr>
-      <tr><td><code>CoachProfile</code></td><td><code>coach_profiles</code></td><td>Root aggregate, unique on <code>user_id</code>. Display name, bio, city/district, <code>languages</code> (<code>varchar[]</code>), <code>canonical_timezone</code>, <code>photo_url</code> (a storage <em>key</em>), <code>status</code> (<code>DRAFT, ACTIVE, REDUCED, PENDING_REVIEW, SUSPENDED, DEACTIVATED</code>), <code>status_changed_at</code>, <code>verification_tier</code> (<code>updatable = false</code>), denormalized <code>average_rating</code>/<code>review_count</code>, <code>recap_data_erased_at</code> (V166 coach-erasure tombstone). No <code>@Version</code>/<code>@DynamicUpdate</code>.</td></tr>
+      <tr><td><code>CoachProfile</code></td><td><code>coach_profiles</code></td><td>Root aggregate, unique on <code>user_id</code>. Display name, bio, city/district, <code>languages</code> (<code>varchar[]</code>), <code>canonical_timezone</code>, <code>photo_url</code> (a storage <em>key</em>), <code>status</code> (<code>DRAFT, ACTIVE, REDUCED, PENDING_REVIEW, SUSPENDED, DEACTIVATED</code>), <code>status_changed_at</code>, <code>verification_tier</code> (<code>updatable = false</code>), denormalized <code>average_rating</code>/<code>review_count</code>, <code>recap_data_erased_at</code> (V166 coach-erasure tombstone, unmapped), <code>version</code> (V188 <code>@Version</code>). No <code>@DynamicUpdate</code>.</td></tr>
       <tr><td><code>CoachSpecialty</code></td><td><code>coach_specialties</code></td><td>One free-text <code>skill</code> per row (<code>uq_coach_specialty</code>).</td></tr>
       <tr><td><code>CoachAgeGroup</code></td><td><code>coach_age_groups</code></td><td>One <code>AgeTier</code> (from <code>security.contract</code>) per row (<code>uq_coach_age_group</code>).</td></tr>
       <tr><td><code>CoachPricing</code></td><td><code>coach_pricing</code></td><td>PK <code>coach_id</code>. <code>per_session_price</code>, currency (always <code>EUR</code>), optional <code>session_duration_minutes</code> (15–240; null = platform default <code>booking.session.defaultDurationMinutes</code>).</td></tr>
@@ -322,14 +322,26 @@ sequenceDiagram
       then re-check state — a check made before the lock is only a fast path.</p>
     </div>
     <div class="callout warn">
-      <p><strong><code>CoachProfile</code> has no <code>@Version</code> and no <code>@DynamicUpdate</code>.</strong>
-      A <code>save()</code> rewrites every column, so an unlocked read-modify-save can silently revert a concurrent
-      status change (e.g. <code>suspendCoach</code>). That is why the status-sensitive writers lock first, and why
-      <code>verification_tier</code> is <code>updatable = false</code> (only the admin bulk UPDATE writes it). Any new
-      writer of this entity should either lock-and-refresh or use a targeted <code>@Modifying</code> UPDATE (as
-      <code>updateRatingAggregate</code>/<code>markRecapDataErased</code>/<code>updatePhotoUrlByUserId</code> do). The
-      two photo writers (<code>saveStep5</code>, <code>CoachProfilePhotoEventListener</code>) were unlocked full-row saves
-      until <code>fix/content-consistency-and-lost-updates</code>.</p>
+      <p><strong><code>CoachProfile</code> is <code>@Version</code>ed (V188) but has no <code>@DynamicUpdate</code>.</strong>
+      A <code>save()</code> rewrites every column; since C5 a save from a stale snapshot fails its version check
+      (<code>ObjectOptimisticLockingFailureException</code>, 409 via <code>ApiAdvice</code>) instead of silently reverting a
+      concurrent change such as <code>suspendCoach</code>. The status-sensitive writers still lock first (a wait-and-recheck
+      beats a 409), and <code>verification_tier</code> stays <code>updatable = false</code>. Rules for a new writer:</p>
+      <ul>
+        <li>Lock-and-refresh, or a targeted <code>@Modifying</code> UPDATE that also does <code>version = version + 1</code>
+        (as <code>updateVerificationTier</code>/<code>updateRatingAggregate</code>/<code>updatePhotoUrlByUserId</code> do —
+        <code>NativeModifyingVersionAuditTest</code> fails the build otherwise). The one allow-listed exception is
+        <code>markRecapDataErased</code>: its column is unmapped, and the GDPR erasure runs it in a <code>REQUIRES_NEW</code>
+        transaction while the outer one holds a managed snapshot of the same row. That outer coach-profile scrub itself
+        now runs last, under <code>findByIdForUpdate</code> + refresh (after the inner transaction has committed), so a
+        concurrent coach write no longer fails the whole erasure.</li>
+        <li>After calling a version-bumping UPDATE, do not modify and flush a <code>CoachProfile</code> you loaded earlier in
+        the same transaction: its version is now behind the row's.</li>
+        <li><code>findByIdForUpdate</code> is a <code>default</code> method: a scalar NOWAIT lock (<code>lockByIdForUpdate</code>)
+        then <code>findById</code>. A locked <em>entity</em> query on an instance already managed from an earlier unlocked read
+        would make Hibernate's lock upgrade version-check it and throw <code>StaleObjectStateException</code> on exactly the race
+        the refresh exists to absorb.</li>
+      </ul>
     </div>
     <div class="callout">
       <p><strong>Timezones are validated as real IANA region ids, and the picker comes from the server.</strong>
@@ -388,7 +400,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>deefa90f</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

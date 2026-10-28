@@ -94,7 +94,8 @@
         trusting it.</li>
       <li><strong>Every owner has a storage quota</strong> (10&nbsp;GiB by default, <code>platform.filestorage.quota.default-bytes</code>),
         checked at sign time against the sum of <code>size_bytes</code> of the owner's <em>non-deleted</em>
-        <code>file_storage_objects</code> (soft-deleting a file frees its quota at once).</li>
+        <code>file_storage_objects</code> (soft-deleting a file frees its quota at once), and enforced again at confirm
+        time against the real size, serialized per owner (see the gotcha below).</li>
       <li><strong>Validation policy</strong> (<code>platform.filestorage.validation.*</code>): allowed MIME types
         <code>image/jpeg|png|gif|webp</code>, <code>application/pdf</code>, <code>text/plain</code>,
         <code>application/octet-stream</code>; extensions <code>jpg jpeg png gif webp pdf txt bin</code>; maximum 100&nbsp;MiB.
@@ -138,7 +139,7 @@
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
       <tr><td><code>FileStorageService</code></td><td>The main entry point. It has two separate surfaces.
-        <br><strong>FSO-tracked (browser) flow:</strong> <code>signUpload()</code> runs the validation chain, checks quota, generates a key and presigns a <code>PUT</code> (<code>app.storage.upload-ttl-seconds</code>, 600). <code>confirmUpload()</code> accepts only keys of the shape <code>StorageKeyGenerator</code> issues (so a <code>storeBytes</code> key such as <code>reports/…</code> is a 404) and, for owner-bound entities, only keys whose <code>entityId</code> is the caller. It runs <code>HeadObject</code> and checks content type, size and ETag, re-applies the max-size and quota limits to the <em>real</em> size (the presigned <code>PUT</code> does not bind the length), then in one <code>TransactionTemplate</code> saves the FSO (plus a <code>REPLICATE</code> job when replication is enabled). <em>After</em> that commits it publishes <code>StorageObjectConfirmedEvent</code>. <code>signDownload()</code> requires the caller to be the FSO's owner or an admin (anyone else gets a 404), then records a <code>StorageAccessEvent</code> and presigns a <code>GET</code> (<code>app.storage.presign-ttl-seconds</code>, 300). <code>softDelete()</code> checks that the caller's login equals <code>createdBy</code>, then runs a conditional <code>softDeleteByKey</code>. <code>findActiveObject(key)</code> (new in #312) returns the confirmed, non-deleted FSO as a <code>StorageObjectDto</code> so a domain module can check the HEAD-verified owner, type and size before linking a key.
+        <br><strong>FSO-tracked (browser) flow:</strong> <code>signUpload()</code> runs the validation chain, checks quota, generates a key and presigns a <code>PUT</code> (<code>app.storage.upload-ttl-seconds</code>, 600). <code>confirmUpload()</code> accepts only keys of the shape <code>StorageKeyGenerator</code> issues (so a <code>storeBytes</code> key such as <code>reports/…</code> is a 404) and, for owner-bound entities, only keys whose <code>entityId</code> is the caller. It runs <code>HeadObject</code> and checks content type, size and ETag, re-applies the max-size limit to the <em>real</em> size (the presigned <code>PUT</code> does not bind the length), then in one <code>TransactionTemplate</code> takes the owner's quota advisory lock, re-checks the quota against the real size, and saves the FSO (plus a <code>REPLICATE</code> job when replication is enabled). <em>After</em> that commits it publishes <code>StorageObjectConfirmedEvent</code>. <code>signDownload()</code> requires the caller to be the FSO's owner or an admin (anyone else gets a 404), then records a <code>StorageAccessEvent</code> and presigns a <code>GET</code> (<code>app.storage.presign-ttl-seconds</code>, 300). <code>softDelete()</code> checks that the caller's login equals <code>createdBy</code>, then runs a conditional <code>softDeleteByKey</code>. <code>findActiveObject(key)</code> (new in #312) returns the confirmed, non-deleted FSO as a <code>StorageObjectDto</code> so a domain module can check the HEAD-verified owner, type and size before linking a key.
         <br><strong>Raw (server-generated) helpers:</strong> <code>storeBytes</code> (direct <code>S3Client.putObject</code>, optional <code>Content-Disposition</code>), <code>downloadBytes</code>, <code>signedDownloadUrl(key)</code> / <code>signedDownloadUrl(key, Duration)</code>, <code>deleteRawBytes</code> (immediate hard delete). These bypass the FSO table: no quota, no replication, no soft-delete lifecycle and no audit row. <code>assertOwnership(key, ownerId)</code> passes only for a non-deleted FSO owned by <code>ownerId</code>, so it always fails for these raw keys.</td></tr>
       <tr><td><code>BlobDeletionOutboxSupport</code> / <code>BlobDeletionOutboxHandler</code></td><td>Re-drivable deletion of raw keys through the generic <code>platform.outbox</code> module (aggregate type <code>BLOB_DELETION</code>, payload <code>{storageKey}</code>). Producers call <code>enqueue(keys)</code> and <code>requestDrainAfterCommit()</code> <em>inside</em> their business transaction. The handler calls <code>deleteRawBytes</code>, which is idempotent because S3 <code>DeleteObject</code> succeeds on a missing key. The only producer today is <code>GdprErasureService</code>. This replaced the old bespoke <code>PendingBlobDeletionService</code> (skillars-deferred-100).</td></tr>
       <tr><td><code>ReplicatedStorageService</code></td><td>A <code>StorageService</code> decorator, created only when replication is enabled. <code>put()</code> delegates to the primary and then enqueues a <code>REPLICATE</code> job if an FSO exists for the key. <code>delete</code> and <code>deleteAll</code> (the bulk delete added in skillars-deferred-164) touch the primary only. Everything else passes straight through.</td></tr>
@@ -323,6 +324,16 @@ sequenceDiagram
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
+      <p><strong>The confirm-time quota check is a per-owner critical section.</strong> Two parallel confirms by one owner
+      used to each read the owner's usage before either inserted, so both passed and together overshot the quota (C5).
+      <code>confirmUpload</code> now runs <code>FileStorageObjectRepository.acquireOwnerQuotaLock</code>
+      (<code>pg_advisory_xact_lock(namespace, hashtext(owner))</code>) as the first statement of its insert transaction,
+      then re-reads <code>findByKey</code> (a parallel confirm of the same key is the idempotent retry, not a second
+      charge), then <code>sumSizeBytesByOwnerId</code>, then inserts. An advisory lock because there is no per-owner quota
+      row to lock; it is released at commit and held only for the insert (the S3 <code>HeadObject</code> runs before it).
+      Any new path that inserts quota-counted FSO rows must take the same lock before reading the usage.</p>
+    </div>
+    <div class="callout warn">
       <p><strong>Never call <code>infrastructure.blobstore</code> storage beans from another platform module. Always go
       through <code>filestorage</code>.</strong> Other modules must use the <code>/api/storage/**</code> endpoints (browser
       uploads) or <code>FileStorageService</code>'s methods, plus <code>BlobDeletionOutboxSupport</code> for deletes that must
@@ -415,7 +426,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>deefa90f</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

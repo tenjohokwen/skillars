@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.video.contract.AccessState;
@@ -63,9 +65,9 @@ class VideoLifecycleSchedulerTest {
         // lenient(): runLifecycleJob_carriesSchedulerLockSizedOffTheConfiguredCeiling() below is a
         // pure reflection/annotation check that never calls the scheduler, so these three would
         // otherwise fail strict-stubbing's UnnecessaryStubbingException in that one test.
-        lenient().when(configService.getBoundedLong("platform.video.lifecycle.blocked_to_archived_days", 30L, 1L, 3650L)).thenReturn(30L);
-        lenient().when(configService.getBoundedLong("platform.video.lifecycle.archived_to_deleted_days", 90L, 1L, 36500L)).thenReturn(90L);
-        lenient().when(configService.getBoundedInt("platform.video.lifecycle.batch_size", 100, 1, 10000)).thenReturn(100);
+        lenient().when(configService.getBoundedLong(ConfigBounds.VIDEO_LIFECYCLE_BLOCKED_TO_ARCHIVED_DAYS)).thenReturn(30L);
+        lenient().when(configService.getBoundedLong(ConfigBounds.VIDEO_LIFECYCLE_ARCHIVED_TO_DELETED_DAYS)).thenReturn(90L);
+        lenient().when(configService.getBoundedInt(ConfigBounds.VIDEO_LIFECYCLE_BATCH_SIZE)).thenReturn(100);
 
         scheduler = new VideoLifecycleScheduler(videoRepository, videoLifecycleLogRepository,
             videoLifecycleService, videoProviderAdapter, configService, txTemplate, quotaService, playerSubscriptionQueryPort);
@@ -88,6 +90,21 @@ class VideoLifecycleSchedulerTest {
         assertThat(log.getFromState()).isEqualTo("BLOCKED");
         assertThat(log.getToState()).isEqualTo("ARCHIVED");
         assertThat(log.getTriggeredBy()).isEqualTo(LifecycleTrigger.SYSTEM);
+    }
+
+    /** C5: the thresholds and batch size come from the ConfigBounds registry entries (BoundedKey overloads). */
+    @Test
+    void runLifecycleJob_readsThresholdsAndBatchSizeFromTheRegistryEntries() {
+        when(videoRepository.findBlockedExceedingThreshold(any(), anyInt())).thenReturn(List.of());
+        when(videoRepository.findArchivedExceedingThreshold(any(), anyInt())).thenReturn(List.of());
+        Instant before = Instant.now();
+
+        scheduler.runLifecycleJob();
+
+        verify(videoRepository).findBlockedExceedingThreshold(
+            argThat(t -> !t.isAfter(before.minus(30, ChronoUnit.DAYS).plusSeconds(60))), eq(100));
+        verify(videoRepository).findArchivedExceedingThreshold(
+            argThat(t -> !t.isAfter(before.minus(90, ChronoUnit.DAYS).plusSeconds(60))), eq(100));
     }
 
     @Test

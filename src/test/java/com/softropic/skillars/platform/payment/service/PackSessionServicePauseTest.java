@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+
 import com.softropic.skillars.platform.booking.contract.BatchRuleViolationException;
 import com.softropic.skillars.platform.booking.contract.PackPausedEvent;
 import com.softropic.skillars.platform.booking.contract.PauseConflictResponse;
@@ -97,7 +99,7 @@ class PackSessionServicePauseTest {
     void pausePack_noConflicts_appliesPauseAndPublishesEvent() {
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
-        when(configService.getBoundedLong(eq("pack.pause.maxDays"), anyLong(), anyLong(), anyLong())).thenReturn(90L);
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
         when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
             .thenReturn(List.of());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
@@ -151,7 +153,7 @@ class PackSessionServicePauseTest {
     void pausePack_conflictWithoutConfirmation_returnsConflictsWithoutApplying() {
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
-        when(configService.getBoundedLong(eq("pack.pause.maxDays"), anyLong(), anyLong(), anyLong())).thenReturn(90L);
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
 
         Booking conflictingBooking = mock(Booking.class);
@@ -181,7 +183,7 @@ class PackSessionServicePauseTest {
     void pausePack_confirmedConflict_cancelsBookingAndAppliesPause() {
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
-        when(configService.getBoundedLong(eq("pack.pause.maxDays"), anyLong(), anyLong(), anyLong())).thenReturn(90L);
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
 
         Booking conflictingBooking = mock(Booking.class);
@@ -214,7 +216,7 @@ class PackSessionServicePauseTest {
         // zero confirmations, not silently cancel the confirmed subset and pause anyway.
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
-        when(configService.getBoundedLong(eq("pack.pause.maxDays"), anyLong(), anyLong(), anyLong())).thenReturn(90L);
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
 
         Booking conflictA = mock(Booking.class);
@@ -251,7 +253,7 @@ class PackSessionServicePauseTest {
         // it against a window that now has an un-confirmed conflict.
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
-        when(configService.getBoundedLong(eq("pack.pause.maxDays"), anyLong(), anyLong(), anyLong())).thenReturn(90L);
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
 
         Booking lateBooking = mock(Booking.class);
@@ -300,7 +302,7 @@ class PackSessionServicePauseTest {
     void pausePack_blankCoachTimezone_fallsBackToUtcAndStillApplies() {
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
-        when(configService.getBoundedLong(eq("pack.pause.maxDays"), anyLong(), anyLong(), anyLong())).thenReturn(90L);
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
         when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
             .thenReturn(List.of());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("")));
@@ -320,7 +322,7 @@ class PackSessionServicePauseTest {
     void pausePack_unrecognisedCoachTimezone_fallsBackToUtc_doesNotThrow() {
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
-        when(configService.getBoundedLong(eq("pack.pause.maxDays"), anyLong(), anyLong(), anyLong())).thenReturn(90L);
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
         when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
             .thenReturn(List.of());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("Europe/Nowhere")));
@@ -339,7 +341,7 @@ class PackSessionServicePauseTest {
     void pausePack_pauseStartInThePast_throwsBatchRuleViolation() {
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
-        when(configService.getBoundedLong(eq("pack.pause.maxDays"), anyLong(), anyLong(), anyLong())).thenReturn(90L);
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
 
         Instant pauseStart = Instant.now().minus(2, ChronoUnit.DAYS);
@@ -355,7 +357,7 @@ class PackSessionServicePauseTest {
     void pausePack_durationExceedsConfiguredMax_throwsBatchRuleViolation() {
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
-        when(configService.getBoundedLong(eq("pack.pause.maxDays"), anyLong(), anyLong(), anyLong())).thenReturn(30L);
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(30L);
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
 
         PausePackRequest req = new PausePackRequest(Instant.now().plus(5, ChronoUnit.DAYS), 45, List.of());
@@ -366,7 +368,7 @@ class PackSessionServicePauseTest {
         // skillars-deferred-107 AC1: the range-bounded overload (default 90, range [1, 3650]) is the
         // one being called — revert PackSessionService to getLong / getBoundedLong(key,default) and
         // this verify fails.
-        verify(configService).getBoundedLong("pack.pause.maxDays", 90L, 1L, 3650L);
+        verify(configService).getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS);
     }
 
     @Test
@@ -375,7 +377,7 @@ class PackSessionServicePauseTest {
         // clamp to the 90-day default; a 91-day pause is then still rejected (not silently accepted).
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
-        when(configService.getBoundedLong("pack.pause.maxDays", 90L, 1L, 3650L)).thenReturn(90L);
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
 
         PausePackRequest req = new PausePackRequest(Instant.now().plus(5, ChronoUnit.DAYS), 91, List.of());
@@ -390,7 +392,7 @@ class PackSessionServicePauseTest {
     void pausePack_blankParentEmail_appliesPauseButSkipsNotification() {
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
-        when(configService.getBoundedLong(eq("pack.pause.maxDays"), anyLong(), anyLong(), anyLong())).thenReturn(90L);
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
         when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
             .thenReturn(List.of());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));

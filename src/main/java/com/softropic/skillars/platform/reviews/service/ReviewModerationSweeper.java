@@ -60,9 +60,7 @@ public class ReviewModerationSweeper {
     @Scheduled(fixedDelay = 10, timeUnit = TimeUnit.MINUTES)
     @SchedulerLock(name = "ReviewModerationSweeper_sweep", lockAtMostFor = "PT20M", lockAtLeastFor = "PT2M")
     public void sweep() {
-        ConfigBounds.BoundedKey grace = ConfigBounds.REVIEWS_MODERATION_ORPHAN_GRACE_MINUTES;
-        long graceMinutes = configService.getBoundedLong(
-            grace.key(), grace.defaultValue(), grace.min(), grace.max());
+        long graceMinutes = configService.getBoundedLong(ConfigBounds.REVIEWS_MODERATION_ORPHAN_GRACE_MINUTES);
         Instant threshold = Instant.now().minus(Duration.ofMinutes(graceMinutes));
 
         List<UUID> stranded = transactionTemplate.execute(status -> reviewRepository.findPendingIdsOlderThan(

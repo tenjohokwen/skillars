@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.admin.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.admin.contract.GdprExportReadyEvent;
 import com.softropic.skillars.platform.admin.repo.GdprRequest;
 import com.softropic.skillars.platform.admin.repo.GdprRequestRepository;
@@ -163,7 +164,7 @@ public class GdprExportService {
 
         // skillars-deferred-107 AC2: 0 → a legally-required GDPR export link is dead on arrival
         // (failFast); huge → compliance exposure. Clamps to 48 + WARN.
-        long hours = configService.getBoundedLong("gdpr.export.urlExpiryHours", 48L, 1L, 720L);
+        long hours = configService.getBoundedLong(ConfigBounds.GDPR_EXPORT_URL_EXPIRY_HOURS);
         String url = fileStorageService.signedDownloadUrl(storageKey, Duration.ofHours(hours));
         Instant expiresAt = Instant.now().plus(hours, ChronoUnit.HOURS);
 

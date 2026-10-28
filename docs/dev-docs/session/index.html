@@ -138,7 +138,7 @@
         <tr><td><code>Drill</code></td><td><code>drills</code></td><td><code>library_type</code> PLATFORM/PRIVATE, <code>status</code> ACTIVE/ARCHIVED, JSONB <code>metadata</code> (<code>DrillMetadata</code>: skills, <code>skillWeighting</code>, intensity, equipment, coaching points, …), <code>source_drill_id</code> for clones, <code>@Version</code>. 20 PLATFORM drills are seeded in V139.</td></tr>
         <tr><td><code>DrillTag</code> / <code>DrillTagId</code></td><td><code>drill_tags</code></td><td>Composite key (drillId, tag, coachId) — per-coach private tagging.</td></tr>
         <tr><td><code>DrillVideoRef</code></td><td><code>drill_video_refs</code></td><td>One row per drill pointing at a <code>video</code>-module <code>Video</code>; an original and its clones can share one <code>video_id</code>. No FK to <code>videos</code>.</td></tr>
-        <tr><td><code>Session</code></td><td><code>sessions</code></td><td>The plan for one <code>booking_id</code> (unique). JSONB <code>blocks</code> (max 4, each with ordered drill refs), <code>session_dna</code>, <code>equipment_list</code>, <code>development_focus</code>, <code>status</code> DRAFT/SAVED/COMPLETED/CANCELLED, and <code>source_template_id</code>/<code>source_template_name</code> when deployed from a template. No <code>@Version</code>: <code>updateSession</code> locks the row (<code>findByIdForUpdate</code>, NOWAIT + retry) and the two listeners use atomic conditional UPDATEs (see gotchas).</td></tr>
+        <tr><td><code>Session</code></td><td><code>sessions</code></td><td>The plan for one <code>booking_id</code> (unique). JSONB <code>blocks</code> (max 4, each with ordered drill refs), <code>session_dna</code>, <code>equipment_list</code>, <code>development_focus</code>, <code>status</code> DRAFT/SAVED/COMPLETED/CANCELLED, and <code>source_template_id</code>/<code>source_template_name</code> when deployed from a template. <code>version</code> (V188 <code>@Version</code>). <code>updateSession</code> also locks the row (<code>findByIdForUpdate</code>, NOWAIT + retry) and the two listeners use atomic conditional UPDATEs that bump the version (see gotchas).</td></tr>
         <tr><td><code>SessionTemplate</code></td><td><code>session_templates</code></td><td>A coach's reusable copy of a plan's blocks/DNA/equipment/focus. <code>status</code> ACTIVE/ARCHIVED; <code>deploy_count</code>/<code>last_deployed_at</code> bumped by a bulk UPDATE on deploy.</td></tr>
         <tr><td><code>HomeworkAssignment</code></td><td><code>homework_assignments</code></td><td>One drill assigned to a player from a completed booking. Unique on (booking_id, drill_id); nullable <code>session_id</code> (QUICK bookings have no plan) and <code>pack_id</code> (provenance).</td></tr>
         <tr><td><code>HomeworkCompletion</code></td><td><code>homework_completions</code></td><td>Marks an assignment done; unique on <code>assignment_id</code>. Deleted by GDPR erasure (<code>GdprErasureService</code>).</td></tr>
@@ -411,7 +411,7 @@ sequenceDiagram
         <code>feature.gate.fully_disabled</code> counter increments.</p>
     </div>
     <div class="callout warn">
-      <p><strong>A session plan's status has three writers and no <code>@Version</code>.</strong> The coach's
+      <p><strong>A session plan's status has three writers.</strong> The coach's
       <code>updateSession</code> rewrites the whole row (status included) with <code>save()</code>, while
       <code>handleBookingCompleted</code> and <code>handleBookingTerminalNonCompletion</code> move it to COMPLETED/CANCELLED.
       <code>updateSession</code> therefore takes <code>SessionRepository.findByIdForUpdate</code> (NOWAIT, wrapped in
@@ -420,7 +420,11 @@ sequenceDiagram
       <code>markCancelledIfOpenByBookingId</code>), which take the same row lock and so serialize with it. Both move only an
       open (DRAFT/SAVED) plan, so a CANCELLED plan is no longer revived by a later completion event. Before
       <code>fix/content-consistency-and-lost-updates</code> an edit racing a booking completion could flip COMPLETED back to SAVED.
-      A new writer of this entity must do the same: lock-and-refresh or a conditional UPDATE.</p>
+      Since C5 (V188) <code>Session</code> also carries <code>@Version</code>: both conditional UPDATEs do
+      <code>version = version + 1</code>, so a full-row save from a snapshot read before them fails (409) instead of
+      reverting them, and <code>findByIdForUpdate</code> locks with a scalar query before <code>findById</code> so the
+      unlocked-read-then-lock shape does not trip Hibernate's lock-upgrade version check.
+      A new writer of this entity must do the same: lock-and-refresh or a conditional UPDATE that bumps the version.</p>
     </div>
     <div class="callout warn">
       <p><strong>Use <code>DrillUsagePolicy</code> for any new code that puts a drill in front of a player.</strong>
@@ -482,7 +486,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>deefa90f</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

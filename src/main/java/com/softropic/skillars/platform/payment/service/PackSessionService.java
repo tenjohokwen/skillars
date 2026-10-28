@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.booking.contract.BatchRuleViolationException;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.contract.ConflictingBookingItem;
@@ -56,11 +57,6 @@ public class PackSessionService {
     private static final List<String> CONFLICT_STATUSES = List.of(
         BookingStatus.REQUESTED.name(), BookingStatus.ACCEPTED.name(),
         BookingStatus.CONFIRMED.name(), BookingStatus.UPCOMING.name());
-    private static final long DEFAULT_PACK_PAUSE_MAX_DAYS = 90L;
-    // skillars-deferred-107 AC1: a stored pause window longer than 10 years is certainly a
-    // fat-finger, not a real setting. Business cap; mirrors ConfigBounds.PACK_PAUSE_MAX_DAYS.
-    private static final long MIN_PACK_PAUSE_MAX_DAYS = 1L;
-    private static final long MAX_PACK_PAUSE_MAX_DAYS = 3650L;
 
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -233,10 +229,9 @@ public class PackSessionService {
         // skillars-deferred-103 AC6: defensive default for max pause days config.
         // skillars-deferred-107 AC1: also range-guard it — a stored 0/negative/absurd value would
         // otherwise be accepted verbatim and reject every pauseDurationDays >= 1 as
-        // booking.pauseDurationInvalid with nothing pointing at the config. Clamps to 90 + WARN;
+        // booking.pauseDurationInvalid with nothing pointing at the config. Falls back to the registry default (90) + WARN;
         // ConfigStartupAssertion additionally refuses to boot on a bad stored value (failFast key).
-        long maxDays = configService.getBoundedLong("pack.pause.maxDays", DEFAULT_PACK_PAUSE_MAX_DAYS,
-            MIN_PACK_PAUSE_MAX_DAYS, MAX_PACK_PAUSE_MAX_DAYS);
+        long maxDays = configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS);
         if (req.pauseDurationDays() < 1 || req.pauseDurationDays() > maxDays) {
             throw new BatchRuleViolationException("booking.pauseDurationInvalid");
         }

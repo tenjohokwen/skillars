@@ -23,6 +23,7 @@ public interface CoachProfileMapper {
     @Mapping(target = "averageRating", ignore = true)
     @Mapping(target = "reviewCount", ignore = true)
     @Mapping(target = "statusChangedAt", ignore = true)
+    @Mapping(target = "version", ignore = true)
     CoachProfile toEntity(ProfileBuilderStep1Request req, Long userId);
 
     @Mapping(target = "id", ignore = true)

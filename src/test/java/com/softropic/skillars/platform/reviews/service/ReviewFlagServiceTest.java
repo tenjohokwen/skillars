@@ -116,10 +116,9 @@ class ReviewFlagServiceTest {
     }
 
     /**
-     * skillars-deferred-132 AC3 Fix 10. Pins the exact key string {@code flag()} passes to
-     * {@code getBoundedInt} — a {@code Mockito verify(...)} drift detector mirroring
-     * {@code GdprErasureServiceTest}'s own established pattern, per {@code ConfigBounds}'s own
-     * documented convention. The bounds (1, 1000) stay re-typed as literals deliberately.
+     * skillars-deferred-132 AC3 Fix 10 / C5. Pins that {@code flag()} reads the threshold through
+     * the registry entry itself ({@code getBoundedInt(BoundedKey)}), so key, default and bounds cannot
+     * drift from {@code ConfigBounds}.
      */
     @Test
     void flag_readsAutoHoldFlagThresholdConfigWithTheDocumentedKeyAndBoundsLiterally() {
@@ -137,13 +136,12 @@ class ReviewFlagServiceTest {
             .set(field(CoachReview::getAuthorId), AUTHOR_ID)
             .create();
         when(reviewRepository.findByIdForUpdateNoWait(REVIEW_ID)).thenReturn(Optional.of(review));
-        when(configService.getBoundedInt(anyString(), any(Integer.class), any(Integer.class), any(Integer.class)))
+        when(configService.getBoundedInt(any(ConfigBounds.BoundedKey.class)))
             .thenReturn(3);
 
         service.flag(REVIEW_ID, FLAGGER_ID, ReviewFlagReason.FAKE_REVIEW, "details");
 
-        verify(configService).getBoundedInt(
-            eq(ConfigBounds.REVIEWS_AUTO_HOLD_FLAG_THRESHOLD.key()), eq(3), eq(1), eq(1000));
+        verify(configService).getBoundedInt(ConfigBounds.REVIEWS_AUTO_HOLD_FLAG_THRESHOLD);
     }
 
     private static DataIntegrityViolationException dive(String constraintName) {

@@ -32,11 +32,7 @@ public class CoachAccessWindow {
     private final ConfigService configService;
 
     public long windowDays() {
-        return configService.getBoundedLong(
-            ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS.key(),
-            ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS.defaultValue(),
-            ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS.min(),
-            ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS.max());
+        return configService.getBoundedLong(ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS);
     }
 
     public Instant now() {

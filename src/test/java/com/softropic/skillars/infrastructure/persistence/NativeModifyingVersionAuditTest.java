@@ -70,7 +70,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   PhoneOtpTokenRepository.deleteByUserIdAndUsedFalse  phone_otp_tokens  DELETE PhoneOtpToken exempt (DELETE)
  *   EmailVerificationTokenRepository.deleteByUserIdAndUsedFalse  email_verification_tokens DELETE EmailVerificationToken exempt (DELETE)
  * </pre>
- * No native ({@code nativeQuery = true}) {@code @Modifying} write against a {@code @Version} table
+ * <p><strong>C5 (V188) additions:</strong> {@code CoachProfile} and {@code Session} gained {@code @Version}.
+ * <pre>
+ *   CoachProfileRepository.updateVerificationTier   coach_profiles  UPDATE  JPQL    version=version+1 added
+ *   CoachProfileRepository.updatePhotoUrlByUserId   coach_profiles  UPDATE  JPQL    version=version+1 added
+ *   CoachProfileRepository.updateRatingAggregate    coach_profiles  UPDATE  JPQL    version=version+1 added
+ *   CoachProfileRepository.markRecapDataErased      coach_profiles  UPDATE  native  allow-listed (unmapped column; see reason)
+ *   SessionRepository.markCompletedByBookingId      session.sessions UPDATE JPQL    version=version+1 added
+ *   SessionRepository.markCancelledIfOpenByBookingId session.sessions UPDATE JPQL   version=version+1 added
+ * </pre>
+ * Before C5: no native ({@code nativeQuery = true}) {@code @Modifying} write against a {@code @Version} table
  * exists at HEAD; both flagged writes are JPQL. {@code Booking}, {@code SessionPackPurchase},
  * {@code SessionPackTier}, {@code CoachStripeAccount}, {@code Dispute}, {@code EnvelopeEntity},
  * {@code Drill} carry {@code @Version} but their repositories declare no {@code @Modifying} method,
@@ -80,7 +89,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 class NativeModifyingVersionAuditTest {
 
     /** methodKey ("SimpleName#method") -> why the missing version bump is safe. */
-    private static final Map<String, String> ALLOWED_WITHOUT_BUMP = Map.of();
+    private static final Map<String, String> ALLOWED_WITHOUT_BUMP = Map.of(
+        "CoachProfileRepository#markRecapDataErased",
+        "C5: writes only recap_data_erased_at, which CoachProfile does not map, so no stale entity save can "
+            + "revert it; and GdprErasureService runs it in a REQUIRES_NEW transaction while the outer erasure "
+            + "transaction holds a managed snapshot of the same row — a bump would fail any pending change to "
+            + "that snapshot at the outer commit and roll back the whole erasure.");
     // skillars-deferred-101 AC11: RefreshTokenRepository.markAllUsedByUserId moved from allow-list
     // to compliant (now includes version = version + 1) for defence-in-depth.
 

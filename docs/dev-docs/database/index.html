@@ -191,6 +191,7 @@
         <tr><td><code>V160</code>, <code>V161</code>, <code>V169</code></td><td><code>player_timeline_events.coach_id</code> + coach lookup index; partial unique index <code>uq_pte_session_completed_per_booking</code> backing <code>PlayerTimelineRepository.insertSessionCompletedIfAbsent</code>'s <code>ON CONFLICT</code> (a replayed <code>BookingCompletedEvent</code> no longer double-counts).</td></tr>
         <tr><td><code>V162</code>, <code>V171</code></td><td><code>admin_action_log.action_type</code> CHECK widened: <code>BOOKING_FORCE_COMPLETE</code>; <code>COACH_TIER_CHANGE</code>, <code>USER_SUSPEND</code>, <code>USER_REACTIVATE</code>, <code>USER_LOGIN_UNLOCK</code>. <code>V171</code> also adds <code>login_attempts.subject_hash</code> + index so an admin can clear a user's login rate-limit.</td></tr>
         <tr><td><code>V166</code></td><td><code>marketplace.coach_profiles.recap_data_erased_at</code> — sticky tombstone set inside the GDPR coach scrub's inner <code>REQUIRES_NEW</code> transaction; <code>BookingCompletionService.recapEditability</code> checks it after locking the completion row. Deliberately <em>not</em> mapped on <code>CoachProfile</code>.</td></tr>
+        <tr><td><code>V188</code></td><td><code>version bigint NOT NULL DEFAULT 0</code> on <code>marketplace.coach_profiles</code> and <code>session.sessions</code> — <code>@Version</code> for <code>CoachProfile</code>/<code>Session</code> (C5).</td></tr>
         <tr><td><code>V168</code></td><td>Adds <code>SES_CUTOVER_PREFLIGHT</code> to <code>envelope_entity_email_template_check</code>. <code>EnvelopeEntitySchemaIT</code> now pins <code>EmailTemplate</code> ↔ CHECK parity — <strong>a new email template needs a migration</strong>.</td></tr>
         <tr><td><code>V172</code></td><td><code>gdpr_requests.player_id</code> (parent requests scoped to a child; no FK) with two scoped partial unique indexes replacing <code>idx_gdpr_requests_unique_active</code>; new <code>admin.appeals</code> (one appeal per enforcement action — <code>uq_appeals_per_enforcement</code>, <code>uq_appeals_one_open_per_subject</code>).</td></tr>
         <tr><td><code>V173</code></td><td>Private-drill uniqueness indexes (<code>idx_drills_coach_name_unique_active</code>, <code>idx_drills_clone_uniqueness_active</code>) scoped to <code>ACTIVE</code> rows, since deleting a private drill is a soft delete (<code>ARCHIVED</code>).</td></tr>
@@ -235,6 +236,16 @@
       <li><strong>Hikari runs with <code>auto-commit: false</code></strong> (with
         <code>hibernate.connection.provider_disables_autocommit: true</code>). Anything not inside a Spring
         transaction does not commit — see the test notes below.</li>
+      <li><strong>Optimistic locking (<code>@Version</code>)</strong> on rows several paths full-row save
+        (<code>Booking</code>, <code>Video</code>, <code>Dispute</code>, <code>Drill</code>, pack purchases/tiers, tokens, and
+        since V188 <code>CoachProfile</code> and <code>Session</code>). A new version column is
+        <code>bigint NOT NULL DEFAULT 0</code> (metadata-only on Postgres, no backfill). A losing save throws
+        <code>ObjectOptimisticLockingFailureException</code>, which <code>ApiAdvice</code> maps to 409. Every
+        <code>@Modifying</code> UPDATE against such a table must <code>SET version = version + 1</code> or be allow-listed with
+        a reason in <code>NativeModifyingVersionAuditTest</code>. And never re-read a <code>@Version</code> entity you already
+        loaded unlocked with a locked <em>entity</em> query: Hibernate's lock upgrade version-checks it and throws
+        <code>StaleObjectStateException</code> if the row moved — lock by id first (scalar query or id-only lookup), as
+        <code>CoachProfileRepository.findByIdForUpdate</code> and <code>BookingRepository.findIdsByCoachIdAndStatusIn</code> do.</li>
     </ul>
 
     <h2 id="locking-conventions">Locking Conventions</h2>
@@ -403,7 +414,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>deefa90f</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

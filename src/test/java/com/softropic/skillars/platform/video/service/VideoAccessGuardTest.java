@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
@@ -62,7 +64,7 @@ class VideoAccessGuardTest {
 
     @BeforeEach
     void setUp() {
-        lenient().when(configService.getBoundedLong(eq("platform.video.access.coach_window_days"), anyLong(), anyLong(), anyLong()))
+        lenient().when(configService.getBoundedLong(ConfigBounds.VIDEO_ACCESS_COACH_WINDOW_DAYS))
             .thenReturn(90L);
     }
 
@@ -154,7 +156,7 @@ class VideoAccessGuardTest {
         // skillars-deferred-107 AC2: the coach access window is read through the range-bounded
         // accessor — a stored 0/negative would otherwise deny every coach with a recent booking.
         // Revert VideoAccessGuard to getLong(key, 90L) and this verify fails.
-        verify(configService).getBoundedLong("platform.video.access.coach_window_days", 90L, 1L, 3650L);
+        verify(configService).getBoundedLong(ConfigBounds.VIDEO_ACCESS_COACH_WINDOW_DAYS);
     }
 
     @Test

@@ -41,9 +41,9 @@ public class CoachProfilePhotoEventListener {
             return;
         }
 
-        // Targeted single-column UPDATE, not findByUserId + save(): CoachProfile has no @Version, so a
-        // full-row save from this (unlocked) snapshot could revert a concurrent status change such as
-        // suspendCoach. See CoachProfileRepository.updatePhotoUrlByUserId.
+        // Targeted single-column UPDATE, not findByUserId + save(): a full-row save from this (unlocked)
+        // snapshot would race a concurrent status change such as suspendCoach (since C5's @Version it would
+        // fail with a 409 rather than revert it, but the targeted UPDATE needs neither a lock nor a retry). See CoachProfileRepository.updatePhotoUrlByUserId.
         if (coachProfileRepository.updatePhotoUrlByUserId(userId, fso.getKey()) > 0) {
             log.info("Updated coach profile photo: userId={}", userId);
         }

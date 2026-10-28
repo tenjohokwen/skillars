@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.development.contract.PlayerTimelineEventType;
 import com.softropic.skillars.platform.development.contract.TimelineResponse;
@@ -40,7 +42,7 @@ class TimelineQueryServiceTest {
     @BeforeEach
     void setUp() {
         // skillars-12-10: the real shared window rule over a stubbed 90-day config value.
-        lenient().when(configService.getBoundedLong(any(), anyLong(), anyLong(), anyLong())).thenReturn(90L);
+        lenient().when(configService.getBoundedLong(ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS)).thenReturn(90L);
         service = new TimelineQueryService(
             timelineRepository, new CoachAccessWindow(configService), coachPlayerLastSessionResolver);
     }

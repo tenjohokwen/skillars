@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.development.repo.RadarCompositeDlqEntry;
 import com.softropic.skillars.platform.development.repo.RadarCompositeDlqRepository;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -270,8 +271,8 @@ public class RadarCompositeDlqProcessor {
             row.setAttempts(row.getAttempts() + 1);
             row.setLastError(e.getMessage());
             // skillars-deferred-107 AC2: 0/neg would dead-letter on the first attempt (or never).
-            int maxAttempts = (int) configService.getBoundedLong(
-                "platform.development.radar_composite_dlq.max_attempts", 5L, 1L, 100L);
+            int maxAttempts = configService.getBoundedInt(
+                ConfigBounds.RADAR_COMPOSITE_DLQ_MAX_ATTEMPTS);
             // skillars-deferred-123 AC3 / skillars-deferred-124 AC4: cleared on BOTH outcomes — see
             // VideoDeletionOutboxProcessor.handleFailure's identical comment for why DEAD must clear
             // both fields too, not just PENDING.

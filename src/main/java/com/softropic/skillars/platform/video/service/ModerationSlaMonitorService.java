@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.exception.TerminalStateViolationException;
@@ -104,7 +105,7 @@ public class ModerationSlaMonitorService {
         // skillars-deferred-115 AC1: was a hardcoded literal (50) at this call site — externalized so
         // an operator can tune it without a deploy, mirroring every sibling scheduler's config-bound
         // batch size (e.g. platform.video.lifecycle.batch_size).
-        int batchSize = configService.getBoundedInt("platform.moderation_sla_batch_size", 50, 1, 500);
+        int batchSize = configService.getBoundedInt(ConfigBounds.MODERATION_SLA_BATCH_SIZE);
         Instant threshold = Instant.now().minus(slaMinutes, ChronoUnit.MINUTES);
 
         List<Video> stuckVideos = Objects.requireNonNullElse(

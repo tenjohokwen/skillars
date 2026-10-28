@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.contract.event.SubscriptionExpiredEvent;
 import com.softropic.skillars.platform.video.contract.PlayerSubscriptionQueryPort;
@@ -122,7 +123,7 @@ public class VideoSubscriptionLifecycleListener {
         // skillars-deferred-107 AC2: 0 → processEntry makes no progress; huge → load spike.
         // skillars-deferred-107 code review: default 100 (matches VideoLifecycleScheduler) so a
         // missing seed falls back rather than throwing IllegalStateException here — same key, one contract.
-        int batchSize = configService.getBoundedInt("platform.video.lifecycle.batch_size", 100, 1, 10000);
+        int batchSize = configService.getBoundedInt(ConfigBounds.VIDEO_LIFECYCLE_BATCH_SIZE);
         entry.setAttempts(entry.getAttempts() + 1);
         try {
             boolean fullyCompleted = processEntry(entry, batchSize);

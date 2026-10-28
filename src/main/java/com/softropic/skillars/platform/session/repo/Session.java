@@ -10,6 +10,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -70,6 +71,16 @@ public class Session {
 
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+
+    /**
+     * C5 (V188): optimistic lock — a full-row save from a stale snapshot (e.g. a plan edit racing the
+     * booking-completion listener's COMPLETED transition) now fails with
+     * {@code ObjectOptimisticLockingFailureException} (ApiAdvice: 409) instead of reverting it. The bulk
+     * transitions in {@code SessionRepository} bump it explicitly ({@code NativeModifyingVersionAuditTest}).
+     */
+    @Version
+    @Column(nullable = false)
+    private long version;
 
     @PrePersist
     void onCreate() {
