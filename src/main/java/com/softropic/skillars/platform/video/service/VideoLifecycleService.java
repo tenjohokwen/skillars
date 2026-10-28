@@ -169,8 +169,15 @@ public class VideoLifecycleService {
             throw new TerminalStateViolationException(videoId, OperationalState.DELETED.name());
         }
 
+        // feat/admin-operations (code review): a fresh block (from any non-BLOCKED state) starts a
+        // fresh lifecycle clock. lifecycleLockedAt is never cleared on BLOCKED→ACTIVE, so keeping a
+        // non-null old value here meant an admin re-blocking a restored video inherited the ORIGINAL
+        // block time and findBlockedExceedingThreshold archived it on the next scheduler run. A
+        // BLOCKED→BLOCKED call (idempotent repeat) keeps the existing clock.
+        boolean freshBlock = newAccessState == AccessState.BLOCKED
+            && (video.getAccessState() != AccessState.BLOCKED || video.getLifecycleLockedAt() == null);
         video.setAccessState(newAccessState);
-        if (newAccessState == AccessState.BLOCKED && video.getLifecycleLockedAt() == null) {
+        if (freshBlock) {
             video.setLifecycleLockedAt(Instant.now());
         }
         return videoRepository.save(video);

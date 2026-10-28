@@ -14,6 +14,9 @@ public interface VideoModerationScanRepository extends JpaRepository<VideoModera
     List<VideoModerationScan> findByVideoId(UUID videoId);
     Optional<VideoModerationScan> findByVideoIdAndLayer(UUID videoId, String layer);
 
+    /** Admin video review queue: the flagged scans for one page of videos, in one query. */
+    List<VideoModerationScan> findByVideoIdInAndOutcome(java.util.Collection<UUID> videoIds, String outcome);
+
     @Transactional
     @Modifying
     @Query(value = "INSERT INTO main.video_moderation_scans (video_id, layer, outcome, confidence, details) " +

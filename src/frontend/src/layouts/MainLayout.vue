@@ -514,6 +514,54 @@
               <q-item-label class="nav-label">{{ $t('nav.appeals') }}</q-item-label>
             </q-item-section>
           </q-item>
+
+          <!-- Admin operations: video ops, stuck bookings, finance, GDPR tracker, platform config -->
+          <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ $t('nav.groupAdminOperations') }}</div>
+
+          <q-item clickable to="/admin/videos" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="video_library" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.adminVideos') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/admin/bookings" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="event_available" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.adminBookings') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/admin/finance" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="payments" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.adminFinance') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/admin/gdpr" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="privacy_tip" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.adminGdpr') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/admin/config" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="tune" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.adminConfig') }}</q-item-label>
+            </q-item-section>
+          </q-item>
         </template>
       </q-list>
 

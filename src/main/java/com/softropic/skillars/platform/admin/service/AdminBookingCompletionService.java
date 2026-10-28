@@ -1,10 +1,16 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.admin.contract.AdminActionType;
+import com.softropic.skillars.platform.admin.contract.AdminBookingLookupDto;
 import com.softropic.skillars.platform.admin.repo.AdminActionLog;
 import com.softropic.skillars.platform.admin.repo.AdminActionLogRepository;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
+import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.contract.ForceCompleteOutcome;
+import com.softropic.skillars.platform.booking.repo.Booking;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
 import com.softropic.skillars.platform.booking.service.BookingCompletionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -26,6 +32,26 @@ public class AdminBookingCompletionService {
 
     private final BookingCompletionService bookingCompletionService;
     private final AdminActionLogRepository adminActionLogRepository;
+    private final BookingRepository bookingRepository;
+    private final SessionCompletionDataRepository completionDataRepository;
+
+    /**
+     * Read-only lookup backing the admin force-complete page: lets the admin confirm the booking id
+     * from a support ticket resolves to the booking they expect before acting. No lock — nothing is
+     * written, and {@link #forceComplete} re-runs its own pre-checks against the live row.
+     */
+    @Transactional(readOnly = true)
+    public AdminBookingLookupDto lookup(UUID bookingId) {
+        Booking booking = bookingRepository.findById(bookingId)
+            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking"));
+        boolean completionRecorded = completionDataRepository.findByBookingId(bookingId).isPresent();
+        boolean pendingConfirmation =
+            BookingStatus.COMPLETED_PENDING_CONFIRMATION.name().equals(booking.getStatus());
+        return new AdminBookingLookupDto(
+            booking.getId(), booking.getStatus(), booking.getCoachId(), booking.getPlayerId(),
+            booking.getParentId(), booking.getRequestedStartTime(), booking.getRequestedEndTime(),
+            booking.getUpdatedAt(), completionRecorded, pendingConfirmation && !completionRecorded);
+    }
 
     @Transactional
     public ForceCompleteOutcome forceComplete(UUID bookingId, Long adminId, String note) {

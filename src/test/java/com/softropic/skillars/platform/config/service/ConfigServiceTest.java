@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.config.service;
 
 import com.softropic.skillars.platform.config.config.ConfigProperties;
+import com.softropic.skillars.platform.config.contract.AdminConfigEntryDto;
 import com.softropic.skillars.platform.config.contract.ConfigValueType;
 import com.softropic.skillars.platform.config.repo.PlatformConfig;
 import com.softropic.skillars.platform.config.repo.PlatformConfigRepository;
@@ -963,5 +964,49 @@ class ConfigServiceTest {
         when(configRepository.findAll()).thenThrow(new IllegalStateException("db down"));
 
         assertThatThrownBy(() -> configService.init()).isInstanceOf(IllegalStateException.class);
+    }
+
+    // ---- admin config editor (FR-ADM-006) ----
+
+    @Test
+    void listForAdmin_annotatesStoredRowsWithBoundsAndAddsUnseededCodeDefaultKeys() {
+        ConfigBounds.BoundedKey bounded = ConfigBounds.PACK_PAUSE_MAX_DAYS;
+        when(configRepository.findAll()).thenReturn(List.of(
+            entry("zzz.unbounded.flag", "true", ConfigValueType.STRING),
+            entry(bounded.key(), "30", ConfigValueType.LONG)));
+
+        List<AdminConfigEntryDto> list = configService.listForAdmin();
+
+        // Sorted by key.
+        assertThat(list).extracting(AdminConfigEntryDto::key).isSorted();
+
+        AdminConfigEntryDto boundedRow = list.stream().filter(e -> e.key().equals(bounded.key())).findFirst().orElseThrow();
+        assertThat(boundedRow.stored()).isTrue();
+        assertThat(boundedRow.value()).isEqualTo("30");
+        assertThat(boundedRow.valueType()).isEqualTo("LONG");
+        assertThat(boundedRow.min()).isEqualTo(bounded.min());
+        assertThat(boundedRow.max()).isEqualTo(bounded.max());
+        assertThat(boundedRow.note()).isEqualTo(bounded.note());
+        assertThat(boundedRow.failFast()).isEqualTo(bounded.failFast());
+        assertThat(boundedRow.codeDefault()).isEqualTo(bounded.defaultValue());
+
+        AdminConfigEntryDto unbounded = list.stream().filter(e -> e.key().equals("zzz.unbounded.flag")).findFirst().orElseThrow();
+        assertThat(unbounded.valueType()).isEqualTo("STRING");
+        assertThat(unbounded.min()).isNull();
+        assertThat(unbounded.max()).isNull();
+        assertThat(unbounded.codeDefault()).isNull();
+        assertThat(unbounded.failFast()).isFalse();
+
+        // Every HAS_CODE_DEFAULT key is reachable from the editor, stored or not — updateConfig upserts them.
+        assertThat(list).extracting(AdminConfigEntryDto::key).containsAll(ConfigBounds.HAS_CODE_DEFAULT);
+        AdminConfigEntryDto unseeded = list.stream()
+            .filter(e -> e.key().equals(ConfigBounds.RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS.key()))
+            .findFirst().orElseThrow();
+        assertThat(unseeded.stored()).isFalse();
+        assertThat(unseeded.value()).isNull();
+        assertThat(unseeded.valueType()).isEqualTo("LONG");
+        assertThat(unseeded.codeDefault()).isEqualTo(ConfigBounds.RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS.defaultValue());
+        // Each key appears once.
+        assertThat(list).extracting(AdminConfigEntryDto::key).doesNotHaveDuplicates();
     }
 }

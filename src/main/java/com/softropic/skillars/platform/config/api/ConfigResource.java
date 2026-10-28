@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.config.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.config.contract.AdminConfigEntryDto;
 import com.softropic.skillars.platform.config.contract.ConfigValueResponse;
 import com.softropic.skillars.platform.config.contract.UpdateConfigRequest;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -16,6 +17,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 @Observed(name = "config")
 @RestController
 @RequestMapping("/api/config")
@@ -25,6 +28,17 @@ public class ConfigResource {
 
     public ConfigResource(ConfigService configService) {
         this.configService = configService;
+    }
+
+    /**
+     * Admin config editor (FR-ADM-006): every stored value plus every unseeded
+     * {@code HAS_CODE_DEFAULT} key, each with the range {@link #updateValue} enforces.
+     */
+    @GetMapping("/values")
+    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @Observed(name = "config.admin.list")
+    public ResponseEntity<List<AdminConfigEntryDto>> listValues() {
+        return ResponseEntity.ok(configService.listForAdmin());
     }
 
     @GetMapping("/values/{key}")
@@ -63,14 +77,11 @@ public class ConfigResource {
      *
      * <p>Also in {@code docs/deployment/runbook.md} § "Config change appears to have no effect".
      *
-     * <p><strong>There is no admin config UI and no generated API docs</strong> — no springdoc/OpenAPI
-     * dependency exists in this project, and {@code src/frontend} has no admin config page. This
-     * javadoc, {@code getValue} above and the runbook section it points to are the entire "admin
-     * config surface": an admin operator drives this endpoint directly (curl, Postman, an internal
-     * tool), not through any UI shipped by this application. Recorded here per the
-     * {@code skillars-deferred-92} AC24.1 code review (2026-09-04) — the AC allowed either an admin
-     * UI or API docs as its deliverable, and this codebase has neither, which is a legitimate scope
-     * outcome but was previously unstated.
+     * <p><strong>Admin UI.</strong> The admin config editor ({@code src/frontend/src/pages/admin/
+     * AdminConfigPage.vue}, route {@code /admin/config}) drives this endpoint and {@link #listValues}.
+     * It surfaces the same {@code ConfigBounds} ranges this endpoint enforces, and shows the 400
+     * reason returned here per field. This supersedes the {@code skillars-deferred-92} AC24.1 note
+     * (2026-09-04) that there was no admin config UI.
      */
     @PutMapping("/values/{key}")
     @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)

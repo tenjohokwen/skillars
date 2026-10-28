@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.admin.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.admin.contract.AdminBookingLookupDto;
 import com.softropic.skillars.platform.admin.contract.AdminForceCompleteBookingRequest;
 import com.softropic.skillars.platform.admin.contract.AdminForceCompleteBookingResponse;
 import com.softropic.skillars.platform.admin.service.AdminBookingCompletionService;
@@ -13,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -29,6 +31,13 @@ public class AdminBookingResource {
 
     private final AdminBookingCompletionService adminBookingCompletionService;
     private final SecurityUtil securityUtil;
+
+    @GetMapping("/{bookingId}")
+    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @Observed(name = "admin.bookings.lookup")
+    public ResponseEntity<AdminBookingLookupDto> lookup(@PathVariable UUID bookingId) {
+        return ResponseEntity.ok(adminBookingCompletionService.lookup(bookingId));
+    }
 
     @PostMapping("/{bookingId}/force-complete")
     @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)

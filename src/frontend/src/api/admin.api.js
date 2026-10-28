@@ -137,4 +137,77 @@ export const adminApi = {
   decideAppeal(appealId, payload) {
     return api.post(`/api/admin/appeals/${appealId}/decide`, payload)
   },
+
+  // GDPR request tracker (AdminGdprResource). type: 'EXPORT' | 'ERASURE' | null (all);
+  // status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | null (all). Newest first.
+  getGdprRequests({ type = null, status = null, page = 0, size = 20 } = {}) {
+    return api.get('/api/admin/gdpr/requests', {
+      params: {
+        type: type || undefined,
+        status: status || undefined,
+        page,
+        size,
+        sort: 'createdAt,desc',
+      },
+    })
+  },
+
+  // Finance overview (AdminFinanceResource). from / to: 'YYYY-MM-DD' (UTC, inclusive) or null —
+  // the backend defaults to the current month.
+  getFinanceOverview(from = null, to = null) {
+    return api.get('/api/admin/payment/overview', {
+      params: { from: from || undefined, to: to || undefined },
+    })
+  },
+
+  getCoachRevenue(coachId, from = null, to = null) {
+    return api.get(`/api/admin/payment/coaches/${coachId}/revenue`, {
+      params: { from: from || undefined, to: to || undefined },
+    })
+  },
+
+  // Stuck-booking force-complete (AdminBookingResource).
+  getAdminBooking(bookingId) {
+    return api.get(`/api/admin/bookings/${bookingId}`)
+  },
+
+  // Returns { outcome: 'FORCE_COMPLETED' | 'ALREADY_RESOLVED' | 'NOT_STUCK' }.
+  forceCompleteBooking(bookingId, note) {
+    return api.post(`/api/admin/bookings/${bookingId}/force-complete`, { note })
+  },
+
+  // Video operations (AdminVideoResource). filter: 'ATTENTION' | 'LOCKED' | 'FAILED' | 'BLOCKED'.
+  getVideoReviewQueue(filter = 'ATTENTION', page = 0) {
+    return api.get('/api/video/admin/videos', { params: { filter, page } })
+  },
+
+  getAdminVideo(videoId) {
+    return api.get(`/api/video/admin/videos/${videoId}`)
+  },
+
+  // newAccessState: 'ACTIVE' | 'BLOCKED' | 'ARCHIVED'
+  setVideoAccessState(videoId, newAccessState) {
+    return api.patch(`/api/video/admin/videos/${videoId}/access-state`, { newAccessState })
+  },
+
+  deleteVideo(videoId) {
+    return api.delete(`/api/video/admin/videos/${videoId}`)
+  },
+
+  getVideoUploadSessions(videoId) {
+    return api.get(`/api/video/admin/videos/${videoId}/sessions`)
+  },
+
+  reconcileVideo(videoId) {
+    return api.post(`/api/video/admin/videos/${videoId}/reconcile`)
+  },
+
+  // Platform config editor (ConfigResource).
+  getConfigValues() {
+    return api.get('/api/config/values')
+  },
+
+  updateConfigValue(key, value) {
+    return api.put(`/api/config/values/${encodeURIComponent(key)}`, { value })
+  },
 }

@@ -440,6 +440,31 @@ const routes = [
             component: () => import('pages/admin/AdminAppealsPage.vue'),
             meta: { requiresAuth: true, roles: ['ADMIN'] },
           },
+          {
+            path: 'gdpr',
+            component: () => import('pages/admin/AdminGdprRequestsPage.vue'),
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
+          },
+          {
+            path: 'finance',
+            component: () => import('pages/admin/AdminFinancePage.vue'),
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
+          },
+          {
+            path: 'bookings',
+            component: () => import('pages/admin/AdminBookingsPage.vue'),
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
+          },
+          {
+            path: 'videos',
+            component: () => import('pages/admin/AdminVideosPage.vue'),
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
+          },
+          {
+            path: 'config',
+            component: () => import('pages/admin/AdminConfigPage.vue'),
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
+          },
         ],
       },
     ],
