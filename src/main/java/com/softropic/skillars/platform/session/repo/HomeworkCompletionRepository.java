@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -29,4 +30,7 @@ public interface HomeworkCompletionRepository extends JpaRepository<HomeworkComp
     @org.springframework.data.jpa.repository.Modifying
     @Query("DELETE FROM HomeworkCompletion h WHERE h.playerId = :playerId")
     int deleteAllByPlayerId(@Param("playerId") Long playerId);
+
+    /** Completion rows for a set of assignments — at most one per assignment (uq_homework_completion). */
+    List<HomeworkCompletion> findByAssignmentIdIn(Collection<UUID> assignmentIds);
 }

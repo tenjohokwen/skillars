@@ -21,6 +21,7 @@ import com.softropic.skillars.platform.video.contract.exception.QuotaExceededExc
 import com.softropic.skillars.platform.video.contract.exception.RateLimitExceededException;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
 import com.softropic.skillars.platform.video.contract.exception.VideoSessionExpiredException;
+import com.softropic.skillars.platform.video.contract.exception.VideoStateConflictException;
 import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
 import io.micrometer.observation.annotation.Observed;
 import org.springframework.context.ApplicationEventPublisher;
@@ -119,6 +120,13 @@ public class VideoService {
         Video video = videoRepository.findById(request.videoId())
             .orElseThrow(() -> new VideoNotFoundException(request.videoId()));
 
+        // Only the video's own owner may retry it. ownerId is immutable after creation, so checking it on
+        // this read is checking it on the row the claim below mutates. A mismatch is a 404, not a 403, so
+        // video ids cannot be probed through the retry endpoint.
+        if (request.ownerId() == null || !request.ownerId().equals(video.getOwnerId())) {
+            throw new VideoNotFoundException(request.videoId());
+        }
+
         if (video.getOperationalState() != OperationalState.FAILED) {
             throw new VideoValidationException("Retry is only permitted for videos in FAILED state");
         }
@@ -148,7 +156,14 @@ public class VideoService {
         try {
             // Transition back to UPLOADING before initiating the new session so the
             // ReconciliationWorker does not re-FAIL the video while the retry is in progress.
-            videoLifecycleService.transitionOperationalState(request.videoId(), OperationalState.UPLOADING);
+            // Atomic conditional claim (not the idempotent plain transition): of two concurrent retries
+            // of the same FAILED video only one proceeds; the loser gets a 409 instead of reserving a
+            // second quota slice and opening a second provider asset.
+            if (!videoLifecycleService.claimFailedForRetry(request.videoId())) {
+                throw new VideoStateConflictException(request.videoId(), OperationalState.FAILED.name(),
+                    videoRepository.findById(request.videoId())
+                        .map(v -> String.valueOf(v.getOperationalState())).orElse("UNKNOWN"));
+            }
             transitionedToUploading = true;
 
             reservationHandle = quotaProvider.reserve(request.ownerId(), request.fileSizeBytes(),

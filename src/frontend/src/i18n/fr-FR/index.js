@@ -1,5 +1,12 @@
 export default {
   coach: {
+    playerDetailHomeworkTitle: 'Devoirs',
+    playerDetailHomeworkHint: 'Les devoirs que vous avez donnés à ce joueur et leur état.',
+    playerDetailNoHomework: "Vous n'avez encore donné aucun devoir à ce joueur.",
+    playerDetailHomeworkUnknownDrill: 'Exercice plus disponible',
+    playerDetailHomeworkAssigned: 'Donné le {date}',
+    playerDetailHomeworkCompletedOn: 'Fait le {date}',
+    playerDetailHomeworkOpen: 'Pas encore fait',
     commandCenterTitle: 'Espace coach',
     stripeBannerAction: 'Configurer les paiements',
     bookingRequestsCta: 'Demandes de réservation',
@@ -737,6 +744,11 @@ export default {
     verificationFailed: 'Échec de la vérification',
   },
   featureGate: {
+    sampleRow: 'Exemple',
+    tier: {
+      INSTRUCTOR: 'Instructor',
+      ACADEMY: 'Academy',
+    },
     requiredTier: 'Nécessite le plan {tier}',
     description: 'Passez à {tier} pour débloquer cette fonctionnalité et accélérer votre coaching.',
     upgradeCTA: 'Mettre à niveau',
@@ -982,6 +994,7 @@ export default {
       generateSuccess: 'Rapport généré et partagé avec le parent.',
     },
     timeline: {
+      viewDetails: 'Voir les détails',
       title: 'Chronologie du joueur',
       noEvents: 'Aucun événement dans la chronologie pour le moment.',
       loadError: 'Échec du chargement de la chronologie',
@@ -1283,6 +1296,35 @@ export default {
     },
   },
   video: {
+    player: {
+      title: 'Vidéo',
+      playAriaLabel: 'Lire la vidéo',
+      closeAriaLabel: 'Fermer le lecteur',
+      download: 'Télécharger',
+      notAllowed: "Vous n'avez pas accès à cette vidéo.",
+      notFound: "Cette vidéo n'existe plus.",
+      notPlayable: "Cette vidéo n'est pas disponible à la lecture pour le moment.",
+      loadError: "La vidéo n'a pas pu être chargée.",
+    },
+    type: {
+      COACH_REVIEW: 'Analyse de séance',
+      DRILL_DEMO: "Démonstration d'exercice",
+      HOMEWORK: 'Devoir',
+    },
+    typeHint: {
+      COACH_REVIEW: "Une vidéo d'analyse pour vos joueurs",
+      DRILL_DEMO: "Une démonstration d'un exercice",
+    },
+    parent: {
+      title: 'Vidéos',
+      subtitle: 'Les vidéos envoyées par votre enfant. Vous pouvez les regarder ou les supprimer.',
+      hubLink: 'Vidéos',
+      backToChild: 'Retour aux séances',
+      emptyState: 'Aucune vidéo envoyée pour le moment',
+      loadError: "Les vidéos n'ont pas pu être chargées.",
+      deleteConfirm:
+        'Supprimer cette vidéo du compte de votre enfant ? Cette action est irréversible.',
+    },
     status: {
       UPLOADING: 'Téléversement',
       PROCESSING: 'Traitement en cours',
@@ -1322,6 +1364,14 @@ export default {
       loading: 'Chargement du quota…',
     },
     management: {
+      coachUploadButton: 'Téléverser une vidéo',
+      retryAriaLabel: "Réessayer l'envoi",
+      retryConflict:
+        'Cet envoi est déjà en cours de nouvelle tentative. Actualisez pour voir son statut.',
+      quotaOrRateLimited:
+        "Limite d'envoi atteinte — libérez de l'espace ou réessayez dans une minute.",
+      uploadRejected:
+        'Ce fichier ne peut pas être envoyé (type, taille ou état de la vidéo). Vérifiez et réessayez.',
       title: 'Mes vidéos',
       uploadButton: 'Téléverser une vidéo de devoirs',
       deleteConfirm: 'Supprimer cette vidéo ? Cette action est irréversible.',
@@ -2025,6 +2075,7 @@ export default {
     metricAverageMs: 'Moyenne en ms',
   },
   nav: {
+    coachVideos: 'Mes vidéos',
     sectionMain: 'Général',
     menu: 'Menu',
     tagline: "Plateforme d'analyse",

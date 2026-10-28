@@ -220,4 +220,56 @@ class VideoRetryUploadIT extends BaseVideoIT {
         assertThat(video.getOperationalState()).isEqualTo(OperationalState.FAILED);
         assertThat(uploadSessionRepository.findAll()).isEmpty();
     }
+
+    @Test
+    void retryUpload_byNonOwner_isNotFound_andVideoStaysFailed() {
+        Video failed = seedFailedVideo("owner-real");
+
+        assertThatThrownBy(() -> videoService.retryUpload(
+            new RetryUploadRequest(failed.getId(), "owner-intruder", 1024L)))
+            .isInstanceOf(com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException.class);
+
+        assertThat(videoRepository.findById(failed.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.FAILED);
+        assertThat(uploadSessionRepository.findAll()).isEmpty();
+    }
+
+    /**
+     * Two concurrent retries of the same FAILED video (a double-clicked Retry button): the atomic
+     * FAILED→UPLOADING claim lets exactly one through. Before it, both passed the FAILED pre-check and the
+     * idempotent UPLOADING→UPLOADING transition, each reserving quota and opening a provider asset.
+     */
+    @Test
+    void retryUpload_concurrentRetries_exactlyOneWins() throws Exception {
+        Video failed = seedFailedVideo("owner-race");
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Callable<Boolean> attempt = () -> {
+                start.await();
+                try {
+                    videoService.retryUpload(new RetryUploadRequest(failed.getId(), "owner-race", 1024L));
+                    return true;
+                } catch (com.softropic.skillars.platform.video.contract.exception.VideoStateConflictException
+                         | VideoValidationException e) {
+                    // Conflict: lost the claim. Validation: read the row after the winner's claim committed.
+                    return false;
+                }
+            };
+            java.util.concurrent.Future<Boolean> a = pool.submit(attempt);
+            java.util.concurrent.Future<Boolean> b = pool.submit(attempt);
+            start.countDown();
+            long wins = java.util.stream.Stream.of(a.get(30, java.util.concurrent.TimeUnit.SECONDS),
+                    b.get(30, java.util.concurrent.TimeUnit.SECONDS))
+                .filter(Boolean::booleanValue).count();
+
+            assertThat(wins).isEqualTo(1);
+            assertThat(uploadSessionRepository.findAll()).hasSize(1);
+            verify(quotaProvider, org.mockito.Mockito.times(1)).reserve(anyString(), anyLong(), any());
+            assertThat(videoRepository.findById(failed.getId()).orElseThrow().getOperationalState())
+                .isEqualTo(OperationalState.UPLOADING);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
 }

@@ -87,6 +87,7 @@ async function mountPageForContributions(playerId = LARGE_PLAYER_ID, initialStat
         PerformanceReportsPanel: true,
         PlayerTimelinePanel: true,
         SessionPackTracker: true,
+        SkillTrendsPanel: true,
       },
     },
   })
@@ -159,5 +160,47 @@ describe('ParentDevelopmentPortalPage.vue — coach-contribution empty state (de
     expect(wrapper.findComponent(CoachContributionSection).exists()).toBe(false)
     expect(wrapper.text()).toContain('development.portal.contributionsBelowThresholdState')
     expect(wrapper.text()).not.toContain('development.portal.noContributionsState')
+  })
+})
+
+// UI-gap chunk C7 — A14 (radar baseline toggle, previously hardcoded :show-baseline="false") and
+// A15 (the SkillTrendsPanel the coach and player views already show).
+describe('ParentDevelopmentPortalPage.vue — baseline toggle and skill trends (A14, A15)', () => {
+  const radar = (baselineScore) => ({
+    skills: [{ skillCode: 'PAC', compositeScore: 7, baselineScore }],
+  })
+
+  it('offers the baseline toggle only when a scored skill has a baseline, and drives the chart', async () => {
+    const { wrapper } = await mountPageForContributions(LARGE_PLAYER_ID, {
+      development: { radarDisplay: radar(5) },
+    })
+    const chart = wrapper.findComponent({ name: 'SkillsRadarChart' })
+    expect(chart.props('showBaseline')).toBe(false)
+
+    const toggle = wrapper.findComponent('[data-testid="parent-radar-baseline-toggle"]')
+    expect(toggle.exists()).toBe(true)
+    await toggle.vm.$emit('update:modelValue', true)
+
+    expect(chart.props('showBaseline')).toBe(true)
+  })
+
+  it('hides the baseline toggle when no skill has a baseline', async () => {
+    const { wrapper } = await mountPageForContributions(LARGE_PLAYER_ID, {
+      development: { radarDisplay: radar(null) },
+    })
+    expect(wrapper.find('[data-testid="parent-radar-baseline-toggle"]').exists()).toBe(false)
+  })
+
+  it('fetches and renders skill trends for the exact route-param player', async () => {
+    const { wrapper, pinia } = await mountPageForContributions(LARGE_PLAYER_ID, {
+      development: { skillTrends: [{ skillCode: 'PAC', direction: 'UP' }] },
+    })
+    const { useDevelopmentStore } = await import('src/stores/development.store')
+    const store = useDevelopmentStore(pinia)
+
+    expect(store.fetchSkillTrends).toHaveBeenCalledWith(LARGE_PLAYER_ID)
+    expect(wrapper.find('[data-testid="parent-skill-trends-card"]').exists()).toBe(true)
+    const panel = wrapper.findComponent({ name: 'SkillTrendsPanel' })
+    expect(panel.props('trends')).toEqual([{ skillCode: 'PAC', direction: 'UP' }])
   })
 })

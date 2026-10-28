@@ -11,7 +11,7 @@
     <template v-if="!store.loading">
       <!-- Skills Radar card — hero element above exposure chart. Read-only: the player sees the
            coaches' composite scores but cannot change the displayed subset. -->
-      <q-card class="q-mb-md">
+      <q-card id="dev-section-radar" class="q-mb-md">
         <q-card-section>
           <div class="text-subtitle1">{{ $t('development.radar.displayTitle') }}</div>
           <q-toggle
@@ -77,7 +77,7 @@
       </q-card>
 
       <!-- Performance Reports — read-only list for the player (no generate button). -->
-      <q-card class="q-mt-md">
+      <q-card id="dev-section-reports" class="q-mt-md">
         <q-card-section>
           <PerformanceReportsPanel :player-id="playerId" :is-coach="false" />
         </q-card-section>
@@ -89,7 +89,12 @@
            consistency with the coach/parent pages rather than a live bug fix. -->
       <q-card class="q-mt-md">
         <q-card-section>
-          <PlayerTimelinePanel :player-id="playerId" :key="playerId" />
+          <PlayerTimelinePanel
+            :key="playerId"
+            :player-id="playerId"
+            viewer="PLAYER"
+            :link-anchors="timelineAnchors"
+          />
         </q-card-section>
       </q-card>
     </template>
@@ -106,6 +111,7 @@ import SkillExposureTrendChart from 'src/components/development/SkillExposureTre
 import SkillTrendsPanel from 'src/components/development/SkillTrendsPanel.vue'
 import PerformanceReportsPanel from 'src/components/development/PerformanceReportsPanel.vue'
 import PlayerTimelinePanel from 'src/components/development/PlayerTimelinePanel.vue'
+import { TIMELINE_ANCHORS } from 'src/utils/timelineLinks'
 
 const route = useRoute()
 const store = useDevelopmentStore()
@@ -117,6 +123,7 @@ const store = useDevelopmentStore()
 // so every API call below was hitting a player id that does not exist. skillars-deferred-147.
 const playerId = computed(() => route.params.playerId)
 const showBaseline = ref(false)
+const timelineAnchors = [TIMELINE_ANCHORS.radar, TIMELINE_ANCHORS.reports]
 
 // skillars-12-9 AC6: this route is PLAYER-only and authStore.role is single-valued, so the
 // coach/parent branches that used to live here were dead. Coach tools now live on

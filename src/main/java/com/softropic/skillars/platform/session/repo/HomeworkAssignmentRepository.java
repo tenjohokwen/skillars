@@ -13,4 +13,7 @@ public interface HomeworkAssignmentRepository extends JpaRepository<HomeworkAssi
     Optional<HomeworkAssignment> findByIdAndPlayerId(UUID id, Long playerId);
 
     boolean existsByBookingIdAndDrillId(UUID bookingId, UUID drillId);
+
+    /** The homework one coach assigned one player, newest first (coach-scoped completion view). */
+    List<HomeworkAssignment> findByPlayerIdAndCoachIdOrderByAssignedAtDesc(Long playerId, UUID coachId);
 }

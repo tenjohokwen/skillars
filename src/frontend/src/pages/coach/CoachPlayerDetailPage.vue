@@ -39,7 +39,7 @@
            skill-definitions / exposure / contributions trio trips the page-level gate above. -->
 
       <!-- Skills radar — hero card; owns its fetches and the preference persistence. -->
-      <CoachRadarCard :player-id="playerId" />
+      <CoachRadarCard id="dev-section-radar" :player-id="playerId" />
 
       <!-- Narrative summary -->
       <q-card class="q-mb-md" data-testid="coach-narrative-card">
@@ -240,8 +240,36 @@
         </q-card-section>
       </q-card>
 
+      <!-- Radar assessment history teaser for a known SCOUT coach (UX-DR22 soft teaser: blurred
+           sample + upgrade CTA). The "Add assessment" entry stays absent for SCOUT (Story 5.x: absent,
+           not disabled); a failed/unknown tier load is never treated as SCOUT here. -->
+      <q-card v-else-if="isScoutTier" class="q-mb-md" data-testid="coach-radar-history-gate">
+        <q-card-section>
+          <div class="text-subtitle1">{{ $t('development.radar.historyTitle') }}</div>
+        </q-card-section>
+        <q-card-section>
+          <FeatureGateOverlay
+            :required-tier="$t('featureGate.tier.INSTRUCTOR')"
+            :feature-label="$t('development.radar.historyTitle')"
+            upgrade-to="/coach/subscription"
+          >
+            <q-list dense style="min-height: 240px">
+              <q-item v-for="n in 3" :key="n">
+                <q-item-section>
+                  <q-item-label>{{ $t('featureGate.sampleRow') }}</q-item-label>
+                  <q-item-label caption>— · —</q-item-label>
+                </q-item-section>
+              </q-item>
+            </q-list>
+          </FeatureGateOverlay>
+        </q-card-section>
+      </q-card>
+
+      <!-- Homework this coach assigned the player, with completion (D2). -->
+      <CoachHomeworkCard id="dev-section-homework" :key="`hw-${playerId}`" :player-id="playerId" />
+
       <!-- Reports — the backend filters a coach to the reports THEY generated. -->
-      <q-card class="q-mb-md" data-testid="coach-reports-card">
+      <q-card id="dev-section-reports" class="q-mb-md" data-testid="coach-reports-card">
         <q-card-section>
           <PerformanceReportsPanel
             :key="playerId"
@@ -259,7 +287,12 @@
            PlayerTimelinePanel.vue only fetches in onMounted with no playerId prop watcher. -->
       <q-card>
         <q-card-section>
-          <PlayerTimelinePanel :player-id="playerId" :key="playerId" />
+          <PlayerTimelinePanel
+            :key="playerId"
+            :player-id="playerId"
+            viewer="COACH"
+            :link-anchors="timelineAnchors"
+          />
         </q-card-section>
       </q-card>
 
@@ -292,6 +325,9 @@ import { getErrorMessage } from 'src/utils/errorHandler'
 import { hasTopAttributions, contributionEmptyStateKind } from 'src/utils/coachContributions'
 import CoachContributionSection from 'src/components/development/CoachContributionSection.vue'
 import PlayerTimelinePanel from 'src/components/development/PlayerTimelinePanel.vue'
+import CoachHomeworkCard from 'src/components/development/CoachHomeworkCard.vue'
+import FeatureGateOverlay from 'src/components/common/FeatureGateOverlay.vue'
+import { TIMELINE_ANCHORS } from 'src/utils/timelineLinks'
 import CoachRadarCard from 'src/components/development/CoachRadarCard.vue'
 import SluNarrativeSummary from 'src/components/development/SluNarrativeSummary.vue'
 import SkillExposureBarChart from 'src/components/development/SkillExposureBarChart.vue'
@@ -364,6 +400,12 @@ const canAssess = computed(
   () => tierSettled.value && RADAR_ALLOWED_TIERS.includes(authStore.coachTier),
 )
 const isAcademyTier = computed(() => tierSettled.value && authStore.coachTier === 'ACADEMY')
+const isScoutTier = computed(() => tierSettled.value && authStore.coachTier === 'SCOUT')
+const timelineAnchors = [
+  TIMELINE_ANCHORS.radar,
+  TIMELINE_ANCHORS.reports,
+  TIMELINE_ANCHORS.homework,
+]
 const showCorrelation = computed(() => tierSettled.value && authStore.coachTier != null)
 
 const showTargetEditor = ref(false)

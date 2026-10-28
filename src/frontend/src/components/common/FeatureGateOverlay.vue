@@ -12,13 +12,19 @@ defineProps({
     type: String,
     required: true,
   },
+  // Where the upgrade CTA navigates (the caller's role-appropriate subscription page). When omitted the
+  // CTA only emits `upgrade-clicked` and the caller decides.
+  upgradeTo: {
+    type: [String, Object],
+    default: null,
+  },
 })
 
 const emit = defineEmits(['upgrade-clicked'])
 </script>
 
 <template>
-  <div class="feature-gate-wrapper">
+  <div class="feature-gate-wrapper" data-testid="feature-gate-overlay">
     <div class="gate-preview-blur" aria-hidden="true">
       <slot />
     </div>
@@ -34,6 +40,8 @@ const emit = defineEmits(['upgrade-clicked'])
         color="primary"
         :label="t('featureGate.upgradeCTA')"
         unelevated
+        :to="upgradeTo || undefined"
+        data-testid="feature-gate-upgrade"
         @click="emit('upgrade-clicked')"
       />
     </div>

@@ -90,6 +90,7 @@ describe('ParentPlayerPortalPage.vue — child hub', () => {
       `/parent/players/${LARGE_PLAYER_ID}/packs`,
       `/parent/player/${LARGE_PLAYER_ID}/subscription`,
       `/player/locker-room/${LARGE_PLAYER_ID}`,
+      `/parent/players/${LARGE_PLAYER_ID}/videos`,
       '/parent/approvals',
     ]) {
       expect(wrapper.find(`[href="${href}"]`).exists()).toBe(true)

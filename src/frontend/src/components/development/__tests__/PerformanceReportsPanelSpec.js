@@ -36,3 +36,41 @@ describe('PerformanceReportsPanel.vue (skillars-12-9)', () => {
     expect(wrapper.text()).toContain('list failed')
   })
 })
+
+// UI-gap chunk C7 / A18 (UX-DR22): a known SCOUT coach gets the soft teaser for report generation
+// instead of the action simply vanishing; an unknown tier is not an upsell moment.
+describe('PerformanceReportsPanel.vue — FeatureGateOverlay (A18)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+  })
+
+  function mountWithTier(coachTier, isCoach = true) {
+    const pinia = createTestingPinia({
+      createSpy: vi.fn,
+      initialState: { auth: { role: 'COACH', coachTier } },
+    })
+    const wrapper = mount(PerformanceReportsPanel, {
+      props: { playerId: '7', isCoach },
+      global: { plugins: [pinia], stubs: { GenerateReportDialog: true } },
+    })
+    mounted.push(wrapper)
+    return wrapper
+  }
+
+  it('shows the upgrade teaser, linking to the coach subscription page, for a SCOUT coach', () => {
+    const wrapper = mountWithTier('SCOUT')
+    const gate = wrapper.findComponent({ name: 'FeatureGateOverlay' })
+    expect(gate.exists()).toBe(true)
+    expect(gate.props('upgradeTo')).toBe('/coach/subscription')
+  })
+
+  it('shows no teaser for a paid tier, an unknown tier, or a non-coach viewer', () => {
+    expect(mountWithTier('INSTRUCTOR').findComponent({ name: 'FeatureGateOverlay' }).exists()).toBe(
+      false,
+    )
+    expect(mountWithTier(null).findComponent({ name: 'FeatureGateOverlay' }).exists()).toBe(false)
+    expect(
+      mountWithTier('SCOUT', false).findComponent({ name: 'FeatureGateOverlay' }).exists(),
+    ).toBe(false)
+  })
+})

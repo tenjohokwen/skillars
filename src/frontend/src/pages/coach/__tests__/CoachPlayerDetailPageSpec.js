@@ -705,6 +705,23 @@ describe('CoachPlayerDetailPage.vue — coach tools (skillars-12-9 G17)', () => 
     expect(callsTo('/radar/correlation')).toHaveLength(0)
     expect(find(wrapper, 'coach-correlation-card').exists()).toBe(true)
     expect(find(wrapper, 'coach-set-targets').exists()).toBe(true)
+    // UI-gap C7 / A18 (UX-DR22): the history is replaced by the soft upgrade teaser, not hidden.
+    expect(find(wrapper, 'coach-radar-history-gate').exists()).toBe(true)
+  })
+
+  it('INSTRUCTOR or unknown tier: no radar-history upgrade teaser (C7 / A18)', async () => {
+    mockApiGetByUrl({ ...CORE, ...tier('INSTRUCTOR') })
+    const { wrapper } = await mountPage()
+    await flushPromises()
+    expect(find(wrapper, 'coach-radar-history-gate').exists()).toBe(false)
+  })
+
+  it('shows the coach homework card for the exact player id (C7 / D2)', async () => {
+    mockApiGetByUrl({ ...CORE, ...tier('INSTRUCTOR') })
+    const { wrapper } = await mountPage()
+    await flushPromises()
+    expect(find(wrapper, 'coach-homework-card').exists()).toBe(true)
+    expect(callsTo(`/api/session/coach/players/${LARGE_PLAYER_ID}/homework`)).toHaveLength(1)
   })
 
   it('INSTRUCTOR: assessment + history, correlation teaser, no correlation call', async () => {
@@ -753,6 +770,7 @@ describe('CoachPlayerDetailPage.vue — coach tools (skillars-12-9 G17)', () => 
     expect(find(wrapper, 'coach-correlation-card').exists()).toBe(false)
     expect(find(wrapper, 'coach-add-assessment').exists()).toBe(false)
     expect(find(wrapper, 'coach-radar-history-card').exists()).toBe(false)
+    expect(find(wrapper, 'coach-radar-history-gate').exists()).toBe(false)
     expect(callsTo('/radar/entries')).toHaveLength(0)
     expect(callsTo('/radar/correlation')).toHaveLength(0)
   })

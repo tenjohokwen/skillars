@@ -98,7 +98,9 @@ class VideoServiceTest {
         Video video = new Video();
         video.setOperationalState(OperationalState.FAILED);
         video.setTitle("clip.mp4");
+        video.setOwnerId("owner-1");
         when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+        when(videoLifecycleService.claimFailedForRetry(videoId)).thenReturn(true);
         when(quotaProvider.check(anyString(), anyLong())).thenReturn(true);
         when(quotaProvider.reserve(anyString(), anyLong(), any())).thenReturn("handle-2");
         when(uploadSessionRepository.save(any(UploadSession.class))).thenAnswer(inv -> {
@@ -118,9 +120,50 @@ class VideoServiceTest {
         InOrder inOrder = inOrder(videoLifecycleService, quotaProvider, uploadSessionRepository);
         // State must flip back to UPLOADING before the new session is reserved/created —
         // otherwise the ReconciliationWorker can re-FAIL the video mid-retry.
-        inOrder.verify(videoLifecycleService).transitionOperationalState(videoId, OperationalState.UPLOADING);
+        // The claim is the atomic FAILED→UPLOADING conditional update, not the idempotent plain transition.
+        inOrder.verify(videoLifecycleService).claimFailedForRetry(videoId);
         inOrder.verify(quotaProvider).reserve(anyString(), anyLong(), any());
         inOrder.verify(uploadSessionRepository).save(any(UploadSession.class));
+        verify(videoLifecycleService, never()).transitionOperationalState(videoId, OperationalState.UPLOADING);
+    }
+
+    @Test
+    void retryUpload_byNonOwner_isNotFound_andTouchesNothing() {
+        UUID videoId = UUID.randomUUID();
+        Video video = new Video();
+        video.setOperationalState(OperationalState.FAILED);
+        video.setTitle("clip.mp4");
+        video.setOwnerId("owner-1");
+        when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                service.retryUpload(new RetryUploadRequest(videoId, "someone-else", 1024L)))
+            .isInstanceOf(com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException.class);
+
+        verify(videoLifecycleService, never()).claimFailedForRetry(any());
+        verify(quotaProvider, never()).reserve(anyString(), anyLong(), any());
+    }
+
+    @Test
+    void retryUpload_losingTheClaimRace_isConflict_andReservesNothing() {
+        UUID videoId = UUID.randomUUID();
+        Video video = new Video();
+        video.setOperationalState(OperationalState.FAILED);
+        video.setTitle("clip.mp4");
+        video.setOwnerId("owner-1");
+        when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+        when(quotaProvider.check(anyString(), anyLong())).thenReturn(true);
+        // A concurrent retry claimed the row between this call's FAILED read and its claim.
+        when(videoLifecycleService.claimFailedForRetry(videoId)).thenReturn(false);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                service.retryUpload(new RetryUploadRequest(videoId, "owner-1", 1024L)))
+            .isInstanceOf(com.softropic.skillars.platform.video.contract.exception.VideoStateConflictException.class);
+
+        verify(quotaProvider, never()).reserve(anyString(), anyLong(), any());
+        verify(videoProviderAdapter, never()).initializeUpload(anyString(), anyLong());
+        // The loser must not "revert" the winner's UPLOADING back to FAILED.
+        verify(videoLifecycleService, never()).transitionOperationalState(videoId, OperationalState.FAILED);
     }
 
     @Test

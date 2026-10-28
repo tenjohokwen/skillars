@@ -13,6 +13,23 @@
       />
     </div>
 
+    <!-- UX-DR22 soft teaser: report generation is not in the SCOUT tier, so a SCOUT coach sees a
+         blurred preview of the action with an upgrade CTA instead of the button simply vanishing. The
+         rest of the panel (the report list) stays usable. -->
+    <FeatureGateOverlay
+      v-if="showGenerateGate"
+      class="q-mb-md"
+      :required-tier="$t('featureGate.tier.INSTRUCTOR')"
+      :feature-label="$t('development.report.generate')"
+      upgrade-to="/coach/subscription"
+    >
+      <!-- min-height: the overlay is absolutely positioned over this preview, so the preview must be
+           tall enough to hold the overlay's tier label, copy and CTA. -->
+      <div class="q-pa-md" style="min-height: 240px">
+        <q-btn color="primary" icon="picture_as_pdf" :label="$t('development.report.generate')" />
+      </div>
+    </FeatureGateOverlay>
+
     <q-inner-loading :showing="store.reportsLoading" />
 
     <q-banner
@@ -72,6 +89,7 @@ import { date } from 'quasar'
 import { useDevelopmentStore } from 'src/stores/development.store'
 import { useAuthStore } from 'src/stores/auth.store'
 import GenerateReportDialog from './GenerateReportDialog.vue'
+import FeatureGateOverlay from 'src/components/common/FeatureGateOverlay.vue'
 
 const props = defineProps({
   playerId: { type: [Number, String], required: true },
@@ -84,6 +102,8 @@ const authStore = useAuthStore()
 const showDialog = ref(false)
 
 const canGenerate = computed(() => authStore.coachTier != null && authStore.coachTier !== 'SCOUT')
+// Only a KNOWN SCOUT tier gets the teaser — an unknown (failed-load) tier is not an upsell moment.
+const showGenerateGate = computed(() => props.isCoach && authStore.coachTier === 'SCOUT')
 
 function formatDate(isoString) {
   return date.formatDate(isoString, 'DD MMM YYYY HH:mm')

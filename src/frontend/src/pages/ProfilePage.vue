@@ -280,9 +280,19 @@
               </div>
               <q-btn flat dense no-caps :label="t('common.retry')" @click="loadCoachBranding" />
             </div>
-            <div v-else-if="authStore.coachTier !== 'ACADEMY'" class="profile-row">
-              <div class="text-body">{{ t('security.featureGated') }}</div>
-            </div>
+            <!-- UX-DR22 soft teaser: a blurred sample of the branding controls with an upgrade CTA
+                 instead of a bare "requires a higher tier" line. The rest of the page stays usable. -->
+            <FeatureGateOverlay
+              v-else-if="authStore.coachTier !== 'ACADEMY'"
+              :required-tier="t('featureGate.tier.ACADEMY')"
+              :feature-label="t('profile.sectionCoachBranding')"
+              upgrade-to="/coach/subscription"
+            >
+              <div class="profile-row row items-center q-gutter-md" style="min-height: 240px">
+                <q-icon name="image" size="48px" />
+                <div class="coach-branding-gate-swatch" />
+              </div>
+            </FeatureGateOverlay>
             <template v-else>
               <!-- AC8: the logo was already fetched (coachBranding.logoSignedUrl) but never
                    rendered here -- only reachable from inside EditCoachBrandingDialog. -->
@@ -511,6 +521,7 @@ import EditCoachAvailabilityDialog from 'src/components/profile/EditCoachAvailab
 import EditCoachPhotoDialog from 'src/components/profile/EditCoachPhotoDialog.vue'
 import EditCoachBrandingDialog from 'src/components/profile/EditCoachBrandingDialog.vue'
 import EditPlayerPositionDialog from 'src/components/profile/EditPlayerPositionDialog.vue'
+import FeatureGateOverlay from 'src/components/common/FeatureGateOverlay.vue'
 
 const { t } = useI18n()
 const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandler()
@@ -681,6 +692,13 @@ const currentInfo = computed(() => {
 </script>
 
 <style lang="scss" scoped>
+.coach-branding-gate-swatch {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  background: var(--accent-primary, #3b82f6);
+}
+
 .page-header {
   border-bottom: 1px solid var(--border-soft);
   padding-bottom: 24px;

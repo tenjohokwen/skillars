@@ -9,15 +9,23 @@
     </q-banner>
 
     <!-- Skills Radar — hero (above all content per AC1) -->
-    <q-card class="q-mb-md">
+    <q-card id="dev-section-radar" class="q-mb-md">
       <q-card-section>
         <div class="text-subtitle1">{{ $t('development.radar.displayTitle') }}</div>
+        <!-- Same baseline comparison the player and coach views offer (CoachRadarCard,
+             PlayerDevelopmentDashboardPage): shown only when some scored skill has a baseline. -->
+        <q-toggle
+          v-if="hasBaseline"
+          v-model="showBaseline"
+          :label="$t('development.radar.compareBaselineLabel')"
+          data-testid="parent-radar-baseline-toggle"
+        />
       </q-card-section>
       <q-card-section>
         <SkillsRadarChart
           :skills="store.radarDisplay?.skills ?? []"
           :selected-skill-codes="[]"
-          :show-baseline="false"
+          :show-baseline="showBaseline"
           :readonly="true"
         />
       </q-card-section>
@@ -102,8 +110,24 @@
       {{ $t('development.portal.neglectedAlert', { skills: neglectedSkillNames }) }}
     </q-banner>
 
+    <!-- Skill Trends — per-skill direction/slope, the same panel the coach and player views show.
+         GET /slu/skill-trends admits a parent of the player via playerOwnershipGuard. -->
+    <q-card class="q-mb-md" data-testid="parent-skill-trends-card">
+      <q-card-section>
+        <div class="text-subtitle1">{{ $t('development.skillTrends.title') }}</div>
+      </q-card-section>
+      <q-card-section class="relative-position">
+        <q-inner-loading :showing="store.skillTrendsLoading" />
+        <SkillTrendsPanel
+          :trends="store.skillTrends"
+          :skill-definitions="store.skillDefinitions"
+          :error="!!store.skillTrendsError && !store.skillTrendsLoading"
+        />
+      </q-card-section>
+    </q-card>
+
     <!-- Reports -->
-    <q-card class="q-mb-md">
+    <q-card id="dev-section-reports" class="q-mb-md">
       <q-card-section>
         <PerformanceReportsPanel :player-id="playerId" :is-coach="false" />
       </q-card-section>
@@ -119,7 +143,12 @@
         <div class="text-subtitle1">{{ $t('development.timeline.title') }}</div>
       </q-card-section>
       <q-card-section>
-        <PlayerTimelinePanel :player-id="playerId" :key="playerId" />
+        <PlayerTimelinePanel
+          :key="playerId"
+          :player-id="playerId"
+          viewer="PARENT"
+          :link-anchors="timelineAnchors"
+        />
       </q-card-section>
     </q-card>
   </q-page>
@@ -138,6 +167,8 @@ import SkillExposureBarChart from 'src/components/development/SkillExposureBarCh
 import CoachContributionSection from 'src/components/development/CoachContributionSection.vue'
 import PerformanceReportsPanel from 'src/components/development/PerformanceReportsPanel.vue'
 import PlayerTimelinePanel from 'src/components/development/PlayerTimelinePanel.vue'
+import SkillTrendsPanel from 'src/components/development/SkillTrendsPanel.vue'
+import { TIMELINE_ANCHORS } from 'src/utils/timelineLinks'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 
 const route = useRoute()
@@ -148,6 +179,15 @@ const store = useDevelopmentStore()
 
 const playerId = computed(() => route.params.playerId)
 const loading = ref(false)
+const showBaseline = ref(false)
+const timelineAnchors = [TIMELINE_ANCHORS.radar, TIMELINE_ANCHORS.reports]
+
+// Same rule as the player dashboard: offer the baseline overlay only when at least one scored skill
+// actually has a baseline to compare against.
+const hasBaseline = computed(() => {
+  const skills = store.radarDisplay?.skills ?? []
+  return skills.filter((s) => s.compositeScore !== null).some((s) => s.baselineScore !== null)
+})
 
 // True only when at least one pack is ACTIVE — exhausted/expired packs still appear in
 // the list, but the "Find a coach" CTA must show whenever no active credits exist (AC4).
@@ -189,6 +229,11 @@ async function loadPortal(id) {
   if (!id) return
   const gen = ++loadGeneration
   loading.value = true
+  // A different child's radar may have no baseline at all — never carry the overlay across.
+  showBaseline.value = false
+  // Own loading/error refs (skillTrendsLoading/-Error) and a sequence guard in the store, so it is
+  // not part of the page-level loading gate.
+  store.fetchSkillTrends(id)
   try {
     await Promise.all([
       store.fetchSkillDefinitions(),

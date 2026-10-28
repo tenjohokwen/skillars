@@ -23,6 +23,17 @@ export const videoApi = {
     return api.get('/api/video/quotas/me')
   },
 
+  // A linked player's videos (parent view). playerId is the PlayerProfile id, kept as a string.
+  getPlayerVideos(playerId) {
+    return api.get(`/api/video/players/${playerId}/videos`)
+  },
+
+  // Restart a FAILED upload on the same video record; returns fresh TUS credentials (same shape as
+  // initiateUpload's response) for the re-selected file.
+  retryUpload(videoId, fileSizeBytes) {
+    return api.post(`/api/video/${videoId}/retry`, { fileSizeBytes })
+  },
+
   deleteVideo(videoId) {
     return api.delete(`/api/video/${videoId}`)
   },

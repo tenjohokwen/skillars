@@ -48,6 +48,10 @@ import { useVideoStatusSse } from 'src/stores/video.store'
 const props = defineProps({
   videoId: { type: String, required: true },
   initialStatus: { type: String, default: 'UPLOADING' },
+  // false: render the given status only, never open the live stream. For viewers who are not the
+  // video's owner (a parent on a child's list) — /api/video/{id}/events and /status are owner-only
+  // (VideoEventResource), so a live card would 403 and degrade to an unknown status.
+  live: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['status-changed'])
@@ -94,7 +98,7 @@ function startSse(vid) {
     sseHandle.stop()
     sseHandle = null
   }
-  if (TERMINAL_STATES.has(currentStatus.value)) return
+  if (!props.live || TERMINAL_STATES.has(currentStatus.value)) return
   sseHandle = useVideoStatusSse(vid, {
     onStatusChange(state) {
       currentStatus.value = state

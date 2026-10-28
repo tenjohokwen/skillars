@@ -237,6 +237,14 @@ export default {
     },
   },
   coach: {
+    playerDetailHomeworkTitle: 'Homework',
+    playerDetailHomeworkHint:
+      'Homework you assigned this player and whether it has been completed.',
+    playerDetailNoHomework: 'You have not assigned this player any homework yet.',
+    playerDetailHomeworkUnknownDrill: 'Drill no longer available',
+    playerDetailHomeworkAssigned: 'Assigned {date}',
+    playerDetailHomeworkCompletedOn: 'Completed {date}',
+    playerDetailHomeworkOpen: 'Not done yet',
     commandCenterTitle: 'Coach Command Center',
     stripeBannerAction: 'Set up payments',
     bookingRequestsCta: 'Booking requests',
@@ -729,6 +737,11 @@ export default {
     verificationFailed: 'Verification failed',
   },
   featureGate: {
+    sampleRow: 'Sample entry',
+    tier: {
+      INSTRUCTOR: 'Instructor',
+      ACADEMY: 'Academy',
+    },
     requiredTier: 'Requires {tier} plan',
     description: 'Upgrade to {tier} to unlock this feature and accelerate your coaching.',
     upgradeCTA: 'Upgrade plan',
@@ -983,6 +996,7 @@ export default {
       generateSuccess: 'Report generated and shared with the parent.',
     },
     timeline: {
+      viewDetails: 'View details',
       title: 'Player Timeline',
       noEvents: 'No timeline events yet.',
       loadError: 'Failed to load timeline',
@@ -1026,6 +1040,34 @@ export default {
     },
   },
   video: {
+    player: {
+      title: 'Video',
+      playAriaLabel: 'Play video',
+      closeAriaLabel: 'Close player',
+      download: 'Download',
+      notAllowed: 'You do not have access to this video.',
+      notFound: 'This video no longer exists.',
+      notPlayable: 'This video is not available for playback right now.',
+      loadError: 'The video could not be loaded.',
+    },
+    type: {
+      COACH_REVIEW: 'Session review',
+      DRILL_DEMO: 'Drill demo',
+      HOMEWORK: 'Homework',
+    },
+    typeHint: {
+      COACH_REVIEW: 'A review or analysis video for your players',
+      DRILL_DEMO: 'A demonstration of a drill',
+    },
+    parent: {
+      title: 'Videos',
+      subtitle: 'Videos your child has uploaded. You can watch or delete them.',
+      hubLink: 'Videos',
+      backToChild: 'Back to sessions',
+      emptyState: 'No videos uploaded yet',
+      loadError: 'Failed to load the videos.',
+      deleteConfirm: "Delete this video from your child's account? This cannot be undone.",
+    },
     status: {
       UPLOADING: 'Uploading',
       PROCESSING: 'Processing',
@@ -1065,6 +1107,12 @@ export default {
       loading: 'Loading quota…',
     },
     management: {
+      coachUploadButton: 'Upload video',
+      retryAriaLabel: 'Retry upload',
+      retryConflict: 'This upload is already being retried. Refresh to see its status.',
+      quotaOrRateLimited: 'Upload limit reached — free up space or try again in a minute.',
+      uploadRejected:
+        'This file cannot be uploaded (type, size or video state). Please check and try again.',
       title: 'My Videos',
       uploadButton: 'Upload Homework Video',
       deleteConfirm: 'Delete this video? This cannot be undone.',
@@ -2028,6 +2076,7 @@ export default {
     metricAverageMs: 'Average ms',
   },
   nav: {
+    coachVideos: 'My videos',
     sectionMain: 'Main',
     menu: 'Menu',
     tagline: 'Analytics Platform',

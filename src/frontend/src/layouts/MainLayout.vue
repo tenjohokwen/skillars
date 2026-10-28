@@ -209,6 +209,15 @@
             </q-item-section>
           </q-item>
 
+          <q-item clickable to="/coach/videos" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="video_library" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.coachVideos') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
           <q-item clickable to="/messaging" class="nav-item">
             <q-item-section avatar>
               <q-icon name="chat" class="nav-icon" />
