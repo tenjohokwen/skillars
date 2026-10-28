@@ -1,6 +1,5 @@
 // feat/admin-operations A5: AdminGdprRequestsPage.vue — GDPR export / erasure request tracker:
-// filters, paging, the 30-day overdue flag, and the player-scope column that only appears once the
-// backend returns `playerId` (GDPR child-scope change).
+// filters, paging, the 30-day overdue flag, and the child-profile (playerId, V172) column.
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -18,6 +17,7 @@ function row(overrides = {}) {
   return {
     requestId: '11111111-2222-3333-4444-555555555555',
     userId: 9001,
+    playerId: null,
     requestType: 'EXPORT',
     status: 'COMPLETED',
     createdAt: new Date(Date.now() - 2 * DAY).toISOString(),
@@ -102,13 +102,7 @@ describe('AdminGdprRequestsPage.vue', () => {
     expect(wrapper.findAll('[data-testid="gdpr-overdue-chip"]')).toHaveLength(1)
   })
 
-  it('hides the child-profile column when rows carry no playerId field', async () => {
-    const wrapper = await mountPage()
-
-    expect(wrapper.vm.columns.map((c) => c.name)).not.toContain('playerId')
-  })
-
-  it('shows the child-profile column once rows carry a playerId field', async () => {
+  it('shows the child-profile id for a child-scoped request and a dash otherwise', async () => {
     adminApi.getGdprRequests.mockResolvedValue({
       content: [row({ playerId: null }), row({ requestId: 'x', playerId: 4242 })],
       totalPages: 1,

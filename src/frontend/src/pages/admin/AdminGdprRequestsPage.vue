@@ -140,19 +140,12 @@ const statusOptions = computed(() => [
   ...Object.entries(statusLabels.value).map(([value, label]) => ({ label, value })),
 ])
 
-// The player-scope column (a parent's request about a child profile) only exists once the backend
-// returns a `playerId` field on the rows — it is added by the GDPR child-scope change. Until then the
-// column stays hidden rather than showing an always-empty column.
-const showPlayerColumn = computed(() =>
-  rows.value.some((r) => Object.prototype.hasOwnProperty.call(r, 'playerId')),
-)
-
 const columns = computed(() => [
   { name: 'requestId', label: t('admin.gdpr.colRequest'), field: 'requestId', align: 'left' },
   { name: 'userId', label: t('admin.gdpr.colUser'), field: 'userId', align: 'left' },
-  ...(showPlayerColumn.value
-    ? [{ name: 'playerId', label: t('admin.gdpr.colPlayer'), field: 'playerId', align: 'left' }]
-    : []),
+  // playerId (V172): set when a parent requested export/erasure of a child profile; userId is then
+  // the requesting parent. Empty for a request about the requester's own account.
+  { name: 'playerId', label: t('admin.gdpr.colPlayer'), field: 'playerId', align: 'left' },
   { name: 'requestType', label: t('admin.gdpr.colType'), field: 'requestType', align: 'left' },
   { name: 'status', label: t('admin.gdpr.colStatus'), field: 'status', align: 'left' },
   { name: 'createdAt', label: t('admin.gdpr.colCreatedAt'), field: 'createdAt', align: 'left' },
