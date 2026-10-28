@@ -120,11 +120,11 @@ class SubscriptionSchedulerIsolationTest {
             .thenReturn(List.of(failingCoachChange, validCoachChange));
         when(playerSubscriptionChangeRepository.findPendingForScheduler(any()))
             .thenReturn(List.of(validPlayerChange));
-        when(paymentCoachSubscriptionRepository.findByCoachId(failingCoachId))
+        when(paymentCoachSubscriptionRepository.findByCoachIdForUpdate(failingCoachId))
             .thenReturn(Optional.of(coachSub(failingCoachId, "INSTRUCTOR")));
-        when(paymentCoachSubscriptionRepository.findByCoachId(validCoachId))
+        when(paymentCoachSubscriptionRepository.findByCoachIdForUpdate(validCoachId))
             .thenReturn(Optional.of(coachSub(validCoachId, "INSTRUCTOR")));
-        when(paymentPlayerSubscriptionRepository.findByPlayerId(validPlayerId))
+        when(paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(validPlayerId))
             .thenReturn(Optional.of(playerSub(validPlayerId, "SEMI_PRO")));
 
         service.applyPendingChanges();
@@ -152,13 +152,13 @@ class SubscriptionSchedulerIsolationTest {
             .thenReturn(List.of(validCoachChange));
         when(playerSubscriptionChangeRepository.findPendingForScheduler(any()))
             .thenReturn(List.of(failingPlayerChange, validPlayerChange));
-        when(paymentCoachSubscriptionRepository.findByCoachId(validCoachId))
+        when(paymentCoachSubscriptionRepository.findByCoachIdForUpdate(validCoachId))
             .thenReturn(Optional.of(coachSub(validCoachId, "INSTRUCTOR")));
-        when(paymentPlayerSubscriptionRepository.findByPlayerId(failingPlayerId))
+        when(paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(failingPlayerId))
             .thenReturn(Optional.of(failingSub));
         when(paymentPlayerSubscriptionRepository.save(failingSub))
             .thenThrow(new RuntimeException("simulated DB write failure"));
-        when(paymentPlayerSubscriptionRepository.findByPlayerId(validPlayerId))
+        when(paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(validPlayerId))
             .thenReturn(Optional.of(playerSub(validPlayerId, "SEMI_PRO")));
 
         service.applyPendingChanges();
@@ -190,15 +190,15 @@ class SubscriptionSchedulerIsolationTest {
             .thenReturn(List.of(failingCoachChange, validCoachChange));
         when(playerSubscriptionChangeRepository.findPendingForScheduler(any()))
             .thenReturn(List.of(failingPlayerChange, validPlayerChange));
-        when(paymentCoachSubscriptionRepository.findByCoachId(failingCoachId))
+        when(paymentCoachSubscriptionRepository.findByCoachIdForUpdate(failingCoachId))
             .thenReturn(Optional.of(coachSub(failingCoachId, "INSTRUCTOR")));
-        when(paymentCoachSubscriptionRepository.findByCoachId(validCoachId))
+        when(paymentCoachSubscriptionRepository.findByCoachIdForUpdate(validCoachId))
             .thenReturn(Optional.of(coachSub(validCoachId, "INSTRUCTOR")));
-        when(paymentPlayerSubscriptionRepository.findByPlayerId(failingPlayerId))
+        when(paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(failingPlayerId))
             .thenReturn(Optional.of(failingPlayerSub));
         when(paymentPlayerSubscriptionRepository.save(failingPlayerSub))
             .thenThrow(new RuntimeException("simulated DB write failure"));
-        when(paymentPlayerSubscriptionRepository.findByPlayerId(validPlayerId))
+        when(paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(validPlayerId))
             .thenReturn(Optional.of(playerSub(validPlayerId, "SEMI_PRO")));
 
         service.applyPendingChanges();
@@ -283,7 +283,7 @@ class SubscriptionSchedulerIsolationTest {
             .set(field(CoachSubscription::getTier), CoachSubscriptionTier.SCOUT)
             .create();
 
-        when(paymentCoachSubscriptionRepository.findAllByStatusIn(List.of("ACTIVE", "TRIALLING")))
+        when(paymentCoachSubscriptionRepository.findAll())
             .thenReturn(List.of(paymentSub));
         when(coachSubscriptionRepository.findByCoachId(coachId)).thenReturn(Optional.of(marketplaceSub));
 
@@ -322,7 +322,7 @@ class SubscriptionSchedulerIsolationTest {
             .set(field(CoachSubscription::getTier), CoachSubscriptionTier.INSTRUCTOR)
             .create();
 
-        when(paymentCoachSubscriptionRepository.findAllByStatusIn(List.of("ACTIVE", "TRIALLING")))
+        when(paymentCoachSubscriptionRepository.findAll())
             .thenReturn(List.of(paymentSub));
         when(coachSubscriptionRepository.findByCoachId(coachId)).thenReturn(Optional.of(marketplaceSub));
 
@@ -356,7 +356,7 @@ class SubscriptionSchedulerIsolationTest {
             .set(field(CoachSubscription::getTier), CoachSubscriptionTier.SCOUT)
             .create();
 
-        when(paymentCoachSubscriptionRepository.findAllByStatusIn(List.of("ACTIVE", "TRIALLING")))
+        when(paymentCoachSubscriptionRepository.findAll())
             .thenReturn(List.of(badSub, validSub));
         when(coachSubscriptionRepository.findByCoachId(validCoachId)).thenReturn(Optional.of(validMarketplaceSub));
 
@@ -371,8 +371,10 @@ class SubscriptionSchedulerIsolationTest {
 
     // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+    // fix/payment-subscription-entitlements: applyPendingChanges re-reads each change (findById) and
+    // its subscription (find*ForUpdate) inside the per-item transaction.
     private CoachSubscriptionChange coachChange(UUID coachId, String toTier) {
-        return Instancio.of(CoachSubscriptionChange.class)
+        CoachSubscriptionChange change = Instancio.of(CoachSubscriptionChange.class)
             .set(field(CoachSubscriptionChange::getCoachId), coachId)
             .set(field(CoachSubscriptionChange::getFromTier), "INSTRUCTOR")
             .set(field(CoachSubscriptionChange::getToTier), toTier)
@@ -382,11 +384,14 @@ class SubscriptionSchedulerIsolationTest {
             // starting value (e.g. "malformed tier leaves applied=false so it is re-selected next
             // run") — Instancio's random boolean generation would otherwise flip it non-deterministically.
             .set(field(CoachSubscriptionChange::isApplied), false)
+            .set(field(CoachSubscriptionChange::getVoidedAt), null)
             .create();
+        lenient().when(coachSubscriptionChangeRepository.findById(change.getChangeId())).thenReturn(Optional.of(change));
+        return change;
     }
 
     private PlayerSubscriptionChange playerChange(long playerId, String toTier) {
-        return Instancio.of(PlayerSubscriptionChange.class)
+        PlayerSubscriptionChange change = Instancio.of(PlayerSubscriptionChange.class)
             .set(field(PlayerSubscriptionChange::getPlayerId), playerId)
             .set(field(PlayerSubscriptionChange::getFromTier), "SEMI_PRO")
             .set(field(PlayerSubscriptionChange::getToTier), toTier)
@@ -394,7 +399,10 @@ class SubscriptionSchedulerIsolationTest {
             .set(field(PlayerSubscriptionChange::getTriggerSource), "SCHEDULED")
             // See coachChange's identical comment above.
             .set(field(PlayerSubscriptionChange::isApplied), false)
+            .set(field(PlayerSubscriptionChange::getVoidedAt), null)
             .create();
+        lenient().when(playerSubscriptionChangeRepository.findById(change.getChangeId())).thenReturn(Optional.of(change));
+        return change;
     }
 
     private PaymentCoachSubscription coachSub(UUID coachId, String tier) {
@@ -414,12 +422,16 @@ class SubscriptionSchedulerIsolationTest {
     }
 
     private PaymentCoachSubscription pastDueCoach(String tier) {
-        return Instancio.of(PaymentCoachSubscription.class)
+        PaymentCoachSubscription sub = Instancio.of(PaymentCoachSubscription.class)
             .set(field(PaymentCoachSubscription::getCoachId), UUID.randomUUID())
             .set(field(PaymentCoachSubscription::getTier), tier)
             .set(field(PaymentCoachSubscription::getStatus), "PAST_DUE")
             .set(field(PaymentCoachSubscription::getPastDueSince), Instant.now().minus(8, ChronoUnit.DAYS))
             .create();
+        // checkPastDueGracePeriod re-reads under lock before and after the Stripe cancel.
+        lenient().when(paymentCoachSubscriptionRepository.findByCoachIdForUpdate(sub.getCoachId()))
+            .thenReturn(Optional.of(sub));
+        return sub;
     }
 
     private static long nextPastDuePlayerId = 9000L;
@@ -427,11 +439,14 @@ class SubscriptionSchedulerIsolationTest {
     private PaymentPlayerSubscription pastDuePlayer(String tier) {
         // Direct list members in these tests, not looked up by id — uniqueness only avoids
         // confusing test failure output, no functional dependency on the value.
-        return Instancio.of(PaymentPlayerSubscription.class)
+        PaymentPlayerSubscription sub = Instancio.of(PaymentPlayerSubscription.class)
             .set(field(PaymentPlayerSubscription::getPlayerId), nextPastDuePlayerId++)
             .set(field(PaymentPlayerSubscription::getTier), tier)
             .set(field(PaymentPlayerSubscription::getStatus), "PAST_DUE")
             .set(field(PaymentPlayerSubscription::getPastDueSince), Instant.now().minus(8, ChronoUnit.DAYS))
             .create();
+        lenient().when(paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(sub.getPlayerId()))
+            .thenReturn(Optional.of(sub));
+        return sub;
     }
 }

@@ -177,6 +177,7 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { usePaymentStore } from 'src/stores/payment.store'
 import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
+import { subscriptionErrorI18nKey } from 'src/utils/subscriptionErrors'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()
@@ -217,8 +218,15 @@ function tierColor(tier) {
 
 function statusColor(status) {
   return (
-    { ACTIVE: 'positive', PAST_DUE: 'warning', CANCELLED: 'negative', TRIALLING: 'info' }[status] ||
-    'grey'
+    {
+      ACTIVE: 'positive',
+      PAST_DUE: 'warning',
+      UNPAID: 'negative',
+      INCOMPLETE: 'warning',
+      PAUSED: 'grey',
+      CANCELLED: 'negative',
+      TRIALLING: 'info',
+    }[status] || 'grey'
   )
 }
 
@@ -252,8 +260,11 @@ async function confirmSubscribe() {
       type: 'positive',
       message: t('subscription.coach.subscribeSuccess', { tier: selectedTier.value }),
     })
-  } catch {
-    $q.notify({ type: 'negative', message: t('subscription.coach.subscribeError') })
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: t(subscriptionErrorI18nKey(err, 'subscription.coach.subscribeError')),
+    })
   } finally {
     actionLoading.value = false
   }
@@ -267,8 +278,11 @@ async function handleChangeTier(newTier) {
       type: 'positive',
       message: t('subscription.coach.tierChangeSuccess', { tier: newTier }),
     })
-  } catch {
-    $q.notify({ type: 'negative', message: t('subscription.coach.tierChangeError') })
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: t(subscriptionErrorI18nKey(err, 'subscription.coach.tierChangeError')),
+    })
   } finally {
     actionLoading.value = false
   }

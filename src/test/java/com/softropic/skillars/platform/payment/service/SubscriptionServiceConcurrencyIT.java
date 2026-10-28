@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep4R
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStepResponse;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscription;
+import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscriptionRepository;
 import com.softropic.skillars.platform.security.contract.AgeTier;
 import com.softropic.skillars.utils.ConcurrencyLockWaitSupport;
 import com.stripe.model.Subscription;
@@ -61,6 +62,7 @@ class SubscriptionServiceConcurrencyIT extends AbstractIntegrationTest {
     @Autowired private CoachProfileService coachProfileService;
     @Autowired private SubscriptionService subscriptionService;
     @Autowired private MeterRegistry meterRegistry;
+    @Autowired private PaymentCoachSubscriptionRepository paymentCoachSubscriptionRepository;
 
     private static final long COACH_USER_ID = 8100_000_001L;
     private static final String SUBSCRIBED_TIER = "INSTRUCTOR";
@@ -105,8 +107,11 @@ class SubscriptionServiceConcurrencyIT extends AbstractIntegrationTest {
         when(stripeSub.getStatus()).thenReturn("active");
         when(stripeSub.getCurrentPeriodEnd()).thenReturn(Instant.now().plusSeconds(2592000).getEpochSecond());
 
+        // fix/payment-subscription-entitlements: persistCoachSubscription now re-reads the payment row
+        // under lock (subscribeCoach's findOrCreate commits it first), so it must exist up front.
         PaymentCoachSubscription paymentSub = new PaymentCoachSubscription();
         paymentSub.setCoachId(coachProfileId);
+        paymentCoachSubscriptionRepository.save(paymentSub);
 
         double lockRetryBaseline = ConcurrencyLockWaitSupport.currentLockRetryCount(
             meterRegistry, "SubscriptionService.syncMarketplaceTier");
@@ -144,8 +149,7 @@ class SubscriptionServiceConcurrencyIT extends AbstractIntegrationTest {
                     if (!lockHeld) {
                         throw new AssertionError("publishLockHeld was never signalled within 10s");
                     }
-                    subscriptionService.persistCoachSubscription(
-                        coachProfileId, paymentSub, SUBSCRIBED_TIER, stripeSub);
+                    subscriptionService.persistCoachSubscription(coachProfileId, SUBSCRIBED_TIER, stripeSub);
                 } catch (Throwable t) {
                     syncOutcome.set(t);
                 }

@@ -143,6 +143,8 @@ public class StripeWebhookService {
             chargeDisputeWebhookService.onDisputeClosed(deserialize(event, Dispute.class));
         } else if ("charge.refunded".equals(event.getType())) {
             chargeDisputeWebhookService.onChargeRefunded(deserialize(event, Charge.class), event);
+        } else if ("invoice.paid".equals(event.getType())) {
+            handleInvoicePaid(event);
         } else {
             log.debug("[STRIPE_WEBHOOK_UNKNOWN_TYPE type={}]", event.getType());
         }
@@ -227,7 +229,7 @@ public class StripeWebhookService {
             return;
         }
 
-        Map<String, Object> data = buildSubDataMap(sub);
+        Map<String, Object> data = buildSubDataMap(sub, event);
         subscriptionService.handleSubscriptionWebhook("customer.subscription.updated", stripeSubId, data);
     }
 
@@ -318,7 +320,7 @@ public class StripeWebhookService {
             return;
         }
 
-        Map<String, Object> data = buildSubDataMap(sub);
+        Map<String, Object> data = buildSubDataMap(sub, event);
         subscriptionService.handleSubscriptionWebhook("customer.subscription.deleted", stripeSubId, data);
     }
 
@@ -346,7 +348,41 @@ public class StripeWebhookService {
         // ifPresent-only lookups are already a no-op for an orphaned subscription today, so there is
         // nothing to skip, matched or not.
         maybeAlertOrphanedInvoicePaymentFailed(invoice, stripeSubId);
-        subscriptionService.handleSubscriptionWebhook("invoice.payment_failed", stripeSubId, Map.of());
+        subscriptionService.handleSubscriptionWebhook("invoice.payment_failed", stripeSubId, eventCreatedData(event));
+    }
+
+    /**
+     * fix/payment-subscription-entitlements: a paid subscription invoice returns a PAST_DUE/UNPAID
+     * subscription to ACTIVE and clears pastDueSince (SubscriptionService.handleInvoicePaid). The
+     * Stripe webhook endpoint must be subscribed to {@code invoice.paid}. Same deserialize-or-rollback
+     * contract as {@link #handleInvoicePaymentFailed}; an invoice for an unknown subscription is a no-op
+     * (no orphan alert: a paid invoice is not a drift signal).
+     */
+    private void handleInvoicePaid(Event event) {
+        Invoice invoice;
+        try {
+            invoice = (Invoice) event.getDataObjectDeserializer().deserializeUnsafe();
+        } catch (EventDataObjectDeserializationException e) {
+            log.error("[STRIPE_WEBHOOK_DESERIALIZE_FAILED type={} error={}]", event.getType(), e.getMessage(), e);
+            throw new RuntimeException("Webhook deserialization failed for type " + event.getType(), e);
+        }
+        if (invoice == null) {
+            log.warn("[STRIPE_WEBHOOK_NULL_INVOICE type={}]", event.getType());
+            return;
+        }
+        String stripeSubId = invoice.getSubscription();
+        if (stripeSubId == null || stripeSubId.isBlank()) {
+            log.debug("[STRIPE_WEBHOOK_INVOICE_NO_SUBSCRIPTION invoiceId={}]", invoice.getId());
+            return;
+        }
+        subscriptionService.handleSubscriptionWebhook("invoice.paid", stripeSubId, eventCreatedData(event));
+    }
+
+    /** The Stripe event's {@code created} (epoch seconds), for SubscriptionService's out-of-order guard. */
+    private static Map<String, Object> eventCreatedData(Event event) {
+        Map<String, Object> data = new HashMap<>();
+        if (event.getCreated() != null) data.put("event_created", event.getCreated());
+        return data;
     }
 
     /**
@@ -415,8 +451,8 @@ public class StripeWebhookService {
         }
     }
 
-    private Map<String, Object> buildSubDataMap(Subscription sub) {
-        Map<String, Object> data = new HashMap<>();
+    private Map<String, Object> buildSubDataMap(Subscription sub, Event event) {
+        Map<String, Object> data = eventCreatedData(event);
         if (sub.getCurrentPeriodEnd() != null) data.put("current_period_end", sub.getCurrentPeriodEnd());
         if (sub.getCancelAtPeriodEnd() != null) data.put("cancel_at_period_end", sub.getCancelAtPeriodEnd());
         if (sub.getStatus() != null) data.put("status", sub.getStatus());

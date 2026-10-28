@@ -23,7 +23,10 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -94,10 +97,10 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
         Subscription mockStripeSub = mock(Subscription.class);
         when(mockStripeSub.getId()).thenReturn(STRIPE_SUB_ID);
         when(mockStripeSub.getStatus()).thenReturn("active");
-        when(stripeClient.createSubscription(anyString(), anyString(), anyString()))
+        when(stripeClient.createSubscription(anyString(), anyString(), anyString(), anyString()))
             .thenReturn(mockStripeSub);
-        when(stripeClient.updateSubscriptionTier(anyString(), anyString()))
-            .thenReturn(Instant.now().plus(30, ChronoUnit.DAYS));
+        when(stripeClient.updateSubscriptionTier(anyString(), anyString(), anyBoolean(), anyString()))
+            .thenReturn(mockStripeSub);
         when(stripeClient.cancelSubscriptionAtPeriodEnd(anyString()))
             .thenReturn(Instant.now().plus(30, ChronoUnit.DAYS));
     }
@@ -137,7 +140,8 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
 
         // Verify Stripe SDK was called
         verify(stripeClient, times(1))
-            .createSubscription(STRIPE_CUSTOMER_ID, "price_instructor_monthly", PAYMENT_METHOD);
+            .createSubscription(eq(STRIPE_CUSTOMER_ID), eq("price_instructor_monthly"), eq(PAYMENT_METHOD),
+                startsWith("sub-create-"));
         // The saved card was already attached to this customer when it was saved via
         // /setup-intent + /save-payment-method — re-attaching here would throw on Stripe's side.
         verify(stripeClient, never()).attachPaymentMethod(anyString(), anyString());
@@ -204,8 +208,9 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
             .findByCoachId(coachId).orElseThrow();
         assertThat(sub.getTier()).isEqualTo("ACADEMY");
 
+        // fix/payment-subscription-entitlements: upgrades charge the proration immediately.
         verify(stripeClient, times(1))
-            .updateSubscriptionTier(STRIPE_SUB_ID, "price_academy_monthly");
+            .updateSubscriptionTier(eq(STRIPE_SUB_ID), eq("price_academy_monthly"), eq(true), startsWith("sub-upgrade-"));
     }
 
     // ─── Downgrade Scheduled ─────────────────────────────────────────────────────
@@ -235,12 +240,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
         subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "ACADEMY");
         subscriptionService.changeCoachTier(coachId, "INSTRUCTOR");
 
-        // Force the effective_at to be in the past
-        jdbcTemplate.update(
-            "UPDATE payment.coach_subscription_changes SET effective_at = ? " +
-            "WHERE coach_id = ? AND applied = false AND voided_at IS NULL",
-            java.sql.Timestamp.from(Instant.now().minus(1, ChronoUnit.HOURS)), coachId
-        );
+        forcePendingCoachChangeDue();
 
         subscriptionService.applyPendingChanges();
 
@@ -255,6 +255,156 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
             Long.class, coachId
         );
         assertThat(pendingCount).isZero();
+    }
+
+    @Test
+    void coachDowngrade_movesStripePriceNowWithoutProration() throws StripeException {
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "ACADEMY");
+
+        subscriptionService.changeCoachTier(coachId, "INSTRUCTOR");
+
+        verify(stripeClient).updateSubscriptionTier(eq(STRIPE_SUB_ID), eq("price_instructor_monthly"), eq(false),
+            startsWith("sub-downgrade-"));
+    }
+
+    // ─── fix/payment-subscription-entitlements item 1: no downgrade after deletion ───
+
+    @Test
+    void scheduledDowngrade_voidedBySubscriptionDeletion_neverRegrantsPaidTier() throws StripeException {
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "ACADEMY");
+        subscriptionService.changeCoachTier(coachId, "INSTRUCTOR");
+        forcePendingCoachChangeDue();
+
+        subscriptionService.handleSubscriptionWebhook("customer.subscription.deleted", STRIPE_SUB_ID, Map.of());
+        subscriptionService.applyPendingChanges();
+
+        PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow();
+        assertThat(sub.getTier()).isEqualTo("SCOUT");
+        assertThat(sub.getStatus()).isEqualTo("CANCELLED");
+        assertThat(marketplaceTier()).isEqualTo("SCOUT");
+        assertThat(pendingCoachChangeCount()).isZero();
+    }
+
+    @Test
+    void scheduledDowngrade_subscriptionNoLongerActive_voidedNotApplied() throws StripeException {
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "ACADEMY");
+        subscriptionService.changeCoachTier(coachId, "INSTRUCTOR");
+        forcePendingCoachChangeDue();
+        // Status moved to a non-entitled value by a webhook the old code would have ignored.
+        subscriptionService.handleSubscriptionWebhook("customer.subscription.updated", STRIPE_SUB_ID,
+            Map.of("status", "unpaid"));
+
+        subscriptionService.applyPendingChanges();
+
+        PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow();
+        assertThat(sub.getStatus()).isEqualTo("UNPAID");
+        assertThat(sub.getTier()).as("change voided, stored tier untouched").isEqualTo("ACADEMY");
+        assertThat(pendingCoachChangeCount()).isZero();
+        assertThat(marketplaceTier()).as("UNPAID is not entitled").isEqualTo("SCOUT");
+    }
+
+    // ─── fix/payment-subscription-entitlements items 2/3: declined payment never grants ───
+
+    @Test
+    void coachSubscribe_declinedFirstPayment_noTierGranted() throws StripeException {
+        when(stripeClient.createSubscription(anyString(), anyString(), anyString(), anyString()))
+            .thenThrow(new com.stripe.exception.CardException("Your card was declined.", "req_1",
+                "card_declined", null, "generic_decline", null, 402, null));
+
+        assertThatThrownBy(() -> subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR"))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessage("payment.subscription.paymentDeclined");
+
+        PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow();
+        assertThat(sub.getTier()).isEqualTo("SCOUT");
+        assertThat(sub.getStripeSubscriptionId()).isNull();
+        assertThat(marketplaceTier()).isNotEqualTo("INSTRUCTOR");
+    }
+
+    @Test
+    void coachSubscribe_incompleteSubscription_cancelledAndNotGranted() throws StripeException {
+        Subscription incomplete = mock(Subscription.class);
+        when(incomplete.getId()).thenReturn("sub_incomplete_91001");
+        when(incomplete.getStatus()).thenReturn("incomplete");
+        when(stripeClient.createSubscription(anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(incomplete);
+
+        assertThatThrownBy(() -> subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR"))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessage("payment.subscription.paymentDeclined");
+
+        verify(stripeClient).cancelSubscriptionImmediately("sub_incomplete_91001");
+        PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow();
+        assertThat(sub.getTier()).isEqualTo("SCOUT");
+        assertThat(sub.getStripeSubscriptionId()).isNull();
+    }
+
+    @Test
+    void unpaidThenInvoicePaid_entitlementRevokedThenRestored() throws StripeException {
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
+        assertThat(marketplaceTier()).isEqualTo("INSTRUCTOR");
+
+        subscriptionService.handleSubscriptionWebhook("customer.subscription.updated", STRIPE_SUB_ID,
+            Map.of("status", "unpaid"));
+        assertThat(marketplaceTier()).isEqualTo("SCOUT");
+
+        subscriptionService.handleSubscriptionWebhook("invoice.paid", STRIPE_SUB_ID, Map.of());
+        PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow();
+        assertThat(sub.getStatus()).isEqualTo("ACTIVE");
+        assertThat(sub.getPastDueSince()).isNull();
+        assertThat(marketplaceTier()).isEqualTo("INSTRUCTOR");
+    }
+
+    // ─── fix/payment-subscription-entitlements item 6: grace expiry cancels at Stripe ───
+
+    @Test
+    void graceExpiry_cancelsStripeSubscriptionAndAllowsCleanResubscribe() throws StripeException {
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
+        subscriptionService.handleSubscriptionWebhook("invoice.payment_failed", STRIPE_SUB_ID, Map.of());
+
+        // While PAST_DUE a second subscribe is blocked (it would bill in parallel).
+        assertThatThrownBy(() -> subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "ACADEMY"))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessage("payment.subscription.updatePaymentMethod");
+
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE payment.coach_subscriptions SET past_due_since = ? WHERE coach_id = ?",
+            java.sql.Timestamp.from(Instant.now().minus(30, ChronoUnit.DAYS)), coachId));
+
+        subscriptionService.checkPastDueGracePeriod();
+
+        verify(stripeClient).cancelSubscriptionImmediately(STRIPE_SUB_ID);
+        PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow();
+        assertThat(sub.getTier()).isEqualTo("SCOUT");
+        assertThat(sub.getStatus()).isEqualTo("CANCELLED");
+        assertThat(sub.getStripeSubscriptionId()).isNull();
+        assertThat(sub.getPastDueSince()).isNull();
+        assertThat(marketplaceTier()).isEqualTo("SCOUT");
+
+        // A late Stripe event for the cancelled subscription no longer matches any row.
+        subscriptionService.handleSubscriptionWebhook("invoice.paid", STRIPE_SUB_ID, Map.of());
+        assertThat(paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow().getStatus())
+            .isEqualTo("CANCELLED");
+
+        CoachSubscriptionResponse resp = subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
+        assertThat(resp.status()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void graceExpiry_stripeCancelFails_rowLeftPastDueForRetry() throws StripeException {
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
+        subscriptionService.handleSubscriptionWebhook("invoice.payment_failed", STRIPE_SUB_ID, Map.of());
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE payment.coach_subscriptions SET past_due_since = ? WHERE coach_id = ?",
+            java.sql.Timestamp.from(Instant.now().minus(30, ChronoUnit.DAYS)), coachId));
+        when(stripeClient.cancelSubscriptionImmediately(STRIPE_SUB_ID))
+            .thenThrow(new com.stripe.exception.ApiConnectionException("stripe down"));
+
+        subscriptionService.checkPastDueGracePeriod();
+
+        PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow();
+        assertThat(sub.getStatus()).isEqualTo("PAST_DUE");
+        assertThat(sub.getStripeSubscriptionId()).isEqualTo(STRIPE_SUB_ID);
     }
 
     // ─── Cancel ──────────────────────────────────────────────────────────────────
@@ -416,7 +566,8 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
         subscriptionService.subscribePlayer(PLAYER_PARENT_ID, PLAYER_ID, "SEMI_PRO", "YEARLY");
 
         verify(stripeClient, times(1)).createSubscription(
-            PLAYER_PARENT_STRIPE_CUSTOMER_ID, "price_semi_pro_yearly", PLAYER_PARENT_PAYMENT_METHOD);
+            eq(PLAYER_PARENT_STRIPE_CUSTOMER_ID), eq("price_semi_pro_yearly"), eq(PLAYER_PARENT_PAYMENT_METHOD),
+            startsWith("sub-create-"));
         verify(stripeClient, never()).attachPaymentMethod(anyString(), anyString());
     }
 
@@ -454,6 +605,25 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+    private void forcePendingCoachChangeDue() {
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE payment.coach_subscription_changes SET effective_at = ? " +
+            "WHERE coach_id = ? AND applied = false AND voided_at IS NULL",
+            java.sql.Timestamp.from(Instant.now().minus(1, ChronoUnit.HOURS)), coachId));
+    }
+
+    private long pendingCoachChangeCount() {
+        return jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM payment.coach_subscription_changes " +
+            "WHERE coach_id = ? AND applied = false AND voided_at IS NULL",
+            Long.class, coachId);
+    }
+
+    private String marketplaceTier() {
+        return jdbcTemplate.query("SELECT tier FROM marketplace.coach_subscriptions WHERE coach_id = ?",
+            rs -> rs.next() ? rs.getString(1) : null, coachId);
+    }
 
     private static org.assertj.core.data.TemporalUnitOffset within(long seconds) {
         return org.assertj.core.api.Assertions.within(seconds, ChronoUnit.SECONDS);

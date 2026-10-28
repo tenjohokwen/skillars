@@ -186,6 +186,7 @@ import { useRoute } from 'vue-router'
 import { usePaymentStore } from 'src/stores/payment.store'
 import { useAuthStore } from 'src/stores/auth.store'
 import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
+import { subscriptionErrorI18nKey } from 'src/utils/subscriptionErrors'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()
@@ -236,8 +237,15 @@ function tierColor(tier) {
 
 function statusColor(status) {
   return (
-    { ACTIVE: 'positive', PAST_DUE: 'warning', CANCELLED: 'negative', TRIALLING: 'info' }[status] ||
-    'grey'
+    {
+      ACTIVE: 'positive',
+      PAST_DUE: 'warning',
+      UNPAID: 'negative',
+      INCOMPLETE: 'warning',
+      PAUSED: 'grey',
+      CANCELLED: 'negative',
+      TRIALLING: 'info',
+    }[status] || 'grey'
   )
 }
 
@@ -276,8 +284,11 @@ async function confirmSubscribe() {
       type: 'positive',
       message: t('subscription.player.subscribeSuccess', { tier: selectedTier.value }),
     })
-  } catch {
-    $q.notify({ type: 'negative', message: t('subscription.player.subscribeError') })
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: t(subscriptionErrorI18nKey(err, 'subscription.player.subscribeError')),
+    })
   } finally {
     actionLoading.value = false
   }

@@ -214,6 +214,21 @@ const DYNAMIC_KEY_CALL_SITES = [
       'start-conversation error: messagingErrorI18nKey maps a backend code to messaging.errors.*',
   },
   {
+    at: 'src/pages/coach/CoachSubscriptionPage.vue:266',
+    reason:
+      'subscribe error: subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
+  },
+  {
+    at: 'src/pages/coach/CoachSubscriptionPage.vue:284',
+    reason:
+      'tier-change error: subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
+  },
+  {
+    at: 'src/pages/parent/PlayerSubscriptionPage.vue:290',
+    reason:
+      'subscribe error: subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
+  },
+  {
     at: 'src/pages/marketplace/CoachPublicProfilePage.vue:214',
     reason: "label keyed by the review-eligibility response's own reasonCode enum",
   },

@@ -162,21 +162,28 @@ class PastDueGracePeriodTest {
         verify(configService, times(3)).getBoundedLong("subscription.pastDue.gracePeriodDays", 0L, 365L);
     }
 
+    // fix/payment-subscription-entitlements: the checker re-reads each row under lock.
     private PaymentCoachSubscription pastDueCoach(Instant pastDueSince) {
-        return Instancio.of(PaymentCoachSubscription.class)
+        PaymentCoachSubscription sub = Instancio.of(PaymentCoachSubscription.class)
             .set(field(PaymentCoachSubscription::getCoachId), COACH_ID)
             .set(field(PaymentCoachSubscription::getTier), "INSTRUCTOR")
             .set(field(PaymentCoachSubscription::getStatus), "PAST_DUE")
             .set(field(PaymentCoachSubscription::getPastDueSince), pastDueSince)
             .create();
+        lenient().when(paymentCoachSubscriptionRepository.findByCoachIdForUpdate(COACH_ID))
+            .thenReturn(java.util.Optional.of(sub));
+        return sub;
     }
 
     private PaymentPlayerSubscription pastDuePlayer(Instant pastDueSince) {
-        return Instancio.of(PaymentPlayerSubscription.class)
+        PaymentPlayerSubscription sub = Instancio.of(PaymentPlayerSubscription.class)
             .set(field(PaymentPlayerSubscription::getPlayerId), PLAYER_ID)
             .set(field(PaymentPlayerSubscription::getTier), "SEMI_PRO")
             .set(field(PaymentPlayerSubscription::getStatus), "PAST_DUE")
             .set(field(PaymentPlayerSubscription::getPastDueSince), pastDueSince)
             .create();
+        lenient().when(paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(PLAYER_ID))
+            .thenReturn(java.util.Optional.of(sub));
+        return sub;
     }
 }

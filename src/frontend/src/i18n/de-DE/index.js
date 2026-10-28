@@ -2235,6 +2235,15 @@ export default {
     confirm: 'Bestätigen',
     perMonth: '{price} / Monat',
     perYear: '{price} / Jahr',
+    errors: {
+      paymentDeclined:
+        'Ihre Karte wurde abgelehnt oder erfordert eine zusätzliche Authentifizierung. Bitte aktualisieren Sie Ihre Zahlungsmethode und versuchen Sie es erneut.',
+      updatePaymentMethod:
+        'Für Ihr bestehendes Abonnement ist eine Rechnung offen. Aktualisieren Sie Ihre Zahlungsmethode, um es wiederherzustellen, statt ein neues Abonnement abzuschließen.',
+      notActive:
+        'Ihr Abonnement ist derzeit nicht aktiv. Begleichen Sie die offene Zahlung, bevor Sie Ihren Tarif ändern.',
+      alreadyActive: 'Sie haben bereits ein aktives Abonnement.',
+    },
     coach: {
       pageTitle: 'Coach-Abonnement',
       loadError:

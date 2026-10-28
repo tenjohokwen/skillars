@@ -1,7 +1,10 @@
 package com.softropic.skillars.platform.payment.repo;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.List;
@@ -26,4 +29,16 @@ public interface PaymentCoachSubscriptionRepository extends JpaRepository<Paymen
     // codebase's established literal-pin convention (see ConfigBoundsEnumCoverageTest's own javadoc)
     // rather than introducing a shared constant for a two-string list.
     List<PaymentCoachSubscription> findAllByStatusIn(List<String> statuses);
+
+    // fix/payment-subscription-entitlements: every persist path (API, webhook, scheduler) re-reads the
+    // row under this lock inside its own transaction instead of saving a copy loaded before the Stripe
+    // call, so concurrent writers serialize rather than overwrite each other (@Version is the backstop).
+    // Blocking FOR UPDATE, not NOWAIT: holders never call Stripe while holding it, so waits are short.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM PaymentCoachSubscription s WHERE s.coachId = :coachId")
+    Optional<PaymentCoachSubscription> findByCoachIdForUpdate(@Param("coachId") UUID coachId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM PaymentCoachSubscription s WHERE s.stripeSubscriptionId = :stripeSubscriptionId")
+    Optional<PaymentCoachSubscription> findByStripeSubscriptionIdForUpdate(@Param("stripeSubscriptionId") String stripeSubscriptionId);
 }

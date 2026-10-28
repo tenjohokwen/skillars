@@ -15,6 +15,7 @@ import com.stripe.param.PaymentIntentCreateParams;
 import com.stripe.param.PaymentIntentRetrieveParams;
 import com.stripe.param.RefundCreateParams;
 import com.stripe.param.SetupIntentCreateParams;
+import com.stripe.param.SubscriptionCancelParams;
 import com.stripe.param.SubscriptionCreateParams;
 import com.stripe.param.SubscriptionListParams;
 import com.stripe.param.SubscriptionUpdateParams;
@@ -32,9 +33,8 @@ import java.time.Instant;
 public class StripeClient {
 
     /**
-     * Creates a Stripe PaymentIntent. The idempotency key must be caller-supplied — unlike
-     * {@link #createSubscription}, this method only receives a pre-built params object, so it
-     * cannot derive a key from plain-value parameters itself.
+     * Creates a Stripe PaymentIntent. The idempotency key must be caller-supplied (this method only
+     * receives a pre-built params object, so it cannot derive a key itself).
      */
     public PaymentIntent createPaymentIntent(PaymentIntentCreateParams params, String idempotencyKey)
             throws StripeException {
@@ -139,40 +139,60 @@ public class StripeClient {
     /**
      * Creates a Stripe Subscription. Returns the full Subscription so callers can extract
      * subscriptionId and currentPeriodEnd in one call.
-     * Idempotency key is derived from customerId+priceId to prevent duplicate subscriptions on retry.
+     *
+     * <p>fix/payment-subscription-entitlements: {@code payment_behavior=error_if_incomplete} — Stripe's
+     * default ({@code allow_incomplete}) returned an {@code incomplete} subscription on a declined first
+     * payment instead of failing, and the caller granted the paid tier anyway. Now a declined (or
+     * SCA-requiring — the frontend has no subscription 3DS flow) first payment throws a
+     * {@link com.stripe.exception.CardException} and no subscription is created. The idempotency key
+     * is caller-supplied per attempt: the old {@code customer+price} key replayed the original response
+     * for any re-subscribe within Stripe's 24h key window.
      */
-    public Subscription createSubscription(String stripeCustomerId, String priceId, String paymentMethodId)
-            throws StripeException {
+    public Subscription createSubscription(String stripeCustomerId, String priceId, String paymentMethodId,
+                                           String idempotencyKey) throws StripeException {
         RequestOptions options = RequestOptions.builder()
-            .setIdempotencyKey("sub-create-" + stripeCustomerId + "-" + priceId)
+            .setIdempotencyKey(idempotencyKey)
             .build();
         SubscriptionCreateParams params = SubscriptionCreateParams.builder()
             .setCustomer(stripeCustomerId)
             .addItem(SubscriptionCreateParams.Item.builder().setPrice(priceId).build())
             .setDefaultPaymentMethod(paymentMethodId)
+            .setPaymentBehavior(SubscriptionCreateParams.PaymentBehavior.ERROR_IF_INCOMPLETE)
             .build();
         return Subscription.create(params, options);
     }
 
     /**
-     * Updates the subscription to a new price (upgrade/downgrade with proration).
-     * Returns the new currentPeriodEnd as Instant.
+     * Moves the subscription's single item to a new price.
+     *
+     * <p>fix/payment-subscription-entitlements: {@code chargeNow=true} (upgrades) uses
+     * {@code proration_behavior=always_invoice} + {@code payment_behavior=error_if_incomplete}, so the
+     * proration is invoiced and charged immediately and, if that payment fails, Stripe rejects the
+     * update (CardException) and leaves the old price in place — previously {@code create_prorations}
+     * deferred the charge to the next invoice, so upgrade-then-cancel never paid for the upgrade.
+     * {@code chargeNow=false} (downgrades) uses {@code proration_behavior=none}: the current period is
+     * already paid at the higher price, the next renewal bills the new one. Idempotency key is
+     * caller-supplied (per attempt, or per scheduled change for the retry-safe applicator).
      */
-    public Instant updateSubscriptionTier(String stripeSubscriptionId, String newPriceId) throws StripeException {
+    public Subscription updateSubscriptionTier(String stripeSubscriptionId, String newPriceId, boolean chargeNow,
+                                               String idempotencyKey) throws StripeException {
         RequestOptions options = RequestOptions.builder()
-            .setIdempotencyKey("sub-update-" + stripeSubscriptionId + "-" + newPriceId)
+            .setIdempotencyKey(idempotencyKey)
             .build();
         Subscription existing = Subscription.retrieve(stripeSubscriptionId);
         String itemId = existing.getItems().getData().get(0).getId();
-        SubscriptionUpdateParams params = SubscriptionUpdateParams.builder()
-            .setProrationBehavior(SubscriptionUpdateParams.ProrationBehavior.CREATE_PRORATIONS)
+        SubscriptionUpdateParams.Builder params = SubscriptionUpdateParams.builder()
             .addItem(SubscriptionUpdateParams.Item.builder()
                 .setId(itemId)
                 .setPrice(newPriceId)
-                .build())
-            .build();
-        Subscription updated = existing.update(params, options);
-        return Instant.ofEpochSecond(updated.getCurrentPeriodEnd());
+                .build());
+        if (chargeNow) {
+            params.setProrationBehavior(SubscriptionUpdateParams.ProrationBehavior.ALWAYS_INVOICE)
+                .setPaymentBehavior(SubscriptionUpdateParams.PaymentBehavior.ERROR_IF_INCOMPLETE);
+        } else {
+            params.setProrationBehavior(SubscriptionUpdateParams.ProrationBehavior.NONE);
+        }
+        return existing.update(params.build(), options);
     }
 
     /**
@@ -188,6 +208,23 @@ public class StripeClient {
             .build();
         Subscription updated = sub.update(params, options);
         return Instant.ofEpochSecond(updated.getCurrentPeriodEnd());
+    }
+
+    /**
+     * fix/payment-subscription-entitlements: cancels the subscription immediately (grace-period expiry,
+     * duplicate-create cleanup, a non-active create). Idempotent: a subscription Stripe already reports
+     * as {@code canceled}/{@code incomplete_expired} is returned as-is instead of re-cancelled (which
+     * Stripe rejects), so a retried sweep converges.
+     */
+    public Subscription cancelSubscriptionImmediately(String stripeSubscriptionId) throws StripeException {
+        Subscription sub = Subscription.retrieve(stripeSubscriptionId);
+        if ("canceled".equals(sub.getStatus()) || "incomplete_expired".equals(sub.getStatus())) {
+            return sub;
+        }
+        RequestOptions options = RequestOptions.builder()
+            .setIdempotencyKey("sub-cancel-now-" + stripeSubscriptionId)
+            .build();
+        return sub.cancel(SubscriptionCancelParams.builder().build(), options);
     }
 
     /**
