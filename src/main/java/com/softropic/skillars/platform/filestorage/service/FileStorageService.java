@@ -27,6 +27,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import software.amazon.awssdk.core.sync.RequestBody;
@@ -44,6 +46,7 @@ import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignReques
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.Set;
 
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 
@@ -66,6 +69,13 @@ public class FileStorageService {
     private final StorageMetrics storageMetrics;
     private final SecurityUtil securityUtil;
 
+    /**
+     * Entities whose key's {@code entityId} segment must be the uploader's own business id. Checked at sign time
+     * by {@code StorageResource} and again at confirm time here (the confirm endpoint takes an arbitrary key).
+     * skillars-deferred-151 AC3 / feat/coach-workflow-gaps D9.
+     */
+    public static final Set<String> OWNER_BOUND_ENTITIES = Set.of("coach_profile", "coach_branding", "coach_gallery");
+
     private String getOwnerId() {
         return securityUtil.requireCurrentBusinessId();
     }
@@ -76,6 +86,13 @@ public class FileStorageService {
         MDC.put("provider", storageProperties.getProvider());
         MDC.put("ownerId", ownerId);
         try {
+            // Compare the SANITIZED entity: the key is built from it, so "coach profile" / "coach.profile" would
+            // otherwise skip the check and still land in coach_profile/<someone-else>/.
+            if (OWNER_BOUND_ENTITIES.contains(StorageKeyGenerator.sanitizeSegment(request.entity()))
+                && !ownerId.equals(request.entityId())) {
+                throw new AccessDeniedException("entityId must match authenticated user");
+            }
+
             ValidationRequest validationRequest = ValidationRequest.builder()
                 .originalFilename(request.entity() + "." + request.extension())
                 .contentType(request.contentType())
@@ -113,9 +130,21 @@ public class FileStorageService {
 
     public ConfirmUploadResponse confirmUpload(String key, ConfirmUploadRequest request) {
         String ownerId = getOwnerId();
+        storageKeyGenerator.parse(key)
+            .filter(parts -> OWNER_BOUND_ENTITIES.contains(parts.entity()))
+            .filter(parts -> !parts.entityId().equals(StorageKeyGenerator.sanitizeSegment(ownerId)))
+            .ifPresent(parts -> {
+                throw new AccessDeniedException("key entityId must match authenticated user");
+            });
+
         Optional<FileStorageObject> existing = fileStorageObjectRepository.findByKey(key);
         if (existing.isPresent()) {
-            return toConfirmUploadResponse(existing.get());
+            return reconfirm(existing.get(), ownerId);
+        }
+        // Only keys signUpload issued can be newly confirmed: a server-written key (reports/..., gdpr/exports/...)
+        // has no FSO row, and confirming it would make the caller its recorded owner. 404, as for a missing object.
+        if (!storageKeyGenerator.isGeneratedKey(key)) {
+            throw new StorageObjectNotFoundException(key);
         }
 
         MDC.put("storageKey", key);
@@ -142,34 +171,28 @@ public class FileStorageService {
             if (head.eTag() == null || head.eTag().isBlank()) {
                 throw new StorageValidationException("upload incomplete: ETag absent for key " + key);
             }
+            // The presigned PUT does not bind the length, so re-apply the size and quota limits to the REAL size
+            // here; sign-time checks only saw the client's declared size.
+            if (head.contentLength() > fileStorageProperties.getValidation().getMaxSizeBytes()) {
+                throw new StorageValidationException("file exceeds maximum size: " + head.contentLength());
+            }
+            long usage = fileStorageObjectRepository.sumSizeBytesByOwnerId(ownerId);
+            if (usage + head.contentLength() > fileStorageProperties.getQuota().getDefaultBytes()) {
+                throw new QuotaExceededException(ownerId, usage, head.contentLength());
+            }
 
-            Instant confirmedAt = Instant.now();
-            FileStorageObject saved = transactionTemplate.execute(status -> {
-                FileStorageObject fso = FileStorageObject.builder()
-                    .key(key)
-                    .ownerId(ownerId)
-                    .originalFilename(resolveOriginalFilename(request, key))
-                    .contentType(head.contentType())
-                    .sizeBytes(head.contentLength())
-                    .checksum(request.checksum())
-                    .tags(request.tags())
-                    .provider(storageProperties.getProvider())
-                    .bucket(storageProperties.getBucket())
-                    .uploadConfirmedAt(confirmedAt)
-                    .build();
-
-                FileStorageObject persistedFso = fileStorageObjectRepository.save(fso);
-
-                OutboxReplicationJob job = OutboxReplicationJob.builder()
-                    .storageObject(persistedFso)
-                    .jobType(OutboxReplicationJob.ReplicationJobType.REPLICATE)
-                    .status(OutboxReplicationJob.ReplicationJobStatus.PENDING)
-                    .attemptCount(0)
-                    .build();
-                outboxReplicationJobRepository.save(job);
-
-                return persistedFso;
-            });
+            FileStorageObject saved;
+            try {
+                saved = transactionTemplate.execute(status -> persistConfirmed(key, ownerId, request, head));
+            } catch (DataIntegrityViolationException race) {
+                // A concurrent confirm of the same key won the unique index (idx_storage_objects_key): treat
+                // this one as the idempotent retry it is. Any other constraint failure is a real error.
+                if (!isDuplicateKeyViolation(race)) {
+                    throw race;
+                }
+                FileStorageObject winner = fileStorageObjectRepository.findByKey(key).orElseThrow(() -> race);
+                return reconfirm(winner, ownerId);
+            }
 
             applicationEventPublisher.publishEvent(new StorageObjectConfirmedEvent(this, saved));
 
@@ -199,6 +222,13 @@ public class FileStorageService {
         MDC.put("operation", "sign_download");
         MDC.put("provider", storageProperties.getProvider());
         try {
+            // Only the uploader (or an admin) may mint a URL through this endpoint. Every legitimate cross-user read
+            // (coach photo/gallery on a public profile, branding logo, report PDFs, GDPR exports) is served by its
+            // owning module through signedDownloadUrl after that module's own authorization check.
+            // 404 rather than 403 so the endpoint does not reveal whether someone else's key exists.
+            if (!securityUtil.isAdmin() && !fso.getOwnerId().equals(getOwnerId())) {
+                throw new StorageObjectNotFoundException(key);
+            }
             transactionTemplate.execute(status -> {
                 StorageAccessEvent event = StorageAccessEvent.builder()
                     .key(key)
@@ -345,13 +375,91 @@ public class FileStorageService {
                 fso.getBucket(), fso.getUploadConfirmedAt()));
     }
 
+    /** True for a key of the shape signUpload issues (a browser upload), false for server-written keys. */
+    public boolean isClientUploadKey(String key) {
+        return storageKeyGenerator.isGeneratedKey(key);
+    }
+
+    /**
+     * Passes only when {@code key} is a confirmed, not-deleted upload recorded as owned by {@code expectedOwnerId}.
+     * A key with no FSO row (a server-written object from {@link #storeBytes}, e.g. a report PDF or GDPR export,
+     * or a key that was never confirmed) fails: absence of a record is not proof of ownership.
+     */
     public void assertOwnership(String key, String expectedOwnerId) {
-        fileStorageObjectRepository.findByKey(key)
-            .ifPresent(fso -> {
-                if (!expectedOwnerId.equals(fso.getOwnerId())) {
-                    throw new AuthorizationException("File does not belong to caller", SecurityError.MISSING_RIGHTS);
-                }
-            });
+        FileStorageObject fso = fileStorageObjectRepository.findByKeyAndDeletedAtIsNull(key)
+            .orElseThrow(() -> new AuthorizationException("File does not belong to caller", SecurityError.MISSING_RIGHTS));
+        if (!expectedOwnerId.equals(fso.getOwnerId())) {
+            throw new AuthorizationException("File does not belong to caller", SecurityError.MISSING_RIGHTS);
+        }
+    }
+
+    /**
+     * Idempotent confirm of an already-recorded key. Scoped to the owner (never hands another user's record to
+     * the caller), refuses a soft-deleted object, and re-publishes {@link StorageObjectConfirmedEvent}: the first
+     * confirm publishes after its commit, so if a listener (e.g. the coach-photo link) failed there, the client's
+     * retry lands here and must re-drive it. Listeners are idempotent (they set a field to this key).
+     */
+    private ConfirmUploadResponse reconfirm(FileStorageObject fso, String ownerId) {
+        // 404 (not 403) for someone else's key: do not reveal that it exists.
+        if (!ownerId.equals(fso.getOwnerId()) || fso.getDeletedAt() != null) {
+            throw new StorageObjectNotFoundException(fso.getKey());
+        }
+        // Re-publish only inside the upload window: that covers the client retrying a failed confirm, but a late
+        // replay of an OLD key must not re-link it (e.g. revert the coach's profile photo to an earlier upload).
+        Instant confirmedAt = fso.getUploadConfirmedAt();
+        if (confirmedAt != null
+            && confirmedAt.isAfter(Instant.now().minusSeconds(storageProperties.getUploadTtlSeconds()))) {
+            applicationEventPublisher.publishEvent(new StorageObjectConfirmedEvent(this, fso));
+        }
+        return toConfirmUploadResponse(fso);
+    }
+
+    /** Is this the unique index on file_storage_objects.key (SQLState 23505), as opposed to any other constraint? */
+    private static boolean isDuplicateKeyViolation(DataIntegrityViolationException e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof org.hibernate.exception.ConstraintViolationException cve) {
+                return "23505".equals(cve.getSQLState())
+                    && (cve.getConstraintName() == null || cve.getConstraintName().contains("idx_storage_objects_key"));
+            }
+            if (t instanceof java.sql.SQLException sql && "23505".equals(sql.getSQLState())) {
+                return true;
+            }
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return false;
+    }
+
+    private FileStorageObject persistConfirmed(String key, String ownerId, ConfirmUploadRequest request,
+                                               HeadObjectResponse head) {
+        FileStorageObject fso = FileStorageObject.builder()
+            .key(key)
+            .ownerId(ownerId)
+            .originalFilename(resolveOriginalFilename(request, key))
+            .contentType(head.contentType())
+            .sizeBytes(head.contentLength())
+            .checksum(request.checksum())
+            .tags(request.tags())
+            .provider(storageProperties.getProvider())
+            .bucket(storageProperties.getBucket())
+            .uploadConfirmedAt(Instant.now())
+            .build();
+
+        // saveAndFlush so a duplicate key surfaces here as DataIntegrityViolationException, not at commit.
+        FileStorageObject persistedFso = fileStorageObjectRepository.saveAndFlush(fso);
+
+        // Nothing drains outbox_replication_jobs unless replication is enabled (OutboxPollerScheduler only exists
+        // then), so enqueueing with it off would just pile up PENDING rows forever.
+        if (storageProperties.getReplication().isEnabled()) {
+            outboxReplicationJobRepository.save(OutboxReplicationJob.builder()
+                .storageObject(persistedFso)
+                .jobType(OutboxReplicationJob.ReplicationJobType.REPLICATE)
+                .status(OutboxReplicationJob.ReplicationJobStatus.PENDING)
+                .attemptCount(0)
+                .build());
+        }
+        return persistedFso;
     }
 
     private String resolveOriginalFilename(ConfirmUploadRequest request, String key) {

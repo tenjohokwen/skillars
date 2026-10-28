@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.filestorage.service;
 
+import com.softropic.skillars.infrastructure.blobstore.config.BlobstoreProperties;
 import com.softropic.skillars.infrastructure.storage.BaseStorageIT;
 import com.softropic.skillars.platform.filestorage.repo.FileStorageObjectRepository;
 import com.softropic.skillars.platform.filestorage.repo.OutboxReplicationJob;
@@ -18,6 +19,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestTemplate;
 
 import java.net.URI;
@@ -40,6 +42,15 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
 
     @Autowired
     private RestTemplate restTemplate;
+
+    @Autowired
+    private BlobstoreProperties blobstoreProperties;
+
+    @Autowired
+    private TransactionTemplate transactionTemplate;
+
+    @Autowired
+    private jakarta.persistence.EntityManager em;
 
     @BeforeEach
     void setUp() {
@@ -65,10 +76,66 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
 
         assertThat(fileStorageObjectRepository.findByKey(signResponse.key())).isPresent();
 
+        // B3 #5: replication is disabled (as in every profile), so nothing would ever drain a REPLICATE job.
+        assertThat(outboxReplicationJobRepository.findAll()).isEmpty();
+    }
+
+    @Test
+    void confirmUpload_replicationEnabled_enqueuesPendingReplicateJob() {
+        byte[] content = new byte[]{1, 2, 3};
+        SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
+
+        blobstoreProperties.getReplication().setEnabled(true);
+        try {
+            fileStorageService.confirmUpload(signResponse.key(),
+                new ConfirmUploadRequest("application/pdf", (long) content.length, null, null, null));
+        } finally {
+            blobstoreProperties.getReplication().setEnabled(false);
+        }
+
         List<OutboxReplicationJob> jobs = outboxReplicationJobRepository.findAll();
         assertThat(jobs).hasSize(1);
         assertThat(jobs.get(0).getJobType()).isEqualTo(OutboxReplicationJob.ReplicationJobType.REPLICATE);
         assertThat(jobs.get(0).getStatus()).isEqualTo(OutboxReplicationJob.ReplicationJobStatus.PENDING);
+    }
+
+    // B3 #2: the idempotent short-circuit used to hand any caller the existing record for a key.
+    @Test
+    void confirmUpload_idempotentPathOfAnotherOwnersRecord_isDenied() {
+        byte[] content = new byte[]{1, 2, 3};
+        SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
+        ConfirmUploadRequest confirmRequest = new ConfirmUploadRequest(
+            "application/pdf", (long) content.length, null, null, null);
+        fileStorageService.confirmUpload(signResponse.key(), confirmRequest);
+        reassignOwner(signResponse.key(), "someone-else");
+
+        // 404, not 403: the endpoint must not reveal that another user's key exists.
+        assertThatThrownBy(() -> fileStorageService.confirmUpload(signResponse.key(), confirmRequest))
+            .isInstanceOf(StorageObjectNotFoundException.class);
+    }
+
+    // B3 #3 (hardening): a server-written object (storeBytes, no FSO row) must not be confirmable — confirming it
+    // would make the caller its recorded owner and so pass assertOwnership / sign-download for it.
+    @Test
+    void confirmUpload_serverWrittenKey_isNotFoundAndCreatesNoRecord() {
+        byte[] pdf = new byte[]{1, 2, 3};
+        String reportKey = "reports/" + java.util.UUID.randomUUID() + "/report.pdf";
+        fileStorageService.storeBytes(pdf, reportKey, "application/pdf");
+
+        assertThatThrownBy(() -> fileStorageService.confirmUpload(reportKey,
+            new ConfirmUploadRequest("application/pdf", (long) pdf.length, null, null, null)))
+            .isInstanceOf(StorageObjectNotFoundException.class);
+        assertThat(fileStorageObjectRepository.findByKey(reportKey)).isEmpty();
+    }
+
+    private void reassignOwner(String key, String ownerId) {
+        transactionTemplate.execute(status -> {
+            em.createQuery("UPDATE FileStorageObject f SET f.ownerId = :owner WHERE f.key = :key")
+                .setParameter("owner", ownerId)
+                .setParameter("key", key)
+                .executeUpdate();
+            return null;
+        });
     }
 
     @Test

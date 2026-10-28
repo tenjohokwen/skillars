@@ -37,4 +37,15 @@ class StorageKeyGeneratorTest {
         String key2 = generator.generate("docs", "entity-1", "txt");
         assertThat(key1).isNotEqualTo(key2);
     }
+
+    @Test
+    void isGeneratedKey_acceptsOnlyTheShapeGenerateProduces() {
+        assertThat(generator.isGeneratedKey(generator.generate("coach_branding", "675373350208068096", "png"))).isTrue();
+        // server-written keys (storeBytes) must never be confirmable by a client
+        assertThat(generator.isGeneratedKey("reports/3f1c2a4e-1b2c-4d5e-8f90-123456789abc/report.pdf")).isFalse();
+        assertThat(generator.isGeneratedKey("gdpr/exports/3f1c2a4e-1b2c-4d5e-8f90-123456789abc.zip")).isFalse();
+        assertThat(generator.isGeneratedKey("documents/42/2026/10/../../x.pdf")).isFalse();
+        assertThat(generator.isGeneratedKey("nonexistent/key/file.pdf")).isFalse();
+        assertThat(generator.isGeneratedKey(null)).isFalse();
+    }
 }

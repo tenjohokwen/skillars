@@ -743,8 +743,60 @@ class ReportGenerationServiceTest {
                 .bucket("test-bucket")
                 .sizeBytes(1024L)
                 .build();
-        when(realRepoDeps.findByKey("coach_branding/logo.png")).thenReturn(Optional.of(fixture));
+        when(realRepoDeps.findByKeyAndDeletedAtIsNull("coach_branding/logo.png")).thenReturn(Optional.of(fixture));
 
+        ReportGenerationService realService = reportServiceWithRealFileStorage(realRepoDeps);
+
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.ACADEMY);
+        when(brandingRepository.findById(COACH_ID)).thenReturn(Optional.empty());
+
+        var request = new com.softropic.skillars.platform.development.contract.CoachBrandingRequest(
+            "coach_branding/logo.png", "#3B82F6");
+
+        assertThatCode(() -> realService.saveBranding(COACH_ID, COACH_USER_ID, request))
+            .doesNotThrowAnyException();
+    }
+
+    // B3 #3: assertOwnership used to PASS for a key with no file_storage_objects row, so a coach could point
+    // logoKey at a server-written object (another coach's report PDF, a GDPR export ZIP) and have it embedded in
+    // and signed for their own reports. An unrecorded key must now fail and nothing may be saved.
+    @Test
+    void saveBranding_realFileStorageService_unrecordedServerWrittenKeyIsRejected() {
+        com.softropic.skillars.platform.filestorage.repo.FileStorageObjectRepository realRepoDeps =
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.filestorage.repo.FileStorageObjectRepository.class);
+        String reportKey = "reports/3f1c2a4e-1b2c-4d5e-8f90-123456789abc/report.pdf";
+        when(realRepoDeps.findByKeyAndDeletedAtIsNull(reportKey)).thenReturn(Optional.empty());
+
+        ReportGenerationService realService = reportServiceWithRealFileStorage(realRepoDeps);
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.ACADEMY);
+
+        var request = new com.softropic.skillars.platform.development.contract.CoachBrandingRequest(reportKey, "#3B82F6");
+
+        assertThatThrownBy(() -> realService.saveBranding(COACH_ID, COACH_USER_ID, request))
+            .isInstanceOf(com.softropic.skillars.infrastructure.security.AuthorizationException.class);
+        verify(brandingRepository, never()).save(any());
+    }
+
+    // B3 review: a colour-only save sends the stored logoKey back. If that logo object was soft-deleted the coach
+    // must still be able to save, so an UNCHANGED browser-upload key is not re-checked.
+    @Test
+    void saveBranding_unchangedBrowserUploadLogoKey_isNotRecheckedOnColourOnlySave() {
+        CoachBranding existing = new CoachBranding();
+        existing.setCoachId(COACH_ID);
+        existing.setLogoKey("coach_branding/1/2026/10/3f1c2a4e-1b2c-4d5e-8f90-123456789abc.png");
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.ACADEMY);
+        when(brandingRepository.findById(COACH_ID)).thenReturn(Optional.of(existing));
+        when(fileStorageService.isClientUploadKey(existing.getLogoKey())).thenReturn(true);
+
+        service.saveBranding(COACH_ID, COACH_USER_ID,
+            new com.softropic.skillars.platform.development.contract.CoachBrandingRequest(existing.getLogoKey(), "#000000"));
+
+        verify(fileStorageService, never()).assertOwnership(anyString(), anyString());
+        verify(brandingRepository).save(existing);
+    }
+
+    private ReportGenerationService reportServiceWithRealFileStorage(
+            com.softropic.skillars.platform.filestorage.repo.FileStorageObjectRepository realRepoDeps) {
         com.softropic.skillars.platform.filestorage.service.FileStorageService realFileStorageService =
             new com.softropic.skillars.platform.filestorage.service.FileStorageService(
                 org.mockito.Mockito.mock(com.softropic.skillars.platform.filestorage.service.ValidationChain.class),
@@ -761,7 +813,7 @@ class ReportGenerationServiceTest {
                 org.mockito.Mockito.mock(com.softropic.skillars.infrastructure.blobstore.service.StorageMetrics.class),
                 org.mockito.Mockito.mock(SecurityUtil.class));
 
-        ReportGenerationService realService = new ReportGenerationService(
+        return new ReportGenerationService(
             coachProfileService, playerProfileService,
             sluRepository, coachPlayerLastSessionResolver,
             skillDefinitionRepository, compositeRepository, baselineRepository,
@@ -770,15 +822,6 @@ class ReportGenerationServiceTest {
             rateLimitingService, new CoachAccessWindow(configService), securityUtil, playerProfileRepository,
             playerTimelineRepository, new FrontendLinkBuilder("http://app.test")
         );
-
-        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.ACADEMY);
-        when(brandingRepository.findById(COACH_ID)).thenReturn(Optional.empty());
-
-        var request = new com.softropic.skillars.platform.development.contract.CoachBrandingRequest(
-            "coach_branding/logo.png", "#3B82F6");
-
-        assertThatCode(() -> realService.saveBranding(COACH_ID, COACH_USER_ID, request))
-            .doesNotThrowAnyException();
     }
 
     // ---- getBranding (Deferred-80 AC3) ----

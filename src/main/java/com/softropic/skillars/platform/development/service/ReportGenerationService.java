@@ -358,10 +358,18 @@ public class ReportGenerationService {
         if (tier != CoachSubscriptionTier.ACADEMY) {
             throw new FeatureGatedException("development.branding", "ACADEMY");
         }
-        if (request.logoKey() != null) {
-            fileStorageService.assertOwnership(request.logoKey(), coachUserId.toString());
-        }
         CoachBranding b = brandingRepository.findById(coachId).orElseGet(CoachBranding::new);
+        // The settings dialog sends the current logoKey back on a colour-only save. Re-checking an UNCHANGED
+        // browser-upload key would lock a coach out of branding once that logo object is soft-deleted, so only a
+        // new key (or an unchanged key that is not a browser upload, i.e. a server-written report/GDPR object) is
+        // checked. assertOwnership fails for keys with no live file_storage_objects row owned by this coach.
+        if (request.logoKey() != null) {
+            boolean unchangedUpload = request.logoKey().equals(b.getLogoKey())
+                && fileStorageService.isClientUploadKey(request.logoKey());
+            if (!unchangedUpload) {
+                fileStorageService.assertOwnership(request.logoKey(), coachUserId.toString());
+            }
+        }
         b.setCoachId(coachId);
         b.setLogoKey(request.logoKey());
         b.setBrandColour(request.brandColour());
