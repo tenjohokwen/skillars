@@ -110,6 +110,22 @@ public interface CoachPayoutRepository extends JpaRepository<CoachPayout, UUID> 
                                        @Param("to") Instant to);
 
     /**
+     * feat/coach-payouts-pack-and-credit: platform commission for the admin finance overview — the
+     * commission actually deducted from coach transfers, for every funding source (card, wallet credit,
+     * session pack), as stamped on each payout row. Only {@code RELEASED} payouts count, dated by
+     * {@code released_at}: a pending/held/frozen payout has not earned it yet, and a cancelled or
+     * reversed one (a dispute refunded the parent) earned none. A partially reversed payout moves to
+     * REVERSED as a whole, so its commission is dropped entirely — an understatement, the conservative side.
+     */
+    @Query(value = """
+        SELECT COALESCE(SUM(p.commission_amount), 0)
+        FROM payment.coach_payouts p
+        WHERE p.status = 'RELEASED'
+          AND p.released_at BETWEEN :from AND :to
+        """, nativeQuery = true)
+    BigDecimal sumReleasedCommissionForPeriod(@Param("from") Instant from, @Param("to") Instant to);
+
+    /**
      * AC12.2: completed-but-not-yet-released sessions show as a separate "pending release" figure,
      * never folded into released revenue. Dated by {@code created_at} — a {@code PENDING_RELEASE}
      * row has no {@code released_at} yet.

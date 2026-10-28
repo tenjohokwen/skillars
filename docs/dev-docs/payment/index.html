@@ -275,7 +275,7 @@
     <table>
       <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
       <tbody>
-        <tr><td>GET</td><td>/api/admin/payment/overview?from&amp;to</td><td>Platform finance overview: gross volume (bookings + packs), commission (stamped rates), refunds credited, cash-outs, estimated Stripe fees, active subscriptions by tier</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td>/api/admin/payment/overview?from&amp;to</td><td>Platform finance overview: gross volume (bookings + packs), commission (released coach payouts), refunds credited, cash-outs, estimated Stripe fees, active subscriptions by tier</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td>/api/admin/payment/coaches/{coachId}/revenue?from&amp;to</td><td>Per-coach revenue (same figures as the coach's own summary) plus 30-day strike count</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td>/api/payment/credits/balance</td><td>Caller's credit wallet balance</td><td>PARENT|PLAYER</td></tr>
         <tr><td>GET</td><td>/api/payment/credits/batch-quote?coachId&amp;sessionCount</td><td>Batch cost preview: per-session price, total, balance, credit applied, card charge. <code>sessionCount</code> must be 1–10, otherwise 400</td><td>PARENT|PLAYER</td></tr>
@@ -670,7 +670,7 @@ sequenceDiagram
       <p><strong>Admin finance figures.</strong> <code>getAdminOverview</code> calculates:</p>
       <ul>
         <li>gross volume as <code>SUM(stripe_charged + credit_debited)</code> over <code>CAPTURED</code> booking rows (booking value before refunds, which are a separate line; wallet credit spent on a booking counts too, so this is not cash charged to cards) plus <code>session_pack_purchases.amount_charged</code> (stamped at purchase, V181; legacy rows were backfilled from the tier's current price);</li>
-        <li>commission as each non-refunded row's <code>stripe_charged × commission_rate</code> (the rate stamped at capture, live rate only for a NULL stamp), rounded per row, which is what the coach payout deducts. A booking with a <code>BOOKING_REFUND</code> row is excluded (a refunded booking stays <code>CAPTURED</code> but its payout is cancelled or reversed). This counts the card portion only, so it <strong>understates</strong> commission now that credit- and pack-funded sessions are paid out with commission deducted (follow-up: report it from <code>coach_payouts</code>);</li>
+        <li>commission as the sum of <code>coach_payouts.commission_amount</code> over payouts <code>RELEASED</code> in the period (dated by <code>released_at</code>): what was actually deducted from coach transfers, for card, wallet-credit and pack sessions alike, at the rate stamped on each row. Pending, held and frozen payouts haven't earned it yet. Cancelled or reversed ones (a dispute refunded the parent) earned none. A partially reversed payout drops its whole commission, which errs on the conservative side;</li>
         <li>Stripe fees as an <em>estimate</em> from config over card money only (card-charged booking money and pack purchases), with one fixed fee per distinct charge;</li>
         <li>cash-outs as <code>CASH_OUT_DEBIT</code> rows not reversed by a <code>CASH_OUT_REVERSAL</code> with the same <code>reference_id</code>. Rows from before the fix hold the gross requested amount and have no reference id.</li>
       </ul>
@@ -725,7 +725,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>5d85d8ec</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>993c6f57</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

@@ -50,6 +50,7 @@ class CoachPayoutPackCreditIT extends BasePaymentIT {
     @Autowired CoachPayoutRepository coachPayoutRepository;
     @Autowired OutboxService outboxService;
     @Autowired ApplicationEventPublisher eventPublisher;
+    @Autowired com.softropic.skillars.platform.admin.service.AdminCoachEnforcementService enforcementService;
 
     private UUID coachId;
 
@@ -89,7 +90,7 @@ class CoachPayoutPackCreditIT extends BasePaymentIT {
         transactionTemplate.execute(s -> jdbcTemplate.update(
             "INSERT INTO booking.bookings (id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, "
                 + "status, canonical_timezone, session_pack_purchase_id, version, created_at, updated_at) "
-                + "VALUES (?, ?, ?, ?, ?, ?, 'CONFIRMED', 'UTC', ?, 0, now(), now())",
+                + "VALUES (?, ?, ?, ?, ?, ?, 'COMPLETED', 'UTC', ?, 0, now(), now())",
             bookingId, PARENT_ID, PLAYER_ID, coachId, Timestamp.from(start),
             Timestamp.from(start.plus(1, ChronoUnit.HOURS)), packId));
         return bookingId;
@@ -259,6 +260,53 @@ class CoachPayoutPackCreditIT extends BasePaymentIT {
         releaseHoldAndDrain(duringHold);
         assertThat(payout(bookingId).getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
         assertThat(payout(duringHold).getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
+    }
+
+    /**
+     * The real CSAM chain, end to end: the published event runs the admin profile hold
+     * (CoachSafetySuspensionListener) AND the payout freeze. Both safety-hold paths are covered — a coach
+     * who was ACTIVE (new hold) and one an admin had already suspended (C2 converts that suspension into
+     * a safety hold) — and in both the real admin reinstatement releases the payout.
+     */
+    @Test
+    void realSafetyHold_newHold_freezesPayouts_andRealReinstatementReleasesThem() {
+        assertRealSafetyHoldFreezesAndReinstatementReleases(false);
+    }
+
+    @Test
+    void realSafetyHold_convertedAdminSuspension_freezesPayouts_andRealReinstatementReleasesThem() {
+        assertRealSafetyHoldFreezesAndReinstatementReleases(true);
+    }
+
+    private void assertRealSafetyHoldFreezesAndReinstatementReleases(boolean alreadyAdminSuspended) {
+        UUID bookingId = seedBooking(null);
+        seedCapturedPayment(bookingId, "50.00", "0.00", "0.10");
+        enqueue(bookingId);
+        // AccountSuspensionEventListener updates the coach's user row, and User validates a 60-char hash.
+        transactionTemplate.execute(s -> jdbcTemplate.update(
+            "UPDATE main.\"user\" SET password_hash = ? WHERE id = ?", "$2a$10$" + "x".repeat(53), COACH_USER_ID));
+        if (alreadyAdminSuspended) {
+            transactionTemplate.execute(s -> jdbcTemplate.update(
+                "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED', status_changed_at = now() WHERE id = ?",
+                coachId));
+        }
+
+        // Published outside a transaction, exactly as ModerationOrchestrationService does.
+        eventPublisher.publishEvent(new AccountSuspensionRequestedEvent(coachId.toString(), UUID.randomUUID()));
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachId)).isEqualTo("SUSPENDED");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM admin.admin_action_log WHERE reference_id = ? AND action_type = 'COACH_SAFETY_HOLD'",
+            Long.class, coachId.toString())).as("the admin safety-hold path ran").isEqualTo(1L);
+        assertThat(payout(bookingId).getStatus()).isEqualTo(CoachPayoutStatus.FROZEN);
+        releaseHoldAndDrain(bookingId);
+        assertThat(payout(bookingId).getStatus()).isEqualTo(CoachPayoutStatus.FROZEN);
+        verify(paymentGateway, never()).transferToCoach(eq(bookingId), any(), any(), any());
+
+        enforcementService.reinstateCoach(coachId, "false positive", PARENT_ID);
+        releaseHoldAndDrain(bookingId);
+        assertThat(payout(bookingId).getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
     }
 
     @Test

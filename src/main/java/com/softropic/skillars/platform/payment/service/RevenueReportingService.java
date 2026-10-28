@@ -269,12 +269,9 @@ public class RevenueReportingService {
      *       session-pack sales ({@code amount_charged}, stamped at purchase — V181). Refunds credited
      *       are a separate line; credit spent on a booking is counted as that booking's value, so
      *       this is booking/sales value, not cash charged to cards;</li>
-     *   <li>commission = each captured, non-refunded booking's card-charged amount × the rate STAMPED
-     *       on that row at capture, rounded per row — the same figure the coach payout deducts
-     *       ({@code CoachPayoutOutboxSupport}) on the card portion. Since feat/coach-payouts-pack-and-credit
-     *       credit- and pack-funded sessions are paid out too and the payout deducts commission on them
-     *       as well, so this figure UNDERSTATES commission by those parts (follow-up: report it from
-     *       {@code coach_payouts});</li>
+     *   <li>commission = the commission deducted from RELEASED coach payouts in the period (dated by
+     *       {@code released_at}), for every funding source — card, wallet credit and session packs — as
+     *       stamped on each {@code coach_payouts} row by {@code CoachPayoutOutboxSupport};</li>
      *   <li>Stripe fees = an ESTIMATE (config rate/fixed fee) over card money only — card-charged
      *       booking money + pack purchases, one fixed fee per distinct charge.</li>
      * </ul>
@@ -285,8 +282,6 @@ public class RevenueReportingService {
         Instant effectiveFrom = from != null ? from
             : YearMonth.now(ZoneOffset.UTC).atDay(1).atStartOfDay(ZoneOffset.UTC).toInstant();
         Instant effectiveTo = to != null ? to : Instant.now();
-
-        BigDecimal liveCommissionRate = new BigDecimal(configService.getString("platform.commission.rate"));
         BigDecimal stripeFeeRate = new BigDecimal(configService.getString("payment.stripe.feeRate"));
         BigDecimal stripeFeeFixed = new BigDecimal(configService.getString("payment.stripe.feeFixed"));
 
@@ -294,8 +289,8 @@ public class RevenueReportingService {
         BigDecimal packGross = sessionPackPurchaseRepository.sumAmountChargedForPeriod(effectiveFrom, effectiveTo);
         BigDecimal totalGrossVolume = bookingGross.add(packGross);
 
-        BigDecimal totalCommissionCollected = bookingPaymentRepository
-            .sumCommissionAtStampedRate(effectiveFrom, effectiveTo, liveCommissionRate)
+        BigDecimal totalCommissionCollected = coachPayoutRepository
+            .sumReleasedCommissionForPeriod(effectiveFrom, effectiveTo)
             .setScale(2, RoundingMode.HALF_UP);
 
         BigDecimal cardMoney = bookingPaymentRepository.sumCardChargedForPeriod(effectiveFrom, effectiveTo).add(packGross);
