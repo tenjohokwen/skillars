@@ -14,8 +14,8 @@ import static com.softropic.skillars.infrastructure.security.SecurityConstants.S
  * The single owner of the {@code skp} cookie's wire format: a quoted-id JSON payload
  * ({@code {"id":"...","role":"..."}}), percent-encoded for a non-HttpOnly cookie the frontend
  * decodes with {@code decodeURIComponent}. Previously open-coded at three call sites
- * ({@code AuthService.login()}, {@code AuthService.refresh()}, {@code JwtManagerImpl
- * .setSkillarsProfileCookie}) — two of them byte-for-byte identical. See
+ * ({@code AuthService.login()}, {@code AuthService.refresh()}, and the since-removed
+ * {@code JwtManagerImpl.setSkillarsProfileCookie}) — two of them byte-for-byte identical. See
  * skillars-deferred-144 for the consolidation and skillars-deferred-142/the quoted-id
  * comment this type now owns for why {@code id} must be quoted: an unquoted id silently
  * corrupts the frontend's {@code authStore.userId} via IEEE-754 double rounding.

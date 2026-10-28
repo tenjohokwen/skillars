@@ -63,7 +63,8 @@ public class MailManager {
     // login-2FA flow already builds a SendMailEvent(EmailTemplate.SEND_OTP, Map.of("otpCode", otp,
     // "helpCode", helpCodeStr)) that SendMailListener republishes as an Envelope, which this class's
     // own @TransactionalEventListener(AFTER_COMMIT) sendEmailFromTemplate already receives and logs
-    // unmasked today. Added here to close that pre-existing gap at the same time.
+    // unmasked today. Added here to close that pre-existing gap at the same time. (That login-2FA
+    // flow has since been removed; SEND_OTP stays masked for any envelope still queued for retry.)
     private static final Set<EmailTemplate> SENSITIVE_DATA_TEMPLATES = Set.of(
         EmailTemplate.COACH_EMAIL_VERIFY, EmailTemplate.COACH_OTP,
         EmailTemplate.PARENT_EMAIL_VERIFY, EmailTemplate.PARENT_OTP,

@@ -1,9 +1,6 @@
 package com.softropic.skillars.platform.security.infrastructure.jwt;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
-import com.softropic.skillars.platform.security.contract.Gender;
 import com.softropic.skillars.platform.security.service.LoginTokenManager;
 import com.softropic.skillars.infrastructure.security.CookieUtil;
 import com.softropic.skillars.platform.security.contract.Principal;
@@ -11,22 +8,15 @@ import com.softropic.skillars.platform.security.contract.SkillarsProfileCookie;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
 import com.softropic.skillars.platform.security.contract.exception.InvalidJWTDataException;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
-import com.softropic.skillars.platform.security.contract.SkillarsRole;
-import io.jsonwebtoken.Claims;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.*;
 import static com.softropic.skillars.infrastructure.security.SecurityError.*;
@@ -38,16 +28,13 @@ public class JwtManagerImpl implements LoginTokenManager {
     private final TokenCreator tokenCreator;
     private final TokenValidator tokenValidator;
     private final ClaimsExtractor claimsExtractor;
-    private final JwtConfiguration jwtConfiguration;
 
     public JwtManagerImpl(TokenCreator tokenCreator,
                           TokenValidator tokenValidator,
-                          ClaimsExtractor claimsExtractor,
-                          JwtConfiguration jwtConfiguration) {
+                          ClaimsExtractor claimsExtractor) {
         this.tokenCreator = tokenCreator;
         this.tokenValidator = tokenValidator;
         this.claimsExtractor = claimsExtractor;
-        this.jwtConfiguration = jwtConfiguration;
     }
 
     @Override
@@ -69,125 +56,11 @@ public class JwtManagerImpl implements LoginTokenManager {
                 .plus(DB_REFRESH_TOKEN_INTERVAL.toMillis(), ChronoUnit.MILLIS)
                 .toEpochMilli();
         final Map<String, Object> claims = tokenCreator.toClaims(principal, dbRefreshToken, true, null);
-        // skillars-deferred-149 AC3 code review (2026-10-08): called both by JWTAuthenticationFilter
-        // (a fresh login) and by JWTAuthorizationFilter's DB-reauth success path -- both are a
-        // verified-as-of-now re-authentication, so the epoch resets here too, same as dbRefreshToken.
+        // skillars-deferred-149 AC3 code review (2026-10-08): called by JWTAuthorizationFilter's
+        // DB-reauth success path -- a verified-as-of-now re-authentication, so the epoch resets here
+        // too, same as dbRefreshToken.
         claims.put(SESSION_ISSUED_AT, Instant.now(ClockProvider.getClock()).toEpochMilli());
         createAndSetJwt(res, claims);
-    }
-
-    @Override
-    public Authentication refreshLoginToken(HttpServletResponse res, String token) {
-        final Optional<Claims> claimsOpt = claimsExtractor.extractClaimsFromTokenSilently(token);
-        if (claimsOpt.isPresent()) {
-            final Claims extractedClaims = claimsOpt.get();
-            Map<String, Object> claims = new HashMap<>(extractedClaims);
-            claims.put(Claims.ISSUED_AT, Date.from(Instant.now(ClockProvider.getClock())).getTime() / 1000);
-            final long dbRefreshToken = Instant.now(ClockProvider.getClock())
-                    .plus(DB_REFRESH_TOKEN_INTERVAL.toMillis(), ChronoUnit.MILLIS)
-                    .toEpochMilli();
-            claims.put(DB_REFRESH_TOKEN, dbRefreshToken);
-            // skillars-deferred-149 AC3 code review (2026-10-08): this completes 2FA -- a fresh
-            // authentication event, exactly like the ISSUED_AT/DB_REFRESH_TOKEN resets above.
-            claims.put(SESSION_ISSUED_AT, Instant.now(ClockProvider.getClock()).toEpochMilli());
-
-            createAndSetJwt(res, claims);
-            setSkillarsProfileCookie(res, claims);
-            return authentication(claims);
-        }
-        throw new InvalidJWTDataException("Claims not present in token or invalid token.", JWT_PARSE_ERROR);
-    }
-
-    // skillars-deferred-142 AC2: createAndSetJwt -> createLoginCookies never sets 'skp' on this path.
-    // AuthService.login()/refresh() set it themselves because they have the User entity in hand;
-    // refreshLoginToken only has the JWT's own claims, so derive the role from the existing ROLES
-    // claim instead of adding a new one (see story Dev Notes for why a new claim is unsafe here).
-    //
-    // Fallback is SkillarsRole.ANONYMOUS, not AuthService's "ADMIN" convention — despite the similar
-    // shape, these are different populations. AuthService's null -> "ADMIN" fires when
-    // user.getSkillarsRole() is unset in the DB, which is AdminBootstrapRunner's deliberate
-    // convention for real admins. This fallback instead fires when no authority in the ROLES claim
-    // maps to a SkillarsRole at all (e.g. ROLE_LTD_ADMIN/ROLE_USER) — callers who are NOT admins.
-    // Labeling them "ADMIN" would surface admin-only nav/UI to a non-admin on the frontend
-    // (authStore.isAdmin reads this value directly). ANONYMOUS has no special frontend handling —
-    // routeForRole/isAdmin/isCoach/isParent/isPlayer all safely treat it as "no known role".
-    // skillars-deferred-150 AC2: a multi-mapped-role claim set previously resolved via
-    // .findFirst() on whatever order Spring Security's own User.sortAuthorities (alphabetical,
-    // confirmed via javap against this project's resolved spring-security-core jar) happened to
-    // produce -- deterministic today by accident of that library internal, not by any precedence
-    // this codebase owns. Explicit precedence instead: ADMIN first, preserving today's actual
-    // behavior (alphabetical already puts ADMIN ahead of COACH/PARENT/PLAYER), since an
-    // admin-held authority should not be silently masked by an incidental second grant. Not
-    // currently triggerable -- no production path grants a second role-bearing authority after
-    // account creation -- this is defensive hardening for a future multi-role account.
-    //
-    // Accepted residual, NOT fixed here: AuthService.login()/refresh() write the SAME 'skp'
-    // cookie from a completely different source -- user.getSkillarsRole(), a single DB scalar
-    // column -- not from this method's ROLES-claim-derived precedence. For a hypothetical
-    // dual-role user, login would stamp the DB-authoritative role while a later token refresh
-    // (this method) stamps this precedence-derived role, which can disagree. Fixing that split
-    // would mean either giving this DB-free-by-design class DB access, or making AuthService
-    // claims-derived too -- both bigger changes than this AC's scope.
-    // Precedence order, highest first. ADMIN > COACH > PARENT > PLAYER -- see this method's own
-    // comment above for why. A List, not a Set, because order here IS the precedence.
-    private static final List<SkillarsRole> ROLE_PRECEDENCE =
-            List.of(SkillarsRole.ADMIN, SkillarsRole.COACH, SkillarsRole.PARENT, SkillarsRole.PLAYER);
-
-    private void setSkillarsProfileCookie(HttpServletResponse res, Map<String, Object> claims) {
-        final EnumSet<SkillarsRole> mappedRoles = getAuthoritiesSilently(claims).stream()
-                .map(authority -> StringUtils.removeStart(authority.getAuthority(), "ROLE_"))
-                .flatMap(name -> {
-                    try {
-                        return Stream.of(SkillarsRole.valueOf(name));
-                    } catch (IllegalArgumentException e) {
-                        return Stream.empty();
-                    }
-                })
-                .collect(Collectors.toCollection(() -> EnumSet.noneOf(SkillarsRole.class)));
-        final SkillarsRole resolvedRole = ROLE_PRECEDENCE.stream()
-                .filter(mappedRoles::contains)
-                .findFirst()
-                .orElse(SkillarsRole.ANONYMOUS);
-        final String role = resolvedRole.name();
-        new SkillarsProfileCookie(String.valueOf(claims.get(BUS_ID)), role).writeTo(res);
-    }
-
-    private Authentication authentication(Map<String, Object> claims) {
-        final boolean otpEnabled = Objects.nonNull(claims.get(OTP_ENABLED)) && (boolean) claims.get(OTP_ENABLED);
-        final Principal principal = new Principal.Builder().otpEnabled(otpEnabled).enabled(true).password("N/A")
-                .username((String) claims.get(Claims.SUBJECT))
-                .businessId((String) claims.get(BUS_ID))
-                .displayName((String) claims.get(DISPLAY_NAME))
-                .gender(Gender.valueOf((String) claims.get(GENDER)))
-                .authorities(getAuthoritiesSilently(claims))
-                .build();
-        return UsernamePasswordAuthenticationToken.authenticated(principal, "", principal.getAuthorities());
-    }
-
-    private Collection<SimpleGrantedAuthority> getAuthoritiesSilently(Map<String, Object> claims) {
-        // skillars-deferred-151 AC5: a null/non-String ROLES claim made ObjectMapper.readValue throw
-        // IllegalArgumentException, not JsonProcessingException — escaping this catch. Latent
-        // hardening, not a reachable live bug today: TokenCreatorImpl.java:49 sets ROLES
-        // unconditionally on every token it issues, and the token is HMAC-verified before this runs.
-        final Object rolesClaim = claims.get(ROLES);
-        if (!(rolesClaim instanceof String roles)) {
-            log.error("ROLES claim missing or not a string; treating as no authorities");
-            return List.of();
-        }
-        try {
-            return jwtConfiguration.getMapper().readValue(roles, new TypeReference<List<SimpleGrantedAuthority>>() {});
-        } catch (JsonProcessingException e) {
-            log.error("Could not parse authorities from claims", e);
-        }
-        return List.of();
-    }
-
-    @Override
-    public String generateToken(Principal principal, String seed) {
-        final long dbRefreshToken = Instant.now(ClockProvider.getClock())
-                .plus(DB_REFRESH_TOKEN_INTERVAL.toMillis(), ChronoUnit.MILLIS)
-                .toEpochMilli();
-        return tokenCreator.generateToken(principal, dbRefreshToken, false, seed);
     }
 
     @Override
@@ -195,11 +68,6 @@ public class JwtManagerImpl implements LoginTokenManager {
         final String sessionId = RequestMetadataProvider.getClientInfo().getSessionId();
         CookieUtil.addCookie(response, ANONYMOUS_SESSION_COOKIE, sessionId, true, -1);
         return sessionId;
-    }
-
-    @Override
-    public void removeTwoFactorCookie(HttpServletResponse response) {
-        CookieUtil.removeCookie(LOGIN_INFO_ID, response, true);
     }
 
     @Override
@@ -268,16 +136,6 @@ public class JwtManagerImpl implements LoginTokenManager {
     @Override
     public Long extractSessionIssuedAt(HttpServletRequest request) {
         return claimsExtractor.extractSessionIssuedAt(request);
-    }
-
-    @Override
-    public void addLoginInfoIdCookie(HttpServletResponse res, String value) {
-        CookieUtil.addCookie(res, LOGIN_INFO_ID, value, true, (int) OTP_TTL.toSeconds());
-    }
-
-    @Override
-    public String extractLoginInfoIdCookie(HttpServletRequest req) {
-        return CookieUtil.getCookieValue(req, LOGIN_INFO_ID);
     }
 
     @Override

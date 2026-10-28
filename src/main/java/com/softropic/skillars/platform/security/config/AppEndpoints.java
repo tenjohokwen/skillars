@@ -30,7 +30,7 @@ public final class AppEndpoints {
     public static final List<String> PUBLIC_ENDPOINTS = List.of(
         "/v1/account/register", "/v1/account/regislink", "/v1/account/activate",
         "/v1/account/reset_password/init", "/v1/account/reset_password/finish",
-        "/api/v1/emails/**", "/authenticate",
+        "/api/v1/emails/**",
         "/api/security/coach/register", "/api/security/coach/verify-email",
         "/api/security/coach/verify-phone", "/api/security/coach/resend-verification",
         "/api/security/coach/resend-otp",

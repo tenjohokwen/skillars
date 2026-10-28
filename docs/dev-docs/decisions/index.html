@@ -69,14 +69,14 @@
       <tbody>
         <tr><td><a href="#adr-outbox">1</a></td><td>Transactional outbox instead of <code>AFTER_COMMIT</code> listeners for durable side effects</td><td>deferred-90/91 (<code>c2c47c1e</code>), deferred-92</td></tr>
         <tr><td><a href="#adr-nowait">2</a></td><td>NOWAIT row locks + <code>PessimisticLockRetryer</code> instead of lock timeouts</td><td>deferred-62 (<code>0f3221ce</code>), deferred-99</td></tr>
-        <tr><td><a href="#adr-shedlock">3</a></td><td>ShedLock on shared-state jobs, nine jobs deliberately unguarded</td><td><code>7e697d4a</code>, deferred-19, deferred-123</td></tr>
+        <tr><td><a href="#adr-shedlock">3</a></td><td>ShedLock on shared-state jobs, ten jobs deliberately unguarded</td><td><code>7e697d4a</code>, deferred-19, deferred-123</td></tr>
         <tr><td><a href="#adr-routing-ds">4</a></td><td>Routing DataSource with isolated pools (GDPR erasure, payment <code>REQUIRES_NEW</code>)</td><td>deferred-136 (<code>a7d2b91b</code>), deferred-137 (<code>0d5897a8</code>)</td></tr>
         <tr><td><a href="#adr-rebaseline">5</a></td><td>Flyway history squashed into V138 + V139</td><td>deferred-112 (<code>7db0c3b7</code>, PR #191)</td></tr>
         <tr><td><a href="#adr-hash-router">6</a></td><td>Hash-mode router, so backend links go through <code>FrontendLinkBuilder</code></td><td>PR #307 (<code>513fa082</code>)</td></tr>
         <tr><td><a href="#adr-payouts">7</a></td><td>Platform charges + completion-gated payouts, not destination charges</td><td>deferred-106 (PR #163)</td></tr>
         <tr><td><a href="#adr-capture-pending">8</a></td><td><code>CAPTURE_PENDING</code> reservation written before every Stripe charge</td><td>UAT.3 (<code>63862bcd</code>), deferred-91 AC5</td></tr>
         <tr><td><a href="#adr-slot">9</a></td><td>Slot exclusivity: per-coach row lock + DB exclusion constraint</td><td>V87, Deferred-14, -78, -79</td></tr>
-        <tr><td><a href="#adr-legacy-auth">10</a></td><td>Legacy <code>/authenticate</code> → <code>/otp</code> stack still wired next to <code>/api/auth/*</code></td><td>skillars-1.5</td></tr>
+        <tr><td><a href="#adr-legacy-auth">10</a></td><td>One password login: the legacy <code>/authenticate</code> → <code>/otp</code> stack was removed</td><td>skillars-1.5, chore/auth-legacy-removal</td></tr>
         <tr><td><a href="#adr-filestorage">11</a></td><td><code>filestorage</code> is the only gateway to the blobstore (video excepted)</td><td>project-context, file-storage architecture</td></tr>
         <tr><td><a href="#adr-config">12</a></td><td>Business config in <code>platform_config</code>, not properties</td><td>architecture.md (FR-PLT-001), deferred-107</td></tr>
         <tr><td><a href="#adr-email-port">13</a></td><td>One outbound email port with <code>log</code> / <code>smtp</code> / <code>ses</code> transports</td><td>ses-1.1 (<code>9e07b386</code>) to ses-1.5 (<code>4317b019</code>)</td></tr>
@@ -86,6 +86,7 @@
         <tr><td><a href="#adr-suspension-cancels">17</a></td><td>A coach suspension / safety hold cancels upcoming bookings with a full refund and no strike</td><td>Owner decision 2026-10-28 (item 2), chunk C2</td></tr>
         <tr><td><a href="#adr-minors-never-upload">18</a></td><td>Minors never upload; coach videos of a child are linked to the session</td><td>Product decision 2026-10-28, V184</td></tr>
         <tr><td><a href="#adr-pack-credit-payouts">19</a></td><td>Pack- and credit-funded sessions paid per completed session; payouts frozen during a CSAM safety hold</td><td>owner decisions 2026-10-28 (items 2 + 3), feat/coach-payouts-pack-and-credit (V186)</td></tr>
+        <tr><td><a href="#adr-single-instance">20</a></td><td>Single instance until SSE fan-out exists — use Postgres <code>LISTEN/NOTIFY</code> when scaling out</td><td>Owner decision 2026-10-28 (item 4), chore/auth-legacy-removal (V187)</td></tr>
       </tbody>
     </table>
 
@@ -124,14 +125,15 @@
       <code>PessimisticLockRetryerCallSiteAuditTest</code> (pins 50 call sites); <code>ApiAdvice.pessimisticLockExceptionHandler</code>;
       <code>docs/persistence/pessimistic-lock-retry.md</code>.</p>
 
-    <h2 id="adr-shedlock">3. ShedLock on shared-state jobs, nine deliberately unguarded</h2>
+    <h2 id="adr-shedlock">3. ShedLock on shared-state jobs, ten deliberately unguarded</h2>
     <p><strong>Context.</strong> The code is written to be safe on more than one instance (scale-out, and two JVMs overlapping during a rolling
       deploy), and every <code>@Scheduled</code> method runs on each instance. A job that writes shared rows without a row claim
       would do its work once per instance.</p>
     <p><strong>Decision.</strong> Every job that writes shared state without a row claim carries <code>@SchedulerLock</code>
-      (31 of 40). The nine unguarded ones are deliberate: five touch only per-instance state (<code>ConfigService</code>,
+      (33 of 43). The ten unguarded ones are deliberate: six touch only per-instance state (<code>ConfigService</code>,
       <code>AlertRuleCache</code>, <code>AlertEvaluationService</code>, <code>MessagingEmitterRegistry</code>,
-      <code>RateLimitingService</code>), and four claim rows with <code>FOR UPDATE [SKIP LOCKED]</code> instead
+      <code>RateLimitingService</code>, and <code>InstanceHeartbeatMonitor</code>, which must write its own heartbeat row on every
+      instance — <a href="#adr-single-instance">ADR 20</a>), and four claim rows with <code>FOR UPDATE [SKIP LOCKED]</code> instead
       (<code>UploadSessionExpiryScheduler</code>, <code>ReconciliationWorkerScheduler</code>,
       <code>WebhookEventProcessorScheduler</code>, <code>ModerationSlaMonitorService</code>). The lock advisor is ordered outermost
       (<code>7e697d4a</code>) so the transaction finishes before the lock is released. Lock expiry uses DB time.</p>
@@ -227,16 +229,22 @@
       <code>V138__baseline_schema.sql</code>; <code>ApiAdvice.resolveConstraintName</code>. See
       <a href="../booking/index.html#slot-exclusivity">Booking</a> and the <a href="../walkthrough/index.html">walkthrough</a>.</p>
 
-    <h2 id="adr-legacy-auth">10. Legacy /authenticate → /otp stack still wired</h2>
+    <h2 id="adr-legacy-auth">10. One password login: the legacy /authenticate → /otp stack was removed</h2>
     <p><strong>Context.</strong> The original login was <code>POST /authenticate</code> (<code>JWTAuthenticationFilter</code>) plus an
-      email OTP at <code>POST /otp</code>, with in-memory brute-force counters. Story skillars-1.5 (2026-06-12) needed DB-backed rate
-      limiting, refresh-token rotation with theft detection and an account-verification gate.</p>
-    <p><strong>Decision.</strong> Add the <code>/api/auth/*</code> family <em>alongside</em> the legacy stack, removing nothing
-      (the story's own change log). Both issue the same <code>potc</code> JWT checked by <code>JWTAuthorizationFilter</code>.</p>
-    <p><strong>Consequences.</strong> The SPA uses only <code>/api/auth/login</code>, but <code>/authenticate</code> and
-      <code>/otp</code> remain live, public endpoints with their own lockout counters, so admin unlock must clear both stores.
-      No decision to retire the legacy stack has been recorded.</p>
-    <p><strong>Where enforced.</strong> <code>platform/security/config/SecurityConfiguration.java</code> (<code>filterChain</code>).
+      email OTP at <code>POST /otp</code>, with in-memory brute-force counters. Story skillars-1.5 (2026-06-12) added the
+      <code>/api/auth/*</code> family (DB-backed rate limiting, refresh-token rotation with theft detection, an account-verification
+      gate) <em>alongside</em> it, removing nothing. The SPA has used only <code>/api/auth/login</code> since; the legacy pair stayed a
+      live, public password oracle with its own counters and in-memory client blacklist, kept only because IT helpers logged in through it.</p>
+    <p><strong>Decision.</strong> Owner decision 2026-10-28 (follow-up list): delete it. The IT helpers moved to
+      <code>POST /api/auth/login</code> (<code>e2e/AdminLogin.login</code>, same cookies), then the filters, <code>TwoFactorLoginService</code>,
+      <code>LoginInfo</code>, <code>FraudAwareAuthenticationManager</code>, <code>LoginAttemptsService</code> and the <code>FraudEvent</code>
+      blacklist were removed — and Spring's default <code>formLogin()</code> too, which was a second, unthrottled password check at
+      <code>POST /login</code>. The registration phone/email OTP flows are unrelated and stay.</p>
+    <p><strong>Consequences.</strong> One login path, one rate limiter (now claimed per key with an advisory try-lock, so a parallel burst cannot exceed the budget), no second factor
+      (<code>user.otp_enabled</code> is unread). <code>main.login_info</code> is unused and is dropped in a later release (expand/contract);
+      the <code>SEND_OTP</code> email template stays in the enum so historical or queued envelopes still resolve.</p>
+    <p><strong>Where enforced.</strong> <code>platform/security/config/SecurityConfiguration.java</code> (<code>filterChain</code>);
+      <code>SecurityFilterChainIT.removedLegacyLoginEndpoints_doNotAuthenticate</code>.
       See <a href="../security/index.html#the-two-login-stacks">Security</a>.</p>
 
     <h2 id="adr-filestorage">11. filestorage is the only gateway to the blobstore</h2>
@@ -386,6 +394,24 @@
       <code>CoachPayoutFreezeService</code>, the freeze check in <code>CoachPayoutTransferHandler</code>,
       <code>DisputeService.paidForSession</code>; <code>CoachPayoutPackCreditIT</code>.</p>
 
+    <h2 id="adr-single-instance">20. Single instance until SSE fan-out exists</h2>
+    <p><strong>Context.</strong> Scheduled jobs, row locks, the outbox and the login rate limiter are multi-instance safe
+      (<a href="#adr-shedlock">ADR 3</a>). Server-sent events are not: <code>MessagingEmitterRegistry</code>, <code>BookingSseService</code> and
+      <code>VideoSseService</code> keep their <code>SseEmitter</code>s in one JVM's memory, so on a second instance a user connected to the
+      other node silently misses real-time events.</p>
+    <p><strong>Decision.</strong> Owner decision 2026-10-28 (item 4, option A): defer cross-instance fan-out and run a single instance.
+      When scaling out becomes necessary, fan SSE events out through Postgres <code>LISTEN/NOTIFY</code> (no new infrastructure: every
+      instance already holds a pool to the same database) before adding the second instance. Until then, make an accidental
+      second instance visible: each instance upserts a heartbeat row in <code>main.app_instance_heartbeat</code> (V187) every minute
+      and logs <code>WARN status=MULTIPLE_INSTANCES</code> while another instance's row is fresh (three beats). ShedLock's
+      <code>locked_by</code> was rejected as the signal: it only shows whichever host last won a job lock.</p>
+    <p><strong>Consequences.</strong> The heartbeat job deliberately has no <code>@SchedulerLock</code> (each instance must beat for
+      itself). Timestamps are the database's <code>now()</code>, so host clock skew cannot hide a peer. A graceful shutdown deletes its
+      own row, so a rolling deploy only warns during the overlap. The <code>skillars.app.instances.live</code> gauge exposes the count.</p>
+    <p><strong>Where enforced.</strong> <code>infrastructure/persistence/InstanceHeartbeatMonitor.java</code>,
+      <code>InstanceHeartbeatMonitorIT</code>; <code>docs/deployment/deploy-guide.md</code> ("Single instance only") and the runbook scenario
+      "More than one application instance".</p>
+
     <h2 id="related">Related</h2>
     <ul>
       <li><a href="../walkthrough/index.html">Anatomy of a request</a> — several of these decisions seen in one booking flow.</li>
@@ -393,7 +419,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>993c6f57</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

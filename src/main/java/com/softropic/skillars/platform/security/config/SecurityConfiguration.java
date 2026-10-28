@@ -3,21 +3,15 @@ package com.softropic.skillars.platform.security.config;
 
 import com.softropic.skillars.infrastructure.web.LoggingFilter;
 import com.softropic.skillars.platform.security.service.LoginTokenManager;
-import com.softropic.skillars.platform.security.infrastructure.filter.SecondFactorLoginFilter;
 import com.softropic.skillars.platform.security.infrastructure.filter.SecurityAdviceFilter;
 import com.softropic.skillars.platform.security.infrastructure.filter.SessionRefreshFilter;
 import com.softropic.skillars.infrastructure.security.AjaxLogoutSuccessHandler;
 import com.softropic.skillars.infrastructure.security.ApplicationAccessDeniedHandler;
 import com.softropic.skillars.infrastructure.security.AuthenticationExceptionHandler;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
-import com.softropic.skillars.platform.security.infrastructure.jwt.filter.JWTAuthenticationFilter;
 import com.softropic.skillars.platform.security.infrastructure.jwt.filter.JWTAuthorizationFilter;
-import com.softropic.skillars.platform.security.infrastructure.AuthenticationManagerSimulator;
 import com.softropic.skillars.platform.security.service.ClientIdAccessDecisionManager;
-import com.softropic.skillars.platform.security.infrastructure.FraudAwareAuthenticationManager;
-import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 import com.softropic.skillars.platform.security.infrastructure.SecuredHttpEndpointGuard;
-import com.softropic.skillars.platform.security.service.TwoFactorLoginService;
 import com.softropic.skillars.platform.security.infrastructure.UnanimousAuthorizationManager;
 import com.softropic.skillars.platform.security.service.DaoAuthProvider;
 import com.softropic.skillars.platform.security.service.LoadUserByUserNameService;
@@ -48,7 +42,6 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
 import org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -102,15 +95,6 @@ public class SecurityConfiguration {
         return new UnanimousAuthorizationManager(authManagers);
     }
 
-    @SuppressWarnings("PMD")
-    public FraudAwareAuthenticationManager fraudAwareAuthenticationManager(AuthenticationManager authenticationManager,
-                                                                           LoginAttemptsService loginAttemptsService) {
-        return new FraudAwareAuthenticationManager(authenticationManager,
-                                                   loginAttemptsService,
-                                                   loginAttemptsService,
-                                                   new AuthenticationManagerSimulator(passwordEncoder()));
-    }
-
     private static boolean activateSecurity(Environment env) {
         return env.getProperty("activate.security", Boolean.class, true);
     }
@@ -134,9 +118,7 @@ public class SecurityConfiguration {
     public SecurityFilterChain filterChain(final HttpSecurity http,
                                            AjaxLogoutSuccessHandler ajaxLogoutSuccessHandler,
                                            SecurityAdviceFilter securityAdviceFilter,
-                                           TwoFactorLoginService twoFactorLoginManager,
                                            HandlerExceptionResolver handlerExceptionResolver,
-                                           AuthenticationManager authenticationManager,
                                            DaoAuthProvider daoAuthProvider,
                                            AuthorizationManager<RequestAuthorizationContext> authorizationManager,
                                            ApplicationEventPublisher applicationEventPublisher,
@@ -145,7 +127,6 @@ public class SecurityConfiguration {
                                            CorsConfiguration corsConfiguration,
                                            org.springframework.context.MessageSource messageSource,
                                            com.fasterxml.jackson.databind.ObjectMapper objectMapper,
-                                           LoginAttemptsService loginAttemptsService,
                                            Environment env) throws Exception {
         //TODO test first, then remove the following line
         //http.authorizeRequests().accessDecisionManager(accessDecisionManager);
@@ -157,11 +138,15 @@ public class SecurityConfiguration {
         http.exceptionHandling(exceptionHandling -> {
                 //used whenever access is denied (this is authorization and not authentication
             exceptionHandling.accessDeniedHandler(new ApplicationAccessDeniedHandler(handlerExceptionResolver));
-                // handles AuthenticationException that may have by-passed the handler in JWTAuthenticationFilter.
-                // So far, I have not found a by-pass path. However this could happen if a different authenticator other than JWTAuthenticationFilter is used
+                // handles an AuthenticationException raised anywhere in the chain (e.g. a missing/invalid
+                // JWT on a secured endpoint). Password login is POST /api/auth/login (AuthResource).
                 exceptionHandling.authenticationEntryPoint(new AuthenticationExceptionHandler(handlerExceptionResolver));
         });
-        http.formLogin(Customizer.withDefaults());
+        // No formLogin(): the only password entry point is POST /api/auth/login (AuthResource ->
+        // AuthService.login, rate limited by LoginRateLimiter). The default form login added a second,
+        // unthrottled POST /login that verified passwords through the AuthenticationManager and
+        // persisted the result in an HttpSession. The legacy POST /authenticate -> POST /otp filter
+        // pair (JWTAuthenticationFilter / SecondFactorLoginFilter) was removed for the same reason.
         http.logout(customizer ->
             // POST only: with CSRF disabled, logoutUrl() alone matches every HTTP method, so a
             // cross-site GET navigation (SameSite=Lax still sends rtkn) could revoke a victim's session.
@@ -182,13 +167,7 @@ public class SecurityConfiguration {
         );
         http.headers(customizer -> customizer.frameOptions(HeadersConfigurer.FrameOptionsConfig::disable));
         http.authorizeHttpRequests(configureRequestMatching(authorizationManager, env));
-        http.addFilterAfter(new JWTAuthenticationFilter(fraudAwareAuthenticationManager(authenticationManager, loginAttemptsService),
-                                                        applicationEventPublisher,
-                                                        handlerExceptionResolver,
-                                                        twoFactorLoginManager,
-                                                        loginTokenManager),
-                            UsernamePasswordAuthenticationFilter.class)
-            .addFilterAfter(new JWTAuthorizationFilter(daoAuthProvider,
+        http.addFilterAfter(new JWTAuthorizationFilter(daoAuthProvider,
                                                        applicationEventPublisher,
                                                        new SecuredHttpEndpointGuard(AppEndpoints.SECURED_MAPPINGS, AppEndpoints.ALL_UNRESTRICTED),
                                                        loginTokenManager,
@@ -200,8 +179,6 @@ public class SecurityConfiguration {
             .addFilterBefore(securityAdviceFilter, WebAsyncManagerIntegrationFilter.class)
             .addFilterBefore(new LoggingFilter(PUBLIC_STATIC_RESOURCES),
                              SecurityAdviceFilter.class)
-            .addFilterAfter(new SecondFactorLoginFilter(twoFactorLoginManager, loginTokenManager, applicationEventPublisher),
-                            SecurityAdviceFilter.class)
             .addFilterAfter(new SessionRefreshFilter(AppEndpoints.REFRESH), JWTAuthorizationFilter.class);
         return http.build();
     }

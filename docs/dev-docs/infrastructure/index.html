@@ -159,7 +159,7 @@
       <code>AuthenticationExceptionHandler</code> and <code>AjaxLogoutSuccessHandler</code> are the Spring Security
       handlers wired by <code>platform.security</code>. Also here: <code>RequestMetadataProvider</code>/<code>ClientContextProvider</code>
       (current request's IP/HTTPS/locale), <code>RequestIdProvider</code>, and the <code>security.event</code>
-      sub-package (<code>BadCredentialsEvent</code>, <code>FraudEvent</code>, <code>PreAuthEvent</code>) that
+      sub-package (<code>BadCredentialsEvent</code>, <code>AuthEvent</code>, <code>PreAuthEvent</code>) that
       <code>platform.security</code>'s audit listeners subscribe to.
     </p>
 
@@ -207,6 +207,16 @@
       lock and read; <code>PessimisticLockRetryerCallSiteAuditTest</code> scans <code>src/main/java</code>, pins the
       call-site count (currently 50) and fails on any write inside a retried lambda or any NOWAIT lock without a
       wrapper. See <a href="../database/index.html">Database &amp; Migrations</a> → Locking Conventions.
+    </p>
+    <p>
+      <code>InstanceHeartbeatMonitor</code> is the single-instance safety net (<a href="../decisions/index.html#adr-single-instance">ADR 20</a>):
+      every instance upserts its own row in <code>main.app_instance_heartbeat</code> (V187) on a fixed delay
+      (<code>platform.instance-heartbeat.interval-ms</code>, default 60 s; first beat after 15 s), counts the other rows
+      seen within three beats, and logs <code>WARN status=MULTIPLE_INSTANCES</code> plus the
+      <code>skillars.app.instances.live</code> gauge when there is one. Plain <code>JdbcTemplate</code> in one
+      <code>TransactionTemplate</code> (no entity; Hikari auto-commit is off), database <code>now()</code> for every
+      timestamp, no <code>@SchedulerLock</code> (each node must beat for itself), own row deleted on graceful shutdown, rows
+      older than a day pruned. <code>InstanceHeartbeatMonitorIT</code> drives it directly.
     </p>
 
     <h3 id="email-ses-email-smtp-email-log-the-transport-port-and-its">email, ses, email.smtp, email.log — the transport port and its three implementations</h3>
@@ -504,7 +514,7 @@ sequenceDiagram
       <code>false</code>. This exists because consolidating the integration suite onto a few long-lived Spring
       contexts removed the accidental protection short-lived contexts used to give (a job with a 5-minute delay never
       fires in a context that lives 90 seconds). Overriding each job's delay in test config <em>cannot</em> substitute:
-      23 of the 41 <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder.
+      24 of the 43 <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder.
       <code>@EnableSchedulerLock</code> deliberately stays on <code>AsyncConfig</code> and is <em>not</em> gated —
       tests invoke scheduled methods directly through the Spring proxy, so the lock advisor must still apply.
       See <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>.</p>
@@ -527,8 +537,8 @@ sequenceDiagram
     </div>
     <div class="callout">
       <p><strong>Rate limits are per instance.</strong> <code>RateLimitingService</code> keeps Bucket4j buckets in
-      memory, so N instances allow N× the configured rate. Fine for the single-instance deployment today; revisit
-      before scaling out.</p>
+      memory, so N instances allow N× the configured rate. Fine for the single-instance deployment today (an accidental
+      second instance is flagged by <code>InstanceHeartbeatMonitor</code>); revisit before scaling out.</p>
     </div>
 
     <h2 id="consumed-by">Consumed By</h2>
@@ -546,7 +556,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>be46d7bb</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

@@ -105,7 +105,6 @@ public final class SecurityConstants {
     public static final Duration REFRESH_TOKEN_TTL     = Duration.ofDays(7);
     public static final String ROLES = "roles";
     public static final String LOGIN_ID = "id";
-    public static final String LOGIN_CODE = "loginCode";
     public static final String OTP_ENABLED = "otpEnabled";
 
 
@@ -121,7 +120,7 @@ public final class SecurityConstants {
 
     /*
     skillars-deferred-149 AC3 code review (2026-10-08): epoch-millis timestamp of when THIS
-    session was last freshly authenticated (login, OTP completion, or a successful DB-reauth).
+    session was last freshly authenticated (login or a successful DB-reauth).
     Unlike Claims.ISSUED_AT (reset on every fast-path extension — see JwtManagerImpl
     .extendTtlOfToken), this claim is carried forward UNCHANGED across fast-path extensions, the
     same way DB_REFRESH_TOKEN is — it is the backward-looking counterpart of that forward-looking
@@ -133,8 +132,6 @@ public final class SecurityConstants {
     */
     public static final String SESSION_ISSUED_AT = "sessIat";
     public static final String BUS_ID = "busId";
-    public static final Duration OTP_TTL = Duration.ofMinutes(30);
-    public static final String LOGIN_INFO_ID = "lii";
     public static final String PHONE         = "phone";
     public static final String USERNAME = "username";
     public static final String SESSION_ID = "sessionId";

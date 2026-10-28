@@ -151,10 +151,11 @@ sequenceDiagram
     </ul>
 
     <h3 id="4-security-filter-chain">4. Security filter chain</h3>
-    <p>The chain is assembled in <code>platform/security/config/SecurityConfiguration.java:133-197</code>. CSRF is
-      disabled (<code>:155</code>); the custom filters are <code>JWTAuthenticationFilter</code> (legacy
-      <code>/authenticate</code> login), <code>JWTAuthorizationFilter</code> (every secured request),
-      <code>SecondFactorLoginFilter</code> and <code>SessionRefreshFilter</code>.</p>
+    <p>The chain is assembled in <code>platform/security/config/SecurityConfiguration.java:118-184</code>. CSRF is
+      disabled (<code>:137</code>); the custom filters are <code>JWTAuthorizationFilter</code> (every secured request),
+      <code>SecurityAdviceFilter</code>, <code>LoggingFilter</code> and <code>SessionRefreshFilter</code>. There is no login filter:
+      the only password login is the controller <code>POST /api/auth/login</code> (the legacy <code>/authenticate</code> →
+      <code>/otp</code> filters and Spring's form login were removed).</p>
     <p><code>platform/security/infrastructure/jwt/filter/JWTAuthorizationFilter.java</code>:</p>
     <ul>
       <li><code>doFilterInternal</code> (<code>:142</code>) skips unrestricted endpoints, otherwise calls
@@ -447,7 +448,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

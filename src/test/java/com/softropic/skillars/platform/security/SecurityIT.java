@@ -7,15 +7,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.security.contract.Gender;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.config.CommonConfig;
-import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.service.MailManager;
-import com.softropic.skillars.platform.security.api.AccountManagementFacade;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.contract.LoginIdType;
 import com.softropic.skillars.platform.security.contract.UserDto;
-import com.softropic.skillars.platform.security.service.LoginAttemptsService;
-import com.softropic.skillars.platform.security.repo.LoginInfoRepository;
-import com.softropic.skillars.platform.security.repo.UserRepository;
 import com.softropic.skillars.utils.TestMailManager;
 
 import org.junit.jupiter.api.AfterEach;
@@ -39,24 +34,19 @@ import java.util.List;
 import java.util.Map;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.JWT_COOKIE_NAME;
-import static com.softropic.skillars.infrastructure.security.SecurityConstants.JWT_SESSION_COOKIE;
-import static com.softropic.skillars.infrastructure.security.SecurityConstants.LOGIN_INFO_ID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 @Sql({SecurityIT.SEC_DATA_SQL_PATH})
 public class SecurityIT extends AbstractIntegrationTest {
-    private final static ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     public static final String USER_DATA_SQL_PATH = "/sql/userData.sql";
     public static final String SEC_DATA_SQL_PATH = "/sql/secData.sql";
     public static final String AUTHORITY_DATA_SQL_PATH = "/sql/authorityData.sql";
-    public static final String AUTHENTICATE_ENDPOINT = "/authenticate";
-    public static final String OTP_ENDPOINT = "/otp";
+    public static final String LOGIN_ENDPOINT = "/api/auth/login";
     public static final String HELP_CODE = "helpCode";
     public static final String PASSWORD = "password";
     public static final String EMAIL = "email";
-    public static final String LOGIN_ID = "id";
     public static final String CLIENT_ID = "myClientId";
 
     @Autowired
@@ -69,18 +59,6 @@ public class SecurityIT extends AbstractIntegrationTest {
     private MailManager mailManager;
 
     @Autowired
-    private AccountManagementFacade accountManagementFacade;
-
-    @Autowired
-    private LoginInfoRepository loginInfoRepository;
-
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private LoginAttemptsService loginAttemptsService;
-
-    @Autowired
     private HttpTestClient httpTestClient;
 
     @LocalServerPort
@@ -90,16 +68,15 @@ public class SecurityIT extends AbstractIntegrationTest {
     void tearDown() {
         template.execute(status -> {
             jdbcTemplate.execute("delete from main.sec");
+            jdbcTemplate.execute("delete from main.refresh_tokens");
             jdbcTemplate.execute("delete from main.user_addresses");
             jdbcTemplate.execute("delete from main.user_authority");
             jdbcTemplate.execute("delete from main.authority");
             jdbcTemplate.execute("delete from main.user");
             jdbcTemplate.execute("delete from main.audit_log");
-            // Failed /authenticate attempts are now DB-backed (LoginRateLimiter), not in-memory.
             jdbcTemplate.execute("delete from main.login_attempts");
             return 0;
         });
-        loginAttemptsService.unblacklistClient(CLIENT_ID);
     }
 
     /**
@@ -107,27 +84,31 @@ public class SecurityIT extends AbstractIntegrationTest {
      */
     @Sql({AUTHORITY_DATA_SQL_PATH, USER_DATA_SQL_PATH, SEC_DATA_SQL_PATH})
     @ParameterizedTest
-    @EnumSource(value = Credentials.class,
-                names = {"INVALID_EMAIL", "ARBITRARY_EMAIL", "INVALID_PASSWORD"})
-    void loginWithWrongCredentials(Credentials credentials) throws JsonProcessingException {
-        final String uri = baseUrl() + AUTHENTICATE_ENDPOINT;
-        
+    @EnumSource(Credentials.class)
+    void loginWithWrongCredentials(Credentials credentials) {
+        final String uri = baseUrl() + LOGIN_ENDPOINT;
+
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(uri,
                 HttpMethod.POST,
                 credentials.getBody(),
                 baseHttpHeaders(),
                 Map.class))
                 .isInstanceOf(HttpClientErrorException.class)
-                .hasFieldOrPropertyWithValue("statusCode", HttpStatus.UNAUTHORIZED);
+                .hasFieldOrPropertyWithValue("statusCode", credentials.expectedStatus);
     }
 
     enum Credentials {
-        INVALID_EMAIL(Map.of(EMAIL, "Mike", PASSWORD, "Thomson")),
-        ARBITRARY_EMAIL(Map.of(EMAIL, "walters@yahoo.com", PASSWORD, "Thomson")),
-        INVALID_PASSWORD(Map.of(EMAIL, "me@yahoo.com", PASSWORD, PASSWORD));
+        // Not an email at all: rejected by LoginRequest's bean validation before any lookup.
+        INVALID_EMAIL(Map.of(EMAIL, "Mike", PASSWORD, "Thomson1"), HttpStatus.BAD_REQUEST),
+        ARBITRARY_EMAIL(Map.of(EMAIL, "walters@yahoo.com", PASSWORD, "Thomson1"), HttpStatus.UNAUTHORIZED),
+        INVALID_PASSWORD(Map.of(EMAIL, "me@yahoo.com", PASSWORD, PASSWORD), HttpStatus.UNAUTHORIZED);
         private final Map<String, Object> body;
+        private final HttpStatus expectedStatus;
 
-        Credentials(Map<String, Object> body) {this.body = body;}
+        Credentials(Map<String, Object> body, HttpStatus expectedStatus) {
+            this.body = body;
+            this.expectedStatus = expectedStatus;
+        }
 
         public Map<String, Object> getBody() {
             return this.body;
@@ -136,8 +117,8 @@ public class SecurityIT extends AbstractIntegrationTest {
 
     @Test
     void attemptLoginWithInvalidOriginPolicy() {
-        final Map<String, Object> body = Map.of(EMAIL, "Mike", PASSWORD, "Thomson");
-        final String uri = baseUrl() + AUTHENTICATE_ENDPOINT;
+        final Map<String, Object> body = Map.of(EMAIL, "mike@yahoo.com", PASSWORD, "Thomson1");
+        final String uri = baseUrl() + LOGIN_ENDPOINT;
 
         final HttpHeaders httpHeaders = baseHttpHeaders();
         httpHeaders.add(HttpHeaders.ORIGIN, "https:localhost:" + randomServerPort);
@@ -164,16 +145,14 @@ public class SecurityIT extends AbstractIntegrationTest {
      */
     @Test
     @Sql({AUTHORITY_DATA_SQL_PATH, USER_DATA_SQL_PATH, SEC_DATA_SQL_PATH})
-    void attemptLoginToDisabledAccount() throws JsonProcessingException {
+    void attemptLoginToDisabledAccount() {
         // Use not-activated@yahoo.com which has activated=false in userData.sql
-        
-        final String uri = baseUrl() + AUTHENTICATE_ENDPOINT;
-        final HttpHeaders httpHeaders = baseHttpHeaders();
-        
+        final String uri = baseUrl() + LOGIN_ENDPOINT;
+
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(uri,
                 HttpMethod.POST,
-                Map.of(LOGIN_ID, "not-activated@yahoo.com", PASSWORD, "admin*123!"),
-                httpHeaders,
+                Map.of(EMAIL, "not-activated@yahoo.com", PASSWORD, "admin*123!"),
+                baseHttpHeaders(),
                 Map.class))
                 .isInstanceOf(HttpClientErrorException.class)
                 .satisfies(e -> {
@@ -184,143 +163,72 @@ public class SecurityIT extends AbstractIntegrationTest {
     }
 
     /**
-     * Happy path test with 2FA
+     * Register, activate via the emailed key, then log in through POST /api/auth/login. The account
+     * is registered with otpEnabled=true: that flag drove the removed POST /authenticate -> /otp
+     * email-2FA flow and must not block (or alter) the one remaining login path.
      */
     @Test
     @Sql({AUTHORITY_DATA_SQL_PATH, USER_DATA_SQL_PATH, SEC_DATA_SQL_PATH})
-    void loginWith2FAWhenAccountEnabled() throws JsonProcessingException {
+    void registeredAndActivatedAccount_logsInDirectly() throws JsonProcessingException {
         final String registrationUri = baseUrl() + "/v1/account/register";
-        boolean otpEnabled = true;
-        final UserDto userData = getUserData(otpEnabled);
+        final UserDto userData = getUserData();
 
         final ObjectMapper defaultObjectMapper = getDefaultObjectMapper();
         final String userDataAsString = defaultObjectMapper.writeValueAsString(userData);
         final Map<String, Object> userDataMap = defaultObjectMapper.readValue(userDataAsString, Map.class);
 
-        //register user
         final ResponseEntity<Map> registerResponse = httpTestClient.makeHttpRequest(registrationUri,
                                                                                     HttpMethod.POST,
                                                                                     userDataMap,
                                                                                     baseHttpHeaders(),
-                                                                                    Map.class
-        );
-
+                                                                                    Map.class);
         final String registerHelpCode = (String) registerResponse.getBody().get(HELP_CODE);
 
-        //Get activation key from sent email and then activate account
         final TestMailManager testMailManager = (TestMailManager) mailManager;
         await().until(() -> testMailManager.getEnvelope(registerHelpCode) != null);
         final String activationKey = (String) testMailManager.getEnvelope(registerHelpCode).data().get("activationKey");
         assertThat(activationKey).isNotNull();
-        
-        final String enableAccountUri = baseUrl() + "/v1/account/activate?key=" + activationKey;
-        final ResponseEntity<Map> activationResponse = httpTestClient.makeHttpRequest(enableAccountUri,
-                                                                                      HttpMethod.POST,
-                                                                                      Map.of(),
-                                                                                      baseHttpHeaders(),
-                                                                                      Map.class);
 
+        final ResponseEntity<Map> activationResponse = httpTestClient.makeHttpRequest(
+                baseUrl() + "/v1/account/activate?key=" + activationKey,
+                HttpMethod.POST,
+                Map.of(),
+                baseHttpHeaders(),
+                Map.class);
         assertThat(activationResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
 
-        // Manually enable OTP if not correctly set by registration
-        template.execute(status -> {
-            userRepository.enableOtp(userData.getLogin());
-            return 0;
-        });
-
-        // Authenticate (should trigger 2FA)
-        String authUri = baseUrl() + AUTHENTICATE_ENDPOINT;
-        final HttpHeaders httpHeaders = baseHttpHeaders();
-        ResponseEntity<Map> responseEntity = httpTestClient.makeHttpRequest(authUri,
-                                                                            HttpMethod.POST,
-                                                                            Map.of(LOGIN_ID,
-                                                                                   userData.getLogin(),
-                                                                                   PASSWORD,
-                                                                                   userData.getPassword()),
-                                                                            httpHeaders,
-                                                                            Map.class);
-        final Map authBody = responseEntity.getBody();
-        assertThat(authBody).isNotNull();
-        final String authHelpCode = (String) authBody.get(HELP_CODE);
-        assertThat(authHelpCode).isNotBlank();
-        
-        final Map payload = (Map) authBody.get("payload");
-        final String loginInfoId = (String) payload.get("loginInfoId");
-        assertThat(loginInfoId).isNotBlank();
-
-        // Get OTP from email
-        await().until(() -> testMailManager.getEnvelope(authHelpCode) != null);
-        
-        final Envelope otpEnvelope = testMailManager.getEnvelope(authHelpCode);
-        final Map<String, Object> data = otpEnvelope.data();
-        
-        // TwoFactorLoginService uses "otpCode"
-        Object otpObj = data.get("otpCode");
-        if (otpObj == null) otpObj = data.get("otp");
-        
-        assertThat(otpObj).as("OTP should be present in envelope data").isNotNull();
-        String otp = otpObj.toString();
-        assertThat(otp).isNotBlank();
-
-        // Submit OTP
-        final List<String> setCookies = responseEntity.getHeaders().get(HttpHeaders.SET_COOKIE);
-        
-        final String liiCookie = setCookies.stream()
-                .filter(c -> c.contains(LOGIN_INFO_ID))
-                .findFirst().orElseThrow();
-        final String sessionCookie = setCookies.stream()
-                .filter(c -> c.contains(JWT_SESSION_COOKIE))
-                .findFirst().orElseThrow();
-
-        final HttpHeaders otpHeaders = baseHttpHeaders();
-        otpHeaders.add(HttpHeaders.COOKIE, liiCookie.split(";", 2)[0]);
-        otpHeaders.add(HttpHeaders.COOKIE, sessionCookie.split(";", 2)[0]);
-
-        final String otpUri = baseUrl() + OTP_ENDPOINT;
-        ResponseEntity<Map> otpResponse = httpTestClient.makeHttpRequest(otpUri,
-                                                                         HttpMethod.POST,
-                                                                         Map.of("otp", otp, "loginInfoId", loginInfoId),
-                                                                         otpHeaders,
-                                                                         Map.class);
-
-        assertThat(otpResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(otpResponse.getHeaders().get(HttpHeaders.SET_COOKIE).stream()
-                .anyMatch(c -> c.contains(JWT_COOKIE_NAME))).isTrue();
-        // skillars-deferred-142 AC2: OTP completion must also set the 'skp' cookie, which it
-        // previously never did. Presence-only — getUserData() below sets no SkillarsRole, so this
-        // fixture can only prove the cookie exists (and carries the ANONYMOUS fallback), not the
-        // real role mapping; JwtManagerImplTest proves the actual ROLES -> SkillarsRole mapping
-        // instead.
-        assertThat(otpResponse.getHeaders().get(HttpHeaders.SET_COOKIE).stream()
-                .anyMatch(c -> c.contains(SecurityConstants.SKILLARS_PROFILE_COOKIE + "="))).isTrue();
+        final ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(baseUrl() + LOGIN_ENDPOINT,
+                HttpMethod.POST,
+                Map.of(EMAIL, userData.getLogin(), PASSWORD, userData.getPassword()),
+                baseHttpHeaders(),
+                Map.class);
+        assertThat(loginResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(loginResponse.getHeaders().get(HttpHeaders.SET_COOKIE))
+                .anyMatch(c -> c.startsWith(JWT_COOKIE_NAME + "="))
+                .anyMatch(c -> c.startsWith(SecurityConstants.SKILLARS_PROFILE_COOKIE + "="));
     }
 
     @Test
     @Sql({AUTHORITY_DATA_SQL_PATH, USER_DATA_SQL_PATH, SEC_DATA_SQL_PATH})
-    void loginWith2FADisabled() {
-        final String uri = baseUrl() + AUTHENTICATE_ENDPOINT;
-        final HttpHeaders httpHeaders = baseHttpHeaders();
-        final ResponseEntity<Map> responseEntity = httpTestClient.makeHttpRequest(uri,
+    void loginThenAccessProtectedResource() {
+        final ResponseEntity<Map> responseEntity = httpTestClient.makeHttpRequest(baseUrl() + LOGIN_ENDPOINT,
                                                                                   HttpMethod.POST,
-                                                                                  Map.of(LOGIN_ID,
+                                                                                  Map.of(EMAIL,
                                                                                          "queb@yahoo.com",
                                                                                          PASSWORD,
                                                                                          "admin*123!"),
-                                                                                  httpHeaders,
+                                                                                  baseHttpHeaders(),
                                                                                   Map.class);
-        final Map responseBody = responseEntity.getBody();
         assertThat(responseEntity.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(responseBody.get("msgKey")).isEqualTo("jwt.created");
 
         // Access protected resource
         final List<String> cookies = responseEntity.getHeaders().get(HttpHeaders.SET_COOKIE);
         String cookieHeaderValue = String.join("; ", cookies.stream().map(c -> c.split(";", 2)[0]).toList());
-        
+
         final HttpHeaders authHeaders = baseHttpHeaders();
         authHeaders.add(HttpHeaders.COOKIE, cookieHeaderValue);
-        
-        String accountUri = baseUrl() + "/v1/account/";
-        ResponseEntity<Map> accountResponse = httpTestClient.makeHttpRequest(accountUri, HttpMethod.GET, null, authHeaders, Map.class);
+
+        ResponseEntity<Map> accountResponse = httpTestClient.makeHttpRequest(baseUrl() + "/v1/account/", HttpMethod.GET, null, authHeaders, Map.class);
 
         assertThat(accountResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(accountResponse.getBody().get("login")).isEqualTo("queb@yahoo.com");
@@ -328,7 +236,7 @@ public class SecurityIT extends AbstractIntegrationTest {
 
     @Test
     @Sql({SecurityIT.SEC_DATA_SQL_PATH})
-    void testAccessProtectedResource_NoToken_Unauthorized() throws JsonProcessingException {
+    void testAccessProtectedResource_NoToken_Unauthorized() {
         final String accountUri = baseUrl() + "/v1/account/";
         final HttpHeaders httpHeaders = baseHttpHeaders();
 
@@ -339,14 +247,11 @@ public class SecurityIT extends AbstractIntegrationTest {
 
     @Test
     @Sql({AUTHORITY_DATA_SQL_PATH, USER_DATA_SQL_PATH, SEC_DATA_SQL_PATH})
-    void attemptLoginWhenAccountBlocked() throws JsonProcessingException {
-        final String uri = baseUrl() + AUTHENTICATE_ENDPOINT;
-        final HttpHeaders httpHeaders = baseHttpHeaders();
-        
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(uri,
+    void attemptLoginWhenAccountBlocked() {
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(baseUrl() + LOGIN_ENDPOINT,
                 HttpMethod.POST,
-                Map.of(LOGIN_ID, "locked@yahoo.com", PASSWORD, "admin*123!"),
-                httpHeaders,
+                Map.of(EMAIL, "locked@yahoo.com", PASSWORD, "admin*123!"),
+                baseHttpHeaders(),
                 Map.class))
                 .isInstanceOf(HttpClientErrorException.class)
                 .satisfies(e -> {
@@ -356,8 +261,7 @@ public class SecurityIT extends AbstractIntegrationTest {
                 });
     }
 
-
-    private static UserDto getUserData(boolean otpEnabled) {
+    private static UserDto getUserData() {
         final UserDto userDto = new UserDto();
         userDto.setEmail("figu@yahoo.com");
         userDto.setLogin("figu@yahoo.com");
@@ -368,7 +272,7 @@ public class SecurityIT extends AbstractIntegrationTest {
         userDto.setGender(Gender.MALE);
         userDto.setDob(LocalDate.of(1990, 2, 20));
         userDto.setPassword("admin*123!");
-        userDto.setOtpEnabled(otpEnabled);
+        userDto.setOtpEnabled(true);
         userDto.setFirstName("Test");
         userDto.setLastName("User");
         return userDto;

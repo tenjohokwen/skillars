@@ -65,8 +65,11 @@ public class AuthService {
     // refresh-token insert happens only after the password check), so committing on it is safe.
     @Transactional(noRollbackFor = BadCredentialsException.class)
     public LoginResponse login(String email, String rawPassword, String clientIp, HttpServletResponse res) {
-        // Rate limit keyed on SHA-256(email|ip) — see LoginRateLimiter. Shared with the legacy
-        // /authenticate filter, so a failure on either entry point counts against both.
+        // Rate limit keyed on SHA-256(email|ip) — see LoginRateLimiter. checkLimited also claims a
+        // transaction-scoped advisory lock on that key (try-lock: a concurrent attempt for the same
+        // (email, ip) is refused with 429 instead of queued), so a burst of parallel wrong passwords
+        // cannot all pass the count before any of them records its failure. The lock is released
+        // when this transaction ends, after the failure row below is committed.
         loginRateLimiter.checkLimited(email, clientIp).ifPresent(limited -> {
             throw new LoginRateLimitedException(
                 "Too many failed login attempts",

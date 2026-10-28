@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * User.securitySessionInvalidatedAt}, making {@code DaoAuthProvider.authorize()} throw for a
  * flagged user — that binding is what let a victim's own re-login re-arm a stolen JWT (clearing
  * the account-wide flag undid the denial for every session, not just the attacker's) and
- * separately locked the still-live {@code /authenticate} endpoint out of a flagged account, since
+ * separately locked the since-removed {@code /authenticate} endpoint out of a flagged account, since
  * Spring's {@code preAuthenticationChecks} runs here too, before the password check. The real
  * per-JWT revocation check now lives entirely in {@code
  * JWTAuthorizationFilter.assertSessionNotRevoked}, comparing the JWT's own claim against this

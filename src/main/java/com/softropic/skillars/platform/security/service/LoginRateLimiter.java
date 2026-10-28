@@ -6,11 +6,13 @@ import com.softropic.skillars.platform.security.repo.LoginAttempt;
 import com.softropic.skillars.platform.security.repo.LoginAttemptRepository;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
@@ -19,16 +21,22 @@ import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 
 /**
- * The one failed-login rate limiter, backed by {@code main.login_attempts} so it holds across every
- * application instance and survives restarts. Shared by both password entry points:
- * {@code AuthService.login} ({@code POST /api/auth/login}, the SPA) and the legacy
- * {@code POST /authenticate} filter (via {@link LoginAttemptsService}). Before this class the
- * legacy path counted failures in per-instance Guava caches, so behind N instances an attacker got
- * N times the budget and a restart reset it.
+ * The failed-login rate limiter for the one password entry point, {@code AuthService.login}
+ * ({@code POST /api/auth/login}). Backed by {@code main.login_attempts}, so it holds across every
+ * application instance and survives restarts.
  *
  * <p>The key is SHA-256(lower-cased login | canonical IP), so an attacker on another IP cannot lock
- * the real user out of their own IP (account-DoS prevention). Both entry points use the SAME key,
- * so failures on one count against the other: there is no doubled budget for trying both.
+ * the real user out of their own IP (account-DoS prevention).
+ *
+ * <p><b>Atomicity.</b> {@link #checkLimited} claims a transaction-scoped advisory lock on that key
+ * before counting, and must run inside the caller's transaction ({@code MANDATORY}) so the lock is
+ * held until the caller has recorded (and committed) its own failure. Without it, N parallel wrong
+ * passwords all read a count below the budget and then all insert — the budget was exceeded by the
+ * degree of parallelism. The lock is a TRY lock re-tried for a bounded {@link #CLAIM_WAIT}: an
+ * ordinary overlap (two tabs, a client retry) just waits for the other attempt's bcrypt check and
+ * transaction to finish, while a sustained burst on one key gives up after that bound and is refused
+ * as rate limited (429, retry after 1s) — so a burst cannot park pooled connections behind the lock
+ * for longer than the bound. A blocking {@code pg_advisory_xact_lock} would have no such bound.
  */
 @Service
 @RequiredArgsConstructor
@@ -37,21 +45,36 @@ public class LoginRateLimiter {
     private final LoginAttemptRepository loginAttemptRepository;
     private final ConfigService configService;
 
+    /** Retry-After for an attempt refused because the (login, ip) key stayed busy for the whole {@link #CLAIM_WAIT}. */
+    static final long CONCURRENT_ATTEMPT_RETRY_AFTER_SECONDS = 1L;
+    /** How long an attempt keeps re-trying the key's try-lock (one bcrypt check plus commit is ~0.1-0.2s). */
+    static final Duration CLAIM_WAIT = Duration.ofSeconds(2);
+    private static final long CLAIM_RETRY_SLEEP_MS = 50L;
+
     /** A (login, ip) pair that has used up its failed-attempt budget for the current window. */
     public record Limited(long recentAttempts, long retryAfterSeconds) {}
 
     /**
+     * Claims this (login, ip) pair for the caller's transaction (waiting up to {@link #CLAIM_WAIT} for
+     * an in-flight attempt on the same pair), then reports whether the pair has used up its budget.
+     * If the pair stays busy for the whole wait, this attempt is reported as limited (retry after 1s)
+     * without being counted.
+     *
      * @return the limit state when this (login, ip) pair has used up its failed-attempt budget for
-     *         the current window, or empty when an attempt is allowed
+     *         the current window (or is busy), or empty when an attempt is allowed
      */
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.MANDATORY)
     public Optional<Limited> checkLimited(String login, String clientIp) {
         int maxAttempts = maxAttempts();
         int lockWindowMin = lockWindowMinutes();
         String identifier = identifier(login, clientIp);
+        boolean claimed = claim(identifier);
         Instant now = Instant.now(ClockProvider.getClock());
         long recentAttempts = loginAttemptRepository
             .countByIdentifierAndAttemptedAtAfter(identifier, now.minus(lockWindowMin, ChronoUnit.MINUTES));
+        if (!claimed) {
+            return Optional.of(new Limited(recentAttempts, CONCURRENT_ATTEMPT_RETRY_AFTER_SECONDS));
+        }
         if (recentAttempts < maxAttempts) {
             return Optional.empty();
         }
@@ -64,6 +87,24 @@ public class LoginRateLimiter {
                 now, a.getAttemptedAt().plus(lockWindowMin, ChronoUnit.MINUTES))))
             .orElse((long) lockWindowMin * 60);
         return Optional.of(new Limited(recentAttempts, retryAfterSeconds));
+    }
+
+    private boolean claim(String identifier) {
+        long deadline = System.nanoTime() + CLAIM_WAIT.toNanos();
+        while (true) {
+            if (loginAttemptRepository.tryAcquireIdentifierLock(identifier)) {
+                return true;
+            }
+            if (System.nanoTime() >= deadline) {
+                return false;
+            }
+            try {
+                Thread.sleep(CLAIM_RETRY_SLEEP_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
     }
 
     /**
@@ -85,17 +126,6 @@ public class LoginRateLimiter {
     @Transactional
     public int clear(String login) {
         return loginAttemptRepository.deleteBySubjectHash(subjectHash(login));
-    }
-
-    /**
-     * Account-wide cap (any IP) for the legacy {@code /authenticate} path only, replacing its former
-     * per-user cache: without it an attacker rotating IPs gets a fresh budget per IP. Deliberately not
-     * applied to {@code /api/auth/login}, where an account-wide lock would let anyone lock a real user
-     * out of the SPA (the reason that path keys on login|ip).
-     */
-    @Transactional(readOnly = true)
-    public boolean isAccountLimited(String login) {
-        return countRecentFailures(login) >= maxAttempts();
     }
 
     /** Admin read-out (V171): failed attempts for this account, any IP, inside the current window. */

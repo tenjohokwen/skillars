@@ -2,13 +2,8 @@ package com.softropic.skillars.platform.security;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.softropic.skillars.e2e.HttpTestClient;
-import com.softropic.skillars.platform.notification.contract.Envelope;
-import com.softropic.skillars.platform.notification.service.MailManager;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
-import com.softropic.skillars.platform.security.service.LoginAttemptsService;
-import com.softropic.skillars.utils.TestMailManager;
 
 import org.apache.catalina.connector.Connector;
 import org.apache.catalina.connector.Request;
@@ -19,10 +14,12 @@ import org.springframework.boot.web.embedded.tomcat.TomcatWebServer;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.web.filter.ForwardedHeaderFilter;
-import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -31,20 +28,22 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.RestTemplate;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.JWT_COOKIE_NAME;
-import static com.softropic.skillars.infrastructure.security.SecurityConstants.JWT_SESSION_COOKIE;
-import static com.softropic.skillars.infrastructure.security.SecurityConstants.LOGIN_INFO_ID;
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.USER_COOKIE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.awaitility.Awaitility.await;
 
 public class SecurityFilterChainIT extends AbstractIntegrationTest {
 
@@ -58,45 +57,32 @@ public class SecurityFilterChainIT extends AbstractIntegrationTest {
     private TransactionTemplate transactionTemplate;
 
     @Autowired
-    private MailManager mailManager;
-
-    @Autowired
-    private LoginAttemptsService loginAttemptsService;
+    private RestTemplate testRestTemplate;
 
     @LocalServerPort
     int randomServerPort;
 
-    @BeforeEach
-    void setUp() {
-        loginAttemptsService.resetLoginRecording();
-    }
-
-    private static final String AUTHENTICATE_URL = "/authenticate";
+    private static final String LOGIN_URL = "/api/auth/login";
     private static final String ACCOUNT_URL = "/v1/account/";
-    private static final String OTP_URL = "/otp";
-
-
 
     private HttpHeaders baseHeaders() {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.add(HttpHeaders.COOKIE, "fcookie=fingerprintCookie");
-        //headers.add(SecurityConstants.API_KEY_HEADER, "myClientId");
         return headers;
     }
 
     @Test
     void testPublicEndpointAccessibleWithoutAuth() {
-        // /authenticate is public
-        String url = baseUrl() + AUTHENTICATE_URL;
-        
-        // We don't provide credentials, but we shouldn't get a 403 Forbidden from Spring Security's filter chain
-        // Instead we get a 401 Unauthorized because JWTAuthenticationFilter expects valid body or creds
+        // /api/auth/login is public: an empty body is rejected by the controller's bean validation
+        // (400), not by the security chain (401/403).
+        String url = baseUrl() + LOGIN_URL;
+
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(url, HttpMethod.POST, Map.of(), baseHeaders(), Map.class))
                 .isInstanceOf(HttpClientErrorException.class)
                 .satisfies(e -> {
                     HttpClientErrorException ex = (HttpClientErrorException) e;
-                    assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                    assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
                 });
     }
 
@@ -119,102 +105,86 @@ public class SecurityFilterChainIT extends AbstractIntegrationTest {
 
     @Test
     @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
-    void testFullAuthFlowAndFilterInterdependencies() throws JsonProcessingException {
-        // Ensure me@yahoo.com is ACTIVE and NOT locked
-        transactionTemplate.execute(status -> {
-            jdbcTemplate.update("update main.user set status = 'ACTIVE', activation_date = '2000-01-01 00:00:00', activated = true, locked = false, otp_enabled = false where login = 'me@yahoo.com'");
-            return 0;
-        });
-
-        // 1. Authenticate (triggers JWTAuthenticationFilter)
-        String authUrl = baseUrl() + AUTHENTICATE_URL;
-        Map<String, Object> credentials = Map.of("id", "me@yahoo.com", "password", "admin*123!");
-        
-        ResponseEntity<Map> authResponse = httpTestClient.makeHttpRequest(authUrl, HttpMethod.POST, credentials, baseHeaders(), Map.class);
-        assertThat(authResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-        
-        // Verify filters added cookies
-        List<String> cookies = authResponse.getHeaders().get(HttpHeaders.SET_COOKIE);
-        assertThat(cookies).anyMatch(c -> c.contains(JWT_COOKIE_NAME));
-        assertThat(cookies).anyMatch(c -> c.contains(JWT_SESSION_COOKIE));
-        assertThat(cookies).anyMatch(c -> c.contains(USER_COOKIE));
-
-        // 2. Access Secured Endpoint (triggers JWTAuthorizationFilter)
-        String cookieHeader = String.join("; ", cookies.stream().map(c -> c.split(";", 2)[0]).toList());
-        HttpHeaders authHeaders = baseHeaders();
-        authHeaders.add(HttpHeaders.COOKIE, cookieHeader);
-        
-        ResponseEntity<Map> accountResponse = httpTestClient.makeHttpRequest(baseUrl() + ACCOUNT_URL, HttpMethod.GET, null, authHeaders, Map.class);
-        assertThat(accountResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(accountResponse.getBody().get("login")).isEqualTo("me@yahoo.com");
-    }
-
-    @Test
-    @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
-    void test2FAFilterBlocksAccessUntilVerified() throws JsonProcessingException {
-        // Ensure me@yahoo.com is ACTIVE, NOT locked, and has OTP enabled
+    void testFullAuthFlowAndFilterInterdependencies() {
+        // Ensure me@yahoo.com is ACTIVE and NOT locked. otp_enabled = true on purpose: the flag only
+        // drove the removed /authenticate -> /otp flow and must not gate /api/auth/login.
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("update main.user set status = 'ACTIVE', activation_date = '2000-01-01 00:00:00', activated = true, locked = false, otp_enabled = true where login = 'me@yahoo.com'");
             return 0;
         });
 
-        String authUrl = baseUrl() + AUTHENTICATE_URL;
-        Map<String, Object> credentials = Map.of("id", "me@yahoo.com", "password", "admin*123!");
-        
-        ResponseEntity<Map> authResponse = httpTestClient.makeHttpRequest(authUrl, HttpMethod.POST, credentials, baseHeaders(), Map.class);
+        // 1. Authenticate (AuthResource -> AuthService.login -> LoginTokenManager.createLoginToken)
+        Map<String, Object> credentials = Map.of("email", "me@yahoo.com", "password", "admin*123!");
+        ResponseEntity<Map> authResponse = httpTestClient.makeHttpRequest(baseUrl() + LOGIN_URL, HttpMethod.POST, credentials, baseHeaders(), Map.class);
         assertThat(authResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-        
-        Map body = authResponse.getBody();
-        String helpCode = (String) body.get("helpCode");
-        Map payload = (Map) body.get("payload");
-        String loginInfoId = (String) payload.get("loginInfoId");
-        
-        // Access secured endpoint with 2FA pending
+
         List<String> cookies = authResponse.getHeaders().get(HttpHeaders.SET_COOKIE);
+        assertThat(cookies).anyMatch(c -> c.startsWith(JWT_COOKIE_NAME + "="));
+        assertThat(cookies).anyMatch(c -> c.startsWith(USER_COOKIE + "="));
+        assertThat(cookies).anyMatch(c -> c.startsWith(SecurityConstants.REFRESH_TOKEN_COOKIE + "="));
+
+        // 2. Access Secured Endpoint (triggers JWTAuthorizationFilter)
         String cookieHeader = String.join("; ", cookies.stream().map(c -> c.split(";", 2)[0]).toList());
-        HttpHeaders partialAuthHeaders = baseHeaders();
-        partialAuthHeaders.add(HttpHeaders.COOKIE, cookieHeader);
-        
-        // jwt cookie not in headers since this is the 1st part of the 2FA flow. So user cannot access endpoint.
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(baseUrl() + ACCOUNT_URL, HttpMethod.GET, null, partialAuthHeaders, Map.class))
-                .isInstanceOf(HttpClientErrorException.class)
-                .hasFieldOrPropertyWithValue("statusCode", HttpStatus.UNAUTHORIZED);
+        HttpHeaders authHeaders = baseHeaders();
+        authHeaders.add(HttpHeaders.COOKIE, cookieHeader);
 
-        // Verify OTP
-        TestMailManager testMailManager = (TestMailManager) mailManager;
-        await().until(() -> testMailManager.getEnvelope(helpCode) != null);
-        
-        final Envelope otpEnvelope = testMailManager.getEnvelope(helpCode);
-        Object otpObj = otpEnvelope.data().get("otpCode");
-        if (otpObj == null) otpObj = otpEnvelope.data().get("otp");
-        String otp = otpObj.toString();
-        
-        Map<String, Object> otpBody = Map.of("otp", otp, "loginInfoId", loginInfoId);
-        
-        // We need BOTH the LOGIN_INFO_ID cookie AND the JWT_SESSION_COOKIE
-        final String liiCookie = cookies.stream().filter(c -> c.contains(LOGIN_INFO_ID)).findFirst().orElseThrow();
-        final String sessionCookie = cookies.stream().filter(c -> c.contains(JWT_SESSION_COOKIE)).findFirst().orElseThrow();
-        
-        HttpHeaders otpHeaders = baseHeaders();
-        otpHeaders.add(HttpHeaders.COOKIE, liiCookie.split(";", 2)[0]);
-        otpHeaders.add(HttpHeaders.COOKIE, sessionCookie.split(";", 2)[0]);
+        ResponseEntity<Map> accountResponse = httpTestClient.makeHttpRequest(baseUrl() + ACCOUNT_URL, HttpMethod.GET, null, authHeaders, Map.class);
+        assertThat(accountResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(accountResponse.getBody().get("login")).isEqualTo("me@yahoo.com");
+    }
 
-        ResponseEntity<Map> otpResponse = httpTestClient.makeHttpRequest(baseUrl() + OTP_URL, 
-                HttpMethod.POST, 
-                otpBody, 
-                otpHeaders, 
-                Map.class);
-        
-        assertThat(otpResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-        
-        // Final access check
-        List<String> finalCookies = otpResponse.getHeaders().get(HttpHeaders.SET_COOKIE);
-        String finalCookieHeader = String.join("; ", finalCookies.stream().map(c -> c.split(";", 2)[0]).toList());
-        HttpHeaders finalHeaders = baseHeaders();
-        finalHeaders.add(HttpHeaders.COOKIE, finalCookieHeader);
-        
-        ResponseEntity<Map> finalAccountResponse = httpTestClient.makeHttpRequest(baseUrl() + ACCOUNT_URL, HttpMethod.GET, null, finalHeaders, Map.class);
-        assertThat(finalAccountResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+    /**
+     * The legacy password entry points are gone: POST /authenticate (+ POST /otp) and Spring's
+     * default form login (POST /login). Valid credentials posted to any of them must not yield a
+     * session — no JWT cookie, no JSESSIONID-backed security context — so POST /api/auth/login
+     * (and its LoginRateLimiter) is the only way to verify a password.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"/authenticate", "/otp", "/login"})
+    @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
+    void removedLegacyLoginEndpoints_doNotAuthenticate(String path) {
+        HttpHeaders jsonHeaders = baseHeaders();
+        Map<String, Object> jsonBody = Map.of("id", "queb@yahoo.com", "email", "queb@yahoo.com",
+                                              "password", "admin*123!", "otp", "123456", "loginInfoId", "x");
+        assertNoSessionFrom(() -> testRestTemplate.exchange(baseUrl() + path, HttpMethod.POST,
+                new HttpEntity<>(jsonBody, jsonHeaders), String.class));
+
+        HttpHeaders formHeaders = new HttpHeaders();
+        formHeaders.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+        formHeaders.add(HttpHeaders.COOKIE, "fcookie=fingerprintCookie");
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("username", "queb@yahoo.com");
+        form.add("password", "admin*123!");
+        assertNoSessionFrom(() -> testRestTemplate.exchange(baseUrl() + path, HttpMethod.POST,
+                new HttpEntity<>(form, formHeaders), String.class));
+    }
+
+    private void assertNoSessionFrom(Supplier<ResponseEntity<String>> call) {
+        ResponseEntity<String> response;
+        try {
+            response = call.get();
+        } catch (HttpStatusCodeException e) {
+            assertThat(e.getStatusCode().is2xxSuccessful()).isFalse();
+            assertThat(cookieNames(e.getResponseHeaders())).doesNotContain(JWT_COOKIE_NAME, "JSESSIONID");
+            return;
+        }
+        assertThat(response.getStatusCode().is2xxSuccessful())
+                .as("a removed login endpoint answered %s", response.getStatusCode())
+                .isFalse();
+        assertThat(cookieNames(response.getHeaders())).doesNotContain(JWT_COOKIE_NAME, "JSESSIONID");
+    }
+
+    /** Names of the cookies a response SETS to a value — a denial may clear (empty) the JWT cookie. */
+    private static List<String> cookieNames(HttpHeaders headers) {
+        List<String> setCookies = headers == null ? null : headers.get(HttpHeaders.SET_COOKIE);
+        if (setCookies == null) {
+            return List.of();
+        }
+        return setCookies.stream()
+                .map(c -> c.split(";", 2)[0].split("=", 2))
+                .filter(nv -> nv.length == 2 && !nv[1].isBlank())
+                .map(nv -> nv[0])
+                .toList();
     }
 
     // skillars-deferred-162 AC1.3/AC1.4: the RemoteIpValve Boot actually built from application.yaml is the

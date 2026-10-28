@@ -7,6 +7,10 @@ public enum EmailTemplate {
     ACTIVATION("email.activation.title"),
     CREATION_DUP("email.creation_dup.title"),
     PASSWORD_RESET("email.pw_reset.title"),
+    // Retired (chore/auth-legacy-removal): its only producer, the legacy POST /authenticate -> /otp
+    // login-2FA flow (TwoFactorLoginService), is gone. Kept so historical envelope_entity rows and
+    // any envelope still queued for retry at deploy time keep resolving (envelope_entity's CHECK
+    // constraint lists it too); nothing new is ever written with it. Remove in a later release.
     SEND_OTP("email.otp.title"),
     // Story ses-1.4 AC3/AC5, deadlines corrected by code review 2026-09-12:
     // - COACH_EMAIL_VERIFY/PARENT_EMAIL_VERIFY/PLAYER_EMAIL_VERIFY: 12h, half of the verification
@@ -138,9 +142,8 @@ public enum EmailTemplate {
      * their own caller-supplied deadline and never consult this accessor at all
      * ({@code AccountManagementFacade}, {@code EmailRegistrationStrategy}, {@code SendMailListener},
      * {@code AlertNotificationListener}, {@code VideoModerationEmailListener},
-     * {@code ReportGenerationService}), and the login-2FA {@code SEND_OTP} flow
-     * ({@code TwoFactorLoginService}) has its own independent hardcoded 10-minute deadline that this
-     * enum value's own {@code deliveryDeadline()} advertises but that flow never reads.
+     * {@code ReportGenerationService}). {@code SEND_OTP} is retired and has no producer any more
+     * (the legacy login-2FA flow that built it with its own hardcoded deadline was removed).
      */
     public Duration deliveryDeadline() {
         return deliveryDeadline;

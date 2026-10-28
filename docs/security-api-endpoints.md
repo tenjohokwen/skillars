@@ -76,29 +76,34 @@ the auth cookies. Returns `204`.
 `LoginRateLimiter` counts failed password attempts in `main.login_attempts`, keyed by
 SHA-256(lower-cased login | client IP), so it holds across every instance and survives restarts.
 The budget and window come from `platform_config`: `security.login.max-attempts` (default 5) and
-`security.login.lock-window-minutes` (default 15). The legacy `/authenticate` endpoint below uses the
-same limiter and the same key, so failures on either entry point count against both. The legacy
-path also refuses an account that has reached the budget across all IPs combined (the SPA path does
-not, so a stranger cannot lock a real user out of it). An admin clears both with
-`POST /api/admin/users/{id}/unlock-login`.
+`security.login.lock-window-minutes` (default 15). Each attempt claims its (login, IP) key with a
+transaction-scoped Postgres advisory try-lock (`pg_try_advisory_xact_lock`), so a parallel burst of
+wrong passwords cannot all pass the count before any of them is recorded: at most the budget is ever
+recorded (`401`). An attempt that finds another one for the same key in flight re-tries the lock for
+up to 2 s (an ordinary overlap just waits); an attempt over budget, or one whose key stays busy for
+the whole wait, gets `429` with `Retry-After` without being counted. There is deliberately no account-wide (all
+IPs) cap, so a stranger cannot lock a real user out. An admin clears the counter with
+`POST /api/admin/users/{id}/unlock-login`. `POST /api/auth/login` is the only password entry point:
+the legacy `POST /authenticate` → `POST /otp` email-2FA filters and Spring's default form login
+(`POST /login`) were removed (chore/auth-legacy-removal).
 
 ---
 
 ## 2. Legacy endpoints (not used by the SPA)
 
-Kept because integration tests and tooling still authenticate through them. New code should use
-section 1.
+New code should use section 1. The former `POST /authenticate` and `POST /otp` login pair (with its
+email OTP, `main.login_info` rows and in-memory client blacklist) has been removed; integration tests
+log in through `POST /api/auth/login` (`e2e/AdminLogin`). `main.login_info` is now unused and will be
+dropped in a later release.
 
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
-| POST | `/authenticate` | public | Spring filter (`JWTAuthenticationFilter`). Body `{"id": "<email>", "password": "..."}` (optional `loginCode`). Returns `JWT_CREATED`, or `check.otp` with a `loginInfoId` when the account has `otp_enabled`. Uses the shared login rate limit. |
-| POST | `/otp` | 2FA cookie from `/authenticate` | Completes the `check.otp` step (`SecondFactorLoginFilter`). Body `{"loginInfoId": "...", "otp": "123456"}`. |
 | POST | `/api/logout` | public | Spring Security `LogoutFilter`, POST only. Same server-side teardown as `/api/auth/logout` (revokes the refresh token, clears cookies), returns `200`. |
 | GET | `/v1/account/authenticate` | authenticated | Returns the remote user's login. |
 
-There is no self-service two-factor toggle: `otp_enabled` only affects the legacy `/authenticate`
-flow, which the SPA does not use, so the former `PUT /api/account/2fa` endpoint and its profile
-toggle were removed.
+There is no two-factor login: `user.otp_enabled` is no longer read by any login path (it only drove
+the removed `/authenticate` → `/otp` flow), and the former `PUT /api/account/2fa` endpoint and its
+profile toggle were removed earlier.
 
 ---
 

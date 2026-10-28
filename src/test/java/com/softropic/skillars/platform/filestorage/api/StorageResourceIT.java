@@ -14,7 +14,6 @@ import com.softropic.skillars.platform.filestorage.contract.ConfirmUploadRespons
 import com.softropic.skillars.platform.filestorage.contract.SignDownloadResponse;
 import com.softropic.skillars.platform.filestorage.contract.SignUploadRequest;
 import com.softropic.skillars.platform.filestorage.contract.SignUploadResponse;
-import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 import org.instancio.Instancio;
 import org.junit.jupiter.api.BeforeEach;
 import com.softropic.skillars.platform.security.WithMockPrincipal;
@@ -73,9 +72,6 @@ class StorageResourceIT extends BaseStorageIT {
     TransactionTemplate transactionTemplate;
 
     @Autowired
-    LoginAttemptsService loginAttemptsService;
-
-    @Autowired
     FileStorageProperties fileStorageProperties;
 
     private RestTemplate noRetryRestTemplate;
@@ -86,8 +82,6 @@ class StorageResourceIT extends BaseStorageIT {
         storageAccessEventRepository.deleteAll();
         outboxReplicationJobRepository.deleteAll();
         fileStorageObjectRepository.deleteAll();
-
-        loginAttemptsService.resetLoginRecording();
 
         transactionTemplate.execute(status -> {
             jdbcTemplate.execute(
@@ -129,8 +123,7 @@ class StorageResourceIT extends BaseStorageIT {
             .requestFactory(SimpleClientHttpRequestFactory.class)
             .build();
 
-        String authUrl = "http://localhost:" + port + "/authenticate";
-        userCookies = AdminLogin.loginAsAdmin(authUrl, noRetryRestTemplate);
+        userCookies = AdminLogin.loginAsAdmin("http://localhost:" + port, noRetryRestTemplate);
     }
 
     @Test

@@ -13,30 +13,39 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Test login helper: authenticates through the SPA's own entry point, {@code POST /api/auth/login}
+ * (the only password login the application exposes), and returns a {@code Cookie} header carrying
+ * every cookie the response set (JWT cookies, {@code rtkn}, {@code skp}).
+ *
+ * <p>The JWT embeds a fingerprint of the {@code fcookie} cookie and the {@code user-agent} header,
+ * and {@code JWTAuthorizationFilter} re-checks both on every request — callers must send the same
+ * {@link #TEST_USER_AGENT} and {@code fcookie=fingerprintCookie} on their follow-up requests.
+ */
 public abstract class AdminLogin {
 
     public static final String TEST_USER_AGENT = "Java/17.0.11";
+    public static final String LOGIN_PATH      = "/api/auth/login";
 
     /** Admin fixture: login and password match userData.sql (queb@yahoo.com). */
     private static final String ADMIN_LOGIN    = "queb@yahoo.com";
     private static final String ADMIN_PASSWORD = "admin*123!";
 
+    /** Logs in as the seeded admin (userData.sql). {@code baseUrl} is e.g. {@code http://localhost:<port>}. */
+    public static HttpHeaders loginAsAdmin(String baseUrl, RestTemplate restTemplate) {
+        return login(baseUrl, ADMIN_LOGIN, ADMIN_PASSWORD, restTemplate);
+    }
 
-    /**
-     * Authenticates as the seeded admin user via POST /authenticate and
-     * returns headers containing the JWT cookies from the response.
-     *
-     */
-    public static HttpHeaders loginAsAdmin(String authenticateUrl, RestTemplate restTemplate) {
+    /** Logs in as any seeded user via {@code POST /api/auth/login} and returns its cookies as a Cookie header. */
+    public static HttpHeaders login(String baseUrl, String email, String password, RestTemplate restTemplate) {
         HttpHeaders loginHeaders = new HttpHeaders();
         loginHeaders.setContentType(MediaType.APPLICATION_JSON);
         loginHeaders.add(HttpHeaders.COOKIE, "fcookie=fingerprintCookie");
         loginHeaders.add("user-agent", TEST_USER_AGENT);
-        //loginHeaders.set("X-Client-Id", TEST_CLIENT_ID);
 
-        Map<String, String> credentials = Map.of("id", ADMIN_LOGIN, "password", ADMIN_PASSWORD);
+        Map<String, String> credentials = Map.of("email", email, "password", password);
         ResponseEntity<Map> loginResponse = restTemplate.exchange(
-                authenticateUrl,
+                baseUrl + LOGIN_PATH,
                 HttpMethod.POST,
                 new HttpEntity<>(credentials, loginHeaders),
                 Map.class);
@@ -52,9 +61,9 @@ public abstract class AdminLogin {
                                                     .map(c -> c.split(";", 2)[0])  // keep only name=value, drop path/httponly etc.
                                                     .toList());
 
-        HttpHeaders adminHeaders = new HttpHeaders();
-        adminHeaders.set(HttpHeaders.COOKIE, cookieHeader);
-        return adminHeaders;
+        HttpHeaders authHeaders = new HttpHeaders();
+        authHeaders.set(HttpHeaders.COOKIE, cookieHeader);
+        return authHeaders;
     }
 
 }

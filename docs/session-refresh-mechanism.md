@@ -103,7 +103,7 @@ There are two distinct endpoints and it matters which you call.
   `/refresh` short-circuits here; the frontend uses `GET`.
 - Frontend call: `sessionApi.refresh()` in `src/api/session.api.js` → `api.get('/refresh')`.
 - **Dev only:** `/refresh` needs a proxy entry in `src/frontend/quasar.config.js`
-  (added alongside `/api`, `/authenticate`, …). Without it, `quasar dev` answers
+  (added alongside `/api`, `/v1/account`, …). Without it, `quasar dev` answers
   `GET /refresh` with the SPA fallback (`200` + `index.html`), `refreshSession()` sees a
   resolved promise and clears the warning, but the JWT is never extended. Production is
   unaffected (Spring serves the SPA).

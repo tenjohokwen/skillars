@@ -12,9 +12,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Story ses-1.4 AC3/AC6 (source doc #7.2 item 22).
  *
  * <p><strong>Scoped to outbox-routed templates only (S4).</strong> {@link EmailTemplate#SEND_OTP} is
- * the login-2FA flow — it is never passed to {@code NotificationOutboxSupport.enqueueEmail} and
- * carries its own independent, hardcoded 10-minute deadline at {@code TwoFactorLoginService.java:60},
- * entirely unrelated to this enum accessor. Asserting {@code SEND_OTP.deliveryDeadline() == 24h} here
+ * the retired login-2FA flow (no producer since the legacy {@code /authenticate -> /otp} stack was
+ * removed) — it was never passed to {@code NotificationOutboxSupport.enqueueEmail} and carried its
+ * own independent, hardcoded 10-minute deadline, entirely unrelated to this enum accessor. Asserting {@code SEND_OTP.deliveryDeadline() == 24h} here
  * would pin a value that accessor advertises but that flow never reads — misleading, not protective.
  *
  * <p><strong>Corrected per code review 2026-09-12:</strong> the first draft excluded only

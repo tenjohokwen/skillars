@@ -263,10 +263,10 @@
       Dependencies: <strong>security</strong> (principal, roles, user/refresh-token/login-attempt data, the
       <code>playerOwnershipGuard</code>); <strong>booking</strong> (bookings disputed, cancelled, force-completed or
       blocking erasure; admin implements booking's <code>BookingDisputeLookup</code> port);
-      <strong>marketplace</strong> (coach profiles, pricing, verification tier, gallery media scrubbed on erasure);
+      <strong>marketplace</strong> (coach profiles, pricing, verification tier; photo and gallery media scrubbed on erasure);
       <strong>payment</strong> (strikes, credit wallet, coach payouts and the payout outbox, cancellation history,
       session packs, subscriptions); <strong>messaging</strong> and <strong>reviews</strong> (moderated content);
-      <strong>development</strong> and <strong>session</strong> (erasure cascade and child export);
+      <strong>development</strong> and <strong>session</strong> (erasure cascade incl. the coach-branding logo, and child export);
       <strong>filestorage</strong> and the blob-deletion outbox (export ZIP, erased blobs); <strong>config</strong>
       (windows, thresholds, lock timeouts). From <code>infrastructure</code>: security constants,
       <code>PessimisticLockRetryer</code>, exceptions, <code>RoutingDataSourceContext</code> /
@@ -479,7 +479,10 @@ sequenceDiagram
       (<code>booking.playerNotBookable</code>), so a new booking and a child-erasure request cannot both succeed. Self erasure anonymises the user
       (<code>deleted.&lt;id&gt;@erased.io</code>), hard-deletes messages, deletes or anonymises reviews (APPROVED ones
       are anonymised so ratings survive), revokes refresh tokens and deletes prior export blobs; a COACH additionally
-      has profile free text, gallery media, recap narrative (session completion data, timeline metadata, performance
+      has profile free text, the profile photo (<code>photo_url</code> cleared), gallery media, the report-branding row
+      (<code>development.coach_branding</code> deleted) — with the photo, gallery and logo blobs enqueued on the
+      blob-deletion outbox, but only keys under their own upload slots (<code>coach_profile/</code>,
+      <code>coach_gallery/</code>, <code>coach_branding/</code>), never a legacy URL or a server-written key — recap narrative (session completion data, timeline metadata, performance
       report <code>next_steps</code> — scrubbed, not deleted) and availability-block reasons scrubbed; a PARENT/PLAYER
       has each child's development data deleted under a per-child lock budget. Child erasure runs the same per-child
       hook and also scrubs the profile identity, committed with the <code>developmentDataErasedAt</code> tombstone;
@@ -522,6 +525,15 @@ sequenceDiagram
       <code>CoachProfile.userId</code>, a user id directly, a minor player with a linked parent redirected to the parent
       (GDPR export is the exception — it goes to the requester, whose profile page holds the download). The signed export
       URL is never emailed. A null recipient skips the email with a WARN.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Coach erasure: no row lock or native statement on <code>coach_profiles</code> before the recap scrub.</strong>
+      <code>eraseTransactional</code>'s outer transaction must not hold the coach's <code>coach_profiles</code> row while the
+      <code>REQUIRES_NEW</code> recap scrub runs — its first statement (<code>markRecapDataErased</code>) locks that row, so it
+      would wait on its own caller into the 5 s <code>lock_timeout</code> and the erasure would end FAILED every time. The outer
+      <code>save(cp)</code> is only flushed at commit, but any native query auto-flushes it: that is why the branding-logo
+      <code>DELETE … RETURNING</code> runs <em>after</em> the scrub, and why the photo key is read from the unlocked snapshot
+      (a photo confirmed in the same milliseconds is unlinked but its blob is not enqueued — accepted).</p>
     </div>
     <div class="callout">
       <p><strong>Alert inserts are isolated on purpose.</strong> <code>AdminAlertEventListener.insertAlert</code>
@@ -596,7 +608,7 @@ sequenceDiagram
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Last verified against master <code>993c6f57</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

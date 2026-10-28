@@ -27,7 +27,7 @@ public class Principal extends User {
     // refresh-token-theft revocation" epoch (null if the account has never had one). NOT consulted
     // by credentialsNonExpired (reverted to hardcoded true below, after the review found that
     // binding it here re-armed a stolen JWT on the victim's own next login and separately locked
-    // the still-live /authenticate endpoint out for every future login attempt). The real
+    // the then-live, since-removed /authenticate endpoint out for every future login attempt). The real
     // per-session check lives in JWTAuthorizationFilter's DB-reauth branch, comparing THIS value
     // against the specific JWT's own SESSION_ISSUED_AT claim -- see that claim's own javadoc.
     private final Instant securitySessionInvalidatedAt;
@@ -168,15 +168,15 @@ public class Principal extends User {
                             // null). That bound credentialsNonExpired to an ACCOUNT-level flag that
                             // AuthService.login() cleared on every successful login -- so a victim's
                             // own re-login re-armed an attacker's still-live stolen JWT, and
-                            // separately locked the still-live /authenticate endpoint out of a
+                            // separately locked the since-removed /authenticate endpoint out of a
                             // flagged account even with correct credentials, since Spring's
                             // preAuthenticationChecks runs before the password check. The real fix
                             // is per-JWT, not per-account -- see securitySessionInvalidatedAt below
                             // and SecurityConstants.SESSION_ISSUED_AT's javadoc.
                             .credentialsNonExpired(true)
                             // A SUSPENDED (safety-suspended) account counts as locked on every
-                            // path that builds a Principal from the user row: the legacy
-                            // /authenticate filter and the JWT filter's DB-backed renewal.
+                            // path that builds a Principal from the user row (the JWT filter's
+                            // DB-backed renewal; AuthService.login checks the row directly).
                             .accountNonLocked(!user.isLocked()
                                 && user.getVerificationStatus() != SkillarsVerificationStatus.SUSPENDED)
                             .authorities(grantedAuthorities)

@@ -7,7 +7,6 @@ import com.softropic.skillars.e2e.AdminLogin;
 import com.softropic.skillars.platform.config.contract.ConfigValueResponse;
 import com.softropic.skillars.platform.config.contract.UpdateConfigRequest;
 import com.softropic.skillars.platform.config.service.ConfigService;
-import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -79,8 +78,6 @@ class ConfigResourceIT extends AbstractIntegrationTest {
     @Autowired
     TransactionTemplate transactionTemplate;
 
-    @Autowired
-    LoginAttemptsService loginAttemptsService;
 
     @Autowired
     ConfigService configService;
@@ -147,19 +144,17 @@ class ConfigResourceIT extends AbstractIntegrationTest {
             return null;
         });
 
-        loginAttemptsService.resetLoginRecording();
-
         RestTemplate noRetryRestTemplate = new RestTemplateBuilder()
                 .requestFactory(SimpleClientHttpRequestFactory.class)
                 .build();
-        String authUrl = "http://localhost:" + port + "/authenticate";
+        String baseUrl = "http://localhost:" + port;
 
-        adminHeaders = AdminLogin.loginAsAdmin(authUrl, noRetryRestTemplate);
+        adminHeaders = AdminLogin.loginAsAdmin(baseUrl, noRetryRestTemplate);
         adminHeaders.add("user-agent", AdminLogin.TEST_USER_AGENT);
         adminHeaders.add(HttpHeaders.COOKIE, "fcookie=fingerprintCookie");
         adminHeaders.setContentType(MediaType.APPLICATION_JSON);
 
-        userHeaders = loginAs(NONADMIN_LOGIN, NONADMIN_PASSWORD, authUrl, noRetryRestTemplate);
+        userHeaders = AdminLogin.login(baseUrl, NONADMIN_LOGIN, NONADMIN_PASSWORD, noRetryRestTemplate);
         userHeaders.add("user-agent", AdminLogin.TEST_USER_AGENT);
         userHeaders.add(HttpHeaders.COOKIE, "fcookie=fingerprintCookie");
         userHeaders.setContentType(MediaType.APPLICATION_JSON);
@@ -338,30 +333,5 @@ class ConfigResourceIT extends AbstractIntegrationTest {
         assertThatThrownBy(() -> restTemplate.exchange(
                 url, HttpMethod.GET, new HttpEntity<>(userHeaders), List.class))
                 .isInstanceOf(HttpClientErrorException.Forbidden.class);
-    }
-
-    private HttpHeaders loginAs(String login, String password, String authUrl, RestTemplate restTemplate) {
-        HttpHeaders loginHeaders = new HttpHeaders();
-        loginHeaders.setContentType(MediaType.APPLICATION_JSON);
-        loginHeaders.add(HttpHeaders.COOKIE, "fcookie=fingerprintCookie");
-        loginHeaders.add("user-agent", AdminLogin.TEST_USER_AGENT);
-
-        Map<String, String> credentials = Map.of("id", login, "password", password);
-        ResponseEntity<Map> loginResponse = restTemplate.exchange(
-                authUrl, HttpMethod.POST,
-                new HttpEntity<>(credentials, loginHeaders),
-                Map.class);
-
-        assertThat(loginResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-
-        List<String> setCookies = loginResponse.getHeaders().get(HttpHeaders.SET_COOKIE);
-        assertThat(setCookies).isNotNull().isNotEmpty();
-
-        String cookieHeader = String.join("; ",
-                setCookies.stream().map(c -> c.split(";", 2)[0]).toList());
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.set(HttpHeaders.COOKIE, cookieHeader);
-        return headers;
     }
 }
