@@ -120,7 +120,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'option label keyed by the focus-area enum value being iterated',
   },
   {
-    at: 'src/components/video/VideoStatusCard.vue:91',
+    at: 'src/components/video/VideoStatusCard.vue:99',
     reason: 'status label keyed by the video processing status enum',
   },
   // ---- string concatenation ('literal.prefix.' + variable) ----

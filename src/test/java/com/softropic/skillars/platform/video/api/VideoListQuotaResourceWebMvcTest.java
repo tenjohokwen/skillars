@@ -91,6 +91,8 @@ class VideoListQuotaResourceWebMvcTest {
     @MockitoBean VideoRepository videoRepository;
     @MockitoBean VideoQuotaRepository videoQuotaRepository;
     @MockitoBean QuotaConfigService quotaConfigService;
+    @MockitoBean com.softropic.skillars.platform.video.service.MinorUploadPolicy minorUploadPolicy;
+    @MockitoBean com.softropic.skillars.platform.video.service.VideoSubjectService videoSubjectService;
 
     // ─── GET /api/video/my ────────────────────────────────────────────────────
 
@@ -262,6 +264,56 @@ class VideoListQuotaResourceWebMvcTest {
                 .with(authentication(skillarsAuth(PARENT_USER_ID, "ROLE_PARENT"))))
             .andExpect(status().isForbidden());
         verify(videoRepository, never()).findByOwnerIdAndOperationalStateNotInOrderByCreatedAtDesc(anyString(), any());
+    }
+
+    // ─── V184: coach videos ABOUT a player (subject link) ─────────────────────
+
+    @Test
+    void getCoachVideosAboutPlayer_parentOfPlayer_returnsSubjectVideosWithoutFailedOrHidden() throws Exception {
+        when(playerProfileRepository.existsByIdAndParentId(PLAYER_PROFILE_ID, PARENT_USER_ID)).thenReturn(true);
+        Video review = stubVideo("asset-review", OperationalState.READY);
+        review.setOwnerId(UUID.randomUUID().toString());
+        review.setSubjectBookingId(UUID.randomUUID());
+        review.setSubjectPlayerId(PLAYER_PROFILE_ID);
+        when(videoRepository.findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(eq(PLAYER_PROFILE_ID), any()))
+            .thenReturn(List.of(review));
+
+        mockMvc.perform(get("/api/video/players/" + PLAYER_PROFILE_ID + "/coach-videos")
+                .with(authentication(skillarsAuth(PARENT_USER_ID, "ROLE_PARENT"))))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].subjectPlayerId").value(PLAYER_PROFILE_ID))
+            .andExpect(jsonPath("$[0].operationalState").value("READY"));
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Collection<OperationalState>> excluded =
+            org.mockito.ArgumentCaptor.forClass(Collection.class);
+        verify(videoRepository).findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(eq(PLAYER_PROFILE_ID), excluded.capture());
+        org.assertj.core.api.Assertions.assertThat(excluded.getValue()).contains(OperationalState.FAILED, OperationalState.HIDDEN,
+            OperationalState.LOCKED, OperationalState.PURGED);
+    }
+
+    @Test
+    void getCoachVideosAboutPlayer_unrelatedParent_returns403() throws Exception {
+        when(playerProfileRepository.existsByIdAndParentId(PLAYER_PROFILE_ID, PARENT_USER_ID)).thenReturn(false);
+        when(playerProfileRepository.existsByIdAndUserId(PLAYER_PROFILE_ID, PARENT_USER_ID)).thenReturn(false);
+
+        mockMvc.perform(get("/api/video/players/" + PLAYER_PROFILE_ID + "/coach-videos")
+                .with(authentication(skillarsAuth(PARENT_USER_ID, "ROLE_PARENT"))))
+            .andExpect(status().isForbidden());
+        verify(videoRepository, never()).findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(any(), any());
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void getMyCoachVideos_selfRegisteredPlayer_scopedToOwnProfile() throws Exception {
+        stubPlayerPrincipal(PLAYER_PROFILE_ID);
+        when(videoRepository.findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(eq(PLAYER_PROFILE_ID), any()))
+            .thenReturn(List.of());
+
+        mockMvc.perform(get("/api/video/my/coach-videos"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$").isEmpty());
+        verify(videoRepository).findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(eq(PLAYER_PROFILE_ID), any());
     }
 
     // ─── POST /api/video/{id}/retry ──────────────────────────────────────────

@@ -118,6 +118,15 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
     List<Video> findByOwnerIdAndOperationalStateNotInOrderByCreatedAtDesc(
         String ownerId, java.util.Collection<OperationalState> excludedStates);
 
+    /** V184: coach videos whose subject is this player (PlayerProfile id), for the parent/player list. */
+    List<Video> findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(
+        Long subjectPlayerId, java.util.Collection<OperationalState> excludedStates);
+
+    /** V184: ids of not-yet-purged videos whose subject is this player — the GDPR subject purge. */
+    @Query("SELECT v.id FROM Video v WHERE v.subjectPlayerId = :playerId "
+        + "AND v.operationalState <> com.softropic.skillars.platform.video.contract.OperationalState.PURGED")
+    List<UUID> findUnpurgedIdsBySubjectPlayerId(@Param("playerId") Long playerId);
+
     /**
      * skillars-deferred-100 AC3: this is a bulk {@code UPDATE} against {@code main.videos}, whose
      * entity {@link Video} carries {@code @Version}. A bulk update bypasses optimistic locking, so

@@ -42,7 +42,9 @@ public class VideoLifecycleService {
         OperationalState.TRANSCODING,  Set.of(OperationalState.READY, OperationalState.FAILED),
         OperationalState.FAILED,       Set.of(OperationalState.UPLOADING),
         OperationalState.LOCKED,       Set.of(),  // terminal — admin action required in Story 10
-        OperationalState.HIDDEN,       Set.of(OperationalState.TRANSCODING, OperationalState.REJECTED),  // Story 6.6: approval paths
+        // Terminal since the parental-approval flow was removed (ADR "Minors never upload", 2026-10-28):
+        // HIDDEN now only means "held by the fail-closed minor-safety gate", which is never released.
+        OperationalState.HIDDEN,       Set.of(),
         OperationalState.READY,        Set.of(),
         OperationalState.DELETED,      Set.of()
     );

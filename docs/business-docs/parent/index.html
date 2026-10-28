@@ -49,7 +49,7 @@ flowchart LR
     F --> L["/parent/players/:id/sessions<br/>Child's schedule"]
     F --> M["/parent/players/:id/development"]
     F --> N["/parent/credit-wallet & /parent/credit-statement"]
-    F --> O["/parent/approvals<br/>Approve child's videos"]
+    F --> O["/parent/players/:id/videos<br/>Child's videos and coach session videos"]
     F --> P["/messaging"]
     </pre>
 
@@ -80,7 +80,6 @@ flowchart LR
           <li><strong>Upcoming Sessions</strong> → <code>/parent/bookings</code>, showing a count of bookings in <code>CONFIRMED</code>/<code>UPCOMING</code> state.</li>
           <li><strong>Browse Coaches</strong> → <code>/marketplace</code>.</li>
           <li><strong>Credit Wallet</strong> → <code>/parent/credit-wallet</code>, showing your current balance.</li>
-          <li><strong>Pending Approvals</strong> → <code>/parent/approvals</code>, showing a count awaiting review, or "All caught up".</li>
         </ul>
       </li>
       <li>A tile whose data fails to load degrades to "Unavailable" rather than breaking the page.</li>
@@ -111,7 +110,7 @@ flowchart LR
     <ol>
       <li><code>/parent/players/:playerId/sessions</code>: your child's upcoming schedule, with a direct link through to their Locker Room (homework hub) so you can see what they've been assigned.</li>
       <li><code>/parent/players/:playerId/development</code>: the same Skills Radar and skill-exposure view the player themselves sees, from the parent's vantage point — plus a narrative summary paragraph parents get that players don't.</li>
-      <li><code>/parent/approvals</code>: <strong>this is specifically about video content, not booking approval</strong> despite the generic name — it's the parental-approval queue for videos your child has uploaded (drill clips, homework submissions). Each pending item shows the player, video type, and date, with Approve/Reject buttons. This is the "minor safety gate" that sits between a child uploading a video and it becoming visible/usable.</li>
+      <li><code>/parent/players/:playerId/videos</code>: your child's own videos (if any) and, below them, the session videos a coach recorded of your child — you can watch those but not delete them. Children never upload video themselves; there is no approval queue.</li>
     </ol>
 
     <h3>6. Reviewing a coach</h3>
@@ -149,16 +148,13 @@ flowchart LR
     <div class="callout warn">
       <p><strong>Parent registration has four separate scroll-gated consent checkboxes</strong> across two pages (ToS, Privacy, Parental Consent at registration; a second child-specific consent when the added player is a minor) — all deliberately un-checkable until the corresponding policy text has been scrolled to the end.</p>
     </div>
-    <div class="callout">
-      <p><strong>"/parent/approvals" means video approvals</strong>, not booking approvals — a naming trap worth knowing before you go looking for it.</p>
-    </div>
 
     <h2>Related Personas</h2>
     <div class="card-grid">
       <div class="card"><h4><a href="../player/index.html">Player</a></h4><p>The child whose homework, videos, and development you're overseeing (or, in the adult self-registration case, a player you may book on behalf of).</p></div>
       <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>Publishes the availability you book against and the session pack you must buy first; receives the payment your packs/subscriptions fund.</p></div>
       <div class="card"><h4><a href="../money/index.html">Money &amp; Commercial Model</a></h4><p>Refund windows, pack expiry and forfeiture, wallet cash-out, and what Skillars takes from each session.</p></div>
-      <div class="card"><h4><a href="../trust-and-safety/index.html">Trust &amp; Safety</a></h4><p>Why your child's age tier changes messaging, and what the video approval queue is protecting against.</p></div>
+      <div class="card"><h4><a href="../trust-and-safety/index.html">Trust &amp; Safety</a></h4><p>Why your child's age tier changes messaging, and why children never upload video.</p></div>
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 

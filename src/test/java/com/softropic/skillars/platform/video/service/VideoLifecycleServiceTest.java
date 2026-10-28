@@ -209,15 +209,18 @@ class VideoLifecycleServiceTest {
     }
 
     @Test
-    void hiddenState_story66_allowsTranscodingAndRejected() {
-        // Story 6.6: HIDDEN is no longer terminal — parental approval drives HIDDEN→TRANSCODING or HIDDEN→REJECTED
+    void hiddenState_isTerminal_neverReleasedToTranscoding() {
+        // ADR "Minors never upload": HIDDEN is the fail-closed minor gate's hold — the old parental
+        // approval path (HIDDEN→TRANSCODING / HIDDEN→REJECTED) is gone, so nothing may release it.
         UUID id = UUID.randomUUID();
         Video v = videoWith(id, OperationalState.HIDDEN, AccessState.ACTIVE);
         when(videoRepository.findById(id)).thenReturn(Optional.of(v));
-        when(videoRepository.save(v)).thenReturn(v);
 
-        Video result = service.transitionOperationalState(id, OperationalState.TRANSCODING);
-        assertThat(result.getOperationalState()).isEqualTo(OperationalState.TRANSCODING);
+        assertThatThrownBy(() -> service.transitionOperationalState(id, OperationalState.TRANSCODING))
+            .isInstanceOf(TerminalStateViolationException.class);
+        assertThatThrownBy(() -> service.transitionOperationalState(id, OperationalState.REJECTED))
+            .isInstanceOf(TerminalStateViolationException.class);
+        verify(videoRepository, never()).save(any());
     }
 
     @Test

@@ -4,13 +4,12 @@ import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.security.contract.AccountRole;
 import com.softropic.skillars.platform.security.contract.event.AccountDeletionRequestedEvent;
+import com.softropic.skillars.platform.security.contract.event.PlayerProfileErasedEvent;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.Visibility;
 import com.softropic.skillars.platform.video.repo.Video;
-import com.softropic.skillars.platform.video.repo.VideoApprovalRequest;
-import com.softropic.skillars.platform.video.repo.VideoApprovalRequestRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,7 +37,6 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
     @Autowired VideoDeletionService videoDeletionService;
     @Autowired VideoRepository videoRepository;
     // videoDeletionOutboxRepository: a spy inherited from AbstractIntegrationTest (skillars-deferred-160 AC7).
-    @Autowired VideoApprovalRequestRepository approvalRequestRepository;
     @Autowired ApplicationEventPublisher eventPublisher;
     @Autowired TransactionTemplate transactionTemplate;
 
@@ -46,7 +44,6 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
     void setUp() {
         doNothing().when(videoProviderAdapter).deleteAsset(org.mockito.ArgumentMatchers.anyString());
         videoDeletionOutboxRepository.deleteAll();
-        approvalRequestRepository.deleteAll();
         videoRepository.deleteAll();
     }
 
@@ -67,24 +64,50 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
         assertThat(videoDeletionOutboxRepository.findAll()).hasSize(2);
     }
 
+    // ── V184: coach videos whose SUBJECT is an erased player are purged; the coach's other videos stay ──
+
     @Test
-    void cascadeDeleteAccount_cancelsPendingApprovals() {
-        // Story deferred-6, AC4: pending VideoApprovalRequest rows for a deleted user's videos
-        // must be cancelled once the account-deletion cascade completes.
-        String parentOwnerId = "parent-uuid-" + java.util.UUID.randomUUID();
-        Video v1 = seedVideo(parentOwnerId, "asset-a1");
-        Video v2 = seedVideo(parentOwnerId, "asset-a2");
-        VideoApprovalRequest req1 = seedPendingApproval(v1.getId(), 9340001L, 9340002L);
-        VideoApprovalRequest req2 = seedPendingApproval(v2.getId(), 9340003L, 9340002L);
+    void onAccountDeleted_player_purgesCoachVideosAboutThatPlayer() {
+        long playerProfileId = 912_345_001L;
+        String coachOwnerId = java.util.UUID.randomUUID().toString();
+        Video about = seedSubjectVideo(coachOwnerId, "asset-subj-1", playerProfileId);
+        Video unrelated = seedVideo(coachOwnerId, "asset-subj-other");
 
-        AccountDeletionRequestedEvent event =
-            new AccountDeletionRequestedEvent(parentOwnerId, AccountRole.PARENT, List.of());
-        listener.onAccountDeleted(event);
+        listener.onAccountDeleted(new AccountDeletionRequestedEvent(
+            String.valueOf(playerProfileId), AccountRole.PLAYER, List.of()));
 
-        assertThat(approvalRequestRepository.findById(req1.getId()).orElseThrow().getStatus())
-            .isEqualTo("CANCELLED");
-        assertThat(approvalRequestRepository.findById(req2.getId()).orElseThrow().getStatus())
-            .isEqualTo("CANCELLED");
+        assertThat(videoRepository.findById(about.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.PURGED);
+        assertThat(videoRepository.findById(unrelated.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.READY);
+        assertThat(videoDeletionOutboxRepository.existsByVideoIdAndStatus(about.getId(), "PENDING")).isTrue();
+    }
+
+    @Test
+    void onAccountDeleted_parent_purgesCoachVideosAboutEachLinkedChild() {
+        long childProfileId = 912_345_002L;
+        Video about = seedSubjectVideo(java.util.UUID.randomUUID().toString(), "asset-subj-2", childProfileId);
+
+        listener.onAccountDeleted(new AccountDeletionRequestedEvent(
+            "parent-" + java.util.UUID.randomUUID(), AccountRole.PARENT, List.of(childProfileId)));
+
+        assertThat(videoRepository.findById(about.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.PURGED);
+    }
+
+    @Test
+    void onPlayerProfileErased_childErasure_purgesCoachVideosAboutTheChildOnly() {
+        long childProfileId = 912_345_003L;
+        String coachOwnerId = java.util.UUID.randomUUID().toString();
+        Video about = seedSubjectVideo(coachOwnerId, "asset-subj-3", childProfileId);
+        Video aboutSibling = seedSubjectVideo(coachOwnerId, "asset-subj-4", childProfileId + 1);
+
+        listener.onPlayerProfileErased(new PlayerProfileErasedEvent(childProfileId));
+
+        assertThat(videoRepository.findById(about.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.PURGED);
+        assertThat(videoRepository.findById(aboutSibling.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.READY);
     }
 
     /**
@@ -227,13 +250,19 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
         assertThat(videoDeletionOutboxRepository.existsByVideoIdAndStatus(videoB.getId(), "PENDING")).isFalse();
     }
 
-    private VideoApprovalRequest seedPendingApproval(java.util.UUID videoId, long playerId, long parentId) {
-        VideoApprovalRequest req = new VideoApprovalRequest();
-        req.setVideoId(videoId);
-        req.setPlayerId(playerId);
-        req.setParentId(parentId);
-        req.setStatus("PENDING");
-        return approvalRequestRepository.save(req);
+    private Video seedSubjectVideo(String coachOwnerId, String providerAssetId, long subjectPlayerId) {
+        Video v = new Video();
+        v.setOwnerId(coachOwnerId);
+        v.setProvider("bunny");
+        v.setProviderAssetId(providerAssetId);
+        v.setTitle("coach-review.mp4");
+        v.setOperationalState(OperationalState.READY);
+        v.setAccessState(AccessState.ACTIVE);
+        v.setVisibility(Visibility.PRIVATE);
+        v.setVideoType(com.softropic.skillars.platform.video.contract.VideoType.COACH_REVIEW);
+        v.setSubjectBookingId(java.util.UUID.randomUUID());
+        v.setSubjectPlayerId(subjectPlayerId);
+        return videoRepository.save(v);
     }
 
     private Video seedVideo(String ownerId, String providerAssetId) {

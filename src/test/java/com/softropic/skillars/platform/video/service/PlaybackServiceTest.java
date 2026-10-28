@@ -264,7 +264,7 @@ class PlaybackServiceTest {
         when(videoProviderAdapter.generateDownloadUrl(anyString(), any(PlaybackTokenClaims.class)))
             .thenReturn(Optional.of("https://cdn/original?token=dl"));
 
-        var response = playbackService.authorizePlayback(videoId, "player@example.com", null, false, true);
+        var response = playbackService.authorizePlayback(videoId, "player@example.com", null, true);
 
         assertThat(response.downloadUrl()).isEqualTo("https://cdn/original?token=dl");
     }
@@ -274,7 +274,7 @@ class PlaybackServiceTest {
         UUID videoId = UUID.randomUUID();
         stubIssue(videoId, readyHomework(videoId, "same-string"));
 
-        var response = playbackService.authorizePlayback(videoId, "same-string", null, false, false);
+        var response = playbackService.authorizePlayback(videoId, "same-string", null, false);
 
         assertThat(response.downloadUrl()).isNull();
         verify(videoProviderAdapter, never()).generateDownloadUrl(anyString(), any());

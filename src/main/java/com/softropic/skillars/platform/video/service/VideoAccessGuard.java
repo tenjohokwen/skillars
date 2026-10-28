@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLink;
@@ -52,7 +53,10 @@ public class VideoAccessGuard {
 
     /**
      * Guards GET /api/video/{id}/play.
-     * Checks in order: PURGED gate → admin → owner → parent (HIDDEN bypass) → coach → deny.
+     * Checks in order: PURGED gate → admin → owner → parent of owner → subject (V184: parent of the
+     * child a coach video is about, or that child themself) → coach → deny.
+     * Admission here is not playability: {@code PlaybackService} still refuses any video that is not
+     * READY/ACTIVE (HIDDEN included, for every caller).
      */
     public boolean canPlay(Authentication auth, UUID videoId) {
         Video video = videoService.findById(videoId);
@@ -75,21 +79,22 @@ public class VideoAccessGuard {
             return true;
         }
 
-        // Step 3: Parent of owner (HIDDEN bypass for parental approval flow AC 2)
+        // Step 3: Parent of owner
         if (isPlayerOwnedVideo(video)) {
             Long playerId = Long.parseLong(video.getOwnerId());
             Long currentUserLongId = getCurrentUserLongId();
-            if (currentUserLongId != null) {
-                List<ParentPlayerLink> links = parentPlayerLinkRepository.findAllByPlayerId(playerId);
-                boolean isParent = links.stream().anyMatch(link -> link.getParentId().equals(currentUserLongId));
-                videoAccessCache.setParentDecision(videoId, isParent);
-                if (isParent) {
-                    return true;
-                }
+            if (currentUserLongId != null && isLinkedParent(playerId, currentUserLongId)) {
+                return true;
             }
         }
 
-        // Step 4: Coach with active relationship (player videos only; not HIDDEN bypass for coaches)
+        // Step 3b (V184): a coach video about a child — that child's parent(s), and the child themself
+        // if self-registered, may PLAY it (never download: downloads stay owner-only in PlaybackService).
+        if (isSubjectViewer(video)) {
+            return true;
+        }
+
+        // Step 4: Coach with active relationship (player videos only)
         if (isPlayerOwnedVideo(video)) {
             try {
                 Long coachUserId = securityUtil.getCurrentCoachUserId();
@@ -115,27 +120,26 @@ public class VideoAccessGuard {
     }
 
     /**
-     * Returns true if the current user is a verified parent of the video owner.
-     * Reads from VideoAccessCache first (populated by canPlay() during @PreAuthorize) to avoid a
-     * second DB round-trip. Falls back to a live DB query only on cache miss.
+     * V184: whether the caller may play {@code video} as its SUBJECT — a linked parent of the player the
+     * coach video is about (ParentPlayerLink), or that player themself (PlayerProfile.userId). False for
+     * a video with no subject.
      */
-    public boolean isParentOf(String currentUserId, String videoOwnerId, UUID videoId) {
-        if (!isLongIdString(videoOwnerId)) {
-            return false; // coach-owned video — no parent relationship
-        }
-        Optional<Boolean> cached = videoAccessCache.getParentDecision(videoId);
-        if (cached.isPresent()) {
-            return cached.get();
-        }
-        try {
-            Long playerId = Long.parseLong(videoOwnerId);
-            Long currentUserLongId = getCurrentUserLongId();
-            if (currentUserLongId == null) return false;
-            List<ParentPlayerLink> links = parentPlayerLinkRepository.findAllByPlayerId(playerId);
-            return links.stream().anyMatch(link -> link.getParentId().equals(currentUserLongId));
-        } catch (NumberFormatException e) {
+    public boolean isSubjectViewer(Video video) {
+        Long subjectPlayerId = video.getSubjectPlayerId();
+        if (subjectPlayerId == null) {
             return false;
         }
+        Long currentUserLongId = getCurrentUserLongId();
+        if (currentUserLongId == null) {
+            return false;
+        }
+        return isLinkedParent(subjectPlayerId, currentUserLongId)
+            || playerProfileRepository.existsByIdAndUserId(subjectPlayerId, currentUserLongId);
+    }
+
+    private boolean isLinkedParent(Long playerId, Long userId) {
+        List<ParentPlayerLink> links = parentPlayerLinkRepository.findAllByPlayerId(playerId);
+        return links.stream().anyMatch(link -> link.getParentId().equals(userId));
     }
 
     /**
@@ -158,14 +162,13 @@ public class VideoAccessGuard {
             return true;
         }
 
+        // A subject viewer (V184) may play a coach video about their child but NOT delete it — the coach
+        // owns it; only GDPR erasure of the child purges it.
         if (isPlayerOwnedVideo(video)) {
             Long playerId = Long.parseLong(video.getOwnerId());
             Long currentUserLongId = getCurrentUserLongId();
-            if (currentUserLongId != null) {
-                List<ParentPlayerLink> links = parentPlayerLinkRepository.findAllByPlayerId(playerId);
-                if (links.stream().anyMatch(link -> link.getParentId().equals(currentUserLongId))) {
-                    return true;
-                }
+            if (currentUserLongId != null && isLinkedParent(playerId, currentUserLongId)) {
+                return true;
             }
         }
 
@@ -199,7 +202,11 @@ public class VideoAccessGuard {
             try {
                 Long coachUserId = securityUtil.getCurrentCoachUserId();
                 UUID coachId = coachProfileService.getCoachIdByUserId(coachUserId);
-                return coachId.toString().equals(video.getOwnerId());
+                return coachId != null && coachId.toString().equals(video.getOwnerId());
+            } catch (ResourceNotFoundException e) {
+                // The caller has no coach profile (a parent or player — e.g. a V184 subject viewer of a
+                // coach video): simply not the owner, not an infrastructure failure worth a WARN.
+                return false;
             } catch (Exception e) {
                 log.warn("[OWNER_CHECK_INFRA_FAILURE videoId={}] Infrastructure error checking coach ownership — denying access", video.getId(), e);
                 return false;

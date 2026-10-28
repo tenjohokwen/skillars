@@ -311,15 +311,6 @@
             </q-item-section>
           </q-item>
 
-          <q-item clickable to="/parent/approvals" class="nav-item">
-            <q-item-section avatar>
-              <q-icon name="task_alt" class="nav-icon" />
-            </q-item-section>
-            <q-item-section>
-              <q-item-label class="nav-label">{{ t('nav.approvals') }}</q-item-label>
-            </q-item-section>
-          </q-item>
-
           <q-item clickable to="/parent/credit-wallet" class="nav-item">
             <q-item-section avatar>
               <q-icon name="account_balance_wallet" class="nav-icon" />

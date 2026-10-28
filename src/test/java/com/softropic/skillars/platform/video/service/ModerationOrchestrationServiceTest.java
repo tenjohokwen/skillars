@@ -13,7 +13,6 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.contract.event.AccountSuspensionRequestedEvent;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
-import com.softropic.skillars.platform.security.service.AgePolicyService;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
 import com.softropic.skillars.platform.video.contract.event.VideoModerationOwnerNotificationEvent;
@@ -55,9 +54,8 @@ class ModerationOrchestrationServiceTest {
     @Mock ConfigService configService;
     @Mock ApplicationEventPublisher publisher;
     @Mock TransactionTemplate transactionTemplate;
-    @Mock AgePolicyService agePolicyService;
     @Mock PlayerProfileRepository playerProfileRepository;
-    @Mock VideoApprovalService videoApprovalService;
+    @Mock MinorUploadPolicy minorUploadPolicy;
     @Mock VideoOwnerAccountResolver videoOwnerAccountResolver;
 
     @InjectMocks
@@ -284,7 +282,7 @@ class ModerationOrchestrationServiceTest {
 
         verify(scanPersistenceService).upsertScanRecord(eq(videoId), eq("MINOR_GATE"), eq("SKIPPED"), any(), any());
         verify(videoProviderAdapter).triggerTranscoding("asset-123");
-        verify(videoApprovalService, never()).createApprovalRequest(any(), any());
+        verify(minorUploadPolicy, never()).refusalReason(any());
     }
 
     @Test
@@ -298,17 +296,16 @@ class ModerationOrchestrationServiceTest {
         profile.setId(777_000_001L);
         profile.setDateOfBirth(LocalDate.now().minusYears(25));
         when(playerProfileRepository.findById(777_000_001L)).thenReturn(Optional.of(profile));
-        when(agePolicyService.isMinor(profile.getDateOfBirth())).thenReturn(false);
+        when(minorUploadPolicy.refusalReason(profile)).thenReturn(null);
 
         service.onVideoUploaded(new VideoUploadedEvent(videoId, playerOwnerId));
 
         verify(scanPersistenceService).upsertScanRecord(eq(videoId), eq("MINOR_GATE"), eq("PASSED"), any(), any());
         verify(videoProviderAdapter).triggerTranscoding("asset-123");
-        verify(videoApprovalService, never()).createApprovalRequest(any(), any());
     }
 
     @Test
-    void minorGate_minorPlayer_flagged_setsHiddenAndCreatesApprovalRequest() {
+    void minorGate_minorPlayer_failsClosed_hiddenUrgentAlertNeverTranscoded() {
         String playerOwnerId = "777000002";
         video.setOwnerId(playerOwnerId);
         when(featureToggleService.isEnabled(AppFeature.ARACHNID_ENABLED)).thenReturn(false);
@@ -318,34 +315,34 @@ class ModerationOrchestrationServiceTest {
         profile.setId(777_000_002L);
         profile.setDateOfBirth(LocalDate.now().minusYears(14));
         when(playerProfileRepository.findById(777_000_002L)).thenReturn(Optional.of(profile));
-        when(agePolicyService.isMinor(profile.getDateOfBirth())).thenReturn(true);
-        // createApprovalRequest must return true here to simulate the standard parental-approval path.
-        // Mockito defaults boolean returns to false, which would silently trigger the "no parent linked"
-        // fallback in ModerationOrchestrationService.runMinorSafetyGate() — recording PASSED instead of
-        // FLAGGED and calling triggerTranscoding(). Always stub this explicitly for minor-gate tests.
-        when(videoApprovalService.createApprovalRequest(videoId, 777_000_002L)).thenReturn(true);
+        when(minorUploadPolicy.refusalReason(profile)).thenReturn("MINOR");
 
         service.onVideoUploaded(new VideoUploadedEvent(videoId, playerOwnerId));
 
         verify(scanPersistenceService).upsertScanRecord(eq(videoId), eq("MINOR_GATE"), eq("FLAGGED"), any(), any());
         verify(videoLifecycleService).transitionOperationalState(videoId, OperationalState.HIDDEN);
-        verify(videoApprovalService).createApprovalRequest(videoId, 777_000_002L);
+        verify(videoLifecycleService, never()).transitionOperationalState(videoId, OperationalState.TRANSCODING);
         verify(videoProviderAdapter, never()).triggerTranscoding(any());
+        ArgumentCaptor<VideoModerationAdminAlertEvent> alert = ArgumentCaptor.forClass(VideoModerationAdminAlertEvent.class);
+        verify(publisher).publishEvent(alert.capture());
+        assertThat(alert.getValue().urgent()).isTrue();
+        assertThat(alert.getValue().body()).contains("reason=MINOR");
     }
 
     @Test
-    void minorGate_noPlayerProfile_fallsThroughToTranscoding() {
+    void minorGate_noPlayerProfile_failsClosed() {
         String playerOwnerId = "777000003";
         video.setOwnerId(playerOwnerId);
         when(featureToggleService.isEnabled(AppFeature.ARACHNID_ENABLED)).thenReturn(false);
         when(featureToggleService.isEnabled(AppFeature.VIDEOINTEL_ENABLED)).thenReturn(false);
         when(playerProfileRepository.findById(777_000_003L)).thenReturn(Optional.empty());
+        when(minorUploadPolicy.refusalReason(null)).thenReturn("PROFILE_NOT_FOUND");
 
         service.onVideoUploaded(new VideoUploadedEvent(videoId, playerOwnerId));
 
-        // No profile → safe fallback: PASSED + advance to transcoding
-        verify(scanPersistenceService).upsertScanRecord(eq(videoId), eq("MINOR_GATE"), eq("PASSED"), any(), any());
-        verify(videoProviderAdapter).triggerTranscoding("asset-123");
-        verify(videoApprovalService, never()).createApprovalRequest(any(), any());
+        // Previously "treated as adult" and transcoded; an unresolvable owner now fails closed.
+        verify(scanPersistenceService).upsertScanRecord(eq(videoId), eq("MINOR_GATE"), eq("FLAGGED"), any(), any());
+        verify(videoLifecycleService).transitionOperationalState(videoId, OperationalState.HIDDEN);
+        verify(videoProviderAdapter, never()).triggerTranscoding(any());
     }
 }

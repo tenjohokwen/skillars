@@ -79,6 +79,8 @@ class PlayerUploadResourceWebMvcTest {
     @MockitoBean VideoRepository videoRepository;
     @MockitoBean VideoQuotaRepository videoQuotaRepository;
     @MockitoBean QuotaConfigService quotaConfigService;
+    @MockitoBean com.softropic.skillars.platform.video.service.MinorUploadPolicy minorUploadPolicy;
+    @MockitoBean com.softropic.skillars.platform.video.service.VideoSubjectService videoSubjectService;
 
     private static final InitializeUploadResponse STUB_RESPONSE = new InitializeUploadResponse(
         UUID.randomUUID(), UUID.randomUUID(), "bunny-player-guid",
@@ -121,6 +123,73 @@ class PlayerUploadResourceWebMvcTest {
         // ownerId must be the PlayerProfile id (what the minor gate / quota tier / lifecycle read),
         // never the caller's user id.
         verify(videoService).initializeUpload(argThat(r -> String.valueOf(PLAYER_PROFILE_ID).equals(r.ownerId())));
+    }
+
+    // ── ADR "Minors never upload" (2026-10-28) ──
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void initiatePlayerUpload_minorProfile_returns403MinorUploadRefused_andNothingIsReserved() throws Exception {
+        stubPlayerPrincipal(PLAYER_PROFILE_ID);
+        org.mockito.Mockito.doThrow(new com.softropic.skillars.platform.video.contract.exception
+                .MinorUploadRefusedException(String.valueOf(PLAYER_PROFILE_ID), "MINOR"))
+            .when(minorUploadPolicy).assertMayUpload(any());
+
+        mockMvc.perform(post(PLAYER_UPLOAD_URL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(homeworkBody()))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.errorMsg.errorKey").value("VIDEO_MINOR_UPLOAD_REFUSED"));
+
+        org.mockito.Mockito.verify(videoService, org.mockito.Mockito.never()).initializeUpload(any());
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void initiatePlayerUpload_checksTheCallersOwnProfile() throws Exception {
+        stubPlayerPrincipal(PLAYER_PROFILE_ID);
+        when(videoService.initializeUpload(any())).thenReturn(STUB_RESPONSE);
+
+        mockMvc.perform(post(PLAYER_UPLOAD_URL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(homeworkBody()))
+            .andExpect(status().isCreated());
+
+        verify(minorUploadPolicy).assertMayUpload(argThat(p -> p.getId() == PLAYER_PROFILE_ID));
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void retryUpload_minorProfile_returns403_andNothingIsRetried() throws Exception {
+        stubPlayerPrincipal(PLAYER_PROFILE_ID);
+        org.mockito.Mockito.doThrow(new com.softropic.skillars.platform.video.contract.exception
+                .MinorUploadRefusedException(String.valueOf(PLAYER_PROFILE_ID), "MINOR"))
+            .when(minorUploadPolicy).assertMayUpload(any());
+
+        mockMvc.perform(post("/api/video/{id}/retry", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"fileSizeBytes\": 1024}"))
+            .andExpect(status().isForbidden());
+
+        org.mockito.Mockito.verify(videoService, org.mockito.Mockito.never()).retryUpload(any());
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void initiatePlayerUpload_withSubjectBooking_returns422() throws Exception {
+        stubPlayerPrincipal(PLAYER_PROFILE_ID);
+        String body = objectMapper.writeValueAsString(Map.of(
+            "fileName", "homework.mp4",
+            "fileSizeBytes", 10_485_760,
+            "mimeType", "video/mp4",
+            "videoType", "HOMEWORK",
+            "subjectBookingId", UUID.randomUUID().toString()
+        ));
+
+        mockMvc.perform(post(PLAYER_UPLOAD_URL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isUnprocessableEntity());
     }
 
     @Test

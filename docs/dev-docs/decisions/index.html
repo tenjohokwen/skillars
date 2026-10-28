@@ -84,6 +84,7 @@
         <tr><td><a href="#adr-it-base">15</a></td><td><code>AbstractIntegrationTest</code> inheritance + a pinned context count</td><td>deferred-19 (<code>b1d8c831</code>), deferred-160 (<code>4869338a</code>)</td></tr>
         <tr><td><a href="#adr-tenant">16</a></td><td>The <code>tenant</code> module was removed</td><td><code>a170e69d</code> (PR #37)</td></tr>
         <tr><td><a href="#adr-suspension-cancels">17</a></td><td>A coach suspension / safety hold cancels upcoming bookings with a full refund and no strike</td><td>Owner decision 2026-10-28 (item 2), chunk C2</td></tr>
+        <tr><td><a href="#adr-minors-never-upload">18</a></td><td>Minors never upload; coach videos of a child are linked to the session</td><td>Product decision 2026-10-28, V184</td></tr>
       </tbody>
     </table>
 
@@ -339,6 +340,32 @@
       <code>CancellationRefundService.onBookingCancelledByAdmin</code>; <code>CoachSuspensionCancelsUpcomingBookingsIT</code>,
       <code>BookingStateMachineTest</code>.</p>
 
+    <h2 id="adr-minors-never-upload">18. Minors never upload; coach videos of a child are linked to the session</h2>
+    <p><strong>Context.</strong> Story 6.6 let minors upload and held the video in <code>HIDDEN</code> until a parent approved it
+      (<code>VideoApprovalService</code>, <code>/parent/approvals</code>, three <code>VIDEO_APPROVAL_*</code> emails). The footage still
+      reached Bunny and both moderation providers before anyone decided whether it should exist, and the approval path was
+      unreachable in the data model anyway (only a <code>user_id</code> profile can upload, and those never carry a <code>parent_id</code>),
+      so a minor's upload would have hit the "no parent" fallback and transcoded unapproved. Meanwhile a coach's review of a
+      child's session was invisible to that child's parent.</p>
+    <p><strong>Decision.</strong> Product decision 2026-10-28, option A. (1) A player upload is allowed only for a self-registered
+      adult profile; anything else is refused at initiation (and on retry) with <code>403 VIDEO_MINOR_UPLOAD_REFUSED</code> plus an
+      urgent admin alert, since reaching it means an invariant broke. The moderation minor layer stays as a fail-closed re-check
+      (HIDDEN + alert, never "approve"). The approval machinery is deleted. (2) A coach video can name its subject: a
+      <code>COACH_REVIEW</code> must, a <code>DRILL_DEMO</code> may, pick one of the coach's held sessions; the server takes the player
+      from that booking. The player's parent(s), and the player if self-registered, may play it — no download, no delete. GDPR
+      erasure of the player (account, parent account, or parent-requested child erasure) purges those coach videos rather than
+      unlinking them. Consent for filming a child (option ii) is a follow-up with legal.</p>
+    <p><strong>Consequences.</strong> Videos uploaded before V184 stay unlinked — no parent sees them. Old <code>HIDDEN</code> videos from
+      the approval gate stay HIDDEN (deletable). <code>video_approval_requests</code> has no reader or writer and is dropped in a later
+      release (expand/contract). The <code>VIDEO_APPROVAL_*</code> <code>EmailTemplate</code> constants and CHECK values stay,
+      <code>@Deprecated</code>, because stored envelope/inbox rows may carry them; <code>/parent/approvals</code> survives as a redirect to the
+      parent dashboard for links in already-sent emails.</p>
+    <p><strong>Where enforced.</strong> <code>MinorUploadPolicy</code> (<code>VideoResource</code> initiate + retry,
+      <code>ModerationOrchestrationService</code>), <code>VideoSubjectService</code>, <code>VideoAccessGuard.isSubjectViewer</code>,
+      <code>chk_videos_subject_pair</code> (V184), <code>AccountDeletionCascadeListener</code>; tests <code>MinorUploadPolicyTest</code>,
+      <code>MinorSafetyGateIT</code>, <code>VideoSubjectServiceTest</code>, <code>AccountDeletionCascadeIT</code>, <code>GdprChildScopeIT</code>.
+      See <a href="../video/index.html">Video</a>.</p>
+
     <h2 id="related">Related</h2>
     <ul>
       <li><a href="../walkthrough/index.html">Anatomy of a request</a> — several of these decisions seen in one booking flow.</li>
@@ -346,7 +373,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>5d85d8ec</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>993c6f57</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

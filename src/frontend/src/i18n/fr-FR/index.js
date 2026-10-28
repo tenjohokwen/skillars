@@ -226,9 +226,6 @@ export default {
       browseCoachesTitle: 'Parcourir les coachs',
       browseCoachesBody: 'Trouvez un coach pour votre joueur',
       creditWalletTitle: 'Portefeuille de crédits',
-      approvalsTitle: 'Approbations en attente',
-      approvalsPending: '{count} en attente de votre validation',
-      approvalsNone: 'Tout est à jour',
       tileUnavailable: 'Indisponible',
     },
     player: {
@@ -1097,7 +1094,6 @@ export default {
       packs: 'Packs de séances',
       subscription: 'Abonnement',
       lockerRoom: 'Vestiaire',
-      approvals: 'Validations vidéo',
       openHub: "Ouvrir l'espace de {name}",
     },
   },
@@ -1548,7 +1544,7 @@ export default {
         TRANSCODING: 'Transcodage',
         READY: 'Prête',
         LOCKED: 'Verrouillée',
-        HIDDEN: "En attente d'accord parental",
+        HIDDEN: 'Masquée (blocage protection des mineurs)',
         REJECTED: 'Refusée',
         FAILED: 'En échec',
         DELETED: 'Supprimée',
@@ -1693,7 +1689,7 @@ export default {
       LOCKED: 'En cours de vérification',
       // Note: HIDDEN maps to 'Awaiting approval' for the minor gate case. This is also used if
       // an admin hides a video for a ToS violation — the UX is ambiguous; tracked as debt item.
-      HIDDEN: "En attente d'approbation",
+      HIDDEN: 'Retenue pour vérification',
       REJECTED: 'Non approuvée',
       FAILED: 'Échec du téléversement',
       DELETED: 'Supprimée',
@@ -1701,20 +1697,29 @@ export default {
       ARCHIVED: 'Archivée',
       unknown: 'Inconnu',
     },
+    subject: {
+      pickerTitle: 'De quelle séance parle cette vidéo ?',
+      pickerHint:
+        "Les analyses de séance sont liées à la séance et à son joueur, pour que ses parents (et le joueur, s'il a son propre compte) puissent la regarder.",
+      label: 'Séance',
+      loadError: "Vos séances n'ont pas pu être chargées.",
+      noSessions:
+        'Aucune séance effectuée au cours des 90 derniers jours. Une analyse de séance nécessite une séance.',
+      required: 'Choisissez la séance analysée par cette vidéo.',
+      confirm: 'Choisir le fichier vidéo',
+      unknownPlayer: 'Joueur inconnu',
+    },
+    coachVideos: {
+      title: 'Du coach',
+      parentSubtitle:
+        'Vidéos de séance que le coach a enregistrées de votre enfant. Vous pouvez les regarder.',
+      playerSubtitle: 'Vidéos de séance que ton coach a enregistrées de toi. Tu peux les regarder.',
+      empty: "Aucune vidéo de séance d'un coach pour le moment",
+      loadError: 'Impossible de charger les vidéos de séance.',
+    },
     statusCard: {
       title: 'Statut de la vidéo',
       reconnecting: 'Reconnexion…',
-    },
-    approval: {
-      awaitingParentTitle: "En attente d'approbation parentale",
-      pendingApprovals: 'Vidéos en attente de votre approbation',
-      noPendingApprovals: "Tout est à jour — aucune vidéo en attente d'approbation",
-      approveButton: 'Approuver',
-      rejectButton: 'Rejeter',
-      approvedNotice: 'Votre vidéo a été approuvée et est en cours de traitement',
-      rejectedNotice: "Votre vidéo n'a pas été approuvée",
-      confirmApprove: 'Approuver cette vidéo pour publication ?',
-      confirmReject: 'Rejeter cette vidéo ? Le joueur sera averti.',
     },
     quota: {
       storage: 'Stockage',
@@ -1744,9 +1749,11 @@ export default {
       deleteSuccess: 'Vidéo supprimée.',
       deleteError: 'Échec de la suppression de la vidéo. Veuillez réessayer.',
       deleteAriaLabel: 'Supprimer la vidéo',
+      minorUploadRefused:
+        "Le téléversement de vidéos n'est pas disponible pour ce compte. Ton coach peut partager des vidéos de séance avec toi.",
+      subjectInvalid:
+        'Cette séance ne peut pas être liée à cette vidéo. Choisissez une de vos propres séances effectuées.',
     },
-    approvalNotFound: "Demande d'approbation introuvable ou la vidéo a été supprimée.",
-    approvalAlreadyResolved: "Cette demande d'approbation a déjà été traitée.",
     deletionNotAuthorised: "Vous n'êtes pas autorisé à supprimer cette vidéo",
     deletionFailed: 'Échec de la suppression de la vidéo. Veuillez réessayer.',
   },
@@ -2503,9 +2510,6 @@ export default {
       PERFORMANCE_REPORT_SHARED:
         '{coachName} a partagé un rapport de performance pour {playerName}.',
       VIDEO_MODERATION_OWNER_FLAGGED: 'Une de vos vidéos a été signalée pour vérification.',
-      VIDEO_APPROVAL_REQUESTED: 'Une vidéo de {playerName} attend votre approbation.',
-      VIDEO_APPROVAL_APPROVED: 'Votre parent a approuvé votre vidéo.',
-      VIDEO_APPROVAL_REJECTED: "Votre parent n'a pas approuvé votre vidéo.",
       COACH_VISIBILITY_REDUCED: 'Votre visibilité sur la place de marché a été réduite.',
       COACH_SUSPENDED:
         'Votre profil de coach a été suspendu. Vous pouvez faire appel depuis votre page de profil.',
@@ -2688,7 +2692,6 @@ export default {
     myPlayers: 'Mes joueurs',
     bookings: 'Réservations',
     creditWallet: 'Portefeuille de crédits',
-    approvals: 'Approbations',
     lockerRoom: 'Vestiaire',
     videos: 'Mes vidéos',
     moderation: 'Modération',

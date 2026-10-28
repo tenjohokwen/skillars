@@ -38,6 +38,7 @@ import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
 import com.softropic.skillars.platform.security.contract.AccountRole;
 import com.softropic.skillars.platform.security.contract.SkillarsRole;
 import com.softropic.skillars.platform.security.contract.event.AccountDeletionRequestedEvent;
+import com.softropic.skillars.platform.security.contract.event.PlayerProfileErasedEvent;
 import com.softropic.skillars.platform.security.contract.event.UserErasedEvent;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
@@ -809,8 +810,9 @@ public class GdprErasureService {
      * atomically with the {@code developmentDataErasedAt} tombstone that also hides the profile from
      * the parent's child list. Deliberately NOT touched: the booking rows themselves and any payment /
      * credit ledger rows (the parent's financial record), messages (authored by the parent or coach,
-     * never by a shadow child, which has no account) and videos (owned by an uploader account, not
-     * linked to a player profile).
+     * never by a shadow child, which has no account) and the videos the child's own account owns (a
+     * shadow child has none). Coach videos whose SUBJECT is the child (V184) ARE purged — by the video
+     * module, AFTER_COMMIT, on the {@link PlayerProfileErasedEvent} published below.
      *
      * <p>Failure handling mirrors the PLAYER branch: a contended/timed-out scrub is alerted and the
      * request is written FAILED so {@link #retryFailedErasures} re-drives it (scope-aware — see there).
@@ -864,6 +866,11 @@ public class GdprErasureService {
                 raiseErasureAlert(requestId, reason);
                 skipped = true;
             }
+            // V184: coach videos whose subject is this child are purged by the video module AFTER_COMMIT
+            // (AccountDeletionCascadeListener.onPlayerProfileErased) — published even when the scrub above
+            // was skipped: the purge is independent of it and idempotent, and a FAILED request's re-drive
+            // publishes again.
+            eventPublisher.publishEvent(new PlayerProfileErasedEvent(playerId));
         }
 
         blobDeletionOutboxSupport.requestDrainAfterCommit();

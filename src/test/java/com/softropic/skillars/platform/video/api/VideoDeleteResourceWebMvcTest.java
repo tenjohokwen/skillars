@@ -73,6 +73,8 @@ class VideoDeleteResourceWebMvcTest {
     @MockitoBean VideoRepository videoRepository;
     @MockitoBean VideoQuotaRepository videoQuotaRepository;
     @MockitoBean QuotaConfigService quotaConfigService;
+    @MockitoBean com.softropic.skillars.platform.video.service.MinorUploadPolicy minorUploadPolicy;
+    @MockitoBean com.softropic.skillars.platform.video.service.VideoSubjectService videoSubjectService;
 
     private static final UUID VIDEO_ID = UUID.fromString("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     private static final String OWNER = "player-42";

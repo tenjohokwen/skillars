@@ -10,9 +10,6 @@ import { createTestingPinia } from '@pinia/testing'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
 vi.mock('@stripe/stripe-js', () => ({ loadStripe: vi.fn() }))
-vi.mock('src/api/video.api', () => ({
-  videoApi: { getMyApprovals: vi.fn().mockResolvedValue([]) },
-}))
 
 import ParentDashboardPage from 'src/pages/parent/ParentDashboardPage.vue'
 

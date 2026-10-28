@@ -13,7 +13,6 @@ import com.softropic.skillars.platform.video.contract.VideoType;
 import com.softropic.skillars.platform.video.contract.Visibility;
 import com.softropic.skillars.platform.video.contract.event.VideoUploadedEvent;
 import com.softropic.skillars.platform.video.repo.Video;
-import com.softropic.skillars.platform.video.repo.VideoApprovalRequestRepository;
 import com.softropic.skillars.platform.video.repo.VideoModerationScanRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,11 +43,11 @@ class MinorSafetyGateIT extends BaseVideoIT {
 
     @Autowired ModerationOrchestrationService moderationOrchestrationServiceProxy;
     @Autowired VideoRepository videoRepository;
-    @Autowired VideoApprovalRequestRepository videoApprovalRequestRepository;
     @Autowired VideoModerationScanRepository videoModerationScanRepository;
     @Autowired PlayerProfileRepository playerProfileRepository;
 
     private static final long PARENT_ID = 98_000_001L;
+    private static final long SELF_PLAYER_USER_ID = 98_000_002L;
 
     private ModerationOrchestrationService orchestrationService;
 
@@ -57,32 +56,31 @@ class MinorSafetyGateIT extends BaseVideoIT {
         // Bypass @Async proxy so the pipeline runs synchronously in the test thread
         orchestrationService = AopTestUtils.getUltimateTargetObject(moderationOrchestrationServiceProxy);
         transactionTemplate.execute(status -> {
-            jdbcTemplate.update("DELETE FROM main.video_approval_requests");
             jdbcTemplate.update("DELETE FROM main.video_moderation_scans");
             jdbcTemplate.update("DELETE FROM main.videos");
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE parent_id = ?", PARENT_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", PARENT_ID);
-            insertParentUser(PARENT_ID);
+            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE parent_id = ? OR user_id = ?",
+                PARENT_ID, SELF_PLAYER_USER_ID);
+            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?)", PARENT_ID, SELF_PLAYER_USER_ID);
+            insertUser(PARENT_ID, "PARENT");
+            insertUser(SELF_PLAYER_USER_ID, "PLAYER");
             return null;
         });
         doNothing().when(videoProviderAdapter).triggerTranscoding(any());
     }
 
 
+    // ADR "Minors never upload" (2026-10-28): uploads by minors are refused at initiation, so this layer
+    // is only a defensive re-check — it fails CLOSED (HIDDEN + admin alert), never "approve".
+
     @Test
-    void minorPlayer_moderationPasses_gateFlags_setsHiddenAndCreatesApprovalRow() {
-        PlayerProfile minor = seedPlayer(LocalDate.now().minusYears(15), PARENT_ID);
+    void minorPlayer_reachingModeration_failsClosed_hiddenAndNeverTranscoded() {
+        PlayerProfile minor = seedManagedPlayer(LocalDate.now().minusYears(15));
         Video video = seedVideoInScanning(String.valueOf(minor.getId()));
 
         orchestrationService.onVideoUploaded(new VideoUploadedEvent(video.getId(), String.valueOf(minor.getId())));
 
         Video updated = videoRepository.findById(video.getId()).orElseThrow();
         assertThat(updated.getOperationalState()).isEqualTo(OperationalState.HIDDEN);
-
-        var approval = videoApprovalRequestRepository.findByVideoIdAndStatus(video.getId(), "PENDING");
-        assertThat(approval).isPresent();
-        assertThat(approval.get().getPlayerId()).isEqualTo(minor.getId());
-        assertThat(approval.get().getParentId()).isEqualTo(PARENT_ID);
 
         var scan = videoModerationScanRepository.findByVideoIdAndLayer(video.getId(), "MINOR_GATE");
         assertThat(scan).isPresent();
@@ -92,9 +90,8 @@ class MinorSafetyGateIT extends BaseVideoIT {
     }
 
     @Test
-    void adultPlayer_moderationPasses_gatePassed_advancesToTranscoding() {
-        // Adult players still need a parent FK in the DB schema — parent_id NOT NULL
-        PlayerProfile adult = seedPlayer(LocalDate.now().minusYears(22), PARENT_ID);
+    void selfRegisteredAdultPlayer_gatePassed_advancesToTranscoding() {
+        PlayerProfile adult = seedSelfRegisteredPlayer(LocalDate.now().minusYears(22));
         Video video = seedVideoInScanning(String.valueOf(adult.getId()));
 
         orchestrationService.onVideoUploaded(new VideoUploadedEvent(video.getId(), String.valueOf(adult.getId())));
@@ -102,13 +99,23 @@ class MinorSafetyGateIT extends BaseVideoIT {
         Video updated = videoRepository.findById(video.getId()).orElseThrow();
         assertThat(updated.getOperationalState()).isEqualTo(OperationalState.TRANSCODING);
 
-        assertThat(videoApprovalRequestRepository.findByVideoIdAndStatus(video.getId(), "PENDING")).isEmpty();
-
         var scan = videoModerationScanRepository.findByVideoIdAndLayer(video.getId(), "MINOR_GATE");
         assertThat(scan).isPresent();
         assertThat(scan.get().getOutcome()).isEqualTo("PASSED");
 
         verify(videoProviderAdapter).triggerTranscoding(video.getProviderAssetId());
+    }
+
+    @Test
+    void parentManagedProfile_evenWithAdultDob_failsClosed() {
+        PlayerProfile managed = seedManagedPlayer(LocalDate.now().minusYears(22));
+        Video video = seedVideoInScanning(String.valueOf(managed.getId()));
+
+        orchestrationService.onVideoUploaded(new VideoUploadedEvent(video.getId(), String.valueOf(managed.getId())));
+
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.HIDDEN);
+        verify(videoProviderAdapter, never()).triggerTranscoding(any());
     }
 
     @Test
@@ -127,44 +134,54 @@ class MinorSafetyGateIT extends BaseVideoIT {
     }
 
     @Test
-    void orphanedOwnerId_noPlayerProfile_fallsThroughToTranscoding() {
+    void orphanedOwnerId_noPlayerProfile_failsClosed() {
+        // Previously "treated as adult" and transcoded; an unresolvable owner is now hidden.
         String orphanedId = "88888888";
         Video video = seedVideoInScanning(orphanedId);
 
         orchestrationService.onVideoUploaded(new VideoUploadedEvent(video.getId(), orphanedId));
 
-        Video updated = videoRepository.findById(video.getId()).orElseThrow();
-        assertThat(updated.getOperationalState()).isEqualTo(OperationalState.TRANSCODING);
-        assertThat(videoApprovalRequestRepository.findByVideoIdAndStatus(video.getId(), "PENDING")).isEmpty();
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.HIDDEN);
+        verify(videoProviderAdapter, never()).triggerTranscoding(any());
     }
 
     @Test
-    void minorGate_idempotent_duplicateEventDoesNotCreateTwoApprovalRows() {
-        PlayerProfile minor = seedPlayer(LocalDate.now().minusYears(13), PARENT_ID);
+    void minorGate_duplicateEvent_staysHidden() {
+        PlayerProfile minor = seedManagedPlayer(LocalDate.now().minusYears(13));
         Video video = seedVideoInScanning(String.valueOf(minor.getId()));
 
         orchestrationService.onVideoUploaded(new VideoUploadedEvent(video.getId(), String.valueOf(minor.getId())));
-        // Second event (retry) — video is now HIDDEN; pipeline sees TerminalStateViolation on SCANNING
-        // transition and skips. No second approval row should appear.
+        // Second event (retry) — video is now HIDDEN; the SCANNING transition is refused and skipped.
         orchestrationService.onVideoUploaded(new VideoUploadedEvent(video.getId(), String.valueOf(minor.getId())));
 
-        long approvalCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM main.video_approval_requests WHERE video_id = ? AND status = 'PENDING'",
-            Long.class, video.getId());
-        assertThat(approvalCount).isEqualTo(1);
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.HIDDEN);
+        verify(videoProviderAdapter, never()).triggerTranscoding(any());
     }
 
     // ─── helpers ─────────────────────────────────────────────────────────────
 
-    private PlayerProfile seedPlayer(LocalDate dob, Long parentId) {
+    private PlayerProfile seedManagedPlayer(LocalDate dob) {
+        PlayerProfile profile = basePlayer(dob);
+        profile.setParentId(PARENT_ID);
+        return playerProfileRepository.save(profile);
+    }
+
+    private PlayerProfile seedSelfRegisteredPlayer(LocalDate dob) {
+        PlayerProfile profile = basePlayer(dob);
+        profile.setUserId(SELF_PLAYER_USER_ID);
+        return playerProfileRepository.save(profile);
+    }
+
+    private static PlayerProfile basePlayer(LocalDate dob) {
         int age = LocalDate.now().getYear() - dob.getYear();
         PlayerProfile profile = new PlayerProfile();
         profile.setName("Gate Test Player");
         profile.setDateOfBirth(dob);
         profile.setPosition(PlayerPosition.MIDFIELDER);
         profile.setAgeTier(age >= 18 ? AgeTier.ADULT : AgeTier.AGE_13_17);
-        profile.setParentId(parentId);
-        return playerProfileRepository.save(profile);
+        return profile;
     }
 
     private Video seedVideoInScanning(String ownerId) {
@@ -180,7 +197,7 @@ class MinorSafetyGateIT extends BaseVideoIT {
         return videoRepository.save(v);
     }
 
-    private void insertParentUser(long userId) {
+    private void insertUser(long userId, String role) {
         Timestamp now = Timestamp.from(Instant.now());
         jdbcTemplate.update(
             "INSERT INTO main.\"user\" " +
@@ -191,11 +208,12 @@ class MinorSafetyGateIT extends BaseVideoIT {
             "VALUES (?, 'system', ?, 'system', ?, 'test-req', NULL, " +
             "'ACTIVE', '1980-01-01', ?, 'Gate', 'OTHER', 'en', 'Parent', 'DE', ?, " +
             "true, false, ?, 'EMAIL', 'testhash', false, " +
-            "'PARENT', 'BASIC_VERIFIED') ON CONFLICT (id) DO NOTHING",
+            "?, 'BASIC_VERIFIED') ON CONFLICT (id) DO NOTHING",
             userId, now, now,
-            "gate-parent-" + userId + "@test.com",
+            "gate-user-" + userId + "@test.com",
             "69" + (userId % 100_000_000L),
-            "gate-parent-" + userId + "@test.com"
+            "gate-user-" + userId + "@test.com",
+            role
         );
     }
 }

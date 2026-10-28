@@ -42,6 +42,38 @@
       />
     </div>
 
+    <!-- Session videos a coach recorded of this child (V184 subject link): play only — the coach
+         owns them, so there is no delete and no download. -->
+    <div class="q-mt-xl" data-testid="child-coach-videos-section">
+      <div class="text-h6">{{ t('video.coachVideos.title') }}</div>
+      <div class="text-body2 text-secondary q-mb-md">
+        {{ t('video.coachVideos.parentSubtitle') }}
+      </div>
+      <div v-if="coachLoading" class="q-gutter-md">
+        <q-skeleton type="QCard" height="80px" />
+      </div>
+      <div v-else-if="coachLoadError" class="text-negative" data-testid="child-coach-videos-error">
+        {{ t('video.coachVideos.loadError') }}
+      </div>
+      <div
+        v-else-if="coachVideos.length === 0"
+        class="text-secondary"
+        data-testid="child-coach-videos-empty"
+      >
+        {{ t('video.coachVideos.empty') }}
+      </div>
+      <div v-else class="q-gutter-md">
+        <VideoListItem
+          v-for="video in coachVideos"
+          :key="video.id"
+          :video="video"
+          :can-delete="false"
+          :live="false"
+          @play="openPlayer"
+        />
+      </div>
+    </div>
+
     <VideoPlayDialog
       v-model="playerOpen"
       :video-id="playingVideo?.id ?? null"
@@ -63,6 +95,7 @@ import VideoPlayDialog from 'src/components/video/VideoPlayDialog.vue'
 // A parent's view of one linked child's videos (GET /api/video/players/{playerId}/videos, guarded by
 // playerOwnershipGuard). Deletion reuses DELETE /api/video/{id}, whose videoAccessGuard.canDelete
 // already admits the parent. No upload or retry here: those stay with the video's owner.
+// Below them: coach videos ABOUT the child (GET .../coach-videos, V184) — play only.
 const { t } = useI18n()
 const $q = useQuasar()
 const route = useRoute()
@@ -80,7 +113,11 @@ const loading = ref(true)
 const loadError = ref(false)
 const playerOpen = ref(false)
 const playingVideo = ref(null)
+const coachVideos = ref([])
+const coachLoading = ref(true)
+const coachLoadError = ref(false)
 let loadSeq = 0
+let coachLoadSeq = 0
 
 async function load() {
   const id = playerId.value
@@ -98,6 +135,25 @@ async function load() {
     }
   } finally {
     if (seq === loadSeq) loading.value = false
+  }
+}
+
+async function loadCoachVideos() {
+  const id = playerId.value
+  if (!id) return
+  const seq = ++coachLoadSeq
+  coachLoading.value = true
+  coachLoadError.value = false
+  try {
+    const data = await videoApi.getPlayerCoachVideos(id)
+    if (seq === coachLoadSeq) coachVideos.value = data ?? []
+  } catch {
+    if (seq === coachLoadSeq) {
+      coachVideos.value = []
+      coachLoadError.value = true
+    }
+  } finally {
+    if (seq === coachLoadSeq) coachLoading.value = false
   }
 }
 
@@ -142,13 +198,19 @@ async function confirmDelete(videoId) {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadCoachVideos()
+})
 
 // Param-only navigation between children reuses this component.
 watch(
   () => route.params.playerId,
   (newId, oldId) => {
-    if (newId && newId !== oldId) load()
+    if (newId && newId !== oldId) {
+      load()
+      loadCoachVideos()
+    }
   },
 )
 </script>

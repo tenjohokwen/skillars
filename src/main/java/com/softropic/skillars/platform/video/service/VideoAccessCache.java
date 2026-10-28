@@ -11,24 +11,15 @@ import java.util.UUID;
 
 /**
  * Request-scoped cache for guard-evaluated data.
- * canPlay() populates both the parent decision and the loaded video entity so the controller
- * can reuse them without a second DB round-trip.
+ * canPlay() populates the owner decision and the loaded video entity so the controller can reuse
+ * them without a second DB round-trip.
  */
 @Component
 @RequestScope
 public class VideoAccessCache {
 
-    private final Map<UUID, Boolean> parentDecisions = new HashMap<>();
     private final Map<UUID, Boolean> ownerDecisions = new HashMap<>();
     private final Map<UUID, Video> videoCache = new HashMap<>();
-
-    public void setParentDecision(UUID videoId, boolean isParent) {
-        parentDecisions.put(videoId, isParent);
-    }
-
-    public Optional<Boolean> getParentDecision(UUID videoId) {
-        return Optional.ofNullable(parentDecisions.get(videoId));
-    }
 
     public void setOwnerDecision(UUID videoId, boolean isOwner) {
         ownerDecisions.put(videoId, isOwner);

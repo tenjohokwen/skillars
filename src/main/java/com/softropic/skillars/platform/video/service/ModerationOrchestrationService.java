@@ -12,7 +12,6 @@ import com.softropic.skillars.infrastructure.videointel.VideoIntelScanResult;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
-import com.softropic.skillars.platform.security.service.AgePolicyService;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
 import com.softropic.skillars.platform.video.contract.event.VideoModerationOwnerNotificationEvent;
@@ -61,9 +60,8 @@ public class ModerationOrchestrationService {
     private final ConfigService configService;
     private final ApplicationEventPublisher publisher;
     private final TransactionTemplate transactionTemplate;
-    private final AgePolicyService agePolicyService;
     private final PlayerProfileRepository playerProfileRepository;
-    private final VideoApprovalService videoApprovalService;
+    private final MinorUploadPolicy minorUploadPolicy;
     private final VideoOwnerAccountResolver videoOwnerAccountResolver;
 
     @Async("moderationTaskExecutor")
@@ -243,14 +241,19 @@ public class ModerationOrchestrationService {
     }
 
     /**
-     * Layer 3: Minor safety gate.
-     * - Coach-owned videos (UUID ownerId): gate records SKIPPED, advances to transcoding.
-     * - Adult player (18+): gate records PASSED, advances to transcoding.
-     * - Minor player (under 18): gate fires for every minor upload (standard path, not a fallback).
-     *   Records FLAGGED, transitions video to HIDDEN, creates parental approval request.
-     *   Bunny encoding is triggered later in VideoApprovalService.approveVideo().
-     * Both the HIDDEN transition and the approval row creation run within the same outer transaction
-     * (createApprovalRequest joins the caller's transaction — no REQUIRES_NEW).
+     * Layer 3: defensive minor check — fail CLOSED, never "approve".
+     *
+     * <p>ADR "Minors never upload" (2026-10-28): a minor's upload is refused at initiation
+     * ({@link MinorUploadPolicy#assertMayUpload}), so a player video reaching this layer should always
+     * belong to a self-registered adult. This re-check only catches an invariant break (or a profile
+     * changed since initiation): such a video is moved to HIDDEN — unplayable for everyone — and an
+     * urgent admin alert is raised. It is never released to transcoding; the old parental-approval
+     * path (VideoApprovalService) is gone.
+     * <ul>
+     *   <li>Coach-owned video (UUID ownerId): SKIPPED, advances to transcoding.</li>
+     *   <li>Self-registered adult player: PASSED, advances to transcoding.</li>
+     *   <li>Anything else (minor, managed profile, no DOB, profile missing): FLAGGED, HIDDEN, alert.</li>
+     * </ul>
      */
     private void runMinorSafetyGate(UUID videoId, String ownerId) {
         // Detect coach-owned videos by attempting UUID parse — coach ownerId is a UUID string
@@ -264,64 +267,28 @@ public class ModerationOrchestrationService {
         }
 
         PlayerProfile profile = playerProfileRepository.findById(playerId).orElse(null);
-        if (profile == null) {
-            log.warn("[MINOR_GATE_NO_PROFILE videoId={} ownerId={}] PlayerProfile not found — advancing to TRANSCODING as safe fallback", videoId, ownerId);
-            recordScan(videoId, "MINOR_GATE", "PASSED", null, "PlayerProfile not found — treating as adult");
-            advanceToTranscoding(videoId, ownerId);
-            return;
-        }
-
-        boolean minor = agePolicyService.isMinor(profile.getDateOfBirth());
-
-        if (!minor) {
+        String refusal = minorUploadPolicy.refusalReason(profile);
+        if (refusal == null) {
             recordScan(videoId, "MINOR_GATE", "PASSED", null, null);
             advanceToTranscoding(videoId, ownerId);
             return;
         }
 
-        // Minor — standard parental approval path.
-        // All three operations share the same transaction: no orphaned HIDDEN video without an
-        // approval row, and no scan record that contradicts the video state on rollback.
-        // createApprovalRequest returns false for the unblockable-minor fallback (deleted profile or
-        // no parent linked). In that case createApprovalRequest already transitions HIDDEN→TRANSCODING
-        // itself — do NOT call advanceToTranscoding() after this block, as that would attempt
-        // TRANSCODING→TRANSCODING (an invalid transition). Capture the asset ID here so the Bunny
-        // call can be made after the transaction commits without holding a DB connection open.
-        final boolean[] needsTranscoding = {false};
-        final String[] fallbackAssetId = {null};
-        final boolean[] fallbackEncodingDone = {false};
-        transactionTemplate.execute(status -> {
-            videoLifecycleService.transitionOperationalState(videoId, OperationalState.HIDDEN);
-            boolean approvalCreated = videoApprovalService.createApprovalRequest(videoId, playerId);
-            if (approvalCreated) {
-                recordScan(videoId, "MINOR_GATE", "FLAGGED", null, "Owner is a minor — setting HIDDEN, requesting parental approval");
-            } else {
-                // Unblockable minor: createApprovalRequest already handled HIDDEN→TRANSCODING.
-                // Capture Bunny asset ID now; triggerTranscoding() runs after commit (see below).
-                Video v = videoRepository.findById(videoId).orElse(null);
-                if (v != null) {
-                    fallbackAssetId[0] = v.getProviderAssetId();
-                    fallbackEncodingDone[0] = v.getEncodingCompletedAt() != null;
-                }
-                recordScan(videoId, "MINOR_GATE", "PASSED", null, "Minor with no parent linked — advancing to transcoding as safe fallback");
-                needsTranscoding[0] = true;
-            }
-            return null;
-        });
-        // Fallback path: state is already TRANSCODING; only the external Bunny call remains.
-        // Do NOT call advanceToTranscoding() here — the state transition was already applied.
-        if (needsTranscoding[0]) {
-            if (fallbackEncodingDone[0]) {
-                videoService.completeTranscoding(videoId);
-            } else if (fallbackAssetId[0] != null) {
-                try {
-                    videoProviderAdapter.triggerTranscoding(fallbackAssetId[0]);
-                } catch (Exception e) {
-                    log.error("triggerTranscoding failed for minor fallback videoId={} — video left in TRANSCODING: {}",
-                              videoId, e.getMessage(), e);
-                }
-            }
+        log.error("[MINOR_GATE_FAIL_CLOSED videoId={} ownerId={} reason={}] player video from a profile that "
+            + "may not upload reached moderation — hiding it", videoId, ownerId, refusal);
+        try {
+            transactionTemplate.execute(status -> {
+                videoLifecycleService.transitionOperationalState(videoId, OperationalState.HIDDEN);
+                return null;
+            });
+        } catch (TerminalStateViolationException e) {
+            log.warn("MINOR_GATE HIDDEN transition skipped — videoId={} already in terminal state", videoId);
         }
+        recordScan(videoId, "MINOR_GATE", "FLAGGED", null, "Upload by a profile that may not upload: " + refusal);
+        alertAdmin(videoId, ownerId, "Minor-safety gate hid a player video",
+            "videoId=" + videoId + " ownerId=" + ownerId + " reason=" + refusal
+                + " — minors never upload; the upload-initiation refusal was bypassed or the profile changed. "
+                + "The video is HIDDEN (unplayable). Review and delete it.", true);
     }
 
     private void advanceToTranscoding(UUID videoId, String ownerId) {
@@ -426,7 +393,15 @@ public class ModerationOrchestrationService {
     }
 
     private void alertAdmin(UUID videoId, String ownerId, String subject, String body, boolean urgent) {
-        publisher.publishEvent(new VideoModerationAdminAlertEvent(videoId, ownerId, subject, body, urgent));
+        // Published inside a transaction: the admin-alert envelope is sent by MailManager's AFTER_COMMIT
+        // listener (no fallbackExecution), which silently drops an envelope published with no
+        // transaction active — and every caller here runs on the @Async pipeline thread outside one.
+        // Joins the caller's transaction when there is one.
+        VideoModerationAdminAlertEvent alert = new VideoModerationAdminAlertEvent(videoId, ownerId, subject, body, urgent);
+        transactionTemplate.execute(status -> {
+            publisher.publishEvent(alert);
+            return null;
+        });
         log.warn("VideoModerationAdminAlertEvent published: {} — {}", subject, body);
     }
 

@@ -83,6 +83,22 @@ public class Video {
     @Column(name = "archived_at")
     private Instant archivedAt;
 
+    /**
+     * V184: the booking a coach-owned video is about (COACH_REVIEW always, DRILL_DEMO optionally).
+     * Set once at upload initiation, never changed. Both subject columns are null or both set
+     * ({@code chk_videos_subject_pair}).
+     */
+    @Column(name = "subject_booking_id", updatable = false)
+    private UUID subjectBookingId;
+
+    /**
+     * V184: the PlayerProfile id (not a user id) of the child the video shows — that booking's
+     * playerId. The player's parent(s), and the player themself if self-registered, may play it
+     * ({@code VideoAccessGuard.canPlay}).
+     */
+    @Column(name = "subject_player_id", updatable = false)
+    private Long subjectPlayerId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

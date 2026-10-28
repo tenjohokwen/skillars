@@ -204,9 +204,13 @@
     <p>What a player may do in messaging, derived from their <a href="#age-tier">age tier</a>: <code>U10</code> prohibited, <code>AGE_10_12</code> parent-managed, <code>AGE_13_17</code> supervised, <code>ADULT</code> unrestricted. Security computes it and messaging consumes it; never re-derive age rules locally.</p>
     <p><strong>See</strong> <a href="../messaging/index.html">Messaging</a>, <a href="../security/index.html">Security</a> · <strong>Code</strong> <code>MessagingPolicy</code>, <code>AgePolicyService.getMessagingPolicy</code></p>
 
-    <h3 id="minor-safety-gate">Minor-safety gate / parental approval</h3>
-    <p>The third layer of <a href="#three-layer-moderation">video moderation</a>. A video owned by a minor is kept hidden and not transcoded until the linked parent approves it at <code>/parent/approvals</code>. Approval triggers the deferred transcoding call. Minors may always start an upload; the gate defers visibility.</p>
-    <p><strong>See</strong> <a href="../video/index.html">Video</a> · <strong>Code</strong> <code>ModerationOrchestrationService</code>, <code>VideoApprovalService</code>, <code>VideoApprovalRequest</code> (<code>main.video_approval_requests</code>)</p>
+    <h3 id="minor-safety-gate">Minor-safety gate / minors never upload</h3>
+    <p>Minors never upload (ADR 18). A player upload whose profile is a minor, parent-managed or has no date of birth is refused at initiation (<code>403 VIDEO_MINOR_UPLOAD_REFUSED</code>) and alerts an admin. The third layer of <a href="#three-layer-moderation">video moderation</a> re-checks the same rule and fails closed: such a video is hidden and never transcoded. The old parental-approval flow (<code>/parent/approvals</code>) was removed.</p>
+    <p><strong>See</strong> <a href="../video/index.html">Video</a> · <strong>Code</strong> <code>MinorUploadPolicy</code>, <code>ModerationOrchestrationService</code></p>
+
+    <h3 id="video-subject">Video subject (coach video of a child)</h3>
+    <p>The session and child a coach video is about (<code>videos.subject_booking_id</code> / <code>subject_player_id</code>, V184). A <code>COACH_REVIEW</code> must name one of the coach's held sessions; the child's parent, and the child themself if self-registered, may play it (never download or delete). GDPR erasure of the child purges it.</p>
+    <p><strong>See</strong> <a href="../video/index.html">Video</a> · <strong>Code</strong> <code>VideoSubjectService</code>, <code>VideoAccessGuard.isSubjectViewer</code></p>
 
     <h2 id="n">N</h2>
     <h3 id="neglected-skill">Neglected skill</h3>
@@ -307,7 +311,7 @@
     <p><strong>See</strong> <a href="../session/index.html">Session</a> · <strong>Code</strong> <code>SessionTemplateService</code>, <code>SessionTemplate</code> (<code>session.session_templates</code>), <code>/coach/session-templates</code></p>
 
     <h3 id="three-layer-moderation">Three-layer video moderation</h3>
-    <p>Every uploaded video passes, in order: (1) <strong>Arachnid</strong>, CSAM hash matching, where a match locks the video, alerts admins and suspends the account; (2) <strong>VideoIntel</strong>, Google Video Intelligence explicit-content detection, where a flag locks the video; (3) the <a href="#minor-safety-gate">minor-safety gate</a>. Each layer's latest outcome is stored per video. A layer outage leaves the video in <code>SCANNING</code> for an SLA monitor to retry through the outbox. Layers 1 and 2 can be switched off via <code>AppFeature</code>.</p>
+    <p>Every uploaded video passes, in order: (1) <strong>Arachnid</strong>, CSAM hash matching, where a match locks the video, alerts admins and suspends the account; (2) <strong>VideoIntel</strong>, Google Video Intelligence explicit-content detection, where a flag locks the video; (3) the <a href="#minor-safety-gate">minor-safety gate</a>, a fail-closed re-check (minors are refused at upload initiation). Each layer's latest outcome is stored per video. A layer outage leaves the video in <code>SCANNING</code> for an SLA monitor to retry through the outbox. Layers 1 and 2 can be switched off via <code>AppFeature</code>.</p>
     <p><strong>See</strong> <a href="../video/index.html">Video</a> · <strong>Code</strong> <code>ModerationOrchestrationService</code>, <code>VideoModerationScan</code> (<code>main.video_moderation_scans</code>), <code>ModerationSlaMonitorService</code></p>
 
     <h3 id="timeline">Timeline</h3>
@@ -332,7 +336,7 @@
     <p>The coach's end-of-session form: attendance, effort/focus/technique ratings, up to two homework drills, the recap, and the <a href="#live-vs-quick">LIVE or QUICK</a> mode. Submitting it completes the booking (or moves it to pending confirmation) and publishes <code>BookingCompletedEvent</code>. That event starts the payout hold, SLU, timeline, homework and plan completion. Abandoned wrap-ups are <a href="#force-complete">force-completed</a>.</p>
     <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>BookingCompletionService.submitWrapUp</code>, <code>WrapUpRequest</code>, <code>POST /api/bookings/{id}/complete</code>, <code>WrapUpSequence.vue</code></p>
 
-    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>993c6f57</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

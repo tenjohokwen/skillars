@@ -11,14 +11,11 @@ import java.util.UUID;
  *
  * <p>skillars-deferred-91 code review, decision D11. AC17 mapped {@code IllegalStateException} to
  * {@code 500} on the premise that "an audit of every request-reachable
- * {@code throw new IllegalStateException} confirmed none legitimately means 409". Three sites
- * falsify that: {@code VideoApprovalService.createApprovalRequest} / {@code approveVideo} (the video
- * left {@code HIDDEN} between the list render and the click, or two parents approve concurrently)
- * and {@code VideoLifecycleService.markPurged}. Those are pure client-side races — the client needs
- * a 409 so it can re-fetch and retry, and 5xx alerting should not see them.
- *
- * <p>Modelled on the sibling {@link VideoAlreadyResolvedException}, which already handles exactly
- * this shape for the approval's own status field.
+ * {@code throw new IllegalStateException} confirmed none legitimately means 409". Sites such as
+ * {@code VideoLifecycleService.markPurged} and {@code VideoService.retryUpload}'s FAILED claim falsify
+ * that: they are pure client-side races — the client needs a 409 so it can re-fetch and retry, and 5xx
+ * alerting should not see them. (The parental-approval sites that originally motivated this class
+ * were removed with the approval flow — ADR "Minors never upload", 2026-10-28.)
  */
 public class VideoStateConflictException extends ApplicationException {
 

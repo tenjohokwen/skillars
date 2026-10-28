@@ -64,7 +64,6 @@ class VideoAccessGuardTest {
     void setUp() {
         lenient().when(configService.getBoundedLong(eq("platform.video.access.coach_window_days"), anyLong(), anyLong(), anyLong()))
             .thenReturn(90L);
-        lenient().when(videoAccessCache.getParentDecision(any())).thenReturn(Optional.empty());
     }
 
     // --- canPlay --- //
@@ -243,31 +242,72 @@ class VideoAccessGuardTest {
             .isInstanceOf(VideoDeletionNotAuthorisedException.class);
     }
 
-    // --- isParentOf --- //
+    // --- V184: subject of a coach video (the child it shows) --- //
+
+    private static final Long SUBJECT_PLAYER_ID = 4_200L;
 
     @Test
-    void isParentOf_coachOwnedVideo_returnsFalse() {
-        // ownerId is a UUID string → coach video; isParentOf returns false immediately
-        assertThat(guard.isParentOf("parent@example.com", COACH_OWNER_ID, VIDEO_ID)).isFalse();
-    }
-
-    @Test
-    void isParentOf_verifiedParent_returnsTrue() {
+    void canPlay_parentOfCoachVideoSubject_allowed_butCannotDelete() {
+        Video video = coachVideoAbout(SUBJECT_PLAYER_ID);
+        when(videoService.findById(VIDEO_ID)).thenReturn(video);
+        when(securityUtil.isAdmin()).thenReturn(false);
         stubPlayerCurrentUser(PARENT_LONG_ID);
         ParentPlayerLink link = new ParentPlayerLink();
         link.setParentId(PARENT_LONG_ID);
-        link.setPlayerId(PLAYER_LONG_ID);
-        when(parentPlayerLinkRepository.findAllByPlayerId(PLAYER_LONG_ID)).thenReturn(List.of(link));
+        link.setPlayerId(SUBJECT_PLAYER_ID);
+        when(parentPlayerLinkRepository.findAllByPlayerId(SUBJECT_PLAYER_ID)).thenReturn(List.of(link));
 
-        assertThat(guard.isParentOf("parent@example.com", PLAYER_OWNER_ID, VIDEO_ID)).isTrue();
+        assertThat(guard.canPlay(null, VIDEO_ID)).isTrue();
+
+        // Play, never delete: the coach owns the video.
+        when(securityUtil.getCurrentUserName()).thenReturn("parent@example.com");
+        assertThatThrownBy(() -> guard.canDelete(null, VIDEO_ID))
+            .isInstanceOf(VideoDeletionNotAuthorisedException.class);
     }
 
     @Test
-    void isParentOf_unrelatedUser_returnsFalse() {
-        stubPlayerCurrentUser(999L);
-        when(parentPlayerLinkRepository.findAllByPlayerId(PLAYER_LONG_ID)).thenReturn(List.of());
+    void canPlay_selfRegisteredSubjectPlayer_allowed() {
+        Video video = coachVideoAbout(SUBJECT_PLAYER_ID);
+        when(videoService.findById(VIDEO_ID)).thenReturn(video);
+        when(securityUtil.isAdmin()).thenReturn(false);
+        stubPlayerCurrentUser(PLAYER_USER_ID);
+        when(parentPlayerLinkRepository.findAllByPlayerId(SUBJECT_PLAYER_ID)).thenReturn(List.of());
+        when(playerProfileRepository.existsByIdAndUserId(SUBJECT_PLAYER_ID, PLAYER_USER_ID)).thenReturn(true);
 
-        assertThat(guard.isParentOf("other@example.com", PLAYER_OWNER_ID, VIDEO_ID)).isFalse();
+        assertThat(guard.canPlay(null, VIDEO_ID)).isTrue();
+    }
+
+    @Test
+    void canPlay_coachVideoSubject_unrelatedParent_denied() {
+        Video video = coachVideoAbout(SUBJECT_PLAYER_ID);
+        when(videoService.findById(VIDEO_ID)).thenReturn(video);
+        when(securityUtil.isAdmin()).thenReturn(false);
+        stubPlayerCurrentUser(999L);
+        when(parentPlayerLinkRepository.findAllByPlayerId(SUBJECT_PLAYER_ID)).thenReturn(List.of());
+        when(playerProfileRepository.existsByIdAndUserId(SUBJECT_PLAYER_ID, 999L)).thenReturn(false);
+        when(securityUtil.getCurrentUserName()).thenReturn("nobody@example.com");
+
+        assertThatThrownBy(() -> guard.canPlay(null, VIDEO_ID))
+            .isInstanceOf(PlaybackDeniedException.class);
+    }
+
+    @Test
+    void canPlay_coachVideoWithoutSubject_parentDenied() {
+        // Existing (pre-V184) coach videos stay unlinked: no parent can play them.
+        Video video = videoWithState(OperationalState.READY, COACH_OWNER_ID);
+        when(videoService.findById(VIDEO_ID)).thenReturn(video);
+        when(securityUtil.isAdmin()).thenReturn(false);
+        when(securityUtil.getCurrentUserName()).thenReturn("parent@example.com");
+
+        assertThatThrownBy(() -> guard.canPlay(null, VIDEO_ID))
+            .isInstanceOf(PlaybackDeniedException.class);
+    }
+
+    private Video coachVideoAbout(Long subjectPlayerId) {
+        Video v = videoWithState(OperationalState.READY, COACH_OWNER_ID);
+        v.setSubjectBookingId(UUID.randomUUID());
+        v.setSubjectPlayerId(subjectPlayerId);
+        return v;
     }
 
     // --- helpers --- //

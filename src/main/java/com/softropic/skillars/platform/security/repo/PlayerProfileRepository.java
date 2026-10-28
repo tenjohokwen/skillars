@@ -62,6 +62,22 @@ public interface PlayerProfileRepository extends JpaRepository<PlayerProfile, Lo
         """)
     Optional<String> findParentEmailByPlayerId(@Param("playerId") Long playerId);
 
+    /**
+     * V184 (video subject link): returns the id iff the profile exists and its data has NOT been
+     * GDPR-erased, holding a FOR SHARE row lock for the caller's transaction. A concurrent erasure takes
+     * this row with {@link #findByIdForUpdate} (NOWAIT + bounded retry), so either it committed first —
+     * and this returns empty — or its lock attempt fails while the caller's short insert transaction
+     * holds the share lock: it retries (and then sees the committed row), or exhausts its retries, marks
+     * the request FAILED and is re-driven by {@code GdprErasureService.retryFailedErasures}, whose
+     * AFTER_COMMIT purge then sees the row. Must run inside a transaction.
+     */
+    @Query(nativeQuery = true, value = """
+        SELECT p.id FROM main.player_profiles p
+        WHERE p.id = :id AND p.development_data_erased_at IS NULL
+        FOR SHARE
+        """)
+    Optional<Long> lockLiveProfileForShare(@Param("id") Long id);
+
     // NO_WAIT + PessimisticLockRetryer bounded-retry pair — mirrors CoachProfileRepository's identical
     // findByIdForUpdate (skillars-deferred-62): jakarta.persistence.lock.timeout has no effect on
     // Postgres for any finite value, so "0" here means NO_WAIT, and every call site wraps this in

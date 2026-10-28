@@ -162,7 +162,7 @@ flowchart LR
         <tr><td><a href="marketplace/index.html">marketplace</a></td><td>Coach discovery (city-scoped search, public profile), the 5-step profile builder and publish, coach self-service profile/photo/gallery, <code>CoachProfile</code> as the per-coach lock, and shared player/parent lookups.</td></tr>
         <tr><td><a href="booking/index.html">booking</a></td><td>Coach availability and blackouts, single and batch booking requests, slot exclusivity, cancellation/no-show/reschedule, live delivery, wrap-up and recap lifecycle, session-prep notes, and the reminder/expiry/completion schedulers.</td></tr>
         <tr><td><a href="session/index.html">session</a></td><td>Coaching content: platform and coach-authored private drill libraries, session plans and templates per confirmed booking, drill-usage ownership policy, homework assignment and completion.</td></tr>
-        <tr><td><a href="video/index.html">video</a></td><td>Video upload/retry, per-tier quota, three-layer moderation with minor-safety parental approval, Bunny transcoding, signed playback, subscription-driven block/archive/purge lifecycle, and the admin review queue.</td></tr>
+        <tr><td><a href="video/index.html">video</a></td><td>Video upload/retry, per-tier quota, three-layer moderation, minors-never-upload refusal, coach videos linked to the session and child they show, Bunny transcoding, signed playback, subscription-driven block/archive/purge lifecycle, and the admin review queue.</td></tr>
         <tr><td><a href="development/index.html">development</a></td><td>Player development tracking — SLU training volume, Skills Radar assessments, neglected-skill detection, timeline, coach roster and session-prep cards, PDF performance reports.</td></tr>
         <tr><td><a href="payment/index.html">payment</a></td><td>Card charges on the platform account and completion-gated Stripe Connect payouts, credit wallet and refunds, subscriptions, session packs, coach/payer/admin finance reporting, reliability strikes.</td></tr>
         <tr><td><a href="messaging/index.html">messaging</a></td><td>Booking-gated, age-tiered coach/parent/player conversations with synchronous Gemini moderation, report/block, parental oversight, SSE live push, and nightly retention.</td></tr>
@@ -226,7 +226,7 @@ flowchart LR
       <p><strong>Email links are hash-routed.</strong> The frontend uses hash-mode routing, so backend links into the app must be built with <code>FrontendLinkBuilder</code> (<code>&lt;frontendUrl&gt;/#/...</code>), never by string concatenation.</p>
     </div>
 
-    <footer class="page-footer">Skillars developer documentation. Last verified against master <code>be46d7bb</code> (2026-10-28).</footer>
+    <footer class="page-footer">Skillars developer documentation. Last verified against master <code>993c6f57</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="assets/mermaid.min.js"></script>

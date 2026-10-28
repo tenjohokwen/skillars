@@ -10,7 +10,7 @@
 // (coach/videos) — coach upload-type choice + coach initiate endpoint (A17), a play action for READY
 // videos (A17b) and a Retry action for FAILED uploads (D5).
 
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { createTestingPinia } from '@pinia/testing'
@@ -23,6 +23,8 @@ vi.mock('src/api/video.api', () => ({
     initiatePlayerUpload: vi.fn(),
     retryUpload: vi.fn(),
     createTusUpload: vi.fn(),
+    getMyCoachVideos: vi.fn(),
+    listSubjectBookings: vi.fn(),
   },
 }))
 
@@ -49,6 +51,8 @@ const EMPTY_QUOTA = {
 
 // The dropdown's menu is teleported and only rendered when open; render its slot inline instead.
 const QBtnDropdownStub = { template: '<div data-testid="coach-upload-dropdown"><slot /></div>' }
+// QDialog teleports; render its content inline while open.
+const QDialogStub = { props: ['modelValue'], template: '<div v-if="modelValue"><slot /></div>' }
 
 async function mountPage({ role = 'PLAYER' } = {}) {
   const router = createRouter({
@@ -73,6 +77,7 @@ async function mountPage({ role = 'PLAYER' } = {}) {
         QuotaUsageBar: true,
         VideoPlayDialog: true,
         QBtnDropdown: QBtnDropdownStub,
+        QDialog: QDialogStub,
       },
     },
   })
@@ -102,6 +107,10 @@ const CREDS = {
   tusAuthorizationExpire: 1,
   tusLibraryId: 2,
 }
+
+beforeEach(() => {
+  videoApi.getMyCoachVideos.mockResolvedValue([])
+})
 
 afterEach(() => {
   while (mounted.length) mounted.pop().unmount()
@@ -261,5 +270,95 @@ describe('VideoManagementPage.vue — play and retry actions (A17b, D5)', () => 
     )
     expect(videoApi.createTusUpload).not.toHaveBeenCalled()
     expect(videoApi.getMyVideos).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('VideoManagementPage.vue — minors never upload / coach video subject (V184)', () => {
+  it('a COACH_REVIEW asks for the session first and sends it as subjectBookingId', async () => {
+    videoApi.getMyVideos.mockResolvedValue([])
+    videoApi.getMyQuota.mockResolvedValue(EMPTY_QUOTA)
+    videoApi.listSubjectBookings.mockResolvedValue([
+      {
+        bookingId: 'b-1',
+        playerId: 77,
+        playerName: 'Mia',
+        requestedStartTime: '2026-10-20T10:00:00Z',
+        canonicalTimezone: 'Europe/Berlin',
+      },
+    ])
+    videoApi.initiateUpload.mockResolvedValue(CREDS)
+    videoApi.createTusUpload.mockReturnValue({ start: vi.fn() })
+
+    const { wrapper } = await mountPage({ role: 'COACH' })
+    await wrapper.find('[data-testid="coach-upload-COACH_REVIEW"]').trigger('click')
+    await flushPromises()
+
+    expect(videoApi.listSubjectBookings).toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="subject-booking-select"]').exists()).toBe(true)
+    // A file picked before a session is chosen is ignored — nothing asked for it yet.
+    await selectFile(wrapper, fakeFile())
+    expect(videoApi.initiateUpload).not.toHaveBeenCalled()
+
+    wrapper.vm.subjectBookingId = 'b-1'
+    await flushPromises()
+    await wrapper.find('[data-testid="subject-confirm-btn"]').trigger('click')
+    await selectFile(wrapper, fakeFile())
+
+    expect(videoApi.initiateUpload).toHaveBeenCalledWith(
+      expect.objectContaining({ videoType: 'COACH_REVIEW', subjectBookingId: 'b-1' }),
+    )
+  })
+
+  it('a coach with no held sessions sees why a session review is not possible', async () => {
+    videoApi.getMyVideos.mockResolvedValue([])
+    videoApi.getMyQuota.mockResolvedValue(EMPTY_QUOTA)
+    videoApi.listSubjectBookings.mockResolvedValue([])
+
+    const { wrapper } = await mountPage({ role: 'COACH' })
+    await wrapper.find('[data-testid="coach-upload-COACH_REVIEW"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="no-subject-bookings"]').exists()).toBe(true)
+  })
+
+  it("a refused minor's upload shows the minors-never-upload message", async () => {
+    videoApi.getMyVideos.mockResolvedValue([])
+    videoApi.getMyQuota.mockResolvedValue(EMPTY_QUOTA)
+    videoApi.initiatePlayerUpload.mockRejectedValue({
+      response: { status: 403, data: { errorMsg: { errorKey: 'VIDEO_MINOR_UPLOAD_REFUSED' } } },
+    })
+
+    const { wrapper } = await mountPage()
+    await wrapper.find('[data-testid="player-upload-btn"]').trigger('click')
+    await selectFile(wrapper, fakeFile())
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'negative', message: 'video.management.minorUploadRefused' }),
+    )
+    expect(videoApi.createTusUpload).not.toHaveBeenCalled()
+  })
+
+  it('a player sees the coach videos about them, playable but not deletable', async () => {
+    videoApi.getMyVideos.mockResolvedValue([])
+    videoApi.getMyQuota.mockResolvedValue(EMPTY_QUOTA)
+    videoApi.getMyCoachVideos.mockResolvedValue([
+      { id: 'c1', operationalState: 'READY', videoType: 'COACH_REVIEW' },
+    ])
+
+    const { wrapper } = await mountPage()
+    const section = wrapper.find('[data-testid="coach-videos-section"]')
+    expect(section.findAll('[data-testid="video-list-item"]')).toHaveLength(1)
+    expect(section.find('[data-testid="video-play-btn"]').exists()).toBe(true)
+    expect(section.find('[data-testid="video-delete-btn"]').exists()).toBe(false)
+  })
+
+  it('a coach does not load a coach-videos-about-me list', async () => {
+    videoApi.getMyVideos.mockResolvedValue([])
+    videoApi.getMyQuota.mockResolvedValue(EMPTY_QUOTA)
+
+    const { wrapper } = await mountPage({ role: 'COACH' })
+
+    expect(videoApi.getMyCoachVideos).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="coach-videos-section"]').exists()).toBe(false)
   })
 })

@@ -38,16 +38,19 @@ export const videoApi = {
     return api.delete(`/api/video/${videoId}`)
   },
 
-  getMyApprovals() {
-    return api.get('/api/video/approvals')
+  // Coach videos ABOUT a player (V184 subject link) — parent view of a linked child; play only.
+  getPlayerCoachVideos(playerId) {
+    return api.get(`/api/video/players/${playerId}/coach-videos`)
   },
 
-  approveVideo(approvalId) {
-    return api.put(`/api/video/approvals/${approvalId}/approve`)
+  // The self-registered player's own view of the coach videos about them.
+  getMyCoachVideos() {
+    return api.get('/api/video/my/coach-videos')
   },
 
-  rejectVideo(approvalId) {
-    return api.put(`/api/video/approvals/${approvalId}/reject`)
+  // The coach's held sessions (last 90 days) a COACH_REVIEW / DRILL_DEMO upload can be linked to.
+  listSubjectBookings() {
+    return api.get('/api/video/coach/subject-bookings')
   },
 
   createTusUpload({

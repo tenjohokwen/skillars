@@ -32,10 +32,10 @@
 
     <h2>Why this is a first-class concern</h2>
     <p>
-      Skillars puts adult coaches in contact with minors, then invites those minors to upload video of themselves.
+      Skillars puts adult coaches in contact with minors, and coaches film those minors in sessions.
       That combination is the single largest risk the business carries, and it shapes product decisions that
-      otherwise look strange: why a child has no login, why messaging is booking-gated, why a parent has an
-      approval queue, why registration has four separate scroll-gated consent boxes. None of those are incidental —
+      otherwise look strange: why a child has no login, why minors can never upload video, why messaging is
+      booking-gated, why registration has four separate scroll-gated consent boxes. None of those are incidental —
       each is a control. This page exists so nobody removes one without understanding what it was for.
     </p>
 
@@ -121,31 +121,32 @@
       the platform, where none of these controls apply.</p>
     </div>
 
-    <h2>Video: the parental approval gate</h2>
+    <h2>Video: minors never upload</h2>
     <p>
-      Video is the highest-risk content type in the product, and it has the most layers between upload and
-      visibility:
+      Video is the highest-risk content type in the product, so the rule is simple: <strong>a minor never uploads
+      video</strong> (product decision, October 2026). Footage of a child only exists as a coach's session video:
     </p>
     <pre class="mermaid">
 flowchart LR
-    U["Minor uploads a video"] --> S["Automated content scanning"]
-    S --> P["/parent/approvals<br/>Parent approves or rejects"]
-    P -->|Approved| V["Usable / visible"]
-    P -->|Rejected| X["Not published"]
+    C["Coach uploads a session review"] --> B["Picks the session it is about"]
+    B --> S["Automated content scanning"]
+    S -->|Clean| V["Playable by the coach and by that child's parent"]
     S -->|Flagged| A["Admin moderation queue"]
+    M["A minor tries to upload"] --> R["Refused, admin alerted"]
     </pre>
     <ol>
-      <li>Uploaded video is scanned automatically, including a CSAM hash-matching check and explicit-content
-        detection, before it can become publicly available.</li>
-      <li>For a <strong>minor</strong>, the video additionally lands in their parent's approval queue at
-        <code>/parent/approvals</code>, showing the player, video type and date with Approve/Reject actions. This is
-        the minor-safety gate: a child's video does not become usable until their parent has said so.</li>
-      <li>An adult self-registered player is not subject to the parental gate, but is still subject to scanning.</li>
+      <li>Only a self-registered adult player can upload (homework). An upload attempt by any profile that is a minor
+        or managed by a parent is refused before anything is stored, and an admin is alerted — it should be
+        impossible, so reaching it means something else broke.</li>
+      <li>A coach's session review must name the session it reviews. The child in that session's parent (and the
+        player, if they have their own adult account) can then watch it — but cannot download or delete it.</li>
+      <li>Every video is still scanned automatically, including a CSAM hash-matching check and explicit-content
+        detection, before it becomes playable. If a child's data is erased (GDPR), the coach videos about that child are
+        deleted too.</li>
     </ol>
     <div class="callout">
-      <p><strong><code>/parent/approvals</code> means <em>video</em> approvals, not booking approvals</strong> —
-      a naming trap worth knowing before you go looking for it, and a common source of confusion when explaining the
-      product.</p>
+      <p><strong>There is no parental approval queue any more.</strong> <code>/parent/approvals</code> existed for the
+      old "minor uploads, parent approves" flow, which was removed; the address now just opens the parent dashboard.</p>
     </div>
 
     <h2>Reporting and enforcement</h2>
@@ -183,7 +184,7 @@ flowchart LR
 
     <h2>Where these controls surface, by persona</h2>
     <div class="card-grid">
-      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Four consent gates, the video approval queue, visibility into every conversation involving their child.</p></div>
+      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Four consent gates, the coach's session videos of their child, visibility into every conversation involving their child.</p></div>
       <div class="card"><h4><a href="../player/index.html">Player</a></h4><p>Adults-only self-registration; minors have no login at all. Age tier governs what a player can do.</p></div>
       <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>Booking-gated messaging, age-tier limits on contacting minors, and reliability enforcement.</p></div>
       <div class="card"><h4><a href="../admin/index.html">Admin / Staff</a></h4><p>Owns every queue named on this page — and currently has a UI for none of them.</p></div>

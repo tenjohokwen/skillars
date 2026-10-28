@@ -89,7 +89,6 @@ class VideoPlayResourceWebMvcTest {
 
     private void stubGuardAllow() {
         when(videoAccessGuard.canPlay(any(), eq(VIDEO_ID))).thenReturn(true);
-        when(videoAccessGuard.isParentOf(any(), any(), any())).thenReturn(false);
     }
 
     @Test
@@ -98,7 +97,7 @@ class VideoPlayResourceWebMvcTest {
         stubGuardAllow();
         when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
         when(videoService.findById(VIDEO_ID)).thenReturn(ownerVideo());
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), eq(false), anyBoolean()))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), anyBoolean()))
             .thenReturn(new PlaybackAuthorizationResponse(
                 "jwt-token", "https://cdn.example.com/asset/playlist.m3u8?token=abc", Instant.now().plusSeconds(7200)));
 
@@ -115,7 +114,7 @@ class VideoPlayResourceWebMvcTest {
         stubGuardAllow();
         when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
         when(videoService.findById(VIDEO_ID)).thenReturn(ownerVideo());
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), anyBoolean(), anyBoolean()))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), anyBoolean()))
             .thenThrow(new PlaybackDeniedException(VIDEO_ID, OWNER));
 
         mockMvc.perform(get("/api/video/{id}/play", VIDEO_ID))
@@ -146,12 +145,13 @@ class VideoPlayResourceWebMvcTest {
 
     @Test
     @WithMockUser(username = "parent-99")
-    void play_parent_skipHiddenCheckTrue_callsAuthorizeWithSkip() throws Exception {
+    void play_parent_isAuthorizedLikeAnyOtherViewer() throws Exception {
+        // The parental-approval preview of a HIDDEN video is gone (ADR "Minors never upload"):
+        // a parent is authorized like any other viewer (no HIDDEN bypass parameter any more).
         when(videoAccessGuard.canPlay(any(), eq(VIDEO_ID))).thenReturn(true);
         when(securityUtil.getCurrentUserName()).thenReturn("parent-99");
         when(videoService.findById(VIDEO_ID)).thenReturn(ownerVideo());
-        when(videoAccessGuard.isParentOf(eq("parent-99"), eq("42"), eq(VIDEO_ID))).thenReturn(true);
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq("parent-99"), nullable(String.class), eq(true), anyBoolean()))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq("parent-99"), nullable(String.class), anyBoolean()))
             .thenReturn(new PlaybackAuthorizationResponse(
                 "jwt", "https://cdn.example.com/asset/playlist.m3u8?token=abc", Instant.now().plusSeconds(7200)));
 
@@ -165,7 +165,7 @@ class VideoPlayResourceWebMvcTest {
         stubGuardAllow();
         when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
         when(videoService.findById(VIDEO_ID)).thenReturn(ownerVideo());
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), eq(false), anyBoolean()))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), anyBoolean()))
             .thenReturn(new PlaybackAuthorizationResponse(
                 "jwt", "https://cdn.example.com/asset/playlist.m3u8?token=x",
                 Instant.now().plusSeconds(7200), "https://cdn.example.com/asset/original?token=y"));
@@ -188,7 +188,7 @@ class VideoPlayResourceWebMvcTest {
         when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
         when(videoService.findById(VIDEO_ID)).thenReturn(video);
         when(videoAccessGuard.isCurrentUserOwner(video)).thenReturn(true);
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), eq(false), eq(true)))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), eq(true)))
             .thenReturn(new PlaybackAuthorizationResponse(
                 "jwt", "https://cdn.example.com/asset/playlist.m3u8?token=x",
                 Instant.now().plusSeconds(7200), "https://cdn.example.com/asset/original?token=y"));
@@ -204,7 +204,7 @@ class VideoPlayResourceWebMvcTest {
         stubGuardAllow();
         when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
         when(videoService.findById(VIDEO_ID)).thenReturn(ownerVideo());
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), eq("5.6.7.8"), eq(false), anyBoolean()))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), eq("5.6.7.8"), anyBoolean()))
             .thenReturn(new PlaybackAuthorizationResponse(
                 "jwt", "https://cdn.example.com/playlist.m3u8?token=x&clientIp=5.6.7.8",
                 Instant.now().plusSeconds(7200)));
@@ -219,10 +219,9 @@ class VideoPlayResourceWebMvcTest {
     @WithMockUser(username = "coach@example.com")
     void play_coachWithActiveBooking_hiddenVideo_playbackServiceBlocks_returns403() throws Exception {
         when(videoAccessGuard.canPlay(any(), eq(VIDEO_ID))).thenReturn(true);
-        when(videoAccessGuard.isParentOf(any(), any(), eq(VIDEO_ID))).thenReturn(false);
         when(securityUtil.getCurrentUserName()).thenReturn("coach@example.com");
         when(videoService.findById(VIDEO_ID)).thenReturn(ownerVideo());
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq("coach@example.com"), nullable(String.class), eq(false), anyBoolean()))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq("coach@example.com"), nullable(String.class), anyBoolean()))
             .thenThrow(new PlaybackDeniedException(VIDEO_ID, "coach@example.com"));
 
         mockMvc.perform(get("/api/video/{id}/play", VIDEO_ID))
