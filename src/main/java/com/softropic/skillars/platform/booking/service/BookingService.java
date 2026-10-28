@@ -300,21 +300,27 @@ public class BookingService {
      * that, the booking's {@code agreed_price} (fix/payment-agreed-price-lock); the
      * coach's current price is only a fallback for a row-less pre-V192 booking (and is wrong once the
      * coach has re-priced, which is why it is not the primary source). A pack booking refunds the
-     * pack's per-session price (its row records zero — the pack was charged at purchase).
+     * pack's per-session share of what it was charged (its row records zero — the pack was charged at
+     * purchase), rounded down so the shares never sum above the charge.
      *
      * <p>Throws {@link ResourceNotFoundException} when neither a captured payment row nor a price exists,
      * failing the cancellation: the coach / parent / no-show paths (C6) must never commit a refund of 0
      * while telling the parent they were "fully refunded".
      */
     private BigDecimal resolveAmountPaid(Booking booking) {
-        if (booking.getSessionPackPurchaseId() == null) {
-            BigDecimal paid = bookingPaymentRepository.findById(booking.getId())
-                .filter(bp -> BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
-                .map(bp -> bp.getCreditDebited().add(bp.getStripeCharged()))
-                .orElse(null);
-            if (paid != null && paid.signum() > 0) {
-                return paid;
-            }
+        if (booking.getSessionPackPurchaseId() != null) {
+            // fix/payment-session-pack-integrity: the per-session share rounded DOWN, so refunding every
+            // session of a pack can never return more than it was charged (200.00 / 3 → 66.66, not 66.67).
+            return sessionPackPurchaseRepository.findById(booking.getSessionPackPurchaseId())
+                .map(SessionPackPurchase::perSessionShare)
+                .orElseThrow(() -> new ResourceNotFoundException("Session pack purchase not found", "session_pack_purchase"));
+        }
+        BigDecimal paid = bookingPaymentRepository.findById(booking.getId())
+            .filter(bp -> BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
+            .map(bp -> bp.getCreditDebited().add(bp.getStripeCharged()))
+            .orElse(null);
+        if (paid != null && paid.signum() > 0) {
+            return paid;
         }
         return resolveSessionPrice(booking);
     }
@@ -450,8 +456,18 @@ public class BookingService {
                     Map.of("submitted parent id", parentId, "submitted pack id", req.sessionPackPurchaseId()),
                     SecurityError.MISSING_RIGHTS);
             }
+            // fix/payment-session-pack-integrity: a pack is bought for one player — a parent must not spend one
+            // child's pack on a sibling. Both ids are PlayerProfile PKs (purchasePack stores the profile id).
+            if (!Objects.equals(pack.getPlayerId(), req.playerId())) {
+                throw new PaymentGatewayException("payment.packPlayerMismatch");
+            }
             if (pack.getExpiresAt().isBefore(Instant.now())) {
                 throw new PaymentGatewayException("payment.packExpired");
+            }
+            // fix/payment-session-pack-integrity: a pause extends expiresAt — booking against a paused pack
+            // would turn the pause into a free extension (findActivePacks applies the same rule).
+            if (pack.getPausedUntil() != null && pack.getPausedUntil().isAfter(Instant.now())) {
+                throw new PaymentGatewayException("payment.packPaused");
             }
             if (!pack.getCoachId().equals(req.coachId())) {
                 throw new PaymentGatewayException("payment.packCoachMismatch");
@@ -918,11 +934,24 @@ public class BookingService {
 
     @Transactional
     public void cancelDueToPause(UUID bookingId, UUID coachId, Long parentId) {
-        Booking booking = getBookingOrThrow(bookingId);
+        // fix/payment-session-pack-integrity: locked (not a plain read) so the captured/not-captured decision
+        // below cannot race a concurrent settle — the same reason cancelBookingAsAdmin locks first.
+        Booking booking = lockBookingForUpdate(bookingId);
         if (!Objects.equals(booking.getParentId(), parentId) || !Objects.equals(booking.getCoachId(), coachId)) {
             throw new OperationNotAllowedException("Booking does not belong to this parent/pack", SecurityError.MISSING_RIGHTS);
         }
         rejectIfPostCompletion(booking); // skillars-deferred-106 AC9.2
+        // fix/payment-session-pack-integrity: a pause cancelling a paid booking returns what was paid —
+        // RefundEnqueueListener restores the pack session or refunds the amount actually paid (C6
+        // resolveAmountPaid, not the current price). A not-yet-captured booking was never charged.
+        boolean paymentCaptured = BookingStatus.CONFIRMED.name().equals(booking.getStatus())
+            || BookingStatus.UPCOMING.name().equals(booking.getStatus());
+        boolean packExpired = paymentCaptured && booking.getSessionPackPurchaseId() != null
+            && sessionPackPurchaseRepository.findById(booking.getSessionPackPurchaseId())
+                .map(p -> p.getExpiresAt().isBefore(Instant.now()))
+                .orElse(false);
+        BigDecimal refundAmount = paymentCaptured && (booking.getSessionPackPurchaseId() == null || packExpired)
+            ? resolveAmountPaid(booking) : BigDecimal.ZERO;
         try {
             transition(bookingId, BookingEvent.CANCEL_DUE_TO_PAUSE, new TransitionContext(ActorRole.SYSTEM, null));
         } catch (OptimisticLockingFailureException e) {
@@ -934,9 +963,10 @@ public class BookingService {
         String parentName = resolveParentName(parentId);
         eventPublisher.publishEvent(new BookingCancelledDueToPauseEvent(
             this, bookingId, parentId, coachId, coachEmail, coachDisplayName,
-            parentName, booking.getRequestedStartTime(), booking.getCanonicalTimezone()
+            parentName, booking.getRequestedStartTime(), booking.getCanonicalTimezone(),
+            booking.getSessionPackPurchaseId(), paymentCaptured, packExpired, refundAmount
         ));
-        log.info("Booking {} cancelled due to pack pause", bookingId);
+        log.info("Booking {} cancelled due to pack pause (paymentCaptured={})", bookingId, paymentCaptured);
     }
 
     private BookingStatus readStatusOrThrow(Booking booking) {

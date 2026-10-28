@@ -2005,7 +2005,6 @@ class BookingServiceTest {
     void cancelDueToPause_concurrentModification_throwsRetryableException() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
 
-        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
         when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
 
@@ -2014,6 +2013,70 @@ class BookingServiceTest {
             .hasCauseInstanceOf(OptimisticLockingFailureException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
+    }
+
+    // ---- fix/payment-session-pack-integrity: a pause cancelling a paid booking returns what was paid ----
+
+    private com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent pauseEvent() {
+        return publishedEvents().stream()
+            .filter(com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent.class::isInstance)
+            .map(com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent.class::cast)
+            .findFirst().orElseThrow();
+    }
+
+    @Test
+    void cancelDueToPause_capturedCardBooking_refundsTheAmountActuallyPaid() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        BookingPayment bp = new BookingPayment();
+        bp.setBookingId(booking.getId());
+        bp.setStatus("CAPTURED");
+        bp.setCreditDebited(new BigDecimal("10.00"));
+        bp.setStripeCharged(new BigDecimal("30.00"));
+        when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.of(bp));
+
+        bookingService.cancelDueToPause(booking.getId(), COACH_ID, PARENT_ID);
+
+        var event = pauseEvent();
+        assertThat(event.isWalletRefund()).isTrue();
+        assertThat(event.isPackRestore()).isFalse();
+        assertThat(event.getRefundAmount()).isEqualByComparingTo("40.00");
+        verify(coachPricingRepository, never()).findByCoachId(any());
+    }
+
+    @Test
+    void cancelDueToPause_capturedPackBooking_restoresTheSession() {
+        UUID packId = UUID.randomUUID();
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        booking.setSessionPackPurchaseId(packId);
+        com.softropic.skillars.platform.payment.repo.SessionPackPurchase pack =
+            new com.softropic.skillars.platform.payment.repo.SessionPackPurchase();
+        pack.setExpiresAt(Instant.now().plusSeconds(86_400));
+        when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        bookingService.cancelDueToPause(booking.getId(), COACH_ID, PARENT_ID);
+
+        var event = pauseEvent();
+        assertThat(event.isPackRestore()).isTrue();
+        assertThat(event.isWalletRefund()).isFalse();
+        assertThat(event.getSessionPackPurchaseId()).isEqualTo(packId);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"REQUESTED", "ACCEPTED"})
+    void cancelDueToPause_notYetCaptured_returnsNothing(String status) {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, status);
+        booking.setSessionPackPurchaseId(UUID.randomUUID());
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        bookingService.cancelDueToPause(booking.getId(), COACH_ID, PARENT_ID);
+
+        var event = pauseEvent();
+        assertThat(event.isPaymentCaptured()).isFalse();
+        assertThat(event.isPackRestore()).isFalse();
+        assertThat(event.isWalletRefund()).isFalse();
+        verify(bookingPaymentRepository, never()).findById(any());
     }
 
     // ---- recordNoShowCoach tests (Deferred-63 AC4) ----

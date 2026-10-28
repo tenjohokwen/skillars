@@ -100,6 +100,14 @@ public class PackSessionService {
         if (purchase.getRemainingSessions() <= 0) {
             throw new PaymentGatewayException("payment.packExhausted");
         }
+        // fix/payment-session-pack-integrity: a pause extends expiresAt by its length, so spending a paused
+        // pack would make the pause a free extension. The accept path records a payment failure for it,
+        // as for an exhausted pack.
+        if (purchase.getPausedUntil() != null && purchase.getPausedUntil().isAfter(Instant.now())) {
+            throw new PaymentGatewayException("payment.packPaused");
+        }
+        // Expiry is deliberately NOT re-checked here: the policy is "book within the pack's validity; the
+        // session may take place later" — BookingService.createBookingRequest checks it at request time.
 
         purchase.setRemainingSessions(purchase.getRemainingSessions() - 1);
         sessionPackPurchaseRepository.save(purchase);
@@ -112,14 +120,31 @@ public class PackSessionService {
         }
     }
 
+    /**
+     * fix/payment-session-pack-integrity: gives back the pack session a cancelled booking had consumed —
+     * exactly once per booking. Reached only from {@link PackSessionRestoreOutboxHandler} (the restore is
+     * enqueued BEFORE_COMMIT with the cancellation, see {@link PackRestoreOutboxSupport}); the V195
+     * {@code pack_session_restores} marker is claimed in this same transaction, so a re-driven outbox row
+     * is a no-op. Lock first, then claim: the marker insert and the increment commit together or not at all.
+     */
     @Transactional
-    public void restoreSession(UUID purchaseId) {
+    public void restoreSessionForBooking(UUID purchaseId, UUID bookingId, String reason) {
         SessionPackPurchase purchase = lockRetryer.withBoundedRetry("PackSessionService.restoreSession",
-            () -> sessionPackPurchaseRepository.findByIdForUpdate(purchaseId)
-                .orElseThrow(() -> new PaymentGatewayException("payment.packNotFound")));
+            () -> sessionPackPurchaseRepository.findByIdForUpdate(purchaseId).orElse(null));
+        if (purchase == null) {
+            // Throwing would only re-drive forever: the pack row is gone (FK cascade removes the marker too).
+            log.error("[PACK_SESSION_RESTORE] pack {} for booking {} no longer exists — session NOT restored, "
+                + "reconcile by hand", purchaseId, bookingId);
+            return;
+        }
+        if (sessionPackPurchaseRepository.insertRestoreMarker(bookingId, purchaseId, reason) == 0) {
+            log.info("[PACK_SESSION_RESTORE] session for booking {} already restored to pack {} — re-drive is a no-op",
+                bookingId, purchaseId);
+            return;
+        }
         purchase.setRemainingSessions(purchase.getRemainingSessions() + 1);
         sessionPackPurchaseRepository.save(purchase);
-        log.info("Session restored to pack: purchaseId={}", purchaseId);
+        log.info("Session restored to pack: purchaseId={} bookingId={} reason={}", purchaseId, bookingId, reason);
     }
 
     @Transactional(readOnly = true)

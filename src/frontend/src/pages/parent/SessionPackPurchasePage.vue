@@ -88,7 +88,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useBookingStore } from 'src/stores/booking.store'
@@ -153,14 +153,32 @@ function formatPrice(value) {
   }).format(Number(value))
 }
 
+// One key per purchase attempt (sent as Idempotency-Key): a double-click or a retry after a lost
+// response replays the same charge instead of buying a second pack. Kept across a retry that never got
+// an answer; a fresh one is minted once the server has answered (success or a definite failure).
+let attemptKey = null
+
+function newAttemptKey() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+}
+
+// A different pack choice is a different purchase.
+watch(selected, () => {
+  attemptKey = null
+})
+
 async function confirmPurchase() {
-  if (!selected.value || !playerId) return
+  if (!selected.value || !playerId || purchasing.value) return
   purchasing.value = true
   purchaseError.value = null
+  attemptKey ??= newAttemptKey()
   try {
-    await bookingStore.purchasePack(playerId, selected.value)
+    await bookingStore.purchasePack(playerId, selected.value, undefined, attemptKey)
+    attemptKey = null
     router.back()
   } catch (e) {
+    if (e?.response) attemptKey = null
     purchaseError.value = e?.response?.data?.message ?? t('booking.packs.purchaseError')
   } finally {
     purchasing.value = false

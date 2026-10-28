@@ -1,8 +1,6 @@
 package com.softropic.skillars.platform.payment.service;
 
-import com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
-import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
 import com.softropic.skillars.platform.booking.contract.PlayerNoShowEvent;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
@@ -23,6 +21,12 @@ import java.time.temporal.ChronoUnit;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * Coach-side consequences of a cancellation / no-show — cancellation history and reliability strikes —
+ * run AFTER_COMMIT so their failure can never roll back the cancellation. Money (wallet refunds and, since
+ * fix/payment-session-pack-integrity, pack session restores) is enqueued BEFORE_COMMIT by
+ * {@link RefundEnqueueListener}; parent and admin cancellations therefore need no listener here.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -31,33 +35,15 @@ public class CancellationRefundService {
     private static final Set<String> EXCUSED_REASONS =
         Set.of("MUTUAL_AGREEMENT", "HEALTH_MEDICAL", "FAMILY_EMERGENCY", "WEATHER");
 
-    private final PackSessionService packSessionService;
     private final CoachCancellationHistoryRepository cancellationHistoryRepository;
     private final ReliabilityStrikeService reliabilityStrikeService;
     private final ConfigService configService;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void onBookingCancelledByParent(BookingCancelledByParentEvent event) {
-        // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT)
-        if (event.getSessionPackPurchaseId() != null) {
-            if (event.isRefundEligible()) {
-                packSessionService.restoreSession(event.getSessionPackPurchaseId());
-                log.info("Pack session restored for parent cancellation >24h: bookingId={}", event.getBookingId());
-            }
-            // else: forfeited, no action — session consumed
-        }
-    }
-
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onBookingCancelledByCoach(BookingCancelledByCoachEvent event) {
-        // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT).
-        // C6: only a captured booking's pack session was ever deducted (at settle), so an ACCEPTED one
-        // has nothing to restore — restoring it would hand the parent a free session.
-        if (event.isPackRestore()) {
-            packSessionService.restoreSession(event.getSessionPackPurchaseId());
-        }
+        // skillars-deferred-101 AC4 / fix/payment-session-pack-integrity: the refund and the pack session
+        // restore are both enqueued by RefundEnqueueListener (BEFORE_COMMIT, durable outbox).
 
         // Always record cancellation history — ALL coach cancellations (excused AND unexcused)
         String reason = event.getCancelReason() != null ? event.getCancelReason() : "OTHER_UNEXCUSED";
@@ -89,11 +75,8 @@ public class CancellationRefundService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onCoachNoShow(CoachNoShowEvent event) {
-        // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT)
-        if (event.isPackRestore()) {
-            packSessionService.restoreSession(event.getSessionPackPurchaseId());
-        }
-
+        // skillars-deferred-101 AC4 / fix/payment-session-pack-integrity: refund and pack restore are enqueued
+        // by RefundEnqueueListener (BEFORE_COMMIT, durable outbox).
         issueStrikeSafely(event.getCoachId(), event.getBookingId(), "COACH_NO_SHOW");
         log.info("Coach no-show processed: bookingId={}", event.getBookingId());
     }
@@ -114,19 +97,6 @@ public class CancellationRefundService {
         } catch (PessimisticLockingFailureException e) {
             log.warn("Strike issuance skipped for coachId={} bookingId={} reason={} — coach-row lock "
                 + "retry exhausted; the refund is unaffected", coachId, bookingId, reason, e);
-        }
-    }
-
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void onBookingCancelledByAdmin(BookingCancelledByAdminEvent event) {
-        // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT).
-        // C2: only a captured booking's pack session was ever deducted (PaymentLifecycleService deducts
-        // at settle, not at request), so only that one is restored. Deliberately no cancellation
-        // history and no reliability strike — the coach did not cancel; an admin/system action did.
-        if (event.isPackRestore()) {
-            packSessionService.restoreSession(event.getSessionPackPurchaseId());
-            log.info("Pack session restored for admin cancellation: bookingId={}", event.getBookingId());
         }
     }
 

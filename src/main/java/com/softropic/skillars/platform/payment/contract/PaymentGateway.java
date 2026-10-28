@@ -17,6 +17,14 @@ public interface PaymentGateway {
     String chargeAndCapture(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount);
 
     /**
+     * fix/payment-session-pack-integrity: {@link #chargeAndCapture(UUID, Long, UUID, BigDecimal)} under a
+     * caller-chosen Stripe idempotency key that names ONE purchase attempt — a retry of that attempt replays
+     * its PaymentIntent, a different attempt always charges. Used by the session-pack purchase, whose
+     * {@code referenceId} (the tier id) is not unique per charge.
+     */
+    String chargeAndCapture(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount, String idempotencyKey);
+
+    /**
      * Creates a single platform-account charge for a batch of credit-based bookings (see
      * {@link #chargeAndCapture} — same B-1 model). Returns stripePaymentIntentId.
      */

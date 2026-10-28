@@ -299,8 +299,8 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
-  async function purchasePack(playerId, packTierId, paymentMethodId) {
-    await purchaseSessionPack(packTierId, playerId, paymentMethodId)
+  async function purchasePack(playerId, packTierId, paymentMethodId, attemptKey) {
+    await purchaseSessionPack(packTierId, playerId, paymentMethodId, attemptKey)
     await loadPlayerPacks(playerId)
   }
 

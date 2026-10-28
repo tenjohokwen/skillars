@@ -1470,6 +1470,8 @@ export default {
         'Dieses Sitzungspaket ist am {date} abgelaufen. Kontaktieren Sie Ihren Coach für eine Verlängerung.',
       exhausted: 'Ihr Sitzungspaket ist vollständig aufgebraucht',
       packCoachMismatch: 'Dieses Sitzungspaket gilt für einen anderen Coach.',
+      packPlayerMismatch: 'Dieses Sitzungspaket gehört einem anderen Spieler.',
+      packPaused: 'Dieses Sitzungspaket ist pausiert. Buche erneut, sobald die Pause endet.',
       packExpired: 'Dieses Sitzungspaket ist abgelaufen.',
       packExhausted: 'Dieses Sitzungspaket hat keine verbleibenden Sitzungen.',
       extendSuccess: 'Ihr Sitzungspaket wurde bis zum {date} verlängert',

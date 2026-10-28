@@ -9,8 +9,14 @@ export const fetchCreditBalance = () => api.get('/api/payment/credits/balance')
 export const cashOut = (amount) => api.post('/api/payment/credits/cashout', { amount })
 
 // Session pack — parent
-export const purchaseSessionPack = (packTierId, playerId, paymentMethodId) =>
-  api.post('/api/payment/session-packs/purchase', { packTierId, playerId, paymentMethodId })
+// attemptKey: one stable key per purchase attempt (Idempotency-Key), so a double-submit or a retry
+// after a lost response dedupes to the same charge and pack instead of charging twice.
+export const purchaseSessionPack = (packTierId, playerId, paymentMethodId, attemptKey) =>
+  api.post(
+    '/api/payment/session-packs/purchase',
+    { packTierId, playerId, paymentMethodId },
+    attemptKey ? { headers: { 'Idempotency-Key': attemptKey } } : undefined,
+  )
 export const getMySessionPacks = (coachId) =>
   api.get('/api/payment/session-packs', { params: coachId ? { coachId } : {} })
 export const pauseSessionPack = (purchaseId, data) =>

@@ -87,6 +87,36 @@ class StripePaymentGatewayTest {
         assertThat(keyCaptor.getValue()).startsWith("pi-" + PACK_TIER_ID + "-1001-");
     }
 
+    /** fix/payment-session-pack-integrity: the pack purchase's per-attempt key is used verbatim — no time bucket. */
+    @Test
+    void chargeAndCapture_explicitKey_isPassedVerbatim() throws StripeException {
+        stubCoachAndCommission();
+        stubStripeCustomer(1001L, "cus_1001");
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenReturn(mockIntent("pi_1"));
+
+        stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT, "pack-1001-attempt-a");
+
+        org.mockito.Mockito.verify(stripeClient)
+            .createPaymentIntent(any(PaymentIntentCreateParams.class), org.mockito.ArgumentMatchers.eq("pack-1001-attempt-a"));
+    }
+
+    /**
+     * fix/payment-session-pack-integrity: the money is captured before last_payment_intent_id is saved. A failing
+     * save used to escape before the intent id reached the caller — captured, no pack, no compensating refund.
+     */
+    @Test
+    void chargeAndCapture_lastIntentSaveFails_stillReturnsTheCapturedIntent() throws StripeException {
+        stubCoachAndCommission();
+        stubStripeCustomer(1001L, "cus_1001");
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenReturn(mockIntent("pi_captured"));
+        when(stripeCustomerRepository.save(any())).thenThrow(new org.springframework.dao.QueryTimeoutException("lock timeout"));
+
+        assertThat(stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT, "pack-1001-attempt-b"))
+            .isEqualTo("pi_captured");
+    }
+
     @Test
     void chargeAndCapture_passesConfiguredCurrencyToStripe() throws StripeException {
         stubCoachAndCommission();

@@ -4,6 +4,7 @@ import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
@@ -76,6 +77,26 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
      */
     @Query("SELECT COALESCE(SUM(p.amountCharged), 0) FROM SessionPackPurchase p WHERE p.createdAt BETWEEN :from AND :to")
     BigDecimal sumAmountChargedForPeriod(@Param("from") Instant from, @Param("to") Instant to);
+
+    /**
+     * fix/payment-session-pack-integrity: the pack (if any) already funded by this Stripe charge. Backed by
+     * the V195 partial unique index, so at most one row matches.
+     */
+    Optional<SessionPackPurchase> findByStripePaymentIntentId(String stripePaymentIntentId);
+
+    /**
+     * fix/payment-session-pack-integrity: claims the per-booking restore marker (V195). Returns 1 when this
+     * call claimed it (the caller then restores the session in the same transaction), 0 when the booking's
+     * session was already restored — a re-driven outbox row.
+     */
+    @Modifying
+    @Query(nativeQuery = true, value = """
+        INSERT INTO payment.pack_session_restores (booking_id, purchase_id, reason, restored_at)
+        VALUES (:bookingId, :purchaseId, :reason, now())
+        ON CONFLICT (booking_id) DO NOTHING
+        """)
+    int insertRestoreMarker(@Param("bookingId") UUID bookingId, @Param("purchaseId") UUID purchaseId,
+                            @Param("reason") String reason);
 
     /** Pack purchases in the period that went through a Stripe charge — the Stripe-fee estimate's count. */
     @Query("SELECT COUNT(p) FROM SessionPackPurchase p WHERE p.stripePaymentIntentId IS NOT NULL AND p.createdAt BETWEEN :from AND :to")

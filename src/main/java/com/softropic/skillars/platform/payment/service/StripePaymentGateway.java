@@ -59,6 +59,24 @@ public class StripePaymentGateway implements PaymentGateway {
      */
     @Override
     public String chargeAndCapture(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount) {
+        return charge(referenceId, parentId, coachId, amount, null);
+    }
+
+    /**
+     * fix/payment-session-pack-integrity: the session-pack purchase passes a per-attempt key, so the tier-id
+     * + time-bucket key below (which replayed a sibling's purchase inside one minute and double-charged a
+     * retry crossing the minute boundary) no longer applies to it.
+     */
+    @Override
+    public String chargeAndCapture(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount,
+                                   String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new IllegalArgumentException("idempotencyKey is required");
+        }
+        return charge(referenceId, parentId, coachId, amount, idempotencyKey);
+    }
+
+    private String charge(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount, String explicitKey) {
         // Fail fast: throws payment.coachStripeNotConfigured if the coach has no COMPLETE +
         // charges_enabled connected account. The returned id is intentionally discarded — B-1 does
         // not put it on the PaymentIntent.
@@ -98,38 +116,39 @@ public class StripePaymentGateway implements PaymentGateway {
         // skillars-deferred-106 AC1.3: the idempotency-key scheme is preserved UNCHANGED — only the
         // PaymentIntent params changed.
         //
-        // Key incorporates parentId, not just referenceId: SessionPackPaymentService.purchasePack
-        // passes a shared session-pack tier id as referenceId, which repeats across every parent
-        // who buys that tier — referenceId alone would let two different parents' purchases
-        // collide on the same Stripe idempotency key.
-        //
-        // The time bucket exists for the same purchasePack path: referenceId there is stable
-        // per tier, not per purchase attempt, so a parent legitimately buying the same tier
-        // twice would otherwise collide on the same key as their first purchase and Stripe
-        // would silently replay the first PaymentIntent instead of charging again. A short
-        // window still dedupes true retries (e.g. a duplicate event/network resend of the same
-        // attempt) without blocking a second, later, genuinely separate purchase. The two
-        // PaymentLifecycleService callers pass a booking/batch id that is already unique per
-        // charge attempt, so the bucket is a no-op there — those are fired once per booking
-        // acceptance with no scheduled retry of the charge itself.
+        // Default key (no explicit key): the two PaymentLifecycleService callers pass a booking/batch id that
+        // is already unique per charge attempt, so the parentId component and the time bucket are a no-op
+        // there — those are fired once per booking acceptance with no scheduled retry of the charge itself.
+        // The bucket originally existed for the session-pack purchase, whose referenceId (the tier id) is
+        // not unique per purchase; that path now passes a per-attempt key instead (see
+        // fix/payment-session-pack-integrity on the 5-arg chargeAndCapture).
         long bucket = Instant.now(ClockProvider.getClock()).getEpochSecond() / IDEMPOTENCY_KEY_WINDOW.toSeconds();
         // parentId is null only via the deprecated capturePayment() overload (no current caller).
         // Fall back to coachId — always non-null — rather than the literal "null", so two
         // distinct null-parentId charges sharing a referenceId don't collide on one key.
         Object keyOwner = parentId != null ? parentId : coachId;
-        String idempotencyKey = "pi-" + referenceId + "-" + keyOwner + "-" + bucket;
+        String idempotencyKey = explicitKey != null ? explicitKey : "pi-" + referenceId + "-" + keyOwner + "-" + bucket;
+        PaymentIntent intent;
         try {
-            PaymentIntent intent = stripeClient.createPaymentIntent(builder.build(), idempotencyKey);
-            if (stripeCustomer != null) {
-                stripeCustomer.setLastPaymentIntentId(intent.getId());
-                stripeCustomerRepository.save(stripeCustomer);
-            }
-            log.info("Stripe charge captured (platform account): referenceId={} intentId={}", referenceId, intent.getId());
-            return intent.getId();
+            intent = stripeClient.createPaymentIntent(builder.build(), idempotencyKey);
         } catch (StripeException e) {
             log.error("Stripe charge failed: referenceId={} error={}", referenceId, e.getMessage());
             throw new PaymentGatewayException("payment.lifecycleFailure");
         }
+        log.info("Stripe charge captured (platform account): referenceId={} intentId={}", referenceId, intent.getId());
+        if (stripeCustomer != null) {
+            // fix/payment-session-pack-integrity: bookkeeping only, AFTER the money is captured. A failure here
+            // used to escape before the intent id reached the caller — captured with no record and no
+            // compensating refund. Never let it fail the charge.
+            try {
+                stripeCustomer.setLastPaymentIntentId(intent.getId());
+                stripeCustomerRepository.save(stripeCustomer);
+            } catch (RuntimeException e) {
+                log.error("[STRIPE_LAST_INTENT_SAVE_FAILED] charge captured but stripe_customers.last_payment_intent_id "
+                    + "not updated: parentId={} intentId={}", parentId, intent.getId(), e);
+            }
+        }
+        return intent.getId();
     }
 
     @Override

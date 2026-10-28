@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent;
 import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,8 +19,11 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * atomically with the booking CANCELLED write. Runs before commit, so a failed enqueue rolls back
  * the entire transaction, surfacing the error to the caller rather than silently losing money.
  * This complements the separate AFTER_COMMIT listeners in {@link CancellationRefundService},
- * which handle pack-restore, cancellation history, and strike issuance (which must survive
- * refund failures — see AC4).
+ * which handle cancellation history and strike issuance (which must survive refund failures — see AC4).
+ *
+ * <p>fix/payment-session-pack-integrity: pack session restores are enqueued here too, onto the durable
+ * outbox ({@link PackRestoreOutboxSupport}), for the same atomicity reason — they used to run inline in
+ * those AFTER_COMMIT listeners, where a failure lost the session.
  *
  * <p>Replicate the exact enqueue conditions from the six sites in CancellationRefundService.
  */
@@ -29,6 +33,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 public class RefundEnqueueListener {
 
     private final RefundOutboxSupport refundOutboxSupport;
+    private final PackRestoreOutboxSupport packRestoreOutboxSupport;
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCancelledByParent(BookingCancelledByParentEvent event) {
@@ -38,6 +43,11 @@ public class RefundEnqueueListener {
                 event.getParentId(), event.getSessionPrice(), event.getBookingId(),
                 "Parent cancellation >24h — full refund");
         }
+        if (event.getSessionPackPurchaseId() != null && event.isRefundEligible()) {
+            packRestoreOutboxSupport.enqueuePackRestore(
+                event.getSessionPackPurchaseId(), event.getBookingId(), "PARENT_CANCELLATION");
+        }
+        // else: forfeited (<=24h), no action — session consumed
     }
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
@@ -52,6 +62,10 @@ public class RefundEnqueueListener {
                     ? "Coach cancellation — expired pack refund"
                     : "Coach cancellation — full refund");
         }
+        if (event.isPackRestore()) {
+            packRestoreOutboxSupport.enqueuePackRestore(
+                event.getSessionPackPurchaseId(), event.getBookingId(), "COACH_CANCELLATION");
+        }
     }
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
@@ -62,6 +76,10 @@ public class RefundEnqueueListener {
                 event.getSessionPackPurchaseId() != null
                     ? "Coach no-show — expired pack refund"
                     : "Coach no-show — full refund");
+        }
+        if (event.isPackRestore()) {
+            packRestoreOutboxSupport.enqueuePackRestore(
+                event.getSessionPackPurchaseId(), event.getBookingId(), "COACH_NO_SHOW");
         }
     }
 
@@ -75,6 +93,31 @@ public class RefundEnqueueListener {
             refundOutboxSupport.enqueueBookingRefund(
                 event.getParentId(), event.getRefundAmount(), event.getBookingId(),
                 refundDescription(event));
+        }
+        if (event.isPackRestore()) {
+            packRestoreOutboxSupport.enqueuePackRestore(
+                event.getSessionPackPurchaseId(), event.getBookingId(), "ADMIN_CANCELLATION");
+        }
+    }
+
+    /**
+     * fix/payment-session-pack-integrity: a pack pause cancelling a paid booking used to return nothing (the
+     * only listener was the coach email). Captured money comes back — the pack session, or the amount
+     * actually paid as wallet credit; a not-yet-captured booking was never charged. No coach strike: the
+     * parent paused.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onBookingCancelledDueToPause(BookingCancelledDueToPauseEvent event) {
+        if (event.isWalletRefund() && event.getRefundAmount() != null && event.getRefundAmount().signum() > 0) {
+            refundOutboxSupport.enqueueBookingRefund(
+                event.getParentId(), event.getRefundAmount(), event.getBookingId(),
+                event.getSessionPackPurchaseId() != null
+                    ? "Pack pause — expired pack refund"
+                    : "Pack pause — full refund");
+        }
+        if (event.isPackRestore()) {
+            packRestoreOutboxSupport.enqueuePackRestore(
+                event.getSessionPackPurchaseId(), event.getBookingId(), "PACK_PAUSE");
         }
     }
 

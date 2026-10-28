@@ -13,6 +13,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -118,6 +119,20 @@ public class SessionPackPurchase {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
+
+    /**
+     * fix/payment-session-pack-integrity: one session's share of what this pack was charged, for a refund of a
+     * single session — {@code amountCharged / sessionCount} rounded DOWN to the cent, so refunding every
+     * session can never return more than was paid (the tier's HALF_UP {@code pricePerSession} could:
+     * 3 x 66.67 = 200.01 for 200.00). Falls back to {@code pricePerSession} only for a legacy row V181/V186
+     * could not stamp.
+     */
+    public BigDecimal perSessionShare() {
+        if (amountCharged != null && sessionCount != null && sessionCount > 0) {
+            return amountCharged.divide(BigDecimal.valueOf(sessionCount), 2, RoundingMode.DOWN);
+        }
+        return pricePerSession;
+    }
 
     @PrePersist
     void onCreate() {

@@ -36,7 +36,9 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -46,6 +48,9 @@ public class SessionPackPaymentService {
 
     /** How long before expiry a coach may extend a pack (once). Shared with CoachSoldPackQueryService. */
     static final java.time.Duration EXTENSION_WINDOW = java.time.Duration.ofDays(14);
+
+    /** A client purchase-attempt key: UUID-like, bounded so the derived Stripe key stays under 255 chars. */
+    private static final Pattern ATTEMPT_KEY_PATTERN = Pattern.compile("[A-Za-z0-9_-]{8,64}");
 
     private final SessionPackTierRepository sessionPackTierRepository;
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
@@ -72,6 +77,20 @@ public class SessionPackPaymentService {
      * path.
      */
     public SessionPackPurchaseResponse purchasePack(Long parentId, UUID packTierId, Long playerId, String paymentMethodId) {
+        return purchasePack(parentId, packTierId, playerId, paymentMethodId, null);
+    }
+
+    /**
+     * fix/payment-session-pack-integrity: {@code attemptKey} names one purchase attempt (the client's
+     * {@code Idempotency-Key}; generated here when absent). It becomes the Stripe idempotency key, so a
+     * double-submit replays the same PaymentIntent and gets back the pack that charge already funded — never
+     * a second pack for one charge (V195 unique index), and never a sibling's purchase replayed.
+     */
+    public SessionPackPurchaseResponse purchasePack(Long parentId, UUID packTierId, Long playerId, String paymentMethodId,
+                                                    String attemptKey) {
+        if (attemptKey != null && !ATTEMPT_KEY_PATTERN.matcher(attemptKey).matches()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payment.invalidIdempotencyKey");
+        }
         // Deferred-81 AC4: a self-registered (no-parent) player has parentId == null by
         // definition, so the old findByIdAndParentId(playerId, parentId) lookup always returned
         // empty for them — reworks this into the same parentId-vs-userId XOR branch
@@ -97,14 +116,40 @@ public class SessionPackPaymentService {
 
         StripeCustomer customer = getOrCreateStripeCustomer(parentId, paymentMethodId);
 
+        // Scoped by parentId so two payers can never share a key, whatever the client sends.
+        String idempotencyKey = "pack-" + parentId + "-" + (attemptKey != null ? attemptKey : UUID.randomUUID());
         String paymentIntentId = paymentGateway.chargeAndCapture(
-            packTierId, parentId, tier.getCoachId(), tier.getTotalPrice());
+            packTierId, parentId, tier.getCoachId(), tier.getTotalPrice(), idempotencyKey);
+
+        // A replayed attempt whose pack is already recorded: return it, charge nothing more.
+        Optional<SessionPackPurchase> alreadyRecorded = sessionPackPurchaseRepository.findByStripePaymentIntentId(paymentIntentId);
+        if (alreadyRecorded.isPresent()) {
+            return replayedPurchase(alreadyRecorded.get(), playerId, tier);
+        }
 
         SessionPackPurchase purchase;
         try {
             purchase = createPurchase(parentId, playerId, tier, paymentIntentId);
         } catch (Exception e) {
-            log.error("Purchase record creation failed after Stripe charge: packTierId={} parentId={}", packTierId, parentId, e);
+            log.error("[PACK_PURCHASE_RECORD_FAILED] purchase record creation failed after Stripe charge: "
+                + "packTierId={} parentId={} intentId={}", packTierId, parentId, paymentIntentId, e);
+            // A concurrent request for the same attempt may have recorded the pack for this very charge (the
+            // V195 unique index is what failed this insert). Refunding then would take back the money of a
+            // pack that exists — so refund only once it is proven that no pack holds this charge.
+            final Optional<SessionPackPurchase> winner;
+            try {
+                winner = sessionPackPurchaseRepository.findByStripePaymentIntentId(paymentIntentId);
+            } catch (Exception lookupEx) {
+                log.error("[PACK_PURCHASE_UNRECONCILED] charge captured, pack record failed and the intent lookup "
+                    + "failed too — NOT refunded automatically, MANUAL RECOVERY REQUIRED: intentId={} amount={} "
+                    + "parentId={} packTierId={}", paymentIntentId, tier.getTotalPrice(), parentId, packTierId, lookupEx);
+                recordReconciliation(paymentIntentId, tier.getTotalPrice(), parentId, packTierId,
+                    "pack record failed and intent lookup failed (not refunded): " + lookupEx);
+                throw new PaymentGatewayException("payment.lifecycleFailure");
+            }
+            if (winner.isPresent()) {
+                return replayedPurchase(winner.get(), playerId, tier);
+            }
             try {
                 paymentGateway.refund(paymentIntentId, tier.getTotalPrice(), "refund-" + paymentIntentId);
             } catch (Exception refundEx) {
@@ -112,22 +157,35 @@ public class SessionPackPaymentService {
                 // throw or an unwrapped StripeException used to propagate here and skip both the
                 // reconciliation record and the lifecycleFailure wrap. Excludes Error only.
                 log.error("Compensating refund also failed: intentId={}", paymentIntentId, refundEx);
-                try {
-                    refundReconciliationService.recordRefundFailure(
-                        paymentIntentId, tier.getTotalPrice(), parentId, packTierId, refundEx.toString());
-                } catch (Exception reconEx) {
-                    // The reconciliation write is the last line of defence; if it also fails the
-                    // money is unrecoverable from the DB. Log at ERROR with the full context so it
-                    // is recoverable from the logs, then still throw a clean lifecycleFailure.
-                    log.error("Refund reconciliation record could not be persisted — MANUAL RECOVERY "
-                        + "REQUIRED: intentId={} amount={} parentId={} packTierId={}",
-                        paymentIntentId, tier.getTotalPrice(), parentId, packTierId, reconEx);
-                }
+                recordReconciliation(paymentIntentId, tier.getTotalPrice(), parentId, packTierId, refundEx.toString());
             }
             throw new PaymentGatewayException("payment.lifecycleFailure");
         }
 
         return toResponse(purchase, tier.getLabel(), tier.getSessionCount());
+    }
+
+    /** The pack an earlier delivery of the same attempt already recorded for this charge. */
+    private SessionPackPurchaseResponse replayedPurchase(SessionPackPurchase existing, Long playerId, SessionPackTier tier) {
+        if (!Objects.equals(existing.getPlayerId(), playerId) || !Objects.equals(existing.getPackTierId(), tier.getPackTierId())) {
+            // Same attempt key, different purchase: never hand back (or create) a pack the charge did not fund.
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "payment.idempotencyKeyReused");
+        }
+        log.info("Pack purchase replayed: purchaseId={} intentId={}", existing.getPurchaseId(), existing.getStripePaymentIntentId());
+        return toResponse(existing, tier.getLabel(), tier.getSessionCount());
+    }
+
+    private void recordReconciliation(String paymentIntentId, BigDecimal amount, Long parentId, UUID packTierId, String reason) {
+        try {
+            refundReconciliationService.recordRefundFailure(paymentIntentId, amount, parentId, packTierId, reason);
+        } catch (Exception reconEx) {
+            // The reconciliation write is the last line of defence; if it also fails the money is
+            // unrecoverable from the DB. Log at ERROR with the full context so it is recoverable from the
+            // logs, then still throw a clean lifecycleFailure (the caller does).
+            log.error("Refund reconciliation record could not be persisted — MANUAL RECOVERY "
+                + "REQUIRED: intentId={} amount={} parentId={} packTierId={}",
+                paymentIntentId, amount, parentId, packTierId, reconEx);
+        }
     }
 
     public List<SessionPackPurchaseResponse> getPacksForParent(Long parentId, UUID coachId) {

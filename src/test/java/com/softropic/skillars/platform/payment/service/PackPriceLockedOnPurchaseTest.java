@@ -71,7 +71,7 @@ class PackPriceLockedOnPurchaseTest {
         customer.setStripeCustomerId("cus_stub_" + PARENT_ID);
         when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(customer));
 
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any())).thenReturn("pi_stub_123");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any())).thenReturn("pi_stub_123");
         when(configService.getString("platform.commission.rate")).thenReturn("0.12");
 
         ArgumentCaptor<SessionPackPurchase> purchaseCaptor = ArgumentCaptor.forClass(SessionPackPurchase.class);
@@ -111,7 +111,7 @@ class PackPriceLockedOnPurchaseTest {
         when(playerProfileRepository.findById(PLAYER_ID))
             .thenReturn(Optional.of(parentOwnedPlayer()));
         when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomer()));
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any())).thenReturn("pi_stub_original");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any())).thenReturn("pi_stub_original");
 
         ArgumentCaptor<SessionPackPurchase> firstCaptor = ArgumentCaptor.forClass(SessionPackPurchase.class);
         SessionPackPurchase firstPurchase = new SessionPackPurchase();

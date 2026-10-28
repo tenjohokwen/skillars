@@ -281,7 +281,8 @@ class SessionPackPaymentResourceWebMvcTest {
     void purchaseSessionPack_playerRole_returns201() throws Exception {
         when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
         java.util.UUID packTierId = java.util.UUID.randomUUID();
-        when(sessionPackPaymentService.purchasePack(eq(PARENT_USER_ID), eq(packTierId), eq(1L), any()))
+        when(sessionPackPaymentService.purchasePack(eq(PARENT_USER_ID), eq(packTierId), eq(1L), any(),
+                org.mockito.ArgumentMatchers.isNull()))
             .thenReturn(new SessionPackPurchaseResponse(
                 java.util.UUID.randomUUID(), packTierId, "Starter", 5, 5, new BigDecimal("20.00"),
                 Instant.now().plusSeconds(3600), "pi_test", 1L, java.util.UUID.randomUUID(), null, "ACTIVE"));
@@ -290,6 +291,23 @@ class SessionPackPaymentResourceWebMvcTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"packTierId\":\"" + packTierId + "\",\"playerId\":1}"))
             .andExpect(status().isCreated());
+    }
+
+    /** fix/payment-session-pack-integrity: the client's per-attempt Idempotency-Key reaches the service. */
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void purchaseSessionPack_forwardsTheIdempotencyKeyHeader() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        java.util.UUID packTierId = java.util.UUID.randomUUID();
+
+        mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .header("Idempotency-Key", "3f2b8c1e-attempt")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"packTierId\":\"" + packTierId + "\",\"playerId\":1}"))
+            .andExpect(status().isCreated());
+
+        org.mockito.Mockito.verify(sessionPackPaymentService).purchasePack(
+            eq(PARENT_USER_ID), eq(packTierId), eq(1L), any(), eq("3f2b8c1e-attempt"));
     }
 
     @Test

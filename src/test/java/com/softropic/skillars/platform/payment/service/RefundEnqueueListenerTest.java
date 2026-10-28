@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent;
 import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -36,6 +37,7 @@ import static org.mockito.Mockito.verify;
 class RefundEnqueueListenerTest {
 
     @Mock RefundOutboxSupport refundOutboxSupport;
+    @Mock PackRestoreOutboxSupport packRestoreOutboxSupport;
 
     @InjectMocks RefundEnqueueListener listener;
 
@@ -187,6 +189,74 @@ class RefundEnqueueListenerTest {
 
         verify(refundOutboxSupport).enqueueBookingRefund(
             eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
+    }
+
+    // ========== fix/payment-session-pack-integrity: pack restores go onto the outbox, BEFORE_COMMIT ==========
+
+    @Test
+    void packRestore_enqueuedOncePerEligibleEvent_withTheBookingAsIdempotencyKey() {
+        UUID packId = UUID.randomUUID();
+
+        listener.onBookingCancelledByParent(parentEvent(packId, true));
+        listener.onBookingCancelledByCoach(coachCancelEvent(packId, false));
+        listener.onCoachNoShow(noShowEvent(packId, false));
+        listener.onBookingCancelledByAdmin(adminCancelEvent(packId, true, false));
+        listener.onBookingCancelledDueToPause(pauseEvent(packId, true, false, BigDecimal.ZERO));
+
+        verify(packRestoreOutboxSupport).enqueuePackRestore(packId, BOOKING_ID, "PARENT_CANCELLATION");
+        verify(packRestoreOutboxSupport).enqueuePackRestore(packId, BOOKING_ID, "COACH_CANCELLATION");
+        verify(packRestoreOutboxSupport).enqueuePackRestore(packId, BOOKING_ID, "COACH_NO_SHOW");
+        verify(packRestoreOutboxSupport).enqueuePackRestore(packId, BOOKING_ID, "ADMIN_CANCELLATION");
+        verify(packRestoreOutboxSupport).enqueuePackRestore(packId, BOOKING_ID, "PACK_PAUSE");
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
+    }
+
+    @Test
+    void packRestore_neverForForfeitedUncapturedOrExpired() {
+        UUID packId = UUID.randomUUID();
+
+        listener.onBookingCancelledByParent(parentEvent(packId, false));
+        listener.onBookingCancelledByCoach(coachCancelEvent(packId, false, false));
+        listener.onBookingCancelledByCoach(coachCancelEvent(packId, true));
+        listener.onCoachNoShow(noShowEvent(packId, true));
+        listener.onBookingCancelledByAdmin(adminCancelEvent(packId, false, false));
+        listener.onBookingCancelledDueToPause(pauseEvent(packId, false, false, BigDecimal.ZERO));
+        listener.onBookingCancelledDueToPause(pauseEvent(packId, true, true, SESSION_PRICE));
+
+        verify(packRestoreOutboxSupport, never()).enqueuePackRestore(any(), any(), any());
+    }
+
+    // ========== fix/payment-session-pack-integrity: pause cancellations ==========
+
+    @Test
+    void onBookingCancelledDueToPause_capturedCardBooking_refundsTheAmountPaid() {
+        listener.onBookingCancelledDueToPause(pauseEvent(null, true, false, new BigDecimal("40.00")));
+
+        verify(refundOutboxSupport).enqueueBookingRefund(
+            eq(PARENT_ID), eq(new BigDecimal("40.00")), eq(BOOKING_ID), eq("Pack pause — full refund"));
+    }
+
+    @Test
+    void onBookingCancelledDueToPause_capturedExpiredPack_refundsTheShare() {
+        listener.onBookingCancelledDueToPause(pauseEvent(UUID.randomUUID(), true, true, SESSION_PRICE));
+
+        verify(refundOutboxSupport).enqueueBookingRefund(
+            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), eq("Pack pause — expired pack refund"));
+    }
+
+    @Test
+    void onBookingCancelledDueToPause_notCaptured_returnsNothing() {
+        listener.onBookingCancelledDueToPause(pauseEvent(null, false, false, BigDecimal.ZERO));
+
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
+        verify(packRestoreOutboxSupport, never()).enqueuePackRestore(any(), any(), any());
+    }
+
+    private BookingCancelledDueToPauseEvent pauseEvent(UUID packId, boolean captured, boolean packExpired,
+                                                       BigDecimal refundAmount) {
+        return new BookingCancelledDueToPauseEvent(
+            this, BOOKING_ID, PARENT_ID, COACH_ID, "coach@test.com", "Coach", "Parent",
+            Instant.now(), "UTC", packId, captured, packExpired, refundAmount);
     }
 
     private BookingCancelledByParentEvent parentEvent(UUID packId, boolean refundEligible) {
