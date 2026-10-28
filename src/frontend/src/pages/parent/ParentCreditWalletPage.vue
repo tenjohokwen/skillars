@@ -91,6 +91,23 @@ onMounted(async () => {
   await store.fetchCreditBalance()
 })
 
+// PaymentApiAdvice returns { helpCode: 'payment.<code>', errorMsg, fieldErrors } — there is no
+// `message` field, so the old `data.message ?? insufficientCredit` fallback showed "insufficient
+// credit" for every failure. Map the known cash-out codes; anything else gets a generic message.
+const CASHOUT_ERROR_MESSAGES = {
+  'payment.insufficientCredit': () => t('payment.credits.insufficientCredit'),
+  'payment.noPaymentMethod': () => t('payment.credits.noPaymentMethod'),
+  'payment.cashOutTooSmall': () => t('payment.credits.cashOutTooSmall'),
+  'payment.cashOutExceedsRefundable': () => t('payment.credits.cashOutExceedsRefundable'),
+  'payment.refundFailed': () => t('payment.credits.refundFailed'),
+  'payment.refundOutcomeUnknown': () => t('payment.credits.refundOutcomeUnknown'),
+}
+
+function cashoutErrorMessage(err) {
+  const message = CASHOUT_ERROR_MESSAGES[err?.response?.data?.helpCode]
+  return message ? message() : t('payment.credits.cashoutFailed')
+}
+
 async function handleCashOut() {
   cashingOut.value = true
   cashoutError.value = null
@@ -105,7 +122,7 @@ async function handleCashOut() {
     cashoutAmount.value = null
     await store.fetchCreditBalance()
   } catch (err) {
-    cashoutError.value = err?.response?.data?.message ?? t('payment.credits.insufficientCredit')
+    cashoutError.value = cashoutErrorMessage(err)
   } finally {
     cashingOut.value = false
   }

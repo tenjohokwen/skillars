@@ -86,8 +86,6 @@ public class SessionPackExpiryNotifier {
 
                     String parentEmail = userRepository.findById(pack.getParentId())
                         .map(u -> u.getEmail()).orElse("");
-                    String coachEmail = userRepository.findById(coach.getUserId())
-                        .map(u -> u.getEmail()).orElse("");
 
                     pack.setExpiryWarnedAt(now);
                     sessionPackPurchaseRepository.save(pack);
@@ -98,7 +96,6 @@ public class SessionPackExpiryNotifier {
                         pack.getParentId(),
                         parentEmail,
                         pack.getCoachId(),
-                        coachEmail,
                         coach.getDisplayName(),
                         pack.getRemainingSessions(),
                         pack.getExpiresAt(),

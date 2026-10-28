@@ -25,19 +25,16 @@ const OVERVIEW = {
   totalStripeFees: 20.1,
   activeCoachSubscriptions: { ACADEMY: 3 },
   activePlayerSubscriptions: {},
-  subscriptionRevenue: 0,
 }
 
 const REVENUE = {
   grossEarnings: 500,
   commissionDeducted: 40,
-  stripeFees: 8,
-  netPayout: 452,
+  netPayout: 460,
   sessionCount: 10,
   refundsIssued: 0,
   currency: 'EUR',
   reliabilityStrikeCount: 1,
-  outstandingDisputeCount: 0,
   pendingReleaseAmount: 50,
   pendingReleaseCount: 1,
 }
@@ -119,6 +116,10 @@ describe('AdminFinancePage.vue', () => {
     expect(adminApi.getCoachRevenue).toHaveBeenCalledWith(COACH_ID, '2026-09-01', '')
     expect(wrapper.find('[data-testid="finance-coach-revenue"]').exists()).toBe(true)
     expect(wrapper.vm.revenueMetrics.find((m) => m.key === 'sessions').value).toBe(10)
+    // fix/payment-money-integrity: the coach pays no Stripe fee (separate charges & transfers), so
+    // there is no fee line and the net shown is the transferred net.
+    expect(wrapper.vm.revenueMetrics.some((m) => m.key === 'stripeFees')).toBe(false)
+    expect(wrapper.vm.revenueMetrics.find((m) => m.key === 'net').value).toBe(460)
   })
 
   it('opens coach revenue by a typed coach id only when it is a UUID', async () => {

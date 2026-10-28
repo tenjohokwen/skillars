@@ -66,6 +66,40 @@ public interface BookingPaymentRepository extends JpaRepository<BookingPayment, 
     @Query("SELECT COUNT(bp) FROM BookingPayment bp WHERE bp.status = 'CAPTURED' AND bp.capturedAt BETWEEN :from AND :to")
     long countCapturedForPeriod(@Param("from") Instant from, @Param("to") Instant to);
 
+    /**
+     * fix/payment-money-integrity: platform commission for the admin finance overview, computed the
+     * way the coach payout computes it ({@code CoachPayoutOutboxSupport.enqueuePayout}): on the
+     * card-charged portion only, at the rate STAMPED at capture, rounded per row (HALF_UP — Postgres
+     * {@code ROUND(numeric, 2)} rounds half away from zero, identical for these non-negative
+     * amounts). A NULL stamp (legacy row) falls back to {@code liveRate}, exactly as the payout does.
+     *
+     * <p>A refunded booking keeps {@code status = 'CAPTURED'}, but its coach payout is cancelled or
+     * reversed, so no commission is earned on it: bookings with a {@code BOOKING_REFUND} ledger row
+     * are excluded. (A partial dispute refund therefore drops that booking's commission entirely —
+     * an understatement, the conservative side.)
+     */
+    @Query(value = """
+        SELECT COALESCE(SUM(ROUND(bp.stripe_charged * COALESCE(bp.commission_rate, :liveRate), 2)), 0)
+        FROM payment.booking_payments bp
+        WHERE bp.status = 'CAPTURED' AND bp.captured_at BETWEEN :from AND :to
+          AND NOT EXISTS (
+            SELECT 1 FROM payment.parent_credit_ledger l
+            WHERE l.type = 'BOOKING_REFUND' AND l.reference_id = bp.booking_id)
+        """, nativeQuery = true)
+    BigDecimal sumCommissionAtStampedRate(@Param("from") Instant from, @Param("to") Instant to,
+                                          @Param("liveRate") BigDecimal liveRate);
+
+    /** Card-charged booking money (excludes credit-funded portions) — the Stripe-fee estimate's base. */
+    @Query("SELECT COALESCE(SUM(bp.stripeCharged), 0) FROM BookingPayment bp WHERE bp.status = 'CAPTURED' AND bp.capturedAt BETWEEN :from AND :to")
+    BigDecimal sumCardChargedForPeriod(@Param("from") Instant from, @Param("to") Instant to);
+
+    /**
+     * Number of distinct Stripe charges behind the period's captured bookings: a batch shares one
+     * PaymentIntent across its bookings, and a credit/pack-funded booking has none.
+     */
+    @Query("SELECT COUNT(DISTINCT bp.stripePaymentIntentId) FROM BookingPayment bp WHERE bp.status = 'CAPTURED' AND bp.stripeCharged > 0 AND bp.capturedAt BETWEEN :from AND :to")
+    long countDistinctCardChargesForPeriod(@Param("from") Instant from, @Param("to") Instant to);
+
     @Query(value = """
         SELECT bp.booking_id
         FROM payment.booking_payments bp

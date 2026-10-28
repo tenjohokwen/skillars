@@ -1,6 +1,8 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.stripe.exception.ApiConnectionException;
 import com.stripe.exception.StripeException;
+import com.stripe.model.Charge;
 import com.stripe.model.PaymentIntent;
 import com.stripe.param.CustomerCreateParams;
 import com.stripe.param.PaymentIntentCreateParams;
@@ -185,20 +187,50 @@ public class StripePaymentGateway implements PaymentGateway {
     }
 
     @Override
-    public void refund(String stripePaymentIntentId, BigDecimal netAmount) {
+    public void refund(String stripePaymentIntentId, BigDecimal amount, String idempotencyKey) {
         RefundCreateParams params = RefundCreateParams.builder()
             .setPaymentIntent(stripePaymentIntentId)
-            .setAmount(toCents(netAmount))
+            .setAmount(toCents(amount))
             .build();
         try {
-            // skillars-deferred-99 AC1: deterministic key per PaymentIntent so a re-attempted
-            // compensating refund (caller retry / operator replay of a recorded failure) replays the
-            // original refund at Stripe instead of double-crediting the parent.
-            stripeClient.createRefund(params, "refund-" + stripePaymentIntentId);
-            log.info("Stripe refund issued: intentId={} amount={}", stripePaymentIntentId, netAmount);
+            // skillars-deferred-99 AC1: the key is chosen by the caller and names one logical refund,
+            // so a re-attempt of that refund replays it at Stripe instead of double-crediting. It must
+            // NOT be derived from the PaymentIntent alone: two distinct cash-outs against the same
+            // PaymentIntent would then share a key and the second would be a silent replay.
+            stripeClient.createRefund(params, idempotencyKey);
+            log.info("Stripe refund issued: intentId={} amount={} key={}", stripePaymentIntentId, amount, idempotencyKey);
         } catch (StripeException e) {
-            log.error("Stripe refund failed: intentId={} error={}", stripePaymentIntentId, e.getMessage());
-            throw new PaymentGatewayException("payment.refundFailed");
+            // A 4xx means Stripe rejected the request and created no refund. No status (network
+            // failure / timeout) or a 5xx means the refund MAY have been executed: the caller must
+            // not treat that as a failure and restore credit — it retries under the same key
+            // (Stripe replays an executed refund) or leaves it for reconciliation.
+            // ApiConnectionException carries status 0 (no HTTP response at all).
+            Integer status = e.getStatusCode();
+            boolean outcomeUnknown = e instanceof ApiConnectionException
+                || status == null || status == 0 || status >= 500;
+            log.error("Stripe refund {}: intentId={} key={} status={} error={}",
+                outcomeUnknown ? "outcome unknown" : "rejected", stripePaymentIntentId, idempotencyKey,
+                status, e.getMessage());
+            throw new PaymentGatewayException(outcomeUnknown ? "payment.refundOutcomeUnknown" : "payment.refundFailed");
+        }
+    }
+
+    @Override
+    public BigDecimal getRefundableAmount(String stripePaymentIntentId) {
+        try {
+            Charge charge = stripeClient.retrievePaymentIntentWithLatestCharge(stripePaymentIntentId)
+                .getLatestChargeObject();
+            if (charge == null) {
+                return BigDecimal.ZERO;
+            }
+            long captured = charge.getAmountCaptured() == null ? 0L : charge.getAmountCaptured();
+            long refunded = charge.getAmountRefunded() == null ? 0L : charge.getAmountRefunded();
+            return BigDecimal.valueOf(Math.max(0L, captured - refunded), 2);
+        } catch (StripeException e) {
+            // Nothing has been debited or refunded yet — a distinct code, so the payer is not told a
+            // refund failed.
+            log.error("Stripe refundable-amount lookup failed: intentId={} error={}", stripePaymentIntentId, e.getMessage());
+            throw new PaymentGatewayException("payment.refundLookupFailed");
         }
     }
 

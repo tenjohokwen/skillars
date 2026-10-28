@@ -12,6 +12,7 @@ import com.stripe.model.TransferReversal;
 import com.stripe.net.RequestOptions;
 import com.stripe.param.CustomerCreateParams;
 import com.stripe.param.PaymentIntentCreateParams;
+import com.stripe.param.PaymentIntentRetrieveParams;
 import com.stripe.param.RefundCreateParams;
 import com.stripe.param.SetupIntentCreateParams;
 import com.stripe.param.SubscriptionCreateParams;
@@ -44,6 +45,14 @@ public class StripeClient {
 
     public PaymentIntent retrievePaymentIntent(String id) throws StripeException {
         return PaymentIntent.retrieve(id);
+    }
+
+    /** One round-trip: the PaymentIntent with its latest Charge expanded (refundable-amount check). */
+    public PaymentIntent retrievePaymentIntentWithLatestCharge(String id) throws StripeException {
+        PaymentIntentRetrieveParams params = PaymentIntentRetrieveParams.builder()
+            .addExpand("latest_charge")
+            .build();
+        return PaymentIntent.retrieve(id, params, RequestOptions.getDefault());
     }
 
     public Refund createRefund(RefundCreateParams params) throws StripeException {

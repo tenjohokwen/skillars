@@ -142,11 +142,14 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * {@code DrillLibraryService.lockOwnedPrivateDrill} (shared by updateDrill/deleteDrill: a
      * findByIdForUpdate+orElseThrow plus entityManager.refresh, the DrillUploadService shape) and
      * {@code CoachGalleryService.lockProfile} (shared by addImage/deleteItem: a findByIdForUpdate+
-     * orElseThrow read); every drill/gallery write runs after withBoundedRetry returns). Asserted explicitly so an
+     * orElseThrow read); every drill/gallery write runs after withBoundedRetry returns) -- now 51 after
+     * fix/payment-money-integrity added {@code CreditWalletService.debitForCashOut} (a
+     * StripeCustomerRepository.findByIdForUpdate+orElseThrow read, the per-payer wallet lock; the
+     * balance read and ledger writes run after withBoundedRetry returns). Asserted explicitly so an
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 50;
+    private static final int EXPECTED_CALL_SITE_COUNT = 51;
 
     private record CallSite(String file, int line, String argument) {
     }
@@ -249,7 +252,8 @@ class PessimisticLockRetryerCallSiteAuditTest {
         "SessionPackPurchaseRepository", "findByIdForUpdate",
         "CoachProfileRepository", "findByIdForUpdate",
         "DrillRepository", "findByIdForUpdate",
-        "CoachReviewRepository", "findByIdForUpdateNoWait"
+        "CoachReviewRepository", "findByIdForUpdateNoWait",
+        "StripeCustomerRepository", "findByIdForUpdate"
     );
 
     private static List<String> findUnwrappedNoWaitLockCallsInFile(Path file) throws IOException {

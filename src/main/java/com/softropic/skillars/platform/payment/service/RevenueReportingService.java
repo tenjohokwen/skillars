@@ -24,6 +24,7 @@ import com.softropic.skillars.platform.payment.repo.ParentCreditLedger;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
 import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscriptionRepository;
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscriptionRepository;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import lombok.RequiredArgsConstructor;
@@ -65,6 +66,7 @@ public class RevenueReportingService {
     private final CoachReliabilityStrikeRepository coachReliabilityStrikeRepository;
     private final PlayerProfileRepository playerProfileRepository;
     private final CoachProfileRepository coachProfileRepository;
+    private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final ConfigService configService;
 
     public RevenueSummaryDto getCoachRevenueSummary(UUID coachId, Instant from, Instant to) {
@@ -83,15 +85,11 @@ public class RevenueReportingService {
             .sumReleasedNetByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
         long sessionCount = coachPayoutRepository.countReleasedByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
 
-        BigDecimal stripeFeeRate = new BigDecimal(configService.getString("payment.stripe.feeRate"));
-        BigDecimal stripeFeeFixed = new BigDecimal(configService.getString("payment.stripe.feeFixed"));
-        BigDecimal stripeFees = grossEarnings.multiply(stripeFeeRate)
-            .add(stripeFeeFixed.multiply(BigDecimal.valueOf(sessionCount)))
-            .setScale(2, RoundingMode.HALF_UP);
-
-        // net_amount on the ledger row is gross - commission; the coach's take-home is that minus
-        // the platform's estimated Stripe processing fee.
-        BigDecimal netPayout = netFromLedger.subtract(stripeFees);
+        // fix/payment-money-integrity: net_amount on the ledger row (gross - commission) IS what was
+        // transferred to the coach. Under separate charges & transfers (deferred-106) the platform,
+        // not the coach, pays Stripe's processing fee, so no fee is subtracted here — the previous
+        // "net minus estimated Stripe fee" understated the coach's actual payout.
+        BigDecimal netPayout = netFromLedger;
 
         List<UUID> bookingIds = coachPayoutRepository
             .findReleasedBookingIdsByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
@@ -105,7 +103,7 @@ public class RevenueReportingService {
         long pendingReleaseCount = coachPayoutRepository
             .countPendingReleaseByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
 
-        return new RevenueSummaryDto(grossEarnings, commissionDeducted, stripeFees, netPayout,
+        return new RevenueSummaryDto(grossEarnings, commissionDeducted, netPayout,
             sessionCount, refundsIssued, "EUR", pendingReleaseAmount, pendingReleaseCount);
     }
 
@@ -261,21 +259,46 @@ public class RevenueReportingService {
         ));
     }
 
+    /**
+     * fix/payment-money-integrity: every figure comes from stamped/recorded amounts, or is labelled
+     * as an estimate:
+     * <ul>
+     *   <li>gross volume = value of captured bookings (card + wallet credit), BEFORE refunds, plus
+     *       session-pack sales ({@code amount_charged}, stamped at purchase — V181). Refunds credited
+     *       are a separate line; credit spent on a booking is counted as that booking's value, so
+     *       this is booking/sales value, not cash charged to cards;</li>
+     *   <li>commission = each captured, non-refunded booking's card-charged amount × the rate STAMPED
+     *       on that row at capture, rounded per row — the same figure the coach payout deducts
+     *       ({@code CoachPayoutOutboxSupport}). Credit- and pack-funded sessions carry no commission:
+     *       no coach payout is made for them (deferred-106 scope);</li>
+     *   <li>Stripe fees = an ESTIMATE (config rate/fixed fee) over card money only — card-charged
+     *       booking money + pack purchases, one fixed fee per distinct charge.</li>
+     * </ul>
+     * Subscription revenue is not reported: no subscription price amounts are stored locally, and
+     * a hard-coded 0 would read as a real figure.
+     */
     public AdminFinanceOverviewDto getAdminOverview(Instant from, Instant to) {
         Instant effectiveFrom = from != null ? from
             : YearMonth.now(ZoneOffset.UTC).atDay(1).atStartOfDay(ZoneOffset.UTC).toInstant();
         Instant effectiveTo = to != null ? to : Instant.now();
 
-        BigDecimal commissionRate = new BigDecimal(configService.getString("platform.commission.rate"));
+        BigDecimal liveCommissionRate = new BigDecimal(configService.getString("platform.commission.rate"));
         BigDecimal stripeFeeRate = new BigDecimal(configService.getString("payment.stripe.feeRate"));
         BigDecimal stripeFeeFixed = new BigDecimal(configService.getString("payment.stripe.feeFixed"));
 
-        BigDecimal totalGrossVolume = bookingPaymentRepository.sumTotalGross(effectiveFrom, effectiveTo).orElse(BigDecimal.ZERO);
-        BigDecimal totalCommissionCollected = totalGrossVolume.multiply(commissionRate).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal bookingGross = bookingPaymentRepository.sumTotalGross(effectiveFrom, effectiveTo).orElse(BigDecimal.ZERO);
+        BigDecimal packGross = sessionPackPurchaseRepository.sumAmountChargedForPeriod(effectiveFrom, effectiveTo);
+        BigDecimal totalGrossVolume = bookingGross.add(packGross);
 
-        long totalSessionCount = bookingPaymentRepository.countCapturedForPeriod(effectiveFrom, effectiveTo);
-        BigDecimal totalStripeFees = totalGrossVolume.multiply(stripeFeeRate)
-            .add(stripeFeeFixed.multiply(BigDecimal.valueOf(totalSessionCount)))
+        BigDecimal totalCommissionCollected = bookingPaymentRepository
+            .sumCommissionAtStampedRate(effectiveFrom, effectiveTo, liveCommissionRate)
+            .setScale(2, RoundingMode.HALF_UP);
+
+        BigDecimal cardMoney = bookingPaymentRepository.sumCardChargedForPeriod(effectiveFrom, effectiveTo).add(packGross);
+        long chargeCount = bookingPaymentRepository.countDistinctCardChargesForPeriod(effectiveFrom, effectiveTo)
+            + sessionPackPurchaseRepository.countChargedForPeriod(effectiveFrom, effectiveTo);
+        BigDecimal totalStripeFees = cardMoney.multiply(stripeFeeRate)
+            .add(stripeFeeFixed.multiply(BigDecimal.valueOf(chargeCount)))
             .setScale(2, RoundingMode.HALF_UP);
 
         BigDecimal totalRefundCredit = parentCreditLedgerRepository.sumTotalRefundCredit(effectiveFrom, effectiveTo);
@@ -284,9 +307,6 @@ public class RevenueReportingService {
         Map<String, Long> activeCoachSubscriptions = toTierCountMap(paymentCoachSubscriptionRepository.countActiveByTier());
         Map<String, Long> activePlayerSubscriptions = toTierCountMap(paymentPlayerSubscriptionRepository.countActiveByTier());
 
-        // TODO: subscriptionRevenue requires EUR price-amount config keys not yet seeded — V64 only seeds Stripe priceId strings
-        BigDecimal subscriptionRevenue = BigDecimal.ZERO;
-
         return new AdminFinanceOverviewDto(
             totalGrossVolume,
             totalCommissionCollected,
@@ -294,8 +314,7 @@ public class RevenueReportingService {
             totalCashOuts,
             totalStripeFees,
             activeCoachSubscriptions,
-            activePlayerSubscriptions,
-            subscriptionRevenue
+            activePlayerSubscriptions
         );
     }
 
@@ -308,19 +327,14 @@ public class RevenueReportingService {
         int reliabilityStrikeCount = (int) coachReliabilityStrikeRepository
             .countByCoachIdAndCreatedAtAfter(coachId, OffsetDateTime.now().minusDays(30));
 
-        // skillars-deferred-106 AC10.5: wiring the real dispute count stays out of scope here.
-        int outstandingDisputeCount = 0; // TODO Story 10.x: wire booking_disputes table
-
         return new CoachRevenueAdminDto(
             summary.grossEarnings(),
             summary.commissionDeducted(),
-            summary.stripeFees(),
             summary.netPayout(),
             summary.sessionCount(),
             summary.refundsIssued(),
             summary.currency(),
             reliabilityStrikeCount,
-            outstandingDisputeCount,
             summary.pendingReleaseAmount(),
             summary.pendingReleaseCount()
         );

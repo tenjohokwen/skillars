@@ -1443,10 +1443,21 @@ export default {
       balance: 'Aktuelles Guthaben',
       cashout: 'Auszahlen',
       cashoutLabel: 'Auszahlungsbetrag (EUR)',
-      cashoutSuccess: 'Auszahlungsanfrage über €{amount} erfolgreich eingereicht.',
+      cashoutSuccess:
+        'Auszahlung über €{amount} eingereicht. Die Bearbeitungsgebühr wird von diesem Betrag abgezogen, bevor die Erstattung auf Ihrer Karte eingeht.',
       insufficientCredit: 'Guthaben nicht ausreichend für diese Auszahlung',
       noPaymentMethod:
         'Keine Zahlungsmethode gespeichert. Bitte fügen Sie zuerst eine Karte hinzu.',
+      cashOutTooSmall:
+        'Dieser Betrag ist nach Abzug der Bearbeitungsgebühr zu klein für eine Auszahlung.',
+      cashOutExceedsRefundable:
+        'Auszahlungen werden auf Ihre letzte Kartenzahlung erstattet, die diesen Betrag nicht aufnehmen kann. Bitte wählen Sie einen kleineren Betrag.',
+      refundFailed:
+        'Die Erstattung auf Ihre Karte ist fehlgeschlagen. Ihr Guthaben wurde wiederhergestellt.',
+      cashoutFailed:
+        'Die Auszahlung konnte nicht abgeschlossen werden. Bitte versuchen Sie es erneut.',
+      refundOutcomeUnknown:
+        'Wir konnten die Erstattung beim Zahlungsdienstleister nicht bestätigen. Ihre Auszahlung wird geprüft – bitte reichen Sie sie nicht erneut ein.',
     },
     sessionPack: {
       title: 'Sitzungspaket',
@@ -1872,7 +1883,6 @@ export default {
       coachRevenueLoadError: 'Der Coach-Umsatz konnte nicht geladen werden',
       coachGross: 'Bruttoeinnahmen',
       coachCommission: 'Abgezogene Provision',
-      coachStripeFees: 'Stripe-Gebühren',
       coachNetPayout: 'Nettoauszahlung',
       coachRefunds: 'Erstattungen',
       coachSessions: 'Einheiten',
@@ -2206,7 +2216,6 @@ export default {
     apply: 'Anwenden',
     gross: 'Brutto',
     commission: 'Provision',
-    stripeFees: 'Stripe-Gebühren',
     netPayout: 'An Ihr Stripe-Konto ausgezahlt',
     pendingRelease: 'Auszahlung ausstehend',
     pendingReleaseNote:
@@ -2223,7 +2232,7 @@ export default {
     date: 'Datum',
     viewReceipt: 'Quittung anzeigen',
     stripeFeeNote:
-      'Stripe-Gebühren werden auf Zusammenfassungsebene geschätzt. Netto pro Transaktion ist vor Gebührenabzug.',
+      'Die Stripe-Bearbeitungsgebühren trägt die Plattform, nicht Sie: Ihre Auszahlung ist der Sitzungsbetrag abzüglich der Plattformprovision.',
     receipt: {
       title: 'Sitzungsquittung',
       print: 'Drucken',

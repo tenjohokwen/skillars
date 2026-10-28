@@ -43,10 +43,24 @@ public interface PaymentGateway {
     void reverseTransfer(String stripeTransferId, BigDecimal amount);
 
     /**
-     * Refunds net amount to the parent via the provided Stripe PaymentIntent ID.
-     * Use the parent's last_payment_intent_id from stripe_customers.
+     * Refunds {@code amount} against the given Stripe PaymentIntent under the caller-supplied Stripe
+     * idempotency key. The key identifies ONE logical refund: a retry of that same refund must reuse
+     * it (Stripe then replays the original instead of refunding twice), and a different refund
+     * against the same PaymentIntent must use a different key — reusing a key there makes Stripe
+     * replay the first refund and the second one silently never happens. Pack-purchase compensation
+     * uses {@code refund-{paymentIntentId}} (one compensating refund per purchase); a credit cash-out
+     * uses {@code cashout-{cashOutId}} (a payer can cash out several times against the same
+     * PaymentIntent).
      */
-    void refund(String stripePaymentIntentId, BigDecimal netAmount);
+    void refund(String stripePaymentIntentId, BigDecimal amount, String idempotencyKey);
+
+    /**
+     * The amount still refundable on a PaymentIntent: its latest charge's captured amount minus
+     * what has already been refunded on it. Stripe rejects a refund above this, so a caller that
+     * computes its own refund amount (credit cash-out) checks against it first and fails with a
+     * clear error instead of a generic refund failure.
+     */
+    BigDecimal getRefundableAmount(String stripePaymentIntentId);
 
     /**
      * Creates a Stripe Customer for a parent and returns the Stripe customer ID (cus_...).

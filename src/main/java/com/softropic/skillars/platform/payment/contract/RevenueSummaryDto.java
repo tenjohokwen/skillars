@@ -8,12 +8,13 @@ import java.math.BigDecimal;
  * Stripe account (dated by {@code released_at}), not merely captured from the parent.
  * {@code pendingReleaseAmount} / {@code pendingReleaseCount} are completed-but-not-yet-released
  * sessions (inside the 48h hold or awaiting a drain) — a separate line, never folded into released
- * revenue.
+ * revenue. fix/payment-money-integrity: {@code netPayout} is the ledger net actually transferred
+ * (gross − commission); the coach pays no Stripe fee under separate charges &amp; transfers, so the
+ * former estimated {@code stripeFees} line (subtracted from the net) was removed.
  */
 public record RevenueSummaryDto(
     BigDecimal grossEarnings,
     BigDecimal commissionDeducted,
-    BigDecimal stripeFees,
     BigDecimal netPayout,
     long sessionCount,
     BigDecimal refundsIssued,

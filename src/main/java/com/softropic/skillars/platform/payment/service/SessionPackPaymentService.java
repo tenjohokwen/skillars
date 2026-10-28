@@ -104,7 +104,7 @@ public class SessionPackPaymentService {
         } catch (Exception e) {
             log.error("Purchase record creation failed after Stripe charge: packTierId={} parentId={}", packTierId, parentId, e);
             try {
-                paymentGateway.refund(paymentIntentId, tier.getTotalPrice());
+                paymentGateway.refund(paymentIntentId, tier.getTotalPrice(), "refund-" + paymentIntentId);
             } catch (Exception refundEx) {
                 // Widened from PaymentGatewayException (skillars-deferred-99 AC1): an unchecked
                 // throw or an unwrapped StripeException used to propagate here and skip both the
@@ -279,6 +279,7 @@ public class SessionPackPaymentService {
         purchase.setCoachId(tier.getCoachId());
         purchase.setPackTierId(tier.getPackTierId());
         purchase.setPricePerSession(tier.getPricePerSession());
+        purchase.setAmountCharged(tier.getTotalPrice());
         purchase.setRemainingSessions(tier.getSessionCount());
         purchase.setExpiresAt(Instant.now().plus(60, ChronoUnit.DAYS));
         purchase.setStripePaymentIntentId(paymentIntentId);

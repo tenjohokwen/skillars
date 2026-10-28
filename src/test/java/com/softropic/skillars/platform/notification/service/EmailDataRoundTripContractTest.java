@@ -47,7 +47,7 @@ import static org.mockito.Mockito.verify;
  * {@code requestedCount}, {@code acceptedCount} and {@code creditsRemaining} — put a primitive
  * {@code int}, boxed to {@code Integer} ({@code BatchBookingRequestedEvent:14},
  * {@code BatchBookingAcceptedEvent:20}, {@code SessionPackExpiredEvent:15} /
- * {@code SessionPackExpiryWarningEvent:16}). They are still <em>correct</em> — {@code Integer}
+ * {@code SessionPackExpiryWarningEvent:15}). They are still <em>correct</em> — {@code Integer}
  * round-trips as {@code Integer} — so there is no live bug, but "the map is all strings" is not the
  * contract the code actually keeps.
  *

@@ -378,6 +378,69 @@ class StripePaymentGatewayTest {
         assertThat(metadata).containsExactly(org.assertj.core.api.Assertions.entry("userId", "1001"));
     }
 
+    @Test
+    void refund_usesTheCallerSuppliedIdempotencyKey() throws StripeException {
+        stripePaymentGateway.refund("pi_7", new BigDecimal("12.34"), "cashout-abc");
+
+        ArgumentCaptor<com.stripe.param.RefundCreateParams> params =
+            ArgumentCaptor.forClass(com.stripe.param.RefundCreateParams.class);
+        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
+        org.mockito.Mockito.verify(stripeClient).createRefund(params.capture(), key.capture());
+        assertThat(key.getValue()).isEqualTo("cashout-abc");
+        assertThat(params.getValue().getPaymentIntent()).isEqualTo("pi_7");
+        assertThat(params.getValue().getAmount()).isEqualTo(1234L);
+    }
+
+    @Test
+    void getRefundableAmount_isLatestChargeCapturedMinusRefunded() throws StripeException {
+        PaymentIntent intent = mockIntent("pi_8");
+        com.stripe.model.Charge charge = new com.stripe.model.Charge();
+        charge.setAmountCaptured(5000L);
+        charge.setAmountRefunded(1250L);
+        intent.setLatestChargeObject(charge);
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_8")).thenReturn(intent);
+
+        assertThat(stripePaymentGateway.getRefundableAmount("pi_8")).isEqualByComparingTo("37.50");
+    }
+
+    @Test
+    void getRefundableAmount_noChargeYet_isZero() throws StripeException {
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_9")).thenReturn(mockIntent("pi_9"));
+
+        assertThat(stripePaymentGateway.getRefundableAmount("pi_9")).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void getRefundableAmount_lookupFails_isNotReportedAsARefundFailure() throws StripeException {
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_x"))
+            .thenThrow(new com.stripe.exception.ApiConnectionException("down"));
+
+        assertThatThrownBy(() -> stripePaymentGateway.getRefundableAmount("pi_x"))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessageContaining("payment.refundLookupFailed");
+    }
+
+    @Test
+    void refund_networkFailure_isOutcomeUnknown_notAFailure() throws StripeException {
+        when(stripeClient.createRefund(any(com.stripe.param.RefundCreateParams.class), any(String.class)))
+            .thenThrow(new com.stripe.exception.ApiConnectionException("timeout"));
+
+        assertThatThrownBy(() -> stripePaymentGateway.refund("pi_1", new BigDecimal("5.00"), "cashout-k"))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessageContaining("payment.refundOutcomeUnknown");
+    }
+
+    @Test
+    void refund_rejectedByStripe_isADefiniteFailure() throws StripeException {
+        when(stripeClient.createRefund(any(com.stripe.param.RefundCreateParams.class), any(String.class)))
+            .thenThrow(new com.stripe.exception.InvalidRequestException(
+                "Refund exceeds charge", "amount", "req_1", "amount_too_large", 400, null));
+
+        assertThatThrownBy(() -> stripePaymentGateway.refund("pi_1", new BigDecimal("5.00"), "cashout-k"))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessageContaining("payment.refundFailed");
+    }
+
     private PaymentIntent mockIntent(String id) {
         PaymentIntent intent = new PaymentIntent();
         intent.setId(id);

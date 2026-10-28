@@ -57,6 +57,7 @@ class RevenueReportingServiceTest {
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private ConfigService configService;
+    @Mock private com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository sessionPackPurchaseRepository;
 
     private RevenueReportingService service;
 
@@ -70,7 +71,7 @@ class RevenueReportingServiceTest {
             bookingPaymentRepository, coachPayoutRepository, parentCreditLedgerRepository, bookingRepository,
             paymentCoachSubscriptionRepository, paymentPlayerSubscriptionRepository,
             coachReliabilityStrikeRepository, playerProfileRepository, coachProfileRepository,
-            configService
+            sessionPackPurchaseRepository, configService
         );
     }
 
@@ -80,16 +81,10 @@ class RevenueReportingServiceTest {
         when(configService.getString("payment.stripe.feeFixed")).thenReturn("0.25");
     }
 
-    private void stubStripeFeeRates() {
-        when(configService.getString("payment.stripe.feeRate")).thenReturn("0.014");
-        when(configService.getString("payment.stripe.feeFixed")).thenReturn("0.25");
-    }
-
     // ── Revenue summary (skillars-deferred-106 AC12: RELEASED coach_payouts, not CAPTURED) ────────
 
     @Test
     void summary_oneReleasedPayout_calculatesFromLedger() {
-        stubStripeFeeRates();
         when(coachPayoutRepository.sumReleasedGrossByCoachAndPeriod(coachId, from, to)).thenReturn(new BigDecimal("100.00"));
         when(coachPayoutRepository.sumReleasedCommissionByCoachAndPeriod(coachId, from, to)).thenReturn(new BigDecimal("10.00"));
         when(coachPayoutRepository.sumReleasedNetByCoachAndPeriod(coachId, from, to)).thenReturn(new BigDecimal("90.00"));
@@ -100,11 +95,11 @@ class RevenueReportingServiceTest {
 
         RevenueSummaryDto dto = service.getCoachRevenueSummary(coachId, from, to);
 
-        // stripeFees = 100 * 0.014 + 0.25 * 1 = 1.65 ; netPayout = 90 (ledger net) - 1.65 = 88.35
+        // fix/payment-money-integrity: netPayout is the ledger net actually transferred (90), not
+        // net minus an estimated Stripe fee the platform — not the coach — pays.
         assertThat(dto.grossEarnings()).isEqualByComparingTo("100.00");
         assertThat(dto.commissionDeducted()).isEqualByComparingTo("10.00");
-        assertThat(dto.stripeFees()).isEqualByComparingTo("1.65");
-        assertThat(dto.netPayout()).isEqualByComparingTo("88.35");
+        assertThat(dto.netPayout()).isEqualByComparingTo("90.00");
         assertThat(dto.sessionCount()).isEqualTo(1L);
         assertThat(dto.currency()).isEqualTo("EUR");
         assertThat(dto.pendingReleaseAmount()).isEqualByComparingTo("15.00");
@@ -113,7 +108,6 @@ class RevenueReportingServiceTest {
 
     @Test
     void summary_noPayouts_returnsAllZero() {
-        stubStripeFeeRates();
         when(coachPayoutRepository.sumReleasedGrossByCoachAndPeriod(coachId, from, to)).thenReturn(BigDecimal.ZERO);
         when(coachPayoutRepository.sumReleasedCommissionByCoachAndPeriod(coachId, from, to)).thenReturn(BigDecimal.ZERO);
         when(coachPayoutRepository.sumReleasedNetByCoachAndPeriod(coachId, from, to)).thenReturn(BigDecimal.ZERO);
@@ -126,7 +120,6 @@ class RevenueReportingServiceTest {
 
         assertThat(dto.grossEarnings()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(dto.commissionDeducted()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(dto.stripeFees()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(dto.netPayout()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(dto.sessionCount()).isZero();
         assertThat(dto.pendingReleaseCount()).isZero();
@@ -256,10 +249,15 @@ class RevenueReportingServiceTest {
     // ── Admin overview ───────────────────────────────────────────
 
     @Test
-    void adminOverview_subscriptionRevenueIsZero_outstandingDisputeCountIsZero() {
+    void adminOverview_grossIncludesPacks_commissionUsesStampedRates_feesEstimateCardMoneyOnly() {
         stubConfigRates();
+        BigDecimal live = new BigDecimal("0.10");
         when(bookingPaymentRepository.sumTotalGross(from, to)).thenReturn(Optional.of(new BigDecimal("200.00")));
-        when(bookingPaymentRepository.countCapturedForPeriod(from, to)).thenReturn(2L);
+        when(sessionPackPurchaseRepository.sumAmountChargedForPeriod(from, to)).thenReturn(new BigDecimal("300.00"));
+        when(bookingPaymentRepository.sumCommissionAtStampedRate(from, to, live)).thenReturn(new BigDecimal("15.00"));
+        when(bookingPaymentRepository.sumCardChargedForPeriod(from, to)).thenReturn(new BigDecimal("150.00"));
+        when(bookingPaymentRepository.countDistinctCardChargesForPeriod(from, to)).thenReturn(2L);
+        when(sessionPackPurchaseRepository.countChargedForPeriod(from, to)).thenReturn(1L);
         when(parentCreditLedgerRepository.sumTotalRefundCredit(from, to)).thenReturn(BigDecimal.ZERO);
         when(parentCreditLedgerRepository.sumTotalCashOuts(from, to)).thenReturn(BigDecimal.ZERO);
         when(paymentCoachSubscriptionRepository.countActiveByTier()).thenReturn(List.of());
@@ -267,8 +265,11 @@ class RevenueReportingServiceTest {
 
         AdminFinanceOverviewDto dto = service.getAdminOverview(from, to);
 
-        assertThat(dto.subscriptionRevenue()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(dto.totalGrossVolume()).isEqualByComparingTo("200.00");
+        assertThat(dto.totalGrossVolume()).isEqualByComparingTo("500.00");
+        // Straight from the stamped-rate query, NOT gross (500) x live rate (0.10) = 50.
+        assertThat(dto.totalCommissionCollected()).isEqualByComparingTo("15.00");
+        // (150 card + 300 pack) x 0.014 + 0.25 x (2 + 1) = 6.30 + 0.75
+        assertThat(dto.totalStripeFees()).isEqualByComparingTo("7.05");
     }
 
     @Test

@@ -1555,7 +1555,6 @@ export default {
       coachRevenueLoadError: 'Failed to load coach revenue',
       coachGross: 'Gross earnings',
       coachCommission: 'Commission deducted',
-      coachStripeFees: 'Stripe fees',
       coachNetPayout: 'Net payout',
       coachRefunds: 'Refunds issued',
       coachSessions: 'Sessions',
@@ -2160,9 +2159,17 @@ export default {
       balance: 'Current Balance',
       cashout: 'Cash Out',
       cashoutLabel: 'Amount to cash out (EUR)',
-      cashoutSuccess: 'Cash-out of €{amount} submitted successfully.',
+      cashoutSuccess:
+        'Cash-out of €{amount} submitted. The processing fee is deducted from this amount before the refund reaches your card.',
       insufficientCredit: 'Insufficient credit balance for this withdrawal',
       noPaymentMethod: 'No payment method saved. Add a card first.',
+      cashOutTooSmall: 'This amount is too small to cash out once the processing fee is deducted.',
+      cashOutExceedsRefundable:
+        'Cash-outs are refunded to your most recent card payment, which cannot take this much. Try a smaller amount.',
+      refundFailed: 'The refund to your card failed. Your credit has been restored.',
+      cashoutFailed: 'The cash-out could not be completed. Please try again.',
+      refundOutcomeUnknown:
+        'We could not confirm the refund with the card processor. Your cash-out is being checked — please do not submit it again.',
     },
     sessionPack: {
       title: 'Session Pack',
@@ -2243,7 +2250,6 @@ export default {
     apply: 'Apply',
     gross: 'Gross',
     commission: 'Commission',
-    stripeFees: 'Stripe Fees',
     netPayout: 'Released to your Stripe account',
     pendingRelease: 'Pending release',
     pendingReleaseNote:
@@ -2260,7 +2266,7 @@ export default {
     date: 'Date',
     viewReceipt: 'View Receipt',
     stripeFeeNote:
-      'Stripe fees are estimated at the summary level. Per-transaction net is before fee deduction.',
+      'Stripe processing fees are paid by the platform, not by you: your payout is the session amount minus the platform commission.',
     receipt: {
       title: 'Session Receipt',
       print: 'Print',

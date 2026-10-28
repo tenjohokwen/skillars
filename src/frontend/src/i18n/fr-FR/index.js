@@ -1470,7 +1470,6 @@ export default {
       coachRevenueLoadError: 'Impossible de charger les revenus du coach',
       coachGross: 'Revenus bruts',
       coachCommission: 'Commission déduite',
-      coachStripeFees: 'Frais Stripe',
       coachNetPayout: 'Versement net',
       coachRefunds: 'Remboursements',
       coachSessions: 'Séances',
@@ -1868,9 +1867,18 @@ export default {
       balance: 'Solde actuel',
       cashout: 'Retirer',
       cashoutLabel: 'Montant à retirer (EUR)',
-      cashoutSuccess: 'Demande de retrait de {amount} € soumise avec succès.',
+      cashoutSuccess:
+        'Retrait de {amount} € soumis. Les frais de traitement sont déduits de ce montant avant que le remboursement n’arrive sur votre carte.',
       insufficientCredit: 'Solde de crédit insuffisant pour ce retrait',
       noPaymentMethod: "Aucun moyen de paiement enregistré. Ajoutez d'abord une carte.",
+      cashOutTooSmall:
+        'Ce montant est trop faible pour être retiré une fois les frais de traitement déduits.',
+      cashOutExceedsRefundable:
+        'Les retraits sont remboursés sur votre dernier paiement par carte, qui ne peut pas recevoir ce montant. Essayez un montant plus petit.',
+      refundFailed: 'Le remboursement sur votre carte a échoué. Votre crédit a été restauré.',
+      cashoutFailed: "Le retrait n'a pas pu être effectué. Veuillez réessayer.",
+      refundOutcomeUnknown:
+        "Nous n'avons pas pu confirmer le remboursement auprès du prestataire de paiement. Votre retrait est en cours de vérification — merci de ne pas le soumettre à nouveau.",
     },
     sessionPack: {
       title: 'Pack de séances',
@@ -2065,7 +2073,6 @@ export default {
     apply: 'Appliquer',
     gross: 'Brut',
     commission: 'Commission',
-    stripeFees: 'Frais Stripe',
     netPayout: 'Versé sur votre compte Stripe',
     pendingRelease: 'Versement en attente',
     pendingReleaseNote:
@@ -2082,7 +2089,7 @@ export default {
     date: 'Date',
     viewReceipt: 'Voir le reçu',
     stripeFeeNote:
-      'Les frais Stripe sont estimés au niveau du résumé. Le net par transaction est avant déduction des frais.',
+      'Les frais de traitement Stripe sont payés par la plateforme, pas par vous : votre versement correspond au montant de la séance moins la commission de la plateforme.',
     receipt: {
       title: 'Reçu de séance',
       print: 'Imprimer',
