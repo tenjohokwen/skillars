@@ -83,7 +83,9 @@ public class DeletionSchedulerService {
                 // because another tick already marked this row physically deleted) must skip the save
                 // entirely rather than needing to be undone afterward.
                 int updated = fileStorageObjectRepository.markPhysicallyDeleted(fso.getId(), Instant.now());
-                if (updated == 1) {
+                // Only enqueue a backup DELETE when replication is on: with it off no OutboxPollerScheduler
+                // exists, so the row would sit PENDING forever.
+                if (updated == 1 && properties.getReplication().isEnabled()) {
                     OutboxReplicationJob job = OutboxReplicationJob.builder()
                         .storageObject(fso)
                         .jobType(OutboxReplicationJob.ReplicationJobType.DELETE)

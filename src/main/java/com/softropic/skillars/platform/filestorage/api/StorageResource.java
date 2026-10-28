@@ -14,7 +14,6 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,24 +33,14 @@ public class StorageResource {
     private final FileStorageService fileStorageService;
     private final SecurityUtil securityUtil;
 
-    // Owner-bound entities: entityId must match the authenticated user's own ID
-    // skillars-deferred-151 AC3: coach_branding added alongside coach_profile — same shape (a coach
-    // uploading their own asset, keyed by their own user id), and this is a cheap, earlier line of
-    // defense than relying on saveBranding's own post-upload assertOwnership check alone.
-    // feat/coach-workflow-gaps D9: coach_gallery (public profile media gallery) — same shape again.
-    private static final java.util.Set<String> OWNER_BOUND_ENTITIES =
-        java.util.Set.of("coach_profile", "coach_branding", "coach_gallery");
+    // Owner-bound entities (coach_profile, coach_branding, coach_gallery): FileStorageService.signUpload and
+    // confirmUpload enforce "entityId must match the authenticated user" — see FileStorageService.OWNER_BOUND_ENTITIES.
 
     @PostMapping("/sign/upload")
     @PreAuthorize(SecurityConstants.HAS_ANY_ROLE)
     @Observed(name = "storage.sign.upload")
     public ResponseEntity<SignUploadResponse> signUpload(
         @RequestBody @Valid SignUploadRequest request) {
-        if (OWNER_BOUND_ENTITIES.contains(request.entity())) {
-            if (!securityUtil.requireCurrentBusinessId().equals(request.entityId())) {
-                throw new AccessDeniedException("entityId must match authenticated user");
-            }
-        }
         return ResponseEntity.ok(fileStorageService.signUpload(request));
     }
 

@@ -179,6 +179,7 @@ class StorageResourceIT extends BaseStorageIT {
             .set(field(FileStorageObject.class, "sizeBytes"), fileStorageProperties.getQuota().getDefaultBytes())
             .set(field(FileStorageObject.class, "provider"), "s3")
             .set(field(FileStorageObject.class, "tags"), null)
+            .set(field(FileStorageObject.class, "deletedAt"), null)
             .create();
         fileStorageObjectRepository.save(existingFile);
 

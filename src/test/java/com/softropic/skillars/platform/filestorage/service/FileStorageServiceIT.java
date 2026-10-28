@@ -98,6 +98,7 @@ class FileStorageServiceIT extends BaseStorageIT {
             .set(field(FileStorageObject.class, "sizeBytes"), fileStorageProperties.getQuota().getDefaultBytes())
             .set(field(FileStorageObject.class, "provider"), "s3")
             .set(field(FileStorageObject.class, "tags"), null)
+            .set(field(FileStorageObject.class, "deletedAt"), null)
             .create();
         fileStorageObjectRepository.save(existingFile);
 
@@ -106,6 +107,29 @@ class FileStorageServiceIT extends BaseStorageIT {
 
         assertThatThrownBy(() -> fileStorageService.signUpload(request))
             .isInstanceOf(QuotaExceededException.class);
+    }
+
+    // B3 #4: a soft-deleted object no longer counts against the quota (it used to, forever — the sum ignored
+    // deleted_at, and physically-deleted rows are kept too).
+    @Test
+    @WithMockPrincipal(businessId = "tenant-quota-freed")
+    void signUpload_softDeletedFilesDoNotCountAgainstQuota() {
+        FileStorageObject deletedFile = Instancio.of(FileStorageObject.class)
+            .ignore(field(BaseEntity.class, "id"))
+            .set(field(FileStorageObject.class, "ownerId"), "tenant-quota-freed")
+            .set(field(FileStorageObject.class, "sizeBytes"), fileStorageProperties.getQuota().getDefaultBytes())
+            .set(field(FileStorageObject.class, "provider"), "s3")
+            .set(field(FileStorageObject.class, "tags"), null)
+            .set(field(FileStorageObject.class, "deletedAt"), Instant.now())
+            .create();
+        fileStorageObjectRepository.save(deletedFile);
+
+        assertThat(fileStorageObjectRepository.sumSizeBytesByOwnerId("tenant-quota-freed")).isZero();
+
+        SignUploadRequest request = new SignUploadRequest(
+            "documents", "42", "application/pdf", "pdf", 1L, null, null);
+
+        assertThat(fileStorageService.signUpload(request).key()).isNotBlank();
     }
 
     @Test

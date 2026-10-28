@@ -69,6 +69,7 @@ class DeletionSchedulerServiceTest {
     @Test
     @SuppressWarnings("unchecked")
     void processDeletions_happyPath_deletesReplicatesAndMarksPhysicallyDeleted() {
+        properties.getReplication().setEnabled(true);
         FileStorageObject fso = mock(FileStorageObject.class);
         when(fso.getId()).thenReturn(1L);
         when(fso.getKey()).thenReturn("documents/42/file.pdf");
@@ -88,6 +89,7 @@ class DeletionSchedulerServiceTest {
     @Test
     @SuppressWarnings("unchecked")
     void processDeletions_losingRace_skipsOutboxSaveWhenNoRowsAffected() {
+        properties.getReplication().setEnabled(true);
         // skillars-deferred-119 AC1: markPhysicallyDeleted returning 0 affected rows simulates a
         // losing race against a concurrent tick that already claimed this row — save() must never be
         // invoked in that case. FileStorageDeletionIT cannot easily force this branch (it needs a real
@@ -111,6 +113,7 @@ class DeletionSchedulerServiceTest {
     @Test
     @SuppressWarnings("unchecked")
     void processDeletions_deleteThrowsForOneRow_continuesToNextRow() {
+        properties.getReplication().setEnabled(true);
         FileStorageObject failing = mock(FileStorageObject.class);
         when(failing.getKey()).thenReturn("documents/42/broken.pdf");
 
@@ -136,6 +139,26 @@ class DeletionSchedulerServiceTest {
             .markPhysicallyDeleted(any(Long.class), any(Instant.class));
         verify(fileStorageObjectRepository).markPhysicallyDeleted(eq(3L), any(Instant.class));
         verify(outboxReplicationJobRepository).save(any(OutboxReplicationJob.class));
+    }
+
+    @Test
+    void processDeletions_replicationDisabled_marksDeletedButEnqueuesNoBackupJob() {
+        // B3 #5: with replication off (every profile) no OutboxPollerScheduler exists to drain the job, so
+        // enqueueing it would only leave a PENDING row behind forever.
+        FileStorageObject fso = mock(FileStorageObject.class);
+        when(fso.getId()).thenReturn(4L);
+        when(fso.getKey()).thenReturn("documents/42/norepl.pdf");
+        when(fileStorageObjectRepository.findEligibleForPhysicalDeletion(any(Instant.class), eq(10)))
+            .thenReturn(List.of(fso));
+        when(fileStorageObjectRepository.markPhysicallyDeleted(eq(4L), any(Instant.class))).thenReturn(1);
+
+        stubTransactionTemplateToRunCallback();
+
+        service.processDeletions();
+
+        verify(storageService).delete("documents/42/norepl.pdf");
+        verify(fileStorageObjectRepository).markPhysicallyDeleted(eq(4L), any(Instant.class));
+        verify(outboxReplicationJobRepository, never()).save(any(OutboxReplicationJob.class));
     }
 
     @Test

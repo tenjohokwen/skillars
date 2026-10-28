@@ -93,7 +93,8 @@
         <code>confirm/{key}</code> so the backend can check the object actually landed (<code>HeadObject</code>) before
         trusting it.</li>
       <li><strong>Every owner has a storage quota</strong> (10&nbsp;GiB by default, <code>platform.filestorage.quota.default-bytes</code>),
-        checked at sign time against the sum of the owner's <code>file_storage_objects.size_bytes</code>.</li>
+        checked at sign time against the sum of <code>size_bytes</code> of the owner's <em>non-deleted</em>
+        <code>file_storage_objects</code> (soft-deleting a file frees its quota at once).</li>
       <li><strong>Validation policy</strong> (<code>platform.filestorage.validation.*</code>): allowed MIME types
         <code>image/jpeg|png|gif|webp</code>, <code>application/pdf</code>, <code>text/plain</code>,
         <code>application/octet-stream</code>; extensions <code>jpg jpeg png gif webp pdf txt bin</code>; maximum 100&nbsp;MiB.
@@ -103,7 +104,10 @@
         (default 30).</li>
       <li><strong>Confirmed uploads <em>can</em> be mirrored to a backup bucket</strong> through the
         <code>outbox_replication_jobs</code> table, but replication is <strong>off</strong> in every profile
-        (<code>app.storage.replication.enabled: false</code>).</li>
+        (<code>app.storage.replication.enabled: false</code>), and while it is off no replication job is written.</li>
+      <li><strong>Only the uploader (or an admin) can get a download URL from <code>sign/download</code>.</strong> Files shown to
+        other users (coach photos, gallery images, branding logos, report PDFs, GDPR exports) are signed by their owning
+        module with <code>signedDownloadUrl</code>, after that module's own access check.</li>
     </ul>
 
     <h2 id="technical-overview">Technical Overview</h2>
@@ -134,12 +138,12 @@
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
       <tr><td><code>FileStorageService</code></td><td>The main entry point. It has two separate surfaces.
-        <br><strong>FSO-tracked (browser) flow:</strong> <code>signUpload()</code> runs the validation chain, checks quota, generates a key and presigns a <code>PUT</code> (<code>app.storage.upload-ttl-seconds</code>, 600). <code>confirmUpload()</code> runs <code>HeadObject</code> and checks content type, size and ETag, then in one <code>TransactionTemplate</code> saves the FSO and a <code>REPLICATE</code> job. <em>After</em> that commits it publishes <code>StorageObjectConfirmedEvent</code>. <code>signDownload()</code> records a <code>StorageAccessEvent</code> and presigns a <code>GET</code> (<code>app.storage.presign-ttl-seconds</code>, 300). <code>softDelete()</code> checks that the caller's login equals <code>createdBy</code>, then runs a conditional <code>softDeleteByKey</code>. <code>findActiveObject(key)</code> (new in #312) returns the confirmed, non-deleted FSO as a <code>StorageObjectDto</code> so a domain module can check the HEAD-verified owner, type and size before linking a key.
-        <br><strong>Raw (server-generated) helpers:</strong> <code>storeBytes</code> (direct <code>S3Client.putObject</code>, optional <code>Content-Disposition</code>), <code>downloadBytes</code>, <code>signedDownloadUrl(key)</code> / <code>signedDownloadUrl(key, Duration)</code>, <code>deleteRawBytes</code> (immediate hard delete), and <code>assertOwnership</code>. These bypass the FSO table: no quota, no replication, no soft-delete lifecycle and no audit row.</td></tr>
+        <br><strong>FSO-tracked (browser) flow:</strong> <code>signUpload()</code> runs the validation chain, checks quota, generates a key and presigns a <code>PUT</code> (<code>app.storage.upload-ttl-seconds</code>, 600). <code>confirmUpload()</code> accepts only keys of the shape <code>StorageKeyGenerator</code> issues (so a <code>storeBytes</code> key such as <code>reports/…</code> is a 404) and, for owner-bound entities, only keys whose <code>entityId</code> is the caller. It runs <code>HeadObject</code> and checks content type, size and ETag, re-applies the max-size and quota limits to the <em>real</em> size (the presigned <code>PUT</code> does not bind the length), then in one <code>TransactionTemplate</code> saves the FSO (plus a <code>REPLICATE</code> job when replication is enabled). <em>After</em> that commits it publishes <code>StorageObjectConfirmedEvent</code>. <code>signDownload()</code> requires the caller to be the FSO's owner or an admin (anyone else gets a 404), then records a <code>StorageAccessEvent</code> and presigns a <code>GET</code> (<code>app.storage.presign-ttl-seconds</code>, 300). <code>softDelete()</code> checks that the caller's login equals <code>createdBy</code>, then runs a conditional <code>softDeleteByKey</code>. <code>findActiveObject(key)</code> (new in #312) returns the confirmed, non-deleted FSO as a <code>StorageObjectDto</code> so a domain module can check the HEAD-verified owner, type and size before linking a key.
+        <br><strong>Raw (server-generated) helpers:</strong> <code>storeBytes</code> (direct <code>S3Client.putObject</code>, optional <code>Content-Disposition</code>), <code>downloadBytes</code>, <code>signedDownloadUrl(key)</code> / <code>signedDownloadUrl(key, Duration)</code>, <code>deleteRawBytes</code> (immediate hard delete). These bypass the FSO table: no quota, no replication, no soft-delete lifecycle and no audit row. <code>assertOwnership(key, ownerId)</code> passes only for a non-deleted FSO owned by <code>ownerId</code>, so it always fails for these raw keys.</td></tr>
       <tr><td><code>BlobDeletionOutboxSupport</code> / <code>BlobDeletionOutboxHandler</code></td><td>Re-drivable deletion of raw keys through the generic <code>platform.outbox</code> module (aggregate type <code>BLOB_DELETION</code>, payload <code>{storageKey}</code>). Producers call <code>enqueue(keys)</code> and <code>requestDrainAfterCommit()</code> <em>inside</em> their business transaction. The handler calls <code>deleteRawBytes</code>, which is idempotent because S3 <code>DeleteObject</code> succeeds on a missing key. The only producer today is <code>GdprErasureService</code>. This replaced the old bespoke <code>PendingBlobDeletionService</code> (skillars-deferred-100).</td></tr>
       <tr><td><code>ReplicatedStorageService</code></td><td>A <code>StorageService</code> decorator, created only when replication is enabled. <code>put()</code> delegates to the primary and then enqueues a <code>REPLICATE</code> job if an FSO exists for the key. <code>delete</code> and <code>deleteAll</code> (the bulk delete added in skillars-deferred-164) touch the primary only. Everything else passes straight through.</td></tr>
       <tr><td><code>OutboxPollerScheduler</code></td><td>Exists only when replication is enabled. Runs every <code>app.storage.poller.fixed-delay-ms</code> (5 s) under ShedLock <code>OutboxPollerScheduler_pollAndProcess</code> (PT10M, at least <code>app.storage.poller.lock-at-least</code>, default PT2S). It claims up to <code>app.storage.poller.batch-size</code> (10) PENDING jobs with <code>FOR UPDATE SKIP LOCKED</code> and marks them PROCESSING in the same transaction. Then it copies primary → backup (<code>REPLICATE</code>) or deletes on backup (<code>DELETE</code>), retrying up to <code>app.storage.replication.max-attempts</code> (5) before marking a job <code>FAILED</code>. It also updates a queue-depth gauge.</td></tr>
-      <tr><td><code>DeletionSchedulerService</code></td><td>Always on. Runs on the same 5 s cadence under ShedLock <code>DeletionSchedulerService_processDeletions</code> (PT5M, at least <code>app.storage.deletion.lock-at-least</code>, default PT2S). It selects soft-deleted FSOs older than the retention cutoff (<code>FOR UPDATE SKIP LOCKED</code>, batch 10), calls <code>StorageService.delete</code>, then uses a conditional <code>markPhysicallyDeleted</code> and enqueues a <code>DELETE</code> job <em>only if</em> that update hit one row.</td></tr>
+      <tr><td><code>DeletionSchedulerService</code></td><td>Always on. Runs on the same 5 s cadence under ShedLock <code>DeletionSchedulerService_processDeletions</code> (PT5M, at least <code>app.storage.deletion.lock-at-least</code>, default PT2S). It selects soft-deleted FSOs older than the retention cutoff (<code>FOR UPDATE SKIP LOCKED</code>, batch 10), calls <code>StorageService.delete</code>, then uses a conditional <code>markPhysicallyDeleted</code> and enqueues a backup <code>DELETE</code> job <em>only if</em> that update hit one row <em>and</em> replication is enabled.</td></tr>
       <tr><td><code>StorageMigrationService</code></td><td>An ops utility. It is a plain class, not a bean, so nothing wires it. It moves objects between two <code>StorageService</code> back ends (<code>migrate</code>, <code>migrateAll(ownerId)</code>) and exports and imports FSO metadata as <code>StorageObjectDto</code>.</td></tr>
       <tr><td><code>StorageKeyGenerator</code></td><td>Builds keys as <code>{entity}/{entityId}/{yyyy}/{mm}/{uuid}.{extension}</code> and parses them back. This is how listeners and domain modules recover which business entity an upload belongs to (for example, <code>CoachGalleryService</code> requires the prefix <code>coach_gallery/{userId}/</code>).</td></tr>
       <tr><td><code>ValidationChain</code> + <code>ValidationStep</code>s</td><td>Ordered pipeline on every sign-upload: <code>FilenameSanitizationStep</code> (1), <code>MimeTypeValidationStep</code> (10), <code>ExtensionValidationStep</code> (20), <code>FileSizeValidationStep</code> (30), and <code>ChecksumValidationStep</code> (40, which requires a 64-character lowercase SHA-256 hex if a checksum is given).</td></tr>
@@ -148,15 +152,16 @@
     <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth/Role</th></tr>
-      <tr><td>POST</td><td><code>/api/storage/sign/upload</code></td><td>Validate and quota-check a proposed upload (<code>{entity, entityId, contentType, extension, fileSizeBytes, checksum?, tags?}</code>) and return <code>{key, uploadUrl, expiresAt}</code>.</td><td><code>HAS_ANY_ROLE</code>. For the owner-bound entities <code>coach_profile</code>, <code>coach_branding</code> and <code>coach_gallery</code>, <code>entityId</code> must equal the caller's business id (otherwise <code>AccessDeniedException</code>).</td></tr>
-      <tr><td>POST</td><td><code>/api/storage/confirm/**</code></td><td>Confirm a completed upload (<code>{contentType, fileSizeBytes, originalFilename?, checksum?, tags?}</code>): HEAD-check, persist the FSO and a REPLICATE job, then publish <code>StorageObjectConfirmedEvent</code>.</td><td><code>HAS_ANY_ROLE</code></td></tr>
-      <tr><td>GET</td><td><code>/api/storage/sign/download/**</code></td><td>Presign a short-lived <code>GET</code> for a confirmed, non-deleted key and log a <code>StorageAccessEvent</code>.</td><td><code>HAS_ANY_ROLE</code>. <strong>No ownership check</strong>: anyone authenticated who knows the key can download it.</td></tr>
+      <tr><td>POST</td><td><code>/api/storage/sign/upload</code></td><td>Validate and quota-check a proposed upload (<code>{entity, entityId, contentType, extension, fileSizeBytes, checksum?, tags?}</code>) and return <code>{key, uploadUrl, expiresAt}</code>.</td><td><code>HAS_ANY_ROLE</code>. For the owner-bound entities <code>coach_profile</code>, <code>coach_branding</code> and <code>coach_gallery</code> (matched after sanitizing, so <code>coach profile</code> counts), <code>entityId</code> must equal the caller's business id (otherwise <code>AccessDeniedException</code>, 403). Enforced in <code>FileStorageService.signUpload</code>.</td></tr>
+      <tr><td>POST</td><td><code>/api/storage/confirm/**</code></td><td>Confirm a completed upload (<code>{contentType, fileSizeBytes, originalFilename?, checksum?, tags?}</code>): HEAD-check, persist the FSO (and a REPLICATE job if replication is on), then publish <code>StorageObjectConfirmedEvent</code>. A repeat confirm returns the existing record and, within the upload window, publishes the event again.</td><td><code>HAS_ANY_ROLE</code>. Owner-bound keys must carry the caller's id (else 403). A repeat confirm must come from the FSO's owner and the FSO must not be soft-deleted (else 404). A new key must be a <code>StorageKeyGenerator</code> key (else 404).</td></tr>
+      <tr><td>GET</td><td><code>/api/storage/sign/download/**</code></td><td>Presign a short-lived <code>GET</code> for a confirmed, non-deleted key and log a <code>StorageAccessEvent</code>.</td><td><code>HAS_ANY_ROLE</code>. Caller must be the FSO's owner or an admin. Anyone else gets 404, so the endpoint does not reveal that the key exists, and no access event is written.</td></tr>
       <tr><td>DELETE</td><td><code>/api/storage/**</code></td><td>Soft-delete a file. Allowed only for the original uploader (<code>createdBy</code>).</td><td><code>HAS_ANY_ROLE</code></td></tr>
     </table>
     <p>
       Errors (global <code>security.api.ApiAdvice</code>): <code>QuotaExceededException</code> → <strong>429</strong>,
       <code>StorageValidationException</code> → <strong>422</strong>, <code>StorageObjectNotFoundException</code> → 404,
-      <code>StorageProviderException</code> → 502, <code>AuthorizationException</code> on delete → 403. Keys may contain
+      <code>StorageProviderException</code> → 502, <code>AccessDeniedException</code> (owner-bound entityId mismatch on sign or confirm) → 403,
+      <code>AuthorizationException</code> on delete. Keys may contain
       <code>/</code>, so the controller reads them from <code>PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE</code> instead of a path
       variable.
     </p>
@@ -208,13 +213,17 @@ sequenceDiagram
   Browser->>S3: PUT bytes directly to uploadUrl
   Browser->>Resource: POST /api/storage/confirm/{key} {contentType, fileSizeBytes, ...}
   Resource->>Service: confirmUpload(key, request)
+  Service->>Service: owner-bound entityId must equal caller (403)
   alt FSO already exists for key
-    Service-->>Browser: 200 existing record (no new event)
+    Service->>Service: owner must equal caller and not soft-deleted (else 404)
+    Service->>Listener: re-publish StorageObjectConfirmedEvent (only within upload-ttl-seconds of the first confirm)
+    Service-->>Browser: 200 existing record
   else
+    Service->>Service: key must have the StorageKeyGenerator shape (404)
     Service->>S3: HeadObject(key)
     S3-->>Service: contentType, contentLength, eTag
-    Service->>Service: declared type/size must match, ETag present
-    Service->>DB: TX: save FileStorageObject + OutboxReplicationJob(REPLICATE, PENDING), commit
+    Service->>Service: declared type/size must match, ETag present, real size within max size and quota
+    Service->>DB: TX: save FileStorageObject (+ OutboxReplicationJob REPLICATE if replication on), commit
     Service->>Listener: publish StorageObjectConfirmedEvent (after commit, no TX)
     Service-->>Browser: 200 ConfirmUploadResponse
   end
@@ -226,10 +235,13 @@ sequenceDiagram
     <p>
       The app server never sees browser-uploaded bytes. <code>confirmUpload()</code> is the trust boundary: it checks
       size, content type and the presence of an <code>ETag</code> with a live <code>HeadObject</code>, and it stores the
-      HEAD values, not the client's claims. Confirmation is idempotent: if an FSO already exists for the key, it is
-      returned unchanged and <strong>no event is published</strong>. Because the event is published after the commit, a
-      listener that throws makes the HTTP call fail even though the FSO is already persisted. A client retry then hits
-      the idempotent short-circuit and never re-fires the event (see gotchas).
+      HEAD values, not the client's claims. Confirmation is idempotent and owner-scoped: if an FSO already exists for the
+      key and belongs to the caller, it is returned and, if the first confirm was less than
+      <code>app.storage.upload-ttl-seconds</code> ago, <code>StorageObjectConfirmedEvent</code> is published again.
+      Because the event is published after the commit, a listener that throws makes the HTTP call fail even though the
+      FSO is already persisted, and the client's retry is what re-drives the listener. Listeners must therefore be
+      idempotent. Two concurrent confirms of the same key race on the unique key index (SQLState 23505), and the loser
+      takes the idempotent path. Any other constraint violation is still an error.
     </p>
 
     <h3 id="downloading-a-file">Downloading a file</h3>
@@ -246,6 +258,8 @@ sequenceDiagram
   Service->>DB: findByKeyAndDeletedAtIsNull(key)
   alt not found or soft-deleted
     Service-->>Caller: 404 StorageObjectNotFoundException
+  else caller is neither owner nor admin
+    Service-->>Caller: 404 StorageObjectNotFoundException
   else found
     Service->>DB: save StorageAccessEvent(key, ownerId, sizeBytes)
     Service->>S3: presign GET (presign-ttl-seconds)
@@ -255,8 +269,8 @@ sequenceDiagram
     </pre>
     <p>
       Downloads never proxy bytes through the application. A soft-deleted object is treated as not found, so deletion
-      takes effect at once for REST downloads even though the bytes remain during the retention window. Most of the app
-      does not call this endpoint at all, though. Coach photos, gallery images, report PDFs and GDPR exports are signed
+      takes effect at once for REST downloads even though the bytes remain during the retention window. The frontend
+      does not call this endpoint at all today. Coach photos, gallery images, report PDFs and GDPR exports are signed
       server-side with <code>signedDownloadUrl</code> and embedded in DTOs, which neither checks <code>deleted_at</code> nor
       writes an access event.
     </p>
@@ -280,7 +294,7 @@ sequenceDiagram
   loop every app.storage.poller.fixed-delay-ms (ShedLock)
     DelSched->>DelSched: findEligibleForPhysicalDeletion(deleted_at older than retentionDays, 10)
     DelSched->>Primary: delete(key)
-    DelSched->>DelSched: TX: markPhysicallyDeleted == 1 then save OutboxReplicationJob(DELETE)
+    DelSched->>DelSched: TX: markPhysicallyDeleted == 1 and replication on then save OutboxReplicationJob(DELETE)
   end
 
   loop every app.storage.poller.fixed-delay-ms (ShedLock)
@@ -299,7 +313,8 @@ sequenceDiagram
     </pre>
     <p>
       FSO-tracked deletion has two stages: the user-facing <code>DELETE</code> only sets a flag, and the scheduler does
-      the irreversible S3 delete later, then queues a backup <code>DELETE</code> through the same replication outbox.
+      the irreversible S3 delete later, then (only with replication on) queues a backup <code>DELETE</code> through the same
+      replication outbox.
       <code>DeletionSchedulerService</code>'s <code>SKIP LOCKED</code> claim commits before the loop runs, so ShedLock plus
       the conditional <code>markPhysicallyDeleted</code> (affected-row count checked before the outbox save) is what stops two
       ticks from double-enqueueing. Raw keys written by <code>storeBytes</code> are never soft-deleted. They are removed
@@ -319,41 +334,50 @@ sequenceDiagram
       <p><strong>There are two kinds of object, with different guarantees.</strong> Browser uploads get an FSO row, so quota,
       replication, the soft-delete and retention lifecycle, <code>findActiveObject</code> and REST download auditing all apply.
       Server-generated files written by <code>storeBytes</code> (report PDFs under <code>reports/</code>, GDPR ZIPs under
-      <code>gdpr/exports/</code>) get <strong>none</strong> of that: they are invisible to quota, never replicated, and
-      <code>assertOwnership</code> <em>passes</em> for them because it only rejects when an FSO row exists with a different
-      owner. Do not use <code>assertOwnership</code> as proof that a key belongs to the caller unless the key is
-      guaranteed to be FSO-tracked. Prefer <code>findActiveObject</code> and an explicit owner comparison, as
-      <code>CoachGalleryService</code> does.</p>
+      <code>gdpr/exports/</code>) get <strong>none</strong> of that: they are invisible to quota, never replicated, cannot be
+      claimed through <code>confirm</code>, and <code>assertOwnership</code> fails for them (it requires a non-deleted FSO
+      owned by the caller; before B3 it passed for any key with no FSO row, which let a coach point a branding
+      <code>logoKey</code> at a report PDF or GDPR ZIP). <code>ReportGenerationService.saveBranding</code> skips the check
+      only when the submitted <code>logoKey</code> is the coach's stored key <em>and</em> a browser-upload key, so a
+      colour-only save still works after the logo object was soft-deleted. Access to raw keys is decided entirely by the module that wrote
+      them.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Replication is off, but the outbox rows are still written.</strong> <code>confirmUpload()</code> always
-      inserts a <code>REPLICATE</code> job, and <code>DeletionSchedulerService</code> always inserts a <code>DELETE</code> job.
-      <code>OutboxPollerScheduler</code> is only created when <code>app.storage.replication.enabled=true</code>, which no
-      profile sets. With the current config, <code>main.outbox_replication_jobs</code> collects PENDING rows that nothing
-      drains. If you turn replication on in an existing environment, the poller starts by working through that whole
-      backlog, including DELETE jobs for keys that were never replicated.</p>
+      <p><strong>Replication jobs are only written while replication is on.</strong> <code>confirmUpload()</code> and
+      <code>DeletionSchedulerService</code> check <code>app.storage.replication.enabled</code> before inserting into
+      <code>main.outbox_replication_jobs</code>, because <code>OutboxPollerScheduler</code> (the only consumer) exists only
+      when it is true, and no profile sets it. Before B3 both always inserted, so environments that ran older builds hold
+      PENDING rows that nothing drains. No migration deletes them, since an operator may have enabled replication through
+      the environment. If you turn replication on, objects uploaded while it was off are <em>not</em> backfilled to the
+      backup (use <code>StorageMigrationService</code>), and the poller will first work through any old backlog. To drop
+      that backlog in an environment where replication has never been enabled:
+      <code>DELETE FROM main.outbox_replication_jobs WHERE status = 'PENDING'</code>.</p>
     </div>
     <div class="callout">
-      <p><strong>The quota is soft and counts deleted files.</strong> <code>signUpload()</code> sums
-      <code>size_bytes</code> for the owner <em>without</em> filtering <code>deleted_at</code>, so deleting files never frees
-      quota. There is also a time-of-check/time-of-use gap: the check happens at sign time and is not repeated at confirm
-      time, so several large uploads signed at once can all pass. Do not treat the quota as a hard, race-proof limit.</p>
+      <p><strong>The quota is soft.</strong> <code>signUpload()</code> sums <code>size_bytes</code> of the owner's
+      non-deleted FSOs (<code>deleted_at IS NULL</code>), so a soft delete frees quota immediately even though the bytes stay
+      in the bucket for the retention window. The quota and max size are checked at sign time against the
+      declared size and again at confirm time against the real size. There is still a time-of-check/time-of-use gap: the confirm-time sum is not taken under a lock, so
+      several concurrent confirms by one owner can each pass. Do not treat the quota as a hard, race-proof limit.</p>
     </div>
     <div class="callout">
-      <p><strong>Upload-time ownership checks are opt-in, and downloads have none.</strong> <code>StorageResource</code>
-      enforces "entityId must equal the caller" only for <code>OWNER_BOUND_ENTITIES</code> (<code>coach_profile</code>,
-      <code>coach_branding</code>, <code>coach_gallery</code>). If you add an owner-sensitive entity, add it there.
-      <code>confirm</code> does not check the key's prefix against the caller, and its idempotent short-circuit returns an
-      existing FSO to whoever asks. <code>sign/download</code> lets any authenticated user download any confirmed key.
-      Protection relies on keys containing a random UUID. Domain modules that link keys must check them again server-side
-      (prefix + <code>findActiveObject</code> owner), as <code>CoachGalleryService.addImage</code> does.</p>
+      <p><strong>Entity-level ownership checks are opt-in; record ownership is not.</strong> "entityId must equal the
+      caller" is enforced at sign and at confirm only for <code>FileStorageService.OWNER_BOUND_ENTITIES</code>
+      (<code>coach_profile</code>, <code>coach_branding</code>, <code>coach_gallery</code>). If you add an owner-sensitive
+      entity, add it there. Independently of the entity, a repeat <code>confirm</code> and <code>sign/download</code> are
+      limited to the FSO's owner (plus admins for download). If another user needs to read a file, sign it server-side with
+      <code>signedDownloadUrl</code> after your own access check rather than widening <code>sign/download</code>. Domain
+      modules that link keys must still check them server-side (prefix + <code>findActiveObject</code> owner), as
+      <code>CoachGalleryService.addImage</code> does.</p>
     </div>
     <div class="callout">
-      <p><strong>The event fires after commit, and a retry will not fire it again.</strong> Because
+      <p><strong>The event fires after commit, and every repeat confirm fires it again.</strong> Because
       <code>StorageObjectConfirmedEvent</code> is published after the FSO transaction, a failure in
-      <code>CoachProfilePhotoEventListener</code> returns an error to the browser while the FSO is already saved, and a
-      repeated confirm short-circuits without publishing. New features should link uploads with an explicit, idempotent
-      domain call (the gallery pattern) rather than a new listener on this event.</p>
+      <code>CoachProfilePhotoEventListener</code> returns an error to the browser while the FSO is already saved. The
+      client's retry takes the idempotent path, which re-publishes the event, so the photo link is re-driven. This means
+      listeners must be idempotent. The re-publish only happens within <code>app.storage.upload-ttl-seconds</code> of the
+      first confirm, so a late replay of an older photo key does not revert the profile photo. The link is still not durable without a retry (no outbox). New features should link uploads with an
+      explicit, idempotent domain call (the gallery pattern) rather than a new listener on this event.</p>
     </div>
     <div class="callout">
       <p><strong>The sign/confirm/download flow bypasses the <code>StorageService</code> abstraction on purpose.</strong>
@@ -391,7 +415,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

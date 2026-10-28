@@ -111,6 +111,26 @@ class FileStorageDownloadIT extends BaseStorageIT {
             .isInstanceOf(StorageObjectNotFoundException.class);
     }
 
+    // B3 #1: sign/download used to mint a URL for any authenticated caller who knew a confirmed key.
+    @Test
+    void signDownload_otherUsersFile_isDeniedAndNotAudited() {
+        byte[] content = "not yours".getBytes();
+        SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
+        confirmUpload(signResponse, content, "application/pdf");
+        transactionTemplate.execute(status -> {
+            em.createQuery("UPDATE FileStorageObject f SET f.ownerId = :owner WHERE f.key = :key")
+                .setParameter("owner", "someone-else")
+                .setParameter("key", signResponse.key())
+                .executeUpdate();
+            return null;
+        });
+
+        // 404, not 403: the endpoint must not reveal that another user's key exists.
+        assertThatThrownBy(() -> fileStorageService.signDownload(signResponse.key()))
+            .isInstanceOf(StorageObjectNotFoundException.class);
+        assertThat(storageAccessEventRepository.findAll()).isEmpty();
+    }
+
     private void softDelete(String key) {
         transactionTemplate.execute(status -> {
             em.createQuery("UPDATE FileStorageObject f SET f.deletedAt = :now WHERE f.key = :key")

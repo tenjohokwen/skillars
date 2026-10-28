@@ -12,7 +12,9 @@ import java.util.Optional;
 
 public interface FileStorageObjectRepository extends JpaRepository<FileStorageObject, Long> {
 
-    @Query("SELECT COALESCE(SUM(f.sizeBytes), 0) FROM FileStorageObject f WHERE f.ownerId = :ownerId")
+    // Soft-deleted objects no longer count against the owner's quota: the user cannot reach them any more, and
+    // the bytes are physically removed after app.storage.deletion.retention-days anyway.
+    @Query("SELECT COALESCE(SUM(f.sizeBytes), 0) FROM FileStorageObject f WHERE f.ownerId = :ownerId AND f.deletedAt IS NULL")
     long sumSizeBytesByOwnerId(@Param("ownerId") String ownerId);
 
     Optional<FileStorageObject> findByKey(String key);

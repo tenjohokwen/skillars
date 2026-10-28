@@ -140,7 +140,12 @@ class FileStorageDeletionIT extends BaseStorageIT {
         fileStorageService.softDelete(signResponse.key(), "test-user");
         backdateDeletedAt(signResponse.key(), storageProperties.getDeletion().getRetentionDays() + 1);
 
-        deletionSchedulerService.processDeletions();
+        storageProperties.getReplication().setEnabled(true);
+        try {
+            deletionSchedulerService.processDeletions();
+        } finally {
+            storageProperties.getReplication().setEnabled(false);
+        }
 
         assertThat(fileStorageObjectRepository.findByKey(signResponse.key()))
             .isPresent()
@@ -174,9 +179,8 @@ class FileStorageDeletionIT extends BaseStorageIT {
     void scheduler_concurrentTicks_doNotDuplicateOutboxJobForSameRow() throws Exception {
         byte[] content = "concurrent race".getBytes();
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
-        // confirmUpload itself enqueues a REPLICATE-type job (replication is enabled by
-        // StorageTestConfig) — that job is not this test's concern, only the DELETE-type job(s) the
-        // racing processDeletions() calls below may or may not duplicate.
+        // Replication is switched on for the race below only (it is off in every profile, and then no
+        // DELETE job is enqueued at all — see scheduler_replicationDisabled_enqueuesNoDeleteJob).
         confirmUpload(signResponse, content, "application/pdf");
 
         transactionTemplate.execute(status -> {
@@ -193,6 +197,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
         CountDownLatch startGate = new CountDownLatch(1);
         CountDownLatch bothReady = new CountDownLatch(2);
         ExecutorService pool = Executors.newFixedThreadPool(2);
+        storageProperties.getReplication().setEnabled(true);
         try {
             Future<?> a = pool.submit(() -> raceProcessDeletions(startGate, bothReady));
             Future<?> b = pool.submit(() -> raceProcessDeletions(startGate, bothReady));
@@ -205,6 +210,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
             b.get(30, TimeUnit.SECONDS);
         } finally {
             pool.shutdownNow();
+            storageProperties.getReplication().setEnabled(false);
         }
 
         assertThat(fileStorageObjectRepository.findByKey(signResponse.key()))
@@ -218,6 +224,33 @@ class FileStorageDeletionIT extends BaseStorageIT {
         assertThat(deleteJobs)
             .as("two racing ticks must not enqueue duplicate DELETE replication jobs for the same object")
             .hasSize(1);
+    }
+
+    // B3 #5: with replication off nothing drains outbox_replication_jobs, so no DELETE job may be enqueued.
+    @Test
+    void scheduler_replicationDisabled_enqueuesNoDeleteJob() {
+        byte[] content = "no replication".getBytes();
+        SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
+        confirmUpload(signResponse, content, "application/pdf");
+
+        transactionTemplate.execute(status -> {
+            em.createQuery("UPDATE FileStorageObject f SET f.createdBy = :user WHERE f.key = :key")
+                .setParameter("user", "test-user")
+                .setParameter("key", signResponse.key())
+                .executeUpdate();
+            return null;
+        });
+
+        fileStorageService.softDelete(signResponse.key(), "test-user");
+        backdateDeletedAt(signResponse.key(), storageProperties.getDeletion().getRetentionDays() + 1);
+
+        deletionSchedulerService.processDeletions();
+
+        assertThat(fileStorageObjectRepository.findByKey(signResponse.key()))
+            .isPresent()
+            .get()
+            .satisfies(fso -> assertThat(fso.getPhysicalDeletedAt()).isNotNull());
+        assertThat(outboxReplicationJobRepository.findAll()).isEmpty();
     }
 
     private void raceProcessDeletions(CountDownLatch startGate, CountDownLatch bothReady) {
