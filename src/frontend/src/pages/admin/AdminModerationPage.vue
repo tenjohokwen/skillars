@@ -138,6 +138,28 @@
                     @click="resolveSafetyHoldAlert(props.row.alertId)"
                   />
                 </template>
+                <template v-else-if="isPaymentIntegrityAlert(props.row.type)">
+                  <q-btn
+                    v-if="isPayoutAlert(props.row.type)"
+                    flat
+                    dense
+                    size="sm"
+                    color="primary"
+                    :label="t('admin.moderation.openBooking')"
+                    :to="{ path: '/admin/bookings', query: { bookingId: props.row.referenceId } }"
+                    data-testid="alert-open-payout-booking-btn"
+                  />
+                  <q-btn
+                    flat
+                    dense
+                    size="sm"
+                    color="negative"
+                    :label="t('admin.moderation.markHandled')"
+                    :loading="resolvingAlertId === props.row.alertId"
+                    data-testid="alert-resolve-payment-btn"
+                    @click="resolvePaymentAlert(props.row.alertId)"
+                  />
+                </template>
                 <span v-else class="text-meta">{{ t('admin.moderation.noInlineAction') }}</span>
               </q-td>
             </template>
@@ -382,6 +404,10 @@ const typeLabels = computed(() => ({
   SUBSCRIPTION_ORPHANED: t('admin.moderation.types.SUBSCRIPTION_ORPHANED'),
   SAFETY_HOLD_BOOKING: t('admin.moderation.types.SAFETY_HOLD_BOOKING'),
   CASH_OUT_UNRESOLVED: t('admin.moderation.types.CASH_OUT_UNRESOLVED'),
+  CHARGEBACK: t('admin.moderation.types.CHARGEBACK'),
+  EXTERNAL_REFUND: t('admin.moderation.types.EXTERNAL_REFUND'),
+  PAYOUT_HELD: t('admin.moderation.types.PAYOUT_HELD'),
+  PAYOUT_REVERSAL_FAILED: t('admin.moderation.types.PAYOUT_REVERSAL_FAILED'),
 }))
 
 const typeOptions = computed(() => [
@@ -400,6 +426,7 @@ const summaryBuckets = computed(() => [
   { key: 'subscriptionOrphaned', label: typeLabels.value.SUBSCRIPTION_ORPHANED },
   { key: 'safetyHoldBookings', label: typeLabels.value.SAFETY_HOLD_BOOKING },
   { key: 'cashOutUnresolved', label: typeLabels.value.CASH_OUT_UNRESOLVED },
+  { key: 'paymentIntegrity', label: t('admin.moderation.paymentIntegrity') },
   { key: 'total', label: t('admin.moderation.totalOpen') },
 ])
 
@@ -434,6 +461,23 @@ function isCoachAlert(type) {
   return type === 'STRIKE_THRESHOLD' || type === 'SUBSCRIPTION_ORPHANED'
 }
 
+// Chargebacks, refunds made outside the app, held payouts and failed reversals: no workflow of their
+// own — the admin reconciles in Stripe / the runbook and marks them handled.
+const PAYMENT_INTEGRITY_TYPES = [
+  'CHARGEBACK',
+  'EXTERNAL_REFUND',
+  'PAYOUT_HELD',
+  'PAYOUT_REVERSAL_FAILED',
+]
+
+function isPaymentIntegrityAlert(type) {
+  return PAYMENT_INTEGRITY_TYPES.includes(type)
+}
+
+function isPayoutAlert(type) {
+  return type === 'PAYOUT_HELD' || type === 'PAYOUT_REVERSAL_FAILED'
+}
+
 // Guards a late detail response for a previously opened item overwriting the current one.
 let detailToken = 0
 
@@ -447,9 +491,17 @@ const resolvingAlertId = ref(null)
 // C2: the urgent safety-hold booking alert has no workflow of its own — the admin contacts the
 // parent (named in the summary) and marks it handled here.
 async function resolveSafetyHoldAlert(alertId) {
+  await markAlertHandled(alertId, adminApi.resolveSafetyHoldAlert)
+}
+
+async function resolvePaymentAlert(alertId) {
+  await markAlertHandled(alertId, adminApi.resolvePaymentAlert)
+}
+
+async function markAlertHandled(alertId, resolve) {
   resolvingAlertId.value = alertId
   try {
-    await adminApi.resolveSafetyHoldAlert(alertId)
+    await resolve(alertId)
     $q.notify({ message: t('admin.moderation.markHandledSuccess'), type: 'positive' })
   } catch {
     $q.notify({ message: t('admin.moderation.markHandledFailed'), type: 'negative' })

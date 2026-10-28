@@ -64,9 +64,11 @@ public interface CoachPayoutRepository extends JpaRepository<CoachPayout, UUID> 
 
     // --- AC12 revenue reporting: coach figures move off booking_payments.CAPTURED onto ------------
     // --- coach_payouts rows in RELEASED, dated by released_at. -----------------------------------
+    // fix/payment-payouts-disputes-webhooks: a partially reversed payout stays RELEASED with
+    // reversed_amount > 0 — net counts as net_amount - reversed_amount, gross and commission pro rata.
 
     @Query(value = """
-        SELECT COALESCE(SUM(p.net_amount), 0)
+        SELECT COALESCE(SUM(p.net_amount - p.reversed_amount), 0)
         FROM payment.coach_payouts p
         WHERE p.coach_id = :coachId
           AND p.status = 'RELEASED'
@@ -77,7 +79,7 @@ public interface CoachPayoutRepository extends JpaRepository<CoachPayout, UUID> 
                                               @Param("to") Instant to);
 
     @Query(value = """
-        SELECT COALESCE(SUM(p.gross_amount), 0)
+        SELECT COALESCE(SUM(CASE WHEN p.net_amount > 0 THEN ROUND(p.gross_amount * (p.net_amount - p.reversed_amount) / p.net_amount, 2) ELSE p.gross_amount END), 0)
         FROM payment.coach_payouts p
         WHERE p.coach_id = :coachId
           AND p.status = 'RELEASED'
@@ -88,7 +90,7 @@ public interface CoachPayoutRepository extends JpaRepository<CoachPayout, UUID> 
                                                 @Param("to") Instant to);
 
     @Query(value = """
-        SELECT COALESCE(SUM(p.commission_amount), 0)
+        SELECT COALESCE(SUM(CASE WHEN p.net_amount > 0 THEN ROUND(p.commission_amount * (p.net_amount - p.reversed_amount) / p.net_amount, 2) ELSE p.commission_amount END), 0)
         FROM payment.coach_payouts p
         WHERE p.coach_id = :coachId
           AND p.status = 'RELEASED'
@@ -114,11 +116,11 @@ public interface CoachPayoutRepository extends JpaRepository<CoachPayout, UUID> 
      * commission actually deducted from coach transfers, for every funding source (card, wallet credit,
      * session pack), as stamped on each payout row. Only {@code RELEASED} payouts count, dated by
      * {@code released_at}: a pending/held/frozen payout has not earned it yet, and a cancelled or
-     * reversed one (a dispute refunded the parent) earned none. A partially reversed payout moves to
-     * REVERSED as a whole, so its commission is dropped entirely — an understatement, the conservative side.
+     * reversed one (a dispute refunded the parent) earned none. fix/payment-payouts-disputes-webhooks: a
+     * partially reversed payout stays RELEASED and counts its commission pro rata to the net it kept.
      */
     @Query(value = """
-        SELECT COALESCE(SUM(p.commission_amount), 0)
+        SELECT COALESCE(SUM(CASE WHEN p.net_amount > 0 THEN ROUND(p.commission_amount * (p.net_amount - p.reversed_amount) / p.net_amount, 2) ELSE p.commission_amount END), 0)
         FROM payment.coach_payouts p
         WHERE p.status = 'RELEASED'
           AND p.released_at BETWEEN :from AND :to
@@ -191,4 +193,32 @@ public interface CoachPayoutRepository extends JpaRepository<CoachPayout, UUID> 
 
     /** AC12.2 / receipt gate: the RELEASED payout for one booking, if it exists. */
     Optional<CoachPayout> findByBookingIdAndStatus(UUID bookingId, String status);
+
+    /**
+     * fix/payment-payouts-disputes-webhooks: every payout funded by one Stripe PaymentIntent — the
+     * booking(s) it charged (a batch charge funds several) and the sessions of any pack it bought —
+     * locked, in booking-id order (the order every multi-row payout locker uses).
+     */
+    @Query(value = """
+        SELECT p.* FROM payment.coach_payouts p
+        WHERE p.booking_id IN (SELECT bp.booking_id FROM payment.booking_payments bp
+                               WHERE bp.stripe_payment_intent_id = :pi)
+           OR p.session_pack_purchase_id IN (SELECT sp.purchase_id FROM payment.session_pack_purchases sp
+                                             WHERE sp.stripe_payment_intent_id = :pi)
+        ORDER BY p.booking_id
+        FOR UPDATE OF p
+        """, nativeQuery = true)
+    List<CoachPayout> findFundedByPaymentIntentForUpdate(@Param("pi") String paymentIntentId);
+
+    /**
+     * fix/payment-payouts-disputes-webhooks: an in-app dispute on the booking is still open (the same
+     * predicate as {@code DisputeRepository.findOpenByBookingId}). Read at enqueue so a session completed
+     * while its dispute is open (e.g. an admin force-complete) is recorded frozen. Native: the payment
+     * module does not depend on the admin module's entities.
+     */
+    @Query(value = """
+        SELECT EXISTS (SELECT 1 FROM admin.disputes d
+                       WHERE d.booking_id = :bookingId AND d.status NOT IN ('RESOLVED', 'DISMISSED'))
+        """, nativeQuery = true)
+    boolean existsOpenDisputeForBooking(@Param("bookingId") UUID bookingId);
 }

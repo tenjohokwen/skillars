@@ -69,6 +69,15 @@ public class AdminModerationResource {
         return ResponseEntity.noContent().build();
     }
 
+    /** fix/payment-payouts-disputes-webhooks: mark a payment-integrity alert (chargeback, external refund, held / unreversed payout) handled. */
+    @PostMapping("/queue/payment-alerts/{alertId}/resolve")
+    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @Observed(name = "admin.queue.paymentAlert.resolve")
+    public ResponseEntity<Void> resolvePaymentAlert(@PathVariable java.util.UUID alertId) {
+        adminQueueService.resolvePaymentIntegrityAlert(alertId, resolveAdminId());
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/messages/{messageId}")
     @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
     @Observed(name = "admin.messages.detail")

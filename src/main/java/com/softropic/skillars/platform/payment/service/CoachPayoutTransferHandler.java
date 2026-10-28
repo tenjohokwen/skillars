@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.outbox.contract.OutboxMessageHandler;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutStatus;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutTransferPayload;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
+import com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent;
 import com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException;
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutFreezeRepository;
@@ -14,6 +15,7 @@ import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.io.UncheckedIOException;
@@ -46,6 +48,7 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
     private final PaymentGateway paymentGateway;
     private final MeterRegistry meterRegistry;
     private final ObjectMapper objectMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Override
     public String aggregateType() {
@@ -75,6 +78,18 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
         if (!CoachPayoutStatus.isPayable(row.getStatus())) {
             log.info("[COACH_PAYOUT] booking {} payout is {} (not PENDING_RELEASE) — re-drive is a no-op",
                 p.bookingId(), row.getStatus());
+            return;
+        }
+        // fix/payment-payouts-disputes-webhooks: an open in-app or card dispute holds the payout. The
+        // writers flip the row FROZEN themselves; this catches a row put back to PENDING_RELEASE by hand.
+        if (row.hasPayoutFreezeReason()) {
+            row.setStatus(CoachPayoutStatus.FROZEN);
+            row.setLastError(row.isDisputeFrozen() ? CoachPayoutAdjustmentService.REASON_DISPUTE_OPEN
+                : CoachPayoutAdjustmentService.REASON_CHARGEBACK_OPEN);
+            coachPayoutRepository.save(row);
+            meterRegistry.counter(METRIC_FROZEN).increment();
+            log.warn("[COACH_PAYOUT_FROZEN] booking={} coach={} reason={} — transfer NOT made while the dispute is open",
+                row.getBookingId(), row.getCoachId(), row.getLastError());
             return;
         }
         // feat/coach-payouts-pack-and-credit (DECISIONS.md item 2): the release-time gate for a CSAM
@@ -129,6 +144,9 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
             meterRegistry.counter(METRIC_HELD, "reason", e.getReason()).increment();
             log.warn("[COACH_PAYOUT_HELD] booking={} coach={} reason={} — payout blocked, operator must "
                 + "reconcile (runbook: COACH_PAYOUT_HELD)", row.getBookingId(), row.getCoachId(), e.getReason());
+            // fix/payment-payouts-disputes-webhooks: an admin alert, one OPEN per booking (AFTER_COMMIT).
+            eventPublisher.publishEvent(new PaymentIntegrityAlertEvent(this, PaymentIntegrityAlertEvent.Kind.PAYOUT_HELD,
+                row.getBookingId().toString(), PaymentIntegrityAlertEvent.Reference.BOOKING, e.getReason()));
         }
     }
 

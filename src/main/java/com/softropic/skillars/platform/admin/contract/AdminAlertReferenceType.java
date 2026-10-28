@@ -7,5 +7,8 @@ public enum AdminAlertReferenceType {
     GDPR_REQUEST,
     // feat/coach-payouts-pack-and-credit: referenceId is the cash-out id
     // (payment.cash_out_reconciliations.cash_out_id) — see V186.
-    CASH_OUT
+    CASH_OUT,
+    // fix/payment-payouts-disputes-webhooks: referenceId is a Stripe PaymentIntent id (or a charge id
+    // when the event carried no intent) — see V193.
+    PAYMENT_INTENT
 }

@@ -310,6 +310,7 @@ class StripePaymentGatewayTest {
         account.setStripeAccountId("acct_coach");
         account.setOnboardingStatus("COMPLETE");
         account.setChargesEnabled(true);
+        account.setPayoutsEnabled(true);
         when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
         com.stripe.model.Transfer tr = new com.stripe.model.Transfer();
         tr.setId("tr_1");
@@ -337,6 +338,7 @@ class StripePaymentGatewayTest {
         account.setStripeAccountId("acct_coach");
         account.setOnboardingStatus("COMPLETE");
         account.setChargesEnabled(true);
+        account.setPayoutsEnabled(true);
         when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
         when(stripeClient.createTransfer(any(com.stripe.param.TransferCreateParams.class), any(String.class)))
             .thenThrow(new com.stripe.exception.ApiConnectionException("boom"));
@@ -354,13 +356,121 @@ class StripePaymentGatewayTest {
                 any(com.stripe.param.TransferReversalCollectionCreateParams.class), any(String.class)))
             .thenReturn(new com.stripe.model.TransferReversal());
 
-        stripePaymentGateway.reverseTransfer("tr_9", new BigDecimal("10.00"));
+        stripePaymentGateway.reverseTransfer("tr_9", new BigDecimal("10.00"), "reversal-tr_9-r1");
 
         ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
         org.mockito.Mockito.verify(stripeClient).createTransferReversal(
             org.mockito.ArgumentMatchers.eq("tr_9"),
             any(com.stripe.param.TransferReversalCollectionCreateParams.class), key.capture());
-        assertThat(key.getValue()).isEqualTo("reversal-tr_9");
+        assertThat(key.getValue()).isEqualTo("reversal-tr_9-r1");
+    }
+
+    // --- fix/payment-payouts-disputes-webhooks item 4: an unusable account is a classified HOLD ---------
+
+    @Test
+    void transferToCoach_noAccount_isNonRetryableHold_beforeStripe() throws StripeException {
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> stripePaymentGateway.transferToCoach(UUID.randomUUID(), COACH_ID, BigDecimal.ONE, "eur"))
+            .isInstanceOfSatisfying(com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException.class,
+                e -> {
+                    assertThat(e.isRetryable()).isFalse();
+                    assertThat(e.getReason()).isEqualTo("NO_ACCOUNT");
+                });
+        org.mockito.Mockito.verifyNoInteractions(stripeClient);
+    }
+
+    @Test
+    void transferToCoach_transfersCapabilityInactive_isNonRetryableHold_evenIfChargesEnabled() throws StripeException {
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_coach");
+        account.setOnboardingStatus("COMPLETE");
+        account.setChargesEnabled(true);
+        account.setPayoutsEnabled(true);
+        account.setTransfersCapability("inactive");
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+
+        assertThatThrownBy(() -> stripePaymentGateway.transferToCoach(UUID.randomUUID(), COACH_ID, BigDecimal.ONE, "eur"))
+            .isInstanceOfSatisfying(com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException.class,
+                e -> {
+                    assertThat(e.isRetryable()).isFalse();
+                    assertThat(e.getReason()).isEqualTo("ACCOUNT_NOT_READY");
+                });
+        org.mockito.Mockito.verifyNoInteractions(stripeClient);
+    }
+
+    @Test
+    void transferToCoach_restrictedLegacyAccount_isNonRetryableHold() {
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_coach");
+        account.setOnboardingStatus("RESTRICTED");
+        account.setChargesEnabled(true);
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+
+        assertThatThrownBy(() -> stripePaymentGateway.transferToCoach(UUID.randomUUID(), COACH_ID, BigDecimal.ONE, "eur"))
+            .isInstanceOfSatisfying(com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException.class,
+                e -> assertThat(e.isRetryable()).isFalse());
+    }
+
+    @Test
+    void transferToCoach_activeCapability_isEnoughEvenWithoutChargesEnabled() throws StripeException {
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_coach");
+        account.setOnboardingStatus("RESTRICTED");
+        account.setTransfersCapability("active");
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+        com.stripe.model.Transfer tr = new com.stripe.model.Transfer();
+        tr.setId("tr_new");
+        when(stripeClient.createTransfer(any(com.stripe.param.TransferCreateParams.class), any(String.class)))
+            .thenReturn(tr);
+
+        assertThat(stripePaymentGateway.transferToCoach(UUID.randomUUID(), COACH_ID, BigDecimal.ONE, "eur"))
+            .isEqualTo("tr_new");
+    }
+
+    // --- fix/payment-payouts-disputes-webhooks item 7: adopt a transfer made beyond the 24h key window --
+
+    @Test
+    void transferToCoach_existingTransferForGroup_isAdopted_noSecondTransfer() throws StripeException {
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_coach");
+        account.setTransfersCapability("active");
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+        UUID bookingId = UUID.randomUUID();
+        com.stripe.model.Transfer other = new com.stripe.model.Transfer();
+        other.setId("tr_other_dest");
+        other.setDestination("acct_someone_else");
+        com.stripe.model.Transfer reversed = new com.stripe.model.Transfer();
+        reversed.setId("tr_reversed");
+        reversed.setDestination("acct_coach");
+        reversed.setReversed(true);
+        com.stripe.model.Transfer existing = new com.stripe.model.Transfer();
+        existing.setId("tr_existing");
+        existing.setDestination("acct_coach");
+        existing.setReversed(false);
+        when(stripeClient.listTransfersByGroup(bookingId.toString()))
+            .thenReturn(java.util.List.of(other, reversed, existing));
+
+        assertThat(stripePaymentGateway.transferToCoach(bookingId, COACH_ID, BigDecimal.ONE, "eur"))
+            .isEqualTo("tr_existing");
+        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
+            .createTransfer(any(com.stripe.param.TransferCreateParams.class), any(String.class));
+    }
+
+    @Test
+    void transferToCoach_listFails_isRetryable_noBlindCreate() throws StripeException {
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_coach");
+        account.setTransfersCapability("active");
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+        when(stripeClient.listTransfersByGroup(any(String.class)))
+            .thenThrow(new com.stripe.exception.ApiConnectionException("boom"));
+
+        assertThatThrownBy(() -> stripePaymentGateway.transferToCoach(UUID.randomUUID(), COACH_ID, BigDecimal.ONE, "eur"))
+            .isInstanceOfSatisfying(com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException.class,
+                e -> assertThat(e.isRetryable()).isTrue());
+        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
+            .createTransfer(any(com.stripe.param.TransferCreateParams.class), any(String.class));
     }
 
     @Test

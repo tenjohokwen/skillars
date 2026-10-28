@@ -10,8 +10,11 @@ import com.softropic.skillars.platform.outbox.service.OutboxService;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutReversalPayload;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutStatus;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutTransferPayload;
+import com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
+import com.softropic.skillars.platform.payment.repo.ChargeDispute;
+import com.softropic.skillars.platform.payment.repo.ChargeDisputeRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutFreezeRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
@@ -22,6 +25,7 @@ import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepositor
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +34,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -60,6 +65,7 @@ public class CoachPayoutOutboxSupport {
     static final String REASON_NOTHING_CHARGED = "NOTHING_CHARGED";
     static final String REASON_PACK_AMOUNT_UNKNOWN = "PACK_AMOUNT_UNKNOWN";
     static final String REASON_PACK_FULLY_ALLOCATED = "PACK_FULLY_ALLOCATED";
+    static final String REASON_CHARGEBACK_LOST = "CHARGEBACK_LOST";
 
     private final CoachPayoutRepository coachPayoutRepository;
     private final BookingPaymentRepository bookingPaymentRepository;
@@ -71,6 +77,8 @@ public class CoachPayoutOutboxSupport {
     private final OutboxService outboxService;
     private final ConfigService configService;
     private final ObjectMapper objectMapper;
+    private final ChargeDisputeRepository chargeDisputeRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * AC3.2 / AC4.1: insert the {@code coach_payouts} row {@code PENDING_RELEASE} and enqueue a
@@ -163,19 +171,41 @@ public class CoachPayoutOutboxSupport {
 
         CoachPayout row = newRow(bookingId, coachId, currency, gross, commission, net, releaseAfter);
         row.setSessionPackPurchaseId(packId);
+        // fix/payment-payouts-disputes-webhooks: a dispute opened before the session completed — in-app
+        // (open on this booking) or a card dispute on the charge that funded it — freezes the payout from
+        // the start. A card dispute already LOST leaves the payout to an operator (HOLD + alert).
+        List<String> chargeDisputeStatuses = chargeDisputeStatuses(bookingId);
+        row.setDisputeFrozen(coachPayoutRepository.existsOpenDisputeForBooking(bookingId));
+        row.setChargebackFrozen(chargeDisputeStatuses.contains(ChargeDispute.STATUS_OPEN));
         // A coach already under a CSAM safety hold: record the payout FROZEN, never PENDING_RELEASE.
         // (A hold landing after this read is caught by CoachPayoutTransferHandler's release-time check.)
-        boolean frozen = coachPayoutFreezeRepository.isFrozenForShare(coachId);
-        row.setStatus(frozen ? CoachPayoutStatus.FROZEN : CoachPayoutStatus.PENDING_RELEASE);
-        if (frozen) {
-            row.setLastError(CoachPayoutFreezeService.REASON_SAFETY_HOLD);
+        boolean safetyHold = coachPayoutFreezeRepository.isFrozenForShare(coachId);
+        boolean frozen = safetyHold || row.hasPayoutFreezeReason();
+        boolean chargebackLost = chargeDisputeStatuses.contains(ChargeDispute.STATUS_LOST);
+        if (chargebackLost) {
+            row.setStatus(CoachPayoutStatus.HOLD);
+            row.setLastError(REASON_CHARGEBACK_LOST);
+        } else if (frozen) {
+            row.setStatus(CoachPayoutStatus.FROZEN);
+            row.setLastError(safetyHold ? CoachPayoutFreezeService.REASON_SAFETY_HOLD
+                : row.isDisputeFrozen() ? CoachPayoutAdjustmentService.REASON_DISPUTE_OPEN
+                : CoachPayoutAdjustmentService.REASON_CHARGEBACK_OPEN);
+        } else {
+            row.setStatus(CoachPayoutStatus.PENDING_RELEASE);
         }
         row.setCoachStripeAccountId(resolveCoachAccountIdBestEffort(coachId));
         coachPayoutRepository.save(row);
 
+        if (chargebackLost) {
+            log.warn("[COACH_PAYOUT_HELD] booking={} coach={} net={} — the charge that paid for this session lost a "
+                + "card dispute, payout recorded HOLD for an operator", bookingId, coachId, net);
+            eventPublisher.publishEvent(new PaymentIntegrityAlertEvent(this, PaymentIntegrityAlertEvent.Kind.PAYOUT_HELD,
+                bookingId.toString(), PaymentIntegrityAlertEvent.Reference.BOOKING, REASON_CHARGEBACK_LOST));
+            return;
+        }
         if (frozen) {
-            log.warn("[COACH_PAYOUT_FROZEN] booking={} coach={} net={} — coach is under a safety hold, payout "
-                + "recorded FROZEN, no transfer until an admin reinstates the coach", bookingId, coachId, net);
+            log.warn("[COACH_PAYOUT_FROZEN] booking={} coach={} net={} reason={} — payout recorded FROZEN, no transfer "
+                + "until the freeze is lifted", bookingId, coachId, net, row.getLastError());
             return;
         }
         enqueue(AGGREGATE_TYPE_TRANSFER, new CoachPayoutTransferPayload(bookingId), releaseAfter, bookingId);
@@ -291,6 +321,11 @@ public class CoachPayoutOutboxSupport {
             log.error("[COACH_PAYOUT_ENQUEUE_FAILED] aggregateType={} booking={} — payout row written but "
                 + "outbox message NOT enqueued, operator must re-drive", aggregateType, bookingId, e);
         }
+    }
+
+    private List<String> chargeDisputeStatuses(UUID bookingId) {
+        List<String> intents = chargeDisputeRepository.findFundingPaymentIntents(bookingId);
+        return intents.isEmpty() ? List.of() : chargeDisputeRepository.findStatusesByPaymentIntentIds(intents);
     }
 
     private CoachPayout newRow(UUID bookingId, UUID coachId, String currency,

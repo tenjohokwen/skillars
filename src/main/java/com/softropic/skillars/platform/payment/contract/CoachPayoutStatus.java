@@ -18,14 +18,21 @@ package com.softropic.skillars.platform.payment.contract;
  *   (row created at completion-enqueue) --> PENDING_RELEASE
  *   PENDING_RELEASE --Transfer.create ok--------> RELEASED        (stamps stripe_transfer_id, released_at)
  *   PENDING_RELEASE --non-retryable transfer err-> HOLD           (operator owns it)
- *   PENDING_RELEASE --dispute inside hold window-> CANCELLED      (no money moved)
- *   RELEASED        --Transfer.createReversal ok-> REVERSED       (dispute upheld after payout)
+ *   PENDING_RELEASE --whole net refunded by a dispute-> CANCELLED  (no money moved)
+ *   PENDING_RELEASE --in-app / card dispute opened--> FROZEN      (dispute_frozen / chargeback_frozen)
+ *   RELEASED        --reversal of the whole net----> REVERSED     (a partial one stays RELEASED, reversed_amount)
  *   RELEASED        --non-retryable reversal err-> REVERSAL_FAILED
  *   HOLD            --operator "coach reconnected"-> PENDING_RELEASE (re-enqueues one outbox message)
  *   HOLD / REVERSAL_FAILED --explicit operator SQL-> FAILED_PERMANENT (unrecoverable; runbook only)
  *   PENDING_RELEASE --coach under CSAM safety hold-> FROZEN       (CoachPayoutFreezeService / transfer handler)
- *   FROZEN          --admin reinstates the coach---> PENDING_RELEASE (re-enqueues one outbox message)
- *   FROZEN          --dispute resolved------------> CANCELLED
+ *   FROZEN          --last freeze reason lifted----> PENDING_RELEASE (re-enqueues one outbox message)
+ *   FROZEN          --whole net refunded by dispute-> CANCELLED
+ * </pre>
+ * fix/payment-payouts-disputes-webhooks: a partial refund (in-app credit or lost card dispute) never
+ * cancels — it cuts a pending net pro rata ({@code CoachPayoutAdjustmentService}), or reverses that share
+ * of a released one; FROZEN is lifted only when no reason (safety hold, in-app dispute, card dispute)
+ * remains.
+ * <pre>
  * </pre>
  *
  * <p>There is <strong>no</strong> automatic/scheduled transition into {@link #FAILED_PERMANENT} —

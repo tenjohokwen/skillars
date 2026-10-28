@@ -146,9 +146,10 @@ public class RevenueReportingService {
                 payout.getBookingId(),
                 playerName,
                 sessionDate,
-                payout.getGrossAmount(),
-                payout.getCommissionAmount(),
-                payout.getNetAmount(),
+                // fix/payment-payouts-disputes-webhooks: a partially reversed payout shows what the coach kept.
+                payout.getEffectiveGrossAmount(),
+                payout.getEffectiveCommissionAmount(),
+                payout.getEffectiveNetAmount(),
                 payout.getStatus(),
                 creditByBooking.getOrDefault(payout.getBookingId(), BigDecimal.ZERO)
             );
@@ -185,9 +186,9 @@ public class RevenueReportingService {
             playerFirstName,
             coach.getDisplayName(),
             "Skillars",
-            payout.getGrossAmount(),
-            payout.getCommissionAmount(),
-            payout.getNetAmount()
+            payout.getEffectiveGrossAmount(),
+            payout.getEffectiveCommissionAmount(),
+            payout.getEffectiveNetAmount()
         );
     }
 

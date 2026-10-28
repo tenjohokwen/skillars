@@ -214,6 +214,18 @@ public class AdminQueueService {
             case CASH_OUT_UNRESOLVED -> "Credit cash-out " + referenceId + ": Stripe refund not confirmed"
                 + (reason != null ? " (" + reason + ")" : "")
                 + " — wallet debited, reconcile in payment.cash_out_reconciliations";
+            // fix/payment-payouts-disputes-webhooks: reason carries the latest state (OPENED / WON / LOST and
+            // amounts for a chargeback, the transfer failure reason for a held payout).
+            case CHARGEBACK -> "Card dispute on payment " + referenceId + ": " + (reason != null ? reason : "")
+                + " — not-yet-released coach payouts it funded are frozen; respond in the Stripe Dashboard";
+            case EXTERNAL_REFUND -> "Payment " + referenceId + " refunded outside the app"
+                + (reason != null ? " (" + reason + ")" : "")
+                + " — no credit or payout was adjusted; reconcile the booking and coach payout by hand";
+            case PAYOUT_HELD -> "Coach payout for booking " + referenceId + " is on HOLD"
+                + (reason != null ? " (" + reason + ")" : "")
+                + " — the transfer cannot be made; see runbook COACH_PAYOUT_HELD";
+            case PAYOUT_REVERSAL_FAILED -> "Coach payout reversal failed for booking " + referenceId
+                + (reason != null ? " (" + reason + ")" : "") + " — see runbook COACH_PAYOUT_REVERSAL";
             default -> "";
         };
     }
@@ -234,6 +246,26 @@ public class AdminQueueService {
                 org.springframework.http.HttpStatus.NOT_FOUND, "admin.moderation.alertNotOpen");
         }
         log.info("Safety-hold booking alert resolved: alertId={} adminId={}", alertId, adminId);
+    }
+
+    /**
+     * fix/payment-payouts-disputes-webhooks: an admin marks a payment-integrity alert (CHARGEBACK,
+     * EXTERNAL_REFUND, PAYOUT_HELD, PAYOUT_REVERSAL_FAILED) handled — like SAFETY_HOLD_BOOKING, these have
+     * no workflow of their own. One conditional UPDATE per type; at most one matches the id.
+     *
+     * @throws ResponseStatusException 404 when no OPEN payment-integrity alert has this id
+     */
+    @Transactional
+    public void resolvePaymentIntegrityAlert(UUID alertId, Long adminId) {
+        int updated = 0;
+        for (AdminAlertType type : AdminAlertType.PAYMENT_INTEGRITY) {
+            updated += adminAlertRepository.resolveOpenAlert(alertId, type.name(), adminId);
+        }
+        if (updated == 0) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.NOT_FOUND, "admin.moderation.alertNotOpen");
+        }
+        log.info("Payment-integrity alert resolved: alertId={} adminId={}", alertId, adminId);
     }
 
     /** "email (user id)" of the booking's payer — booking.parentId is a user id (the requester's own). */
@@ -311,6 +343,7 @@ public class AdminQueueService {
             counts.getOrDefault(AdminAlertType.SUBSCRIPTION_ORPHANED, 0L),
             counts.getOrDefault(AdminAlertType.SAFETY_HOLD_BOOKING, 0L),
             counts.getOrDefault(AdminAlertType.CASH_OUT_UNRESOLVED, 0L),
+            AdminAlertType.PAYMENT_INTEGRITY.stream().mapToLong(t -> counts.getOrDefault(t, 0L)).sum(),
             total);
     }
 }
