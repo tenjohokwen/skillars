@@ -164,4 +164,14 @@ class CreditWalletResourceWebMvcTest {
                 .content(objectMapper.writeValueAsString(new CashOutRequest(new BigDecimal("5.00")))))
             .andExpect(status().isNoContent());
     }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void cashOut_subCentAmount_returns400() throws Exception {
+        // fix/payment-money-integrity: euro money into a numeric(10,2) ledger — reject, never round.
+        mockMvc.perform(post("/api/payment/credits/cashout")
+                .contentType("application/json")
+                .content("{\"amount\": 5.005}"))
+            .andExpect(status().isBadRequest());
+    }
 }

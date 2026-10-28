@@ -61,7 +61,7 @@ class AdminFinanceResourceWebMvcTest {
 
     private static final AdminFinanceOverviewDto ZERO_OVERVIEW = new AdminFinanceOverviewDto(
         BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-        BigDecimal.ZERO, Map.of(), Map.of(), BigDecimal.ZERO
+        BigDecimal.ZERO, Map.of(), Map.of()
     );
 
     // ── Role enforcement ─────────────────────────────────────────
@@ -81,12 +81,14 @@ class AdminFinanceResourceWebMvcTest {
 
     @Test
     @WithMockUser(roles = "ADMIN")
-    void overview_adminRole_returns200WithSubscriptionRevenueZero() throws Exception {
+    void overview_adminRole_returns200_withoutAFakeSubscriptionRevenueFigure() throws Exception {
         when(revenueReportingService.getAdminOverview(any(), any())).thenReturn(ZERO_OVERVIEW);
 
+        // fix/payment-money-integrity: subscriptionRevenue was a hard-coded 0 and is no longer sent.
         mockMvc.perform(get("/api/admin/payment/overview"))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.subscriptionRevenue").value(0));
+            .andExpect(jsonPath("$.totalGrossVolume").value(0))
+            .andExpect(jsonPath("$.subscriptionRevenue").doesNotExist());
     }
 
     @Test
@@ -113,16 +115,20 @@ class AdminFinanceResourceWebMvcTest {
 
     @Test
     @WithMockUser(roles = "ADMIN")
-    void coachRevenue_knownCoach_outstandingDisputeCountIsZero() throws Exception {
+    void coachRevenue_knownCoach_omitsAlwaysZeroAndFeeFields() throws Exception {
         UUID coachId = UUID.randomUUID();
         CoachRevenueAdminDto dto = new CoachRevenueAdminDto(
-            BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-            0L, BigDecimal.ZERO, "EUR", 0, 0, BigDecimal.ZERO, 0L
+            new BigDecimal("100.00"), new BigDecimal("10.00"), new BigDecimal("90.00"),
+            1L, BigDecimal.ZERO, "EUR", 0, BigDecimal.ZERO, 0L
         );
         when(revenueReportingService.getAdminCoachRevenue(eq(coachId), any(), any())).thenReturn(dto);
 
+        // fix/payment-money-integrity: outstandingDisputeCount was a hard-coded 0 and stripeFees an
+        // estimate of a fee the coach never pays — both removed; netPayout is the transferred net.
         mockMvc.perform(get("/api/admin/payment/coaches/{coachId}/revenue", coachId))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.outstandingDisputeCount").value(0));
+            .andExpect(jsonPath("$.netPayout").value(90.00))
+            .andExpect(jsonPath("$.outstandingDisputeCount").doesNotExist())
+            .andExpect(jsonPath("$.stripeFees").doesNotExist());
     }
 }

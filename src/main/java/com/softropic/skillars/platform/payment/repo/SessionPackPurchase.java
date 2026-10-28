@@ -43,6 +43,15 @@ public class SessionPackPurchase {
     @Column(name = "price_per_session", nullable = false, updatable = false, precision = 10, scale = 2)
     private BigDecimal pricePerSession;
 
+    /**
+     * fix/payment-money-integrity (V181): what the payer was actually charged for the pack — the
+     * tier's total price at purchase time, stamped because the tier is coach-editable afterwards.
+     * Read by the admin finance overview's gross volume. Nullable only for legacy rows V181 could
+     * not backfill.
+     */
+    @Column(name = "amount_charged", updatable = false, precision = 10, scale = 2)
+    private BigDecimal amountCharged;
+
     @Column(name = "remaining_sessions", nullable = false)
     private int remainingSessions;
 

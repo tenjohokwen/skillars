@@ -79,7 +79,7 @@ class SessionPackEmailListenerTest {
         for (int i = 0; i < 10_000; i++) {
             SessionPackExpiryWarningEvent event = new SessionPackExpiryWarningEvent(
                     this, UUID.randomUUID(), 1L, "parent@example.com", UUID.randomUUID(),
-                    "coach@example.com", "Coach", 3, Instant.now().plusSeconds(3600), "3", "UTC"
+                    "Coach", 3, Instant.now().plusSeconds(3600), "3", "UTC"
             );
             listener.onExpiryWarning(event);
         }

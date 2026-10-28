@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -68,4 +69,15 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
     Set<UUID> findCoachIdsWithActivePack(@Param("playerId") Long playerId,
                                           @Param("coachIds") Set<UUID> coachIds,
                                           @Param("now") Instant now);
+
+    /**
+     * fix/payment-money-integrity: pack revenue charged in the period, for the admin finance
+     * overview's gross volume. {@code amountCharged} is stamped at purchase (V181).
+     */
+    @Query("SELECT COALESCE(SUM(p.amountCharged), 0) FROM SessionPackPurchase p WHERE p.createdAt BETWEEN :from AND :to")
+    BigDecimal sumAmountChargedForPeriod(@Param("from") Instant from, @Param("to") Instant to);
+
+    /** Pack purchases in the period that went through a Stripe charge — the Stripe-fee estimate's count. */
+    @Query("SELECT COUNT(p) FROM SessionPackPurchase p WHERE p.stripePaymentIntentId IS NOT NULL AND p.createdAt BETWEEN :from AND :to")
+    long countChargedForPeriod(@Param("from") Instant from, @Param("to") Instant to);
 }

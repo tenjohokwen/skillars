@@ -44,8 +44,17 @@ public interface ParentCreditLedgerRepository extends JpaRepository<ParentCredit
         + CreditLedgerEntryType.BOOKING_REFUND + "' AND l.createdAt BETWEEN :from AND :to")
     BigDecimal sumTotalRefundCredit(@Param("from") Instant from, @Param("to") Instant to);
 
+    /**
+     * Money returned to cards by cash-outs in the period: {@code CASH_OUT_DEBIT} rows whose refund
+     * did not fail. fix/payment-money-integrity: a failed refund's debit is reversed by
+     * {@code CASH_OUT_REVERSAL} rows carrying the same {@code reference_id} (the cash-out id), and
+     * is excluded here. Legacy rows (before that fix) have no {@code reference_id}, so a legacy
+     * failed cash-out is still counted; they also hold the gross requested amount, not the net.
+     */
     @Query("SELECT COALESCE(SUM(ABS(l.amount)), 0) FROM ParentCreditLedger l WHERE l.type = '"
-        + CreditLedgerEntryType.CASH_OUT_DEBIT + "' AND l.createdAt BETWEEN :from AND :to")
+        + CreditLedgerEntryType.CASH_OUT_DEBIT + "' AND l.createdAt BETWEEN :from AND :to"
+        + " AND NOT EXISTS (SELECT r.txId FROM ParentCreditLedger r WHERE r.type = '"
+        + CreditLedgerEntryType.CASH_OUT_REVERSAL + "' AND r.parentId = l.parentId AND r.referenceId = l.referenceId)")
     BigDecimal sumTotalCashOuts(@Param("from") Instant from, @Param("to") Instant to);
 
     List<ParentCreditLedger> findAllByParentId(Long parentId);

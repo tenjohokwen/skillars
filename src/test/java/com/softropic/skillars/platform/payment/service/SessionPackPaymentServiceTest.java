@@ -160,7 +160,7 @@ class SessionPackPaymentServiceTest {
         when(sessionPackPurchaseRepository.save(any())).thenThrow(new RuntimeException("db write failed"));
         // An unchecked throw out of refund used to propagate and skip the wrap + reconciliation.
         org.mockito.Mockito.doThrow(new IllegalStateException("stripe SDK blew up"))
-            .when(paymentGateway).refund("pi_test", tier.getTotalPrice());
+            .when(paymentGateway).refund("pi_test", tier.getTotalPrice(), "refund-pi_test");
 
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test"))
             .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
@@ -180,7 +180,7 @@ class SessionPackPaymentServiceTest {
         stubHappyPathUntilPersist(tier);
         when(sessionPackPurchaseRepository.save(any())).thenThrow(new RuntimeException("db write failed"));
         org.mockito.Mockito.doThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException("payment.refundFailed"))
-            .when(paymentGateway).refund("pi_test", tier.getTotalPrice());
+            .when(paymentGateway).refund("pi_test", tier.getTotalPrice(), "refund-pi_test");
 
         assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test"))
             .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
@@ -200,7 +200,7 @@ class SessionPackPaymentServiceTest {
             .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
             .hasMessageContaining("payment.lifecycleFailure");
 
-        verify(paymentGateway).refund("pi_test", tier.getTotalPrice());
+        verify(paymentGateway).refund("pi_test", tier.getTotalPrice(), "refund-pi_test");
         verify(refundReconciliationService, never()).recordRefundFailure(any(), any(), any(), any(), any());
     }
 

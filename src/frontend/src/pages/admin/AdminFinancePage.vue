@@ -262,8 +262,9 @@ const periodLabel = computed(() => {
   })
 })
 
-// subscriptionRevenue is deliberately not shown: RevenueReportingService returns a hard-coded 0
-// for it until subscription price amounts are seeded, and a 0 would read as a real figure.
+// There is no subscription-revenue figure: no subscription price amounts are stored locally, so the
+// backend no longer sends one (it used to be a hard-coded 0). Stripe fees are the platform's own
+// estimated processing cost; the coach drill-down shows no fee line because coaches don't pay it.
 const overviewMetrics = computed(() =>
   overview.value
     ? [
@@ -307,12 +308,6 @@ const revenueMetrics = computed(() => {
       key: 'commission',
       label: t('admin.finance.coachCommission'),
       value: r.commissionDeducted,
-      format: money,
-    },
-    {
-      key: 'stripeFees',
-      label: t('admin.finance.coachStripeFees'),
-      value: r.stripeFees,
       format: money,
     },
     { key: 'net', label: t('admin.finance.coachNetPayout'), value: r.netPayout, format: money },

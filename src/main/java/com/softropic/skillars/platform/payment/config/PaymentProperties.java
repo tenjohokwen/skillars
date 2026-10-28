@@ -19,10 +19,6 @@ public class PaymentProperties {
      * FrontendLinkBuilder), or an absolute http(s) URL used verbatim.
      */
     private String callbackSuccessUrl = "/coach/payment-settings";
-    /** Stripe processing fee rate for credit cash-outs (e.g. 0.025 = 2.5%). */
-    private String feeRate = "0.025";
-    /** Stripe fixed fee per credit cash-out transaction in EUR (e.g. 0.25). */
-    private String feeFixed = "0.25";
     /** Stripe.js publishable key, safe to expose to authenticated frontend clients. */
     private String publishableKey = "";
 }

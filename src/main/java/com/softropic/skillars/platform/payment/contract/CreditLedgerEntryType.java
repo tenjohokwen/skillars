@@ -19,13 +19,20 @@ package com.softropic.skillars.platform.payment.contract;
  */
 public final class CreditLedgerEntryType {
 
-    /** {@code CreditWalletService.debitForCashOut}: the requested cash-out amount, debited. */
+    /**
+     * {@code CreditWalletService.debitForCashOut}: the net amount refunded to the card (requested
+     * minus the fee), debited. Rows written before fix/payment-money-integrity hold the gross
+     * requested amount instead (and carry no {@code reference_id}).
+     */
     public static final String CASH_OUT_DEBIT = "CASH_OUT_DEBIT";
 
     /** {@code CreditWalletService.debitForCashOut}: the Stripe processing fee, debited. */
     public static final String STRIPE_FEE_DEBIT = "STRIPE_FEE_DEBIT";
 
-    /** {@code CashOutService}: a cash-out's Stripe refund failed — the debited amount/fee restored. */
+    /**
+     * {@code CashOutService}: a cash-out's Stripe refund failed — the debited net and fee restored,
+     * one row each, {@code reference_id} = the cash-out id of the debits they reverse.
+     */
     public static final String CASH_OUT_REVERSAL = "CASH_OUT_REVERSAL";
 
     /**

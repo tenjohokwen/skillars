@@ -22,8 +22,14 @@ class StubPaymentGateway implements PaymentGateway {
     }
 
     @Override
-    public void refund(String stripePaymentIntentId, BigDecimal netAmount) {
+    public void refund(String stripePaymentIntentId, BigDecimal amount, String idempotencyKey) {
         // no-op for tests
+    }
+
+    @Override
+    public BigDecimal getRefundableAmount(String stripePaymentIntentId) {
+        // Generous fixed ceiling: ITs exercising cash-out assert on the ledger, not on Stripe's cap.
+        return new BigDecimal("1000000.00");
     }
 
     @Override

@@ -335,7 +335,8 @@ const routes = [
       {
         // Dual-role (feat/coach-workflow-gaps A23): a self-registered adult player pays for their own
         // sessions, so their credit statement and receipts are theirs to read. The backend scopes both
-        // to the caller's own user id (GET /api/revenue/credits/statement, .../receipt). Cash-out
+        // to the caller's own user id (GET /api/payment/credits/statement and
+        // /api/payment/parents/bookings/{id}/receipt). Cash-out
         // (parent-credit-wallet) stays PARENT-only per the UAT.5 scope.
         path: 'parent/credit-statement',
         name: 'parent-credit-statement',

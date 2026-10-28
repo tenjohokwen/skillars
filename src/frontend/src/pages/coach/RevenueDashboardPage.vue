@@ -40,10 +40,6 @@
           <div class="text-h5 text-negative">– €{{ fmt(summary.commissionDeducted) }}</div>
         </div>
         <div class="col summary-card glass-card q-pa-md text-center">
-          <div class="text-caption text-secondary">{{ t('revenue.stripeFees') }}</div>
-          <div class="text-h5 text-negative">– €{{ fmt(summary.stripeFees) }}</div>
-        </div>
-        <div class="col summary-card glass-card q-pa-md text-center">
           <div class="text-caption text-secondary">{{ t('revenue.netPayout') }}</div>
           <div class="text-h5 text-positive text-weight-bold">€{{ fmt(summary.netPayout) }}</div>
         </div>

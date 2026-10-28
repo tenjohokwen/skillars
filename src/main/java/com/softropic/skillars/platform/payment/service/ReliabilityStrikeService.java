@@ -37,14 +37,15 @@ public class ReliabilityStrikeService {
     private final PessimisticLockRetryer lockRetryer;
 
     // skillars-deferred-100 code review (2026-09-08): REQUIRES_NEW, not the default REQUIRED. The
-    // AFTER_COMMIT refund listeners (CancellationRefundService.onCoachNoShow /
-    // onBookingCancelledByCoach) call issue() *after* refundOutboxSupport.enqueueBookingRefund(...)
-    // has already written the refund row into their own REQUIRES_NEW transaction. If issue() joined
-    // that transaction (REQUIRED) and its lockRetryer.withBoundedRetry exhausted
-    // (PessimisticLockingFailureException), the shared transaction would be marked rollback-only and
-    // the refund would be lost with the strike. A separate transaction here contains an issue()
-    // failure to the strike alone; the two call sites additionally catch the exception so the refund
-    // enqueue commits regardless. The admin path (AdminCoachEnforcementService) still sees the
+    // caller is an AFTER_COMMIT listener in CancellationRefundService (coach no-show / unexcused
+    // coach cancellation), itself running in its own REQUIRES_NEW transaction. Since
+    // skillars-deferred-101 AC4 the BOOKING_REFUND outbox row is no longer written there: the
+    // sibling RefundEnqueueListener enqueues it BEFORE_COMMIT, inside the booking's own
+    // cancellation transaction, so the refund is already committed before issue() ever runs and
+    // a strike failure cannot lose it. REQUIRES_NEW is kept so an issue() failure
+    // (PessimisticLockingFailureException from lockRetryer.withBoundedRetry exhausting) rolls back
+    // the strike alone and never marks the listener's transaction (pack-session restore,
+    // cancellation history) rollback-only; the listener also catches the exception. The admin path (AdminCoachEnforcementService) still sees the
     // propagated exception and surfaces it for an operator retry.
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CoachReliabilityStrike issue(UUID coachId, UUID bookingId, String reason) {
@@ -90,10 +91,10 @@ public class ReliabilityStrikeService {
         //
         // withBoundedRetry can still exhaust under sustained contention
         // (PessimisticLockingFailureException); issue() then propagates and its transaction rolls
-        // back. That is acceptable and deliberately not given a bespoke retry: the refund-listener
-        // callers (CancellationRefundService.onCoachCancellationUnexcused / onCoachNoShow) have no
-        // retry, a dropped strike-escalation is far less harmful than the refund those listeners
-        // exist to protect, and the admin path (AdminCoachEnforcementService.issueManualStrike)
+        // back. That is acceptable and deliberately not given a bespoke retry: the listener callers
+        // (CancellationRefundService.onBookingCancelledByCoach / onCoachNoShow) have no retry, a
+        // dropped strike-escalation is far less harmful than the work those listeners carry (the
+        // refund itself is already committed by RefundEnqueueListener), and the admin path (AdminCoachEnforcementService.issueManualStrike)
         // surfaces the error for the operator to retry.
         CoachProfile coach = lockRetryer.withBoundedRetry("ReliabilityStrikeService.issue",
             () -> coachProfileRepository.findByIdForUpdate(coachId)
