@@ -216,21 +216,4 @@ public class ShadowAccountService {
         playerProfileRepository.save(profile);
         return playerProfileMapper.toResponse(profile);
     }
-
-    public void linkAdditionalParent(Long requestingParentId, Long playerId) {
-        if (parentPlayerLinkRepository.existsByPlayerId(playerId)) {
-            throw new ShadowAccountException("security.playerAlreadyHasParent", "Player already has a parent");
-        }
-        ParentPlayerLink link = new ParentPlayerLink();
-        link.setParentId(requestingParentId);
-        link.setPlayerId(playerId);
-        link.setConsentAcceptedAt(Instant.now());
-        link.setConsentPolicyVersion("1.0");
-        try {
-            parentPlayerLinkRepository.save(link);
-        } catch (DataIntegrityViolationException ex) {
-            throw new ShadowAccountException("security.playerAlreadyHasParent", "Player already has a parent");
-        }
-    }
-
 }

@@ -2,7 +2,6 @@ package com.softropic.skillars.platform.security.infrastructure.listener;
 
 
 
-import com.softropic.skillars.infrastructure.security.event.BadCredentialsEvent;
 import com.softropic.skillars.infrastructure.security.event.FraudEvent;
 import com.softropic.skillars.infrastructure.security.RequestMetadata;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
@@ -19,7 +18,7 @@ import org.springframework.stereotype.Component;
 public class AuthenticationFailureListener {
     private static final Logger               logger = LoggerFactory.getLogger(AuthenticationFailureListener.class);
 
-    //Todo Document this as one of the things to be replaced (by redis) in order to support multi-node apps [horizontal scaling]
+    // Only the in-memory, best-effort client blacklist remains here (see LoginAttemptsService).
     private final LoginAttemptsService loginAttemptsService;
 
     @Autowired
@@ -27,12 +26,10 @@ public class AuthenticationFailureListener {
         this.loginAttemptsService = loginAttemptsService;
     }
 
-    @EventListener
-    public void auditEventHappened(final BadCredentialsEvent event) {
-        logger.debug("About to register bad credentials event. Message: {}", event.msg());
-        final RequestMetadata requestMetadata = RequestMetadataProvider.getClientInfo();
-        loginAttemptsService.loginFailed(requestMetadata);
-    }
+    // No BadCredentialsEvent handler any more: failed /authenticate attempts are recorded at their
+    // source (FraudAwareAuthenticationManager) into the shared DB-backed LoginRateLimiter. This
+    // event fires app-wide — for the SPA's /api/auth/login (which records its own) and for
+    // refresh-token denials — so counting it here would double-count or charge non-login failures.
 
     @EventListener
     public void captureFraudEvent(final FraudEvent fraudEvent) {

@@ -216,46 +216,6 @@ public class UserProfileService {
                 });
     }
 
-    /**
-     * Toggles two-factor authentication for the current user.
-     * Requires password verification for security.
-     *
-     * @param enabled the desired 2FA state
-     * @param password the current password for verification
-     * @return the updated user if successful
-     * @throws ProfileActionException if password doesn't match
-     */
-    @PreAuthorize(SecurityConstants.HAS_ANY_ROLE)
-    public Optional<User> toggle2fa(boolean enabled, String password) {
-        return userRepository.findOneByLogin(securityUtil.getCurrentUser().getUsername())
-                .map(user -> {
-                    if (!passwordEncoder.matches(password, user.getPassword())) {
-                        throw new ProfileActionException("Password does not match",
-                                                         Map.of("login", user.getLogin()),
-                                                         SecurityError.EMAIL_OR_PW_MISMATCH);
-                    }
-                    user.setOtpEnabled(enabled);
-                    log.debug("User profile updated",
-                        kv("operation", "user_profile"),
-                        kv("field", "2fa"),
-                        kv("status", "UPDATED"));
-
-                    // Publish event for notification and audit
-                    AccountChangeEvent.Action action = enabled
-                            ? AccountChangeEvent.Action.TWO_FACTOR_AUTH_ENABLED
-                            : AccountChangeEvent.Action.TWO_FACTOR_AUTH_DISABLED;
-                    AccountChangeEvent event = new AccountChangeEvent(
-                            action,
-                            String.valueOf(!enabled),  // oldValue: previous state
-                            String.valueOf(enabled),   // newValue: new state
-                            buildUserInfo(user)
-                    );
-                    publisher.publishEvent(event);
-
-                    return user;
-                });
-    }
-
     private PhoneNumber toPhoneNumber(String phone) {
         return PhoneNumberUtil.fromString(phone);
     }

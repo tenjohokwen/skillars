@@ -137,7 +137,6 @@ export default {
     parentConsentBody:
       'En tant que représentant légal du ou des joueurs que vous inscrivez, vous consentez à ce que Skillars collecte et traite les données de votre enfant à des fins de coaching. Vous confirmez être le parent ou le tuteur légal. Il vous appartient de vous assurer que la participation de votre enfant est appropriée. Vous pouvez retirer votre consentement à tout moment en contactant le support.',
     activateRedirecting: 'Redirection dans {seconds}…',
-    otpCodeExpiry: 'le code expire dans 10 minutes.',
     parentTosBody:
       "En utilisant Skillars, vous acceptez nos conditions générales. Elles régissent votre utilisation de la plateforme, y compris la réservation de séances, les paiements et le traitement des données. Vous devez avoir au moins 18 ans pour créer un compte parent. Tous les comptes sont soumis à notre charte d'utilisation.",
     activationTitle: 'Activation du compte',
@@ -147,8 +146,6 @@ export default {
       'Saisissez votre adresse e-mail et votre date de naissance pour réinitialiser votre mot de passe.',
     recoveryEmailSent: 'E-mail envoyé',
     loginWelcome: 'Bon retour. Connectez-vous pour continuer.',
-    twoFactorTitle: 'Authentification à deux facteurs',
-    otpNotReceived: "Vous n'avez pas reçu le code ?",
     registerTitle: 'Créez votre compte',
     registerBody: 'Renseignez vos informations pour commencer.',
     resetTitle: 'Réinitialisation du mot de passe',
@@ -197,11 +194,6 @@ export default {
     registerAsParent: "S'inscrire en tant que parent",
     registerAsPlayer: "S'inscrire en tant que joueur (18+)",
     activateAccount: 'Activer le compte',
-    enterOtp: 'Entrer le code de vérification',
-    otpSent: 'Un code de vérification a été envoyé à votre e-mail',
-    resendOtp: 'Renvoyer le code',
-    verifyOtp: 'Vérifier',
-    enableTwoFactor: "Activer l'authentification à deux facteurs",
     preferredLanguage: 'Langue préférée',
     languageEnglish: 'Anglais',
     languageFrench: 'Français',
@@ -832,8 +824,6 @@ export default {
     phoneChanged: 'Votre numéro de téléphone a été mis à jour.',
     addressChanged: 'Votre adresse a été mise à jour.',
     infoChanged: 'Vos informations personnelles ont été mises à jour.',
-    twoFactorEnabled: "L'authentification à deux facteurs a été activée.",
-    twoFactorDisabled: "L'authentification à deux facteurs a été désactivée.",
   },
   common: {
     retry: 'Réessayer',
@@ -891,7 +881,6 @@ export default {
     address: 'Adresse',
     noAddress: 'Non fournie',
     personalInfo: 'Informations personnelles',
-    twoFactorAuth: 'Authentification à deux facteurs',
     enabled: 'Activée',
     disabled: 'Désactivée',
     edit: 'Modifier',
@@ -901,7 +890,6 @@ export default {
     updatePhone: 'Modifier le numéro de téléphone',
     updateAddress: "Modifier l'adresse",
     updateInfo: 'Modifier les informations personnelles',
-    toggle2fa: 'Authentification à deux facteurs',
     // Address fields
     addressName: "Libellé de l'adresse",
     addressNameHint: 'ex: DOMICILE, TRAVAIL',
@@ -916,12 +904,6 @@ export default {
     stateProvince: 'État/Province',
     postalCode: 'Code postal',
     country: 'Pays',
-    // 2FA dialog
-    enable2fa: "Activer l'authentification à deux facteurs",
-    disable2fa: "Désactiver l'authentification à deux facteurs",
-    confirm2faEnable: "Entrez votre mot de passe pour activer l'authentification à deux facteurs.",
-    confirm2faDisable:
-      "Entrez votre mot de passe pour désactiver l'authentification à deux facteurs.",
     emailChangeWarning:
       'La modification de votre adresse e-mail entraînera également un changement de vos identifiants de connexion. Vous serez automatiquement déconnecté et devrez vous reconnecter avec votre nouvelle adresse e-mail.',
     sectionCoachProfile: 'Profil Entraîneur',
@@ -1396,6 +1378,8 @@ export default {
         'Les comptes administrateur ne peuvent pas être modifiés depuis cette page.',
       cannotSuspendSelf: 'Vous ne pouvez pas suspendre votre propre compte.',
       erased: 'Ce compte a été effacé (RGPD) et ne peut pas être réactivé.',
+      safetyHold:
+        "Ce compte est suspendu pour la protection de l'enfance (contenu signalé) et ne peut pas être réactivé depuis cette page.",
       actionFailed: "L'action a échoué. Veuillez réessayer.",
       actions: {
         USER_SUSPEND: 'Suspendu',

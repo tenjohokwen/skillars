@@ -6,7 +6,6 @@ import com.softropic.skillars.infrastructure.message.Success;
 import com.softropic.skillars.platform.security.api.dto.AddressDto;
 import com.softropic.skillars.platform.security.api.dto.ChangePasswordRequestDto;
 import com.softropic.skillars.platform.security.api.dto.ChangePhoneDto;
-import com.softropic.skillars.platform.security.api.dto.Toggle2faDto;
 import com.softropic.skillars.platform.security.api.dto.UpdateUserInfoDto;
 import com.softropic.skillars.platform.security.repo.Address;
 import com.softropic.skillars.platform.security.contract.UserDto;
@@ -167,20 +166,6 @@ public class ProfileResource {
             dto.getTitle())
             .orElseThrow(() -> new AuthorizationException("User not found", SecurityError.USER_NOT_FOUND));
         return new Success(null, "info.changed", "Your profile information has been updated", Map.of());
-    }
-
-    /**
-     * PUT /api/account/2fa to toggle two-factor authentication.
-     * @param dto contains enabled flag and password for verification
-     * @return success response
-     */
-    @PutMapping(value = "/2fa", consumes = MediaType.APPLICATION_JSON_VALUE)
-    @Timed
-    public Success toggle2fa(@Valid @RequestBody Toggle2faDto dto) {
-        userProfileService.toggle2fa(dto.getEnabled(), dto.getPassword())
-            .orElseThrow(() -> new AuthorizationException("User not found or password mismatch", SecurityError.EMAIL_OR_PW_MISMATCH));
-        String status = dto.getEnabled() ? "enabled" : "disabled";
-        return new Success(null, "2fa.changed", "Two-factor authentication has been " + status, Map.of());
     }
 
 }

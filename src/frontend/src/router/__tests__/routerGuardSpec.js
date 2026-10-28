@@ -49,6 +49,8 @@ vi.mock('src/pages/parent/PlayerSubscriptionPage.vue', () => ({ default: { rende
 vi.mock('src/pages/parent/ParentDashboardPage.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/pages/player/PlayerLockerRoomPage.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/pages/VideoManagementPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/coach/RevenueDashboardPage.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/pages/coach/ReceiptView.vue', () => ({ default: { render: () => null } }))
 
 async function buildRouter(initialState) {
   createTestingPinia({ createSpy: vi.fn, initialState })
@@ -291,5 +293,38 @@ describe('router/index.js — nav destinations admit their own role (navigation 
     const router = await buildRouter(COACH_COMPLETE)
     await router.push(`/parent/players/${PID}/sessions`)
     expect(router.currentRoute.value.path).toBe('/coach/command-center')
+  })
+})
+
+describe("router/index.js — meta.role 'COACH' is enforced, not just PARENT/PLAYER", () => {
+  const COACH = {
+    auth: { userId: '1', role: 'COACH' },
+    profileBuilder: { status: { profileComplete: true } },
+  }
+
+  it('redirects a PARENT away from /coach/revenue', async () => {
+    const router = await buildRouter({ auth: { userId: '1', role: 'PARENT' } })
+    await router.push('/coach/revenue')
+    expect(router.currentRoute.value.path).toBe('/parent/dashboard')
+  })
+
+  it('redirects a PLAYER away from /coach/bookings/:bookingId/receipt', async () => {
+    const router = await buildRouter({ auth: { userId: '1', role: 'PLAYER' } })
+    await router.push('/coach/bookings/abc/receipt')
+    expect(router.currentRoute.value.path).not.toBe('/coach/bookings/abc/receipt')
+  })
+
+  it('redirects an ADMIN away from /coach/revenue', async () => {
+    const router = await buildRouter({ auth: { userId: '1', role: 'ADMIN' } })
+    await router.push('/coach/revenue')
+    expect(router.currentRoute.value.path).toBe('/admin/health-dashboard')
+  })
+
+  it('lets a COACH reach /coach/revenue and its booking receipt', async () => {
+    const router = await buildRouter(COACH)
+    await router.push('/coach/revenue')
+    expect(router.currentRoute.value.path).toBe('/coach/revenue')
+    await router.push('/coach/bookings/abc/receipt')
+    expect(router.currentRoute.value.path).toBe('/coach/bookings/abc/receipt')
   })
 })

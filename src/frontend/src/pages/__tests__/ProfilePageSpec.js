@@ -55,7 +55,6 @@ function mountPage(role, initialState = {}) {
         UpdatePhoneDialog: true,
         UpdateAddressDialog: true,
         UpdateInfoDialog: true,
-        Toggle2faDialog: true,
         EditCoachIdentityDialog: true,
         EditCoachSpecialtiesDialog: true,
         EditCoachPricingDialog: true,
@@ -76,6 +75,13 @@ describe('ProfilePage.vue — role-gated sections (deferred-139 AC2/AC4/AC5/AC6)
   afterEach(() => {
     while (mounted.length) mounted.pop().unmount()
     vi.clearAllMocks()
+  })
+
+  it('shows no two-factor toggle: the SPA login never enforced it, so it was removed', async () => {
+    const wrapper = mountPage('PARENT')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('profile.twoFactorAuth')
   })
 
   it('a Coach sees the Coach Profile section and none of the Player/Parent sections', async () => {

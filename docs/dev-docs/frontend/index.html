@@ -104,7 +104,7 @@
       <tr><td><code>boot/</code></td><td><code>theme.js</code> (applies persisted dark/light theme before first render), <code>i18n.js</code> (the <code>createI18n</code> instance + <code>getCurrentLocale()</code>), <code>axios.js</code> (the shared <code>api</code> instance, interceptors, loading counter, fingerprint cookie).</td></tr>
       <tr><td><code>router/</code></td><td><code>routes.js</code> (route table), <code>index.js</code> (global <code>beforeEach</code> guard), <code>roleRoutes.js</code> (per-role landing route, single source of truth), <code>safeRedirect.js</code> (<code>isSafeRedirect</code> for <code>?redirect=</code>).</td></tr>
       <tr><td><code>layouts/MainLayout.vue</code></td><td>The only layout: header (parent child switcher, language menu, theme toggle, <code>NotificationBell</code>, logout) and the role-specific drawer.</td></tr>
-      <tr><td><code>pages/</code></td><td>Route components: <code>auth/</code> (21 &mdash; login, OTP, password reset, activation, the three registration/verification flows), <code>coach/</code> (16), <code>parent/</code> (13), <code>admin/</code> (11), <code>player/</code> (3), <code>marketplace/</code> (2), <code>messaging/</code> (1), plus shared top-level pages (<code>DashboardPage</code>, <code>ProfilePage</code>, <code>NotificationsPage</code>, <code>UnsubscribePage</code>, <code>VideoManagementPage</code>, <code>ErrorNotFound</code>).</td></tr>
+      <tr><td><code>pages/</code></td><td>Route components: <code>auth/</code> (20 &mdash; login, password reset, activation, the three registration/verification flows), <code>coach/</code> (16), <code>parent/</code> (13), <code>admin/</code> (11), <code>player/</code> (3), <code>marketplace/</code> (2), <code>messaging/</code> (1), plus shared top-level pages (<code>DashboardPage</code>, <code>ProfilePage</code>, <code>NotificationsPage</code>, <code>UnsubscribePage</code>, <code>VideoManagementPage</code>, <code>ErrorNotFound</code>).</td></tr>
       <tr><td><code>components/</code></td><td>Grouped by domain (<code>admin</code>, <code>availability</code>, <code>booking</code>, <code>common</code>, <code>development</code>, <code>marketplace</code>, <code>notification</code>, <code>payment</code>, <code>profile</code>, <code>profileBuilder</code>, <code>session</code>, <code>video</code>). <code>common/</code> holds <code>GlobalLoadingBar</code>, <code>SessionWarningDialog</code>, <code>FeatureGateOverlay</code>, <code>AppealAction</code>.</td></tr>
       <tr><td><code>api/</code></td><td>One <code>*.api.js</code> per backend area (21 files: <code>account</code>, <code>admin</code>, <code>appeals</code>, <code>auth</code>, <code>booking</code>, <code>coachRegistration</code>, <code>development</code>, <code>disputes</code>, <code>gdpr</code>, <code>homework</code>, <code>marketplace</code>, <code>messaging</code>, <code>notification</code>, <code>parentRegistration</code>, <code>payment</code>, <code>playerProfile</code>, <code>playerRegistration</code>, <code>profile</code>, <code>reviews</code>, <code>session</code>, <code>video</code>) and an <code>index.js</code> that re-exports only <code>authApi</code>/<code>accountApi</code>/<code>sessionApi</code>.</td></tr>
       <tr><td><code>stores/</code></td><td>Pinia setup-stores (see below). <code>stores/index.js</code> creates the Pinia instance; <code>example-store.js</code> is the unused Quasar scaffold.</td></tr>
@@ -130,7 +130,7 @@ flowchart TD
     SM["plugins/sessionManager.js<br/>(rint countdown, warning dialog)"]
     ES["EventSource<br/>(booking / messaging / video SSE)"]
   end
-  BE["Spring Boot backend<br/>/api/**, /authenticate, /otp, /refresh"]
+  BE["Spring Boot backend<br/>/api/**, /refresh"]
 
   R --> L --> P
   P --> C
@@ -164,7 +164,7 @@ flowchart TD
       <tr><td><code>requiresAuth</code></td><td>Not authenticated &rarr; <code>/login?redirect=&lt;fullPath&gt;</code>.</td></tr>
       <tr><td><code>requiresGuest</code></td><td>Authenticated &rarr; <code>routeForRole(role)</code>. Used by every login/registration/verification page.</td></tr>
       <tr><td><code>requiresCoach</code></td><td>Authenticated non-coach &rarr; own landing route.</td></tr>
-      <tr><td><code>role: 'PARENT' | 'PLAYER'</code></td><td>Single-role gate (older routes; <code>role: 'COACH'</code> appears on <code>coach/revenue</code> and <code>coach/bookings/:bookingId/receipt</code> but the guard only evaluates PARENT/PLAYER for <code>meta.role</code> &mdash; those two COACH routes are only protected by <code>requiresAuth</code> client-side; the backend still enforces the role).</td></tr>
+      <tr><td><code>role: 'PARENT' | 'PLAYER' | 'COACH'</code></td><td>Single-role gate (older routes): every <code>meta.role</code> value on the matched records must equal the caller's role, else &rarr; own landing route. Generic since fix/security-session-revocation &mdash; it used to check only PARENT/PLAYER, so <code>coach/revenue</code> and <code>coach/bookings/:bookingId/receipt</code> (<code>role: 'COACH'</code>) were login-gated only.</td></tr>
       <tr><td><code>roles: [...]</code></td><td>Additive multi-role gate (UAT.5 AC4 onward): caller's role must be in the union of <code>meta.roles</code> across matched records. Used for dual-role PARENT/PLAYER routes and all <code>/admin/*</code> routes (<code>['ADMIN']</code>).</td></tr>
       <tr><td><em>(special)</em></td><td>Entering <code>/coach/command-center</code> as a coach loads <code>profileBuilder.store</code> status and redirects to <code>/coach/profile-builder</code> if the profile is incomplete.</td></tr>
     </table>
@@ -189,7 +189,7 @@ flowchart TD
     <h4>Route tree per role</h4>
     <table>
       <tr><th>Role</th><th>Routes (all under <code>/#/</code>)</th></tr>
-      <tr><td>Guest / public</td><td><code>login</code>, <code>register</code>, <code>otp</code>, <code>forgot-password</code>, <code>reset-password</code>, <code>activate</code>; registration flows <code>coach-register</code>, <code>parent-register</code>, <code>player-register</code> with <code>{coach,parent,player}/{email-pending,verify-email,verify-phone}</code>; no-meta public pages <code>marketplace</code>, <code>coaches/:coachId</code>, <code>unsubscribe</code> (signed-token landing page for email opt-out links).</td></tr>
+      <tr><td>Guest / public</td><td><code>login</code>, <code>register</code>, <code>forgot-password</code>, <code>reset-password</code>, <code>activate</code>; registration flows <code>coach-register</code>, <code>parent-register</code>, <code>player-register</code> with <code>{coach,parent,player}/{email-pending,verify-email,verify-phone}</code>; no-meta public pages <code>marketplace</code>, <code>coaches/:coachId</code>, <code>unsubscribe</code> (signed-token landing page for email opt-out links).</td></tr>
       <tr><td>COACH</td><td><code>coach/command-center</code>, <code>coach/profile-builder</code>, <code>coach/availability</code>, <code>coach/booking-requests</code>, <code>coach/players</code>, <code>coach/players/:playerId</code>, <code>coach/drills</code>, <code>coach/session-builder/:bookingId</code>, <code>coach/session-templates</code>, <code>coach/videos</code> (shared <code>VideoManagementPage.vue</code>), <code>coach/revenue</code>, <code>coach/bookings/:bookingId/receipt</code>, <code>coach/session-pack-tiers</code>, <code>coach/payment-settings</code>, <code>coach/subscription</code>, <code>coach/reviews</code>, <code>coach/reliability</code>.</td></tr>
       <tr><td>PARENT</td><td><code>parent/dashboard</code>, <code>parent/create-player</code> (auth only), <code>parent/approvals</code> (canonical &mdash; notification deep links target it), <code>parent/credit-wallet</code>, per-child <code>parent/players/:playerId/{sessions,videos,development}</code> (<code>sessions</code> = the per-child hub <code>ParentPlayerPortalPage.vue</code>).</td></tr>
       <tr><td>PARENT + PLAYER (<code>roles</code>)</td><td><code>parent/bookings</code>, <code>parent/coaches/:coachId/request-booking</code>, <code>parent/coaches/:coachId/purchase-sessions</code>, <code>parent/players/:playerId/packs</code>, <code>parent/player/:playerId/subscription</code>, <code>parent/credit-statement</code>, <code>parent/bookings/:bookingId/receipt</code>, <code>player/locker-room/:playerId</code>. The <code>parent/</code> prefix is historical; pages gate parent-only buttons on <code>authStore.isParent</code>.</td></tr>
@@ -241,8 +241,8 @@ flowchart TD
     </table>
     <p><strong>Login / session flow.</strong></p>
     <ul>
-      <li><code>LoginPage.vue</code> calls <code>authApi.skillarsLogin</code> &rarr; <code>POST /api/auth/login</code> (<code>AuthResource</code>). The backend sets the HttpOnly JWT cookie (<code>potc</code>), <code>skp</code>, <code>user</code> (display name, or the <code>__blank__</code> sentinel) and <code>rint</code>; the JSON <code>LoginResponse</code> goes to <code>authStore.setUser</code>. Redirect target: <code>?redirect=</code> if <code>isSafeRedirect</code> passes, else <code>routeForRole(role)</code>. 403 = account not verified, 429 = rate-limited. OTP second factor posts to <code>/otp</code> (<code>OtpPage.vue</code>).</li>
-      <li>There is no client-side token refresh loop. The JWT is sliding: <code>JWTAuthorizationFilter</code> extends it on each authenticated request and rewrites <code>rint</code>. <code>plugins/sessionManager.js</code> ticks every 30&nbsp;s against <code>rint</code>, shows <code>SessionWarningDialog</code> 5 minutes before expiry, and "Continue session" calls <code>sessionApi.refresh()</code> &rarr; <code>GET /refresh</code> (TTL extension only, empty 200). <code>POST /api/auth/refresh</code> (full token rotation) exists in <code>auth.api.js</code> as <code>skillarsRefresh</code> but has no caller. If <code>rint</code> runs out, <code>tick()</code> dispatches <code>window</code> event <code>session:expired</code>; <code>App.vue</code> tears down state and redirects. Details: <a href="../../session-refresh-mechanism.md">docs/session-refresh-mechanism.md</a>.</li>
+      <li><code>LoginPage.vue</code> calls <code>authApi.skillarsLogin</code> &rarr; <code>POST /api/auth/login</code> (<code>AuthResource</code>). The backend sets the HttpOnly JWT cookie (<code>potc</code>), <code>skp</code>, <code>user</code> (display name, or the <code>__blank__</code> sentinel) and <code>rint</code>; the JSON <code>LoginResponse</code> goes to <code>authStore.setUser</code>. Redirect target: <code>?redirect=</code> if <code>isSafeRedirect</code> passes, else <code>routeForRole(role)</code>. 403 = account not verified, 429 = rate-limited. There is no second-factor step in the SPA (the legacy <code>OtpPage.vue</code> and the 2FA profile toggle were removed).</li>
+      <li>There is no client-side token refresh loop. The JWT is sliding: <code>JWTAuthorizationFilter</code> extends it on each authenticated request and rewrites <code>rint</code>. <code>plugins/sessionManager.js</code> ticks every 30&nbsp;s against <code>rint</code>, shows <code>SessionWarningDialog</code> 5 minutes before expiry, and "Continue session" calls <code>sessionApi.refresh()</code> &rarr; <code>GET /refresh</code> (TTL extension only, empty 200). <code>POST /api/auth/refresh</code> (full token rotation) exists on the backend but the SPA does not call it (the unused <code>skillarsRefresh</code> wrapper was removed from <code>auth.api.js</code>). If <code>rint</code> runs out, <code>tick()</code> dispatches <code>window</code> event <code>session:expired</code>; <code>App.vue</code> tears down state and redirects. Details: <a href="../../session-refresh-mechanism.md">docs/session-refresh-mechanism.md</a>.</li>
       <li><code>boot/axios.js</code> also sets a one-year <code>fcookie</code> browser-fingerprint cookie on boot (fraud signal; distinct from the backend's <code>bcookie</code>).</li>
     </ul>
     <p>
@@ -324,7 +324,7 @@ sequenceDiagram
   R->>AS: hydrateFromCookie() (first navigation only, reads skp)
   alt not authenticated
     R-->>U: /login?redirect=/parent/bookings
-  else role not in meta.roles
+  else role not in meta.roles or not meta.role
     R-->>U: routeForRole(role)
   else allowed
     R->>P: render
@@ -390,8 +390,8 @@ sequenceDiagram
     <div class="callout">
       <p><strong>The router guard is UX, not security.</strong> It trusts the JS-readable <code>skp</code> cookie.
       Every backend endpoint must enforce its own role/ownership check; a route's <code>meta</code> only decides where
-      the user lands. Prefer <code>meta.roles</code> for new routes &mdash; it is the only form that is evaluated
-      for every role (a <code>meta.role: 'COACH'</code> is ignored by the guard).</p>
+      the user lands. Prefer <code>meta.roles</code> for new routes; <code>meta.role</code> and <code>requiresCoach</code>
+      remain for older ones and are enforced for every value (<code>routerGuardSpec.js</code> covers the COACH case).</p>
     </div>
     <div class="callout">
       <p><strong>Shared pages, role-aware.</strong> <code>VideoManagementPage.vue</code> serves both
@@ -418,7 +418,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

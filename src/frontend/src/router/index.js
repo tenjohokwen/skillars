@@ -47,8 +47,10 @@ export default defineRouter(function (/* { store, ssrContext } */) {
     const requiresAuth = to.matched.some((r) => r.meta.requiresAuth)
     const requiresGuest = to.matched.some((r) => r.meta.requiresGuest)
     const requiresCoach = to.matched.some((r) => r.meta.requiresCoach)
-    const requiresParent = to.matched.some((r) => r.meta.role === 'PARENT')
-    const requiresPlayer = to.matched.some((r) => r.meta.role === 'PLAYER')
+    // Single-role gate: EVERY meta.role value is enforced, not just a hard-coded subset. This used
+    // to check only 'PARENT' and 'PLAYER', so routes declaring meta.role 'COACH' (coach/revenue,
+    // coach/bookings/:bookingId/receipt) were login-gated only — any signed-in role could open them.
+    const requiredRoles = to.matched.map((r) => r.meta.role).filter(Boolean)
     // Dual-role routes (UAT.5 AC4): meta.roles is additive to the single-value meta.role gates
     // above, scoped to the handful of routes that need it, rather than migrating every existing
     // route's meta.role/requiresParent/requiresCoach in the same diff.
@@ -71,12 +73,7 @@ export default defineRouter(function (/* { store, ssrContext } */) {
       return
     }
 
-    if (requiresParent && isAuthenticated && !authStore.isParent) {
-      next(routeForRole(authStore.role))
-      return
-    }
-
-    if (requiresPlayer && isAuthenticated && !authStore.isPlayer) {
+    if (isAuthenticated && requiredRoles.some((role) => role !== authStore.role)) {
       next(routeForRole(authStore.role))
       return
     }

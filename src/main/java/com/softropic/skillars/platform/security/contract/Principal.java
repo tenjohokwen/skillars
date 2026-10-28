@@ -174,7 +174,11 @@ public class Principal extends User {
                             // is per-JWT, not per-account -- see securitySessionInvalidatedAt below
                             // and SecurityConstants.SESSION_ISSUED_AT's javadoc.
                             .credentialsNonExpired(true)
-                            .accountNonLocked(!user.isLocked())
+                            // A SUSPENDED (safety-suspended) account counts as locked on every
+                            // path that builds a Principal from the user row: the legacy
+                            // /authenticate filter and the JWT filter's DB-backed renewal.
+                            .accountNonLocked(!user.isLocked()
+                                && user.getVerificationStatus() != SkillarsVerificationStatus.SUSPENDED)
                             .authorities(grantedAuthorities)
                             .gender(user.getGender())
                             .displayName(user.getFirstName())

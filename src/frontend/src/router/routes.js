@@ -22,11 +22,6 @@ const routes = [
         meta: { requiresGuest: true },
       },
       {
-        path: 'otp',
-        component: () => import('pages/auth/OtpPage.vue'),
-        meta: { requiresGuest: true },
-      },
-      {
         path: 'forgot-password',
         component: () => import('pages/auth/ForgotPasswordPage.vue'),
         meta: { requiresGuest: true },

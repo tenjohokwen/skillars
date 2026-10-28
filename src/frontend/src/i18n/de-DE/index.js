@@ -36,7 +36,6 @@ export default {
     parentConsentBody:
       'Als Erziehungsberechtigte(r) der von Ihnen registrierten Spieler stimmen Sie zu, dass Skillars Daten über Ihr Kind zu Coaching-Zwecken erhebt und verarbeitet. Sie bestätigen, dass Sie der gesetzliche Elternteil oder Vormund sind. Sie sind dafür verantwortlich, dass die Teilnahme Ihres Kindes angemessen ist. Sie können Ihre Einwilligung jederzeit widerrufen, indem Sie den Support kontaktieren.',
     activateRedirecting: 'Weiterleitung in {seconds}…',
-    otpCodeExpiry: 'der Code läuft in 10 Minuten ab.',
     parentTosBody:
       'Mit der Nutzung von Skillars stimmen Sie unseren Allgemeinen Geschäftsbedingungen zu. Diese regeln Ihre Nutzung der Plattform, einschließlich der Buchung von Trainingseinheiten, Zahlungen und des Umgangs mit Daten. Für die Registrierung als Elternteil müssen Sie mindestens 18 Jahre alt sein. Für alle Konten gilt unsere Richtlinie zur zulässigen Nutzung.',
     activationTitle: 'Kontoaktivierung',
@@ -46,8 +45,6 @@ export default {
       'Geben Sie Ihre E-Mail-Adresse und Ihr Geburtsdatum ein, um Ihr Passwort zurückzusetzen.',
     recoveryEmailSent: 'E-Mail gesendet',
     loginWelcome: 'Willkommen zurück. Melden Sie sich an, um fortzufahren.',
-    twoFactorTitle: 'Zwei-Faktor-Authentifizierung',
-    otpNotReceived: 'Code nicht erhalten?',
     registerTitle: 'Erstellen Sie Ihr Konto',
     registerBody: 'Geben Sie Ihre Daten ein, um zu starten.',
     resetTitle: 'Passwort zurücksetzen',
@@ -260,11 +257,6 @@ export default {
     registerAsParent: 'Als Elternteil registrieren',
     registerAsPlayer: 'Als Spieler registrieren (18+)',
     activateAccount: 'Konto aktivieren',
-    enterOtp: 'Bestätigungscode eingeben',
-    otpSent: 'Ein Bestätigungscode wurde an Ihre E-Mail-Adresse gesendet',
-    resendOtp: 'Code erneut senden',
-    verifyOtp: 'Bestätigen',
-    enableTwoFactor: 'Zwei-Faktor-Authentifizierung aktivieren',
     preferredLanguage: 'Bevorzugte Sprache',
     languageEnglish: 'Englisch',
     languageFrench: 'Französisch',
@@ -1810,6 +1802,8 @@ export default {
       cannotModifyAdmin: 'Administratorkonten können auf dieser Seite nicht geändert werden.',
       cannotSuspendSelf: 'Sie können Ihr eigenes Konto nicht sperren.',
       erased: 'Dieses Konto wurde gelöscht (DSGVO) und kann nicht reaktiviert werden.',
+      safetyHold:
+        'Dieses Konto ist wegen eines Kinderschutz-Verdachts (gemeldeter Upload) gesperrt und kann auf dieser Seite nicht reaktiviert werden.',
       actionFailed: 'Die Aktion ist fehlgeschlagen. Bitte erneut versuchen.',
       actions: {
         USER_SUSPEND: 'Gesperrt',
@@ -2362,7 +2356,6 @@ export default {
     address: 'Adresse',
     noAddress: 'Nicht angegeben',
     personalInfo: 'Persönliche Informationen',
-    twoFactorAuth: 'Zwei-Faktor-Authentifizierung',
     enabled: 'Aktiviert',
     disabled: 'Deaktiviert',
     edit: 'Bearbeiten',
@@ -2371,7 +2364,6 @@ export default {
     updatePhone: 'Telefonnummer aktualisieren',
     updateAddress: 'Adresse aktualisieren',
     updateInfo: 'Persönliche Informationen aktualisieren',
-    toggle2fa: 'Zwei-Faktor-Authentifizierung',
     addressName: 'Adressbezeichnung',
     addressNameHint: 'z.B. ZUHAUSE, ARBEIT',
     addressTypeHome: 'Zuhause',
@@ -2385,12 +2377,6 @@ export default {
     stateProvince: 'Bundesland/Provinz',
     postalCode: 'Postleitzahl',
     country: 'Land',
-    enable2fa: 'Zwei-Faktor-Authentifizierung aktivieren',
-    disable2fa: 'Zwei-Faktor-Authentifizierung deaktivieren',
-    confirm2faEnable:
-      'Geben Sie Ihr Passwort ein, um die Zwei-Faktor-Authentifizierung zu aktivieren.',
-    confirm2faDisable:
-      'Geben Sie Ihr Passwort ein, um die Zwei-Faktor-Authentifizierung zu deaktivieren.',
     emailChangeWarning:
       'Das Ändern Ihrer E-Mail-Adresse ändert auch Ihre Anmeldedaten. Sie werden automatisch abgemeldet und müssen sich mit Ihrer neuen E-Mail-Adresse erneut anmelden.',
     sectionCoachProfile: 'Trainerprofil',
@@ -2445,8 +2431,6 @@ export default {
     phoneChanged: 'Ihre Telefonnummer wurde aktualisiert.',
     addressChanged: 'Ihre Adresse wurde aktualisiert.',
     infoChanged: 'Ihre Profilinformationen wurden aktualisiert.',
-    twoFactorEnabled: 'Die Zwei-Faktor-Authentifizierung wurde aktiviert.',
-    twoFactorDisabled: 'Die Zwei-Faktor-Authentifizierung wurde deaktiviert.',
   },
   validation: {
     required: 'Dieses Feld ist erforderlich',

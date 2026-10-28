@@ -13,13 +13,13 @@ import com.softropic.skillars.platform.admin.repo.AdminActionLogRepository;
 import com.softropic.skillars.platform.admin.repo.GdprRequestRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.SkillarsRole;
+import com.softropic.skillars.platform.security.contract.SkillarsVerificationStatus;
 import com.softropic.skillars.platform.security.repo.Authority;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserAdminSummaryView;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import com.softropic.skillars.platform.security.service.AuthService;
-import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -89,7 +89,6 @@ public class AdminUserService {
     private final AdminActionLogRepository adminActionLogRepository;
     private final GdprRequestRepository gdprRequestRepository;
     private final AuthService authService;
-    private final LoginAttemptsService loginAttemptsService;
     private final PessimisticLockRetryer lockRetryer;
     private final CoachProfileRepository coachProfileRepository;
     private final AdminCoachEnforcementService coachEnforcementService;
@@ -182,6 +181,12 @@ public class AdminUserService {
         if (isPrivileged(user)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "admin.users.cannotModifyAdmin");
         }
+        // A safety suspension (CSAM match, AccountSuspensionEventListener) is not lifted from this
+        // console: it is a child-safety/legal hold, not an admin moderation lock. Checked before the
+        // not-locked no-op so an account stuck SUSPENDED-but-unlocked is reported, not "reactivated".
+        if (user.getVerificationStatus() == SkillarsVerificationStatus.SUSPENDED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "admin.users.safetyHold");
+        }
         if (!user.isLocked()) {
             return false;
         }
@@ -201,8 +206,8 @@ public class AdminUserService {
     }
 
     /**
-     * A10: clears the failed-login rate limit for this account — both the DB-backed one the SPA's
-     * {@code /api/auth/login} enforces and the legacy in-memory {@link LoginAttemptsService} caches —
+     * A10: clears the failed-login rate limit for this account — the one DB-backed limiter both
+     * {@code /api/auth/login} and the legacy {@code /authenticate} enforce (LoginRateLimiter) —
      * and records who did it. Does not touch {@code locked}: a suspended account stays suspended.
      */
     @Transactional
@@ -213,10 +218,8 @@ public class AdminUserService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "admin.users.cannotModifyAdmin");
         }
         String login = user.getLogin();
-        loginAttemptsService.unlockUser(login);
         int cleared = authService.clearLoginRateLimit(login);
         if (user.getEmail() != null && !user.getEmail().equalsIgnoreCase(login)) {
-            loginAttemptsService.unlockUser(user.getEmail());
             cleared += authService.clearLoginRateLimit(user.getEmail());
         }
         audit(adminId, AdminActionType.USER_LOGIN_UNLOCK, userId, "Cleared " + cleared + " failed login attempt(s)");

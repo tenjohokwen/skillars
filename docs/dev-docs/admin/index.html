@@ -192,7 +192,7 @@
         <tr><td>GET</td><td><code>/api/admin/users</code></td><td>Search users (<code>q</code>, <code>page</code>)</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/users/{userId}</code></td><td>User detail + failed-login count + enforcement history</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/admin/users/{userId}/suspend</code></td><td>Lock the account, revoke sessions, suspend coach profile if any</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/users/{userId}/reactivate</code></td><td>Unlock the account (refused if a self-scoped erasure exists)</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/users/{userId}/reactivate</code></td><td>Unlock the account (refused if a self-scoped erasure exists, or the account is under a child-safety suspension)</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/admin/users/{userId}/unlock-login</code></td><td>Clear the failed-login rate limit; returns cleared-attempt count</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/coaches</code></td><td>Coaches under enforcement (default PENDING_REVIEW + SUSPENDED; <code>status</code> filter)</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/coaches/{coachId}/enforcement</code></td><td>Enforcement profile (status, tier, 30-day strikes, histories, open alerts)</td><td>ADMIN</td></tr>
@@ -326,7 +326,9 @@ sequenceDiagram
       filter's no-DB fast path until its next DB re-auth (5 min). Suspend is idempotent (an already-locked account
       writes no second audit row but still makes sure the coach profile is suspended). Reactivating the account does
       <em>not</em> reinstate the coach profile, and is refused (<code>admin.users.erased</code>) when a self-scoped
-      erasure request exists for the user — a parent's erasure of a child does not block it.
+      erasure request exists for the user — a parent's erasure of a child does not block it. It is also refused
+      (<code>admin.users.safetyHold</code>) for an account in <code>verificationStatus = SUSPENDED</code>, the
+      child-safety suspension the CSAM scan applies (<code>AccountSuspensionEventListener</code>, security module).
     </p>
 
     <h3 id="dispute-resolution">Dispute resolution</h3>
@@ -529,7 +531,7 @@ sequenceDiagram
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

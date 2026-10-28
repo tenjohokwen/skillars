@@ -189,6 +189,23 @@ describe('AdminUsersPage.vue', () => {
     )
   })
 
+  it('maps the child-safety-hold reactivation refusal to its own message', async () => {
+    adminApi.getUser.mockResolvedValue({ ...DETAIL, suspended: true })
+    adminApi.reactivateUser.mockRejectedValue({
+      response: { status: 409, data: { errorMsg: { message: 'admin.users.safetyHold' } } },
+    })
+    const wrapper = await mountPage()
+    await wrapper.vm.openDetail('9171000010')
+
+    wrapper.vm.openAction('reactivate')
+    wrapper.vm.actionReason = 'undo'
+    await wrapper.vm.submitAction()
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'admin.users.safetyHold' }),
+    )
+  })
+
   it('a failed search shows the error banner', async () => {
     adminApi.searchUsers.mockRejectedValue(new Error('network'))
     const wrapper = await mountPage()

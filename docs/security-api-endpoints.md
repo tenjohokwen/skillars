@@ -1,719 +1,190 @@
-# Security API Endpoints Documentation
+# Security API Endpoints
 
-This document describes the REST API endpoints for authentication, user registration, and password management. These endpoints are designed for integration with Vue.js 3 + Quasar 2 frontend applications.
+The REST endpoints owned by the `platform.security` module: authentication and sessions, role
+registration and verification, account self-service, and player profiles. Every path below is
+checked against the controllers and filters in `src/main/java/com/softropic/skillars/platform/security`
+(`api/*Resource.java`, `config/SecurityConfiguration.java`, `config/AppEndpoints.java`).
 
-## Base URL
+Admin-only user management (suspend, reactivate, unlock login) lives in the `admin` module under
+`/api/admin/users/**` and is not repeated here.
 
-All API calls should be made to your backend server. In development, this is typically `http://localhost:8080`.
+## Conventions
 
-## CORS Configuration
-
-The backend accepts requests from the following origins in development:
-- `http://localhost:8080`
-- `https://localhost:9090`
-- `http://localhost:5175`
-- `http://localhost:9000`
-
-**Important:** All requests that need to send/receive cookies must include:
-```javascript
-// Axios configuration
-axios.defaults.withCredentials = true;
-
-// Or per-request
-axios.post('/authenticate', data, { withCredentials: true });
-```
+- **Cookies, not headers.** The session is carried in HttpOnly cookies (`potc` JWT, `rtkn` refresh
+  token, plus the readable `skp` profile cookie `{"id":"<userId>","role":"COACH"}`). The SPA's axios
+  instance sends them with `withCredentials: true`.
+- **Public vs. secured.** Public paths are listed in `AppEndpoints.PUBLIC_ENDPOINTS`. Everything else
+  under `/api/**` and `/v1/**` requires an authenticated session, and every controller method also
+  carries a `@PreAuthorize`.
+- **Errors** are an `ErrorDto` produced by `ApiAdvice`; the stable key is in `errorMsg.message`
+  (for example `security.badCreds`, `security.accLocked`, `security.accNotEnabled`).
+- **Rate limits.** `@RateLimited` (per IP, token bucket) guards registration and password-reset
+  calls; failed password logins are limited separately (see [Login rate limit](#login-rate-limit)).
 
 ---
 
-## 1. User Registration
+## 1. Authentication and session (SPA)
 
-### Register New Account
+These are the endpoints the Vue SPA uses (`src/frontend/src/api/auth.api.js`, `boot/axios.js`).
 
-Creates a new user account and sends an activation email/SMS.
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| POST | `/api/auth/login` | public | Email + password login. Sets `potc`, `rtkn`, `skp`. |
+| POST | `/api/auth/refresh` | public (needs `rtkn`) | Rotates the refresh token and mints a new JWT. |
+| POST | `/api/auth/logout` | public | Revokes this session's refresh token, clears all auth cookies. `204`. |
+| POST | `/refresh` | any authenticated role | Extends the TTL of an already-valid JWT session. Empty `200`. |
 
-**Endpoint:** `POST /v1/account/register`
+### `POST /api/auth/login`
 
-**Authentication:** Not required (public)
+Request (`LoginRequest`):
 
-**Headers:**
-```
-Content-Type: application/json
-```
-
-**Request Body:**
 ```json
-{
-  "login": "johndoe",
-  "password": "securePassword123",
-  "firstName": "John",
-  "lastName": "Doe",
-  "email": "john.doe@example.com",
-  "phone": {
-    "phone": "+1234567890",
-    "iso2Country": "US",
-    "phoneType": "MOBILE",
-    "provider": "Carrier"
-  },
-  "langKey": "en",
-  "gender": "MALE",
-  "dob": "1990-05-15",
-  "otpEnabled": true
-}
+{ "email": "coach@example.com", "password": "at-least-8-chars" }
 ```
 
-**Field Validations:**
-| Field | Required | Constraints |
-|-------|----------|-------------|
-| login | Yes | 1-50 characters |
-| password | Yes | 5-100 characters |
-| firstName | Yes | Max 50 characters |
-| lastName | Yes | Max 50 characters |
-| email | Yes | Valid email, 5-100 characters |
-| phone | No | Phone object |
-| langKey | No | 2-5 characters (default: "en") |
-| gender | No | MALE, FEMALE, OTHER |
-| dob | No | Past date in yyyy-MM-dd format |
-| otpEnabled | No | Boolean (enables 2FA) |
+Response `200` (`LoginResponse`):
 
-**Success Response (201 Created):**
 ```json
-{
-  "id": "abc123-help-code",
-  "message": "user.creation.feedback",
-  "description": "You will receive an email shortly with an activation key or else contact support with the help code",
-  "data": {}
-}
+{ "userId": "7310000000000001", "role": "COACH", "displayName": "Sam" }
 ```
 
-**Error Responses:**
-- `400 Bad Request` - Validation errors
-- `500 Internal Server Error` - Server error
+`role` is the account's `SkillarsRole`, or `ADMIN` for accounts without one.
 
-**Vue.js/Quasar Example:**
-```javascript
-import { api } from 'src/boot/axios';
+| Status | Key | When |
+|--------|-----|------|
+| 401 | `security.badCreds` | Unknown email or wrong password (recorded as a failed attempt) |
+| 401 | `security.accNotEnabled` | Account not activated, or GDPR-erased |
+| 401 | `security.accLocked` | Account locked by an admin, or suspended (`verification_status = SUSPENDED`) |
+| 403 | `security.accountNotVerified` | A role account that is not `BASIC_VERIFIED` while `security.registration.phone-otp-required` is true |
+| 429 | `security.accountLocked` | Login rate limit reached; `Retry-After` header carries the seconds to wait |
 
-async function registerUser(userData) {
-  try {
-    const response = await api.post('/v1/account/register', userData);
-    // Show success notification
-    $q.notify({
-      type: 'positive',
-      message: 'Registration successful! Check your email for activation link.'
-    });
-    return response.data;
-  } catch (error) {
-    if (error.response?.status === 400) {
-      // Handle validation errors
-    }
-    throw error;
-  }
-}
-```
+### `POST /api/auth/refresh`
+
+Reads the `rtkn` cookie. On success the presented token is marked used, a new one is issued, and the
+response is the same `LoginResponse` as login. A token that was already used outside the 30-second
+multi-tab grace window is treated as theft: every refresh token of the account is revoked, and every
+standing JWT is invalidated through `user.security_session_invalidated_at`. A locked, deactivated or
+suspended account is refused with `401` and the presented token is revoked.
+
+### `POST /api/auth/logout`
+
+Revokes the refresh token in the `rtkn` cookie (a `REQUIRES_NEW` write, so it is durable) and clears
+the auth cookies. Returns `204`.
+
+### Login rate limit
+
+`LoginRateLimiter` counts failed password attempts in `main.login_attempts`, keyed by
+SHA-256(lower-cased login | client IP), so it holds across every instance and survives restarts.
+The budget and window come from `platform_config`: `security.login.max-attempts` (default 5) and
+`security.login.lock-window-minutes` (default 15). The legacy `/authenticate` endpoint below uses the
+same limiter and the same key, so failures on either entry point count against both. The legacy
+path also refuses an account that has reached the budget across all IPs combined (the SPA path does
+not, so a stranger cannot lock a real user out of it). An admin clears both with
+`POST /api/admin/users/{id}/unlock-login`.
 
 ---
 
-### Resend Activation Link
+## 2. Legacy endpoints (not used by the SPA)
 
-Resends the activation link if the user didn't receive it.
+Kept because integration tests and tooling still authenticate through them. New code should use
+section 1.
 
-**Endpoint:** `POST /v1/account/regislink`
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| POST | `/authenticate` | public | Spring filter (`JWTAuthenticationFilter`). Body `{"id": "<email>", "password": "..."}` (optional `loginCode`). Returns `JWT_CREATED`, or `check.otp` with a `loginInfoId` when the account has `otp_enabled`. Uses the shared login rate limit. |
+| POST | `/otp` | 2FA cookie from `/authenticate` | Completes the `check.otp` step (`SecondFactorLoginFilter`). Body `{"loginInfoId": "...", "otp": "123456"}`. |
+| POST | `/api/logout` | public | Spring Security `LogoutFilter`, POST only. Same server-side teardown as `/api/auth/logout` (revokes the refresh token, clears cookies), returns `200`. |
+| GET | `/v1/account/authenticate` | authenticated | Returns the remote user's login. |
 
-**Authentication:** Not required (public)
-
-**Query Parameters:**
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| login | Yes | Username |
-| password | Yes | User's password |
-
-**Example Request:**
-```
-POST /v1/account/regislink?login=johndoe&password=securePassword123
-```
-
-**Success Response (200 OK):**
-```json
-{
-  "id": "abc123-help-code",
-  "message": "user.creation.feedback",
-  "description": "You will receive an email shortly with an activation key",
-  "data": {}
-}
-```
+There is no self-service two-factor toggle: `otp_enabled` only affects the legacy `/authenticate`
+flow, which the SPA does not use, so the former `PUT /api/account/2fa` endpoint and its profile
+toggle were removed.
 
 ---
 
-### Activate Account
+## 3. Role registration and verification
 
-Activates a user account using the activation key from email.
+Coach, parent and player self-registration share one shape. Replace `{role}` with `coach`,
+`parent` or `player`. All are public.
 
-**Endpoint:** `POST /v1/account/activate`
+| Method | Path | Body / params | Response |
+|--------|------|---------------|----------|
+| POST | `/api/security/{role}/register` | role registration request (below) | `200`, empty |
+| GET | `/api/security/{role}/verify-email` | `?token=<uuid>` from the email link | `200` `VerifyEmailResponse` |
+| POST | `/api/security/{role}/verify-phone` | `{"verificationToken": "...", "otp": "123456"}` | `200`, empty |
+| POST | `/api/security/{role}/resend-verification` | `{"email": "..."}` | `200`, empty |
+| POST | `/api/security/{role}/resend-otp` | `{"verificationToken": "..."}` | `200`, empty |
 
-**Authentication:** Not required (public)
+Registration request fields:
 
-**Query Parameters:**
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| key | Yes | Activation key from email |
+| Field | Coach | Parent | Player |
+|-------|-------|--------|--------|
+| `firstName`, `lastName` | required, max 100 | required, max 50 | required, max 100 |
+| `email` | required, valid email | required | required |
+| `password` | required, min 8 | required, min 8 | required, min 8 |
+| `phone` | required, 7-20 chars | required | required, 7-20 chars |
+| `dateOfBirth` | n/a | n/a | required, past date (`yyyy-MM-dd`) |
+| `langKey` | optional, 2-5 chars | optional | optional |
 
-**Example Request:**
-```
-POST /v1/account/activate?key=abc123xyz789
-```
+The account becomes `EMAIL_VERIFIED` after the email link and `BASIC_VERIFIED` after the phone OTP.
 
-**Success Response (200 OK):**
-```json
-{
-  "id": null,
-  "message": "user.activation.success",
-  "description": "Account has been activated",
-  "data": {}
-}
-```
+### Generic account registration and password reset (`/v1/account`)
 
-**Error Response (400 Bad Request):**
-```json
-{
-  "id": "error-code",
-  "message": "INVALID_ACTIVATION_KEY",
-  "description": "The activation key is invalid or has already been used",
-  "data": {}
-}
-```
-
-**Notes:**
-- Activation keys expire after **7 days**
-- Each key can only be used once
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| POST | `/v1/account/register` | public | Generic (role-less) account, body `UserDto`. Rate limited 5/hour/IP. |
+| POST | `/v1/account/regislink` | public | Resend the activation link. Params `login`, `password`. Rate limited. |
+| POST | `/v1/account/activate` | public | `?key=<activation key>`. |
+| POST | `/v1/account/reset_password/init` | public | Body `{"loginId", "dob", "currentEmail"}`. `202`. Rate limited 3/15 min. |
+| POST | `/v1/account/reset_password/finish` | public | Body `{"key", "password"}`. Rate limited 5/10 min. |
+| GET | `/v1/account/` | authenticated | Current user (`UserDto`). |
+| GET | `/v1/account/ping` | authenticated | `{"server": "up"}`. |
 
 ---
 
-## 2. Authentication (Login)
+## 4. Account self-service (`/api/account`)
 
-### Login - Standard Authentication
+Every method requires an authenticated session (any role).
 
-Authenticates a user and creates a JWT session.
-
-**Endpoint:** `POST /authenticate`
-
-**Authentication:** Not required (public)
-
-**Headers:**
-```
-Content-Type: application/json
-```
-
-**Request Body:**
-```json
-{
-  "id": "john.doe@example.com",
-  "password": "securePassword123",
-  "loginCode": 1
-}
-```
-
-**Login Code Values:**
-| Code | Description |
-|------|-------------|
-| 1 | Login with Email (default) |
-| 2 | Login with Phone |
-| 3 | Login with Username |
-
-**Success Response - Without 2FA (200 OK):**
-```json
-{
-  "id": "JWT_CREATED",
-  "message": "jwt.created",
-  "description": "JWT token has been created",
-  "data": {}
-}
-```
-
-**Success Response - With 2FA Enabled (200 OK):**
-```json
-{
-  "id": "obfuscated-login-info-id",
-  "message": "check.otp",
-  "description": "Check your email for the otp",
-  "data": {
-    "loginInfoId": "obfuscated-login-info-id"
-  }
-}
-```
-
-**Cookies Set on Successful Login:**
-| Cookie | HTTPOnly | Purpose | TTL |
-|--------|----------|---------|-----|
-| potc | Yes | JWT Token | 15 minutes (`JWT_TTL`) |
-| bcookie | Yes | Browser Client ID | Session |
-| ION | Yes | JWT Session ID | Session |
-| user | No | Display name (readable by JS) | 15 minutes |
-| admin | No | Admin indicator — literal string `"admin"`, set only when the roles claim contains `ADMIN` (**not** `"true"`) | 15 minutes |
-| rint | No | The JWT's **absolute expiry as epoch milliseconds** — rewritten (advanced) on every authenticated response. Not a countdown and not a delta. | `JWT_TTL + 60s` (~16 min) |
-| rtkn | Yes | Opaque refresh token | 7 days (`REFRESH_TOKEN_TTL`) |
-| skp | No | URL-encoded JSON `{"id":<Long>,"role":"COACH"}`; hydrates client-side auth state | 7 days |
-
-> `CookieUtil` writes every cookie above with `Path=/` and `SameSite=Lax`. `Secure` is emitted
-> only when the request arrived over HTTPS, so cookies are **not** `Secure` over plain HTTP in
-> local dev. For how `rint` drives the client-side countdown, see
-> [Session Refresh Mechanism](./session-refresh-mechanism.md) — that document is the authority.
-
-**Error Responses:**
-- `401 Unauthorized` - Invalid credentials
-- `423 Locked` - Account locked due to too many failed attempts
-
-**Vue.js/Quasar Example:**
-```javascript
-import { api } from 'src/boot/axios';
-import { useCookies } from '@vueuse/integrations/useCookies';
-
-async function login(email, password) {
-  try {
-    const response = await api.post('/authenticate', {
-      id: email,
-      password: password,
-      loginCode: 1
-    }, { withCredentials: true });
-
-    if (response.data.message === 'check.otp') {
-      // 2FA required - redirect to OTP page
-      return {
-        requires2FA: true,
-        loginInfoId: response.data.data.loginInfoId
-      };
-    }
-
-    // Login successful - cookies are automatically set
-    const cookies = useCookies();
-    const displayName = cookies.get('user');
-    const isAdmin = cookies.get('admin') === 'true';
-
-    return {
-      requires2FA: false,
-      displayName,
-      isAdmin
-    };
-  } catch (error) {
-    if (error.response?.status === 401) {
-      throw new Error('Invalid email or password');
-    }
-    if (error.response?.status === 423) {
-      throw new Error('Account locked. Please try again later.');
-    }
-    throw error;
-  }
-}
-```
+| Method | Path | Body | Success key |
+|--------|------|------|-------------|
+| GET | `/api/account/profile` | - | `UserDto` |
+| PUT | `/api/account/email` | `{"oldEmail", "newEmail", "password"}` | `email.updated` |
+| PUT | `/api/account/password` | `{"currentPassword", "newPassword"}` | `password.changed` |
+| PUT | `/api/account/phone` | `{"phone"}` | `phone.changed` |
+| PUT | `/api/account/address` | `AddressDto` (`name`, `addressLine1`, `city`, `stateProvince`, ...) | `address.changed` |
+| PUT | `/api/account/info` | `{"firstName", "lastName", "langKey", "nationalId", "gender", "title"}` | `info.changed` |
+| POST | `/api/util/sanitize-preview` | `{"text"}` (max 2000) | `{"original", "sanitized", "detectionFound"}` |
 
 ---
 
-### Two-Factor Authentication (OTP Verification)
+## 5. Player profiles (`/api/security/players`)
 
-Completes login when 2FA is enabled.
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| POST | `/api/security/players` | PARENT | Create a child profile (`name`, `dateOfBirth`, `position`, `parentConsent`, `consentPolicyVersion`; consent fields required for minors). |
+| GET | `/api/security/players` | PARENT | List the caller's children. |
+| GET | `/api/security/players/{playerId}` | owning parent (`@playerOwnershipGuard`) | One child profile. |
+| PATCH | `/api/security/players/{playerId}/position` | owning parent | Change a child's position. |
+| POST | `/api/security/players/me` | PLAYER | Create the self-registered player's own profile (`position`). One-time. |
+| GET | `/api/security/players/me` | PLAYER | The caller's own profile. |
+| PATCH | `/api/security/players/me/position` | PLAYER | Change own position. |
 
-**Endpoint:** `POST /otp`
-
-**Authentication:** Not required (but requires valid 2FA cookie from login)
-
-**Headers:**
-```
-Content-Type: application/json
-```
-
-**Request Body:**
-```json
-{
-  "loginInfoId": "obfuscated-login-info-id",
-  "otp": "123456"
-}
-```
-
-**Success Response (200 OK):**
-```json
-{
-  "id": "",
-  "message": "login.success",
-  "description": "Login was successful",
-  "data": {}
-}
-```
-
-**Error Response (401 Unauthorized):**
-```json
-{
-  "id": "error-code",
-  "message": "invalid.otp",
-  "description": "The OTP code is invalid or expired",
-  "data": {}
-}
-```
-
-**Notes:**
-- OTP codes expire after **30 minutes**
-- The `loginInfoId` from the login response must be passed
-
-**Vue.js/Quasar Example:**
-```javascript
-async function verifyOTP(loginInfoId, otpCode) {
-  try {
-    const response = await api.post('/otp', {
-      loginInfoId: loginInfoId,
-      otp: otpCode
-    }, { withCredentials: true });
-
-    // Login complete - cookies are set
-    return true;
-  } catch (error) {
-    if (error.response?.status === 401) {
-      throw new Error('Invalid or expired OTP code');
-    }
-    throw error;
-  }
-}
-```
+One parent per player (FR-USR-001) is enforced by the `uq_ppl_player_id` unique constraint on
+`parent_player_links`. There is no "link another parent" endpoint.
 
 ---
 
-### Check Authentication Status
-
-Checks if the current user is authenticated.
-
-**Endpoint:** `GET /v1/account/authenticate`
-
-**Authentication:** Not required (public)
-
-**Success Response (200 OK):**
-```
-johndoe
-```
-Returns the username if authenticated, or empty string if not.
-
----
-
-### Logout
-
-Logs out the current user and clears all session cookies.
-
-**Endpoint:** `POST /api/logout`
-
-**Authentication:** Not required
-
-**Success Response (200 OK):**
-```json
-{
-  "status": "logged_out"
-}
-```
-
-**Cookies Cleared:**
-- `JSESSIONID`
-- `potc` (JWT)
-- `bcookie`
-- `user`
-- `admin`
-- `ION`
-
-**Vue.js/Quasar Example:**
-```javascript
-async function logout() {
-  try {
-    await api.post('/api/logout', {}, { withCredentials: true });
-    // Redirect to login page
-    router.push('/login');
-  } catch (error) {
-    // Even if logout fails, clear local state and redirect
-    router.push('/login');
-  }
-}
-```
-
----
-
-## 3. Password Reset
-
-### Request Password Reset
-
-Initiates the password reset process by sending a reset link to the user's email.
-
-**Endpoint:** `POST /v1/account/reset_password/init`
-
-**Authentication:** Not required (public)
-
-**Headers:**
-```
-Content-Type: application/json
-```
-
-**Request Body:**
-```json
-{
-  "loginId": "john.doe@example.com",
-  "dob": "1990-05-15",
-  "currentEmail": "john.doe@example.com"
-}
-```
-
-**Field Validations:**
-| Field | Required | Description |
-|-------|----------|-------------|
-| loginId | Yes | Valid email address |
-| dob | Yes | Date of birth (yyyy-MM-dd) |
-| currentEmail | Yes | Current email on account |
-
-**Success Response (202 Accepted):**
-```json
-{
-  "id": "tracking-code",
-  "message": "password.reset.emailed",
-  "description": "Check your email for a link to reset your password",
-  "data": {}
-}
-```
-
-**Notes:**
-- Password reset links expire after **24 hours**
-- For security, the same response is returned even if the email doesn't exist
-
-**Vue.js/Quasar Example:**
-```javascript
-async function requestPasswordReset(email, dob) {
-  try {
-    const response = await api.post('/v1/account/reset_password/init', {
-      loginId: email,
-      dob: dob,
-      currentEmail: email
-    });
-
-    $q.notify({
-      type: 'positive',
-      message: 'Password reset link sent! Check your email.'
-    });
-
-    return response.data;
-  } catch (error) {
-    throw error;
-  }
-}
-```
-
----
-
-### Complete Password Reset
-
-Resets the password using the token from email.
-
-**Endpoint:** `POST /v1/account/reset_password/finish`
-
-**Authentication:** Not required (public)
-
-**Headers:**
-```
-Content-Type: application/json
-```
-
-**Request Body:**
-```json
-{
-  "key": "reset-token-from-email",
-  "password": "newSecurePassword123"
-}
-```
-
-**Field Validations:**
-| Field | Required | Constraints |
-|-------|----------|-------------|
-| key | Yes | 2-25 characters (token from email) |
-| password | Yes | 5-50 characters |
-
-**Success Response (200 OK):**
-```json
-{
-  "id": null,
-  "message": "password.reset.success",
-  "description": "Your password has now been reset. You can now login with your new password.",
-  "data": {}
-}
-```
-
-**Error Response (400 Bad Request):**
-```json
-{
-  "id": "error-code",
-  "message": "INVALID_RESET_KEY",
-  "description": "The password reset key is invalid or has expired",
-  "data": {}
-}
-```
-
-**Vue.js/Quasar Example:**
-```javascript
-async function resetPassword(token, newPassword) {
-  try {
-    const response = await api.post('/v1/account/reset_password/finish', {
-      key: token,
-      password: newPassword
-    });
-
-    $q.notify({
-      type: 'positive',
-      message: 'Password reset successful! You can now login.'
-    });
-
-    // Redirect to login
-    router.push('/login');
-
-    return response.data;
-  } catch (error) {
-    if (error.response?.status === 400) {
-      throw new Error('Invalid or expired reset link');
-    }
-    throw error;
-  }
-}
-```
-
----
-
-## 4. Account Management (Authenticated)
-
-### Get Current User Account
-
-Retrieves the current authenticated user's account details.
-
-**Endpoint:** `GET /v1/account/`
-
-**Authentication:** Required (JWT)
-
-**Success Response (200 OK):**
-```json
-{
-  "id": "user-id",
-  "login": "johndoe",
-  "firstName": "John",
-  "lastName": "Doe",
-  "email": "john.doe@example.com",
-  "phone": {
-    "phone": "+1234567890",
-    "iso2Country": "US",
-    "phoneType": "MOBILE"
-  },
-  "langKey": "en",
-  "gender": "MALE",
-  "dob": "1990-05-15",
-  "authorities": ["ROLE_USER"],
-  "activated": true,
-  "otpEnabled": true
-}
-```
-
-**Error Response (401 Unauthorized):**
-Session expired or not authenticated.
-
----
-
-### Change Email Address
-
-Changes the user's email address.
-
-**Endpoint:** `POST /v1/account/change_email`
-
-**Authentication:** Required (JWT)
-
-**Headers:**
-```
-Content-Type: application/json
-```
-
-**Request Body:**
-```json
-{
-  "oldEmail": "old.email@example.com",
-  "newEmail": "new.email@example.com",
-  "password": "currentPassword123"
-}
-```
-
-**Field Validations:**
-| Field | Required | Constraints |
-|-------|----------|-------------|
-| oldEmail | Yes | Valid email, max 100 characters |
-| newEmail | Yes | Valid email, max 100 characters |
-| password | Yes | 4-60 characters |
-
-**Success Response (200 OK):**
-```json
-{
-  "id": "tracking-code",
-  "message": "email.updated",
-  "description": "Your email address has been updated",
-  "data": {}
-}
-```
-
----
-
-## 5. Health Check
-
-### Ping
-
-Simple health check endpoint.
-
-**Endpoint:** `GET /v1/account/ping`
-
-**Authentication:** Not required (public)
-
-**Success Response (200 OK):**
-```json
-{
-  "server": "up"
-}
-```
-
----
-
-## Error Response Format
-
-All error responses follow this format:
-
-```json
-{
-  "id": "unique-error-id",
-  "message": "error.code",
-  "description": "Human-readable error description",
-  "data": {}
-}
-```
-
-## Rate Limiting
-
-The API implements rate limiting to prevent brute-force attacks:
-
-| Level | Trigger | Lockout Duration |
-|-------|---------|------------------|
-| Client + Username | 3 failed attempts | 4 hours |
-| IP + Username | 3 failed attempts | 4 hours |
-| Username Only | 5 failed attempts | 4 hours |
-
-After exceeding the limit, you'll receive a `423 Locked` response.
-
----
-
-## Quick Reference
-
-| Feature | Endpoint | Method | Auth Required |
-|---------|----------|--------|---------------|
-| Register | `/v1/account/register` | POST | No |
-| Resend Activation | `/v1/account/regislink` | POST | No |
-| Activate Account | `/v1/account/activate` | POST | No |
-| Login | `/authenticate` | POST | No |
-| 2FA/OTP | `/otp` | POST | No* |
-| Check Auth | `/v1/account/authenticate` | GET | No |
-| Logout | `/api/logout` | POST | No |
-| Password Reset Request | `/v1/account/reset_password/init` | POST | No |
-| Password Reset Complete | `/v1/account/reset_password/finish` | POST | No |
-| Get Account | `/v1/account/` | GET | Yes |
-| Change Email | `/v1/account/change_email` | POST | Yes |
-| Session Refresh | `/refresh` | ANY | Yes |
-| Ping | `/v1/account/ping` | GET | No |
-
-*Requires valid 2FA cookie from login response
+## 6. Account suspension and session revocation
+
+Server-side behaviour that clients observe as `401`s:
+
+- **Admin suspension** (`POST /api/admin/users/{id}/suspend`) locks the account, invalidates every
+  JWT and revokes every refresh token.
+- **Safety suspension.** When a video upload matches the CSAM scan, `AccountSuspensionEventListener`
+  resolves the uploader's account from the video owner id (coach profile → its user; player profile
+  → its own user, or the parent for a managed minor) and sets `verification_status = SUSPENDED`, locks the account, invalidates every JWT and revokes every
+  refresh token. Login and refresh are refused with `security.accLocked`. The admin console's
+  "reactivate" refuses such an account with `409 admin.users.safetyHold`.
+- **Refresh-token reuse** (theft detection, see `/api/auth/refresh`) revokes every session.
+- **Logout** (`/api/auth/logout` or `/api/logout`) revokes the current session's refresh token.

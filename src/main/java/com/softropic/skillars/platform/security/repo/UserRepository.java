@@ -70,6 +70,26 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     Optional<User> findOneByEmailOrLogin(final String email, final String login);
 
+    /**
+     * Scalar id lookups for callers that must then take the row lock with {@link #findByIdForUpdate}:
+     * loading the entity first would make that locked query return the already-managed, pre-lock
+     * snapshot (see AdminUserService.suspendCoachProfileIfAny's note on the same hazard).
+     */
+    @Query("select u.id from User u where u.login = :login")
+    Optional<Long> findIdByLogin(@Param("login") String login);
+
+    @Query("select u.id from User u where u.email = :email")
+    Optional<Long> findIdByEmail(@Param("email") String email);
+
+    /**
+     * The account behind a coach profile, for a video owner id (coach uploads store the
+     * CoachProfile UUID as {@code Video.ownerId}). Scalar and native so the security module does not
+     * load a marketplace entity.
+     */
+    @Query(value = "select cp.user_id from marketplace.coach_profiles cp where cp.id = :coachProfileId",
+           nativeQuery = true)
+    Optional<Long> findUserIdByCoachProfileId(@Param("coachProfileId") java.util.UUID coachProfileId);
+
     @Override
     void delete(final User user);
 

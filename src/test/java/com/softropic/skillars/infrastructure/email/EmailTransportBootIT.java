@@ -58,7 +58,7 @@ class EmailTransportBootIT {
 
     /**
      * Runs with <strong>no profile active and no property manually supplied</strong> — the same
-     * shape as {@code AdminLoginResourceTest}/{@code RateLimitingAspectIT} — so this is the
+     * shape as {@code RateLimitingAspectIT} — so this is the
      * assertion that actually proves the {@code EnvironmentPostProcessor} ordering assumption in
      * {@link EmailTransportPropertyValidator}'s javadoc: it must run <em>after</em>
      * {@code ConfigDataEnvironmentPostProcessor} has loaded {@code application.yaml}'s base default.

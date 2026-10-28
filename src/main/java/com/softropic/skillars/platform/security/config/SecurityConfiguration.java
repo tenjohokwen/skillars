@@ -9,22 +9,22 @@ import com.softropic.skillars.platform.security.infrastructure.filter.SessionRef
 import com.softropic.skillars.infrastructure.security.AjaxLogoutSuccessHandler;
 import com.softropic.skillars.infrastructure.security.ApplicationAccessDeniedHandler;
 import com.softropic.skillars.infrastructure.security.AuthenticationExceptionHandler;
-import com.softropic.skillars.infrastructure.security.RequestMetadata;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.security.infrastructure.jwt.filter.JWTAuthenticationFilter;
 import com.softropic.skillars.platform.security.infrastructure.jwt.filter.JWTAuthorizationFilter;
 import com.softropic.skillars.platform.security.infrastructure.AuthenticationManagerSimulator;
 import com.softropic.skillars.platform.security.service.ClientIdAccessDecisionManager;
 import com.softropic.skillars.platform.security.infrastructure.FraudAwareAuthenticationManager;
-import com.softropic.skillars.platform.security.service.LoginDecisionManager;
+import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 import com.softropic.skillars.platform.security.infrastructure.SecuredHttpEndpointGuard;
 import com.softropic.skillars.platform.security.service.TwoFactorLoginService;
 import com.softropic.skillars.platform.security.infrastructure.UnanimousAuthorizationManager;
 import com.softropic.skillars.platform.security.service.DaoAuthProvider;
 import com.softropic.skillars.platform.security.service.LoadUserByUserNameService;
 
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 import org.springframework.boot.actuate.autoconfigure.security.servlet.EndpointRequest;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
@@ -104,9 +104,10 @@ public class SecurityConfiguration {
 
     @SuppressWarnings("PMD")
     public FraudAwareAuthenticationManager fraudAwareAuthenticationManager(AuthenticationManager authenticationManager,
-                                                                           LoginDecisionManager<RequestMetadata> loginDecisionManager) {
+                                                                           LoginAttemptsService loginAttemptsService) {
         return new FraudAwareAuthenticationManager(authenticationManager,
-                                                   loginDecisionManager,
+                                                   loginAttemptsService,
+                                                   loginAttemptsService,
                                                    new AuthenticationManagerSimulator(passwordEncoder()));
     }
 
@@ -144,7 +145,7 @@ public class SecurityConfiguration {
                                            CorsConfiguration corsConfiguration,
                                            org.springframework.context.MessageSource messageSource,
                                            com.fasterxml.jackson.databind.ObjectMapper objectMapper,
-                                           @Qualifier("loginAttemptService") LoginDecisionManager<RequestMetadata> loginDecisionManager,
+                                           LoginAttemptsService loginAttemptsService,
                                            Environment env) throws Exception {
         //TODO test first, then remove the following line
         //http.authorizeRequests().accessDecisionManager(accessDecisionManager);
@@ -162,7 +163,15 @@ public class SecurityConfiguration {
         });
         http.formLogin(Customizer.withDefaults());
         http.logout(customizer ->
-            customizer.logoutUrl("/api/logout")
+            // POST only: with CSRF disabled, logoutUrl() alone matches every HTTP method, so a
+            // cross-site GET navigation (SameSite=Lax still sends rtkn) could revoke a victim's session.
+            customizer.logoutRequestMatcher(PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, "/api/logout"))
+                      // Same server-side teardown as POST /api/auth/logout (AuthService.logout):
+                      // revoke this session's refresh token (REQUIRES_NEW, durable) and clear the
+                      // rtkn/skp/JWT cookies. Without it this endpoint only dropped cookies, leaving
+                      // the refresh token valid for its full TTL to anyone holding a copy.
+                      .addLogoutHandler((request, response, authentication) ->
+                          securityUtil.terminateSession(request, response))
                       .logoutSuccessHandler(ajaxLogoutSuccessHandler)
                       .deleteCookies(JAVA_SESSION_COOKIE,
                                      JWT_COOKIE_NAME,
@@ -173,7 +182,7 @@ public class SecurityConfiguration {
         );
         http.headers(customizer -> customizer.frameOptions(HeadersConfigurer.FrameOptionsConfig::disable));
         http.authorizeHttpRequests(configureRequestMatching(authorizationManager, env));
-        http.addFilterAfter(new JWTAuthenticationFilter(fraudAwareAuthenticationManager(authenticationManager, loginDecisionManager),
+        http.addFilterAfter(new JWTAuthenticationFilter(fraudAwareAuthenticationManager(authenticationManager, loginAttemptsService),
                                                         applicationEventPublisher,
                                                         handlerExceptionResolver,
                                                         twoFactorLoginManager,

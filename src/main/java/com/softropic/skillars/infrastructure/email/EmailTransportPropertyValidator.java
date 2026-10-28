@@ -13,7 +13,7 @@ import org.springframework.core.env.ConfigurableEnvironment;
  * <ul>
  *   <li>An <strong>absent</strong> value is allowed — it falls through to {@code application.yaml}'s
  *       base default ({@code log}). A design that aborted on "unset" would break every Spring test
- *       context that loads no profile ({@code AdminLoginResourceTest}, {@code RateLimitingAspectIT},
+ *       context that loads no profile ({@code RateLimitingAspectIT},
  *       {@code PropertiesFeatureToggleServiceIT}) and a bare {@code mvn spring-boot:run}, since
  *       {@link EnvironmentPostProcessor}s run for every {@code SpringApplication}, test or
  *       production — see story ses-1.1's AC3/Dev Notes.

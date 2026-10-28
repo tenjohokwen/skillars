@@ -54,20 +54,6 @@
                 <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
               </q-btn>
             </div>
-
-            <div class="profile-row">
-              <div>
-                <div class="text-label">{{ t('profile.twoFactorAuth') }}</div>
-                <div class="q-mt-xs">
-                  <span class="badge-accent" :style="profile.otpEnabled ? '' : 'opacity: 0.5'">
-                    {{ profile.otpEnabled ? t('profile.enabled') : t('profile.disabled') }}
-                  </span>
-                </div>
-              </div>
-              <q-btn flat dense icon="edit" round class="edit-btn" @click="show2faDialog = true">
-                <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
-              </q-btn>
-            </div>
           </div>
 
           <div class="glass-card profile-section">
@@ -491,11 +477,6 @@
       @updated="loadProfile"
     />
     <UpdateInfoDialog v-model="showInfoDialog" :current-info="currentInfo" @updated="loadProfile" />
-    <Toggle2faDialog
-      v-model="show2faDialog"
-      :current-enabled="profile?.otpEnabled"
-      @updated="loadProfile"
-    />
 
     <!-- AC2/AC3 -->
     <EditCoachIdentityDialog
@@ -584,7 +565,6 @@ import UpdatePasswordDialog from 'src/components/profile/UpdatePasswordDialog.vu
 import UpdatePhoneDialog from 'src/components/profile/UpdatePhoneDialog.vue'
 import UpdateAddressDialog from 'src/components/profile/UpdateAddressDialog.vue'
 import UpdateInfoDialog from 'src/components/profile/UpdateInfoDialog.vue'
-import Toggle2faDialog from 'src/components/profile/Toggle2faDialog.vue'
 import EditCoachIdentityDialog from 'src/components/profile/EditCoachIdentityDialog.vue'
 import EditCoachSpecialtiesDialog from 'src/components/profile/EditCoachSpecialtiesDialog.vue'
 import EditCoachPricingDialog from 'src/components/profile/EditCoachPricingDialog.vue'
@@ -616,7 +596,6 @@ const showPasswordDialog = ref(false)
 const showPhoneDialog = ref(false)
 const showAddressDialog = ref(false)
 const showInfoDialog = ref(false)
-const show2faDialog = ref(false)
 
 const showCoachIdentityDialog = ref(false)
 const showCoachSpecialtiesDialog = ref(false)

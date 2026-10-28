@@ -175,14 +175,6 @@
                 :error-message="getFieldError('langKey')"
               />
             </div>
-
-            <div class="col-12 col-md-6 flex items-center">
-              <q-checkbox
-                v-model="form.otpEnabled"
-                :label="t('auth.enableTwoFactor')"
-                color="primary"
-              />
-            </div>
           </div>
 
           <q-btn
@@ -243,7 +235,6 @@ const form = ref({
   dob: '',
   gender: null,
   langKey: 'en',
-  otpEnabled: false,
 })
 
 const isPwd = ref(true)
@@ -297,7 +288,6 @@ async function handleRegister() {
     }
     if (form.value.phone) userData.phone = form.value.phone
     if (form.value.gender) userData.gender = form.value.gender
-    if (form.value.otpEnabled) userData.otpEnabled = form.value.otpEnabled
 
     await accountApi.register(userData)
     $q.notify({ type: 'positive', message: t('success.registered') })
