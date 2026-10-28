@@ -58,7 +58,16 @@ public class CoachProfile {
     @Column(nullable = false)
     private CoachProfileStatus status = CoachProfileStatus.DRAFT;
 
-    @Column(name = "verification_tier", nullable = false)
+    /**
+     * {@code updatable = false}: the only writer after insert is the admin console
+     * ({@code CoachProfileRepository.updateVerificationTier}, a bulk UPDATE). Several coach-side paths
+     * ({@code CoachProfileService.saveStep5}, {@code CoachProfilePhotoEventListener}) save a managed
+     * CoachProfile they loaded without the row lock, and this entity has no {@code @Version} or
+     * {@code @DynamicUpdate} — so a static full-row UPDATE from such a save, racing an admin tier
+     * change, would silently write the stale tier back. Excluding the column from entity UPDATEs makes
+     * that impossible by construction (same technique as {@code User.securitySessionInvalidatedAt}).
+     */
+    @Column(name = "verification_tier", nullable = false, updatable = false)
     private String verificationTier = "BASIC";
 
     @Column(name = "average_rating", columnDefinition = "NUMERIC(3,1)")

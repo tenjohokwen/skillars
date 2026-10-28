@@ -60,6 +60,13 @@ public class AuthService {
     private final LoginTokenManager loginTokenManager;
     private final SecurityUtil securityUtil;
 
+    // noRollbackFor BadCredentialsException: the failed-attempt row recordAttempt() writes just before
+    // that throw is the ONLY thing this rate limiter counts. With the class-level @Transactional's
+    // default rollback-on-RuntimeException it was rolled back together with the very failure it
+    // recorded, so countByIdentifierAndAttemptedAtAfter never grew past what tests seeded directly and
+    // the limiter could never engage. Nothing else is written on a BadCredentialsException path (the
+    // refresh-token insert happens only after the password check), so committing on it is safe.
+    @Transactional(noRollbackFor = BadCredentialsException.class)
     public LoginResponse login(String email, String rawPassword, String clientIp, HttpServletResponse res) {
         int maxAttempts = configService.find("security.login.max-attempts")
             .map(Integer::parseInt).orElse(5);
@@ -69,6 +76,7 @@ public class AuthService {
         // Rate-limit key is SHA-256(email|ip) so an attacker on a different IP cannot
         // lock the legitimate user's own IP+email combination (account-DoS prevention).
         String identifier = sha256Hex(email.toLowerCase() + "|" + canonicaliseIp(clientIp));
+        String subjectHash = loginSubjectHash(email);
         Instant windowStart = Instant.now(ClockProvider.getClock()).minus(lockWindowMin, ChronoUnit.MINUTES);
         long recentAttempts = loginAttemptRepository.countByIdentifierAndAttemptedAtAfter(identifier, windowStart);
         if (recentAttempts >= maxAttempts) {
@@ -85,12 +93,12 @@ public class AuthService {
         }
 
         var user = userRepository.findOneByLogin(email.toLowerCase()).orElseThrow(() -> {
-            recordAttempt(identifier);
+            recordAttempt(identifier, subjectHash);
             return new BadCredentialsException("Invalid credentials");
         });
 
         if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
-            recordAttempt(identifier);
+            recordAttempt(identifier, subjectHash);
             throw new BadCredentialsException("Invalid credentials");
         }
 
@@ -312,9 +320,31 @@ public class AuthService {
         }
     }
 
-    private void recordAttempt(String identifier) {
+    private void recordAttempt(String identifier, String subjectHash) {
         loginAttemptRepository.save(
-            new LoginAttempt(identifier, Instant.now(ClockProvider.getClock())));
+            new LoginAttempt(identifier, subjectHash, Instant.now(ClockProvider.getClock())));
+    }
+
+    /**
+     * Admin "unlock login" (V171): deletes every recorded failed attempt for this account across all
+     * IPs, lifting {@link #login}'s per-(email, ip) rate limit for it immediately instead of waiting
+     * out the lock window. Returns the number of attempt rows removed.
+     */
+    public int clearLoginRateLimit(String login) {
+        return loginAttemptRepository.deleteBySubjectHash(loginSubjectHash(login));
+    }
+
+    /** Admin read-out (V171): failed attempts for this account, any IP, inside the current lock window. */
+    @Transactional(readOnly = true)
+    public long countRecentFailedAttempts(String login) {
+        int lockWindowMin = configService.find("security.login.lock-window-minutes")
+            .map(Integer::parseInt).orElse(15);
+        Instant windowStart = Instant.now(ClockProvider.getClock()).minus(lockWindowMin, ChronoUnit.MINUTES);
+        return loginAttemptRepository.countBySubjectHashAndAttemptedAtAfter(loginSubjectHash(login), windowStart);
+    }
+
+    private static String loginSubjectHash(String email) {
+        return sha256Hex(email.toLowerCase());
     }
 
     private static String canonicaliseIp(String ip) {

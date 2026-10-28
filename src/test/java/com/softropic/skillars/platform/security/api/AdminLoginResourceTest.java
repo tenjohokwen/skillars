@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.security.api;
 
 import com.softropic.skillars.platform.security.infrastructure.jwt.JwtSecretService;
+import com.softropic.skillars.platform.security.service.AuthService;
 import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 import com.softropic.skillars.platform.video.service.VideoMetrics;
 
@@ -55,6 +56,9 @@ class AdminLoginResourceTest {
     @MockitoBean
     private LoginAttemptsService loginAttemptsService;
 
+    @MockitoBean
+    private AuthService authService;
+
     // Required by SecurityAdviceFilter which is a @Component picked up by the web slice scan
     @MockitoBean
     private JwtSecretService jwtSecretService;
@@ -102,6 +106,8 @@ class AdminLoginResourceTest {
                .andExpect(status().isNoContent());
 
         verify(loginAttemptsService).unlockUser(TARGET_USERNAME);
+        // V171: the DB-backed /api/auth/login rate limit is cleared too, not just the legacy caches.
+        verify(authService).clearLoginRateLimit(TARGET_USERNAME);
     }
 
     @Test

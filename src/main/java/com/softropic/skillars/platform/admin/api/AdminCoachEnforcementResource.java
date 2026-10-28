@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.admin.contract.AdminManualStrikeRequest;
 import com.softropic.skillars.platform.admin.contract.AdminManualStrikeResponse;
 import com.softropic.skillars.platform.admin.contract.AdminReinstateCoachRequest;
+import com.softropic.skillars.platform.admin.contract.AdminSetVerificationTierRequest;
 import com.softropic.skillars.platform.admin.contract.AdminSuspendCoachRequest;
 import com.softropic.skillars.platform.admin.contract.CoachEnforcementListItemDto;
 import com.softropic.skillars.platform.admin.contract.CoachEnforcementProfileDto;
@@ -22,6 +23,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -86,6 +88,17 @@ public class AdminCoachEnforcementResource {
             @NotBlank @Size(max = 500) @RequestParam String reason) {
         enforcementService.deleteStrike(coachId, strikeId, reason, resolveAdminId());
         return ResponseEntity.ok().build();
+    }
+
+    /** D6: set the coach's marketplace verification tier (BASIC / TRUSTED / FEATURED), audited. */
+    @PatchMapping("/{coachId}/verification-tier")
+    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @Observed(name = "admin.coach.verificationTier")
+    public ResponseEntity<Void> setVerificationTier(
+            @PathVariable UUID coachId,
+            @Valid @RequestBody AdminSetVerificationTierRequest request) {
+        enforcementService.setVerificationTier(coachId, request.tier(), request.reason(), resolveAdminId());
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping

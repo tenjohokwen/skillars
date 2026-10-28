@@ -28,6 +28,7 @@ import jakarta.persistence.JoinTable;
 import jakarta.persistence.ManyToMany;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.DynamicUpdate;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotNull;
@@ -45,6 +46,11 @@ import static jakarta.persistence.CascadeType.REFRESH;
 @Audited
 @Entity
 @Table(name = "user")
+// Admin console D7: without this, every managed save() issued a static full-row UPDATE, so any
+// transaction that loaded a User before an admin suspension (profile edit, GDPR erasure, ...) and saved
+// it afterwards wrote the stale `locked = false` back, silently lifting the suspension (and the mirror
+// for reactivation). With @DynamicUpdate a save writes only the columns that transaction changed.
+@DynamicUpdate
 public class User extends Customer implements Serializable {
 
     //TODO lastLogins (loginTime:LocalDateTime, sessionId:text, explicitLogout:boolean, RequestMetadata:json, logoutTime:localDateTime, credId:uuid, blacklisted:boolean)
@@ -146,7 +152,8 @@ public class User extends Customer implements Serializable {
      * column; V145's gap is the mistake not to repeat here).
      *
      * <p>{@code insertable = false, updatable = false} (code review 2026-10-08): {@code User} has
-     * no {@code @Version} and no {@code @DynamicUpdate}, so a plain managed-entity
+     * no {@code @Version} and (until the admin-console D7 change added {@code @DynamicUpdate},
+     * which narrows but does not close this hole) no {@code @DynamicUpdate}, so a plain managed-entity
      * {@code userRepository.save(user)} — of which there are many call sites, and any one of them
      * racing a theft-detection event — flushes a STATIC {@code UPDATE} naming every mapped column,
      * writing back whatever stale in-memory value this field held when THAT entity was loaded,

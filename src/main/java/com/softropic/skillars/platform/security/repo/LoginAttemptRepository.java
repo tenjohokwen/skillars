@@ -15,6 +15,19 @@ public interface LoginAttemptRepository extends JpaRepository<LoginAttempt, Long
 
     Optional<LoginAttempt> findFirstByIdentifierOrderByAttemptedAtAsc(String identifier);
 
+    /** V171: failed attempts for one account (any IP) since {@code windowStart} — admin read-out only. */
+    long countBySubjectHashAndAttemptedAtAfter(String subjectHash, Instant windowStart);
+
+    /**
+     * V171: admin "unlock login" — removes every recorded failed attempt for one account across all
+     * IPs, which is what lifts {@code AuthService.login}'s per-(email, ip) rate limit for that account.
+     * A bulk statement on a non-versioned-in-practice, append-only table (rows are only ever inserted
+     * and bulk-deleted, never updated), so no version bump is involved.
+     */
+    @Modifying
+    @Query("DELETE FROM LoginAttempt a WHERE a.subjectHash = :subjectHash")
+    int deleteBySubjectHash(@Param("subjectHash") String subjectHash);
+
     /**
      * skillars-deferred-120 code review (2026-09-17, Decision 2): this was previously a
      * <em>derived</em> delete method (no {@code @Query}), which Spring Data JPA executes as a

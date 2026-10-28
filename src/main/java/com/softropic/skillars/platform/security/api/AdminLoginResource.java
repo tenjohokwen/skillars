@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.security.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.security.service.AuthService;
 import com.softropic.skillars.platform.security.service.LoginAttemptsService;
 
 import io.micrometer.observation.annotation.Observed;
@@ -30,6 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminLoginResource {
 
     private final LoginAttemptsService loginAttemptsService;
+    private final AuthService authService;
 
     /**
      * Immediately clears all login-attempt locks for a user.
@@ -54,6 +56,10 @@ public class AdminLoginResource {
             kv("action", "clear_login_attempts"),
             kv("status", "SUCCESS"));
         loginAttemptsService.unlockUser(username);
+        // V171: the in-memory caches above only gate the legacy /authenticate flow; the SPA's
+        // /api/auth/login rate limit lives in main.login_attempts and must be cleared too, or this
+        // endpoint silently leaves the user locked out of the login path they actually use.
+        authService.clearLoginRateLimit(username);
         return ResponseEntity.noContent().build();
     }
 }

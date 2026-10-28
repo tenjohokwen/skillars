@@ -7,5 +7,6 @@ public record CoachEnforcementListItemDto(
     UUID coachId,
     String coachName,
     String status,
+    String verificationTier,
     long activeStrikes,
     Instant statusChangedAt) {}
