@@ -16,5 +16,8 @@ public enum AdminAlertType {
     // session is live (IN_PROGRESS / PAUSED) or its payment capture was in flight (PAYMENT_IN_FLIGHT,
     // in `reason`). referenceId is the booking id (reference_type BOOKING); the queue summary names the
     // parent to contact. Raised by AdminCoachEnforcementService.suspendCoachForSafetyHold.
-    SAFETY_HOLD_BOOKING
+    SAFETY_HOLD_BOOKING,
+    // feat/coach-payouts-pack-and-credit: a credit cash-out whose Stripe refund outcome could not be
+    // confirmed (payment.cash_out_reconciliations UNKNOWN) — see V186.
+    CASH_OUT_UNRESOLVED
 }

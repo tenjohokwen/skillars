@@ -42,6 +42,13 @@ public class CoachPayout {
     @Column(name = "coach_stripe_account_id")
     private String coachStripeAccountId;
 
+    /**
+     * feat/coach-payouts-pack-and-credit (V186): the session pack that funded this booking, for a
+     * pack-funded payout; null for a card/credit-funded one.
+     */
+    @Column(name = "session_pack_purchase_id", updatable = false)
+    private UUID sessionPackPurchaseId;
+
     @Column(name = "gross_amount", nullable = false, precision = 10, scale = 2)
     private BigDecimal grossAmount;
 

@@ -3,12 +3,15 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
+import com.softropic.skillars.platform.payment.repo.CashOutReconciliation;
+import com.softropic.skillars.platform.payment.repo.CashOutReconciliationRepository;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedger;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -22,6 +25,7 @@ public class CreditWalletService {
     private final ParentCreditLedgerRepository ledgerRepository;
     private final StripeCustomerRepository stripeCustomerRepository;
     private final PessimisticLockRetryer lockRetryer;
+    private final CashOutReconciliationRepository cashOutReconciliationRepository;
 
     public BigDecimal getBalance(Long parentId) {
         return ledgerRepository.sumByParentId(parentId).orElse(BigDecimal.ZERO);
@@ -41,12 +45,16 @@ public class CreditWalletService {
      * the processing fee. Both carry {@code cashOutId} as {@code reference_id} so a reversal and the
      * Stripe idempotency key ({@code cashout-{cashOutId}}) tie back to them.
      *
-     * <p>Scope: this serializes cash-outs against each other. The booking-settlement credit
-     * deductions ({@code PaymentLifecycleService}) read the balance outside this lock and are not
-     * serialized against a cash-out — see the PR design note.
+     * <p>Scope: this serializes cash-outs against each other, and — through {@link #lockAndGetBalance}
+     * — against the booking-settlement credit deductions in {@code PaymentLifecycleService}.
+     *
+     * <p>feat/coach-payouts-pack-and-credit (C3 item 4): also writes the PENDING
+     * {@code cash_out_reconciliations} record in this same transaction, so a debit can never exist
+     * without the durable record that tracks its refund.
      */
     @Transactional
-    public void debitForCashOut(Long parentId, UUID cashOutId, BigDecimal netAmount, BigDecimal feeAmount) {
+    public void debitForCashOut(Long parentId, UUID cashOutId, BigDecimal netAmount, BigDecimal feeAmount,
+                                String paymentIntentId) {
         lockRetryer.withBoundedRetry("CreditWalletService.debitForCashOut",
             () -> stripeCustomerRepository.findByIdForUpdate(parentId)
                 .orElseThrow(() -> new PaymentGatewayException("payment.noPaymentMethod")));
@@ -62,6 +70,30 @@ public class CreditWalletService {
             writeLedgerEntry(parentId, feeAmount.negate(), CreditLedgerEntryType.STRIPE_FEE_DEBIT, cashOutId,
                 "Stripe processing fee for cash-out");
         }
+        cashOutReconciliationRepository.save(
+            CashOutReconciliation.pending(cashOutId, parentId, paymentIntentId, netAmount, feeAmount));
+    }
+
+    /**
+     * feat/coach-payouts-pack-and-credit (C3 item 3, the #318 follow-up): the booking-settlement side of
+     * the per-payer wallet lock. Takes the same {@code stripe_customers} row lock as
+     * {@link #debitForCashOut}, but WAITS for it instead of NOWAIT + retry (see
+     * {@code StripeCustomerRepository.findByIdForUpdateWaiting} for why), and returns the balance read
+     * UNDER it, so a settlement's credit split and its {@code BOOKING_DEDUCTION} — written later in the
+     * caller's transaction, while the lock is still held — cannot overdraw the wallet against a
+     * concurrent cash-out or a concurrent settlement for the same payer. The lock lasts until the
+     * caller's transaction ends.
+     *
+     * <p>A payer with no {@code stripe_customers} row cannot cash out (the refund needs that row's
+     * PaymentIntent), so there is nothing to serialize against and the balance is returned unlocked.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public BigDecimal lockAndGetBalance(Long parentId) {
+        boolean locked = stripeCustomerRepository.findByIdForUpdateWaiting(parentId).isPresent();
+        if (!locked) {
+            log.debug("No stripe_customers row for parentId={} — wallet balance read without the payer lock", parentId);
+        }
+        return getBalance(parentId);
     }
 
     /**

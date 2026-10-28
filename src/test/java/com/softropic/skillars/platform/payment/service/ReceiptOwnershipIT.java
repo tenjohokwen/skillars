@@ -71,9 +71,10 @@ class ReceiptOwnershipIT extends BasePaymentIT {
     }
 
     /**
-     * fix/payment-money-integrity: the overview's gross volume includes pack purchases, commission
-     * uses each non-refunded booking payment's STAMPED rate on its card-charged portion (not gross ×
-     * the live rate), and cash-outs whose refund failed (reversed) are not counted.
+     * fix/payment-money-integrity: the overview's gross volume includes pack purchases and cash-outs whose
+     * refund failed (reversed) are not counted. feat/coach-payouts-pack-and-credit: commission is the
+     * commission stamped on RELEASED coach payouts in the period — card, credit AND pack sessions — not
+     * gross × the live rate, and not card money only.
      */
     @Test
     void adminOverview_realFigures_fromStampedRatesPacksAndNetCashOuts() {
@@ -108,6 +109,16 @@ class ReceiptOwnershipIT extends BasePaymentIT {
                     + "VALUES (?, 2010, ?, ?, 3010, 40.00, 5, 'pi_fin_pack', 200.00, ?)",
                 UUID.randomUUID(), coach, tier, java.sql.Timestamp.from(inPeriod));
 
+            // Coach payouts: released card 15.00 + released credit 6.00 + released pack 3.33 = 24.33; pending,
+            // cancelled, reversed and out-of-period payouts earn nothing in this period.
+            payout(coach, "RELEASED", "15.00", inPeriod);
+            payout(coach, "RELEASED", "6.00", inPeriod);
+            payout(coach, "RELEASED", "3.33", inPeriod);
+            payout(coach, "PENDING_RELEASE", "9.00", null);
+            payout(coach, "CANCELLED", "9.00", null);
+            payout(coach, "REVERSED", "9.00", inPeriod);
+            payout(coach, "RELEASED", "9.00", Instant.parse("2031-04-02T00:00:00Z"));
+
             UUID okCashOut = UUID.randomUUID();
             UUID failedCashOut = UUID.randomUUID();
             ledger(2010L, "-30.00", "CASH_OUT_DEBIT", okCashOut, inPeriod);
@@ -117,15 +128,11 @@ class ReceiptOwnershipIT extends BasePaymentIT {
             return null;
         });
 
-        BigDecimal live = new BigDecimal(jdbcTemplate.queryForObject(
-            "SELECT value FROM main.platform_config WHERE key = 'platform.commission.rate'", String.class));
         var dto = revenueReportingService.getAdminOverview(from, to);
 
         // Bookings 100 + (50+50) + 40 + 10 + 200 (refunded) = 450, plus the 200 pack.
         assertThat(dto.totalGrossVolume()).isEqualByComparingTo("650.00");
-        BigDecimal expectedCommission = new BigDecimal("25.00")
-            .add(new BigDecimal("10.00").multiply(live).setScale(2, java.math.RoundingMode.HALF_UP));
-        assertThat(dto.totalCommissionCollected()).isEqualByComparingTo(expectedCommission);
+        assertThat(dto.totalCommissionCollected()).isEqualByComparingTo("24.33");
         assertThat(dto.totalCashOuts()).isEqualByComparingTo("30.00");
     }
 
@@ -136,6 +143,17 @@ class ReceiptOwnershipIT extends BasePaymentIT {
                 + "status, captured_at, commission_rate) VALUES (?, ?, ?, ?, 'CAPTURED', ?, ?)",
             bookingId, pi, credit, card, java.sql.Timestamp.from(capturedAt), rate);
         return bookingId;
+    }
+
+    /** A coach_payouts row with the given commission; released_at null for a not-yet-released one. */
+    private void payout(UUID coachId, String status, String commission, Instant releasedAt) {
+        BigDecimal c = new BigDecimal(commission);
+        jdbcTemplate.update(
+            "INSERT INTO payment.coach_payouts (booking_id, coach_id, gross_amount, commission_amount, net_amount, "
+                + "currency, status, release_after, released_at, attempts, created_at, updated_at) "
+                + "VALUES (?, ?, ?, ?, ?, 'eur', ?, now(), ?, 0, now(), now())",
+            UUID.randomUUID(), coachId, c.multiply(BigDecimal.TEN), c, c.multiply(new BigDecimal("9")), status,
+            releasedAt == null ? null : java.sql.Timestamp.from(releasedAt));
     }
 
     private void ledger(long parentId, String amount, String type, UUID ref, Instant createdAt) {

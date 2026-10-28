@@ -50,6 +50,21 @@
         {{ t('admin.finance.loadError') }}
       </q-banner>
 
+      <!-- Not period-bound: cash-outs whose Stripe refund is still unconfirmed right now. -->
+      <q-banner
+        v-if="overview && overview.unresolvedCashOutCount > 0"
+        class="bg-warning text-dark q-mb-md"
+        rounded
+        data-testid="finance-unresolved-cash-outs"
+      >
+        {{
+          t('admin.finance.unresolvedCashOuts', {
+            count: overview.unresolvedCashOutCount,
+            amount: formatAmount(overview.unresolvedCashOutAmount),
+          })
+        }}
+      </q-banner>
+
       <!-- Overview -->
       <div v-if="overview" class="row q-col-gutter-md q-mb-lg" data-testid="finance-overview">
         <div v-for="m in overviewMetrics" :key="m.key" class="col-12 col-sm-6 col-md-4">

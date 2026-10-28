@@ -58,6 +58,7 @@ class RevenueReportingServiceTest {
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private ConfigService configService;
     @Mock private com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository sessionPackPurchaseRepository;
+    @Mock private com.softropic.skillars.platform.payment.repo.CashOutReconciliationRepository cashOutReconciliationRepository;
 
     private RevenueReportingService service;
 
@@ -71,12 +72,12 @@ class RevenueReportingServiceTest {
             bookingPaymentRepository, coachPayoutRepository, parentCreditLedgerRepository, bookingRepository,
             paymentCoachSubscriptionRepository, paymentPlayerSubscriptionRepository,
             coachReliabilityStrikeRepository, playerProfileRepository, coachProfileRepository,
-            sessionPackPurchaseRepository, configService
+            sessionPackPurchaseRepository, cashOutReconciliationRepository, configService
         );
     }
 
     private void stubConfigRates() {
-        when(configService.getString("platform.commission.rate")).thenReturn("0.10");
+        org.mockito.Mockito.lenient().when(configService.getString("platform.commission.rate")).thenReturn("0.10");
         when(configService.getString("payment.stripe.feeRate")).thenReturn("0.014");
         when(configService.getString("payment.stripe.feeFixed")).thenReturn("0.25");
     }
@@ -251,10 +252,9 @@ class RevenueReportingServiceTest {
     @Test
     void adminOverview_grossIncludesPacks_commissionUsesStampedRates_feesEstimateCardMoneyOnly() {
         stubConfigRates();
-        BigDecimal live = new BigDecimal("0.10");
         when(bookingPaymentRepository.sumTotalGross(from, to)).thenReturn(Optional.of(new BigDecimal("200.00")));
         when(sessionPackPurchaseRepository.sumAmountChargedForPeriod(from, to)).thenReturn(new BigDecimal("300.00"));
-        when(bookingPaymentRepository.sumCommissionAtStampedRate(from, to, live)).thenReturn(new BigDecimal("15.00"));
+        when(coachPayoutRepository.sumReleasedCommissionForPeriod(from, to)).thenReturn(new BigDecimal("15.00"));
         when(bookingPaymentRepository.sumCardChargedForPeriod(from, to)).thenReturn(new BigDecimal("150.00"));
         when(bookingPaymentRepository.countDistinctCardChargesForPeriod(from, to)).thenReturn(2L);
         when(sessionPackPurchaseRepository.countChargedForPeriod(from, to)).thenReturn(1L);
@@ -266,7 +266,7 @@ class RevenueReportingServiceTest {
         AdminFinanceOverviewDto dto = service.getAdminOverview(from, to);
 
         assertThat(dto.totalGrossVolume()).isEqualByComparingTo("500.00");
-        // Straight from the stamped-rate query, NOT gross (500) x live rate (0.10) = 50.
+        // Straight from the released coach payouts' stamped commission, NOT gross (500) x live rate (0.10) = 50.
         assertThat(dto.totalCommissionCollected()).isEqualByComparingTo("15.00");
         // (150 card + 300 pack) x 0.014 + 0.25 x (2 + 1) = 6.30 + 0.75
         assertThat(dto.totalStripeFees()).isEqualByComparingTo("7.05");

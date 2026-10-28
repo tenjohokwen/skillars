@@ -421,6 +421,17 @@ class StripePaymentGatewayTest {
     }
 
     @Test
+    void refund_idempotencyConflict_isOutcomeUnknown_soCreditIsNeverRestoredWhileAnotherAttemptRuns()
+            throws StripeException {
+        when(stripeClient.createRefund(any(com.stripe.param.RefundCreateParams.class), any(String.class)))
+            .thenThrow(new com.stripe.exception.IdempotencyException("key in use", "req_1", "idempotency_key_in_use", 409));
+
+        assertThatThrownBy(() -> stripePaymentGateway.refund("pi_1", new BigDecimal("5.00"), "cashout-k"))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessageContaining("payment.refundOutcomeUnknown");
+    }
+
+    @Test
     void refund_networkFailure_isOutcomeUnknown_notAFailure() throws StripeException {
         when(stripeClient.createRefund(any(com.stripe.param.RefundCreateParams.class), any(String.class)))
             .thenThrow(new com.stripe.exception.ApiConnectionException("timeout"));

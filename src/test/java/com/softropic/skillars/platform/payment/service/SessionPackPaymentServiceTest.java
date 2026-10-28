@@ -48,6 +48,7 @@ class SessionPackPaymentServiceTest {
     @Mock CoachProfileRepository coachProfileRepository;
     @Mock PlayerProfileRepository playerProfileRepository;
     @Mock PaymentGateway paymentGateway;
+    @Mock com.softropic.skillars.platform.config.service.ConfigService configService;
     @Mock StripeClient stripeClient;
     @Mock PessimisticLockRetryer lockRetryer;
     @Mock RefundReconciliationService refundReconciliationService;

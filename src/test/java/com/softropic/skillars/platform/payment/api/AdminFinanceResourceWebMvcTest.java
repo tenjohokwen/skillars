@@ -61,7 +61,7 @@ class AdminFinanceResourceWebMvcTest {
 
     private static final AdminFinanceOverviewDto ZERO_OVERVIEW = new AdminFinanceOverviewDto(
         BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-        BigDecimal.ZERO, Map.of(), Map.of()
+        BigDecimal.ZERO, Map.of(), Map.of(), 0L, BigDecimal.ZERO
     );
 
     // ── Role enforcement ─────────────────────────────────────────

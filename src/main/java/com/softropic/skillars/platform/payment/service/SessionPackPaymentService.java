@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodResponse;
@@ -55,6 +56,7 @@ public class SessionPackPaymentService {
     private final StripeClient stripeClient;
     private final PessimisticLockRetryer lockRetryer;
     private final RefundReconciliationService refundReconciliationService;
+    private final ConfigService configService;
 
     /**
      * Purchase a session pack for a player.
@@ -280,10 +282,31 @@ public class SessionPackPaymentService {
         purchase.setPackTierId(tier.getPackTierId());
         purchase.setPricePerSession(tier.getPricePerSession());
         purchase.setAmountCharged(tier.getTotalPrice());
+        // feat/coach-payouts-pack-and-credit (V186): what each completed session's coach payout is
+        // computed from — locked here, because the tier and platform.commission.rate can both change
+        // before the pack's sessions are played.
+        purchase.setSessionCount(tier.getSessionCount());
+        purchase.setCommissionRate(currentCommissionRate());
         purchase.setRemainingSessions(tier.getSessionCount());
         purchase.setExpiresAt(Instant.now().plus(60, ChronoUnit.DAYS));
         purchase.setStripePaymentIntentId(paymentIntentId);
         return sessionPackPurchaseRepository.save(purchase);
+    }
+
+    /**
+     * {@code platform.commission.rate} now, or null when unreadable — a malformed config value must not
+     * fail a purchase the payer has already been charged for; the payout then falls back to the live
+     * rate, as for a pre-V186 pack (mirrors {@code BookingPaymentPersistenceService.currentCommissionRate}).
+     */
+    private BigDecimal currentCommissionRate() {
+        try {
+            String raw = configService.getString("platform.commission.rate");
+            return raw == null ? null : new BigDecimal(raw.strip());
+        } catch (IllegalStateException | NumberFormatException e) {
+            log.error("Could not stamp session_pack_purchases.commission_rate — platform.commission.rate "
+                + "unreadable ({}); leaving NULL, pack payouts will fall back to the live rate", e.getMessage());
+            return null;
+        }
     }
 
     private SessionPackPurchaseResponse toResponse(SessionPackPurchase purchase, String label, int sessionCount) {

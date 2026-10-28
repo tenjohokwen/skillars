@@ -25,6 +25,8 @@ const OVERVIEW = {
   totalStripeFees: 20.1,
   activeCoachSubscriptions: { ACADEMY: 3 },
   activePlayerSubscriptions: {},
+  unresolvedCashOutCount: 0,
+  unresolvedCashOutAmount: 0,
 }
 
 const REVENUE = {
@@ -77,6 +79,21 @@ describe('AdminFinancePage.vue', () => {
       'refundCredit',
       'cashOuts',
     ])
+  })
+
+  it('warns about cash-outs whose Stripe refund is still unconfirmed, and only then', async () => {
+    let wrapper = await mountPage()
+    expect(wrapper.find('[data-testid="finance-unresolved-cash-outs"]').exists()).toBe(false)
+
+    adminApi.getFinanceOverview.mockResolvedValue({
+      ...OVERVIEW,
+      unresolvedCashOutCount: 2,
+      unresolvedCashOutAmount: 145.5,
+    })
+    wrapper = await mountPage()
+    const banner = wrapper.find('[data-testid="finance-unresolved-cash-outs"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('admin.finance.unresolvedCashOuts')
   })
 
   it('does not show the always-zero subscription revenue figure', async () => {

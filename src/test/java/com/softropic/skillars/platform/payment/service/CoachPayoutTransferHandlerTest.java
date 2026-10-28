@@ -36,6 +36,7 @@ import static org.mockito.Mockito.when;
 class CoachPayoutTransferHandlerTest {
 
     @Mock CoachPayoutRepository coachPayoutRepository;
+    @Mock com.softropic.skillars.platform.payment.repo.CoachPayoutFreezeRepository coachPayoutFreezeRepository;
     @Mock PaymentGateway paymentGateway;
 
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
@@ -47,7 +48,8 @@ class CoachPayoutTransferHandlerTest {
 
     @BeforeEach
     void setUp() {
-        handler = new CoachPayoutTransferHandler(coachPayoutRepository, paymentGateway, meterRegistry, objectMapper);
+        handler = new CoachPayoutTransferHandler(coachPayoutRepository, coachPayoutFreezeRepository, paymentGateway,
+            meterRegistry, objectMapper);
     }
 
     private String payload() throws Exception {
@@ -80,6 +82,30 @@ class CoachPayoutTransferHandlerTest {
         assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
         assertThat(r.getStripeTransferId()).isEqualTo("tr_1");
         assertThat(r.getReleasedAt()).isNotNull();
+    }
+
+    @Test
+    void coachUnderSafetyHold_atReleaseTime_freezesInsteadOfTransferring() throws Exception {
+        CoachPayout r = row(CoachPayoutStatus.PENDING_RELEASE, Instant.now().minus(1, ChronoUnit.HOURS));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+        when(coachPayoutFreezeRepository.isFrozenForShare(coachId)).thenReturn(true);
+
+        handler.handle(payload());
+
+        verify(paymentGateway, never()).transferToCoach(any(), any(), any(), any());
+        assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.FROZEN);
+        assertThat(r.getLastError()).isEqualTo(CoachPayoutFreezeService.REASON_SAFETY_HOLD);
+        assertThat(meterRegistry.counter(CoachPayoutTransferHandler.METRIC_FROZEN).count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void reDriveOfFrozenRow_isNoOp() throws Exception {
+        when(coachPayoutRepository.findByIdForUpdate(bookingId))
+            .thenReturn(Optional.of(row(CoachPayoutStatus.FROZEN, Instant.now().minusSeconds(1))));
+
+        handler.handle(payload());
+
+        verify(paymentGateway, never()).transferToCoach(any(), any(), any(), any());
     }
 
     @Test

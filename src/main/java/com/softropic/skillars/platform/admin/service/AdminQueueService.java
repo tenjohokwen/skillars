@@ -209,6 +209,11 @@ public class AdminQueueService {
                 yield "URGENT — coach under child-safety hold; booking " + referenceId + " is " + state
                     + " and could not be cancelled. Contact the parent: " + parentContact(referenceId);
             }
+            // feat/coach-payouts-pack-and-credit: referenceId is the cash-out id
+            // (payment.cash_out_reconciliations); reason carries the last refund error.
+            case CASH_OUT_UNRESOLVED -> "Credit cash-out " + referenceId + ": Stripe refund not confirmed"
+                + (reason != null ? " (" + reason + ")" : "")
+                + " — wallet debited, reconcile in payment.cash_out_reconciliations";
             default -> "";
         };
     }
@@ -305,6 +310,7 @@ public class AdminQueueService {
             // SUBSCRIPTION_ORPHANED.
             counts.getOrDefault(AdminAlertType.SUBSCRIPTION_ORPHANED, 0L),
             counts.getOrDefault(AdminAlertType.SAFETY_HOLD_BOOKING, 0L),
+            counts.getOrDefault(AdminAlertType.CASH_OUT_UNRESOLVED, 0L),
             total);
     }
 }

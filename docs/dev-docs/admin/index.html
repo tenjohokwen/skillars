@@ -146,7 +146,7 @@
       <thead><tr><th>Entity</th><th>Table</th><th>Purpose</th></tr></thead>
       <tbody>
         <tr><td><code>AdminActionLog</code></td><td><code>admin.admin_action_log</code></td><td>Immutable audit trail (admin id, <code>AdminActionType</code>, reference id, reason). <code>action_type</code> is CHECK-constrained; last widened by V171 (<code>COACH_TIER_CHANGE</code>, <code>USER_SUSPEND</code>, <code>USER_REACTIVATE</code>, <code>USER_LOGIN_UNLOCK</code>), before that V162 (<code>BOOKING_FORCE_COMPLETE</code>).</td></tr>
-        <tr><td><code>AdminAlert</code></td><td><code>admin.admin_alerts</code></td><td>Backs the moderation queue. Partial unique index <code>admin_alerts_unique_open_per_ref (reference_id, type) WHERE status='OPEN'</code>. <code>type</code>/<code>reference_type</code> CHECKs last widened by V152 (<code>GDPR_ERASURE_DEADLINE</code> / <code>GDPR_REQUEST</code>) V153 (<code>SUBSCRIPTION_ORPHANED</code>) and V185 (<code>SAFETY_HOLD_BOOKING</code>, reference type <code>BOOKING</code>).</td></tr>
+        <tr><td><code>AdminAlert</code></td><td><code>admin.admin_alerts</code></td><td>Backs the moderation queue. Partial unique index <code>admin_alerts_unique_open_per_ref (reference_id, type) WHERE status='OPEN'</code>. <code>type</code>/<code>reference_type</code> CHECKs last widened by V152 (<code>GDPR_ERASURE_DEADLINE</code> / <code>GDPR_REQUEST</code>) V153 (<code>SUBSCRIPTION_ORPHANED</code>) V185 (<code>SAFETY_HOLD_BOOKING</code>, reference type <code>BOOKING</code>) and V186 (<code>CASH_OUT_UNRESOLVED</code> / <code>CASH_OUT</code>).</td></tr>
         <tr><td><code>Dispute</code></td><td><code>admin.disputes</code></td><td>A booking dispute from raise to RESOLVED/DISMISSED; optimistic-locked (<code>@Version</code>).</td></tr>
         <tr><td><code>Appeal</code></td><td><code>admin.appeals</code> (V172)</td><td>One appeal against one enforcement action: <code>subject_type</code> + <code>subject_id</code> + <code>enforced_at</code>, status OPEN/UPHELD/OVERTURNED, <code>reversal_applied</code>. Unique <code>uq_appeals_per_enforcement</code> and partial unique <code>uq_appeals_one_open_per_subject</code>; CHECK <code>appeals_decision_consistent</code>. Deliberately no <code>@Version</code>.</td></tr>
         <tr><td><code>GdprRequest</code></td><td><code>admin.gdpr_requests</code></td><td>One EXPORT or ERASURE request: PENDING → PROCESSING → COMPLETED/FAILED, signed <code>download_url</code> + <code>expires_at</code> for exports, <code>retry_count</code> + <code>failed_at</code> (V154) for the retry sweep, and nullable <code>player_id</code> (V172) — non-null means a parent-requested, child-scoped request where <code>user_id</code> is the <em>parent</em>. Partial unique indexes <code>idx_gdpr_requests_unique_active_self</code> / <code>_player</code> allow one active request per type per subject.</td></tr>
@@ -248,6 +248,7 @@
         <tr><td><code>ReviewFlaggedEvent</code></td><td>Consumed (from <code>reviews</code>)</td><td>REVIEW_FLAG alert.</td></tr>
         <tr><td><code>StrikeThresholdReachedEvent</code></td><td>Consumed (from <code>payment</code>; also re-published by <code>reinstateCoach</code>)</td><td>STRIKE_THRESHOLD alert.</td></tr>
         <tr><td><code>CoachSubscriptionOrphanedEvent</code></td><td>Consumed (from <code>payment</code>'s Stripe webhook handling)</td><td>SUBSCRIPTION_ORPHANED alert (reference type COACH).</td></tr>
+        <tr><td><code>CashOutRefundUnresolvedEvent</code></td><td>Consumed (from <code>payment</code>'s cash-out reconciliation)</td><td>CASH_OUT_UNRESOLVED alert (reference type CASH_OUT, reference id = cash-out id): a credit cash-out's Stripe refund was not confirmed and the wallet stays debited.</td></tr>
         <tr><td><code>DisputeRaisedEvent</code></td><td>Published &amp; consumed (internal)</td><td>DISPUTE_RAISED alert, keyed on the booking id.</td></tr>
         <tr><td><code>BookingCancelledByAdminEvent</code></td><td>Published (to <code>payment</code>)</td><td>Published by <code>booking.BookingService.cancelBookingAsAdmin</code>, one per booking a coach suspension / safety hold cancels. Carries the amount actually paid, <code>refundEligible</code> (payment was captured) and the neutral-notice data; consumed by <code>RefundEnqueueListener</code> (wallet refund), <code>CancellationRefundService</code> (pack restore, no strike) and <code>BookingEmailListener</code> (<code>BOOKING_CANCELLED_COACH_UNAVAILABLE</code>).</td></tr>
         <tr><td><code>GdprExportRequestedEvent</code>, <code>GdprErasureRequestedEvent</code></td><td>Published &amp; consumed (internal, <code>AFTER_COMMIT</code>)</td><td>Carry <code>requestId</code>, <code>userId</code> and nullable <code>playerId</code>.</td></tr>
@@ -595,7 +596,7 @@ sequenceDiagram
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Last verified against master <code>5d85d8ec</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>993c6f57</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

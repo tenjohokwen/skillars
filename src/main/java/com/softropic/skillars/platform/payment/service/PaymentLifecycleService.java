@@ -136,6 +136,29 @@ public class PaymentLifecycleService {
         log.warn("Settle aborted: bookingId={} reason={}", bookingId, reservation);
     }
 
+    /**
+     * feat/coach-payouts-pack-and-credit (C3 item 3, the #318 follow-up): the wallet balance a settlement
+     * splits on. When the payer has credit, it is re-read under the per-payer wallet lock
+     * ({@link CreditWalletService#lockAndGetBalance}, the {@code stripe_customers} row lock a cash-out
+     * takes) and that lock is held until this listener's transaction commits — i.e. through the
+     * {@code BOOKING_DEDUCTION} write — so a concurrent cash-out (or a second settlement for the same
+     * payer) can no longer spend the same credit and overdraw the wallet.
+     *
+     * <p>Disclosed trade-off: on a mixed credit + card settlement the lock is still held while Stripe is
+     * called. A cash-out for the same payer during those seconds waits through its NOWAIT retry budget
+     * (~3s) and may get a retryable 409, and a second settlement for the same payer simply waits (its
+     * lock is blocking, so an accepted booking is never stranded by contention); the alternative — debiting the credit in its own committed
+     * transaction before the charge — would strand debited credit on a crash between the two. With no
+     * credit (the common case) no lock is taken at all: there is nothing to overdraw.
+     */
+    private BigDecimal walletBalanceForSettlement(Long parentId) {
+        BigDecimal unlocked = creditWalletService.getBalance(parentId);
+        if (unlocked.signum() <= 0) {
+            return unlocked;
+        }
+        return creditWalletService.lockAndGetBalance(parentId);
+    }
+
     // ─── Single booking ───────────────────────────────────────────────────────
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -197,7 +220,7 @@ public class PaymentLifecycleService {
     }
 
     private void handleCreditBasedBooking(BookingAcceptedEvent event) {
-        BigDecimal balance = creditWalletService.getBalance(event.getParentId());
+        BigDecimal balance = walletBalanceForSettlement(event.getParentId());
         BigDecimal creditToUse = balance.min(event.getSessionPrice());
         BigDecimal stripeAmount = creditToUse.compareTo(event.getSessionPrice()) >= 0
             ? BigDecimal.ZERO
@@ -212,9 +235,10 @@ public class PaymentLifecycleService {
             // DEADLOCK CONSTRAINT: reserveCapture is REQUIRES_NEW and takes a PESSIMISTIC_WRITE
             // lock on booking.bookings on a SECOND connection. This transaction must therefore
             // hold no lock and no uncommitted write on that booking row here — today it only
-            // issues reads. If a future edit adds a write above this line, it deadlocks with NO
-            // timeout: a plain UPDATE ignores the jakarta.persistence.lock.timeout=0 (NOWAIT) hint,
-            // which applies only to the locked SELECT.
+            // issues reads, plus (when the payer has credit) the stripe_customers wallet lock, which
+            // reserveCapture never touches. If a future edit adds a write above this line, it
+            // deadlocks with NO timeout: a plain UPDATE ignores the jakarta.persistence.lock.timeout=0
+            // (NOWAIT) hint, which applies only to the locked SELECT.
             CaptureReservation reservation = reserveOrReport(
                 event.getBookingId(), creditToUse, stripeAmount, null);
             if (reservation != CaptureReservation.RESERVED) {
@@ -336,7 +360,7 @@ public class PaymentLifecycleService {
 
         // feat/coach-workflow-gaps A22: the split rule lives in CreditCardSplit so the parent's pre-submit
         // batch quote (BatchPaymentQuoteService) computes exactly this figure.
-        BigDecimal balance = creditWalletService.getBalance(event.getParentId());
+        BigDecimal balance = walletBalanceForSettlement(event.getParentId());
         CreditCardSplit split = CreditCardSplit.of(balance, creditSubtotal);
         BigDecimal creditToUse = split.creditApplied();
         BigDecimal stripeAmount = split.cardCharge();

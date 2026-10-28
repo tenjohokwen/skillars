@@ -371,6 +371,7 @@ const typeLabels = computed(() => ({
   GDPR_ERASURE_DEADLINE: t('admin.moderation.types.GDPR_ERASURE_DEADLINE'),
   SUBSCRIPTION_ORPHANED: t('admin.moderation.types.SUBSCRIPTION_ORPHANED'),
   SAFETY_HOLD_BOOKING: t('admin.moderation.types.SAFETY_HOLD_BOOKING'),
+  CASH_OUT_UNRESOLVED: t('admin.moderation.types.CASH_OUT_UNRESOLVED'),
 }))
 
 const typeOptions = computed(() => [
@@ -388,6 +389,7 @@ const summaryBuckets = computed(() => [
   { key: 'gdprErasureDeadlines', label: typeLabels.value.GDPR_ERASURE_DEADLINE },
   { key: 'subscriptionOrphaned', label: typeLabels.value.SUBSCRIPTION_ORPHANED },
   { key: 'safetyHoldBookings', label: typeLabels.value.SAFETY_HOLD_BOOKING },
+  { key: 'cashOutUnresolved', label: typeLabels.value.CASH_OUT_UNRESOLVED },
   { key: 'total', label: t('admin.moderation.totalOpen') },
 ])
 

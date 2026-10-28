@@ -106,7 +106,7 @@ class CoachPayoutOutboxIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void fullyCreditFundedBooking_writesCancelledRow_andNeverEnqueues() {
+    void nothingChargedBooking_writesCancelledRow_andNeverEnqueues() {
         seedCapturedBookingPayment("0.00", "0.10");
 
         transactionTemplate.execute(s -> {
@@ -116,7 +116,7 @@ class CoachPayoutOutboxIT extends AbstractIntegrationTest {
 
         CoachPayout row = coachPayoutRepository.findById(bookingId).orElseThrow();
         assertThat(row.getStatus()).isEqualTo(CoachPayoutStatus.CANCELLED);
-        assertThat(row.getLastError()).isEqualTo("NO_STRIPE_CHARGE");
+        assertThat(row.getLastError()).isEqualTo(CoachPayoutOutboxSupport.REASON_NOTHING_CHARGED);
         assertThat(myOutboxRows()).isZero();
     }
 

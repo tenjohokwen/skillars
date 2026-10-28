@@ -17,4 +17,6 @@ public record AdminQueueSummaryDto(
     long subscriptionOrphaned,
     // C2: urgent bookings a coach child-safety hold could not cancel (live session / payment in flight).
     long safetyHoldBookings,
+    // feat/coach-payouts-pack-and-credit: CASH_OUT_UNRESOLVED — same reasoning, its own bucket.
+    long cashOutUnresolved,
     long total) {}

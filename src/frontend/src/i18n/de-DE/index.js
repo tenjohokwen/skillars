@@ -1682,6 +1682,7 @@ export default {
         GDPR_ERASURE_DEADLINE: 'DSGVO-Löschung überfällig',
         SAFETY_HOLD_BOOKING: 'Dringend: Buchung unter Schutzsperre',
         SUBSCRIPTION_ORPHANED: 'Verwaistes Abonnement',
+        CASH_OUT_UNRESOLVED: 'Unbestätigte Guthaben-Auszahlung',
       },
     },
     reviewModeration: {
@@ -1883,6 +1884,8 @@ export default {
       totalStripeFees: 'Stripe-Gebühren (geschätzt)',
       totalRefundCredit: 'Als Guthaben erstattet',
       totalCashOuts: 'Guthabenauszahlungen',
+      unresolvedCashOuts:
+        'Guthabenauszahlungen ohne Stripe-Bestätigung: {count} ({amount}). Die Guthaben der Zahler sind belastet; sie werden automatisch erneut geprüft, und unbeantwortete erscheinen in der Admin-Warteschlange.',
       coachSubscriptions: 'Aktive Coach-Abonnements',
       playerSubscriptions: 'Aktive Spieler-Abonnements',
       noSubscriptions: 'Keine',

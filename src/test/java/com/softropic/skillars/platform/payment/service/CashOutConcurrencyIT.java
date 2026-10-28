@@ -112,7 +112,7 @@ class CashOutConcurrencyIT extends BasePaymentIT {
             // Contender read 100.00 before the lock; it must re-check under the lock and refuse.
             Future<?> contender = pool.submit(() -> {
                 creditWalletService.debitForCashOut(PARENT_ID, UUID.randomUUID(),
-                    new BigDecimal("47.50"), new BigDecimal("2.50"));
+                    new BigDecimal("47.50"), new BigDecimal("2.50"), "pi_cashout_it");
                 return null;
             });
 
