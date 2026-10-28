@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.config.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.config.config.ConfigProperties;
+import com.softropic.skillars.platform.config.contract.AdminConfigEntryDto;
 import com.softropic.skillars.platform.config.contract.ConfigValueResponse;
 import com.softropic.skillars.platform.config.contract.ConfigValueType;
 import com.softropic.skillars.platform.config.repo.PlatformConfig;
@@ -21,10 +22,14 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
@@ -251,6 +256,52 @@ public class ConfigService {
             throw new ResourceNotFoundException("ConfigEntry", key);
         }
         return configMapper.toResponse(entry);
+    }
+
+    /**
+     * Admin config editor (FR-ADM-006): every stored {@code platform_config} row plus every
+     * {@link ConfigBounds#HAS_CODE_DEFAULT} key that has no row yet (those are writable through
+     * {@link #updateConfig}'s upsert path, so the editor must be able to reach them), each annotated
+     * with the {@link ConfigBounds} range {@link #updateConfig} enforces. Sorted by key.
+     *
+     * <p>Reads the table directly rather than the cache: this is an operator view, and showing the
+     * committed value (not a possibly TTL-stale snapshot from this node) is the point of it. Read-only,
+     * low-frequency and admin-only; the table holds a few hundred rows at most.
+     */
+    public List<AdminConfigEntryDto> listForAdmin() {
+        Map<String, ConfigBounds.BoundedKey> bounds = new HashMap<>();
+        ConfigBounds.ALL.forEach(b -> bounds.put(b.key(), b));
+
+        List<AdminConfigEntryDto> result = new ArrayList<>();
+        Set<String> storedKeys = new HashSet<>();
+        for (PlatformConfig pc : configRepository.findAll()) {
+            storedKeys.add(pc.getKey());
+            result.add(toAdminEntry(pc.getKey(), pc.getValue(),
+                pc.getValueType() != null ? pc.getValueType().name() : null,
+                pc.getDescription(), pc.getUpdatedAt(), true, bounds.get(pc.getKey())));
+        }
+        for (String key : ConfigBounds.HAS_CODE_DEFAULT) {
+            if (!storedKeys.contains(key)) {
+                result.add(toAdminEntry(key, null, ConfigValueType.LONG.name(), null, null, false,
+                    bounds.get(key)));
+            }
+        }
+        result.sort(Comparator.comparing(AdminConfigEntryDto::key));
+        return result;
+    }
+
+    private static AdminConfigEntryDto toAdminEntry(String key, String value, String valueType,
+                                                    String description, Instant updatedAt, boolean stored,
+                                                    ConfigBounds.BoundedKey bound) {
+        Long codeDefault = bound != null && ConfigBounds.HAS_CODE_DEFAULT.contains(key)
+            ? bound.defaultValue() : null;
+        return new AdminConfigEntryDto(key, value, valueType, description, updatedAt,
+            bound != null ? bound.min() : null,
+            bound != null ? bound.max() : null,
+            bound != null ? bound.note() : null,
+            bound != null && bound.failFast(),
+            stored,
+            codeDefault);
     }
 
     /**

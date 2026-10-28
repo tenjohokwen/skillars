@@ -1,10 +1,16 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.admin.contract.AdminActionType;
+import com.softropic.skillars.platform.admin.contract.AdminBookingLookupDto;
 import com.softropic.skillars.platform.admin.repo.AdminActionLog;
 import com.softropic.skillars.platform.admin.repo.AdminActionLogRepository;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.ForceCompleteOutcome;
+import com.softropic.skillars.platform.booking.repo.Booking;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.repo.SessionCompletionData;
+import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
 import com.softropic.skillars.platform.booking.service.BookingCompletionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,9 +19,11 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -24,6 +32,8 @@ class AdminBookingCompletionServiceTest {
 
     @Mock private BookingCompletionService bookingCompletionService;
     @Mock private AdminActionLogRepository adminActionLogRepository;
+    @Mock private BookingRepository bookingRepository;
+    @Mock private SessionCompletionDataRepository completionDataRepository;
 
     private AdminBookingCompletionService service;
 
@@ -32,7 +42,8 @@ class AdminBookingCompletionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new AdminBookingCompletionService(bookingCompletionService, adminActionLogRepository);
+        service = new AdminBookingCompletionService(bookingCompletionService, adminActionLogRepository,
+            bookingRepository, completionDataRepository);
     }
 
     @Test
@@ -91,5 +102,55 @@ class AdminBookingCompletionServiceTest {
         verify(adminActionLogRepository).save(captor.capture());
         assertThat(captor.getValue().getReason())
             .isEqualTo("misdirected ticket [outcome: NOT_STUCK]");
+    }
+
+    @Test
+    void lookup_stuckBookingWithoutCompletionRow_isForceCompletable() {
+        when(bookingRepository.findById(BOOKING_ID)).thenReturn(Optional.of(booking("COMPLETED_PENDING_CONFIRMATION")));
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.empty());
+
+        AdminBookingLookupDto dto = service.lookup(BOOKING_ID);
+
+        assertThat(dto.bookingId()).isEqualTo(BOOKING_ID);
+        assertThat(dto.status()).isEqualTo("COMPLETED_PENDING_CONFIRMATION");
+        assertThat(dto.playerId()).isEqualTo(42L);
+        assertThat(dto.completionRecorded()).isFalse();
+        assertThat(dto.forceCompletable()).isTrue();
+    }
+
+    @Test
+    void lookup_pendingConfirmationWithCompletionRow_isNotForceCompletable() {
+        when(bookingRepository.findById(BOOKING_ID)).thenReturn(Optional.of(booking("COMPLETED_PENDING_CONFIRMATION")));
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(new SessionCompletionData()));
+
+        AdminBookingLookupDto dto = service.lookup(BOOKING_ID);
+
+        assertThat(dto.completionRecorded()).isTrue();
+        assertThat(dto.forceCompletable()).isFalse();
+    }
+
+    @Test
+    void lookup_otherStatus_isNotForceCompletable() {
+        when(bookingRepository.findById(BOOKING_ID)).thenReturn(Optional.of(booking("UPCOMING")));
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.empty());
+
+        assertThat(service.lookup(BOOKING_ID).forceCompletable()).isFalse();
+    }
+
+    @Test
+    void lookup_unknownBooking_throwsNotFound() {
+        when(bookingRepository.findById(BOOKING_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.lookup(BOOKING_ID)).isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    private static Booking booking(String status) {
+        Booking b = new Booking();
+        b.setId(BOOKING_ID);
+        b.setStatus(status);
+        b.setPlayerId(42L);
+        b.setParentId(7L);
+        b.setCoachId(UUID.randomUUID());
+        return b;
     }
 }

@@ -150,4 +150,30 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
         + "v.version = v.version + 1, v.updatedAt = CURRENT_TIMESTAMP "
         + "WHERE v.id = :id AND v.operationalState = com.softropic.skillars.platform.video.contract.OperationalState.FAILED")
     int claimFailedForRetry(@Param("id") UUID id);
+
+    /**
+     * Admin video review queue (story 6.3 / FR-ADM-002). Read-only, no lock: every action the queue
+     * links to goes through its own existing mutation, each of which re-reads the row. The three
+     * flags select which "needs attention" conditions match; DELETED/PURGED rows never do.
+     * No dedicated index — admin-only, paged, low-frequency; see the PR notes.
+     */
+    @Query(value = """
+        SELECT v FROM Video v
+        WHERE v.operationalState NOT IN (com.softropic.skillars.platform.video.contract.OperationalState.DELETED,
+                                         com.softropic.skillars.platform.video.contract.OperationalState.PURGED)
+          AND ((:locked = true AND v.operationalState = com.softropic.skillars.platform.video.contract.OperationalState.LOCKED)
+            OR (:failed = true AND v.operationalState = com.softropic.skillars.platform.video.contract.OperationalState.FAILED)
+            OR (:blocked = true AND v.accessState = com.softropic.skillars.platform.video.contract.AccessState.BLOCKED))
+        ORDER BY v.updatedAt DESC, v.id
+        """,
+        countQuery = """
+        SELECT COUNT(v) FROM Video v
+        WHERE v.operationalState NOT IN (com.softropic.skillars.platform.video.contract.OperationalState.DELETED,
+                                         com.softropic.skillars.platform.video.contract.OperationalState.PURGED)
+          AND ((:locked = true AND v.operationalState = com.softropic.skillars.platform.video.contract.OperationalState.LOCKED)
+            OR (:failed = true AND v.operationalState = com.softropic.skillars.platform.video.contract.OperationalState.FAILED)
+            OR (:blocked = true AND v.accessState = com.softropic.skillars.platform.video.contract.AccessState.BLOCKED))
+        """)
+    Page<Video> findAdminReviewQueue(@Param("locked") boolean locked, @Param("failed") boolean failed,
+                                     @Param("blocked") boolean blocked, Pageable pageable);
 }

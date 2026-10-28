@@ -299,6 +299,47 @@ class ConfigResourceIT extends AbstractIntegrationTest {
                 .isInstanceOf(HttpClientErrorException.Forbidden.class);
     }
 
+    // Admin config editor (FR-ADM-006): list endpoint backing AdminConfigPage.
+    @Test
+    @SuppressWarnings("unchecked")
+    void listAsAdmin_returnsStoredRowsWithBoundsAndUnseededCodeDefaultKeys() {
+        String url = "http://localhost:" + port + "/api/config/values";
+
+        ResponseEntity<List> response = restTemplate.exchange(
+                url, HttpMethod.GET, new HttpEntity<>(adminHeaders), List.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<String, Object>> rows = response.getBody();
+        assertThat(rows).isNotNull().isNotEmpty();
+
+        Map<String, Object> seeded = rows.stream()
+                .filter(r -> "disputes.submissionWindowDays".equals(r.get("key"))).findFirst().orElseThrow();
+        assertThat(seeded.get("stored")).isEqualTo(true);
+        assertThat(seeded.get("valueType")).isNotNull();
+        assertThat(seeded.get("min")).isNotNull();
+        assertThat(seeded.get("max")).isNotNull();
+
+        Map<String, Object> unbounded = rows.stream()
+                .filter(r -> "coach.tier.scout.drill_library".equals(r.get("key"))).findFirst().orElseThrow();
+        assertThat(unbounded.get("value")).isEqualTo("true");
+        assertThat(unbounded.get("min")).isNull();
+
+        Map<String, Object> unseeded = rows.stream()
+                .filter(r -> "platform.radar_composite_lock_timeout_seconds".equals(r.get("key")))
+                .findFirst().orElseThrow();
+        assertThat(unseeded.get("stored")).isEqualTo(false);
+        assertThat(unseeded.get("codeDefault")).isNotNull();
+    }
+
+    @Test
+    void listAsNonAdmin_returns403() {
+        String url = "http://localhost:" + port + "/api/config/values";
+
+        assertThatThrownBy(() -> restTemplate.exchange(
+                url, HttpMethod.GET, new HttpEntity<>(userHeaders), List.class))
+                .isInstanceOf(HttpClientErrorException.Forbidden.class);
+    }
+
     private HttpHeaders loginAs(String login, String password, String authUrl, RestTemplate restTemplate) {
         HttpHeaders loginHeaders = new HttpHeaders();
         loginHeaders.setContentType(MediaType.APPLICATION_JSON);

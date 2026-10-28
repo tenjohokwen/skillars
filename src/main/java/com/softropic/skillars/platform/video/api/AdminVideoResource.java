@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.video.service.AdminVideoService;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -21,6 +22,26 @@ import java.util.UUID;
 public class AdminVideoResource {
 
     private final AdminVideoService adminVideoService;
+
+    /**
+     * Admin video review queue (story 6.3 / FR-ADM-002). {@code filter}: ATTENTION (default), LOCKED,
+     * FAILED or BLOCKED — an unknown value is a 400 via the standard type-mismatch handler.
+     */
+    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @Observed(name = "video.admin.reviewQueue")
+    @GetMapping("/videos")
+    public ResponseEntity<Page<AdminVideoQueueItemDto>> reviewQueue(
+            @RequestParam(defaultValue = "ATTENTION") AdminVideoQueueFilter filter,
+            @RequestParam(defaultValue = "0") int page) {
+        return ResponseEntity.ok(adminVideoService.getReviewQueue(filter, page));
+    }
+
+    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @Observed(name = "video.admin.getVideo")
+    @GetMapping("/videos/{videoId}")
+    public ResponseEntity<AdminVideoQueueItemDto> getVideo(@PathVariable UUID videoId) {
+        return ResponseEntity.ok(adminVideoService.getVideo(videoId));
+    }
 
     @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
     @Observed(name = "video.admin.setAccessState")

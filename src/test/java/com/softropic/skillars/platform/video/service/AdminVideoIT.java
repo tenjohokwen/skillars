@@ -37,9 +37,11 @@ class AdminVideoIT extends BaseVideoIT {
     @Autowired PlaybackTokenRepository playbackTokenRepository;
     @Autowired VideoWebhookEventRepository webhookEventRepository;
     @Autowired ReconciliationIncidentRepository incidentRepository;
+    @Autowired VideoModerationScanRepository moderationScanRepository;
 
     @BeforeEach
     void setUp() {
+        moderationScanRepository.deleteAll();
         incidentRepository.deleteAll();
         playbackTokenRepository.deleteAll();
         uploadSessionRepository.deleteAll();
@@ -163,6 +165,65 @@ class AdminVideoIT extends BaseVideoIT {
     }
 
     // ── helpers ────────────────────────────────────────────────────────────
+
+    // ---- admin video review queue (story 6.3 / FR-ADM-002) ----
+
+    @Test
+    void getReviewQueue_attention_returnsLockedFailedAndBlocked_excludingHealthyAndDeleted() {
+        Video locked = seedVideo(OperationalState.LOCKED, AccessState.ACTIVE, "asset-q-locked");
+        Video failed = seedVideo(OperationalState.FAILED, AccessState.ACTIVE, "asset-q-failed");
+        Video blocked = seedBlockedVideo("asset-q-blocked");
+        seedVideo(OperationalState.READY, AccessState.ACTIVE, "asset-q-ready");
+        seedVideo(OperationalState.DELETED, AccessState.ACTIVE, "asset-q-deleted");
+        moderationScanRepository.upsertScan(locked.getId(), "VIDEOINTEL", "FLAGGED", 0.97, "violence");
+        moderationScanRepository.upsertScan(locked.getId(), "ARACHNID", "PASSED", null, null);
+
+        var page = adminVideoService.getReviewQueue(AdminVideoQueueFilter.ATTENTION, 0);
+
+        assertThat(page.getTotalElements()).isEqualTo(3);
+        assertThat(page.getContent()).extracting(AdminVideoQueueItemDto::id)
+                .containsExactlyInAnyOrder(locked.getId(), failed.getId(), blocked.getId());
+        AdminVideoQueueItemDto lockedRow = page.getContent().stream()
+                .filter(r -> r.id().equals(locked.getId())).findFirst().orElseThrow();
+        assertThat(lockedRow.flaggedLayers()).containsExactly("VIDEOINTEL");
+        AdminVideoQueueItemDto blockedRow = page.getContent().stream()
+                .filter(r -> r.id().equals(blocked.getId())).findFirst().orElseThrow();
+        assertThat(blockedRow.lifecycleLockedAt()).isNotNull();
+        assertThat(blockedRow.flaggedLayers()).isEmpty();
+    }
+
+    @Test
+    void getReviewQueue_singleFilters_returnOnlyTheirCondition() {
+        Video locked = seedVideo(OperationalState.LOCKED, AccessState.ACTIVE, "asset-qf-locked");
+        Video failed = seedVideo(OperationalState.FAILED, AccessState.ACTIVE, "asset-qf-failed");
+        Video blocked = seedBlockedVideo("asset-qf-blocked");
+
+        assertThat(adminVideoService.getReviewQueue(AdminVideoQueueFilter.LOCKED, 0).getContent())
+                .extracting(AdminVideoQueueItemDto::id).containsExactly(locked.getId());
+        assertThat(adminVideoService.getReviewQueue(AdminVideoQueueFilter.FAILED, 0).getContent())
+                .extracting(AdminVideoQueueItemDto::id).containsExactly(failed.getId());
+        assertThat(adminVideoService.getReviewQueue(AdminVideoQueueFilter.BLOCKED, 0).getContent())
+                .extracting(AdminVideoQueueItemDto::id).containsExactly(blocked.getId());
+    }
+
+    @Test
+    void getReviewQueue_orderedByMostRecentlyUpdatedFirst() {
+        Video older = seedVideo(OperationalState.FAILED, AccessState.ACTIVE, "asset-qo-older");
+        Video newer = seedVideo(OperationalState.FAILED, AccessState.ACTIVE, "asset-qo-newer");
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("UPDATE main.videos SET updated_at = now() - interval '2 days' WHERE id = ?", older.getId());
+            jdbcTemplate.update("UPDATE main.videos SET updated_at = now() - interval '1 day' WHERE id = ?", newer.getId());
+            return null;
+        });
+
+        assertThat(adminVideoService.getReviewQueue(AdminVideoQueueFilter.FAILED, 0).getContent())
+                .extracting(AdminVideoQueueItemDto::id).containsExactly(newer.getId(), older.getId());
+    }
+
+    private Video seedBlockedVideo(String providerAssetId) {
+        Video v = seedVideo(OperationalState.READY, AccessState.ACTIVE, providerAssetId);
+        return adminVideoService.setVideoAccessState(v.getId(), AccessState.BLOCKED);
+    }
 
     private Video seedVideo(OperationalState opState, AccessState accessState, String providerAssetId) {
         Video v = new Video();

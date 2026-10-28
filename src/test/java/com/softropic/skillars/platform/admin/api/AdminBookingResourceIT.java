@@ -259,6 +259,52 @@ class AdminBookingResourceIT extends AbstractIntegrationTest {
                 .isEqualTo(HttpStatus.UNAUTHORIZED));
     }
 
+    // Admin force-complete UI: the read-only lookup the confirm dialog is built from.
+    @Test
+    @SuppressWarnings("unchecked")
+    void lookup_stuckBooking_reportsForceCompletable() {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + ADMIN_BOOKING_BASE + "/" + bookingId, HttpMethod.GET, null,
+            authenticatedHeaders(adminCookies), Map.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().get("bookingId")).isEqualTo(bookingId.toString());
+        assertThat(resp.getBody().get("status")).isEqualTo("COMPLETED_PENDING_CONFIRMATION");
+        assertThat(resp.getBody().get("coachId")).isEqualTo(coachProfileId.toString());
+        assertThat(resp.getBody().get("completionRecorded")).isEqualTo(false);
+        assertThat(resp.getBody().get("forceCompletable")).isEqualTo(true);
+        // Read-only: nothing written.
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM admin.admin_action_log WHERE reference_id = ?",
+            Integer.class, bookingId.toString())).isZero();
+    }
+
+    @Test
+    void lookup_unknownBooking_returns404() {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + ADMIN_BOOKING_BASE + "/" + UUID.randomUUID(), HttpMethod.GET, null,
+            authenticatedHeaders(adminCookies), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void lookup_nonAdminCaller_returns403() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + ADMIN_BOOKING_BASE + "/" + bookingId, HttpMethod.GET, null,
+            authenticatedHeaders(coachCookies), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
     // ── helpers ──
 
     // skillars-deferred-153 code review (2026-10-17): Map.class, not Void.class — the endpoint now

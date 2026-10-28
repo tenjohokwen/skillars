@@ -10,12 +10,18 @@ import io.micrometer.observation.annotation.Observed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -29,6 +35,56 @@ public class AdminVideoService {
     private final VideoProviderAdapter videoProviderAdapter;
     private final QuotaProvider quotaProvider;
     private final TransactionTemplate transactionTemplate;
+    private final VideoModerationScanRepository moderationScanRepository;
+
+    static final int REVIEW_QUEUE_PAGE_SIZE = 20;
+    private static final String SCAN_OUTCOME_FLAGGED = "FLAGGED";
+
+    /**
+     * Admin video review queue (story 6.3 / FR-ADM-002): videos that need an operator — moderation
+     * LOCKED, FAILED, or playback BLOCKED — most recently changed first. Read-only; actions go through
+     * the existing {@link #setVideoAccessState}, {@link #deleteVideo} and {@link #triggerReconciliation}.
+     */
+    @Observed(name = "video.admin.reviewQueue")
+    @Transactional(readOnly = true)
+    public Page<AdminVideoQueueItemDto> getReviewQueue(AdminVideoQueueFilter filter, int page) {
+        AdminVideoQueueFilter f = filter == null ? AdminVideoQueueFilter.ATTENTION : filter;
+        boolean all = f == AdminVideoQueueFilter.ATTENTION;
+        Pageable pageable = PageRequest.of(Math.max(0, page), REVIEW_QUEUE_PAGE_SIZE);
+        Page<Video> videos = videoRepository.findAdminReviewQueue(
+                all || f == AdminVideoQueueFilter.LOCKED,
+                all || f == AdminVideoQueueFilter.FAILED,
+                all || f == AdminVideoQueueFilter.BLOCKED,
+                pageable);
+        Map<UUID, List<String>> flagged = flaggedLayersFor(videos.getContent().stream().map(Video::getId).toList());
+        return videos.map(v -> toQueueItem(v, flagged.getOrDefault(v.getId(), List.of())));
+    }
+
+    /** Single-video admin lookup, same shape as a queue row; lets the admin act on any video by id. */
+    @Observed(name = "video.admin.getVideo")
+    @Transactional(readOnly = true)
+    public AdminVideoQueueItemDto getVideo(UUID videoId) {
+        Video video = videoRepository.findById(videoId)
+                .orElseThrow(() -> new VideoNotFoundException(videoId));
+        return toQueueItem(video, flaggedLayersFor(List.of(videoId)).getOrDefault(videoId, List.of()));
+    }
+
+    private Map<UUID, List<String>> flaggedLayersFor(List<UUID> videoIds) {
+        if (videoIds.isEmpty()) {
+            return Map.of();
+        }
+        return moderationScanRepository.findByVideoIdInAndOutcome(videoIds, SCAN_OUTCOME_FLAGGED).stream()
+                .collect(Collectors.groupingBy(VideoModerationScan::getVideoId,
+                        Collectors.mapping(VideoModerationScan::getLayer,
+                                Collectors.collectingAndThen(Collectors.toList(),
+                                        l -> l.stream().sorted().toList()))));
+    }
+
+    private static AdminVideoQueueItemDto toQueueItem(Video v, List<String> flaggedLayers) {
+        return new AdminVideoQueueItemDto(v.getId(), v.getTitle(), v.getOperationalState(), v.getAccessState(),
+                v.getOwnerId(), v.getVisibility(), v.getVideoType() != null ? v.getVideoType().name() : null,
+                v.getCreatedAt(), v.getUpdatedAt(), v.getLifecycleLockedAt(), v.getArchivedAt(), flaggedLayers);
+    }
 
     @Observed(name = "video.admin.setAccessState")
     public Video setVideoAccessState(UUID videoId, AccessState newAccessState) {
