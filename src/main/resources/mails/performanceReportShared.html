@@ -9,5 +9,6 @@
     <p>Coach <strong th:text="${map.coachName}">Coach</strong> has generated a performance report for <strong th:text="${map.playerName}">your child</strong> on <strong th:text="${map.reportDate}">date</strong>.</p>
     <p>Log in to Skillars to view and download the report:</p>
     <p><a th:href="${map.reportsPageUrl}" th:text="${map.reportsPageUrl}">View Reports</a></p>
+    <div th:replace="~{fragments/unsubscribeFooter :: footer}"></div>
 </body>
 </html>

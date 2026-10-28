@@ -2208,6 +2208,95 @@ export default {
     samePassword: 'Das neue Passwort muss sich vom aktuellen Passwort unterscheiden',
     samePhone: 'Die neue Telefonnummer muss sich von der aktuellen unterscheiden',
   },
+  notifications: {
+    title: 'Benachrichtigungen',
+    subtitle: 'Neuigkeiten zu Ihren Buchungen, Trainingseinheiten und Ihrem Konto.',
+    bellLabel: 'Benachrichtigungen',
+    empty: 'Sie sind auf dem neuesten Stand — noch keine Benachrichtigungen.',
+    viewAll: 'Alle Benachrichtigungen anzeigen',
+    markAllRead: 'Alle als gelesen markieren',
+    markAllReadError:
+      'Ihre Benachrichtigungen konnten nicht als gelesen markiert werden. Bitte versuchen Sie es erneut.',
+    unread: 'Ungelesen',
+    loadError:
+      'Ihre Benachrichtigungen konnten nicht geladen werden. Bitte versuchen Sie es erneut.',
+    typeFallback: 'Sie haben eine neue Benachrichtigung.',
+    types: {
+      BOOKING_REQUESTED: 'Neue Buchungsanfrage für {requestedStartTime}.',
+      BOOKING_CONFIRMED:
+        '{coachDisplayName} hat Ihre Trainingseinheit am {requestedStartTime} bestätigt.',
+      BOOKING_DECLINED: '{coachDisplayName} hat Ihre Anfrage für {requestedStartTime} abgelehnt.',
+      BOOKING_PAYMENT_UNRESOLVED:
+        'Ihre Buchung bei {coachDisplayName} konnte nicht abgeschlossen werden — das Zahlungsergebnis wird noch geprüft.',
+      BOOKING_EXPIRED: 'Ihre Anfrage bei {coachDisplayName} ist ohne Antwort abgelaufen.',
+      BOOKING_QUICK_COMPLETE_CONFIRM:
+        '{coachDisplayName} hat eine Trainingseinheit als abgeschlossen markiert — bitte bestätigen Sie sie.',
+      BOOKING_RESCHEDULE_REQUESTED:
+        '{parentName} möchte eine Trainingseinheit auf {proposedStartTime} verschieben.',
+      BOOKING_RESCHEDULE_ACCEPTED:
+        'Die Terminverschiebung wurde angenommen — neuer Termin: {newStartTime}.',
+      BOOKING_RESCHEDULE_DECLINED: '{coachDisplayName} hat Ihre Verschiebungsanfrage abgelehnt.',
+      BOOKING_RESCHEDULE_REQUESTED_BY_COACH:
+        '{coachDisplayName} hat einen neuen Termin vorgeschlagen: {proposedStartTime}.',
+      BOOKING_RESCHEDULE_DECLINED_BY_PARENT: '{parentName} hat Ihren Terminvorschlag abgelehnt.',
+      BOOKING_DUPLICATE_PROPOSED:
+        '{coachDisplayName} hat eine weitere Trainingseinheit am {proposedStartTime} vorgeschlagen.',
+      BOOKING_BATCH_REQUESTED: '{parentName} hat {requestedCount} Trainingseinheiten angefragt.',
+      BOOKING_BATCH_ACCEPTED: '{coachDisplayName} hat {acceptedCount} Ihrer Anfragen angenommen.',
+      BOOKING_CANCELLED_DUE_TO_PAUSE:
+        'Die Trainingseinheit am {requestedStartTime} wurde storniert, weil das Paket pausiert wurde.',
+      BOOKING_CANCELLED_BY_PARENT:
+        'Die Trainingseinheit am {requestedStartTime} wurde von den Eltern storniert.',
+      BOOKING_CANCELLED_BY_COACH:
+        'Ihr Coach hat die Trainingseinheit am {requestedStartTime} storniert.',
+      COACH_NO_SHOW:
+        'Für die Trainingseinheit am {requestedStartTime} wurde ein Nichterscheinen des Coaches erfasst.',
+      PLAYER_NO_SHOW:
+        'Für die Trainingseinheit am {requestedStartTime} wurde ein Nichterscheinen des Spielers erfasst.',
+      BOOKING_REMINDER:
+        'Erinnerung: Trainingseinheit mit {coachDisplayName} am {requestedStartTime}.',
+      SESSION_PACK_EXPIRY_WARNING:
+        '{creditsRemaining} Trainingseinheit(en) mit {coachDisplayName} verfallen am {expiresAt}.',
+      SESSION_PACK_EXPIRED: 'Ihr Paket bei {coachDisplayName} ist abgelaufen.',
+      PACK_PAUSED: 'Ihr Paket bei {coachDisplayName} wurde pausiert.',
+      PERFORMANCE_REPORT_SHARED: '{coachName} hat einen Leistungsbericht für {playerName} geteilt.',
+      VIDEO_MODERATION_OWNER_FLAGGED: 'Eines Ihrer Videos wurde zur Überprüfung markiert.',
+      COACH_VISIBILITY_REDUCED: 'Ihre Sichtbarkeit im Marktplatz wurde reduziert.',
+    },
+    preferences: {
+      title: 'E-Mail-Benachrichtigungen',
+      description:
+        'Wählen Sie, welche optionalen E-Mails Sie erhalten. Alles erscheint auch in Ihrem Benachrichtigungseingang.',
+      transactionalNote:
+        'E-Mails zu Konto, Sicherheit, Buchungen, Zahlungen und Paketen werden immer gesendet.',
+      loadError: 'Ihre E-Mail-Einstellungen konnten nicht geladen werden.',
+      saved: 'E-Mail-Einstellung gespeichert.',
+      saveError:
+        'Ihre E-Mail-Einstellung konnte nicht gespeichert werden. Bitte versuchen Sie es erneut.',
+      reminder: {
+        label: 'Erinnerungen',
+        description:
+          'Erinnerungen an anstehende Trainingseinheiten und Warnungen vor dem Ablauf von Paketen.',
+      },
+      development: {
+        label: 'Entwicklungs-Updates',
+        description: 'Leistungsberichte, die Ihr Coach teilt.',
+      },
+    },
+    unsubscribe: {
+      title: 'Abmelden',
+      prompt:
+        'Diese Art von E-Mail nicht mehr erhalten? Sie können sie jederzeit auf Ihrer Profilseite wieder aktivieren.',
+      confirm: 'Abmelden',
+      success: 'Erledigt — Sie erhalten keine „{category}“-E-Mails mehr.',
+      manageHint:
+        'Sie können dies jederzeit im Bereich E-Mail-Benachrichtigungen Ihrer Profilseite ändern.',
+      invalid:
+        'Dieser Abmeldelink ist ungültig oder abgelaufen. Sie können Ihre E-Mails auf Ihrer Profilseite verwalten.',
+      missingToken:
+        'Dieser Abmeldelink ist unvollständig. Bitte verwenden Sie den Link aus der E-Mail oder verwalten Sie Ihre E-Mails auf Ihrer Profilseite.',
+    },
+  },
   errorPage: {
     notFoundTitle: 'Seite nicht gefunden',
     notFoundBody: 'Die gesuchte Seite existiert nicht oder wurde verschoben.',

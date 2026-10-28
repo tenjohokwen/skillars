@@ -8,6 +8,7 @@ import com.softropic.skillars.infrastructure.email.EmailTransportTransientExcept
 import com.softropic.skillars.infrastructure.email.OutboundEmailRequest;
 import com.softropic.skillars.infrastructure.email.OutboundEmailResult;
 import com.softropic.skillars.infrastructure.email.OutboundEmailSender;
+import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 
@@ -26,6 +27,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -49,6 +54,9 @@ class MailServiceTest {
     @Mock
     private OutboundEmailSender outboundEmailSender;
 
+    @Mock
+    private NotificationPreferenceService preferenceService;
+
     private SimpleMeterRegistry meterRegistry;
     private MailMetrics mailMetrics;
     private EmailTransportProperties transportProperties;
@@ -62,7 +70,10 @@ class MailServiceTest {
         mailMetrics = new MailMetrics(meterRegistry);
         transportProperties = new EmailTransportProperties();
         transportProperties.setTransport(EmailTransport.SES);
-        mailService = new MailService(contentRenderer, outboundEmailSender, mailMetrics, transportProperties);
+        mailService = new MailService(contentRenderer, outboundEmailSender, mailMetrics, transportProperties,
+            preferenceService, new FrontendLinkBuilder("https://app.example.com"));
+        when(preferenceService.emailDecision(any(), any()))
+            .thenReturn(new NotificationPreferenceService.EmailDecision(false, null));
         recipient = new Recipient();
         recipient.setEmail("player@example.com");
         recipient.setLangKey("en");
@@ -250,5 +261,68 @@ class MailServiceTest {
             .doesNotThrowAnyException();
 
         assertThat(timerCount("log", "success")).isEqualTo(1.0);
+    }
+
+    // ── Notification centre (UI-gap chunk C9): send-time preference gate + unsubscribe link ──
+
+    @Test
+    @DisplayName("a send the recipient opted out of is suppressed: nothing rendered, nothing sent, no metric")
+    void optedOutRecipient_isSuppressed() {
+        when(preferenceService.emailDecision(EmailTemplate.BOOKING_REMINDER, "player@example.com"))
+            .thenReturn(new NotificationPreferenceService.EmailDecision(true, null));
+
+        mailService.sendEmailFromTemplate(recipient, EmailTemplate.BOOKING_REMINDER, Map.of());
+
+        verify(contentRenderer, never()).render(any(), any(), any());
+        verify(outboundEmailSender, never()).send(any());
+        assertThat(meterRegistry.find(MailMetrics.MAIL_SEND).timers()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("an opt-out-able send carries the unsubscribe link in the body and RFC 8058 one-click headers")
+    @SuppressWarnings("unchecked")
+    void optOutableSend_carriesUnsubscribeLinkAndHeaders() {
+        when(preferenceService.emailDecision(EmailTemplate.BOOKING_REMINDER, "player@example.com"))
+            .thenReturn(new NotificationPreferenceService.EmailDecision(false, "v1.abc.def"));
+        when(contentRenderer.render(any(), any(), any()))
+            .thenReturn(new EmailContentRenderer.Rendered("Subject", "<p>x</p>", null));
+
+        mailService.sendEmailFromTemplate(recipient, EmailTemplate.BOOKING_REMINDER, Map.of("coachDisplayName", "C"));
+
+        ArgumentCaptor<Map<String, Object>> values = ArgumentCaptor.forClass(Map.class);
+        verify(contentRenderer).render(eq(recipient), eq(EmailTemplate.BOOKING_REMINDER), values.capture());
+        assertThat(values.getValue())
+            .containsEntry("coachDisplayName", "C")
+            .containsEntry("unsubscribeUrl", "https://app.example.com/#/unsubscribe?token=v1.abc.def");
+
+        ArgumentCaptor<OutboundEmailRequest> captor = ArgumentCaptor.forClass(OutboundEmailRequest.class);
+        verify(outboundEmailSender).send(captor.capture());
+        assertThat(captor.getValue().headers())
+            .containsEntry("List-Unsubscribe", "<https://app.example.com/api/notifications/unsubscribe?token=v1.abc.def>")
+            .containsEntry("List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
+    }
+
+    @Test
+    @DisplayName("a transactional send carries no unsubscribe link and no List-Unsubscribe header")
+    void transactionalSend_hasNoUnsubscribe() {
+        when(contentRenderer.render(any(), any(), anyMap()))
+            .thenReturn(new EmailContentRenderer.Rendered("Subject", "<p>x</p>", null));
+
+        mailService.sendEmailFromTemplate(recipient, EmailTemplate.BOOKING_CONFIRMED, Map.of());
+
+        ArgumentCaptor<OutboundEmailRequest> captor = ArgumentCaptor.forClass(OutboundEmailRequest.class);
+        verify(outboundEmailSender).send(captor.capture());
+        assertThat(captor.getValue().headers()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a failing preference lookup is a retryable, metered send failure — never a silent send or drop")
+    void preferenceLookupFailure_isRetryableTransientFailure() {
+        when(preferenceService.emailDecision(any(), any())).thenThrow(new IllegalStateException("db down"));
+
+        assertThatThrownBy(() -> mailService.sendEmailFromTemplate(recipient, EmailTemplate.BOOKING_REMINDER, Map.of()))
+            .isInstanceOf(EmailTransportTransientException.class);
+        verify(outboundEmailSender, never()).send(any());
+        assertThat(timerCount("ses", "failure")).isEqualTo(1.0);
     }
 }

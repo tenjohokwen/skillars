@@ -466,6 +466,9 @@
             <div class="text-label q-mb-lg">{{ t('profile.sectionPrivacy') }}</div>
             <PrivacyDataSection />
           </div>
+
+          <!-- Notification centre (UI-gap chunk C9): per-category email opt-out, every role -->
+          <NotificationPreferencesSection />
         </div>
       </template>
     </div>
@@ -593,6 +596,7 @@ import EditPlayerPositionDialog from 'src/components/profile/EditPlayerPositionD
 import FeatureGateOverlay from 'src/components/common/FeatureGateOverlay.vue'
 import PrivacyDataSection from 'src/components/profile/PrivacyDataSection.vue'
 import AppealAction from 'src/components/common/AppealAction.vue'
+import NotificationPreferencesSection from 'src/components/notification/NotificationPreferencesSection.vue'
 
 const { t } = useI18n()
 const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandler()

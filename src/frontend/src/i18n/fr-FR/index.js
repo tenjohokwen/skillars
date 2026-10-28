@@ -2192,6 +2192,90 @@ export default {
       step5SubmitError: "Impossible d'envoyer le récapitulatif de séance. Veuillez réessayer.",
     },
   },
+  notifications: {
+    title: 'Notifications',
+    subtitle: 'Les nouvelles de vos réservations, séances et de votre compte.',
+    bellLabel: 'Notifications',
+    empty: 'Vous êtes à jour — aucune notification pour le moment.',
+    viewAll: 'Voir toutes les notifications',
+    markAllRead: 'Tout marquer comme lu',
+    markAllReadError: 'Impossible de marquer vos notifications comme lues. Veuillez réessayer.',
+    unread: 'Non lu',
+    loadError: 'Impossible de charger vos notifications. Veuillez réessayer.',
+    typeFallback: 'Vous avez une nouvelle notification.',
+    types: {
+      BOOKING_REQUESTED: 'Nouvelle demande de réservation pour le {requestedStartTime}.',
+      BOOKING_CONFIRMED: '{coachDisplayName} a confirmé votre séance du {requestedStartTime}.',
+      BOOKING_DECLINED:
+        '{coachDisplayName} a refusé votre demande de séance pour le {requestedStartTime}.',
+      BOOKING_PAYMENT_UNRESOLVED:
+        "Votre réservation avec {coachDisplayName} n'a pas pu être finalisée — le résultat du paiement est en cours de vérification.",
+      BOOKING_EXPIRED: 'Votre demande de séance avec {coachDisplayName} a expiré sans réponse.',
+      BOOKING_QUICK_COMPLETE_CONFIRM:
+        '{coachDisplayName} a marqué une séance comme terminée — veuillez la confirmer.',
+      BOOKING_RESCHEDULE_REQUESTED:
+        '{parentName} souhaite déplacer une séance au {proposedStartTime}.',
+      BOOKING_RESCHEDULE_ACCEPTED: 'Le report a été accepté — nouvel horaire : {newStartTime}.',
+      BOOKING_RESCHEDULE_DECLINED: '{coachDisplayName} a refusé votre demande de report.',
+      BOOKING_RESCHEDULE_REQUESTED_BY_COACH:
+        '{coachDisplayName} a proposé un nouvel horaire : {proposedStartTime}.',
+      BOOKING_RESCHEDULE_DECLINED_BY_PARENT:
+        '{parentName} a refusé l’horaire que vous avez proposé.',
+      BOOKING_DUPLICATE_PROPOSED:
+        '{coachDisplayName} a proposé une autre séance le {proposedStartTime}.',
+      BOOKING_BATCH_REQUESTED: '{parentName} a demandé {requestedCount} séances.',
+      BOOKING_BATCH_ACCEPTED:
+        '{coachDisplayName} a accepté {acceptedCount} de vos demandes de séance.',
+      BOOKING_CANCELLED_DUE_TO_PAUSE:
+        'La séance du {requestedStartTime} a été annulée car le forfait a été mis en pause.',
+      BOOKING_CANCELLED_BY_PARENT: 'La séance du {requestedStartTime} a été annulée par le parent.',
+      BOOKING_CANCELLED_BY_COACH: 'Votre coach a annulé la séance du {requestedStartTime}.',
+      COACH_NO_SHOW:
+        'Une absence du coach a été enregistrée pour la séance du {requestedStartTime}.',
+      PLAYER_NO_SHOW:
+        'Une absence du joueur a été enregistrée pour la séance du {requestedStartTime}.',
+      BOOKING_REMINDER: 'Rappel : séance avec {coachDisplayName} le {requestedStartTime}.',
+      SESSION_PACK_EXPIRY_WARNING:
+        '{creditsRemaining} séance(s) avec {coachDisplayName} expirent le {expiresAt}.',
+      SESSION_PACK_EXPIRED: 'Votre forfait avec {coachDisplayName} a expiré.',
+      PACK_PAUSED: 'Votre forfait avec {coachDisplayName} a été mis en pause.',
+      PERFORMANCE_REPORT_SHARED:
+        '{coachName} a partagé un rapport de performance pour {playerName}.',
+      VIDEO_MODERATION_OWNER_FLAGGED: 'Une de vos vidéos a été signalée pour vérification.',
+      COACH_VISIBILITY_REDUCED: 'Votre visibilité sur la place de marché a été réduite.',
+    },
+    preferences: {
+      title: 'Notifications par e-mail',
+      description:
+        'Choisissez les e-mails facultatifs que vous recevez. Tout apparaît aussi dans votre boîte de notifications.',
+      transactionalNote:
+        'Les e-mails concernant votre compte, la sécurité, les réservations, les paiements et les forfaits sont toujours envoyés.',
+      loadError: 'Impossible de charger vos préférences e-mail.',
+      saved: 'Préférence e-mail enregistrée.',
+      saveError: "Impossible d'enregistrer votre préférence e-mail. Veuillez réessayer.",
+      reminder: {
+        label: 'Rappels',
+        description: "Rappels des séances à venir et alertes d'expiration des forfaits.",
+      },
+      development: {
+        label: 'Suivi de progression',
+        description: 'Les rapports de performance partagés par votre coach.',
+      },
+    },
+    unsubscribe: {
+      title: 'Se désabonner',
+      prompt:
+        'Ne plus recevoir ce type d’e-mail ? Vous pourrez le réactiver à tout moment depuis votre page de profil.',
+      confirm: 'Se désabonner',
+      success: 'C’est fait — vous ne recevrez plus les e-mails « {category} ».',
+      manageHint:
+        'Vous pouvez modifier ce choix à tout moment dans la section Notifications par e-mail de votre page de profil.',
+      invalid:
+        'Ce lien de désabonnement est invalide ou a expiré. Vous pouvez gérer vos e-mails depuis votre page de profil.',
+      missingToken:
+        'Ce lien de désabonnement est incomplet. Utilisez le lien de l’e-mail ou gérez vos e-mails depuis votre page de profil.',
+    },
+  },
   errorPage: {
     notFoundTitle: 'Page introuvable',
     notFoundBody: "La page que vous recherchez n'existe pas ou a été déplacée.",

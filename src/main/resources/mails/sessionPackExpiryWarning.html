@@ -9,5 +9,6 @@
     <p>Your <strong th:text="${map.creditsRemaining}">N</strong> session(s) with <strong th:text="${map.coachDisplayName}">Coach</strong> expire on <strong th:text="${map.expiresAt}">date</strong>.</p>
     <p>Book your remaining sessions or pause your pack to extend your window.</p>
     <p>Log in to Skillars to take action before your pack expires.</p>
+    <div th:replace="~{fragments/unsubscribeFooter :: footer}"></div>
 </body>
 </html>

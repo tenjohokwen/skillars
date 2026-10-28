@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/* Notification centre (UI-gap chunk C9): included by every opt-out-able email template.
+       Renders only when MailService supplied an unsubscribe link (opt-out-able template + the
+       recipient address belongs to a platform user). Transactional templates never include it.
+       map['key'] (indexer), not map.key: SpEL property access on a Map with no such key throws,
+       which would fail every send that carries no unsubscribe link. */-->
+<div th:fragment="footer" th:if="${map != null and map['unsubscribeUrl'] != null}"
+     style="margin-top:24px;padding-top:12px;border-top:1px solid #dddddd;font-size:12px;color:#777777;">
+    <p th:text="#{email.unsubscribe.footer}">You are receiving this email because of your Skillars notification settings.</p>
+    <p><a th:href="${map['unsubscribeUrl']}" th:text="#{email.unsubscribe.link}">Unsubscribe from these emails</a></p>
+</div>
+</body>
+</html>

@@ -3,14 +3,19 @@ package com.softropic.skillars.platform.notification.service;
 import com.softropic.skillars.infrastructure.email.EmailTransport;
 import com.softropic.skillars.infrastructure.email.EmailTransportPermanentException;
 import com.softropic.skillars.infrastructure.email.EmailTransportProperties;
+import com.softropic.skillars.infrastructure.email.EmailTransportTransientException;
 import com.softropic.skillars.infrastructure.email.OutboundEmailRequest;
 import com.softropic.skillars.infrastructure.email.OutboundEmailSender;
+import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -30,15 +35,21 @@ public class MailService {
     private final OutboundEmailSender outboundEmailSender;
     private final MailMetrics mailMetrics;
     private final EmailTransportProperties transportProperties;
+    private final NotificationPreferenceService preferenceService;
+    private final FrontendLinkBuilder frontendLinks;
 
     public MailService(final EmailContentRenderer contentRenderer,
                        final OutboundEmailSender outboundEmailSender,
                        final MailMetrics mailMetrics,
-                       final EmailTransportProperties transportProperties) {
+                       final EmailTransportProperties transportProperties,
+                       final NotificationPreferenceService preferenceService,
+                       final FrontendLinkBuilder frontendLinks) {
         this.contentRenderer = contentRenderer;
         this.outboundEmailSender = outboundEmailSender;
         this.mailMetrics = mailMetrics;
         this.transportProperties = transportProperties;
+        this.preferenceService = preferenceService;
+        this.frontendLinks = frontendLinks;
     }
 
     @Observed(name = "mail.send_from_template")
@@ -50,8 +61,46 @@ public class MailService {
         // must be counted too, or mail.send_seconds_count under-counts relative to actual attempts.
         final long start = System.nanoTime();
         boolean success = false;
+        boolean suppressed = false;
         try {
-            final EmailContentRenderer.Rendered rendered = contentRenderer.render(recipient, emailTemplate, values);
+            // Notification centre (UI-gap chunk C9): the email opt-out is enforced HERE, at send time,
+            // so it also covers rows already sitting in the outbox / EmailRetryScheduler queue when the
+            // user opted out. A suppressed send returns normally — MailManager records the recipient as
+            // handled (status SENT), which is the correct terminal outcome: a re-drive must not retry an
+            // email the user asked not to receive. Transactional templates never reach the DB here.
+            final NotificationPreferenceService.EmailDecision decision;
+            try {
+                decision = preferenceService.emailDecision(emailTemplate, recipient.getEmail());
+            } catch (RuntimeException e) {
+                // Neither sending (could ignore an opt-out) nor dropping (could lose a wanted email)
+                // is safe on an unknown preference: fail retryably, inside the timed block.
+                throw new EmailTransportTransientException("email preference lookup failed", e);
+            }
+            if (decision.suppressed()) {
+                suppressed = true;
+                log.info("[EMAIL_SUPPRESSED_BY_PREFERENCE] template={} sendId={}", emailTemplate, values.get("sendId"));
+                return;
+            }
+            final Map<String, Object> renderValues;
+            final Map<String, String> headers;
+            if (decision.unsubscribeToken() != null) {
+                final String token = URLEncoder.encode(decision.unsubscribeToken(), StandardCharsets.UTF_8);
+                renderValues = new HashMap<>(values);
+                // Body link: the hash-routed landing page, which asks for a click before unsubscribing.
+                renderValues.put("unsubscribeUrl", frontendLinks.route("unsubscribe?token=" + token));
+                // RFC 2369 / RFC 8058 one-click: the mailbox provider POSTs "List-Unsubscribe=One-Click"
+                // straight to the API. The API is served under the frontend origin (same-origin SPA in
+                // prod; the dev server proxies /api), so frontendLinks.base() is the right host.
+                headers = Map.of(
+                    "List-Unsubscribe",
+                    "<" + frontendLinks.base() + "/api/notifications/unsubscribe?token=" + token + ">",
+                    "List-Unsubscribe-Post", "List-Unsubscribe=One-Click");
+            } else {
+                renderValues = values;
+                headers = Map.of();
+            }
+
+            final EmailContentRenderer.Rendered rendered = contentRenderer.render(recipient, emailTemplate, renderValues);
 
             // One correlation id per call, not per logical send — a RetryTemplate retry (MailManager)
             // gets a new id. Correlating retries of the same envelope back to one logical send is a
@@ -69,7 +118,8 @@ public class MailService {
             final OutboundEmailRequest request;
             try {
                 request = new OutboundEmailRequest(
-                    recipient.getEmail(), rendered.subject(), rendered.htmlBody(), rendered.textBody(), correlationId);
+                    recipient.getEmail(), rendered.subject(), rendered.htmlBody(), rendered.textBody(), correlationId,
+                    headers);
             } catch (IllegalArgumentException ex) {
                 throw new EmailTransportPermanentException("malformed email payload: " + ex.getMessage(), ex);
             }
@@ -85,7 +135,10 @@ public class MailService {
             // forever — precisely the misclassification the comment above exists to prevent. No
             // metric is worth that, so failure to record is logged and swallowed.
             try {
-                mailMetrics.recordSend(transportTag(), success ? "success" : "failure", System.nanoTime() - start);
+                // A preference-suppressed send is neither a send nor a failure: no metric.
+                if (!suppressed) {
+                    mailMetrics.recordSend(transportTag(), success ? "success" : "failure", System.nanoTime() - start);
+                }
             } catch (RuntimeException metricsFailure) {
                 log.warn("Failed to record the mail.send metric; the send outcome itself is unaffected",
                     metricsFailure);

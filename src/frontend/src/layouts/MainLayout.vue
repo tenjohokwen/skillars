@@ -65,6 +65,9 @@
           <q-tooltip>{{ darkMode ? t('theme.light') : t('theme.dark') }}</q-tooltip>
         </q-btn>
 
+        <!-- Notification centre (UI-gap chunk C9): bell + unread badge, every authenticated role -->
+        <NotificationBell v-if="authStore.isAuthenticated" />
+
         <!-- Authenticated: user menu -->
         <template v-if="authStore.isAuthenticated">
           <q-btn-dropdown
@@ -542,6 +545,7 @@ import { useSession, LOGOUT_BACKEND_WAIT_MS } from 'src/composables/useSession'
 import { stopSessionMonitoring } from 'src/plugins/sessionManager'
 import { toggleTheme as bootToggleTheme, isDarkMode } from 'src/boot/theme'
 import ParentChildSwitcher from 'src/components/ParentChildSwitcher.vue'
+import NotificationBell from 'src/components/notification/NotificationBell.vue'
 import { useAuthStore } from 'src/stores/auth.store'
 import { usePlayerStore } from 'src/stores/playerStore'
 import { pushLoginOrHardNavigate } from 'src/utils/sessionRedirect'
