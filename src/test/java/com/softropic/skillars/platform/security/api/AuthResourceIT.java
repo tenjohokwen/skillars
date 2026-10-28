@@ -20,6 +20,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -38,6 +39,12 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
@@ -968,23 +975,58 @@ class AuthResourceIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void legacyAuthenticateFailure_isRecordedOnceInTheSharedDbLimiter_andSpaFailureIsNotDoubleCounted() {
-        // The legacy /authenticate path counted failures in per-instance Guava caches; it now writes
-        // the same main.login_attempts rows /api/auth/login does (same key), and the app-wide
-        // BadCredentialsEvent no longer adds a second count for an /api/auth/login failure.
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            baseUrl() + "/authenticate", HttpMethod.POST,
-            Map.of("id", COACH_EMAIL, "password", "wrongPassword123!"), clientHeaders(), Map.class))
-            .isInstanceOf(HttpClientErrorException.class);
-        assertThat(loginAttemptCountFor(COACH_EMAIL)).isEqualTo(1L);
+    void parallelWrongPasswords_neverRecordMoreFailuresThanTheBudget() throws Exception {
+        // LoginRateLimiter.checkLimited claims a transaction-scoped advisory try-lock per
+        // SHA-256(email|ip). Before that, every request in a parallel burst read a count below the
+        // budget and then inserted its own failure, so the budget was exceeded by the degree of
+        // parallelism. Now each attempt either holds the key (and is counted: 401) or is turned away
+        // (429) without being recorded — whether because the budget is used up or because another
+        // attempt for the key was in flight. Follow-up sequential attempts then fill the budget
+        // exactly, never beyond it.
+        long maxAttempts = configService.find("security.login.max-attempts").map(Long::parseLong).orElse(5L);
+        int burst = (int) maxAttempts * 3;
+        ExecutorService pool = Executors.newFixedThreadPool(burst);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<HttpStatusCode>> results = new ArrayList<>();
+            for (int i = 0; i < burst; i++) {
+                results.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        return httpTestClient.makeHttpRequest(
+                            baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
+                            Map.of("email", COACH_EMAIL, "password", "wrongPassword123!"),
+                            clientHeaders(), Map.class).getStatusCode();
+                    } catch (HttpClientErrorException e) {
+                        return e.getStatusCode();
+                    }
+                }));
+            }
+            start.countDown();
+            List<HttpStatusCode> statuses = new ArrayList<>();
+            for (Future<HttpStatusCode> f : results) {
+                statuses.add(f.get(60, TimeUnit.SECONDS));
+            }
 
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
-            Map.of("email", COACH_EMAIL, "password", "wrongPassword123!"), clientHeaders(), Map.class))
-            .isInstanceOf(HttpClientErrorException.class);
-        assertThat(loginAttemptCountFor(COACH_EMAIL))
-            .as("one /api/auth/login failure adds exactly one row to the shared counter")
-            .isEqualTo(2L);
+            long recordedByBurst = loginAttemptCountFor(COACH_EMAIL);
+            assertThat(recordedByBurst)
+                .as("failed attempts recorded for a parallel burst of %d wrong passwords", burst)
+                .isBetween(1L, maxAttempts);
+            assertThat(statuses).allMatch(st -> st.equals(HttpStatus.UNAUTHORIZED) || st.equals(HttpStatus.TOO_MANY_REQUESTS));
+            assertThat(statuses).filteredOn(HttpStatus.UNAUTHORIZED::equals).hasSize((int) recordedByBurst);
+
+            for (int i = 0; i < maxAttempts; i++) {
+                try {
+                    httpTestClient.makeHttpRequest(baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
+                        Map.of("email", COACH_EMAIL, "password", "wrongPassword123!"), clientHeaders(), Map.class);
+                } catch (HttpClientErrorException expected) {
+                    // 401 until the budget is used up, then 429
+                }
+            }
+            assertThat(loginAttemptCountFor(COACH_EMAIL)).isEqualTo(maxAttempts);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     private long loginAttemptCountFor(String email) {

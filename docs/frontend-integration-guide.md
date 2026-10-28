@@ -1,5 +1,10 @@
 # Vue.js 3 + Quasar 2 Frontend Integration Guide
 
+> **Outdated login flow.** The `POST /authenticate` → `POST /otp` email-2FA login described below was
+> removed from the backend (chore/auth-legacy-removal). The only password login is
+> `POST /api/auth/login` (`{ email, password }`), which sets the JWT, `rtkn` and `skp` cookies — see
+> `docs/security-api-endpoints.md` and `src/frontend/src/api/auth.api.js`.
+
 This guide provides a complete setup for integrating your Vue.js 3 + Quasar 2 frontend with the Skillars security backend.
 
 ## Table of Contents

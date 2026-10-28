@@ -19,6 +19,23 @@ No SSH access to the Node is required to trigger a deploy — GitHub Actions han
 
 ---
 
+## Single instance only
+
+Run exactly **one** application container against a database. Server-sent events (messaging,
+booking and video status updates) are pushed from in-memory emitter registries, so on a second
+instance a user connected to the "other" node silently misses real-time events. Scaling out needs a
+cross-instance fan-out first — the planned mechanism is Postgres `LISTEN/NOTIFY` (see the dev-docs
+decision "Single instance until SSE fan-out exists"). The scheduled jobs, row locks and the login
+rate limiter are already multi-instance safe; SSE is the blocker.
+
+Every instance writes a heartbeat row (`main.app_instance_heartbeat`, `InstanceHeartbeatMonitor`)
+and logs a `WARN` with `status=MULTIPLE_INSTANCES` while another instance's heartbeat is fresh; the
+`skillars_app_instances_live` gauge shows the count. A brief warning during a rolling deploy's
+overlap is expected; a persistent one means a second instance is running — see the runbook scenario
+"More than one application instance".
+
+---
+
 ## Pre-Flight Checks
 
 Before starting, verify:

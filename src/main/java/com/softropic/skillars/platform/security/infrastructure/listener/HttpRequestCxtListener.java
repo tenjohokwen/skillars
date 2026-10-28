@@ -30,7 +30,6 @@ public class HttpRequestCxtListener extends RequestContextListener {
      * Sets the principal on the RequestMetadata object as soon as the name is figured out.
      * @param //preAuthenticationEvent contains the principal
      *
-     * @see //JWTAuthenticationFilter
      * @see //JWTAuthorizationFilter
      * */
     @EventListener

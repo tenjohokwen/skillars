@@ -762,6 +762,38 @@ Notes:
 
 ---
 
+## More than one application instance
+
+### Detection
+
+The app logs, about a minute after start and then every minute:
+
+```
+WARN ... More than one application instance is running against this database (2 live, ...)
+  operation=instance_heartbeat status=MULTIPLE_INSTANCES peerHosts=[...]
+```
+
+and the Prometheus gauge `skillars_app_instances_live` is above 1. A warning only during a deploy's
+overlap window is expected (the old container deletes its heartbeat row on graceful shutdown).
+
+### Why it matters
+
+Skillars supports a single instance until SSE fan-out exists (Postgres `LISTEN/NOTIFY` is the planned
+mechanism). With two instances, messaging, booking and video SSE events only reach users connected to
+the instance that produced them.
+
+### Remediation
+
+```bash
+# On the Node: list running app containers
+docker compose ps
+# Stop the extra one (keep exactly one app container)
+docker compose stop <extra-app-service-or-container>
+```
+
+`peerHosts` in the log line names the other instance's hostname (container id). Rows of crashed
+instances stop counting after three missed beats (3 minutes) and are pruned after a day.
+
 ## Admin alert recipient (`platform.admin_alert_email`)
 
 Both video-moderation admin alerts and EMAIL-channel alert rules (`AlertNotificationListener`) are

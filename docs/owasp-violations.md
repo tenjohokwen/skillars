@@ -52,7 +52,7 @@ This controller, mapped under `/v1/account`, has no authorization checks on its 
 *   `/register`: Allows user registration.
 *   `/regislink`: Resends a registration link.
 *   `/activate`: Activates a user account.
-*   `/authenticate`: Checks if a user is authenticated.
+*   `/authenticate` (`GET /v1/account/authenticate`): Checks if a user is authenticated.
 *   `/`: Retrieves the current user's account details.
 *   `/reset_password/init`: Initiates a password reset.
 *   `/reset_password/finish`: Finishes a password reset.

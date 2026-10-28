@@ -210,7 +210,7 @@ public class AdminUserService {
 
     /**
      * A10: clears the failed-login rate limit for this account — the one DB-backed limiter both
-     * {@code /api/auth/login} and the legacy {@code /authenticate} enforce (LoginRateLimiter) —
+     * {@code /api/auth/login} enforces (LoginRateLimiter) —
      * and records who did it. Does not touch {@code locked}: a suspended account stays suspended.
      */
     @Transactional

@@ -1,5 +1,10 @@
 # Frontend Security Features Implementation Specification
 
+> **Outdated login flow.** The `POST /authenticate` → `POST /otp` email-2FA login described below was
+> removed from the backend (chore/auth-legacy-removal). The only password login is
+> `POST /api/auth/login` (`{ email, password }`), which sets the JWT, `rtkn` and `skp` cookies — see
+> `docs/security-api-endpoints.md` and `src/frontend/src/api/auth.api.js`.
+
 This document provides specifications for implementing authentication and security features in a Vue.js 3 + Quasar 2 frontend application. Use this alongside implementation prompts.
 
 ---

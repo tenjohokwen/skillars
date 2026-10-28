@@ -9,7 +9,9 @@ import jakarta.servlet.http.HttpServletResponse;
 
 
 /**
- * Actually, JWTAuthenticationFilter (the 'unsuccessfulAuthentication' method) should handle all authentication issues.
+ * Entry point for an AuthenticationException that reaches the filter chain's exception translation
+ * (e.g. a secured endpoint hit without a valid JWT); delegates to the MVC exception resolver so the
+ * response is the usual ErrorDto. Password login errors come from POST /api/auth/login itself.
  */
 public class AuthenticationExceptionHandler implements AuthenticationEntryPoint {
 

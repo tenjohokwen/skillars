@@ -39,7 +39,6 @@ import com.softropic.skillars.platform.security.contract.exception.JWTTheftExcep
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.contract.exception.SecException;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
-import com.softropic.skillars.infrastructure.security.event.FraudEvent;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -84,7 +83,7 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
 /**
  * As the name implies, this class handles exceptions thrown at the controller level, however, this class can be indirectly invoked from filters.
  * Pass an object of type HandlerExceptionResolver through the filter constructor;
- * See 'JWTAuthenticationFilter'
+ * See 'JWTAuthorizationFilter'
  */
 
 @Slf4j
@@ -350,7 +349,6 @@ public class ApiAdvice {
     })
     @ResponseStatus(HttpStatus.FORBIDDEN) //could occur when method security throws exception
     public ErrorDto fraudHandler(final AuthorizationException exception) {
-        publisher.publishEvent(new FraudEvent("AuthorizationException of type %s has been thrown.".formatted(exception.getClass().getSimpleName())));
         final String defaultMsg = "Access has been denied. You can contact help desk";
         return handleSecErrorAndReturnDTO(exception, defaultMsg, "security.opForbidden");
     }

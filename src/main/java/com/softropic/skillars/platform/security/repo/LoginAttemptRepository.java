@@ -13,6 +13,20 @@ public interface LoginAttemptRepository extends JpaRepository<LoginAttempt, Long
 
     long countByIdentifierAndAttemptedAtAfter(String identifier, Instant windowStart);
 
+    /**
+     * Claims the right to run one login attempt for {@code identifier} (SHA-256(login|ip)) across every
+     * application instance: a transaction-scoped Postgres advisory lock, released automatically at
+     * commit or rollback. The TRY variant never waits — {@code false} means another attempt for the
+     * same key is in flight right now. Not waiting is deliberate: a blocking lock would park one pooled
+     * connection per queued request, so a burst against one account from one IP could drain the pool.
+     * The {@code 'login_attempt:'} prefix keeps this key space apart from the other {@code hashtext}
+     * advisory locks (e.g. {@code EnvelopeEntityRepository.acquireSendIdLock}); a 32-bit hash collision
+     * only makes two unrelated keys contend, it never lets an attempt skip the lock. Plain native SELECT,
+     * not {@code @Modifying} — see {@code EnvelopeEntityRepository.acquireSendIdLock} for why.
+     */
+    @Query(value = "SELECT pg_try_advisory_xact_lock(hashtext('login_attempt:' || ?1))", nativeQuery = true)
+    boolean tryAcquireIdentifierLock(String identifier);
+
     Optional<LoginAttempt> findFirstByIdentifierAndAttemptedAtAfterOrderByAttemptedAtAsc(String identifier,
                                                                                          Instant windowStart);
 

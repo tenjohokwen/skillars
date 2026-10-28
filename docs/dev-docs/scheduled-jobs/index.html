@@ -62,8 +62,8 @@
       actions expire on a timer; a booking stranded mid-payment is swept back out; a coach who abandons the
       wrap-up wizard has the session force-completed; a message or review whose moderation verdict never landed is
       escalated to a human; packs forfeit at expiry; outboxes drain; failed GDPR erasures are retried; local
-      subscriptions are reconciled against Stripe. There are <strong>41 <code>@Scheduled</code> methods in
-      40 classes across 12 platform modules plus <code>infrastructure</code></strong>, and
+      subscriptions are reconciled against Stripe. There are <strong>42 <code>@Scheduled</code> methods in
+      41 classes across 12 platform modules plus <code>infrastructure</code></strong>, and
       <strong>32 of them are ShedLock-guarded</strong>. Several are the <em>only</em> thing standing between a
       crashed transaction and a permanently stuck row, so knowing they exist is a prerequisite for debugging
       "why is this record stuck".
@@ -93,7 +93,7 @@
       long-lived Spring contexts: a job with a 5-minute delay never fires in a context that lives 90 seconds,
       and that accidental protection disappeared. Worse, the per-test reset backdates every ShedLock row,
       making every guarded job eligible on every test method.</p>
-      <p>Overriding each job's delay in test config <em>cannot</em> substitute for the switch: 23 of the 41
+      <p>Overriding each job's delay in test config <em>cannot</em> substitute for the switch: 23 of the 42
       <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder. Meanwhile
       <code>@EnableSchedulerLock</code> stays unconditional because tests invoke scheduled methods directly
       through the Spring proxy, so the lock advisor must still apply — that is the behaviour
@@ -194,6 +194,7 @@
         <tr><td><code>notification.AlertEvaluationService.evaluate</code></td><td>(cfg) <code>alert.evaluation-interval-ms</code> [30s]</td><td>Evaluates alert rules against this instance's Micrometer counters (needs ≥10 samples before firing).</td></tr>
         <tr><td><code>messaging.MessagingEmitterRegistry.sendHeartbeats</code></td><td>every 30s</td><td>SSE heartbeats to this instance's connected clients.</td></tr>
         <tr><td><code>infrastructure.security.RateLimitingService.evictIdleBuckets</code></td><td>hourly</td><td>Evicts in-memory Bucket4j rate-limit buckets idle past the TTL so the map cannot grow unbounded.</td></tr>
+        <tr><td><code>infrastructure.persistence.InstanceHeartbeatMonitor.beat</code></td><td>(cfg) <code>platform.instance-heartbeat.interval-ms</code> [60s, first after 15s]</td><td>Upserts this instance's row in <code>main.app_instance_heartbeat</code> and WARNs (<code>status=MULTIPLE_INSTANCES</code>) when another instance's row is fresh — single-instance safety net (<a href="../decisions/index.html#adr-single-instance">ADR 20</a>). Must stay unguarded: each instance beats for itself.</td></tr>
       </tbody>
     </table>
 
@@ -213,18 +214,18 @@
         <tr><td>admin</td><td>1</td><td>1</td></tr>
         <tr><td>outbox</td><td>1</td><td>1</td></tr>
         <tr><td>config</td><td>1</td><td>0</td></tr>
-        <tr><td><code>infrastructure</code></td><td>1</td><td>0</td></tr>
-        <tr><td><strong>Total</strong></td><td><strong>41</strong></td><td><strong>32</strong></td></tr>
+        <tr><td><code>infrastructure</code></td><td>2</td><td>0</td></tr>
+        <tr><td><strong>Total</strong></td><td><strong>42</strong></td><td><strong>32</strong></td></tr>
       </tbody>
     </table>
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
 
     <div class="callout warn">
-      <p><strong>9 of the 41 jobs are unguarded, and each has a reason.</strong> Five are per-instance by
+      <p><strong>10 of the 42 jobs are unguarded, and each has a reason.</strong> Six are per-instance by
       design (<code>ConfigService</code>, <code>AlertRuleCache</code>, <code>AlertEvaluationService</code>,
-      <code>MessagingEmitterRegistry</code>, <code>RateLimitingService</code>) — they touch only in-memory state
-      or this instance's metrics/connections. The other four (<code>UploadSessionExpiryScheduler</code>,
+      <code>MessagingEmitterRegistry</code>, <code>RateLimitingService</code>, <code>InstanceHeartbeatMonitor</code>) — they
+      touch only in-memory state, this instance's metrics/connections, or (the heartbeat) this instance's own row. The other four (<code>UploadSessionExpiryScheduler</code>,
       <code>ReconciliationWorkerScheduler.reconcile</code>, <code>WebhookEventProcessorScheduler</code>,
       <code>ModerationSlaMonitorService</code>) rely on row-level <code>FOR UPDATE [SKIP LOCKED]</code> claims
       instead of ShedLock, which is a valid alternative. Every job that writes shared state without a row

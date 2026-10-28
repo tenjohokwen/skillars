@@ -18,6 +18,7 @@ import com.softropic.skillars.platform.booking.repo.SessionCompletionDataReposit
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.session.repo.HomeworkCompletionRepository;
+import com.softropic.skillars.platform.development.repo.CoachBrandingRepository;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PerformanceReportRepository;
 import com.softropic.skillars.platform.development.repo.PlayerRadarBaselineRepository;
@@ -119,6 +120,12 @@ public class GdprErasureService {
     private final DataSource dataSource;
     // feat/coach-workflow-gaps D9: the coach's own public-profile gallery images (personal data).
     private final CoachMediaItemRepository coachMediaItemRepository;
+    // The coach's report-branding logo (development.coach_branding.logo_key).
+    private final CoachBrandingRepository coachBrandingRepository;
+
+    /** Storage-key prefixes StorageKeyGenerator issues for the coach photo and branding-logo upload slots. */
+    static final String COACH_PHOTO_KEY_PREFIX = "coach_profile/";
+    static final String COACH_BRANDING_KEY_PREFIX = "coach_branding/";
 
     /**
      * Self-reference so {@link #erase}'s pre-transaction connection-pool check (skillars-deferred-132
@@ -352,7 +359,9 @@ public class GdprErasureService {
      *   <li><b>Always:</b> {@code main.user} identity fields (anonymised to
      *       {@code deleted.<id>@erased.io} / "Deleted User"), messages, review bodies, refresh tokens,
      *       expired GDPR requests, and the S3 blobs of previously COMPLETED export requests.</li>
-     *   <li><b>COACH:</b> {@code marketplace.coach_profiles} free text, plus — all inside one
+     *   <li><b>COACH:</b> {@code marketplace.coach_profiles} free text and photo key, the coach's
+     *       gallery rows, and the {@code development.coach_branding} row — with the photo, gallery
+     *       and branding-logo blobs enqueued for deletion — plus, all inside one
      *       {@code REQUIRES_NEW} block under a {@code lock_timeout} bound — three copies of the coach's
      *       own authored narrative: {@code booking.session_completion_data} recap columns
      *       (skillars-deferred-154 AC2), {@code development.player_timeline_events.metadata}'s
@@ -415,7 +424,20 @@ public class GdprErasureService {
             cp.setBio(null);
             cp.setCity(null);
             cp.setDistrict(null);
+            // The coach's profile photo is a picture of them: clear the key and delete the blob
+            // (outbox, after commit). Read from this unlocked snapshot rather than with a row lock:
+            // a coach_profiles FOR UPDATE held by this outer transaction would self-deadlock the
+            // REQUIRES_NEW recap scrub below, whose first statement (markRecapDataErased) locks the
+            // same row. Residual, accepted: a new photo confirmed in the milliseconds between this
+            // read and the commit is unlinked by the full-row save but its blob is not enqueued.
+            // Only keys this app generated for the photo slot are deleted — a legacy absolute URL
+            // has no blob of ours behind it.
+            String photoKey = cp.getPhotoUrl();
+            cp.setPhotoUrl(null);
             coachProfileRepository.save(cp);
+            if (photoKey != null && photoKey.startsWith(COACH_PHOTO_KEY_PREFIX)) {
+                blobDeletionOutboxSupport.enqueue(List.of(photoKey));
+            }
 
             // feat/coach-workflow-gaps D9: gallery images are photos the coach uploaded of themselves /
             // their sessions — delete the rows and enqueue their coach_gallery/* blobs in THIS
@@ -582,6 +604,18 @@ public class GdprErasureService {
                 // lambda above is idempotent, so the retry is safe to re-run wholesale.
                 skipped.set(true);
             }
+
+            // The coach's report-branding logo (ACADEMY tier). Deleted AFTER the REQUIRES_NEW recap
+            // scrub above, never before it: a native statement auto-flushes this transaction's
+            // pending coach_profiles UPDATE (save(cp) above), and that row lock, held until this
+            // outer transaction commits, would block markRecapDataErased into its lock_timeout.
+            // DELETE ... RETURNING removes the row and reports the exact key it held in one
+            // statement. Only keys generated for the branding slot are deleted: saveBranding also
+            // accepts an unchanged server-written key (e.g. a report PDF), which is not ours to drop.
+            List<String> logoKeys = coachBrandingRepository.deleteByCoachIdReturningLogoKey(cp.getId()).stream()
+                .filter(k -> k != null && k.startsWith(COACH_BRANDING_KEY_PREFIX))
+                .toList();
+            blobDeletionOutboxSupport.enqueue(logoKeys);
         });
 
         // Hard-delete messages (all rows including soft-deleted — Article 17)

@@ -4,7 +4,6 @@ package com.softropic.skillars.platform.security.service;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
 
-import org.springframework.security.core.Authentication;
 
 import java.util.Optional;
 
@@ -30,33 +29,12 @@ public interface LoginTokenManager {
     void renewLoginToken(HttpServletResponse res, Principal principal);
 
     /**
-     * Resets the time-to-live, db refresh interval and expiration of the fetched token
-     * @param res Provides means of sending the created token to the client
-     * @param token Token whose TTl, dbrefresh and expiration will be reset
-     */
-    Authentication refreshLoginToken(HttpServletResponse res, String token);
-
-    /**
-     * Creates the login token and embeds the seed in claims
-     * @param principal holds the user data that is used to create the token
-     * @param seed is stored in the claims
-     * @return the created token
-     */
-    String generateToken(final Principal principal, String seed);
-
-    /**
      * Sets session cookie for anonymous user
      * @param response
      * @return
      */
     String generateAnonymousSession(HttpServletResponse response);
 
-
-    /** TODO //maybe this should not be removed? Just let it expire or else you may be revealing secrets?
-     * Removes the 2FA cookie from the client side.
-     * @param response used to remove the 2FA cookie on the client side
-     */
-    void removeTwoFactorCookie(HttpServletResponse response);
 
     /**
      * Resets the Ttl of the token. It should not refresh the dbRefreshToken
@@ -103,20 +81,6 @@ public interface LoginTokenManager {
     String extractUserNameSilently(final HttpServletRequest request);
 
     /**
-     * Sets the login info id cookie
-     * @param res Provides means of sending the request to set the login id on the client sent
-     * @param value to be set as login id
-     */
-    void addLoginInfoIdCookie(HttpServletResponse res, String value);
-
-    /**
-     * Gets the login info id from the incoming request.
-     * @param req holds the login token
-     * @return the fetched login token or null
-     */
-    String extractLoginInfoIdCookie(HttpServletRequest req);
-
-    /**
      * Ensures the client id is available in the incoming request
      */
     void ensureClientHasPreLoginId();
@@ -137,7 +101,7 @@ public interface LoginTokenManager {
 
     /**
      * skillars-deferred-149 AC3 code review (2026-10-08): epoch-millis of when the incoming JWT's
-     * session was last freshly authenticated (login, OTP completion, or a successful DB-reauth) —
+     * session was last freshly authenticated (login or a successful DB-reauth) —
      * preserved unchanged across fast-path extensions, unlike the JWT's own {@code iat}. Null for
      * a token minted before this claim existed. See {@code SecurityConstants.SESSION_ISSUED_AT}'s
      * own javadoc for the full mechanism this feeds.

@@ -88,8 +88,6 @@ import static org.mockito.Mockito.when;
 
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.ANONYMOUS_SESSION_COOKIE;
-import static com.softropic.skillars.infrastructure.security.SecurityConstants.LOGIN_INFO_ID;
-import static com.softropic.skillars.infrastructure.security.SecurityConstants.OTP_TTL;
 import static com.softropic.skillars.infrastructure.security.SecurityError.MISSING_JWT_PRINCIPAL;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
@@ -121,6 +119,7 @@ public class JwtManagerImplTest {
 
     private JwtManagerImpl jwtManager;
     private ClaimsExtractor claimsExtractor;
+    private TokenCreator tokenCreator;
 
     @BeforeEach
     void setUp() {
@@ -129,7 +128,7 @@ public class JwtManagerImplTest {
         when(secretService.fetchSecret(anyString(), anyString())).thenReturn(secret);
 
         JwtConfiguration jwtConfiguration = new JwtConfiguration(secretService);
-        TokenCreator tokenCreator = new TokenCreatorImpl(jwtConfiguration);
+        this.tokenCreator = new TokenCreatorImpl(jwtConfiguration);
         this.claimsExtractor = new ClaimsExtractorImpl(jwtConfiguration);
         TokenValidator tokenValidator = new TokenValidatorImpl(claimsExtractor);
 
@@ -143,6 +142,16 @@ public class JwtManagerImplTest {
     void tearDown() {
         reset(secretService);
         RequestMetadataProvider.cleanup();
+    }
+
+    // Mints a not-logged-in token straight from TokenCreator, as the removed
+    // JwtManagerImpl.generateToken(principal, seed) did for the retired /authenticate 2FA flow; the
+    // tests below only need it as a fixture token to extract from / extend.
+    private String generateToken(Principal principal, String seed) {
+        final long dbRefreshToken = Instant.now(ClockProvider.getClock())
+                .plus(DB_REFRESH_TOKEN_INTERVAL.toMillis(), ChronoUnit.MILLIS)
+                .toEpochMilli();
+        return tokenCreator.generateToken(principal, dbRefreshToken, false, seed);
     }
 
     // Helper to build a token with custom claims for testing invalid/malformed scenarios
@@ -165,7 +174,7 @@ public class JwtManagerImplTest {
 
         // 2. Call jwtManager.generateToken
         String opfSeed = UUID.randomUUID().toString();
-        assertThrows(MissingClientIdException.class, () -> jwtManager.generateToken(principal, opfSeed));
+        assertThrows(MissingClientIdException.class, () -> generateToken(principal, opfSeed));
     }
 
     private static Principal createPrincipal(Set<SimpleGrantedAuthority> authorities) {
@@ -194,7 +203,7 @@ public class JwtManagerImplTest {
 
         // 2. Call jwtManager.generateToken
         String opfSeed = UUID.randomUUID().toString();
-        String token = jwtManager.generateToken(principal, opfSeed);
+        String token = generateToken(principal, opfSeed);
         assertThat(token).isNotNull();
 
         // 3. Parse the token
@@ -368,7 +377,7 @@ public class JwtManagerImplTest {
         Set<SimpleGrantedAuthority> authorities = Set.of(new SimpleGrantedAuthority(ROLE_USER));
         Principal originalPrincipal = createPrincipal(authorities);
         String opfSeed = UUID.randomUUID().toString();
-        String token = jwtManager.generateToken(originalPrincipal, opfSeed);
+        String token = generateToken(originalPrincipal, opfSeed);
 
         // 3. Mock HttpServletRequest and CookieUtil.getCookieValue
         HttpServletRequest mockRequest = mock(HttpServletRequest.class);
@@ -433,7 +442,7 @@ public class JwtManagerImplTest {
         //set time in the past so that an expired token is created
         // This is the only way to test this since the jjwt lib uses Date() (the old java class) instead of the new DateTime lib
         TestClockProvider.setClock(Clock.offset(TestClockProvider.getClock(), Duration.ofSeconds(-(JWT_TTL.toSeconds()+1))));
-        String token = jwtManager.generateToken(originalPrincipal, UUID.randomUUID().toString());
+        String token = generateToken(originalPrincipal, UUID.randomUUID().toString());
 
 
         HttpServletRequest mockRequest = mock(HttpServletRequest.class);
@@ -558,231 +567,6 @@ public class JwtManagerImplTest {
         assertThat(claims.getExpiration().toInstant()).isCloseTo(expectedExpiration, org.assertj.core.api.Assertions.within(2, ChronoUnit.SECONDS));
     }
 
-    // --- refreshLoginToken Tests ---
-    @Test
-    void testRefreshLoginToken_success() throws JsonProcessingException {
-        initRequestMetadata();
-
-        // 1. Generate initial principal and token
-        Set<SimpleGrantedAuthority> authorities = Set.of(new SimpleGrantedAuthority("ROLE_REFRESH_USER"));
-        Principal originalPrincipal = createPrincipal(authorities);
-        String opfSeedOriginal = UUID.randomUUID().toString();
-
-        String initialTokenString = jwtManager.generateToken(originalPrincipal, opfSeedOriginal);
-
-
-        Claims initialClaims = claimsExtractor.extractClaims(initialTokenString);
-        Long originalDbRefreshToken = initialClaims.get(DB_REFRESH_TOKEN, Long.class);
-
-        // 2. Mock response and CookieUtil
-        HttpServletResponse mockResponse = new MockHttpServletResponse();
-
-        // 3. Advance clock slightly to ensure new iat/exp
-        Instant refreshInstant = Instant.now(ClockProvider.getClock());
-
-        // 4. Call refreshLoginToken
-        jwtManager.refreshLoginToken(mockResponse, initialTokenString);
-
-        // 5. Verify CookieUtil.addCookie and capture the new token
-        final String jwt = extractCookie(mockResponse, JWT_COOKIE_NAME);
-        final Claims refreshedClaims = claimsExtractor.extractClaims(jwt);
-
-
-        // 6. Parse and assert claims of the refreshed token
-
-        assertThat(refreshedClaims.getSubject()).isEqualTo(originalPrincipal.getUsername());
-        assertThat(MAPPER.readValue(refreshedClaims.get(ROLES, String.class),
-                                    new TypeReference<Set<SimpleGrantedAuthority>>() {
-                                    })).isEqualTo(authorities);
-        assertThat(refreshedClaims.get(GENDER, String.class)).isEqualTo(originalPrincipal.getGender().toString());
-        assertThat(refreshedClaims.get(DISPLAY_NAME, String.class)).isEqualTo(originalPrincipal.getDisplayName());
-        assertThat(refreshedClaims.get(BUS_ID, String.class)).isEqualTo(originalPrincipal.getBusinessId());
-        assertThat(refreshedClaims.get(OPF_SEED, String.class)).isEqualTo(initialClaims.get(OPF_SEED,
-                                                                                            String.class)); // OPF Seed should be preserved on refresh
-
-        // Assert new iat and dbRefreshToken
-        assertThat(refreshedClaims.getIssuedAt().toInstant()).isCloseTo(refreshInstant,
-                                                                        org.assertj.core.api.Assertions.within(1,
-                                                                                                               ChronoUnit.SECONDS));
-        assertThat(refreshedClaims.getExpiration().toInstant()).isCloseTo(refreshInstant.plus(JWT_TTL),
-                                                                          org.assertj.core.api.Assertions.within(1,
-                                                                                                                 ChronoUnit.SECONDS));
-        assertThat(refreshedClaims.get(DB_REFRESH_TOKEN, Long.class)).isNotNull().isNotEqualTo(originalDbRefreshToken);
-        // The new DB_REFRESH_TOKEN should be based on the new 'iat' + JWT_REFRESH_TTL
-        // SQIDS encoding might cause slight variations, so check it's roughly what we expect or greater than original.
-        // For simplicity, checking it's greater than original and positive.
-        assertThat(refreshedClaims.get(DB_REFRESH_TOKEN, Long.class)).isPositive()
-                                                                     .isGreaterThan(originalDbRefreshToken);
-
-        // Check client specific claims are present
-        assertThat(refreshedClaims.get(CLIENT_ID, String.class)).isEqualTo(RequestMetadataProvider.getClientInfo()
-                                                                                                  .getClientIdentifier());
-
-    }
-
-    // skillars-deferred-142 AC2: refreshLoginToken (the OTP-completion path) must set 'skp' with
-    // the caller's real role, derived from the ROLES claim — not just the "ADMIN" fallback shape.
-    @Test
-    void testRefreshLoginToken_setsSkillarsProfileCookieFromRolesClaim() throws Exception {
-        initRequestMetadata();
-
-        Set<SimpleGrantedAuthority> authorities = Set.of(new SimpleGrantedAuthority("ROLE_COACH"));
-        Principal originalPrincipal = createPrincipal(authorities);
-        String initialTokenString = jwtManager.generateToken(originalPrincipal, UUID.randomUUID().toString());
-
-        HttpServletResponse mockResponse = new MockHttpServletResponse();
-        jwtManager.refreshLoginToken(mockResponse, initialTokenString);
-
-        final String skpRaw = extractCookie(mockResponse, SKILLARS_PROFILE_COOKIE);
-        final String skpJson = java.net.URLDecoder.decode(skpRaw, StandardCharsets.UTF_8);
-        assertThat(skpJson).isEqualTo("{\"id\":\"" + originalPrincipal.getBusinessId() + "\",\"role\":\"COACH\"}");
-    }
-
-    // An authority with no SkillarsRole equivalent (e.g. ROLE_LTD_ADMIN) must fall back to
-    // ANONYMOUS, never the literal "null" — and never "ADMIN": ROLE_LTD_ADMIN/ROLE_USER holders are
-    // not admins, and labeling them "ADMIN" would surface admin-only nav/UI to them on the frontend.
-    @Test
-    void testRefreshLoginToken_fallsBackToAnonymousWhenNoAuthorityMapsToSkillarsRole() throws Exception {
-        initRequestMetadata();
-
-        Set<SimpleGrantedAuthority> authorities = Set.of(new SimpleGrantedAuthority("ROLE_LTD_ADMIN"));
-        Principal originalPrincipal = createPrincipal(authorities);
-        String initialTokenString = jwtManager.generateToken(originalPrincipal, UUID.randomUUID().toString());
-
-        HttpServletResponse mockResponse = new MockHttpServletResponse();
-        jwtManager.refreshLoginToken(mockResponse, initialTokenString);
-
-        final String skpRaw = extractCookie(mockResponse, SKILLARS_PROFILE_COOKIE);
-        final String skpJson = java.net.URLDecoder.decode(skpRaw, StandardCharsets.UTF_8);
-        assertThat(skpJson).isEqualTo("{\"id\":\"" + originalPrincipal.getBusinessId() + "\",\"role\":\"ANONYMOUS\"}");
-    }
-
-    // skillars-deferred-151 AC5: getAuthoritiesSilently's own catch only handled
-    // JsonProcessingException. A null/non-String ROLES claim makes
-    // ObjectMapper.readValue((String) null, ...) throw IllegalArgumentException instead, escaping
-    // that catch entirely. Latent defensive hardening, not a reachable live bug today —
-    // TokenCreatorImpl.java:49 sets ROLES unconditionally on every token it issues, so a client
-    // cannot forge a ROLES-absent token through any live path; this pins the fix's observable
-    // behavior via the one call site that matters (setSkillarsProfileCookie, called from
-    // refreshLoginToken) using the file's own buildTokenWithCustomClaims precedent, since the
-    // target method is private.
-    //
-    // Mutation check: revert getAuthoritiesSilently to its pre-fix body (drop the
-    // `instanceof String roles` guard) — this test goes RED two ways: refreshLoginToken throws
-    // IllegalArgumentException instead of completing, and no 'skp' cookie is written at all (the
-    // throw happens inside setSkillarsProfileCookie, before its own writeTo call — not "resolves to
-    // ANONYMOUS", which is the POST-fix behavior this test pins instead).
-    @Test
-    void testRefreshLoginToken_nullRolesClaim_degradesToAnonymousInsteadOfThrowing() throws Exception {
-        initRequestMetadata();
-
-        Map<String, Object> claims = new HashMap<>();
-        // No ROLES claim at all — the gap this fix hardens against.
-        claims.put(SUBJECT, "no-roles-claim-user");
-        claims.put(BUS_ID, "999");
-        claims.put(GENDER, Gender.FEMALE.toString());
-        claims.put(CLIENT_ID, "test-client");
-        claims.put(DB_REFRESH_TOKEN, Instant.now(ClockProvider.getClock()).plus(DB_REFRESH_TOKEN_INTERVAL).toEpochMilli());
-
-        String token = buildTokenWithCustomClaims(claims, Instant.now(ClockProvider.getClock()).plus(JWT_TTL), secret);
-
-        HttpServletResponse mockResponse = new MockHttpServletResponse();
-
-        assertThatCode(() -> jwtManager.refreshLoginToken(mockResponse, token)).doesNotThrowAnyException();
-
-        final String skpRaw = extractCookie(mockResponse, SKILLARS_PROFILE_COOKIE);
-        final String skpJson = java.net.URLDecoder.decode(skpRaw, StandardCharsets.UTF_8);
-        assertThat(skpJson).isEqualTo("{\"id\":\"999\",\"role\":\"ANONYMOUS\"}");
-    }
-
-    // skillars-deferred-150 AC2 (code review 2026-10-09 Patch -- the original two tests here
-    // could not actually discriminate pre- from post-fix code, and have been replaced): this
-    // codebase's own Principal extends Spring Security's User, whose constructor
-    // unconditionally re-sorts authorities alphabetically (confirmed via javap) before
-    // TokenCreatorImpl ever serializes them into the ROLES claim -- so ANY test built via
-    // generateToken(principal, ...) hands getAuthoritiesSilently an already alphabetically
-    // ordered claim, regardless of which precedence logic later consumes it. Design B's chosen
-    // order (ADMIN > COACH > PARENT > PLAYER) was deliberately picked to equal alphabetical
-    // order ("preserve current behavior"), so a principal-based test can never tell the old
-    // findFirst()-over-library-sort mechanism apart from the new explicit one: both produce the
-    // identical answer for every possible role subset. These two tests instead hand-build a raw
-    // token via buildTokenWithCustomClaims, bypassing Principal/Spring-Security's own sort
-    // entirely, with the ROLES claim's JSON array placed in deliberately NON-alphabetical order
-    // -- forcing a real divergence: the old .findFirst() would read whatever order the stream
-    // happens to be in (here, JSON array order) and pick wrong; the new Set+ternary logic is
-    // order-independent and must still resolve to the intended role regardless of input order.
-    @Test
-    void testRefreshLoginToken_dualRole_resolvesToHigherPrecedenceParentOverPlayer() throws Exception {
-        initRequestMetadata();
-
-        Map<String, Object> claims = new HashMap<>();
-        claims.put(SUBJECT, "dualRoleUser");
-        // Deliberately non-alphabetical: PLAYER listed before PARENT. The old .findFirst() over
-        // this exact stream order would pick PLAYER; only an order-independent precedence picks
-        // PARENT correctly.
-        claims.put(ROLES, "[{\"role\":\"ROLE_PLAYER\"},{\"role\":\"ROLE_PARENT\"}]");
-        claims.put(CLIENT_ID, "testClientId");
-        claims.put(DISPLAY_NAME, "DualRoleUser");
-        claims.put(SESSION_ID, "testSessionId");
-        claims.put(BUS_ID, "bus-dualrole-1");
-        claims.put(GENDER, Gender.OTHER.toString());
-        String initialTokenString = buildTokenWithCustomClaims(
-            claims, Instant.now(ClockProvider.getClock()).plus(JWT_TTL), secret);
-
-        HttpServletResponse mockResponse = new MockHttpServletResponse();
-        jwtManager.refreshLoginToken(mockResponse, initialTokenString);
-
-        final String skpRaw = extractCookie(mockResponse, SKILLARS_PROFILE_COOKIE);
-        final String skpJson = java.net.URLDecoder.decode(skpRaw, StandardCharsets.UTF_8);
-        assertThat(skpJson).isEqualTo("{\"id\":\"bus-dualrole-1\",\"role\":\"PARENT\"}");
-    }
-
-    @Test
-    void testRefreshLoginToken_dualRole_resolvesToAdminOverCoach() throws Exception {
-        initRequestMetadata();
-
-        Map<String, Object> claims = new HashMap<>();
-        claims.put(SUBJECT, "dualRoleUser2");
-        // Deliberately non-alphabetical: COACH listed before ADMIN. The old .findFirst() over
-        // this exact stream order would pick COACH; only an order-independent precedence picks
-        // ADMIN correctly.
-        claims.put(ROLES, "[{\"role\":\"ROLE_COACH\"},{\"role\":\"ROLE_ADMIN\"}]");
-        claims.put(CLIENT_ID, "testClientId");
-        claims.put(DISPLAY_NAME, "DualRoleUser2");
-        claims.put(SESSION_ID, "testSessionId2");
-        claims.put(BUS_ID, "bus-dualrole-2");
-        claims.put(GENDER, Gender.OTHER.toString());
-        String initialTokenString = buildTokenWithCustomClaims(
-            claims, Instant.now(ClockProvider.getClock()).plus(JWT_TTL), secret);
-
-        HttpServletResponse mockResponse = new MockHttpServletResponse();
-        jwtManager.refreshLoginToken(mockResponse, initialTokenString);
-
-        final String skpRaw = extractCookie(mockResponse, SKILLARS_PROFILE_COOKIE);
-        final String skpJson = java.net.URLDecoder.decode(skpRaw, StandardCharsets.UTF_8);
-        assertThat(skpJson).isEqualTo("{\"id\":\"bus-dualrole-2\",\"role\":\"ADMIN\"}");
-    }
-
-    @Test
-    void testRefreshLoginToken_invalidInitialToken() {
-        HttpServletResponse mockResponse = mock(HttpServletResponse.class);
-        try (MockedStatic<CookieUtil> mockedCookieUtil = Mockito.mockStatic(CookieUtil.class)) {
-            // This should ideally throw an exception which is caught and logged by JwtManagerImpl,
-            // and then it proceeds to effectively do nothing regarding cookie setting.
-            // Or, if it's more robust, it might call deleteLoginToken.
-            // Based on current code, it logs and does not set cookies.
-            
-            assertThrows(InvalidJWTDataException.class, () -> jwtManager.refreshLoginToken(mockResponse, "invalid.token.string"));
-
-            // Verify that addCookie was NOT called for JWT_COOKIE_NAME
-            // (or any cookie if that's the behavior for invalid token)
-            mockedCookieUtil.verifyNoInteractions(); // Or more specifically, verify addCookie was not called
-                                                    // if deleteLoginToken might be called internally.
-                                                    // If it calls delete, then verify removeCookie was called.
-                                                    // Current implementation: it logs and returns, so no cookie interactions.
-        }
-    }
-
     // --- extendTtlOfToken Tests ---
     @Test
     void testExtendTtlOfToken_success() throws JsonProcessingException {
@@ -793,7 +577,7 @@ public class JwtManagerImplTest {
         Principal originalPrincipal = createPrincipal(authorities);
 
         String opfSeedOriginal = UUID.randomUUID().toString();
-        String initialTokenString = jwtManager.generateToken(originalPrincipal, opfSeedOriginal);
+        String initialTokenString = generateToken(originalPrincipal, opfSeedOriginal);
 
         Claims initialClaims = claimsExtractor.extractClaims(initialTokenString);
         Long originalDbRefreshToken = initialClaims.get(DB_REFRESH_TOKEN, Long.class);
@@ -972,41 +756,6 @@ public class JwtManagerImplTest {
     }
 
     @Test
-    void testRemoveTwoFactorCookie() {
-        HttpServletResponse mockResponse = new MockHttpServletResponse();
-        jwtManager.removeTwoFactorCookie(mockResponse);
-        
-        String cookieHeader = mockResponse.getHeader("Set-Cookie");
-        assertThat(cookieHeader).contains(LOGIN_INFO_ID + "=");
-        assertThat(cookieHeader).contains("Max-Age=0");
-    }
-
-    @Test
-    void testAddLoginInfoIdCookie() {
-        HttpServletResponse mockResponse = new MockHttpServletResponse();
-        String val = "test-val";
-        jwtManager.addLoginInfoIdCookie(mockResponse, val);
-        
-        String cookieValue = extractCookie(mockResponse, LOGIN_INFO_ID);
-        assertThat(cookieValue).isEqualTo(val);
-        // Verify TTL
-        String cookieHeader = mockResponse.getHeader("Set-Cookie");
-        assertThat(cookieHeader).contains("Max-Age=" + OTP_TTL.toSeconds());
-    }
-
-    @Test
-    void testExtractLoginInfoIdCookie() {
-        HttpServletRequest mockRequest = mock(HttpServletRequest.class);
-        String val = "test-val";
-        try (MockedStatic<CookieUtil> mockedCookieUtil = Mockito.mockStatic(CookieUtil.class)) {
-            mockedCookieUtil.when(() -> CookieUtil.getCookieValue(mockRequest, LOGIN_INFO_ID)).thenReturn(val);
-            
-            String extracted = jwtManager.extractLoginInfoIdCookie(mockRequest);
-            assertThat(extracted).isEqualTo(val);
-        }
-    }
-
-    @Test
     void testEnsureAuthTokenPresent() {
         HttpServletRequest mockRequest = mock(HttpServletRequest.class);
         try (MockedStatic<CookieUtil> mockedCookieUtil = Mockito.mockStatic(CookieUtil.class)) {
@@ -1024,7 +773,7 @@ public class JwtManagerImplTest {
         initRequestMetadata();
         Set<SimpleGrantedAuthority> authorities = Set.of(new SimpleGrantedAuthority(ROLE_USER));
         Principal principal = createPrincipal(authorities);
-        String token = jwtManager.generateToken(principal, "seed");
+        String token = generateToken(principal, "seed");
 
         HttpServletRequest mockRequest = mock(HttpServletRequest.class);
         try (MockedStatic<CookieUtil> mockedCookieUtil = Mockito.mockStatic(CookieUtil.class)) {
@@ -1043,7 +792,7 @@ public class JwtManagerImplTest {
         initRequestMetadata();
         Set<SimpleGrantedAuthority> authorities = Set.of(new SimpleGrantedAuthority(ROLE_USER));
         Principal principal = createPrincipal(authorities);
-        String token = jwtManager.generateToken(principal, "seed");
+        String token = generateToken(principal, "seed");
 
         HttpServletRequest mockRequest = mock(HttpServletRequest.class);
         try (MockedStatic<CookieUtil> mockedCookieUtil = Mockito.mockStatic(CookieUtil.class)) {

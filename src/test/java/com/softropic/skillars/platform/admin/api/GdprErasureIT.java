@@ -1014,6 +1014,82 @@ class GdprErasureIT extends AbstractIntegrationTest {
         verify(fileStorageService, never()).deleteRawBytes("https://cdn.example.com/legacy.jpg");
     }
 
+    /**
+     * The coach's profile photo and report-branding logo are pictures of / about them: erasure clears
+     * coach_profiles.photo_url, deletes the coach_branding row, and enqueues both blobs (proved via the
+     * drained S3 delete). A branding row pointing at a key outside the branding upload slot (saveBranding
+     * accepts an unchanged server-written key) is removed without deleting that foreign blob, and another
+     * coach's photo and branding stay untouched.
+     */
+    @Test
+    void erase_coachUser_deletesProfilePhotoAndBrandingLogoBlobsAndClearsTheirKeys() {
+        String photoKey = "coach_profile/" + COACH_USER_ID + "/2026/10/" + UUID.randomUUID() + ".jpg";
+        String logoKey = "coach_branding/" + COACH_USER_ID + "/2026/10/" + UUID.randomUUID() + ".png";
+        String otherPhotoKey = "coach_profile/9210000905/2026/10/" + UUID.randomUUID() + ".jpg";
+        String otherLogoKey = "coach_branding/9210000905/2026/10/" + UUID.randomUUID() + ".png";
+        UUID otherCoachProfileId = UUID.randomUUID();
+        long otherCoachUserId = 9210_000_905L;
+        transactionTemplate.execute(status -> {
+            insertUser(otherCoachUserId, "gdpr.erasure.othercoach.photo.9210@skillars-test.com",
+                passwordEncoder.encode(TEST_PASSWORD), "COACH");
+            grantAuthority(otherCoachUserId, "ROLE_COACH");
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_profiles "
+                    + "(id, user_id, display_name, bio, city, languages, canonical_timezone, status, photo_url) "
+                    + "VALUES (?, ?, 'Unrelated Coach', 'Unrelated bio', 'Munich', "
+                    + "ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE', ?)",
+                otherCoachProfileId, otherCoachUserId, otherPhotoKey);
+            jdbcTemplate.update("UPDATE marketplace.coach_profiles SET photo_url = ? WHERE id = ?",
+                photoKey, coachProfileId);
+            jdbcTemplate.update(
+                "INSERT INTO development.coach_branding (coach_id, logo_key, brand_colour, updated_at) VALUES (?, ?, '#3B82F6', now())",
+                coachProfileId, logoKey);
+            jdbcTemplate.update(
+                "INSERT INTO development.coach_branding (coach_id, logo_key, brand_colour, updated_at) VALUES (?, ?, '#000000', now())",
+                otherCoachProfileId, otherLogoKey);
+            return null;
+        });
+
+        erase(COACH_USER_ID);
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT photo_url FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId)).isNull();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.coach_branding WHERE coach_id = ?", Integer.class, coachProfileId)).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT photo_url FROM marketplace.coach_profiles WHERE id = ?", String.class, otherCoachProfileId))
+            .isEqualTo(otherPhotoKey);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT logo_key FROM development.coach_branding WHERE coach_id = ?", String.class, otherCoachProfileId))
+            .isEqualTo(otherLogoKey);
+
+        outboxService.drain();
+        verify(fileStorageService).deleteRawBytes(photoKey);
+        verify(fileStorageService).deleteRawBytes(logoKey);
+        verify(fileStorageService, never()).deleteRawBytes(otherPhotoKey);
+        verify(fileStorageService, never()).deleteRawBytes(otherLogoKey);
+    }
+
+    /** A branding row whose key is not a branding-slot upload (e.g. an unchanged server-written key) is
+     *  removed with the coach's erasure, but the foreign blob it points at is not deleted. */
+    @Test
+    void erase_coachUser_brandingRowWithForeignKey_isRemovedWithoutDeletingThatBlob() {
+        String foreignKey = "performance_report/" + UUID.randomUUID() + ".pdf";
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO development.coach_branding (coach_id, logo_key, brand_colour, updated_at) VALUES (?, ?, NULL, now())",
+                coachProfileId, foreignKey);
+            return null;
+        });
+
+        erase(COACH_USER_ID);
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.coach_branding WHERE coach_id = ?", Integer.class, coachProfileId)).isZero();
+        outboxService.drain();
+        verify(fileStorageService, never()).deleteRawBytes(foreignKey);
+    }
+
     @Test
     void erase_coachUser_scrubsOwnAvailabilityBlockReasonsButNotAnotherCoachs() {
         UUID ownBlockId = UUID.randomUUID();

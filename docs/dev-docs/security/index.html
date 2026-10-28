@@ -118,9 +118,9 @@
       <tr><td><code>contract.event</code></td><td>Domain events published or consumed by this module (registration emails/OTPs, account changes, security alerts, suspension/erasure).</td></tr>
       <tr><td><code>contract.exception</code></td><td>All security/registration/auth exception types, most carrying a message key and machine error code consumed by <code>ApiAdvice</code> (incl. <code>LoginRateLimitedException</code> &rarr; 429 + <code>Retry-After</code>, <code>FeatureGatedException</code>).</td></tr>
       <tr><td><code>contract.util</code></td><td><code>AuthoritiesConstants</code>, <code>Cryptopher</code> (crypto helper), <code>ShortCode</code> (short human-support codes / obfuscated ids).</td></tr>
-      <tr><td><code>infrastructure</code></td><td>Security-module-internal plumbing: JWT filters/token creation and the JWT signing-secret lookup (<code>infrastructure.jwt</code>), the legacy <code>/otp</code> and <code>/refresh</code> filters (<code>infrastructure.filter</code>), the authorization manager chain, the fraud-aware authentication manager, and event listeners that turn auth/registration/suspension/erasure events into lockouts, audit rows and outbox emails (<code>infrastructure.listener</code>).</td></tr>
-      <tr><td><code>repo</code></td><td>JPA entities and Spring Data repositories: <code>User</code>, <code>PlayerProfile</code>, <code>ParentPlayerLink</code>, <code>Authority</code>, tokens (<code>RefreshToken</code>, <code>EmailVerificationToken</code>, <code>PhoneOtpToken</code>, <code>PersistentToken</code>, <code>LoginInfo</code>), <code>LoginAttempt</code>, <code>SecKey</code>/<code>Secret</code> (encrypted key material), <code>UserAdminSummaryView</code> (admin search projection), <code>Address</code>/<code>Challenge</code> (embeddables).</td></tr>
-      <tr><td><code>service</code></td><td>All business logic: auth (<code>AuthService</code>, <code>TwoFactorLoginService</code>, <code>LoginAttemptsService</code>, <code>LoginTokenManager</code>, <code>DaoAuthProvider</code>), registration (<code>CoachRegistrationService</code>, <code>ParentRegistrationService</code>, <code>PlayerRegistrationService</code>, <code>RegistrationOtpResendSupport</code>, <code>RegistrationVerificationTokenService</code>, <code>OtpHasher</code>, legacy <code>UserRegistrationService</code>), profile (<code>UserProfileService</code>, <code>UserService</code>), shadow accounts (<code>ShadowAccountService</code>, <code>PlayerOwnershipGuard</code>), GDPR write guard (<code>DevelopmentDataErasureGuard</code>), age policy, password reset, admin ops and housekeeping (<code>UserAdminService</code>, <code>AuthCleanupService</code>), startup bootstrap (<code>AdminBootstrapRunner</code>, <code>JwtSecretBootstrapRunner</code>), and low-level crypto (<code>SecKeyService</code>/<code>SecretService</code>).</td></tr>
+      <tr><td><code>infrastructure</code></td><td>Security-module-internal plumbing: JWT filters/token creation and the JWT signing-secret lookup (<code>infrastructure.jwt</code>), the <code>/refresh</code> keep-alive and security-advice filters (<code>infrastructure.filter</code>), the authorization manager chain, and event listeners that turn auth/registration/suspension/erasure events into lockouts, audit rows and outbox emails (<code>infrastructure.listener</code>).</td></tr>
+      <tr><td><code>repo</code></td><td>JPA entities and Spring Data repositories: <code>User</code>, <code>PlayerProfile</code>, <code>ParentPlayerLink</code>, <code>Authority</code>, tokens (<code>RefreshToken</code>, <code>EmailVerificationToken</code>, <code>PhoneOtpToken</code>, <code>PersistentToken</code>), <code>LoginAttempt</code>, <code>SecKey</code>/<code>Secret</code> (encrypted key material), <code>UserAdminSummaryView</code> (admin search projection), <code>Address</code>/<code>Challenge</code> (embeddables).</td></tr>
+      <tr><td><code>service</code></td><td>All business logic: auth (<code>AuthService</code>, <code>LoginRateLimiter</code>, <code>LoginTokenManager</code>, <code>DaoAuthProvider</code>), registration (<code>CoachRegistrationService</code>, <code>ParentRegistrationService</code>, <code>PlayerRegistrationService</code>, <code>RegistrationOtpResendSupport</code>, <code>RegistrationVerificationTokenService</code>, <code>OtpHasher</code>, legacy <code>UserRegistrationService</code>), profile (<code>UserProfileService</code>, <code>UserService</code>), shadow accounts (<code>ShadowAccountService</code>, <code>PlayerOwnershipGuard</code>), GDPR write guard (<code>DevelopmentDataErasureGuard</code>), age policy, password reset, admin ops and housekeeping (<code>UserAdminService</code>, <code>AuthCleanupService</code>), startup bootstrap (<code>AdminBootstrapRunner</code>, <code>JwtSecretBootstrapRunner</code>), and low-level crypto (<code>SecKeyService</code>/<code>SecretService</code>).</td></tr>
     </table>
 
     <h3 id="key-entities-tables">Key entities &amp; tables</h3>
@@ -134,7 +134,6 @@
       <tr><td><code>EmailVerificationToken</code></td><td><code>email_verification_tokens</code></td><td>Single-use UUID token shared by the three role registration flows (coach/parent/player).</td></tr>
       <tr><td><code>PhoneOtpToken</code></td><td><code>phone_otp_tokens</code></td><td>Keyed-HMAC 6-digit OTP (10-min TTL) for the phone-verification step, shared across the three registration flows. Partial unique index <code>uq_pot_one_active_per_user</code> allows one live OTP per user (a concurrent re-issue &rarr; 409 <code>security.otpResendInProgress</code>).</td></tr>
       <tr><td><code>LoginAttempt</code></td><td><code>main.login_attempts</code></td><td>One row per failed <code>/api/auth/login</code>, keyed by <code>identifier = SHA-256(email|ip)</code> plus (V171) <code>subject_hash = SHA-256(email)</code>, so an admin can count/clear an account's failures across all IPs. Purged after 24h by <code>AuthCleanupService</code>.</td></tr>
-      <tr><td><code>LoginInfo</code></td><td>(default)</td><td>Backs the legacy <code>/authenticate</code> &rarr; <code>/otp</code> two-factor flow — stores the OTP, seed, and client/session metadata between the first-factor check and the 2FA confirmation.</td></tr>
       <tr><td><code>PersistentToken</code></td><td><code>persistent_token</code></td><td>Per-user session/device info (IP, user agent, blacklist flag); cleared by <code>UserErasedEventListener</code>.</td></tr>
       <tr><td><code>SecKey</code> / <code>Secret</code></td><td><code>sec_key</code> / <code>sec</code></td><td>Jasypt-encrypted key material keyed by (<code>version</code>, <code>busId</code>). The JWT signing secret is a <code>Secret</code> row (<code>JWT_VERSION</code>/<code>JWT_BUS_NAME</code>) — no Flyway seed creates it, so a fresh DB fails every request with <code>KEY_NOT_FOUND</code> until it exists (see <code>JwtSecretBootstrapRunner</code>).</td></tr>
     </table>
@@ -151,9 +150,7 @@
       <tr><td><code>ShadowAccountService</code></td><td>Creates/lists/fetches <code>PlayerProfile</code>s for parent-managed minors (with consent enforcement) and self-registered adults; updates position (<code>updateOwnPosition</code>/<code>updateChildPosition</code>); hides GDPR-erased children from listings. There is no "link another parent" path: one parent per player is enforced by <code>uq_ppl_player_id</code>.</td></tr>
       <tr><td><code>UserService</code> / <code>UserProfileService</code></td><td>User/profile lookups and self-service profile mutations (email, password, phone, address, info), each publishing an <code>AccountChangeEvent</code> for audit/notification.</td></tr>
       <tr><td><code>AgePolicyService</code></td><td>Config-driven age-tier calculation and derived <code>MessagingPolicy</code> (<code>getMessagingPolicy</code>, <code>findMessagingPolicy</code>, batch <code>findMessagingPoliciesByPlayerIds</code>), shared by shadow-account creation, player self-registration and messaging.</td></tr>
-      <tr><td><code>LoginRateLimiter</code></td><td>The one failed-login limiter, in <code>main.login_attempts</code> keyed by SHA-256(login|ip): <code>checkLimited</code>, <code>recordFailure</code>, admin <code>clear</code>/<code>countRecentFailures</code>. Budget/window from <code>security.login.max-attempts</code> / <code>lock-window-minutes</code>. Used by <code>AuthService.login</code> and by the legacy <code>/authenticate</code> path, with the same key, so the two share one budget. The legacy path also checks <code>isAccountLimited</code> (same budget across all IPs); the SPA path does not, to avoid account-DoS.</td></tr>
-      <tr><td><code>LoginAttemptsService</code> / <code>LoginDecisionManager</code></td><td>Login decision for the legacy <code>/authenticate</code> path (<code>FraudAwareAuthenticationManager</code>): delegates counting to <code>LoginRateLimiter</code> (failures are recorded where <code>/authenticate</code> rejects a password, not from the app-wide <code>BadCredentialsEvent</code>). Only the <code>FraudEvent</code>-fed client blacklist (30 days) is still in memory, per instance.</td></tr>
-      <tr><td><code>TwoFactorLoginService</code></td><td>Generates and validates the email OTP for the legacy <code>/authenticate</code> &rarr; <code>/otp</code> flow (distinct from the registration phone OTP).</td></tr>
+      <tr><td><code>LoginRateLimiter</code></td><td>The one failed-login limiter, in <code>main.login_attempts</code> keyed by SHA-256(login|ip): <code>checkLimited</code>, <code>recordFailure</code>, admin <code>clear</code>/<code>countRecentFailures</code>. Budget/window from <code>security.login.max-attempts</code> / <code>lock-window-minutes</code>. Used by <code>AuthService.login</code>, the only password entry point. <code>checkLimited</code> (<code>MANDATORY</code> propagation) first claims <code>pg_try_advisory_xact_lock(hashtext('login_attempt:' || key))</code>, held until the login transaction ends: a parallel burst never records more than the budget, and an attempt that finds another one for the same key in flight gets 429 (retry after 1 s) instead of parking a pooled connection behind the lock. No account-wide (all IPs) cap, to avoid account-DoS.</td></tr>
       <tr><td><code>LoginTokenManager</code> / <code>JwtManagerImpl</code></td><td>Mint, extend and delete the JWT cookie set (<code>potc</code>, <code>user</code>, <code>rint</code>, <code>ION</code>, <code>skp</code>…). The JWT carries <code>ROLES</code> and <code>sessIat</code> (<code>SESSION_ISSUED_AT</code>); role precedence for a multi-role claim set is explicit ADMIN &gt; COACH &gt; PARENT &gt; PLAYER, and a null/non-string <code>ROLES</code> claim is rejected cleanly.</td></tr>
       <tr><td><code>PasswordResetService</code></td><td>Reset-key issuance/validation and password completion, delegating invariant checks to <code>User</code> domain methods.</td></tr>
       <tr><td><code>UserAdminService</code></td><td><code>lockUserAccount</code>, <code>deleteUserInformation</code>, and the nightly <code>removeNotActivatedUsers</code> purge (batched, capped at 10,000 delete attempts per run, failures recorded in <code>user.cleanup*</code> columns).</td></tr>
@@ -171,8 +168,6 @@
       <tr><td>POST</td><td><code>/api/auth/refresh</code></td><td>Rotate refresh token, reissue JWT</td><td>Public (refresh-token cookie)</td></tr>
       <tr><td>POST</td><td><code>/api/auth/logout</code></td><td>Revoke the refresh token, clear cookies</td><td>Public</td></tr>
       <tr><td>GET (any verb)</td><td><code>/refresh</code></td><td>Keep-alive: <code>JWTAuthorizationFilter</code> extends the JWT, <code>SessionRefreshFilter</code> returns an empty 200</td><td>Any authenticated role</td></tr>
-      <tr><td>POST</td><td><code>/authenticate</code></td><td>Legacy login (<code>JWTAuthenticationFilter</code>); answers <code>JWT_CREATED</code>, or <code>check.otp</code> with a <code>loginInfoId</code> when <code>User.otpEnabled</code>. Still used by ITs (<code>AdminLogin</code>)</td><td>Public</td></tr>
-      <tr><td>POST</td><td><code>/otp</code></td><td>Legacy second factor (<code>SecondFactorLoginFilter</code>); only active when the login-info cookie is present</td><td>Public (login-info cookie)</td></tr>
       <tr><td>POST</td><td><code>/api/logout</code></td><td>Spring Security logout (POST only, so a cross-site GET cannot trigger it): a <code>LogoutHandler</code> runs <code>SecurityUtil.terminateSession</code> (revokes the <code>rtkn</code> refresh token, clears cookies), then <code>AjaxLogoutSuccessHandler</code> answers 200</td><td>Public</td></tr>
       <tr><td>POST</td><td><code>/v1/account/register</code></td><td>Legacy full account registration (<code>RegisterPage.vue</code>)</td><td>Public</td></tr>
       <tr><td>POST</td><td><code>/v1/account/regislink</code></td><td>Resend registration/activation link</td><td>Public</td></tr>
@@ -229,7 +224,7 @@
       <li><code>UserErasedEvent</code> — published by admin's <code>GdprErasureService</code>; <code>UserErasedEventListener</code> (<code>AFTER_COMMIT</code>) re-asserts <code>activated=false, locked=true</code> and clears persistent tokens if erasure somehow left them. Also consumed by notification.</li>
       <li><code>AccountDeletionRequestedEvent</code> — published by <code>GdprErasureService</code>, consumed by video's <code>AccountDeletionCascadeListener</code>. Its ids are in the <code>videos.owner_id</code> space: coach-profile UUID, player <code>PlayerProfile</code> id, and <code>linkedPlayerIds</code> = the parent's children's <code>PlayerProfile</code> ids.</li>
     </ul>
-    <p>Consumed from <code>infrastructure.security.event</code> (cross-cutting): <code>BadCredentialsEvent</code>, <code>FraudEvent</code>, <code>AuthEvent</code>/<code>PreAuthEvent</code>, picked up by listeners in <code>platform.security.infrastructure.listener</code> for audit logging and the legacy client blacklist (<code>FraudEvent</code>). <code>BadCredentialsEvent</code> no longer feeds any login counter.</p>
+    <p>Consumed from <code>infrastructure.security.event</code> (cross-cutting): <code>BadCredentialsEvent</code>, <code>AuthEvent</code>/<code>PreAuthEvent</code>, picked up by listeners in <code>platform.security.infrastructure.listener</code> for audit logging and request-context enrichment. <code>BadCredentialsEvent</code> does not feed any login counter. (<code>FraudEvent</code> and its in-memory client blacklist were removed with the legacy login stack.)</p>
     <p>Depends on <code>infrastructure.security</code> for cookie handling (<code>CookieUtil</code>), rate limiting (<code>@RateLimited</code>/<code>RateLimitingService</code>), the shared <code>SecurityConstants</code>/<code>SecurityError</code>, and request-context helpers (<code>ClientContextProvider</code>, <code>RequestMetadataProvider</code>). Also imports from <code>infrastructure.sanitizer</code>, <code>infrastructure.validation</code> (<code>PhoneNumber</code>), <code>infrastructure.persistence</code>, <code>infrastructure.web</code> (<code>FrontendLinkBuilder</code>), and reaches into <code>platform.config</code> (<code>ConfigService</code>), <code>platform.admin</code> (<code>SkillarsPlatformProperties</code>), <code>platform.notification</code> (outbox support), and every module's contract exceptions (handled centrally in <code>ApiAdvice</code>).</p>
 
     <h3 id="scheduled-jobs">Scheduled jobs</h3>
@@ -242,21 +237,30 @@
 
     <h2 id="key-flows">Key Flows</h2>
 
-    <h3 id="the-two-login-stacks">The two login stacks</h3>
+    <h3 id="the-two-login-stacks">The login stack</h3>
     <p>
-      Both stacks are still wired in <code>SecurityConfiguration.filterChain</code>, and both end in the same JWT cookie
-      (<code>potc</code>) checked by the same <code>JWTAuthorizationFilter</code> on every secured request. They differ in
-      how the caller proves identity and which brute-force counters apply:
+      There is one password entry point: <code>POST /api/auth/login</code> &rarr; <code>AuthResource</code> &rarr;
+      <code>AuthService.login</code>, used by <code>LoginPage.vue</code> for <em>every</em> persona, admins included (admins get
+      <code>role = "ADMIN"</code> in <code>skp</code> because their <code>skillarsRole</code> is null), and by the ITs
+      (<code>e2e/AdminLogin.login</code>). It ends in the JWT cookie (<code>potc</code>) that <code>JWTAuthorizationFilter</code>
+      checks on every secured request, plus the <code>rtkn</code> refresh token and the <code>skp</code> profile cookie.
     </p>
     <table>
-      <tr><th></th><th>SPA stack (in use)</th><th>Legacy stack (wired, not used by the SPA)</th></tr>
-      <tr><td>Entry</td><td><code>POST /api/auth/login</code> &rarr; <code>AuthResource</code>/<code>AuthService</code></td><td><code>POST /authenticate</code> (<code>JWTAuthenticationFilter</code>) &rarr; <code>POST /otp</code> (<code>SecondFactorLoginFilter</code>)</td></tr>
-      <tr><td>Who uses it</td><td><code>LoginPage.vue</code> for <em>every</em> persona, admins included (admins get <code>role = "ADMIN"</code> in <code>skp</code> because their <code>skillarsRole</code> is null)</td><td>No in-app caller (the SPA's <code>authApi.login</code>/<code>verifyOtp</code> and <code>OtpPage.vue</code> were removed). ITs still log in through it (<code>e2e/AdminLogin</code>, <code>ConfigResourceIT</code>, <code>StorageResourceIT</code>, <code>ReportGenerationServiceIT</code>)</td></tr>
-      <tr><td>Second factor</td><td>None</td><td>Only when <code>User.otpEnabled</code> (the authenticated principal comes from the user row); email OTP via <code>TwoFactorLoginService</code>/<code>LoginInfo</code></td></tr>
-      <tr><td>Brute-force counters</td><td colspan="2">One DB-backed limiter for both: <code>LoginRateLimiter</code> over <code>main.login_attempts</code>, same SHA-256(login|ip) key, so failures on either path count against both</td></tr>
-      <tr><td>Refresh</td><td><code>rtkn</code> rotation via <code>POST /api/auth/refresh</code></td><td>Sliding-window extension only (<code>GET /refresh</code>)</td></tr>
-      <tr><td>Logout</td><td><code>POST /api/auth/logout</code> (revokes the refresh token)</td><td><code>POST /api/logout</code> (Spring logout; also revokes the refresh token)</td></tr>
+      <tr><th></th><th>How</th></tr>
+      <tr><td>Second factor</td><td>None. <code>User.otpEnabled</code> is no longer read by any login path.</td></tr>
+      <tr><td>Brute-force counter</td><td><code>LoginRateLimiter</code> over <code>main.login_attempts</code>, SHA-256(login|ip) key, claimed per key with a transaction-scoped advisory try-lock (a concurrent attempt for the same key gets 429)</td></tr>
+      <tr><td>Refresh</td><td><code>rtkn</code> rotation via <code>POST /api/auth/refresh</code>; sliding-window JWT extension via <code>GET /refresh</code></td></tr>
+      <tr><td>Logout</td><td><code>POST /api/auth/logout</code>, or Spring's <code>POST /api/logout</code> (both revoke the refresh token)</td></tr>
     </table>
+    <p>
+      Removed (chore/auth-legacy-removal): the legacy <code>POST /authenticate</code> (<code>JWTAuthenticationFilter</code>)
+      &rarr; <code>POST /otp</code> (<code>SecondFactorLoginFilter</code>) email-2FA pair with <code>TwoFactorLoginService</code>,
+      <code>LoginInfo</code>, <code>FraudAwareAuthenticationManager</code> and the in-memory client blacklist
+      (<code>LoginAttemptsService</code>), and Spring's default <code>formLogin()</code> (an unthrottled
+      <code>POST /login</code> that verified passwords and kept the result in an <code>HttpSession</code>). The
+      <code>main.login_info</code> table is unused and is dropped in a later release; the <code>SEND_OTP</code> email
+      template stays in the enum (and masked in <code>MailManager</code>) only so historical/queued envelopes resolve.
+    </p>
 
     <h3 id="coach-parent-player-self-registration-verification">Coach / Parent / Player self-registration &amp; verification</h3>
     <pre class="mermaid">
@@ -408,16 +412,15 @@ sequenceDiagram
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
-      <p><strong>Two login stacks, one JWT.</strong> See <a href="#the-two-login-stacks">the table above</a>. Only
-      <code>/api/auth/login</code> is used by the SPA, for every role including admins. The legacy
-      <code>/authenticate</code> &rarr; <code>/otp</code> path is still a live, public endpoint pair (ITs log in through
-      it). Both paths share one DB-backed failed-login limiter (<code>LoginRateLimiter</code>), so a lockout on one
-      applies to the other and the admin "unlock login" clears it for both. The <code>/otp</code> step itself has no
-      attempt counter beyond its 10-minute expiry and the client/session binding.</p>
+      <p><strong>One login path.</strong> See <a href="#the-two-login-stacks">the login stack</a>. Every password check goes
+      through <code>POST /api/auth/login</code> and its rate limiter — do not add another
+      <code>AuthenticationManager</code>-backed entry point (form login, HTTP Basic, a filter) without the same
+      limiter, or it becomes an unthrottled password oracle. <code>SecurityFilterChainIT.removedLegacyLoginEndpoints_doNotAuthenticate</code>
+      pins that <code>/authenticate</code>, <code>/otp</code> and <code>/login</code> never yield a session.</p>
     </div>
     <div class="callout warn">
-      <p><strong>No self-service 2FA toggle.</strong> <code>User.otpEnabled</code> is only read by the legacy
-      <code>/authenticate</code> path; <code>AuthService.login</code> (the SPA) never enforces a second factor. The
+      <p><strong>No 2FA.</strong> <code>User.otpEnabled</code> is not read by any login path (it only drove the removed
+      <code>/authenticate</code> &rarr; <code>/otp</code> flow); <code>AuthService.login</code> never enforces a second factor. The
       former <code>PUT /api/account/2fa</code>, its <code>Toggle2faDialog.vue</code> and the registration checkbox were
       removed rather than left as a toggle that silently did nothing. Real SPA 2FA needs <code>/api/auth/login</code>
       to issue the refresh/<code>skp</code> cookies only after the OTP step, and an attempt counter on that step.</p>

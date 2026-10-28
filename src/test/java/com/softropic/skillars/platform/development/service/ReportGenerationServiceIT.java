@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.e2e.AdminLogin;
 import com.softropic.skillars.infrastructure.storage.BaseStorageIT;
 import com.softropic.skillars.platform.development.contract.CoachBrandingRequest;
 import com.softropic.skillars.platform.development.contract.CoachBrandingResponse;
@@ -294,29 +295,9 @@ class ReportGenerationServiceIT extends BaseStorageIT {
             coachId, tier);
     }
 
-    /** Mirrors AdminLogin.loginAsAdmin's POST /authenticate + Set-Cookie extraction for an
-     *  arbitrary (non-admin) seeded user, since AdminLogin itself is hardcoded to the admin
-     *  fixture's credentials. */
+    /** Logs in through POST /api/auth/login (AdminLogin.login) as an arbitrary seeded user. */
     private HttpHeaders loginAsCoach(String email, String password) {
-        HttpHeaders loginHeaders = new HttpHeaders();
-        loginHeaders.setContentType(MediaType.APPLICATION_JSON);
-        loginHeaders.add(HttpHeaders.COOKIE, "fcookie=fingerprintCookie");
-        loginHeaders.add("user-agent", "Java/17.0.11");
-
-        Map<String, String> credentials = Map.of("id", email, "password", password);
-        ResponseEntity<Map> loginResponse = restTemplate.exchange(
-            baseUrl() + "/authenticate", HttpMethod.POST,
-            new HttpEntity<>(credentials, loginHeaders), Map.class);
-        assertThat(loginResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-
-        List<String> setCookies = loginResponse.getHeaders().get(HttpHeaders.SET_COOKIE);
-        assertThat(setCookies).isNotNull().isNotEmpty();
-        String cookieHeader = String.join("; ",
-            setCookies.stream().map(c -> c.split(";", 2)[0]).toList());
-
-        HttpHeaders authHeaders = new HttpHeaders();
-        authHeaders.set(HttpHeaders.COOKIE, cookieHeader);
-        return authHeaders;
+        return AdminLogin.login(baseUrl(), email, password, restTemplate);
     }
 
     // JWTAuthorizationFilter/TokenValidatorImpl re-check the fingerprint (fcookie) + user-agent

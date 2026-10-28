@@ -82,7 +82,7 @@
       <tr><td>State / routing / i18n</td><td>Pinia <code>^3</code>, vue-router <code>^4</code>, vue-i18n <code>^11</code> (composition mode, <code>legacy: false</code>), <code>@intlify/unplugin-vue-i18n</code> Vite plugin.</td></tr>
       <tr><td>Other runtime deps</td><td><code>axios</code>, <code>echarts</code> + <code>vue-echarts</code> (charts/radar), <code>@stripe/stripe-js</code>, <code>tus-js-client</code> (resumable video uploads), <code>vuedraggable</code> (session builder), <code>@rajesh896/broprint.js</code> (browser fingerprint cookie).</td></tr>
       <tr><td>Config</td><td><code>quasar.config.js</code>: boot files <code>['theme', 'i18n', 'axios']</code> (in that order), <code>css: ['app.scss']</code>, <code>vueRouterMode: 'hash'</code>, Quasar plugins <code>Notify</code> + <code>Dialog</code>, <code>vite-plugin-checker</code> running ESLint on dev builds.</td></tr>
-      <tr><td>Dev server</td><td><code>npm run dev</code> (<code>quasar dev</code>). The <code>devServer.proxy</code> forwards <code>/api</code>, <code>/api/v1</code>, <code>/v1/api</code>, <code>/v1/account</code>, <code>/v1/admin</code>, <code>/authenticate</code>, <code>/refresh</code> to the backend on <code>localhost:9990</code> and <code>/manage</code> to <code>localhost:8367</code> (actuator). A new top-level backend path prefix needs a proxy entry or <code>quasar dev</code> serves <code>index.html</code> for it.</td></tr>
+      <tr><td>Dev server</td><td><code>npm run dev</code> (<code>quasar dev</code>). The <code>devServer.proxy</code> forwards <code>/api</code>, <code>/api/v1</code>, <code>/v1/api</code>, <code>/v1/account</code>, <code>/v1/admin</code>, <code>/refresh</code> to the backend on <code>localhost:9990</code> and <code>/manage</code> to <code>localhost:8367</code> (actuator). A new top-level backend path prefix needs a proxy entry or <code>quasar dev</code> serves <code>index.html</code> for it.</td></tr>
       <tr><td>Maven integration</td><td><code>frontend-maven-plugin</code> installs Node <code>v22.16.0</code> (<code>&lt;node.version&gt;</code> in <code>pom.xml</code>), runs <code>npm install --legacy-peer-deps</code>, <code>npm install -g @quasar/cli</code>, <code>npx quasar build</code>, and <code>npm test</code> (a deliberate no-op). <code>-DskipFrontend</code> skips all of it &mdash; the resulting jar has <strong>no UI</strong>.</td></tr>
     </table>
 
@@ -408,7 +408,7 @@ sequenceDiagram
 
     <h2 id="related-docs">Related Docs</h2>
     <ul>
-      <li><a href="../security/index.html">Security</a> &mdash; JWT cookie, <code>skp</code>/<code>rint</code>/<code>user</code> cookies, <code>/authenticate</code>, <code>/otp</code>, <code>/refresh</code>, <code>/api/auth/*</code>.</li>
+      <li><a href="../security/index.html">Security</a> &mdash; JWT cookie, <code>skp</code>/<code>rint</code>/<code>user</code> cookies, <code>/refresh</code>, <code>/api/auth/*</code>.</li>
       <li><a href="../messaging/index.html">Messaging</a>, <a href="../booking/index.html">Booking</a>, <a href="../video/index.html">Video</a> &mdash; the backends of the three SSE streams.</li>
       <li><a href="../notification/index.html">Notification</a> &mdash; in-app inbox, email preferences and the unsubscribe token behind <code>NotificationsPage.vue</code> / <code>UnsubscribePage.vue</code>.</li>
       <li><a href="../config/index.html">Config</a> &mdash; the store edited by <code>pages/admin/AdminConfigPage.vue</code>.</li>

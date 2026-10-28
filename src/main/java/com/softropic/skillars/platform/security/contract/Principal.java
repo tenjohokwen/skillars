@@ -175,8 +175,8 @@ public class Principal extends User {
                             // and SecurityConstants.SESSION_ISSUED_AT's javadoc.
                             .credentialsNonExpired(true)
                             // A SUSPENDED (safety-suspended) account counts as locked on every
-                            // path that builds a Principal from the user row: the legacy
-                            // /authenticate filter and the JWT filter's DB-backed renewal.
+                            // path that builds a Principal from the user row (the JWT filter's
+                            // DB-backed renewal; AuthService.login checks the row directly).
                             .accountNonLocked(!user.isLocked()
                                 && user.getVerificationStatus() != SkillarsVerificationStatus.SUSPENDED)
                             .authorities(grantedAuthorities)

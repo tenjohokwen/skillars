@@ -93,6 +93,7 @@ import static org.mockito.Mockito.when;
 class GdprErasureServiceTest {
 
     @Mock private com.softropic.skillars.platform.marketplace.repo.CoachMediaItemRepository coachMediaItemRepository;
+    @Mock private com.softropic.skillars.platform.development.repo.CoachBrandingRepository coachBrandingRepository;
     @Mock private GdprRequestRepository gdprRequestRepository;
     @Mock private AdminAlertRepository adminAlertRepository;
     @Mock private UserRepository userRepository;
@@ -157,7 +158,7 @@ class GdprErasureServiceTest {
             playerRadarBaselineRepository, playerRadarCompositeRepository, performanceReportRepository,
             playerTimelineRepository, homeworkCompletionRepository, blobDeletionOutboxSupport,
             refreshTokenRepository, eventPublisher, lockRetryer, entityManager, txManager, configService,
-            dataSource, coachMediaItemRepository);
+            dataSource, coachMediaItemRepository, coachBrandingRepository);
         service.initTemplates();
         // skillars-deferred-132 AC1 Fix 4: erase() now delegates to self.eraseTransactional(...) so its
         // own connection-pool pre-check runs before the @Transactional(REQUIRES_NEW) proxy advice would
