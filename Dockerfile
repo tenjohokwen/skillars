@@ -6,7 +6,20 @@ WORKDIR /app
 COPY pom.xml .
 RUN mvn dependency:go-offline -B -q || true
 
-# Layer: Full source (Java + frontend — node binary downloaded here by frontend-maven-plugin)
+# Layer: node + npm for frontend-maven-plugin (cached until pom.xml changes). Runs the pom's own
+# "Install node and npm" execution, so versions come from pom.xml with no duplication here. It
+# used to run inside `mvn package` below, after `COPY src/`, so every PR re-downloaded ~55MB from
+# nodejs.org; a slow/stalled download there failed or timed out the docker-image job (2026-10-28,
+# #317/#319). It installs into src/frontend/node, which .dockerignore keeps out of the build
+# context, so the COPY below cannot clobber it and `mvn package` finds node already installed.
+# Retries cover transient nodejs.org/npmjs.org failures; if all attempts fail, `mvn package`
+# still tries once more itself.
+RUN for i in 1 2 3 4; do \
+      mvn -B -q "com.github.eirslett:frontend-maven-plugin:install-node-and-npm@Install node and npm" && break; \
+      echo "node/npm prefetch attempt $i failed, retrying" >&2; sleep $((i * 15)); \
+    done
+
+# Layer: Full source (Java + frontend)
 COPY src/ src/
 
 # skillars-deferred-149 AC7: git-commit-id-maven-plugin's own git-based generation is skipped
