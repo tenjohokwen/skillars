@@ -22,6 +22,7 @@
         <li><a href="../messaging/index.html">Messaging</a></li>
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
@@ -33,6 +34,7 @@
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
         <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
         <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
       </ul>
     </nav>
   </aside>
@@ -43,41 +45,52 @@
 
     <h2>Business Overview</h2>
     <p>
-      Skillars accumulates files from almost every persona: a Coach's profile photo, a GDPR data-export ZIP an Admin
-      generates for a Parent, a branded session-report PDF a Coach downloads. None of those modules know or care whether the bytes end up in S3, on local disk, or get mirrored to
-      a backup region — that's <code>filestorage</code>'s job. It exists to answer, once, for the whole platform: "how
-      do we accept an upload safely, enforce a size/type/quota policy on it, know who owns it, let it be downloaded
-      again without proxying the bytes through our own servers, and eventually delete it — including from a backup
-      copy — without losing track of any of that in the process?"
+      Skillars stores files for almost every persona: a coach's profile photo and gallery images, a coach's report
+      branding logo, a branded session-report PDF, and a GDPR data-export ZIP. None of those modules knows whether the
+      bytes end up in S3 or MinIO, or get mirrored to a backup bucket. That is <code>filestorage</code>'s job. It answers,
+      once for the whole platform: how do we accept a browser upload safely, enforce a size, type and quota policy,
+      know who owns the file, let it be downloaded without proxying bytes through our servers, and eventually delete it?
     </p>
-    <p>Personas touch <code>filestorage</code> almost entirely indirectly, through whichever module owns the business flow:</p>
+    <p>Personas touch <code>filestorage</code> almost entirely indirectly, through the module that owns the business flow:</p>
     <ul>
-      <li><strong>Coaches</strong> upload a profile photo during the Marketplace profile builder; the photo bytes go
-        straight from the browser to S3 via a presigned URL that <code>filestorage</code> issues.</li>
-      <li><strong>Coaches</strong> no longer record a voice note during a session wrap-up: story 12.7 (D3) removed
-        that wizard step, so the Booking wrap-up stores nothing in <code>filestorage</code> today. Earlier wizard runs
-        did upload <code>audio/webm</code> blobs through the generic <code>/api/storage</code> endpoints tagged
-        <code>entity=booking</code>; those legacy objects may still exist, unread and unlinked to any row (clean-up is
-        tracked in the deferred-work ledger, <code>_bmad-output/implementation-artifacts/deferred-work.md</code>).</li>
-      <li><strong>Admins</strong> trigger GDPR export/erasure jobs that store a generated ZIP bundle and later delete
-        it, via <code>filestorage</code>'s programmatic Java API.</li>
-      <li><strong>Coaches</strong> download generated session-report PDFs and branding logos (Development module),
-        again via <code>filestorage</code>'s programmatic API and presigned download URLs.</li>
+      <li><strong>Coaches</strong> upload a profile photo in the Marketplace profile builder. The bytes go straight from
+        the browser to S3 via a presigned URL (entity <code>coach_profile</code>), and
+        <code>CoachProfilePhotoEventListener</code> links the confirmed key to the profile.</li>
+      <li><strong>Coaches</strong> upload up to 6 public-profile <strong>gallery</strong> images (entity
+        <code>coach_gallery</code>, added in #312). The browser runs sign → PUT → confirm, then calls
+        <code>POST /api/marketplace/coaches/me/profile/gallery {key}</code>. <code>marketplace.CoachGalleryService</code> then
+        checks the key again on the server with <code>FileStorageService.findActiveObject</code> (owner, JPEG/PNG/WebP, ≤5 MB),
+        and removal soft-deletes the object. Frontend: <code>components/profile/EditCoachGalleryDialog.vue</code>.</li>
+      <li><strong>Coaches</strong> upload a report-branding logo (entity <code>coach_branding</code>) and download generated
+        session-report PDFs. <code>development.ReportGenerationService</code> stores the PDF server-side
+        (<code>storeBytes</code>, key <code>reports/{uuid}/report.pdf</code>), reads the logo
+        (<code>downloadBytes</code>, after <code>assertOwnership</code>), and hands out <code>signedDownloadUrl</code>s.</li>
+      <li><strong>Parents, players and admins</strong> get GDPR export ZIPs that <code>admin.GdprExportService</code> stores with
+        <code>storeBytes</code> (key <code>gdpr/exports/{requestId}.zip</code>) and shares with a time-limited
+        <code>signedDownloadUrl(key, Duration)</code>. <code>admin.GdprErasureService</code> deletes a user's blobs (exports,
+        child and coach report PDFs, gallery images) through <code>BlobDeletionOutboxSupport</code>.</li>
+      <li>The old booking wrap-up voice note is gone (story 12.7, D3). Legacy <code>audio/webm</code> objects tagged
+        <code>entity=booking</code> may still exist, unread and unlinked. Clean-up is tracked in
+        <code>_bmad-output/implementation-artifacts/deferred-work.md</code>.</li>
     </ul>
     <p>Key business rules found in the code:</p>
     <ul>
-      <li><strong>Uploads are two-phase and never touch the app server's bytes.</strong> A caller first asks for a
-        presigned S3 <code>PUT</code> URL (<code>sign/upload</code>), uploads bytes directly to S3 from the browser,
-        then calls back to <code>confirm/**</code> so the backend can verify the object actually landed (via
-        <code>HeadObject</code>) before it trusts it exists.</li>
+      <li><strong>Browser uploads happen in two phases and never pass through the app server.</strong> The caller first asks
+        for a presigned S3 <code>PUT</code> URL (<code>sign/upload</code>), uploads the bytes directly to S3, then calls
+        <code>confirm/{key}</code> so the backend can check the object actually landed (<code>HeadObject</code>) before
+        trusting it.</li>
       <li><strong>Every owner has a storage quota</strong> (10&nbsp;GiB by default, <code>platform.filestorage.quota.default-bytes</code>),
-        enforced by summing existing <code>file_storage_objects.size_bytes</code> for the caller before a new upload
-        is signed.</li>
-      <li><strong>Deletes are soft first, physical later.</strong> A <code>DELETE</code> just marks a row
-        <code>deleted_at</code>; a scheduled job physically removes the S3 object only after a retention window
-        (<code>app.storage.deletion.retention-days</code>, default 30 days) has passed.</li>
-      <li><strong>Every write can be asynchronously mirrored to a backup region/bucket</strong> via a transactional
-        outbox table, so a slow or failing backup copy never blocks the primary upload/delete request.</li>
+        checked at sign time against the sum of the owner's <code>file_storage_objects.size_bytes</code>.</li>
+      <li><strong>Validation policy</strong> (<code>platform.filestorage.validation.*</code>): allowed MIME types
+        <code>image/jpeg|png|gif|webp</code>, <code>application/pdf</code>, <code>text/plain</code>,
+        <code>application/octet-stream</code>; extensions <code>jpg jpeg png gif webp pdf txt bin</code>; maximum 100&nbsp;MiB.
+        Domain modules add stricter rules on top (the gallery allows only JPEG, PNG and WebP up to 5 MB).</li>
+      <li><strong>User-initiated deletes are soft first and physical later.</strong> <code>DELETE</code> only sets
+        <code>deleted_at</code>. A scheduled job removes the S3 object after <code>app.storage.deletion.retention-days</code>
+        (default 30).</li>
+      <li><strong>Confirmed uploads <em>can</em> be mirrored to a backup bucket</strong> through the
+        <code>outbox_replication_jobs</code> table, but replication is <strong>off</strong> in every profile
+        (<code>app.storage.replication.enabled: false</code>).</li>
     </ul>
 
     <h2>Technical Overview</h2>
@@ -85,65 +98,76 @@
     <h3>Package layout</h3>
     <table>
       <tr><th>Package</th><th>Purpose</th></tr>
-      <tr><td><code>filestorage.api</code></td><td>One REST controller (<code>StorageResource</code>) exposing the generic sign-upload / confirm / sign-download / delete endpoints used directly by frontends.</td></tr>
-      <tr><td><code>filestorage.config</code></td><td><code>FileStorageProperties</code> (validation rules, quota) and <code>FileStorageConfig</code>, which conditionally wires the replication decorator/scheduler beans.</td></tr>
-      <tr><td><code>filestorage.contract</code></td><td>Request/response records (sign/confirm/download), <code>ValidationRequest</code>, <code>StorageObjectDto</code> (metadata export/import), and <code>FileStorageErrorCode</code>.</td></tr>
-      <tr><td><code>filestorage.contract.exception</code></td><td><code>QuotaExceededException</code>, <code>StorageValidationException</code> — typed <code>ApplicationException</code>s mapped to HTTP errors by <code>security.api.ApiAdvice</code>.</td></tr>
-      <tr><td><code>filestorage.event</code></td><td><code>StorageObjectConfirmedEvent</code> — the one domain event this module publishes.</td></tr>
-      <tr><td><code>filestorage.repo</code></td><td>JPA entities/repositories: <code>FileStorageObject</code>, <code>OutboxReplicationJob</code>, <code>StorageAccessEvent</code>.</td></tr>
-      <tr><td><code>filestorage.service</code></td><td>The core orchestration: <code>FileStorageService</code>, <code>ReplicatedStorageService</code>, <code>OutboxPollerScheduler</code>, <code>DeletionSchedulerService</code>, <code>StorageMigrationService</code>, <code>StorageKeyGenerator</code>, and the validation chain.</td></tr>
-      <tr><td><code>filestorage.service.validation</code></td><td>Five ordered <code>ValidationStep</code> components run by <code>ValidationChain</code> on every sign-upload request.</td></tr>
+      <tr><td><code>filestorage.api</code></td><td>One REST controller, <code>StorageResource</code> (<code>/api/storage</code>): sign-upload, confirm, sign-download and delete, used directly by frontends.</td></tr>
+      <tr><td><code>filestorage.config</code></td><td><code>FileStorageProperties</code> (<code>platform.filestorage.*</code>: validation rules, quota) and <code>FileStorageConfig</code>, which creates <code>ReplicatedStorageService</code> (<code>@Primary</code>) and <code>OutboxPollerScheduler</code> only when <code>app.storage.replication.enabled=true</code>.</td></tr>
+      <tr><td><code>filestorage.contract</code></td><td>Request and response records (<code>SignUploadRequest</code>, <code>ConfirmUploadRequest</code>, <code>SignUploadResponse</code>, <code>ConfirmUploadResponse</code>, <code>SignDownloadResponse</code>), <code>ValidationRequest</code>, <code>StorageObjectDto</code> (metadata export/import, and the return type of <code>findActiveObject</code>), and <code>FileStorageErrorCode</code> (<code>QUOTA_EXCEEDED</code>, <code>VALIDATION_FAILED</code>).</td></tr>
+      <tr><td><code>filestorage.contract.exception</code></td><td><code>QuotaExceededException</code> and <code>StorageValidationException</code>, mapped by <code>security.api.ApiAdvice</code>.</td></tr>
+      <tr><td><code>filestorage.event</code></td><td><code>StorageObjectConfirmedEvent</code>, the one domain event this module publishes.</td></tr>
+      <tr><td><code>filestorage.repo</code></td><td>JPA entities and repositories: <code>FileStorageObject</code>, <code>OutboxReplicationJob</code>, <code>StorageAccessEvent</code>.</td></tr>
+      <tr><td><code>filestorage.service</code></td><td><code>FileStorageService</code>, <code>ReplicatedStorageService</code>, <code>OutboxPollerScheduler</code>, <code>DeletionSchedulerService</code>, <code>BlobDeletionOutboxSupport</code> + <code>BlobDeletionOutboxHandler</code>, <code>StorageMigrationService</code>, <code>StorageKeyGenerator</code>, <code>ValidationChain</code>/<code>ValidationStep</code>, and <code>FileValidator</code>/<code>FileValidatorImpl</code>.</td></tr>
+      <tr><td><code>filestorage.service.validation</code></td><td>Five ordered <code>ValidationStep</code> components that <code>ValidationChain</code> runs on every sign-upload request.</td></tr>
     </table>
 
     <h3>Key entities &amp; DB tables</h3>
+    <p>All three tables are in the <code>main</code> schema, defined in <code>V138__baseline_schema.sql</code>. No later migration changes them.</p>
     <table>
       <tr><th>Entity</th><th>Table</th><th>Notes</th></tr>
-      <tr><td><code>FileStorageObject</code></td><td><code>file_storage_objects</code></td><td>The record of a confirmed upload: <code>key</code>, <code>owner_id</code>, filename, content type, size, checksum, JSON <code>tags</code>, provider/bucket, <code>upload_confirmed_at</code>, plus <code>deleted_at</code>/<code>physical_deleted_at</code> for the two-stage delete lifecycle. Extends <code>AbstractAuditingEntity</code>, so <code>createdBy</code> is used as the upload's owner-of-record for delete authorization.</td></tr>
-      <tr><td><code>OutboxReplicationJob</code></td><td><code>outbox_replication_jobs</code></td><td>Transactional outbox row per <code>REPLICATE</code>/<code>DELETE</code> action, with <code>status</code> (PENDING/PROCESSING/COMPLETED/FAILED), <code>attemptCount</code>, and <code>errorMessage</code>. One row is created in the same DB transaction as the primary write it shadows.</td></tr>
-      <tr><td><code>StorageAccessEvent</code></td><td><code>storage_access_events</code></td><td>Append-only audit log of every signed-download request (key, owner, size, timestamp) — used for access auditing, not currently exposed via any read API.</td></tr>
+      <tr><td><code>FileStorageObject</code></td><td><code>main.file_storage_objects</code></td><td>The record of a <strong>confirmed browser upload</strong>: <code>key</code>, <code>owner_id</code> (the confirmer's business id), original filename, content type and size (taken from <code>HeadObject</code>, not the client), checksum, JSON <code>tags</code>, provider and bucket, <code>upload_confirmed_at</code>, plus <code>deleted_at</code>/<code>physical_deleted_at</code> for the two-stage delete. Extends <code>AbstractAuditingEntity</code>. <code>createdBy</code> (the login) is what <code>softDelete</code> authorizes against. Files written with <code>storeBytes</code> have <strong>no</strong> row here.</td></tr>
+      <tr><td><code>OutboxReplicationJob</code></td><td><code>main.outbox_replication_jobs</code></td><td>One row per <code>REPLICATE</code>/<code>DELETE</code> action for an FSO, with <code>status</code> (PENDING/PROCESSING/COMPLETED/FAILED), <code>attemptCount</code>, <code>lastAttemptedAt</code> and <code>errorMessage</code> (≤500). Inserted in the same transaction as the write it shadows.</td></tr>
+      <tr><td><code>StorageAccessEvent</code></td><td><code>main.storage_access_events</code></td><td>Append-only audit row for every REST sign-download (key, owner, size, timestamp). There is no read API. The programmatic <code>signedDownloadUrl</code> does <em>not</em> write one.</td></tr>
     </table>
 
     <h3>Key services</h3>
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
-      <tr><td><code>FileStorageService</code></td><td>The main entry point. <code>signUpload()</code> runs the validation chain, checks the owner's quota, generates a storage key, and presigns an S3 <code>PUT</code>. <code>confirmUpload()</code> verifies the object via <code>HeadObject</code>, persists <code>FileStorageObject</code>, enqueues a <code>REPLICATE</code> outbox job, and publishes <code>StorageObjectConfirmedEvent</code> — all inside one transaction. <code>signDownload()</code> records a <code>StorageAccessEvent</code> and presigns a <code>GET</code>. <code>softDelete()</code> checks the caller is the original uploader (<code>createdBy</code>) before flagging <code>deleted_at</code>. It also exposes programmatic helpers (<code>storeBytes</code>, <code>downloadBytes</code>, <code>signedDownloadUrl</code>, <code>deleteRawBytes</code>, <code>assertOwnership</code>) used by server-side callers that generate their own files (PDFs, ZIPs) rather than accepting a browser upload.</td></tr>
-      <tr><td><code>ReplicatedStorageService</code></td><td>A <code>StorageService</code> decorator (conditional <code>@Primary</code> bean when <code>app.storage.replication.enabled=true</code>): after delegating <code>put()</code> to the real primary <code>StorageService</code>, it enqueues a <code>REPLICATE</code> outbox job for that key. All other methods pass straight through.</td></tr>
-      <tr><td><code>OutboxPollerScheduler</code></td><td>Scheduled job (<code>app.storage.poller.fixed-delay-ms</code>, default 5s) that claims <code>PENDING</code> outbox rows with <code>FOR UPDATE SKIP LOCKED</code>, streams the object from the primary <code>StorageService</code> to the backup one for <code>REPLICATE</code> jobs (or calls <code>delete()</code> on the backup for <code>DELETE</code> jobs), and retries with an attempt counter up to <code>app.storage.replication.max-attempts</code> before marking a job <code>FAILED</code>.</td></tr>
-      <tr><td><code>DeletionSchedulerService</code></td><td>Scheduled job on the same interval that finds soft-deleted <code>FileStorageObject</code>s past the retention cutoff, physically deletes them from the primary store, enqueues a <code>DELETE</code> outbox job (so the backup copy is cleaned up too), and marks <code>physical_deleted_at</code>.</td></tr>
-      <tr><td><code>StorageMigrationService</code></td><td>Ops utility (plain class, not a managed bean) for moving objects between two <code>StorageService</code> backends — e.g. local-disk-to-S3 migration — plus exporting/importing <code>FileStorageObject</code> metadata as <code>StorageObjectDto</code> for backup/restore.</td></tr>
-      <tr><td><code>StorageKeyGenerator</code></td><td>Generates keys as <code>{entity}/{entityId}/{yyyy}/{mm}/{uuid}.{extension}</code> and parses them back apart. This convention is how other modules (e.g. Marketplace) recover "which business entity does this confirmed upload belong to" without any extra columns.</td></tr>
-      <tr><td><code>ValidationChain</code> + <code>ValidationStep</code>s</td><td>Ordered pipeline run on every sign-upload: <code>FilenameSanitizationStep</code> (order 1, strips control chars/path traversal), <code>MimeTypeValidationStep</code> (10), <code>ExtensionValidationStep</code> (20), <code>FileSizeValidationStep</code> (30), <code>ChecksumValidationStep</code> (40, requires a 64-char lowercase SHA-256 hex if provided).</td></tr>
+      <tr><td><code>FileStorageService</code></td><td>The main entry point. It has two separate surfaces.
+        <br><strong>FSO-tracked (browser) flow:</strong> <code>signUpload()</code> runs the validation chain, checks quota, generates a key and presigns a <code>PUT</code> (<code>app.storage.upload-ttl-seconds</code>, 600). <code>confirmUpload()</code> runs <code>HeadObject</code> and checks content type, size and ETag, then in one <code>TransactionTemplate</code> saves the FSO and a <code>REPLICATE</code> job. <em>After</em> that commits it publishes <code>StorageObjectConfirmedEvent</code>. <code>signDownload()</code> records a <code>StorageAccessEvent</code> and presigns a <code>GET</code> (<code>app.storage.presign-ttl-seconds</code>, 300). <code>softDelete()</code> checks that the caller's login equals <code>createdBy</code>, then runs a conditional <code>softDeleteByKey</code>. <code>findActiveObject(key)</code> (new in #312) returns the confirmed, non-deleted FSO as a <code>StorageObjectDto</code> so a domain module can check the HEAD-verified owner, type and size before linking a key.
+        <br><strong>Raw (server-generated) helpers:</strong> <code>storeBytes</code> (direct <code>S3Client.putObject</code>, optional <code>Content-Disposition</code>), <code>downloadBytes</code>, <code>signedDownloadUrl(key)</code> / <code>signedDownloadUrl(key, Duration)</code>, <code>deleteRawBytes</code> (immediate hard delete), and <code>assertOwnership</code>. These bypass the FSO table: no quota, no replication, no soft-delete lifecycle and no audit row.</td></tr>
+      <tr><td><code>BlobDeletionOutboxSupport</code> / <code>BlobDeletionOutboxHandler</code></td><td>Re-drivable deletion of raw keys through the generic <code>platform.outbox</code> module (aggregate type <code>BLOB_DELETION</code>, payload <code>{storageKey}</code>). Producers call <code>enqueue(keys)</code> and <code>requestDrainAfterCommit()</code> <em>inside</em> their business transaction. The handler calls <code>deleteRawBytes</code>, which is idempotent because S3 <code>DeleteObject</code> succeeds on a missing key. The only producer today is <code>GdprErasureService</code>. This replaced the old bespoke <code>PendingBlobDeletionService</code> (skillars-deferred-100).</td></tr>
+      <tr><td><code>ReplicatedStorageService</code></td><td>A <code>StorageService</code> decorator, created only when replication is enabled. <code>put()</code> delegates to the primary and then enqueues a <code>REPLICATE</code> job if an FSO exists for the key. <code>delete</code> and <code>deleteAll</code> (the bulk delete added in skillars-deferred-164) touch the primary only. Everything else passes straight through.</td></tr>
+      <tr><td><code>OutboxPollerScheduler</code></td><td>Exists only when replication is enabled. Runs every <code>app.storage.poller.fixed-delay-ms</code> (5 s) under ShedLock <code>OutboxPollerScheduler_pollAndProcess</code> (PT10M, at least <code>app.storage.poller.lock-at-least</code>, default PT2S). It claims up to <code>app.storage.poller.batch-size</code> (10) PENDING jobs with <code>FOR UPDATE SKIP LOCKED</code> and marks them PROCESSING in the same transaction. Then it copies primary → backup (<code>REPLICATE</code>) or deletes on backup (<code>DELETE</code>), retrying up to <code>app.storage.replication.max-attempts</code> (5) before marking a job <code>FAILED</code>. It also updates a queue-depth gauge.</td></tr>
+      <tr><td><code>DeletionSchedulerService</code></td><td>Always on. Runs on the same 5 s cadence under ShedLock <code>DeletionSchedulerService_processDeletions</code> (PT5M, at least <code>app.storage.deletion.lock-at-least</code>, default PT2S). It selects soft-deleted FSOs older than the retention cutoff (<code>FOR UPDATE SKIP LOCKED</code>, batch 10), calls <code>StorageService.delete</code>, then uses a conditional <code>markPhysicallyDeleted</code> and enqueues a <code>DELETE</code> job <em>only if</em> that update hit one row.</td></tr>
+      <tr><td><code>StorageMigrationService</code></td><td>An ops utility. It is a plain class, not a bean, so nothing wires it. It moves objects between two <code>StorageService</code> back ends (<code>migrate</code>, <code>migrateAll(ownerId)</code>) and exports and imports FSO metadata as <code>StorageObjectDto</code>.</td></tr>
+      <tr><td><code>StorageKeyGenerator</code></td><td>Builds keys as <code>{entity}/{entityId}/{yyyy}/{mm}/{uuid}.{extension}</code> and parses them back. This is how listeners and domain modules recover which business entity an upload belongs to (for example, <code>CoachGalleryService</code> requires the prefix <code>coach_gallery/{userId}/</code>).</td></tr>
+      <tr><td><code>ValidationChain</code> + <code>ValidationStep</code>s</td><td>Ordered pipeline on every sign-upload: <code>FilenameSanitizationStep</code> (1), <code>MimeTypeValidationStep</code> (10), <code>ExtensionValidationStep</code> (20), <code>FileSizeValidationStep</code> (30), and <code>ChecksumValidationStep</code> (40, which requires a 64-character lowercase SHA-256 hex if a checksum is given).</td></tr>
     </table>
 
     <h3>REST endpoints</h3>
     <table>
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth/Role</th></tr>
-      <tr><td>POST</td><td><code>/api/storage/sign/upload</code></td><td>Validate + quota-check a proposed upload and return a presigned S3 <code>PUT</code> URL plus the generated key.</td><td><code>SecurityConstants.HAS_ANY_ROLE</code> (any authenticated role); additionally, for <code>entity=coach_profile</code>, <code>entityId</code> must equal the caller's own business id.</td></tr>
-      <tr><td>POST</td><td><code>/api/storage/confirm/**</code></td><td>Confirm a completed upload: verifies the object in S3, persists <code>FileStorageObject</code>, enqueues replication, publishes <code>StorageObjectConfirmedEvent</code>.</td><td><code>HAS_ANY_ROLE</code></td></tr>
-      <tr><td>GET</td><td><code>/api/storage/sign/download/**</code></td><td>Presign a temporary S3 <code>GET</code> URL for an existing, non-deleted key and log a <code>StorageAccessEvent</code>.</td><td><code>HAS_ANY_ROLE</code></td></tr>
-      <tr><td>DELETE</td><td><code>/api/storage/**</code></td><td>Soft-delete a file; rejects the request unless the caller is the original uploader.</td><td><code>HAS_ANY_ROLE</code></td></tr>
+      <tr><td>POST</td><td><code>/api/storage/sign/upload</code></td><td>Validate and quota-check a proposed upload (<code>{entity, entityId, contentType, extension, fileSizeBytes, checksum?, tags?}</code>) and return <code>{key, uploadUrl, expiresAt}</code>.</td><td><code>HAS_ANY_ROLE</code>. For the owner-bound entities <code>coach_profile</code>, <code>coach_branding</code> and <code>coach_gallery</code>, <code>entityId</code> must equal the caller's business id (otherwise <code>AccessDeniedException</code>).</td></tr>
+      <tr><td>POST</td><td><code>/api/storage/confirm/**</code></td><td>Confirm a completed upload (<code>{contentType, fileSizeBytes, originalFilename?, checksum?, tags?}</code>): HEAD-check, persist the FSO and a REPLICATE job, then publish <code>StorageObjectConfirmedEvent</code>.</td><td><code>HAS_ANY_ROLE</code></td></tr>
+      <tr><td>GET</td><td><code>/api/storage/sign/download/**</code></td><td>Presign a short-lived <code>GET</code> for a confirmed, non-deleted key and log a <code>StorageAccessEvent</code>.</td><td><code>HAS_ANY_ROLE</code>. <strong>No ownership check</strong>: anyone authenticated who knows the key can download it.</td></tr>
+      <tr><td>DELETE</td><td><code>/api/storage/**</code></td><td>Soft-delete a file. Allowed only for the original uploader (<code>createdBy</code>).</td><td><code>HAS_ANY_ROLE</code></td></tr>
     </table>
+    <p>
+      Errors (global <code>security.api.ApiAdvice</code>): <code>QuotaExceededException</code> → <strong>429</strong>,
+      <code>StorageValidationException</code> → <strong>422</strong>, <code>StorageObjectNotFoundException</code> → 404,
+      <code>StorageProviderException</code> → 502, <code>AuthorizationException</code> on delete → 403. Keys may contain
+      <code>/</code>, so the controller reads them from <code>PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE</code> instead of a path
+      variable.
+    </p>
 
     <h3>Domain events</h3>
     <p>
-      <code>filestorage</code> publishes <code>filestorage.event.StorageObjectConfirmedEvent</code> from
-      <code>FileStorageService.confirmUpload()</code>, inside the same transaction as the persisted
-      <code>FileStorageObject</code>. It is currently consumed by exactly one listener platform-wide:
-      <code>marketplace.service.CoachProfilePhotoEventListener</code>, which parses the key via
-      <code>StorageKeyGenerator</code> and, only for <code>entity=coach_profile</code> keys, updates the matching
-      coach's <code>photoUrl</code>. <code>filestorage</code> does not consume any events published by other modules.
+      <code>filestorage.event.StorageObjectConfirmedEvent</code> is published by <code>FileStorageService.confirmUpload()</code>
+      <strong>after</strong> the FSO and outbox transaction has committed, not inside it. Listeners run synchronously on the
+      request thread with no surrounding transaction. There is one listener:
+      <code>marketplace.service.CoachProfilePhotoEventListener</code> (plain <code>@EventListener</code>). It parses the key,
+      and for <code>entity=coach_profile</code> keys only, sets the coach's <code>photoUrl</code>. Gallery and branding keys are
+      linked by explicit domain calls, not by this event. <code>filestorage</code> consumes no events. Its
+      <code>BLOB_DELETION</code> handler is driven by the generic outbox poller.
     </p>
 
     <div class="callout">
-      <p><strong>Dependency on <code>infrastructure.blobstore</code>:</strong> <code>filestorage</code> is built
-      directly on top of <code>infrastructure.blobstore</code>'s <code>StorageService</code> interface (used by the
-      replication/migration/deletion code paths) and its S3 SDK beans — <code>S3Client</code> and
-      <code>S3Presigner</code>, built by <code>BlobstoreConfig</code> from <code>BlobstoreProperties</code> — which
-      <code>FileStorageService</code> autowires directly for the sign/confirm/download HTTP flow (presigning needs
-      the S3-specific presigner API, not just the generic <code>StorageService</code> abstraction). Everything
-      backend-specific — S3 vs. local disk, bucket names, credentials, backup-region wiring — lives in
-      <code>infrastructure.blobstore</code> and is covered in depth on the
-      <a href="../infrastructure/index.html">Infrastructure</a> page; this page only documents the boundary.</p>
+      <p><strong>Dependency on <code>infrastructure.blobstore</code>:</strong> <code>filestorage</code> is built on
+      <code>infrastructure.blobstore</code>'s <code>StorageService</code> interface (used by replication, migration and
+      deletion), its <code>S3Client</code>/<code>S3Presigner</code> beans (used directly by <code>FileStorageService</code>,
+      because presigning is S3-specific), <code>BlobstoreProperties</code> (<code>app.storage.*</code>) and
+      <code>StorageMetrics</code>. Back-end details such as S3/MinIO, bucket, credentials and backup wiring are on the
+      <a href="../infrastructure/index.html">Infrastructure</a> page. Two configuration namespaces are involved:
+      <code>app.storage.*</code> (blobstore: TTLs, poller, replication, retention) and <code>platform.filestorage.*</code>
+      (this module: validation, quota).</p>
     </div>
 
     <h2>Key Flows</h2>
@@ -157,41 +181,48 @@ sequenceDiagram
   participant Chain as ValidationChain
   participant S3 as S3 (via S3Presigner/S3Client)
   participant DB as file_storage_objects / outbox_replication_jobs
-  participant Listener as e.g. CoachProfilePhotoEventListener
+  participant Listener as CoachProfilePhotoEventListener
 
   Browser->>Resource: POST /api/storage/sign/upload {entity, entityId, contentType, extension, fileSizeBytes, checksum}
+  Resource->>Resource: owner-bound entity? entityId must equal caller
   Resource->>Service: signUpload(request)
   Service->>Chain: validate(request)
-  Chain-->>Service: OK (or StorageValidationException)
-  Service->>Service: check owner quota (sumSizeBytesByOwnerId)
-  Service->>Service: generate key via StorageKeyGenerator
-  Service->>S3: presign PUT (uploadTtlSeconds)
-  Service-->>Resource: SignUploadResponse {key, uploadUrl, expiresAt}
-  Resource-->>Browser: 200 OK
+  Chain-->>Service: OK (or StorageValidationException, 422)
+  Service->>DB: sumSizeBytesByOwnerId (QuotaExceededException, 429)
+  Service->>Service: key = StorageKeyGenerator.generate(entity, entityId, ext)
+  Service->>S3: presign PUT (upload-ttl-seconds)
+  Service-->>Browser: 200 {key, uploadUrl, expiresAt}
   Browser->>S3: PUT bytes directly to uploadUrl
-  Browser->>Resource: POST /api/storage/confirm/{key} {contentType, fileSizeBytes, checksum}
+  Browser->>Resource: POST /api/storage/confirm/{key} {contentType, fileSizeBytes, ...}
   Resource->>Service: confirmUpload(key, request)
-  Service->>S3: HeadObject(key)
-  S3-->>Service: contentType, contentLength, eTag
-  Service->>DB: save FileStorageObject + OutboxReplicationJob(REPLICATE, PENDING)
-  Service->>Listener: publish StorageObjectConfirmedEvent
-  Service-->>Resource: ConfirmUploadResponse
-  Resource-->>Browser: 200 OK
+  alt FSO already exists for key
+    Service-->>Browser: 200 existing record (no new event)
+  else
+    Service->>S3: HeadObject(key)
+    S3-->>Service: contentType, contentLength, eTag
+    Service->>Service: declared type/size must match, ETag present
+    Service->>DB: TX: save FileStorageObject + OutboxReplicationJob(REPLICATE, PENDING), commit
+    Service->>Listener: publish StorageObjectConfirmedEvent (after commit, no TX)
+    Service-->>Browser: 200 ConfirmUploadResponse
+  end
+  opt gallery upload
+    Browser->>Browser: POST /api/marketplace/coaches/me/profile/gallery {key}
+    Note over Browser: CoachGalleryService.addImage re-validates via findActiveObject
+  end
     </pre>
     <p>
-      The app server never sees the file's bytes — the browser uploads straight to S3 using the presigned URL, which
-      keeps upload traffic off the Spring Boot instances entirely. <code>confirmUpload()</code> is the trust
-      boundary: it re-verifies size, content type, and that an <code>ETag</code> exists via a live <code>HeadObject</code>
-      call, so a client can't simply lie about what it uploaded. If a <code>FileStorageObject</code> for the key
-      already exists, <code>confirmUpload()</code> short-circuits and returns the existing record — confirmation is
-      idempotent. The event publish and outbox insert happen in the same transaction as the object save, so a
-      listener never sees a confirmed upload that isn't durably persisted.
+      The app server never sees browser-uploaded bytes. <code>confirmUpload()</code> is the trust boundary: it checks
+      size, content type and the presence of an <code>ETag</code> with a live <code>HeadObject</code>, and it stores the
+      HEAD values, not the client's claims. Confirmation is idempotent: if an FSO already exists for the key, it is
+      returned unchanged and <strong>no event is published</strong>. Because the event is published after the commit, a
+      listener that throws makes the HTTP call fail even though the FSO is already persisted. A client retry then hits
+      the idempotent short-circuit and never re-fires the event (see gotchas).
     </p>
 
-    <h3>Downloading / streaming a file</h3>
+    <h3>Downloading a file</h3>
     <pre class="mermaid">
 sequenceDiagram
-  participant Caller as Caller (browser or another module)
+  participant Caller as Browser
   participant Resource as StorageResource
   participant Service as FileStorageService
   participant DB as file_storage_objects / storage_access_events
@@ -201,137 +232,149 @@ sequenceDiagram
   Resource->>Service: signDownload(key)
   Service->>DB: findByKeyAndDeletedAtIsNull(key)
   alt not found or soft-deleted
-    Service-->>Resource: StorageObjectNotFoundException (404)
+    Service-->>Caller: 404 StorageObjectNotFoundException
   else found
     Service->>DB: save StorageAccessEvent(key, ownerId, sizeBytes)
-    Service->>S3: presign GET (presignTtlSeconds)
-    Service-->>Resource: SignDownloadResponse {key, downloadUrl, expiresAt}
-    Resource-->>Caller: 200 OK
-    Caller->>S3: GET downloadUrl (direct fetch/stream)
+    Service->>S3: presign GET (presign-ttl-seconds)
+    Service-->>Caller: 200 {key, downloadUrl, expiresAt}
+    Caller->>S3: GET downloadUrl (direct)
   end
     </pre>
     <p>
-      Like uploads, downloads never proxy bytes through the application — the caller gets a short-lived presigned
-      URL and streams directly from S3. A soft-deleted object (<code>deleted_at</code> set) is treated as not found,
-      so deletion takes effect immediately for downloads even though the physical bytes and DB row still exist during
-      the retention window. Every successful sign-download is recorded as a <code>StorageAccessEvent</code> before
-      the URL is even returned, giving an audit trail of who accessed what and when.
+      Downloads never proxy bytes through the application. A soft-deleted object is treated as not found, so deletion
+      takes effect at once for REST downloads even though the bytes remain during the retention window. Most of the app
+      does not call this endpoint at all, though. Coach photos, gallery images, report PDFs and GDPR exports are signed
+      server-side with <code>signedDownloadUrl</code> and embedded in DTOs, which neither checks <code>deleted_at</code> nor
+      writes an access event.
     </p>
 
-    <h3>Soft delete, retention, and cross-region replication (outbox pattern)</h3>
+    <h3>Soft delete, retention, replication and raw-blob deletion</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Caller as Caller
-  participant Resource as StorageResource
   participant Service as FileStorageService
   participant DelSched as DeletionSchedulerService
-  participant Outbox as OutboxPollerScheduler
+  participant Outbox as OutboxPollerScheduler (replication only)
   participant Primary as Primary StorageService
   participant Backup as Backup StorageService
+  participant Gdpr as GdprErasureService
+  participant GenOutbox as platform.outbox (BLOB_DELETION)
 
-  Caller->>Resource: DELETE /api/storage/{key}
-  Resource->>Service: softDelete(key, currentUser)
-  Service->>Service: verify createdBy == currentUser
-  Service-->>Resource: 204 No Content (deleted_at set)
+  Caller->>Service: DELETE /api/storage/{key} (or CoachGalleryService/CoachProfileService.softDelete)
+  Service->>Service: createdBy == current login? softDeleteByKey
+  Service-->>Caller: 204 (deleted_at set)
 
-  loop every poller.fixed-delay-ms
-    DelSched->>DelSched: find FSOs with deleted_at < now-retentionDays
+  loop every app.storage.poller.fixed-delay-ms (ShedLock)
+    DelSched->>DelSched: findEligibleForPhysicalDeletion(deleted_at older than retentionDays, 10)
     DelSched->>Primary: delete(key)
-    DelSched->>DelSched: enqueue OutboxReplicationJob(DELETE, PENDING), mark physical_deleted_at
+    DelSched->>DelSched: TX: markPhysicallyDeleted == 1 then save OutboxReplicationJob(DELETE)
   end
 
-  loop every poller.fixed-delay-ms
-    Outbox->>Outbox: pollPending() FOR UPDATE SKIP LOCKED, mark PROCESSING
-    alt job type REPLICATE
+  loop every app.storage.poller.fixed-delay-ms (ShedLock)
+    Outbox->>Outbox: pollPending FOR UPDATE SKIP LOCKED, mark PROCESSING
+    alt REPLICATE
       Outbox->>Primary: get(key)
-      Outbox->>Backup: put(key, data, length, contentType)
-    else job type DELETE
+      Outbox->>Backup: put(key, stream)
+    else DELETE
       Outbox->>Backup: delete(key)
     end
-    Outbox->>Outbox: mark COMPLETED, or increment attempt / mark FAILED
+    Outbox->>Outbox: COMPLETED, or retry, then FAILED after max-attempts
   end
+
+  Gdpr->>GenOutbox: enqueue(keys) + requestDrainAfterCommit (inside erasure TX)
+  GenOutbox->>Service: BlobDeletionOutboxHandler, deleteRawBytes(key) (idempotent)
     </pre>
     <p>
-      Deletion is deliberately two-staged: the user-facing <code>DELETE</code> only flips a flag, so it's instant and
-      reversible-in-principle during the retention window. A separate scheduler does the actual, irreversible S3
-      deletion later and — importantly — routes that physical deletion through the same outbox table used for
-      replication, so the backup copy is guaranteed to eventually be deleted too, not just the primary. The outbox
-      poller uses <code>FOR UPDATE SKIP LOCKED</code> so multiple app instances can run the scheduler concurrently
-      without double-processing a job, and gives up on a job (marking it <code>FAILED</code>) only after
-      <code>replication.max-attempts</code> retries.
+      FSO-tracked deletion has two stages: the user-facing <code>DELETE</code> only sets a flag, and the scheduler does
+      the irreversible S3 delete later, then queues a backup <code>DELETE</code> through the same replication outbox.
+      <code>DeletionSchedulerService</code>'s <code>SKIP LOCKED</code> claim commits before the loop runs, so ShedLock plus
+      the conditional <code>markPhysicallyDeleted</code> (affected-row count checked before the outbox save) is what stops two
+      ticks from double-enqueueing. Raw keys written by <code>storeBytes</code> are never soft-deleted. They are removed
+      immediately (<code>deleteRawBytes</code>) or through the re-drivable <code>BLOB_DELETION</code> outbox.
     </p>
 
     <h2>Conventions &amp; Gotchas</h2>
     <div class="callout warn">
-      <p><strong>Never call <code>infrastructure.blobstore</code> directly from another platform module — always go
-      through <code>filestorage</code>.</strong> Every other module that needs to store or retrieve a file (profile
-      photos, drill videos, generated documents, GDPR bundles) must go through <code>filestorage</code>'s public
-      surface: the <code>/api/storage/**</code> REST endpoints for end-user-driven uploads/downloads, or
-      <code>FileStorageService</code>'s programmatic methods (<code>storeBytes</code>, <code>downloadBytes</code>,
-      <code>signedDownloadUrl</code>, <code>deleteRawBytes</code>, <code>assertOwnership</code>) for server-generated
-      files, as Admin and Development already do. <code>filestorage</code> is the only module that is allowed to
-      depend on <code>infrastructure.blobstore</code>'s <code>StorageService</code>/<code>S3Client</code>/<code>S3Presigner</code>
-      beans directly. This is the single point of control for: swapping the storage backend (S3 vs. local disk) or
-      adding a new one without touching business modules; enforcing per-owner quota and the file-validation chain
-      consistently; recording ownership (<code>FileStorageObject.ownerId</code>/<code>createdBy</code>) and access
-      history (<code>StorageAccessEvent</code>) for every file regardless of which module requested it; and
-      guaranteeing the soft-delete/retention/outbox-replication lifecycle runs for every object. A module that wrote
-      straight to <code>infrastructure.blobstore</code> would silently skip all of that — no quota accounting, no
-      audit trail, no replication, and no coordinated deletion.</p>
+      <p><strong>Never call <code>infrastructure.blobstore</code> storage beans from another platform module. Always go
+      through <code>filestorage</code>.</strong> Other modules must use the <code>/api/storage/**</code> endpoints (browser
+      uploads) or <code>FileStorageService</code>'s methods, plus <code>BlobDeletionOutboxSupport</code> for deletes that must
+      survive a crash. This rule holds today. Outside this module, the only <code>infrastructure.blobstore</code> imports are
+      exception and error-code types: <code>StorageObjectNotFoundException</code> in <code>CoachProfileService</code> and
+      <code>CoachGalleryService</code>, and <code>BlobstoreErrorCode</code>/exceptions in <code>ApiAdvice</code>.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>There are two kinds of object, with different guarantees.</strong> Browser uploads get an FSO row, so quota,
+      replication, the soft-delete and retention lifecycle, <code>findActiveObject</code> and REST download auditing all apply.
+      Server-generated files written by <code>storeBytes</code> (report PDFs under <code>reports/</code>, GDPR ZIPs under
+      <code>gdpr/exports/</code>) get <strong>none</strong> of that: they are invisible to quota, never replicated, and
+      <code>assertOwnership</code> <em>passes</em> for them because it only rejects when an FSO row exists with a different
+      owner. Do not use <code>assertOwnership</code> as proof that a key belongs to the caller unless the key is
+      guaranteed to be FSO-tracked. Prefer <code>findActiveObject</code> and an explicit owner comparison, as
+      <code>CoachGalleryService</code> does.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Replication is off, but the outbox rows are still written.</strong> <code>confirmUpload()</code> always
+      inserts a <code>REPLICATE</code> job, and <code>DeletionSchedulerService</code> always inserts a <code>DELETE</code> job.
+      <code>OutboxPollerScheduler</code> is only created when <code>app.storage.replication.enabled=true</code>, which no
+      profile sets. With the current config, <code>main.outbox_replication_jobs</code> collects PENDING rows that nothing
+      drains. If you turn replication on in an existing environment, the poller starts by working through that whole
+      backlog, including DELETE jobs for keys that were never replicated.</p>
     </div>
     <div class="callout">
-      <p><strong>The sign/confirm/download HTTP flow bypasses the <code>StorageService</code> abstraction on
-      purpose.</strong> <code>FileStorageService</code> autowires <code>S3Client</code> and <code>S3Presigner</code>
-      directly rather than going through <code>infrastructure.blobstore.service.StorageService</code>, because
-      presigned URLs are an S3-presigner-specific capability that the generic interface doesn't expose. Only the
-      replication/migration/deletion code paths (<code>ReplicatedStorageService</code>, <code>OutboxPollerScheduler</code>,
-      <code>DeletionSchedulerService</code>, <code>StorageMigrationService</code>) go through the portable
-      <code>StorageService</code> interface. Keep this split in mind if you ever try to make the whole module
-      provider-agnostic — the presigning path is currently S3-only.</p>
+      <p><strong>The quota is soft and counts deleted files.</strong> <code>signUpload()</code> sums
+      <code>size_bytes</code> for the owner <em>without</em> filtering <code>deleted_at</code>, so deleting files never frees
+      quota. There is also a time-of-check/time-of-use gap: the check happens at sign time and is not repeated at confirm
+      time, so several large uploads signed at once can all pass. Do not treat the quota as a hard, race-proof limit.</p>
     </div>
     <div class="callout">
-      <p><strong>Quota is checked at sign-upload time, not at confirm time.</strong> <code>signUpload()</code> sums
-      existing bytes for the owner and compares against the quota before issuing a presigned URL — there's a
-      time-of-check/time-of-use gap if a caller signs several large uploads concurrently before confirming any of
-      them, since nothing re-checks the quota in <code>confirmUpload()</code>. Don't rely on the quota being a hard,
-      race-proof limit today.</p>
+      <p><strong>Upload-time ownership checks are opt-in, and downloads have none.</strong> <code>StorageResource</code>
+      enforces "entityId must equal the caller" only for <code>OWNER_BOUND_ENTITIES</code> (<code>coach_profile</code>,
+      <code>coach_branding</code>, <code>coach_gallery</code>). If you add an owner-sensitive entity, add it there.
+      <code>confirm</code> does not check the key's prefix against the caller, and its idempotent short-circuit returns an
+      existing FSO to whoever asks. <code>sign/download</code> lets any authenticated user download any confirmed key.
+      Protection relies on keys containing a random UUID. Domain modules that link keys must check them again server-side
+      (prefix + <code>findActiveObject</code> owner), as <code>CoachGalleryService.addImage</code> does.</p>
     </div>
     <div class="callout">
-      <p><strong>Entity-ownership validation at upload time is opt-in, not universal.</strong> <code>StorageResource</code>
-      only enforces "entityId must match the caller" for entities listed in its <code>OWNER_BOUND_ENTITIES</code> set
-      (currently just <code>coach_profile</code>). Any other <code>entity</code> value (e.g. <code>booking</code>) is
-      accepted with whatever <code>entityId</code> the client sends at sign-upload time — ownership for those is only
-      enforced later, and only for delete, via <code>softDelete()</code> checking <code>createdBy</code>. If you add a
-      new owner-sensitive entity type, add it to <code>OWNER_BOUND_ENTITIES</code>.</p>
+      <p><strong>The event fires after commit, and a retry will not fire it again.</strong> Because
+      <code>StorageObjectConfirmedEvent</code> is published after the FSO transaction, a failure in
+      <code>CoachProfilePhotoEventListener</code> returns an error to the browser while the FSO is already saved, and a
+      repeated confirm short-circuits without publishing. New features should link uploads with an explicit, idempotent
+      domain call (the gallery pattern) rather than a new listener on this event.</p>
     </div>
     <div class="callout">
-      <p><strong>Not every module that handles files goes through <code>filestorage</code> today.</strong> The
-      <code>video</code> module has no imports of <code>filestorage</code> or <code>infrastructure.blobstore</code>
-      anywhere in its source as of this writing — it manages its own video bytes through a separate pipeline. Don't
-      assume drill-video storage is covered by anything documented on this page; check the
-      <a href="../video/index.html">Video</a> module directly.</p>
+      <p><strong>The sign/confirm/download flow bypasses the <code>StorageService</code> abstraction on purpose.</strong>
+      Presigned URLs need <code>S3Presigner</code>, which the generic interface does not expose, and the raw helpers also
+      call <code>S3Client</code> directly. Only <code>ReplicatedStorageService</code>, <code>OutboxPollerScheduler</code>,
+      <code>DeletionSchedulerService</code> and <code>StorageMigrationService</code> use the portable interface. The
+      presigning path is S3-only, which includes MinIO in dev.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Video bytes do not go through this module.</strong> The <a href="../video/index.html">video</a> module has
+      no import of <code>filestorage</code> or <code>infrastructure.blobstore</code>. Video goes through its own Bunny
+      Stream pipeline, which is also why the coach gallery accepts images only.</p>
     </div>
 
     <h2>Related Modules</h2>
     <ul>
-      <li><a href="../marketplace/index.html">Marketplace</a> — <code>CoachProfilePhotoEventListener</code> consumes
-        <code>StorageObjectConfirmedEvent</code> to sync a confirmed coach profile photo upload onto <code>CoachProfile.photoUrl</code>.</li>
-      <li><a href="../booking/index.html">Booking</a> — no live dependency: the wrap-up no longer captures voice notes
-        (story 12.7, D3). Before that, the frontend wrap-up flow called <code>/api/storage/sign/upload</code> and
-        <code>/confirm/**</code> directly (tagged <code>entity=booking</code>), so legacy voice-note audio uploads may
-        remain (see the deferred-work ledger); no Java code in the booking module itself touches <code>filestorage</code>.</li>
-      <li><a href="../admin/index.html">Admin</a> — <code>GdprExportService</code>/<code>GdprErasureService</code> use
-        <code>FileStorageService.storeBytes</code>/<code>signedDownloadUrl</code>/<code>deleteRawBytes</code> to
-        store, share, and clean up generated GDPR export ZIPs.</li>
-      <li><a href="../development/index.html">Development</a> — <code>ReportGenerationService</code> uses the same
-        programmatic API to store/download/delete session-report PDFs and coach branding logo assets.</li>
-      <li><a href="../security/index.html">Security</a> — supplies <code>SecurityUtil</code> (current user/business
-        id resolution) that <code>filestorage</code> depends on for ownership; conversely,
-        <code>security.api.ApiAdvice</code> maps <code>filestorage</code>'s <code>QuotaExceededException</code>/<code>StorageValidationException</code>
-        to HTTP error responses in the platform's global exception handler.</li>
-      <li><a href="../infrastructure/index.html">Infrastructure</a> — <code>infrastructure.blobstore</code> is the
-        only thing <code>filestorage</code> is allowed to sit on top of; see the boundary callout above and the
-        Infrastructure page for the S3/local-disk backend details.</li>
+      <li><a href="../marketplace/index.html">Marketplace</a> — <code>CoachProfilePhotoEventListener</code> (profile photo via
+        <code>StorageObjectConfirmedEvent</code>), <code>CoachGalleryService</code> (gallery link and remove via
+        <code>findActiveObject</code>/<code>softDelete</code>), <code>CoachProfileService</code> (<code>deletePhoto</code>, photo
+        and gallery URL signing), and <code>CoachSearchService</code> (signed photo URLs in search results).</li>
+      <li><a href="../development/index.html">Development</a> — <code>ReportGenerationService</code>: <code>storeBytes</code> for
+        report PDFs, <code>downloadBytes</code> + <code>assertOwnership</code> for the branding logo,
+        <code>signedDownloadUrl</code> for downloads.</li>
+      <li><a href="../admin/index.html">Admin</a> — <code>GdprExportService</code> (<code>storeBytes</code> +
+        <code>signedDownloadUrl(key, Duration)</code> for export ZIPs) and <code>GdprErasureService</code>
+        (<code>BlobDeletionOutboxSupport.enqueue</code> for export, child-report, coach-report and gallery keys).</li>
+      <li><a href="../booking/index.html">Booking</a> — no live dependency. Legacy wrap-up voice-note objects
+        (<code>entity=booking</code>) may still exist.</li>
+      <li><a href="../security/index.html">Security</a> — <code>SecurityUtil</code> (business id for owner and quota, login for
+        <code>createdBy</code> delete checks), and <code>security.api.ApiAdvice</code>, which maps this module's exceptions to HTTP.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> — <code>infrastructure.blobstore</code> (the storage back end,
+        <code>BlobstoreProperties</code>, <code>StorageMetrics</code>).</li>
+      <li>Outbox (<code>platform.outbox</code>) — the generic transactional outbox (<code>OutboxService</code>) that stores and
+        drains the <code>BLOB_DELETION</code> rows handled by <code>BlobDeletionOutboxHandler</code>.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
   </main>

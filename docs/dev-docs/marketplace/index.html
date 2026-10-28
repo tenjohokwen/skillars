@@ -22,6 +22,7 @@
         <li><a href="../messaging/index.html">Messaging</a></li>
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
@@ -33,61 +34,61 @@
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
         <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
         <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
       </ul>
     </nav>
   </aside>
   <main class="content">
     <div class="breadcrumb"><a href="../index.html">Home</a> / Marketplace</div>
     <h1>Marketplace</h1>
-    <p class="subtitle">Coach discovery, search/filter, and the multi-step profile builder coaches use to become bookable.</p>
+    <p class="subtitle">Coach discovery (search/filter and the public profile), the multi-step profile builder coaches use to become bookable, and the coach's own profile/gallery management.</p>
 
     <h2>Business Overview</h2>
     <p>
       Marketplace answers the first question every Parent or Player has: <em>"which coach should I book?"</em>
       It is the public storefront of Skillars — a searchable, filterable directory of coach profiles (city,
-      district, language, price range, age group coached, skill/specialty) and the coach-facing wizard used to
-      build and publish that storefront listing in the first place. Everything downstream — booking, payments,
-      reviews — points back at a <code>CoachProfile</code> as the anchor identity for "this is a coach on the
-      platform."
+      district, language, price range, age group coached, skill, minimum rating) and the coach-facing wizard used to
+      build and publish that listing. Everything downstream — booking, payments, reviews, enforcement — points back
+      at a <code>CoachProfile</code> as the anchor identity for "this is a coach on the platform", and its row is
+      also the platform's per-coach lock.
     </p>
     <p>Two personas touch this module directly:</p>
     <ul>
       <li><strong>Parents / Players</strong> — anonymous or authenticated users browse
-        <code>GET /api/marketplace/coaches</code> (permit-all, no login required) and view a single coach's
-        public profile page, including reviews, media gallery, pricing and session packs.</li>
-      <li><strong>Coaches</strong> — authenticated users with <code>ROLE_COACH</code> build their profile through
-        a strict 5-step wizard (<code>ProfileBuilderResource</code>) before it can be published and appear in
-        search.</li>
+        <code>GET /api/marketplace/coaches</code> (permit-all) and open a coach's public profile with reviews, a
+        media gallery (up to 6 images), pricing and session packs.</li>
+      <li><strong>Coaches</strong> — users with <code>ROLE_COACH</code> build their profile through a strict
+        5-step wizard (<code>ProfileBuilderResource</code>), publish it, and later edit it from "My Profile": re-submit
+        any step, remove their photo, and manage their public gallery.</li>
     </ul>
     <p>Key business rules found in the code:</p>
     <ul>
-      <li><strong>City is mandatory for every search.</strong> <code>CoachSearchSpecification.inCity()</code> always
-        produces a predicate, and the repository's language-matching native query is explicitly city-scoped "to
-        avoid a global scan of all active coaches" — there is no platform-wide coach search.</li>
-      <li><strong>Only <code>ACTIVE</code> and <code>REDUCED</code> profiles are searchable.</strong>
-        <code>REDUCED</code> coaches (a status presumably driven by moderation/enforcement in the Admin module)
-        still appear in results but are always sorted after <code>ACTIVE</code> coaches
-        (<code>CoachSearchSpecification.isActive()</code> + the status-first <code>Sort</code> in
-        <code>CoachSearchService.buildSort()</code>).</li>
-      <li><strong>The profile builder is a strict, ordered state machine.</strong> Step 2 requires Step 1's
-        display name to be set; Step 3 requires specialties + age groups from Step 2; Step 4 requires pricing from
-        Step 3; Step 5 requires an availability window from Step 4. Skipping ahead throws
-        <code>MarketplaceException("marketplace.stepOutOfOrder", ...)</code>.</li>
-      <li><strong>Publishing re-validates everything, not just the last step.</strong>
-        <code>publishProfile()</code> calls <code>validateAllStepsComplete()</code>, checking display name,
-        specialties, age groups, pricing, and availability windows all over again before flipping status from
-        <code>DRAFT</code> to <code>ACTIVE</code> and provisioning a default <code>SCOUT</code>-tier
-        <code>CoachSubscription</code>.</li>
-      <li><strong>Availability windows must not overlap and must be well-formed.</strong>
-        <code>validateAvailabilityWindows()</code> rejects an end time before/equal to its start time and rejects
-        overlapping windows on the same day of week.</li>
-      <li><strong>Minimum-rating filtering is a stub.</strong> <code>CoachSearchParams.minRating</code> is typed
-        but <code>CoachSearchSpecification</code> has no rating lower-bound predicate wired to it beyond
-        <code>hasMinRating()</code> — the DTO comment for it explicitly says "stub: > 0 returns 0 results until
-        Epic 9", so don't trust it as a real feature yet.</li>
-      <li><strong>Capability badges are scaffolded but empty.</strong> <code>CoachCapabilityService</code> always
-        returns an empty badge list per coach — it's wired for a future epic that will source badges from
-        activity in other modules (e.g. session completion counts).</li>
+      <li><strong>City is mandatory for every search</strong> (<code>@RequestParam @NotBlank</code>), and
+        <code>CoachSearchSpecification.inCity()</code> always produces a predicate — there is no platform-wide
+        search.</li>
+      <li><strong>Only <code>ACTIVE</code> and <code>REDUCED</code> profiles are searchable</strong>;
+        <code>REDUCED</code> coaches (set by <code>payment.ReliabilityStrikeService</code> or admin enforcement) are
+        sorted after <code>ACTIVE</code> ones. The public profile page additionally shows
+        <code>PENDING_REVIEW</code> profiles.</li>
+      <li><strong>The profile builder is an ordered state machine.</strong> Step 2 needs Step 1's display name,
+        Step 3 needs specialties + age groups, Step 4 needs pricing, Step 5 needs an availability window; otherwise
+        <code>MarketplaceException("marketplace.stepOutOfOrder")</code>.</li>
+      <li><strong>Publishing re-validates every step</strong> and is only allowed from <code>DRAFT</code>
+        (<code>marketplace.alreadyPublished</code> for ACTIVE, <code>marketplace.profileNotEligibleToPublish</code>
+        for SUSPENDED/REDUCED/PENDING_REVIEW/DEACTIVATED). It sets <code>ACTIVE</code> +
+        <code>status_changed_at</code> and find-or-creates a <code>CoachSubscription</code> (default
+        <code>SCOUT</code>, an existing paid tier is preserved).</li>
+      <li><strong>Availability windows</strong> must have end &gt; start and must not overlap on the same day.
+        Every window is stamped with the <em>profile's</em> <code>canonical_timezone</code> (the per-window value in
+        the request is validated but discarded); changing the profile timezone in Step 1 re-stamps all windows.</li>
+      <li><strong>City and timezone must be plausible together.</strong> <code>CityTimezoneValidator</code> rejects
+        a known city paired with a zone in a different IANA region (<code>marketplace.cityTimezoneMismatch</code>)
+        and fails open on anything it cannot classify (unknown or ambiguous city, no-slash zone ids, UTC
+        aliases).</li>
+      <li><strong>A suspended coach cannot rewrite availability</strong> (Step 4 throws
+        <code>COACH_UNAVAILABLE</code> after taking the profile lock).</li>
+      <li><strong>Capability badges are still a scaffold.</strong> <code>CoachCapabilityService</code> returns empty
+        badge lists for every coach.</li>
     </ul>
 
     <h2>Technical Overview</h2>
@@ -95,70 +96,82 @@
     <h3>Package layout</h3>
     <table>
       <tr><th>Package</th><th>Purpose</th></tr>
-      <tr><td><code>marketplace.api</code></td><td>REST controllers: public search/profile endpoints and the coach-only profile builder wizard.</td></tr>
-      <tr><td><code>marketplace.service</code></td><td>Search assembly, profile CRUD/state-machine, capability badges, player lookups, and a filestorage event listener that syncs photo uploads onto the profile.</td></tr>
-      <tr><td><code>marketplace.repo</code></td><td>JPA entities and Spring Data repositories, all under the <code>marketplace</code> schema.</td></tr>
-      <tr><td><code>marketplace.contract</code></td><td>DTOs/records, request/response payloads for each wizard step, enums (<code>CoachProfileStatus</code>, <code>CoachSubscriptionTier</code>), exceptions, and a MapStruct mapper.</td></tr>
-      <tr><td><code>marketplace.config</code></td><td>Empty <code>@Configuration</code> placeholder — no beans currently defined here.</td></tr>
+      <tr><td><code>marketplace.api</code></td><td><code>CoachMarketplaceResource</code> (public search/profile + own tier) and <code>ProfileBuilderResource</code> (wizard, own profile, photo delete, gallery, timezone list).</td></tr>
+      <tr><td><code>marketplace.service</code></td><td>Search, profile state machine and public-profile assembly, gallery, city/timezone validation, capability badges, a filestorage listener, and <code>PlayerProfileService</code> lookups.</td></tr>
+      <tr><td><code>marketplace.repo</code></td><td>JPA entities and repositories under the <code>marketplace</code> schema, plus <code>CoachPublicProfileFactsRepository</code> (one <code>UNION ALL</code> query for public-profile facts).</td></tr>
+      <tr><td><code>marketplace.contract</code></td><td>DTOs/records, per-step request records, enums (<code>CoachProfileStatus</code>, <code>CoachSubscriptionTier</code>), <code>MarketplaceException</code>, <code>CoachProfileNotFoundException</code>, <code>CoachProfileMapper</code>.</td></tr>
+      <tr><td><code>marketplace.config</code></td><td>Empty <code>MarketplaceConfig</code> placeholder.</td></tr>
     </table>
 
     <h3>Key entities &amp; DB tables</h3>
     <table>
       <tr><th>Entity</th><th>Table (schema <code>marketplace</code>)</th><th>Notes</th></tr>
-      <tr><td><code>CoachProfile</code></td><td><code>coach_profiles</code></td><td>Root aggregate. Unique on <code>user_id</code>. Holds display name, bio, city/district, languages (Postgres <code>varchar[]</code>), status, verification tier, denormalized <code>average_rating</code>/<code>review_count</code>.</td></tr>
-      <tr><td><code>CoachSpecialty</code></td><td><code>coach_specialties</code></td><td>One row per skill tag; free-text <code>skill</code> string, keyed by <code>coach_id</code>.</td></tr>
-      <tr><td><code>CoachAgeGroup</code></td><td><code>coach_age_groups</code></td><td>One row per <code>AgeTier</code> (from <code>security.contract</code>) the coach serves.</td></tr>
-      <tr><td><code>CoachPricing</code></td><td><code>coach_pricing</code></td><td>Single row per coach; <code>coach_id</code> is the primary key. <code>per_session_price</code> + currency (hardcoded to <code>EUR</code> today).</td></tr>
-      <tr><td><code>SessionPack</code></td><td><code>session_packs</code></td><td>Optional bundled pricing (N sessions for a total price + label), 0..5 per coach.</td></tr>
-      <tr><td><code>CoachAvailabilityWindow</code></td><td><code>coach_availability_windows</code></td><td>Recurring weekly windows: day of week, start/end time, timezone. Presence of at least one row is used as the "available" flag on the public profile.</td></tr>
-      <tr><td><code>CoachMediaItem</code></td><td><code>coach_media</code></td><td>Ordered image/video gallery entries; public profile shows the first 6 by <code>display_order</code>.</td></tr>
-      <tr><td><code>CoachSubscription</code></td><td><code>coach_subscriptions</code></td><td>Created at publish time with tier <code>SCOUT</code>; <code>coach_id</code> is the primary key.</td></tr>
-      <tr><td><code>CoachReliabilityStrike</code></td><td><code>coach_reliability_strikes</code></td><td>Strikes recorded against a coach (e.g. no-shows); only reads happen here — strikes are written by other modules (see Related Modules). A 90-day rolling window count is surfaced on search cards and profiles.</td></tr>
+      <tr><td><code>CoachProfile</code></td><td><code>coach_profiles</code></td><td>Root aggregate, unique on <code>user_id</code>. Display name, bio, city/district, <code>languages</code> (<code>varchar[]</code>), <code>canonical_timezone</code>, <code>photo_url</code> (a storage <em>key</em>), <code>status</code> (<code>DRAFT, ACTIVE, REDUCED, PENDING_REVIEW, SUSPENDED, DEACTIVATED</code>), <code>status_changed_at</code>, <code>verification_tier</code> (<code>updatable = false</code>), denormalized <code>average_rating</code>/<code>review_count</code>, <code>recap_data_erased_at</code> (V166 coach-erasure tombstone). No <code>@Version</code>/<code>@DynamicUpdate</code>.</td></tr>
+      <tr><td><code>CoachSpecialty</code></td><td><code>coach_specialties</code></td><td>One free-text <code>skill</code> per row (<code>uq_coach_specialty</code>).</td></tr>
+      <tr><td><code>CoachAgeGroup</code></td><td><code>coach_age_groups</code></td><td>One <code>AgeTier</code> (from <code>security.contract</code>) per row (<code>uq_coach_age_group</code>).</td></tr>
+      <tr><td><code>CoachPricing</code></td><td><code>coach_pricing</code></td><td>PK <code>coach_id</code>. <code>per_session_price</code>, currency (always <code>EUR</code>), optional <code>session_duration_minutes</code> (15–240; null = platform default <code>booking.session.defaultDurationMinutes</code>).</td></tr>
+      <tr><td><code>SessionPack</code></td><td><code>session_packs</code></td><td>Advertised bundles (N sessions for a total price + label), 0..5 per coach, <code>uq_session_pack (coach_id, session_count)</code>. Purchasable pack tiers live in <code>payment</code>.</td></tr>
+      <tr><td><code>CoachAvailabilityWindow</code></td><td><code>coach_availability_windows</code></td><td>Recurring weekly windows (day, start/end, timezone). At least one row = "available" on the public profile.</td></tr>
+      <tr><td><code>CoachMediaItem</code></td><td><code>coach_media</code></td><td>Gallery entries (<code>file_url</code> = <code>coach_gallery/…</code> storage key or a legacy absolute URL, <code>media_type</code>, <code>display_order</code>). Written by <code>CoachGalleryService</code>; max 6.</td></tr>
+      <tr><td><code>CoachSubscription</code></td><td><code>coach_subscriptions</code></td><td>PK <code>coach_id</code>; tier <code>SCOUT</code>/<code>INSTRUCTOR</code>/<code>ACADEMY</code>. Also written by <code>payment.SubscriptionService</code>. A missing row reads as <code>SCOUT</code>.</td></tr>
+      <tr><td><code>CoachReliabilityStrike</code></td><td><code>coach_reliability_strikes</code></td><td>Issued by <code>payment.ReliabilityStrikeService</code>, deleted by <code>admin.AdminCoachEnforcementService</code>; marketplace only counts the last 90 days for cards and profiles.</td></tr>
     </table>
 
     <h3>Key services</h3>
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
-      <tr><td><code>CoachSearchService</code></td><td>The full marketplace search pipeline: builds a JPA <code>Specification</code>, paginates at the DB level, applies the language filter post-fetch (Postgres array <code>ANY()</code> isn't Criteria-API portable), batch-loads specialties/prices/strikes/badges only for the current page, assembles <code>CoachCardDto</code>s, and applies an in-memory price sort within the page.</td></tr>
-      <tr><td><code>CoachSearchSpecification</code></td><td>Static factory of composable <code>Specification&lt;CoachProfile&gt;</code> predicates (status, city, district, skill, age group, min/max price via subqueries, min rating) used by <code>CoachSearchService</code>.</td></tr>
-      <tr><td><code>CoachProfileService</code></td><td>The profile builder state machine (steps 1-5 + publish), public profile assembly (<code>getPublicProfile</code>), and lookups used elsewhere (subscription tier, coach id by user id, display names by id set). Sanitizes bio text via <code>infrastructure.sanitizer.ContactDetailSanitizer</code> and validates uploaded photo keys against an expected <code>coach_profile/{userId}/</code> prefix.</td></tr>
-      <tr><td><code>CoachCapabilityService</code></td><td>Scaffold for capability badges (per-coach and batch); currently returns empty lists for every coach. Reads a configurable activity-window setting via <code>ConfigService</code> for future use.</td></tr>
-      <tr><td><code>CoachProfilePhotoEventListener</code></td><td>Listens for <code>filestorage</code>'s <code>StorageObjectConfirmedEvent</code>, parses the storage key via <code>StorageKeyGenerator</code>, and — only for keys tagged with entity <code>coach_profile</code> — updates the matching <code>CoachProfile.photoUrl</code>.</td></tr>
-      <tr><td><code>PlayerProfileService</code></td><td>Read-only lookups against <code>security.repo.PlayerProfile</code>/<code>UserRepository</code>: parent id, player name/age, parent email/name by player id. Used by other modules (video, development) that need player/parent context but live outside <code>security</code>.</td></tr>
+      <tr><td><code>CoachSearchService</code></td><td>Builds the <code>Specification</code>, paginates in the DB, applies the language filter post-fetch (native <code>ANY(languages)</code> query), batch-loads specialties/prices/90-day strike counts/badges for the page only, signs photo keys, and sorts by price within the page.</td></tr>
+      <tr><td><code>CoachSearchSpecification</code></td><td>Composable predicates: status ACTIVE/REDUCED, city, district, skill, age group, min/max price (<code>EXISTS</code> subqueries on <code>coach_pricing</code>), and <code>averageRating &gt;= minRating</code> when <code>minRating &gt; 0</code>.</td></tr>
+      <tr><td><code>CoachProfileService</code></td><td>Wizard steps 1–5 + publish, <code>getOwnProfile</code> (DRAFT-safe full profile), <code>deletePhoto</code>, <code>getPublicProfile</code> (4 queries, guarded by <code>CoachPublicProfileQueryCountIT</code>), <code>getSupportedTimezones</code>, and lookups used across the platform (<code>getCoachIdByUserId</code>, <code>getCoachSubscriptionTier</code>, <code>getDisplayNamesByIds</code>, <code>validateReadyForActivation</code> for admin reinstatement).</td></tr>
+      <tr><td><code>CoachGalleryService</code></td><td>The coach's own gallery (#312): list, add an uploaded image, delete. Re-validates the confirmed storage object server-side and serialises adds/deletes on the profile row lock.</td></tr>
+      <tr><td><code>CityTimezoneValidator</code></td><td>Package-private plausibility check for Step 1 (small hand-maintained city&rarr;region map, fail-open).</td></tr>
+      <tr><td><code>CoachCapabilityService</code></td><td>Badge scaffold (single + batch); reads <code>marketplace.capability.badge.activity.window.days</code> (default 90) for future use.</td></tr>
+      <tr><td><code>CoachProfilePhotoEventListener</code></td><td>On <code>filestorage</code>'s <code>StorageObjectConfirmedEvent</code> for a <code>coach_profile/{userId}/…</code> key, sets that coach's <code>photoUrl</code> to the key.</td></tr>
+      <tr><td><code>PlayerProfileService</code></td><td>Read-only player/parent lookups over <code>security</code> repositories (parent id, player name(s)/age, parent email/name), used by <code>development</code>, <code>messaging</code> and <code>video</code>.</td></tr>
     </table>
 
     <h3>REST endpoints</h3>
     <table>
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth/Role</th></tr>
-      <tr><td>GET</td><td><code>/api/marketplace/coaches</code></td><td>Search/browse coaches by city (required), district, language, price range, age group, skill, min rating, sort, page/size.</td><td>Permit all</td></tr>
-      <tr><td>GET</td><td><code>/api/marketplace/coaches/{coachId}</code></td><td>Full public profile for one coach, enriched with the first page of reviews from the <code>reviews</code> module.</td><td>Permit all</td></tr>
-      <tr><td>GET</td><td><code>/api/marketplace/coaches/me/tier</code></td><td>The current coach's own subscription tier.</td><td><code>ROLE_COACH</code></td></tr>
-      <tr><td>GET</td><td><code>/api/marketplace/coaches/me/profile/status</code></td><td>Wizard progress: last completed step and whether the profile is published.</td><td><code>ROLE_COACH</code></td></tr>
-      <tr><td>PUT</td><td><code>/api/marketplace/coaches/me/profile/steps/1</code></td><td>Save identity basics: display name, bio, city/district, languages, timezone.</td><td><code>ROLE_COACH</code></td></tr>
-      <tr><td>PUT</td><td><code>/api/marketplace/coaches/me/profile/steps/2</code></td><td>Save specialties and age groups coached.</td><td><code>ROLE_COACH</code></td></tr>
-      <tr><td>PUT</td><td><code>/api/marketplace/coaches/me/profile/steps/3</code></td><td>Save per-session price and optional session packs.</td><td><code>ROLE_COACH</code></td></tr>
-      <tr><td>PUT</td><td><code>/api/marketplace/coaches/me/profile/steps/4</code></td><td>Save recurring weekly availability windows (validated for overlap).</td><td><code>ROLE_COACH</code></td></tr>
-      <tr><td>PUT</td><td><code>/api/marketplace/coaches/me/profile/steps/5</code></td><td>Attach a profile photo key (validated to belong to the current coach).</td><td><code>ROLE_COACH</code></td></tr>
-      <tr><td>POST</td><td><code>/api/marketplace/coaches/me/profile/publish</code></td><td>Re-validate all 5 steps and flip the profile from <code>DRAFT</code> to <code>ACTIVE</code>, provisioning a <code>SCOUT</code> subscription.</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>GET</td><td><code>/api/marketplace/coaches</code></td><td>Search by <code>city</code> (required), <code>district</code>, <code>language</code>, <code>minPrice</code>/<code>maxPrice</code>, <code>ageGroup</code>, <code>skill</code>, <code>minRating</code>, <code>sortBy</code> (<code>displayName</code> default, <code>rating</code>, <code>price</code>), <code>page</code>, <code>size</code> (1–50, default 20).</td><td>Permit all</td></tr>
+      <tr><td>GET</td><td><code>/api/marketplace/coaches/{coachId}</code></td><td>Public profile, with the first page of reviews stitched in by the controller.</td><td>Permit all</td></tr>
+      <tr><td>GET</td><td><code>/api/marketplace/coaches/me/tier</code></td><td><code>{"tier": …}</code> for the current coach.</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>GET</td><td><code>/api/marketplace/coaches/me/profile/status</code></td><td>Wizard progress: status, last completed step, published flag.</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>GET</td><td><code>/api/marketplace/coaches/me/profile</code></td><td>Own full profile (<code>CoachProfileSelfResponse</code>) for edit-dialog prefill; works for DRAFT.</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>GET</td><td><code>/api/marketplace/coaches/me/profile/timezones</code></td><td>Server-side IANA zone list for the Step 1 picker (~486 ids on JDK 17).</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>PUT</td><td><code>/api/marketplace/coaches/me/profile/steps/{1..5}</code></td><td>1: identity, bio, city/district, languages, timezone. 2: specialties + age groups. 3: price, duration override, session packs. 4: weekly availability. 5: photo key.</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>POST</td><td><code>/api/marketplace/coaches/me/profile/publish</code></td><td>Re-validate and flip <code>DRAFT</code> &rarr; <code>ACTIVE</code>.</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>DELETE</td><td><code>/api/marketplace/coaches/me/profile/photo</code></td><td>Soft-delete the photo object and clear <code>photoUrl</code> (idempotent).</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>GET</td><td><code>/api/marketplace/coaches/me/profile/gallery</code></td><td>Own gallery items (signed URLs).</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>POST</td><td><code>/api/marketplace/coaches/me/profile/gallery</code></td><td>Link a confirmed upload <code>{key}</code> &rarr; 201 (idempotent per key).</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>DELETE</td><td><code>/api/marketplace/coaches/me/profile/gallery/{mediaId}</code></td><td>Remove an item and soft-delete its storage object; 404 if not the caller's.</td><td><code>ROLE_COACH</code></td></tr>
     </table>
+    <p>All <code>/api/marketplace/coaches/**</code> paths are in <code>AppEndpoints.PUBLIC_ENDPOINTS</code>, so for the
+      <code>me/…</code> endpoints the <code>@PreAuthorize</code> is the real guard — never drop it. Frontend:
+      <code>pages/marketplace/MarketplacePage.vue</code>, <code>pages/marketplace/CoachPublicProfilePage.vue</code>,
+      <code>pages/coach/CoachProfileBuilderPage.vue</code>, and <code>pages/ProfilePage.vue</code> (edit dialogs incl.
+      <code>components/profile/EditCoachGalleryDialog.vue</code>); API client <code>src/frontend/src/api/marketplace.api.js</code>.</p>
 
     <h3>Domain events</h3>
-    <p>Marketplace does not currently publish its own domain events. It <strong>consumes</strong> one:
-      <code>filestorage.event.StorageObjectConfirmedEvent</code>, handled by
-      <code>CoachProfilePhotoEventListener</code> to sync a confirmed photo upload back onto the coach's
-      <code>photoUrl</code>. Elsewhere in the platform, <code>booking.contract.CoachReliabilityStrikeQueuedEvent</code>
-      and services in <code>payment</code>/<code>admin</code> write directly into
-      <code>CoachReliabilityStrikeRepository</code> — marketplace only reads that table back out.</p>
+    <p>Marketplace publishes no domain events. It consumes one: <code>filestorage.event.StorageObjectConfirmedEvent</code>
+      (synchronous <code>@EventListener</code>, inside the confirm transaction) in
+      <code>CoachProfilePhotoEventListener</code>. Profile <code>status</code> is changed from outside the module by
+      <code>payment.ReliabilityStrikeService</code> (PENDING_REVIEW/REDUCED) and
+      <code>admin.AdminCoachEnforcementService</code> (SUSPENDED, reinstatement to ACTIVE/DRAFT); the rating aggregate
+      by <code>reviews</code>; <code>verification_tier</code> by the admin console via
+      <code>CoachProfileRepository.updateVerificationTier</code>.</p>
 
     <div class="callout">
-      <p><strong>Cross-module dependencies observed in imports:</strong> <code>infrastructure.exception</code>
-      (<code>ResourceNotFoundException</code>), <code>infrastructure.sanitizer</code>
-      (<code>ContactDetailSanitizer</code> for bio text), <code>filestorage.event</code>/<code>repo</code>/<code>service</code>
-      (photo upload confirmation + storage key parsing), <code>security.contract.AgeTier</code>,
-      <code>security.repo.PlayerProfile</code>/<code>PlayerProfileRepository</code>/<code>UserRepository</code>,
-      <code>security.service.SecurityUtil</code>, <code>reviews.contract.ReviewListResponse</code> and
-      <code>reviews.service.ReviewQueryService</code> (profile page reviews), and
-      <code>config.service.ConfigService</code> (capability badge window setting).</p>
+      <p><strong>Cross-module dependencies observed in imports:</strong> <code>infrastructure.exception</code>,
+      <code>infrastructure.persistence.PessimisticLockRetryer</code>, <code>infrastructure.sanitizer.ContactDetailSanitizer</code>
+      (bio), <code>infrastructure.validation.IanaTimezone</code>, <code>filestorage</code> (<code>FileStorageService</code>
+      for signed URLs/soft delete/<code>findActiveObject</code>, <code>StorageKeyGenerator</code>,
+      <code>StorageObjectConfirmedEvent</code>), <code>security</code> (<code>AgeTier</code>, <code>SecurityUtil</code>,
+      <code>PlayerProfileRepository</code>/<code>UserRepository</code>), <code>booking.contract.BookingError</code>
+      (Step 4 suspended-coach error), <code>reviews</code> (<code>ReviewQueryService</code>,
+      <code>ReviewListResponse</code>) and <code>config.ConfigService</code>. In the other direction, admin, booking,
+      development, messaging, payment, reviews, security, session and video all import marketplace classes —
+      mostly <code>CoachProfileService</code>/<code>CoachProfileRepository</code>.</p>
     </div>
 
     <h2>Key Flows</h2>
@@ -176,24 +189,23 @@ sequenceDiagram
   Parent->>Resource: GET /api/marketplace/coaches?city=...&skill=...&page=0
   Resource->>Search: searchCoaches(params, page, size)
   Search->>Spec: build(params)
-  Spec-->>Search: Specification (status ACTIVE/REDUCED, city, district, skill, ageGroup, price, rating)
-  Search->>DB: findAll(spec, pageable)
+  Spec-->>Search: Specification (status, city, district, skill, ageGroup, price, minRating)
+  Search->>DB: findAll(spec, pageable sorted status ASC then name or rating)
   DB-->>Search: Page of CoachProfile
   Search->>Search: applyLanguageFilter() via native query (post-fetch)
   Search->>Enrich: batch load specialties/prices/strikes/badges for page IDs only
   Enrich-->>Search: maps keyed by coachId
-  Search->>Search: assemble CoachCardDto, sortPage() if sortBy=price
+  Search->>Search: CoachCardDto (signed photo URL), sortPage() if sortBy=price
   Search-->>Resource: CoachSearchResponse
   Resource-->>Parent: 200 OK (coach cards + pagination)
     </pre>
     <p>
-      A search always requires a city, which keeps the specification and the native language query scoped and
-      cheap. Only <code>ACTIVE</code>/<code>REDUCED</code> coaches are visible, with <code>ACTIVE</code> ranked
-      first. Enrichment data (specialties, price, reliability strikes, capability badges) is batch-loaded only for
-      the coaches on the current result page, avoiding N+1 queries and avoiding loading the entire city's coach
-      roster into memory. Price sorting is applied in Java after enrichment because per-session price lives in a
-      separate <code>coach_pricing</code> table, not on <code>CoachProfile</code> itself; this means price sort is
-      only correct within a page, not globally across pages.
+      The DB sort is <code>status ASC</code> first (ACTIVE sorts before REDUCED alphabetically — the enum is stored as
+      a string), then <code>displayName</code> or <code>averageRating DESC NULLS LAST</code>. Enrichment is
+      batch-loaded only for the current page. Price sort happens in Java after enrichment because the price lives in
+      <code>coach_pricing</code>, so it is only correct <em>within</em> a page. With a <code>language</code> filter,
+      <code>totalElements</code> comes from a separate <code>countByLanguageAndCity</code> query; see the gotcha below
+      on why language-filtered paging is approximate.
     </p>
 
     <h3>Viewing a single coach's public profile</h3>
@@ -203,23 +215,25 @@ sequenceDiagram
   participant Resource as CoachMarketplaceResource
   participant Profile as CoachProfileService
   participant ReviewSvc as ReviewQueryService (reviews module)
-  participant Repos as Specialty/AgeGroup/Pricing/SessionPack/Availability/Media repos
+  participant Repos as marketplace repos + FileStorageService
 
   Parent->>Resource: GET /api/marketplace/coaches/{coachId}
   Resource->>Profile: getPublicProfile(coachId)
-  Profile->>Profile: findById + filter status ACTIVE/REDUCED/PENDING_REVIEW
-  Profile->>Repos: load specialties, age groups, pricing, session packs,
-  Note over Profile,Repos: availability (-> "available" flag), reliability strikes, media gallery (top 6)
-  Profile-->>Resource: CoachProfileDto (reviews field = null)
+  Profile->>Repos: (1) profile LEFT JOIN pricing, status ACTIVE/REDUCED/PENDING_REVIEW
+  Profile->>Repos: (2) facts UNION ALL: specialties, age groups, availability count, 90-day strikes
+  Profile->>Repos: (3) session packs, (4) media gallery (first 6)
+  Profile->>Repos: sign photo key and gallery keys
+  Profile-->>Resource: CoachProfileDto (reviews = null)
   Resource->>ReviewSvc: getFirstPageForCoach(coachId)
   ReviewSvc-->>Resource: ReviewListResponse
   Resource-->>Parent: 200 OK (CoachProfileDto with reviews populated)
     </pre>
     <p>
-      The profile is visible for <code>ACTIVE</code>, <code>REDUCED</code>, and even <code>PENDING_REVIEW</code>
-      coaches — otherwise a <code>CoachProfileNotFoundException</code> is thrown. <code>CoachProfileService</code>
-      deliberately returns <code>reviews = null</code> in the DTO to avoid a circular dependency between the
-      marketplace and reviews services; the controller stitches the first page of reviews back in afterward.
+      Any other status (incl. <code>DRAFT</code>) is a <code>CoachProfileNotFoundException</code>. The query count is
+      fixed at four regardless of profile size (<code>CoachPublicProfileQueryCountIT</code>). Photo and gallery values
+      are stored as private-bucket keys and turned into signed download URLs on the way out; legacy absolute gallery
+      URLs pass through. The service returns <code>reviews = null</code> to avoid a marketplace&harr;reviews service
+      cycle; the controller stitches reviews in.
     </p>
 
     <h3>Coach builds and publishes a profile</h3>
@@ -230,109 +244,124 @@ sequenceDiagram
   participant Service as CoachProfileService
 
   Coach->>Resource: PUT steps/1 (identity, bio, city, languages, timezone)
-  Resource->>Service: saveStep1()
+  Resource->>Service: saveStep1() - CityTimezoneValidator, lock, re-stamp windows if zone changed
   Coach->>Resource: PUT steps/2 (specialties, age groups)
-  Resource->>Service: saveStep2() - requires displayName set
-  Coach->>Resource: PUT steps/3 (per-session price, session packs)
-  Resource->>Service: saveStep3() - requires specialties+ageGroups set
+  Resource->>Service: saveStep2() - requires displayName, delete + flush + reinsert
+  Coach->>Resource: PUT steps/3 (price, duration, session packs)
+  Resource->>Service: saveStep3() - requires specialties and age groups
   Coach->>Resource: PUT steps/4 (weekly availability windows)
-  Resource->>Service: saveStep4() - requires pricing set, validates overlap
+  Resource->>Service: saveStep4() - requires pricing, overlap check, lock, not SUSPENDED
   Coach->>Resource: PUT steps/5 (photo key)
-  Resource->>Service: saveStep5() - requires availability set, validates key prefix
+  Resource->>Service: saveStep5() - requires availability, key prefix coach_profile/userId/
   Coach->>Resource: POST publish
   Resource->>Service: publishProfile()
-  Service->>Service: validateAllStepsComplete() (re-checks steps 1-4)
-  Service->>Service: status DRAFT -> ACTIVE, create CoachSubscription(SCOUT)
+  Service->>Service: requireDraftStatus, lock + refresh, re-check, validateAllStepsComplete
+  Service->>Service: status ACTIVE, statusChangedAt, find-or-create CoachSubscription(SCOUT)
   Service-->>Resource: ProfileBuilderStatusResponse
   Resource-->>Coach: 200 OK (profile now searchable)
     </pre>
     <p>
-      Each step is guarded against being submitted out of order, and the profile only becomes searchable after
-      <code>publishProfile()</code> re-validates every prior step and flips <code>status</code> from
-      <code>DRAFT</code> to <code>ACTIVE</code>. The photo itself is uploaded separately through
-      <code>filestorage</code>; step 5 only records the storage key, and the actual <code>photoUrl</code> can also
-      be set asynchronously later by <code>CoachProfilePhotoEventListener</code> when the upload is confirmed.
+      Step 1 creates the <code>DRAFT</code> profile if none exists. Steps can be re-submitted after publishing
+      ("My Profile" edits reuse the same endpoints); Steps 2 and 3 delete and re-insert their child rows with an explicit
+      <code>flush()</code> in between, because Hibernate otherwise orders INSERTs before DELETEs and trips
+      <code>uq_coach_specialty</code>/<code>uq_coach_age_group</code>/<code>uq_session_pack</code>. The photo is
+      uploaded through <code>filestorage</code> (sign &rarr; PUT &rarr; confirm); step 5 records the key, and
+      <code>CoachProfilePhotoEventListener</code> also sets it when the upload is confirmed.
+    </p>
+
+    <h3>Coach adds a gallery image</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Coach as Coach (ROLE_COACH)
+  participant Storage as filestorage StorageResource
+  participant Resource as ProfileBuilderResource
+  participant Gallery as CoachGalleryService
+
+  Coach->>Storage: POST /api/storage/sign/upload (entity coach_gallery, entityId = own userId)
+  Coach->>Storage: PUT bytes, then POST /api/storage/confirm/{key}
+  Coach->>Resource: POST /api/marketplace/coaches/me/profile/gallery {key}
+  Resource->>Gallery: addImage(userId, key)
+  Gallery->>Gallery: key prefix coach_gallery/userId/, findActiveObject: owner, JPEG/PNG/WebP, max 5 MB
+  Gallery->>Gallery: lock CoachProfile row (NOWAIT + retry)
+  Gallery->>Gallery: same key already linked? return it. 6 items already? galleryFull
+  Gallery-->>Coach: 201 CoachMediaItemDto (signed URL)
+    </pre>
+    <p>
+      Validation uses the HEAD-verified storage record, never the client's declared type/size. Images only — short
+      video clips would need the <code>video</code> module and are not supported. Delete takes the same lock, removes
+      the row and soft-deletes the object, tolerating an already-gone object or a stale <code>created_by</code> (as
+      <code>deletePhoto</code> does). GDPR coach erasure deletes <code>coach_media</code> rows and enqueues their
+      <code>coach_gallery/*</code> blobs (<code>admin.GdprErasureService</code>).
     </p>
 
     <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong><code>CoachProfileRepository.findByIdForUpdate</code> is the platform's per-coach serialization
+      point.</strong> It is <code>PESSIMISTIC_WRITE</code> with <code>jakarta.persistence.lock.timeout = 0</code>, i.e.
+      NOWAIT — not a blocking wait. Every call site wraps it in <code>PessimisticLockRetryer.withBoundedRetry</code>
+      (retry from a savepoint, ~3.2s budget); exhausting the budget surfaces as a 409 from <code>ApiAdvice</code>.
+      Booking create/accept, reschedule, duplicate-next-week, admin enforcement, strikes, Step 1/4, publish, photo
+      delete and gallery writes all take it. Lock, then <code>entityManager.refresh(profile, PESSIMISTIC_WRITE)</code>,
+      then re-check state — a check made before the lock is only a fast path.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong><code>CoachProfile</code> has no <code>@Version</code> and no <code>@DynamicUpdate</code>.</strong>
+      A <code>save()</code> rewrites every column, so an unlocked read-modify-save can silently revert a concurrent
+      status change (e.g. <code>suspendCoach</code>). That is why the status-sensitive writers lock first, and why
+      <code>verification_tier</code> is <code>updatable = false</code> (only the admin bulk UPDATE writes it). Any new
+      writer of this entity should either lock-and-refresh or use a targeted <code>@Modifying</code> UPDATE (as
+      <code>updateRatingAggregate</code>/<code>markRecapDataErased</code> do).</p>
+    </div>
     <div class="callout">
-      <p><strong>Timezones are validated as real IANA zone ids.</strong> Both
-      <code>ProfileBuilderStep1Request.canonicalTimezone</code> and each
-      <code>ProfileBuilderStep4Request.AvailabilityWindowRequest.canonicalTimezone</code> carry
-      <code>@IanaTimezone</code> (from <code>infrastructure.validation</code>) on top of <code>@NotBlank</code>.
-      This matters downstream: <code>AvailabilityService.hasBookingConflict</code> and the booking overlap checks
-      resolve local times against these strings, so an unparseable zone would fail deep inside booking rather
-      than at the request boundary.</p>
+      <p><strong>Timezones are validated as real IANA region ids, and the picker comes from the server.</strong>
+      <code>ProfileBuilderStep1Request.canonicalTimezone</code> (and each Step 4 window's) carries
+      <code>@IanaTimezone</code>. The frontend must offer <code>GET …/me/profile/timezones</code>, not the browser's
+      <code>Intl</code> zone — a browser on newer tzdata than the JVM (e.g. <code>Europe/Kyiv</code>) used to make Step 1
+      uncompletable. The profile's zone is authoritative for all availability (deferred-140): booking resolves windows
+      against it.</p>
     </div>
     <div class="callout warn">
       <p><strong>Annotate list <em>elements</em>, not just the list.</strong>
-      <code>ProfileBuilderStep4Request.windows</code> is declared
-      <code>List&lt;@NotNull @Valid AvailabilityWindowRequest&gt;</code>. Bean Validation skips the cascade on a
-      null element, so with only <code>@Valid</code> on the list a payload of
-      <code>{"windows":[null]}</code> passed every constraint and then NPE'd inside
-      <code>CoachProfileService.validateAvailabilityWindows</code> as a 500. Repeat this element-level pattern for
-      any new collection field.</p>
-    </div>
-    <div class="callout">
-      <p><strong><code>CoachProfileRepository.findByIdForUpdate</code> is the platform's booking serialization
-      point.</strong> There is no "coach calendar" row, so booking takes a <code>PESSIMISTIC_WRITE</code> lock on
-      the <code>CoachProfile</code> row (with a 5s <code>jakarta.persistence.lock.timeout</code> hint) to serialize
-      concurrent booking creates/accepts for the same coach. Be aware that a change to this entity's write paths
-      can affect booking throughput — see <a href="../booking/index.html">Booking</a>'s slot-exclusivity section.</p>
+      <code>ProfileBuilderStep4Request.windows</code> is <code>List&lt;@NotNull @Valid AvailabilityWindowRequest&gt;</code>.
+      With only <code>@Valid</code> on the list, <code>{"windows":[null]}</code> passed validation and NPE'd inside
+      <code>validateAvailabilityWindows</code> as a 500. Repeat this element-level pattern for new collection fields.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Search always needs a city.</strong> There is no cross-city or "search everywhere" mode — every
-      specification and the native language-filter query are scoped to <code>city</code>. If you're adding a new
-      filter, keep it inside this city-scoped query pattern rather than introducing an unscoped scan.</p>
-    </div>
-    <div class="callout warn">
-      <p><strong>The profile builder wizard enforces strict ordering server-side, not just client-side.</strong>
-      Each <code>saveStepN</code> method checks that the previous step's data actually exists in the DB before
-      accepting new data, and throws <code>MarketplaceException("marketplace.stepOutOfOrder", ...)</code>
-      otherwise. Don't assume the frontend wizard UI is the only thing preventing out-of-order submission.</p>
+      <p><strong>Search always needs a city, and the language filter is a post-fetch step.</strong> Keep new filters
+      city-scoped. The language filter runs <em>after</em> the DB page is fetched, so a language-filtered page can
+      contain fewer than <code>size</code> results (or none) while later pages hold matches, and its native query only
+      matches <code>ACTIVE</code> coaches — REDUCED coaches disappear when a language is given. Moving language into
+      the <code>Specification</code> (e.g. a native-function predicate) would fix both.</p>
     </div>
     <div class="callout">
-      <p><strong>Photo URLs are validated against a strict key prefix.</strong> <code>saveStep5()</code> rejects
-      any <code>photoUrl</code> that doesn't start with <code>coach_profile/{userId}/</code> — this prevents a
-      coach from pointing their profile photo at an arbitrary storage object belonging to someone else. Any new
-      code that sets <code>photoUrl</code> directly (as <code>CoachProfilePhotoEventListener</code> does) should
-      preserve this invariant.</p>
+      <p><strong>Storage keys, not URLs.</strong> <code>photo_url</code> and gallery <code>file_url</code> hold
+      private-bucket object keys; always resolve through <code>FileStorageService.signedDownloadUrl</code>
+      (<code>CoachGalleryService.resolveUrl</code> is the shared rule). Key prefixes are the ownership check:
+      <code>coach_profile/{userId}/</code> for the photo (Step 5) and <code>coach_gallery/{userId}/</code> plus a storage
+      owner check for gallery items. Preserve these if you add new writers.</p>
     </div>
     <div class="callout">
-      <p><strong>Rating and review count are denormalized onto <code>CoachProfile</code>.</strong>
-      <code>average_rating</code>/<code>review_count</code> are not computed by marketplace — they're written by
-      <code>reviews.service.CoachRatingService.recompute()</code> via the
-      <code>updateRatingAggregate</code> bulk update query. If ratings look stale, look in the <code>reviews</code>
-      module, not here.</p>
+      <p><strong>Rating and review count are denormalized onto <code>CoachProfile</code></strong> by
+      <code>reviews.service.CoachRatingService.recompute()</code> via <code>updateRatingAggregate</code>. If ratings or
+      the <code>minRating</code> filter look wrong, look in <code>reviews</code>. (The "stub until Epic 9" comment on
+      <code>CoachSearchParams.minRating</code> is stale — the filter is live.)</p>
     </div>
     <div class="callout">
-      <p><strong><code>minRating</code> and capability badges are not fully implemented yet.</strong>
-      <code>CoachSearchParams.minRating</code> is a stub per its own code comment (returns 0 results for now,
-      pending Epic 9), and <code>CoachCapabilityService</code> always returns empty badge lists. Don't build
-      features on top of these assuming they filter/populate anything today.</p>
+      <p><strong><code>CoachSubscriptionTier</code> declaration order is load-bearing.</strong>
+      <code>SCOUT, INSTRUCTOR, ACADEMY</code> is asserted in a static initializer because the session module's
+      feature-gate "minimum tier" lookup iterates <code>values()</code> in order.</p>
     </div>
 
     <h2>Related Modules</h2>
     <ul>
-      <li><a href="../reviews/index.html">Reviews</a> — supplies the review list shown on a coach's public
-        profile and owns the rating/review-count aggregate written back onto <code>CoachProfile</code>.</li>
-      <li><a href="../booking/index.html">Booking</a> — reads coach profiles, pricing, session packs, and
-        availability windows to schedule sessions; queues reliability strikes that marketplace surfaces.</li>
-      <li><a href="../payment/index.html">Payment</a> — reads/writes <code>CoachSubscription</code> tier and
-        billing, session pack pricing, and reliability strikes (e.g. <code>ReliabilityStrikeService</code>).</li>
-      <li><a href="../filestorage/index.html">Filestorage</a> — owns the actual coach profile photo upload
-        pipeline; marketplace only listens for its confirmation event and stores the resulting key.</li>
-      <li><a href="../security/index.html">Security</a> — supplies <code>AgeTier</code>, <code>SecurityUtil</code>
-        for current-user resolution, and player/parent identity data used by <code>PlayerProfileService</code>.</li>
-      <li><a href="../admin/index.html">Admin</a> — moderation/enforcement flows (GDPR export/erasure, coach
-        enforcement, disputes) that read and mutate marketplace data such as profile status and reliability
-        strikes.</li>
-      <li><a href="../development/index.html">Development</a>, <a href="../video/index.html">Video</a>,
-        <a href="../session/index.html">Session</a>, <a href="../messaging/index.html">Messaging</a> — all read
-        coach/player identity and profile data from marketplace to attribute drills, videos, session plans, and
-        conversations to the right coach.</li>
-      <li><a href="../config/index.html">Config</a> — provides the configurable activity-window setting used by
-        <code>CoachCapabilityService</code>.</li>
+      <li><a href="../reviews/index.html">Reviews</a> — supplies the review list on the public profile and writes the rating aggregate back onto <code>CoachProfile</code>.</li>
+      <li><a href="../booking/index.html">Booking</a> — reads profiles, pricing, availability and the profile timezone; locks the profile row to serialise per-coach booking writes.</li>
+      <li><a href="../payment/index.html">Payment</a> — issues reliability strikes (and the resulting PENDING_REVIEW/REDUCED status), manages <code>CoachSubscription</code> tiers and purchasable pack tiers.</li>
+      <li><a href="../admin/index.html">Admin</a> — coach enforcement (suspend/reinstate, strike deletion), verification tier, GDPR erasure of coach profile text, gallery and recap data.</li>
+      <li><a href="../filestorage/index.html">Filestorage</a> — owns the photo and gallery upload pipeline (<code>coach_profile</code>, <code>coach_gallery</code> entities) and signed download URLs.</li>
+      <li><a href="../security/index.html">Security</a> — <code>AgeTier</code>, <code>SecurityUtil</code>, and player/parent data behind <code>PlayerProfileService</code>.</li>
+      <li><a href="../session/index.html">Session</a>, <a href="../development/index.html">Development</a>, <a href="../video/index.html">Video</a>, <a href="../messaging/index.html">Messaging</a> — resolve coach ids, tiers and display names through <code>CoachProfileService</code>.</li>
+      <li><a href="../config/index.html">Config</a> — the capability-badge activity-window setting.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
   </main>

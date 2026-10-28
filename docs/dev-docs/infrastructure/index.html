@@ -22,6 +22,7 @@
         <li><a href="../messaging/index.html">Messaging</a></li>
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
@@ -30,9 +31,10 @@
       </ul>
       <h4>Cross-Cutting</h4>
       <ul>
-        <li><a href="../infrastructure/index.html" class="active">Infrastructure</a></li>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
         <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
         <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
       </ul>
     </nav>
   </aside>
@@ -70,31 +72,34 @@
     <h2>Subpackage Reference</h2>
     <div class="card-grid">
       <div class="card"><h4>blobstore</h4><p>S3 / local-filesystem object storage abstraction. Wrapped exclusively by <code>platform.filestorage</code>.</p></div>
-      <div class="card"><h4>security</h4><p>Cross-cutting auth primitives: cookie helpers, rate limiting, request context, JWT/role constants, security error events.</p></div>
-      <div class="card"><h4>feature</h4><p>Simple properties-backed feature-toggle service (<code>features.*</code> config keys) gating payments, invoicing, arachnid, videointel.</p></div>
-      <div class="card"><h4>persistence</h4><p>JPA base classes (<code>BaseEntity</code>, <code>AbstractAuditingEntity</code>), TSID generation, Flyway schema check, audit listeners.</p></div>
-      <div class="card"><h4>email</h4><p>The <code>OutboundEmailSender</code> transport port + <code>EmailTransport</code> enum (<code>ses</code>/<code>smtp</code>/<code>log</code>) that <code>platform.notification</code> dispatches every send through.</p></div>
-      <div class="card"><h4>ses</h4><p>The AWS SES implementation of the <code>infrastructure.email</code> transport port — one of three, active when <code>app.email.transport=ses</code>.</p></div>
-      <div class="card"><h4>sanitizer</h4><p>Regex-based redaction of emails/phone numbers from free text, used to strip contact info from user-generated content.</p></div>
-      <div class="card"><h4>threadpool</h4><p>MDC task decorator and executor wiring so <code>@Async</code>/detached threads keep the originating request's logging context.</p></div>
+      <div class="card"><h4>security</h4><p>Cross-cutting auth primitives: cookie helpers, <code>@RateLimited</code> + in-memory Bucket4j rate limiting, request context, JWT/role constants, access-denied/auth-failure handlers, security events.</p></div>
+      <div class="card"><h4>feature</h4><p>Simple properties-backed feature-toggle service (<code>features.*</code> config keys). Only <code>ARACHNID_ENABLED</code>/<code>VIDEOINTEL_ENABLED</code> are read today.</p></div>
+      <div class="card"><h4>persistence</h4><p>JPA base classes (<code>BaseEntity</code>, <code>AbstractAuditingEntity</code>), TSID generation, Flyway schema check, audit listeners, and <code>PessimisticLockRetryer</code>.</p></div>
+      <div class="card"><h4>email</h4><p>The <code>OutboundEmailSender</code> transport port + <code>EmailTransport</code> enum (<code>ses</code>/<code>smtp</code>/<code>log</code>), the SMTP and log adapters, address parsing and PII masking.</p></div>
+      <div class="card"><h4>ses</h4><p>The AWS SES implementation of the <code>infrastructure.email</code> transport port — active when <code>app.email.transport=ses</code>. The only package allowed to import the SES SDK.</p></div>
+      <div class="card"><h4>sanitizer</h4><p>Regex-based redaction of emails/phone numbers from free text (registration names, coach bio, booking notes, recaps, drill text).</p></div>
+      <div class="card"><h4>threadpool</h4><p>MDC task decorator, plus <code>ExecutorShutdown</code>/<code>GracefulShutdownTaskExecutor</code>: the per-pool drain budget on SIGTERM.</p></div>
       <div class="card"><h4>exception</h4><p><code>ApplicationException</code> — the base runtime exception (support-id, error code, log context) every module's own exceptions extend.</p></div>
-      <div class="card"><h4>video</h4><p><code>VideoProviderAdapter</code> contract plus the BunnyCDN implementation used for upload/playback/webhook handling.</p></div>
-      <div class="card"><h4>gemini</h4><p>Thin client wrapping Google Gemini for text-content moderation, consumed by <code>messaging</code>'s moderation service.</p></div>
-      <div class="card"><h4>util</h4><p>Grab-bag of stateless helpers: <code>Constants</code>, <code>JsonUtil</code>, <code>TimeUtil</code>/<code>TimeGuru</code>, <code>ClockProvider</code>, <code>RandomUtil</code>, <code>PhoneNumberUtil</code>, <code>EnvUtil</code>.</p></div>
-      <div class="card"><h4>config</h4><p>App-wide Spring <code>@Configuration</code> classes: Jackson/ObjectMapper setup, async executor, <code>SchedulingConfig</code>, datasource, JPA auditing, ShedLock, observability.</p></div>
-      <div class="card"><h4>web</h4><p><code>LoggingFilter</code> — the one shared servlet filter, emitting structured <code>request_end</code>/<code>request_error</code> log events.</p></div>
+      <div class="card"><h4>video</h4><p><code>VideoProviderAdapter</code> contract plus the BunnyCDN implementation: upload credentials, asset status, signed playback URLs, webhook verification, delete.</p></div>
+      <div class="card"><h4>gemini</h4><p>Thin client wrapping Google Gemini for text-content moderation, consumed by <code>messaging</code> and <code>reviews</code>.</p></div>
+      <div class="card"><h4>util</h4><p>Grab-bag of stateless helpers: <code>Constants</code>, <code>JsonUtil</code>, <code>TimeUtil</code>/<code>TimeGuru</code>, <code>ClockProvider</code>, <code>RandomUtil</code>, <code>PhoneNumberUtil</code>, <code>EnvUtil</code>, <code>BodySanitizer</code>, <code>TransactionIdProvider</code>.</p></div>
+      <div class="card"><h4>config</h4><p>App-wide <code>@Configuration</code>: <code>Clock</code>/Jackson (<code>CommonConfig</code>), async executor, <code>SchedulingConfig</code>, <code>ShedLockConfig</code>, the routing <code>DataSource</code> with its isolated pools, JPA auditing, access logs, observability.</p></div>
+      <div class="card"><h4>web</h4><p><code>LoggingFilter</code> (structured request logs), <code>Slf4jAccessLogValve</code> (Tomcat access log via SLF4J), and <code>FrontendLinkBuilder</code> (absolute hash-routed SPA links).</p></div>
       <div class="card"><h4>videointel</h4><p>Client for Google Cloud Video Intelligence, used to flag explicit content in uploaded videos before publish.</p></div>
-      <div class="card"><h4>message</h4><p>Shared REST response/error DTO shapes (<code>Response</code>, <code>ErrorDto</code>, <code>ErrorMsg</code>, <code>Success</code>/<code>Failure</code>) returned by controllers app-wide.</p></div>
+      <div class="card"><h4>message</h4><p>Shared REST response/error DTO shapes (<code>Response</code>, <code>ErrorDto</code>, <code>FieldErrorDto</code>, <code>ErrorMsg</code>, <code>Success</code>/<code>Failure</code>) returned by controllers app-wide.</p></div>
       <div class="card"><h4>arachnid</h4><p>Client for a third-party CSAM (child sexual abuse material) hash-matching scanner, gating video publish before public availability.</p></div>
-      <div class="card"><h4>client</h4><p><code>AbstractClient</code> — shared RestTemplate wiring (timeouts, interceptors, JSON converters) that provider-specific clients extend.</p></div>
+      <div class="card"><h4>client</h4><p><code>AbstractClient</code> — shared RestTemplate wiring for provider clients. <strong>Currently unused</strong>: no class outside the package extends or imports it.</p></div>
+      <div class="card"><h4>i18n</h4><p><code>WarnOnMissingMessageSource</code> — the app's <code>MessageSource</code> (wired in <code>platform.security.config.MvcConfig</code>): an unresolvable code renders as the code plus one WARN instead of a 500.</p></div>
       <div class="card"><h4>logging</h4><p>Small constant holders (<code>LogKeys</code>, <code>InventoryCode</code>) standardising structured-log field names across modules.</p></div>
-      <div class="card"><h4>validation</h4><p>Bean Validation annotations/validators: <code>@Phone</code>, <code>@Name</code>, <code>@LangIso2</code>, <code>@LocalDateWindow</code>, <code>@IanaTimezone</code>, plus ISO language/phone helpers.</p></div>
+      <div class="card"><h4>validation</h4><p>Bean Validation annotations/validators: <code>@Phone</code>/<code>@CamPhone</code>, <code>@Name</code>, <code>@LangIso2</code>, <code>@LocalDateWindow</code>, <code>@IanaTimezone</code>, plus ISO language/phone-rule helpers.</p></div>
     </div>
 
     <h3>blobstore</h3>
     <p>
       <code>infrastructure.blobstore</code> is the raw object-storage abstraction. The public contract is
-      <code>StorageService</code> (<code>put</code>/<code>get</code>/<code>delete</code>/<code>exists</code>/<code>stat</code>/<code>copy</code>),
+      <code>StorageService</code> (<code>put</code>/<code>get</code>/<code>delete</code>/<code>deleteAll</code>/<code>exists</code>/<code>stat</code>/<code>copy</code>;
+      <code>deleteAll</code> is best-effort — every key is attempted and all failures are reported together in one
+      <code>StorageProviderException</code>),
       backed by two implementations selected via <code>app.storage.provider</code>: <code>S3StorageService</code>
       (default; retries transient <code>SdkException</code>s with exponential backoff via Spring Retry, sanitizes keys,
       uses <code>S3TransferManager</code> for async uploads) and <code>LocalFileSystemStorageService</code> (dev-mode;
@@ -123,8 +128,14 @@
       <code>REFRESH_TOKEN_TTL</code> = 7 days). <code>CookieUtil</code> centralizes cookie creation/removal so every
       cookie gets consistent <code>Secure</code>/<code>SameSite</code>/<code>HttpOnly</code> handling based on the
       current request's HTTPS status. <code>RateLimitingService</code> is a generic Bucket4j-backed token-bucket keyed
-      by <code>limitKey:identifier</code>, used by the <code>@RateLimited</code> annotation/aspect and directly by
-      modules needing ad-hoc throttling (login attempts, OTP resend). Also here: <code>RequestMetadataProvider</code>/<code>ClientContextProvider</code>
+      by <code>limitKey:identifier</code>, used by the <code>@RateLimited</code> annotation/<code>RateLimitingAspect</code>
+      (about two dozen endpoints) and directly by modules needing ad-hoc throttling (registration OTP resend, video
+      upload, report generation). Buckets live in a per-instance in-memory map, so limits are per-node; an hourly
+      <code>@Scheduled</code> <code>evictIdleBuckets()</code> removes buckets idle past
+      <code>security.rate_limiting.bucket_ttl_hours</code> (runtime config, default 24h — note this reaches
+      <em>up</em> into <code>platform.config.ConfigService</code>). <code>ApplicationAccessDeniedHandler</code>,
+      <code>AuthenticationExceptionHandler</code> and <code>AjaxLogoutSuccessHandler</code> are the Spring Security
+      handlers wired by <code>platform.security</code>. Also here: <code>RequestMetadataProvider</code>/<code>ClientContextProvider</code>
       (current request's IP/HTTPS/locale), <code>RequestIdProvider</code>, and the <code>security.event</code>
       sub-package (<code>BadCredentialsEvent</code>, <code>FraudEvent</code>, <code>PreAuthEvent</code>) that
       <code>platform.security</code>'s audit listeners subscribe to.
@@ -139,10 +150,12 @@
       <code>PropertiesFeatureToggleService</code> (the only <code>FeatureToggleService</code> implementation) fails
       fast at startup (<code>@PostConstruct</code>) if config defines a toggle key that isn't a known
       <code>AppFeature</code>, and defaults an unset toggle to a caller-supplied default (or <code>false</code>).
-      Consumers call <code>featureToggleService.isEnabled(AppFeature.PAYMENTS)</code> rather than reading raw config —
-      <code>platform.security</code>'s <code>FeatureGatedException</code> path and the video moderation pipeline
-      (<code>ARACHNID_ENABLED</code>/<code>VIDEOINTEL_ENABLED</code>, gating whether CSAM/explicit-content scanning
-      actually runs) are the main consumers.
+      Consumers call <code>featureToggleService.isEnabled(AppFeature.X)</code> rather than reading raw config. Today
+      the only readers are the video moderation pipeline (<code>ModerationOrchestrationService</code>, gating
+      whether CSAM/explicit-content scanning runs) and <code>VideoModerationEmailListener</code>, both on
+      <code>ARACHNID_ENABLED</code>/<code>VIDEOINTEL_ENABLED</code>; <code>PAYMENTS</code> and <code>INVOICING</code>
+      are declared but read nowhere. Don't confuse this with <code>platform.security</code>'s
+      <code>FeatureGatedException</code>, which is subscription-tier gating (e.g. radar assessments), not a toggle.
     </p>
 
     <h3>persistence</h3>
@@ -158,8 +171,19 @@
       <code>infrastructure.security</code>) so every row can be traced back to the request/session that wrote it.
       <code>DbUtil.generateDbRandom()</code> is the TSID factory entry point used wherever a sortable random id is
       needed outside JPA's own generator. <code>DbSchemaChecker</code> fails app startup if Flyway detects pending
-      migrations (only active when <code>custom.flyway.check-schema=true</code>). Every entity in every platform
-      module ultimately extends <code>BaseEntity</code> or <code>AbstractAuditingEntity</code>.
+      migrations (only active when <code>custom.flyway.check-schema=true</code>, which base <code>application.yaml</code>
+      sets). Most entities extend <code>BaseEntity</code> or <code>AbstractAuditingEntity</code>; newer tables with
+      <code>UUID</code> keys map their own id.
+    </p>
+    <p>
+      <code>PessimisticLockRetryer.withBoundedRetry(lockName, supplier)</code> is the companion to every
+      <code>FOR UPDATE NOWAIT</code> (<code>findByIdForUpdate</code>) lock in the codebase: it takes a JDBC savepoint,
+      runs the supplier, and on <code>PessimisticLockingFailureException</code> rolls back to the savepoint and
+      retries with jittered backoff (<code>app.locking.retry.max-attempts</code>, default 8, ≈3.2s worst case) before
+      rethrowing, which <code>ApiAdvice</code> maps to 409. The supplier may run more than once, so it must only
+      lock and read; <code>PessimisticLockRetryerCallSiteAuditTest</code> scans <code>src/main/java</code>, pins the
+      call-site count (currently 50) and fails on any write inside a retried lambda or any NOWAIT lock without a
+      wrapper. See <a href="../database/index.html">Database &amp; Migrations</a> → Locking Conventions.
     </p>
 
     <h3>email, ses, email.smtp, email.log — the transport port and its three implementations</h3>
@@ -209,13 +233,25 @@
         mirrors <code>SesPropertiesValidator</code>'s shape — a dedicated, transport-gated
         <code>@PostConstruct</code> check — though <code>MailSenderProvider</code>'s own constructor performs
         the load-bearing version of the same checks itself, since bean-creation ordering between the two is not
-        guaranteed.
-        <strong>Known gap, not yet fixed:</strong> <code>MailSenderProvider.toMailSender</code> ignores
-        <code>implicitTls</code> entirely — it hardcodes plaintext-plus-STARTTLS for every provider — so a
-        port-465 (implicit-TLS) provider is probed UP by <code>SmtpHealthIndicator</code> (which does perform a
-        real TLS handshake) while the actual send path talks the wrong protocol to that same endpoint and fails.
-        Tracked in <code>deferred-work.md</code>; not fixed here.</li>
+        guaranteed. <code>MailSenderProvider</code> honours <code>implicitTls</code> (skillars-deferred-111
+        AC10): an implicit-TLS provider uses protocol <code>smtps</code> with its properties under
+        <code>mail.smtps.*</code>, the rest use <code>smtp</code> + STARTTLS; connect/read/write timeouts are 5s each,
+        because the registration listeners call the port synchronously from an AFTER_COMMIT listener.</li>
     </ul>
+    <p>
+      Port-level pieces shared by all three adapters: <code>OutboundEmailRequest</code> now carries an optional
+      <code>headers</code> map (validated against header injection — RFC 5322 names, no CR/LF in values), which
+      <code>SmtpEmailSender</code> and <code>SesEmailSender</code> both apply; the notification centre uses it for
+      <code>List-Unsubscribe</code>/one-click unsubscribe. Failures are classified into
+      <code>EmailTransportTransientException</code>, <code>EmailTransportPermanentException</code> and
+      <code>EmailTransportRateLimitedException</code> (by <code>SesErrorClassifier</code>/<code>SmtpErrorClassifier</code>),
+      which drive the retry decision in <code>platform.notification</code>. <code>EmailAddressParser</code> is the one
+      address validator (strict <code>InternetAddress</code> parse + <code>validate()</code>), and
+      <code>EmailPiiSanitizer</code> masks recipient addresses in exception messages before they reach logs or
+      <code>envelope_entity.error</code>. <code>SesAccountChecker</code> is a live, uncached SES account check behind
+      the SES cutover preflight endpoint — it lives here because <code>EmailTransportArchitectureTest</code> forbids
+      any class outside <code>infrastructure.ses</code> from importing the SES SDK.
+    </p>
     <p>
       <code>EmailTransportPropertyValidator</code> is <strong>not</strong> what selects a bean — that would be a
       common but incorrect reading of its name. It is an <code>EnvironmentPostProcessor</code> that only
@@ -233,9 +269,14 @@
       phone-number-shaped substrings in arbitrary text and replaces them with a fixed
       <code>[contact details removed]</code> marker, returning a <code>SanitizerResult(sanitized, wasModified)</code>
       record. This exists to stop users (particularly minors messaging coaches) from exchanging off-platform contact
-      details inside in-app messages, and to strip contact info from free-text fields at registration. It is used by
-      <code>platform.messaging</code> (message content) and <code>platform.security</code> (registration name/bio
-      fields, and exposed for manual testing via <code>/api/util/sanitize-preview</code>). <code>SanitizerConfig</code>
+      details through free-text fields. Current callers: <code>platform.security</code> (player/parent/coach
+      registration and shadow-account names, plus the <code>SanitizePreviewResource</code> manual-test endpoint),
+      <code>marketplace.CoachProfileService</code> (bio), <code>booking.BookingService</code> and
+      <code>BookingCompletionService</code> (booking notes, player requests, recap text — via the shared
+      <code>BookingService.sanitizeAndTruncate</code>), <code>development.SessionPrepService</code> (plan-note
+      suggestions) and <code>session.DrillLibraryService</code> (private drill text).
+      <code>platform.messaging</code> does <em>not</em> use it — message content goes through Gemini moderation
+      instead. <code>SanitizerConfig</code>
       is an empty <code>@Configuration</code> marker with no beans of its own beyond component-scanning the sanitizer.
     </p>
 
@@ -250,9 +291,72 @@
       It is wired in <code>infrastructure.config.AsyncConfig</code>'s <code>taskExecutor</code> bean (distinct from
       <code>platform.notification</code>'s own <code>sendMailPool</code> executor). Any module using
       <code>@Async</code> or submitting work to a shared pool should be aware its task runs through this decorator,
-      not with a fresh, empty context. A second <code>TenantContextTaskDecorator</code> used to be composed in here;
-      it was deleted with the tenant module, and <code>AsyncConfig</code>'s bean name changed from
-      <code>"tenantAsyncConfig"</code> to <code>"skillarsAsyncConfig"</code> at the same time.
+      not with a fresh, empty context. (<code>AsyncConfig</code> is registered as <code>"skillarsAsyncConfig"</code>;
+      its <code>taskExecutor</code> uses <code>CallerRunsPolicy</code> on saturation.)
+    </p>
+    <p>
+      <strong>Shutdown budget.</strong> <code>ExecutorShutdown</code> is the single place that sets
+      wait-for-tasks/await-termination on every application pool, with a per-pool budget constant
+      (<code>OUTBOX_DRAIN_SECONDS</code> 10, <code>REPORT_SECONDS</code> 8, <code>SLU_RETRY_SECONDS</code> 5,
+      <code>STORAGE_UPLOAD_SECONDS</code> 5, <code>SEND_MAIL_SECONDS</code> 4, <code>MODERATION_SECONDS</code> 2,
+      <code>SHARED_ASYNC_SECONDS</code> 2). Before it existed every pool took the <code>shutdownNow()</code> path on
+      SIGTERM and dropped queued work. <code>GracefulShutdownTaskExecutor</code> escalates to
+      <code>shutdownNow()</code> plus a short bounded wait once that budget is spent, because Spring's own
+      shutdown merely logs and returns. <code>ExecutorShutdownConfigurationTest</code> fails if a new
+      <code>*Config</code> executor bean isn't covered, and the sum of budgets feeds
+      <code>docker-compose.yml</code>'s <code>stop_grace_period</code> — <strong>a new pool needs a budget here and
+      a compose update</strong>. Spring's own <code>taskScheduler</code> (which runs every <code>@Scheduled</code>
+      job) is outside this class; <code>spring.task.scheduling.shutdown.await-termination-period: 5s</code> in
+      <code>application.yaml</code> covers it.
+    </p>
+
+    <h3>config — data sources, access logs, observability</h3>
+    <p>
+      <code>DataSourceConfig</code> builds a single <code>RoutingDataSource</code> (an
+      <code>AbstractRoutingDataSource</code>) over three Hikari pools that all point at the <strong>same</strong>
+      database: the default pool (<code>spring.datasource.hikari.*</code>, 25 connections,
+      <code>auto-commit: false</code>), <code>gdpr-erasure-pool</code> and <code>payment-requires-new-pool</code>.
+      A caller sets <code>RoutingDataSourceContext.set(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY)</code> (or
+      <code>PAYMENT_REQUIRES_NEW_DATASOURCE_KEY</code>) immediately before opening a transaction and clears it in
+      <code>finally</code> — today only <code>GdprErasureService</code> and
+      <code>BookingPaymentPersistenceService</code> do. This isolates connection <em>pools</em> so a
+      <code>REQUIRES_NEW</code> inner transaction can't starve on the pool its own suspended outer transaction is
+      holding; it has to happen inside the one <code>DataSource</code> because Hibernate binds one
+      <code>EntityManagerFactory</code> to one <code>DataSource</code>. The key is a thread-local, so it must never be
+      set across an <code>@Async</code> hop.
+    </p>
+    <p>
+      <code>AccessLogConfig</code> and <code>ManagementAccessLogConfig</code> register <code>web.Slf4jAccessLogValve</code>
+      on the main server (9990) and the actuator server (8367) respectively, so access logs go through logback to the
+      console JSON appender and Loki instead of a file nobody collected. The management one is registered via
+      <code>META-INF/spring/…ManagementContextConfiguration.imports</code>, not component scanning — delete that
+      entry and management access logging silently stops. <code>ObservabilityConfig</code> enables
+      <code>@Observed</code>/<code>@Timed</code> AOP; <code>CommonConfig</code> supplies the injectable
+      <code>Clock</code> (<code>zoneId</code>, default UTC) and the Jackson builder; <code>JpaAuditingConfig</code>
+      enables JPA auditing with <code>persistence.audit.SpringSecurityAuditorAware</code> as the auditor. <code>SchedulingConfig</code>
+      and <code>ShedLockConfig</code> are covered on <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>.
+    </p>
+
+    <h3>web — logging filter, access log valve, frontend links</h3>
+    <p>
+      <code>LoggingFilter</code> emits the structured <code>request_end</code>/<code>request_error</code> events.
+      <code>FrontendLinkBuilder</code> (<code>base()</code>, <code>route(path)</code>, <code>resolve(pathOrUrl)</code>)
+      is the one way to build an absolute link into the SPA for emails and redirects. It exists because hand-built
+      links kept getting two things wrong: the frontend origin is <code>app.frontend-url</code>, not the backend's
+      own <code>baseurl:server.port</code>; and the Quasar router runs in <strong>hash mode</strong>, so every route
+      lives after <code>/#/</code> (a query string appended to <code>route(...)</code> correctly lands inside the
+      fragment). Used by <code>MailService</code>, <code>InAppNotificationService</code> (deep links), the booking and
+      account email listeners, <code>StripeOnboardingResource</code>, <code>ReportGenerationService</code> and the
+      registration strategies. Don't concatenate a frontend URL by hand.
+    </p>
+
+    <h3>i18n</h3>
+    <p>
+      <code>WarnOnMissingMessageSource</code> is the application <code>MessageSource</code>
+      (<code>platform.security.config.MvcConfig</code>). With <code>setFallbackToSystemLocale(false)</code> a code
+      missing from every bundle used to throw <code>NoSuchMessageException</code> (a 500) for any locale outside
+      de/fr/en; now it returns the code and logs one WARN. <code>MessageBundleParityTest</code> keeps the static
+      bundles in parity, so this only bites dynamically-constructed codes.
     </p>
 
     <h3>exception</h3>
@@ -377,7 +481,7 @@ sequenceDiagram
       <code>false</code>. This exists because consolidating the integration suite onto a few long-lived Spring
       contexts removed the accidental protection short-lived contexts used to give (a job with a 5-minute delay never
       fires in a context that lives 90 seconds). Overriding each job's delay in test config <em>cannot</em> substitute:
-      16 of the 30 <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder.
+      22 of the 40 <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder.
       <code>@EnableSchedulerLock</code> deliberately stays on <code>AsyncConfig</code> and is <em>not</em> gated —
       tests invoke scheduled methods directly through the Spring proxy, so the lock advisor must still apply.
       See <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>.</p>
@@ -387,20 +491,35 @@ sequenceDiagram
       Don't override them in subclasses unless you have a specific reason — doing so inconsistently across entities is
       a common source of subtle JPA collection/dedup bugs.</p>
     </div>
+    <div class="callout warn">
+      <p><strong>A new executor pool needs a shutdown budget.</strong> Configure it through
+      <code>ExecutorShutdown.configureGracefulShutdown</code> (ideally on a <code>GracefulShutdownTaskExecutor</code>),
+      or <code>ExecutorShutdownConfigurationTest</code> fails — and re-check <code>docker-compose.yml</code>'s
+      <code>stop_grace_period</code> against the new total.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Never hand-build a frontend URL.</strong> Use <code>FrontendLinkBuilder.route("/coach/…")</code>; a
+      link without <code>/#/</code> or on the backend's origin 404s or lands on the SPA root (fixed across the
+      codebase in #307).</p>
+    </div>
+    <div class="callout">
+      <p><strong>Rate limits are per instance.</strong> <code>RateLimitingService</code> keeps Bucket4j buckets in
+      memory, so N instances allow N× the configured rate. Fine for the single-instance deployment today; revisit
+      before scaling out.</p>
+    </div>
 
     <h2>Consumed By</h2>
     <ul>
       <li><a href="../security/index.html">Security</a> — the heaviest consumer by far; depends on cookie/rate-limiting/request-context helpers, <code>SecurityConstants</code>, and its own exception hierarchy extends <code>ApplicationException</code>.</li>
-      <li><a href="../video/index.html">Video</a> — consumes the <code>video</code>, <code>arachnid</code>, <code>videointel</code>, and <code>gemini</code> provider adapters for upload/playback and content-moderation scanning.</li>
+      <li><a href="../video/index.html">Video</a> — consumes the <code>video</code> (Bunny), <code>arachnid</code> and <code>videointel</code> provider adapters for upload, signed playback and content-moderation scanning, gated by the <code>feature</code> toggles.</li>
       <li><a href="../filestorage/index.html">Filestorage</a> — the sole consumer of <code>blobstore</code>; also uses <code>persistence</code> base entities and the exception hierarchy.</li>
-      <li><a href="../booking/index.html">Booking</a> and <a href="../session/index.html">Session</a> — heavy users of <code>persistence</code> base entities, <code>threadpool</code>-decorated async work, and <code>ApplicationException</code> subclassing.</li>
-      <li><a href="../payment/index.html">Payment</a> — uses <code>client.AbstractClient</code> for outbound provider HTTP calls and the <code>feature</code> toggle service (<code>PAYMENTS</code>/<code>INVOICING</code>).</li>
-      <li><a href="../messaging/index.html">Messaging</a> — uses <code>sanitizer</code> for contact-detail redaction and <code>gemini</code> for moderation.</li>
+      <li><a href="../booking/index.html">Booking</a>, <a href="../session/index.html">Session</a>, <a href="../marketplace/index.html">Marketplace</a> — heavy users of <code>PessimisticLockRetryer</code>, <code>persistence</code> base entities and <code>sanitizer</code> for free text.</li>
+      <li><a href="../payment/index.html">Payment</a> and <a href="../admin/index.html">Admin</a> — the two users of the isolated connection pools (<code>RoutingDataSourceContext</code>) for <code>REQUIRES_NEW</code> payment writes and GDPR erasure.</li>
+      <li><a href="../messaging/index.html">Messaging</a> and <a href="../reviews/index.html">Reviews</a> — use <code>gemini</code> for text moderation.</li>
       <li><a href="../notification/index.html">Notification</a> — the primary consumer of the
         <code>infrastructure.email</code> transport port, not <code>ses</code> specifically; <code>ses</code> is
         only the transport that's active in <code>prod</code> (<code>uat</code> runs
         <code>smtp</code>, <code>dev</code> runs <code>log</code>).</li>
-      <li><a href="../admin/index.html">Admin</a> — consumes security/persistence primitives for cross-cutting admin operations.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
   </main>

@@ -22,17 +22,19 @@
         <li><a href="../messaging/index.html">Messaging</a></li>
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
         <li><a href="../config/index.html">Config</a></li>
-        <li><a href="../monitoring/index.html" class="active">Monitoring</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
       </ul>
       <h4>Cross-Cutting</h4>
       <ul>
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
         <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
         <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
       </ul>
     </nav>
   </aside>
@@ -44,68 +46,108 @@
     <h2>Business Overview</h2>
     <p>
       Skillars coaches, parents, and players book live, time-boxed activity: a session slot, a video review window, a
-      payment that has to clear before a booking is confirmed. None of that tolerates silent failure — a coach whose
-      TLS configuration is quietly broken, or a payment provider call that fails without anyone noticing, turns into a
-      missed session or an unresolved charge with no paper trail. The <code>monitoring</code> module itself is
-      intentionally tiny (one class), but it exists precisely because "fail loudly at startup, and leave a trail once
-      running" is cheaper to guarantee once, centrally, than to re-check per module. This page also anchors the
-      broader operability story &mdash; structured logs and the LGTM stack &mdash; that every module depends on when
-      something goes wrong in production.
+      payment that has to clear before a booking is confirmed. None of that tolerates silent failure. A payment
+      provider call that fails without anyone noticing turns into a missed session or an unresolved charge with no
+      paper trail. The <code>monitoring</code> package itself is intentionally tiny (one class,
+      <code>TlsStartupAssertion</code>). This page also covers the wider operability setup that every module depends
+      on when something goes wrong in production: structured logs, access logs, the actuator/metrics surface, and the
+      LGTM stack. Almost all of that is configured in <code>infrastructure</code> and resource files, not in this package.
     </p>
 
     <h2>Technical Overview</h2>
     <h3><code>TlsStartupAssertion</code></h3>
     <p>
       <code>TlsStartupAssertion</code> (<code>platform.monitoring</code>) is a Spring
-      <code>ApplicationListener&lt;ApplicationReadyEvent&gt;</code>. It deliberately hooks <code>ApplicationReadyEvent</code>
-      rather than <code>@PostConstruct</code>: <code>ApplicationReadyEvent</code> fires only after every bean is fully
-      wired and the application is ready to accept traffic, which is the correct point for an operational
-      "is production configured correctly" assertion &mdash; a <code>@PostConstruct</code> check could run before
-      other configuration has finished loading.
+      <code>ApplicationListener&lt;ApplicationReadyEvent&gt;</code>. It hooks <code>ApplicationReadyEvent</code>
+      rather than <code>@PostConstruct</code> because that event fires only after every bean is wired, which is the
+      right moment for an "is this deployment configured correctly" check. <code>ConfigStartupAssertion</code> in the
+      <a href="../config/index.html">Config</a> module uses the same pattern for required platform config keys.
     </p>
     <p>On firing, the assertion does two things in order:</p>
     <ul>
-      <li><strong>Dev-profile guard.</strong> If the active Spring profiles include <code>dev</code>, the assertion
-        logs a debug line and returns immediately. Local/sandbox <code>application.yaml</code> intentionally sets
-        <code>checkCertificate: false</code> via the shared <code>*DEFAULT_TCP</code> YAML anchor, and the assertion
-        must not block that.</li>
-      <li><strong>Certificate-check assertion.</strong> Outside the <code>dev</code> profile, it reads
-        <code>client.momo.tcp-config.check-certificate</code> (defaulting to <code>true</code> if the property is
-        absent &mdash; safe-by-default). Both the Orange Money and MTN MoMo mobile-money provider clients share this
-        same flag via the YAML anchor. If it resolves to <code>false</code>, the assertion throws
-        <code>AppSetupException</code> with a message pointing at the exact property to fix.</li>
+      <li><strong>Dev-profile guard.</strong> If the active Spring profiles include <code>dev</code>, it logs a
+        debug line and returns.</li>
+      <li><strong>Certificate-check assertion.</strong> Otherwise it reads
+        <code>client.momo.tcp-config.check-certificate</code>, defaulting to <code>true</code> when the property is
+        absent. If that resolves to <code>false</code> it throws <code>AppSetupException</code>; if not, it logs
+        <code>TLS assertion passed</code> at INFO.</li>
     </ul>
+    <div class="callout warn">
+      <p><strong>The property it checks is not set anywhere, so today the assertion always passes.</strong> The class
+      was written for Orange Money / MTN MoMo mobile-money clients that no longer exist in the codebase. Payments go
+      through Stripe (<code>app.payment.stripe.*</code>). No YAML file sets <code>client.momo.*</code>. The
+      <code>defaultTcpConfig: &amp;DEFAULT_TCP</code> anchor in <code>application.yaml</code> (which does contain
+      <code>checkCertificate: false</code>) is still defined, but nothing references it with <code>*DEFAULT_TCP</code>.
+      The safe-by-default <code>true</code> therefore wins in every profile. The guard only bites again if someone
+      re-introduces <code>client.momo.tcp-config.check-certificate: false</code> outside <code>dev</code>. Don't read
+      the INFO line as proof that any real HTTP client verifies certificates.</p>
+    </div>
     <p>
-      Because <code>AppSetupException</code> is thrown from an <code>ApplicationReadyEvent</code> listener, Spring
-      Boot treats it as a startup failure: the context fails to complete refresh and the JVM exits non-zero rather
-      than serving traffic with certificate verification silently disabled. This is the fail-fast contract &mdash; a
-      misconfigured production/staging deployment never comes up "green" with TLS verification off for the payment
-      providers.
+      An exception thrown from an <code>ApplicationReadyEvent</code> listener happens after the context has been
+      refreshed. <code>SpringApplication.run</code> treats it as a run failure: it closes the context and rethrows,
+      so the JVM exits non-zero instead of carrying on to serve traffic.
     </p>
 
     <h3>Structured logging</h3>
     <p>
-      <code>src/main/resources/config/logback-spring.xml</code> configures a single <code>ConsoleAppender</code> named
+      <code>src/main/resources/config/logback-spring.xml</code> configures a <code>ConsoleAppender</code> named
       <code>JSON</code>, using <code>logstash-logback-encoder</code>'s <code>LoggingEventCompositeJsonEncoder</code>.
-      Every log line is emitted as JSON with UTC timestamp, level, thread, logger name, message, MDC context, and
-      exception arguments/stack trace, plus a fixed <code>service</code>/<code>environment</code>/<code>version</code>
-      block sourced from <code>spring.application.name</code>, <code>app.environment</code>, and <code>app.version</code>.
-      This is what makes log lines machine-parseable for LogQL queries once/if they reach Loki (see the callout below).
+      Every log line is emitted as JSON with UTC timestamp, level, thread, logger name, message, MDC, arguments,
+      key-value pairs (<code>kv(...)</code> from <code>StructuredArguments</code>), and stack trace, plus a fixed
+      <code>service</code>/<code>environment</code>/<code>version</code> block taken from
+      <code>spring.application.name</code>, <code>app.environment</code> and <code>app.version</code>.
     </p>
+    <p>
+      A second appender, <code>LOKI</code>, is defined conditionally (see the Loki callout below). It uses
+      <code>loki-logback-appender</code> <strong>2.x</strong> (<code>Loki4jAppender</code>, a nested
+      <code>&lt;http&gt;&lt;sender class="JavaHttpSender"/&gt;&lt;/http&gt;</code>, and newline-separated
+      <code>&lt;labels&gt;</code> <code>app</code>/<code>environment</code>/<code>level</code>). The message body is the
+      same JSON layout as the console appender.
+    </p>
+
+    <h3>Access logs</h3>
+    <p>
+      Tomcat access logs are routed through SLF4J by <code>infrastructure.web.Slf4jAccessLogValve</code>, not written
+      to a file. This means they inherit both root appenders and can be queried in Loki like any other log line:
+    </p>
+    <table>
+      <tr><th>Logger</th><th>Server</th><th>Wired by</th></tr>
+      <tr><td><code>skillars.access</code></td><td>main app (port 9990)</td><td><code>AccessLogConfig</code></td></tr>
+      <tr><td><code>skillars.access.management</code></td><td>actuator (port 8367, separate child context)</td><td><code>ManagementAccessLogConfig</code> (a <code>@ManagementContextConfiguration</code> registered in <code>META-INF/spring/…ManagementContextConfiguration.imports</code>; its port guard stops the copy that component scanning puts in the main context from logging every request twice)</td></tr>
+    </table>
+    <p>
+      Both loggers are at INFO. Setting <code>skillars.access</code> to OFF silences both. The management log is mostly
+      the 30-second container healthcheck plus Prometheus scrapes, so it is the bulk of access-log volume in a quiet
+      environment.
+    </p>
+
+    <h3>Actuator, metrics and tracing</h3>
+    <table>
+      <tr><th>Concern</th><th>Configuration (<code>application.yaml</code> unless noted)</th></tr>
+      <tr><td>Management server</td><td><code>management.server.port: 8367</code>, base path <code>/manage</code>; exposed: <code>health</code>, <code>info</code>, <code>env</code>, <code>metrics</code>, <code>prometheus</code>.</td></tr>
+      <tr><td>Unauthenticated endpoints</td><td><code>AppEndpoints.PUBLIC_MGMT_ENDPOINTS</code>: <code>/manage/health</code>, <code>/manage/health/smoke</code>, <code>/manage/info</code>, <code>/manage/prometheus</code>. All other <code>/manage/**</code> paths need <code>ROLE_ADMIN</code>; health/info/env details are shown only to ROLE_ADMIN (<code>show-details: when-authorized</code>).</td></tr>
+      <tr><td>Health groups</td><td><code>smoke</code> = <code>db</code>, <code>diskSpace</code>, <code>ping</code> (polled by Docker <code>HEALTHCHECK</code> and the deploy workflow). The <code>notification</code> group is declared per profile only (<code>ses</code> in prod, <code>smtp</code> in uat, none in dev). Declaring it in the base file would fail startup in any profile whose transport indicator is not registered.</td></tr>
+      <tr><td>Metrics</td><td>Micrometer + Prometheus registry; common tag <code>application</code>; percentile histograms on <code>http.server.requests</code>. <code>infrastructure.config.ObservabilityConfig</code> registers <code>ObservedAspect</code> and <code>TimedAspect</code>. Without those beans, <code>@Observed</code>/<code>@Timed</code> (e.g. <code>AdminLoginResource</code>'s <code>http.admin.login-lock</code>) are silently ignored. Domain meters live with their modules: <code>MailMetrics</code> (<code>mail.send</code>, …), <code>VideoMetrics</code> (<code>video.upload.*</code>, <code>video.playback.*</code>, …), <code>StorageMetrics</code>.</td></tr>
+      <tr><td>Health indicators</td><td><code>SesHealthIndicator</code> / <code>SmtpHealthIndicator</code> (<code>infrastructure.ses</code> / <code>infrastructure.email.smtp</code>), each <code>@Conditional</code> on the active mail transport.</td></tr>
+      <tr><td>Tracing</td><td><code>management.tracing.sampling.probability: 1.0</code>; OTLP export to <code>management.otlp.tracing.endpoint</code> (default <code>http://localhost:4318/v1/traces</code>, Tempo in the LGTM stack).</td></tr>
+      <tr><td>In-app alerting</td><td>Not in this package: notification's <code>AlertEvaluationService</code> evaluates DB-configured alert rules against in-memory Micrometer counters on a schedule and publishes <code>AlertFiredEvent</code>. The admin <code>HealthDashboardPage.vue</code> reads <code>/manage/health</code>.</td></tr>
+    </table>
 
     <h3>The LGTM stack</h3>
     <p>
-      Beyond this module, Skillars documents a full LGTM (Loki, Grafana, Tempo, Prometheus) observability stack for
-      the whole application (a youth-football coaching marketplace, not a payment orchestrator — see the History
-      section of the doc below for why that distinction matters here): structured logs for exact error context,
-      Prometheus metrics for rate/volume health signals, Tempo traces for causal request chains, and Grafana for
-      unified dashboards and alerting. See <a href="../../lgtm-observability.md">docs/lgtm-observability.md</a> for
-      the LogQL/PromQL/TraceQL query reference; <a href="../../deployment/monitoring.md">docs/deployment/monitoring.md</a>
-      for the alert inventory and its response actions; and <a href="../../deployment/runbook.md">docs/deployment/runbook.md</a>
-      for incident runbooks. Grafana dashboard panels are provisioned from <code>deploy/lgtm/</code>, not narrated in
-      any of the three docs above. For how to bring the stack up locally alongside the app, see
-      <a href="../../deployment/local-deployment.md">docs/deployment/local-deployment.md</a>.
+      Skillars documents a full LGTM (Loki, Grafana, Tempo, Prometheus) observability stack for the whole application:
+      structured logs for exact error context, Prometheus metrics for rate/volume health signals, Tempo traces for
+      causal request chains, and Grafana for dashboards and alerting. Its provisioning lives in <code>deploy/lgtm/</code>
+      (<code>loki.yml</code>, <code>prometheus.yml</code>, <code>tempo.yml</code>, <code>alerts.yml</code>,
+      <code>grafana-*.yml</code>, <code>skillars-dashboard.json</code>). Reference docs:
     </p>
+    <ul>
+      <li><a href="../../lgtm-observability.md">docs/lgtm-observability.md</a> — LogQL/PromQL/TraceQL query reference.</li>
+      <li><a href="../../deployment/monitoring.md">docs/deployment/monitoring.md</a> — alert inventory and response actions.</li>
+      <li><a href="../../deployment/runbook.md">docs/deployment/runbook.md</a> — incident runbooks.</li>
+      <li><a href="../../deployment/uptime-monitor.md">docs/deployment/uptime-monitor.md</a> — external UptimeRobot monitor setup.</li>
+      <li><a href="../../deployment/local/deployment.md">docs/deployment/local/deployment.md</a> — running the stack locally alongside the app.</li>
+    </ul>
 
     <h2>Key Flows</h2>
     <pre class="mermaid">
@@ -113,59 +155,60 @@ flowchart TD
   A[ApplicationReadyEvent fires] --> B{dev profile active?}
   B -- yes --> C[log.debug: assertion skipped]
   C --> Z[App continues serving traffic]
-  B -- no --> D[Read client.momo.tcp-config.check-certificate<br/>default = true]
+  B -- no --> D[Read client.momo.tcp-config.check-certificate<br/>default = true, currently unset everywhere]
   D --> E{checkCertificate == true?}
   E -- yes --> F[log.info: TLS assertion passed]
   F --> Z
   E -- no --> G[throw AppSetupException]
-  G --> H[Spring context fails to complete refresh]
-  H --> I[JVM exits non-zero — app never serves traffic]
+  G --> H[SpringApplication.run fails: context closed]
+  H --> I[JVM exits non-zero, app never serves traffic]
     </pre>
     <p>
-      The assertion runs exactly once per boot, after the full application context is up. In the common case (dev
-      profile, or a correctly configured non-dev environment) it is a no-op observability line and the app proceeds
-      normally. The failure path only triggers when a non-dev deployment has <code>checkCertificate: false</code> set
-      for the shared Orange/MTN TCP config &mdash; a configuration mistake that would otherwise let payment-provider
-      HTTP clients skip certificate verification silently. Throwing from an <code>ApplicationReadyEvent</code>
-      listener is what converts that mistake into a hard, visible deployment failure instead of a runtime security gap
-      discovered later.
+      The assertion runs once per boot, after the full application context is up. Because no profile sets the property,
+      the non-dev branch currently always takes the <code>true</code> path. The failure branch exists only as a
+      tripwire for a future provider config that disables certificate checks outside <code>dev</code>.
     </p>
 
     <h2>Conventions &amp; Gotchas</h2>
     <div class="callout warn">
-      <p><strong>Loki log shipping is wired up, but gated behind <code>loki.enabled</code>, which defaults to
-      <code>false</code> outside Docker Compose.</strong> <code>logback-spring.xml</code> declares a
-      <code>Loki4jAppender</code> (using the <code>loki-logback-appender</code> dependency, driven by the
-      <code>lokiUrl</code>/<code>lokiEnabled</code> Spring properties sourced from <code>loki.url</code>/<code>loki.enabled</code>)
-      and attaches it to <code>root</code> <em>unconditionally</em> &mdash; there is no <code>&lt;if&gt;</code> around the
-      <code>&lt;appender-ref ref="LOKI"/&gt;</code> itself, only around which concrete appender class <code>LOKI</code>
-      resolves to (a no-op <code>NOPAppender</code> when disabled, logback's own do-nothing appender &mdash; see the
-      comment block in the file for why the naive <code>&lt;if&gt;</code>-around-<code>&lt;root&gt;</code> placements
-      don't work). <code>docker-compose.yml</code> sets <code>LOKI_ENABLED=true</code>/<code>LOKI_URL</code> on the
-      <code>app</code> service, so logs <strong>do</strong> reach Loki when the app is run via <code>docker compose
-      up</code>. Run the JAR standalone (<code>mvn spring-boot:run</code>, an IDE run configuration) against a
-      standalone LGTM stack instead, and <code>loki.enabled</code> falls back to its Spring Boot default of
-      <code>false</code> &mdash; only the console <code>JSON</code> appender is live, and every LogQL query in
+      <p><strong>Whether logs reach Loki depends on profile and environment.</strong> <code>loki.enabled</code> is
+      <code>${LOKI_ENABLED:false}</code> in <code>application.yaml</code>, and <code>application-prod.yaml</code>
+      overrides it to <code>true</code>. <code>docker-compose.yml</code> runs the <code>prod</code> profile with
+      <code>LOKI_ENABLED=true</code>, and <code>docker-compose.local.yml</code> (<code>dev</code> profile) inherits that,
+      so logs <strong>do</strong> reach Loki under Docker Compose. <code>docker-compose.uat-hostwinds.yml</code> sets
+      <code>LOKI_ENABLED=false</code> because there is no Loki container there. If you run the JAR standalone
+      (<code>mvn spring-boot:run</code>, an IDE run config) without the prod profile, it falls back to
+      <code>false</code>. Only the console <code>JSON</code> appender is then live, and every LogQL query in
       <a href="../../lgtm-observability.md">docs/lgtm-observability.md</a> returns nothing until you set
-      <code>LOKI_ENABLED=true</code> yourself.</p>
+      <code>LOKI_ENABLED=true</code>.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Don't "simplify" the <code>&lt;if&gt;</code>/<code>&lt;root&gt;</code> layout in
+      <code>logback-spring.xml</code>.</strong> The <code>LOKI</code> appender is defined inside
+      <code>&lt;if&gt;</code> (a real <code>Loki4jAppender</code>, or logback's no-op <code>NOPAppender</code> when
+      disabled). <code>&lt;root&gt;</code> sits outside it and references <code>LOKI</code> unconditionally. Two other
+      layouts were tried and both broke. Nesting <code>&lt;if&gt;</code> inside <code>&lt;root&gt;</code> logs a
+      warning. Putting <code>&lt;root&gt;</code> inside both branches leaves the context with no appenders, and Spring
+      Boot then fails startup. Logback configuration errors are fatal here, and that includes 1.x-style loki4j
+      syntax.</p>
     </div>
     <div class="callout">
-      <p><strong>The dev-profile skip is a deliberate escape hatch, not a bug.</strong> Local/sandbox
-      <code>application.yaml</code> intentionally sets <code>checkCertificate: false</code> on the shared
-      <code>*DEFAULT_TCP</code> anchor so developers can hit mock/sandboxed provider endpoints without valid certs.
-      Don't "fix" this by removing the dev-profile guard in <code>TlsStartupAssertion</code> &mdash; that would break
-      local development instead.</p>
+      <p><strong>The dev-profile skip in <code>TlsStartupAssertion</code> is deliberate.</strong> It keeps
+      local/sandbox setups able to point at endpoints without valid certificates. If a provider client is ever wired to
+      a <code>check-certificate</code> flag again, re-check that this assertion reads <em>that</em> property. It is
+      hard-coded to <code>client.momo.tcp-config.check-certificate</code>, which nothing currently sets.</p>
     </div>
     <div class="callout">
-      <p><strong>One flag governs both providers.</strong> Orange Money and MTN MoMo TCP client config share the same
-      <code>*DEFAULT_TCP</code> YAML anchor, so <code>client.momo.tcp-config.check-certificate</code> is a single
-      switch for certificate verification across both provider integrations &mdash; there's no way to disable it for
-      one provider only via this property.</p>
+      <p><strong>Prometheus scrapes the management port, not 9990.</strong> <code>/manage/prometheus</code> is served
+      on 8367 and is unauthenticated (<code>PUBLIC_MGMT_ENDPOINTS</code>). Keep port 8367 off the public ingress.</p>
     </div>
 
     <h2>Related Modules</h2>
     <ul>
-      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; supplies <code>AppSetupException</code> (thrown by <code>TlsStartupAssertion</code>) and other shared exception/config primitives; also where the console JSON logging pattern is consumed uniformly across modules.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; supplies <code>AppSetupException</code> (thrown by <code>TlsStartupAssertion</code>), <code>ObservabilityConfig</code>, the access-log valve/configs, and the SES/SMTP health indicators.</li>
+      <li><a href="../config/index.html">Config</a> &mdash; <code>ConfigStartupAssertion</code>, the sibling fail-fast <code>ApplicationReadyEvent</code> check for required platform config.</li>
+      <li><a href="../notification/index.html">Notification</a> &mdash; <code>AlertEvaluationService</code> / <code>MailMetrics</code>: in-app alerting on Micrometer counters.</li>
+      <li><a href="../security/index.html">Security</a> &mdash; <code>AppEndpoints.PUBLIC_MGMT_ENDPOINTS</code> decides which actuator endpoints are unauthenticated.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
   </main>

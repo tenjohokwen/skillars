@@ -22,10 +22,11 @@
         <li><a href="../messaging/index.html">Messaging</a></li>
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
-        <li><a href="../config/index.html" class="active">Config</a></li>
+        <li><a href="../config/index.html">Config</a></li>
         <li><a href="../monitoring/index.html">Monitoring</a></li>
       </ul>
       <h4>Cross-Cutting</h4>
@@ -33,221 +34,276 @@
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
         <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
         <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
       </ul>
     </nav>
   </aside>
   <main class="content">
     <div class="breadcrumb"><a href="../index.html">Home</a> / Config</div>
     <h1>Config</h1>
-    <p class="subtitle">The database-backed key/value store admins use to tune business thresholds, quotas, and per-tier gates without a deploy.</p>
+    <p class="subtitle">The database-backed key/value store admins use to tune business thresholds, quotas, and per-tier gates without a deploy &mdash; with range validation on write and a fail-fast check at boot.</p>
 
     <h2>Business Overview</h2>
     <p>
       The <code>config</code> module is Skillars' single "knobs and dials" table: a flat list of typed key/value rows
-      (<code>platform_config</code>) that other modules read at runtime instead of hardcoding a number or a per-tier
-      switch in Java. It exists so that Product/Ops can change a business rule &mdash; a commission rate, a storage
-      quota, a moderation SLA window, an age-tier cutoff &mdash; by editing one row through an admin-only REST
-      endpoint, rather than filing a code change and waiting for a release.
+      (<code>main.platform_config</code>) that other modules read at runtime instead of hardcoding a number or a
+      per-tier switch in Java. Product/Ops can change a business rule &mdash; a commission rate, a storage quota, a
+      moderation SLA window, an age-tier cutoff &mdash; through the admin config editor
+      (<code>src/frontend/src/pages/admin/AdminConfigPage.vue</code>, route <code>/admin/config</code>) rather than
+      filing a code change and waiting for a release.
     </p>
     <p>
-      Looking at the seed data (Flyway migrations <code>V20</code>, <code>V25</code>, <code>V42</code>, <code>V57</code>)
-      shows four broad categories of value living here:
+      The seed data lives in the baseline <code>V139__baseline_seed_data.sql</code> (120 rows; the historical
+      per-feature migrations were squashed into <code>V138</code>/<code>V139</code>), plus later migrations such as
+      <code>V156__reviews_eligibility_config_rework.sql</code>. Four broad categories of value live here:
     </p>
     <ul>
       <li><strong>Per-tier feature gates</strong> &mdash; e.g. <code>coach.tier.scout.video_upload</code>,
-        <code>player.tier.athlete.skills_radar</code> &mdash; booleans (stored as the strings <code>"true"</code>/<code>"false"</code>)
-        that decide whether a given Coach or Player subscription tier can use a capability.</li>
-      <li><strong>Quotas</strong> &mdash; per-tier storage and bandwidth limits in GB (<code>coach.tier.academy.storage_quota_gb</code>,
-        <code>player.tier.pro.bandwidth_quota_gb</code>), and drill-video size/duration caps.</li>
+        <code>player.tier.athlete.skills_radar</code> &mdash; booleans stored as the strings <code>"true"</code>/<code>"false"</code>.</li>
+      <li><strong>Quotas</strong> &mdash; per-tier storage/bandwidth (<code>coach.tier.academy.storage_quota_gb</code>,
+        <code>video.quota.&lt;tier&gt;.storageBytes</code>, <code>video.quota.&lt;tier&gt;.bandwidthBytesMonthly</code>)
+        and per-type video caps (<code>video.&lt;type&gt;.maxSizeBytes</code>, <code>.maxDurationSeconds</code>).</li>
       <li><strong>Business thresholds and timers</strong> &mdash; <code>platform.commission_rate</code>,
-        <code>platform.reliability_strike_expiry_days</code>, <code>platform.strike_threshold.auto_suspension</code>,
-        <code>platform.moderation_sla_minutes</code>, <code>platform.message_retention_months</code>, reminder intervals,
-        signed-URL TTLs.</li>
-      <li><strong>Policy cutoffs</strong> &mdash; the U10/young-teen/teen max-age boundaries the <code>security</code>
-        module's age-tier logic is built on (<code>security.age-policy.*</code>).</li>
+        <code>reliability.strike.visibilityThreshold</code>/<code>suspensionThreshold</code>,
+        <code>disputes.submissionWindowDays</code>, <code>platform.moderation_sla_minutes</code>,
+        <code>platform.message_retention_months</code>, <code>gdpr.export.urlExpiryHours</code>,
+        <code>reviews.minSessionAgeDays</code>/<code>updateCooldownDays</code>, reminder intervals, signed-URL TTLs,
+        batch sizes and lock timeouts.</li>
+      <li><strong>Policy cutoffs</strong> &mdash; the age-tier boundaries the <code>security</code> module's
+        age-policy logic is built on (<code>security.age-policy.*</code>).</li>
     </ul>
     <p>
-      Only ROLE_ADMIN/ROLE_LTD_ADMIN accounts can read or change a value, via <code>ConfigResource</code>. There is no
-      self-service UI referenced in this backend module &mdash; whoever exposes an admin console for this simply calls
-      <code>GET</code>/<code>PUT&nbsp;/api/config/values/{key}</code>. New engineers should treat this as a
-      <em>values</em> store, not a schema store: keys are pre-seeded by Flyway migrations, and the API can only update
-      an existing key's value &mdash; it cannot create or delete keys.
+      Only <code>ROLE_ADMIN</code>/<code>ROLE_LTD_ADMIN</code> can read or change a value via
+      <code>ConfigResource</code>. Treat this as a <em>values</em> store, not a schema store: keys are seeded by Flyway,
+      and the API can only update an existing key &mdash; with one exception, the unseeded
+      <code>ConfigBounds.HAS_CODE_DEFAULT</code> keys, which a <code>PUT</code> creates. Writes to bounded keys are
+      range-checked, and a bad stored value for a critical key blocks startup outside the <code>dev</code> profile.
     </p>
 
     <h2>Technical Overview</h2>
     <h3>Package layout</h3>
     <table>
       <tr><th>Package</th><th>Purpose</th></tr>
-      <tr><td><code>api</code></td><td><code>ConfigResource</code> &mdash; the only entry point into this module, two admin-only endpoints.</td></tr>
-      <tr><td><code>contract</code></td><td>Public surface: <code>ConfigValueType</code> enum, <code>ConfigValueResponse</code> DTO, <code>UpdateConfigRequest</code> DTO.</td></tr>
-      <tr><td><code>config</code></td><td><code>ConfigProperties</code> (<code>@ConfigurationProperties(prefix = "app.config")</code>, currently just <code>cacheTtlSeconds</code>, default 300) and <code>ConfigModuleConfig</code> which registers it.</td></tr>
-      <tr><td><code>service</code></td><td><code>ConfigService</code> &mdash; the module's real public API (injected directly by ~40 services across the codebase) and <code>ConfigMapper</code> (MapStruct entity&rarr;DTO mapping).</td></tr>
-      <tr><td><code>repo</code></td><td><code>PlatformConfig</code> JPA entity and <code>PlatformConfigRepository</code> (Spring Data, one derived finder: <code>findByKey</code>).</td></tr>
+      <tr><td><code>api</code></td><td><code>ConfigResource</code> &mdash; the only HTTP entry point, three admin-only endpoints under <code>/api/config</code>.</td></tr>
+      <tr><td><code>contract</code></td><td><code>ConfigValueType</code> enum, <code>ConfigValueResponse</code>, <code>UpdateConfigRequest</code> (<code>@NotBlank value</code>), and <code>AdminConfigEntryDto</code> (editor row: value plus <code>min</code>/<code>max</code>/<code>note</code>/<code>failFast</code>/<code>stored</code>/<code>codeDefault</code>).</td></tr>
+      <tr><td><code>config</code></td><td><code>ConfigProperties</code> (<code>@ConfigurationProperties(prefix = "app.config")</code>, just <code>cacheTtlSeconds</code>, default 300; <code>application.yaml</code> sets <code>app.config.cache-ttl-seconds: 300</code>) and <code>ConfigModuleConfig</code> which registers it.</td></tr>
+      <tr><td><code>service</code></td><td><code>ConfigService</code> (the real public API, injected directly by ~60 classes across the codebase), <code>ConfigBounds</code> (range registry), <code>ConfigStartupAssertion</code> (boot-time validation), <code>ConfigRefreshException</code>, <code>ConfigMapper</code> (MapStruct entity&rarr;DTO).</td></tr>
+      <tr><td><code>repo</code></td><td><code>PlatformConfig</code> JPA entity and <code>PlatformConfigRepository</code> (one derived finder: <code>findByKey</code>).</td></tr>
     </table>
 
     <h3>Key entities &amp; tables</h3>
     <table>
       <tr><th>Entity</th><th>Table</th><th>Notes</th></tr>
       <tr><td><code>PlatformConfig</code> (extends <code>BaseEntity</code>)</td><td><code>main.platform_config</code></td>
-        <td><code>key</code> (unique, VARCHAR 255), <code>value</code> (TEXT), <code>value_type</code> (enum, CHECK-constrained
-        to <code>STRING</code>/<code>LONG</code>), optional <code>description</code>, <code>updated_at</code>. Seeded almost
-        entirely via Flyway (<code>V20</code>, <code>V25</code>, <code>V42</code>, <code>V57</code> and others) &mdash;
-        there is no code path that inserts a brand-new key at runtime.</td></tr>
+        <td><code>key</code> (VARCHAR 255, unique <code>uq_platform_config_key</code>), <code>value</code> (TEXT),
+        <code>value_type</code> (CHECK <code>chk_platform_config_type</code>: <code>STRING</code>/<code>LONG</code>),
+        optional <code>description</code>, <code>updated_at</code>. Defined in <code>V138__baseline_schema.sql</code>.
+        Not to be confused with <code>admin.config.PlatformConfig</code>, an unrelated Spring <code>@Configuration</code>.</td></tr>
     </table>
 
     <h3>Key services</h3>
     <table>
-      <tr><th>Service</th><th>Responsibility</th></tr>
-      <tr><td><code>ConfigService</code></td><td>Loads the entire <code>platform_config</code> table into an in-memory
-        <code>ConcurrentHashMap</code> cache and serves typed reads off it: <code>getString</code>, <code>getLong</code>,
-        <code>getLong(key, default)</code>, <code>getInt(key, default)</code>,
-        <code>getBoundedLong(key, default, min, max)</code> (rejects out-of-range values, logs a warning, falls back to
-        default), <code>getBoolean</code>/<code>getBoolean(key, default)</code>, and <code>find(key)</code> returning an
-        <code>Optional&lt;String&gt;</code>. Also owns <code>updateConfig(key, value)</code> (used by the admin endpoint)
-        and <code>invalidate()</code>.</td></tr>
+      <tr><th>Class</th><th>Responsibility</th></tr>
+      <tr><td><code>ConfigService</code></td><td>Caches the whole table and serves typed reads:
+        <code>getString</code>/<code>getLong(key)</code> (throw <code>IllegalStateException</code> if missing or
+        non-numeric), <code>getLong(key, default)</code>/<code>getInt(key, default)</code> (WARN + default),
+        <code>getBoundedLong(key, default, min, max)</code>/<code>getBoundedInt(...)</code> (out-of-range &rarr; WARN +
+        default), <code>getBoundedLong(key, min, max)</code> (missing still throws; out-of-range is <em>clamped</em> to
+        the nearest bound), <code>getBoolean(key)</code> (missing or non-boolean &rarr; <code>false</code> + WARN +
+        <code>config.value.misconfigured</code> metric), <code>getBoolean(key, default)</code>, <code>find(key)</code>.
+        Write/admin side: <code>updateConfig</code>, <code>findResponse</code>, <code>listForAdmin</code>,
+        <code>invalidate</code>.</td></tr>
+      <tr><td><code>ConfigBounds</code></td><td>Static registry of <code>BoundedKey(key, min, max, failFast, note, defaultValue)</code>:
+        ~33 named keys (pack pause, dispute window, moderation SLA/retries/lock timeout, video lifecycle and playback
+        TTL, timeline/roster windows, GDPR export TTL and erase lock timeout, message retention, batch sizes, review
+        eligibility, DLQ/outbox attempts, rate-limit TTL, stuck-completion and recap-edit windows) plus generated
+        <code>video.quota.&lt;tier&gt;.*</code> and <code>video.&lt;type&gt;.*</code> keys. <code>ALL</code> is the full list;
+        <code>HAS_CODE_DEFAULT</code> (23 keys) marks keys whose call site has a code default. Call sites still pass
+        their <code>[min, max]</code> literally &mdash; change a bound in both places.</td></tr>
+      <tr><td><code>ConfigStartupAssertion</code></td><td><code>ApplicationListener&lt;ApplicationReadyEvent&gt;</code>.
+        For every <code>ConfigBounds.ALL</code> key reads the raw stored value and logs ERROR + increments
+        <code>config.value.misconfigured{key,reason}</code> for missing / non-numeric / out-of-range values; also
+        checks two cross-field invariants (<code>reliability.strike.visibilityThreshold</code> &le;
+        <code>suspensionThreshold</code>; <code>reviews.updateCooldownDays</code> &minus;
+        <code>reviews.minSessionAgeDays</code> &ge; 7) and that every <code>@SchedulerLock</code> in the context has
+        <code>lockAtLeastFor &le; lockAtMostFor</code>. Any <code>failFast</code> violation throws
+        <code>AppSetupException</code> and blocks boot &mdash; except under the <code>dev</code> profile, where it only
+        logs.</td></tr>
       <tr><td><code>ConfigMapper</code></td><td>MapStruct mapper, <code>PlatformConfig</code> &rarr; <code>ConfigValueResponse</code>.</td></tr>
     </table>
 
     <h3>REST endpoints</h3>
     <table>
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr>
-      <tr><td>GET</td><td><code>/api/config/values/{key}</code></td><td>Fetch one config entry (current value, type, last-updated timestamp)</td><td>ROLE_ADMIN / ROLE_LTD_ADMIN</td></tr>
-      <tr><td>PUT</td><td><code>/api/config/values/{key}</code></td><td>Update an existing config entry's value (must already exist &mdash; 404 otherwise)</td><td>ROLE_ADMIN / ROLE_LTD_ADMIN</td></tr>
+      <tr><td>GET</td><td><code>/api/config/values</code></td><td>Admin editor list: every stored row plus every unseeded <code>HAS_CODE_DEFAULT</code> key, each with its <code>ConfigBounds</code> range, sorted by key. Reads the table directly, not the cache.</td><td>ROLE_ADMIN / ROLE_LTD_ADMIN</td></tr>
+      <tr><td>GET</td><td><code>/api/config/values/{key}</code></td><td>One entry (value, type, last-updated) from this node's cache; 404 if absent</td><td>ROLE_ADMIN / ROLE_LTD_ADMIN</td></tr>
+      <tr><td>PUT</td><td><code>/api/config/values/{key}</code></td><td>Update a value (or create an unseeded <code>HAS_CODE_DEFAULT</code> key); 404 for any other unknown key, 400 for a non-numeric/out-of-range bounded value or a review-window pair violation</td><td>ROLE_ADMIN / ROLE_LTD_ADMIN</td></tr>
     </table>
-    <p>There is no list/search endpoint and no create/delete endpoint &mdash; keys are enumerated only by reading the Flyway migrations or the database directly.</p>
+    <p>There is no delete endpoint, and keys outside <code>HAS_CODE_DEFAULT</code> can only be added by a migration.</p>
 
     <h3>Value types</h3>
     <p><code>ConfigValueType</code> has exactly two members:</p>
     <ul>
-      <li><code>STRING</code> &mdash; free text, including booleans stored as the literal strings <code>"true"</code>/<code>"false"</code> and decimals like the commission rate <code>"0.08"</code>.</li>
-      <li><code>LONG</code> &mdash; whole numbers (quotas, day/hour/minute counts, strike thresholds), parsed via <code>Long.parseLong</code>.</li>
+      <li><code>STRING</code> &mdash; free text, including booleans (<code>"true"</code>/<code>"false"</code>) and decimals like the commission rate <code>"0.08"</code>.</li>
+      <li><code>LONG</code> &mdash; whole numbers, parsed with <code>Long.parseLong(value.trim())</code>. Rows created by the <code>HAS_CODE_DEFAULT</code> upsert path are always <code>LONG</code>.</li>
     </ul>
-    <p><code>value_type</code> is descriptive metadata on the row (and a DB CHECK constraint) &mdash; <code>ConfigService</code>'s typed getters don't branch on it; callers simply call <code>getLong</code>/<code>getString</code>/<code>getBoolean</code> for the key they expect and get a parse failure or warning-plus-default if the stored value doesn't match.</p>
+    <p><code>value_type</code> is descriptive metadata (and a DB CHECK) &mdash; the typed getters do not branch on it; the method you call decides how the string is parsed.</p>
 
     <h3>Boundary vs. <code>infrastructure.feature</code></h3>
     <p>
       Skillars has a second, unrelated toggle mechanism: <code>infrastructure.feature.FeatureToggleService</code>
-      (implemented by <code>PropertiesFeatureToggleService</code>), gating a small fixed enum of coarse, whole-platform
-      switches (<code>AppFeature.PAYMENTS</code>, <code>INVOICING</code>, <code>ARACHNID_ENABLED</code>,
-      <code>VIDEOINTEL_ENABLED</code>). Those are backed by Spring <code>@ConfigurationProperties</code>
-      (<code>FeatureProperties</code>), i.e. plain application properties/environment variables validated at startup
-      &mdash; changing one requires a config-map/env change and a restart (or at minimum a re-deploy), and there is no
-      admin API for them. <code>platform.config</code>, by contrast, is a DB-backed, per-key store meant for
-      <em>business-tunable</em> values (tier gates, quotas, thresholds) that Ops can change live through
-      <code>ConfigResource</code> without touching the deployment at all. If you're adding a true environment-level
-      on/off switch (e.g. "is the payment provider integration enabled in this environment"), it belongs in
-      <code>AppFeature</code>; if you're adding a business rule an admin might reasonably want to tune per environment
-      without redeploying, it belongs in <code>platform_config</code>.
+      (implemented by <code>PropertiesFeatureToggleService</code>), gating a small fixed enum of coarse,
+      whole-platform switches (<code>AppFeature.PAYMENTS</code>, <code>INVOICING</code>, <code>ARACHNID_ENABLED</code>,
+      <code>VIDEOINTEL_ENABLED</code>). Those are Spring <code>@ConfigurationProperties</code>
+      (<code>FeatureProperties</code>) &mdash; changing one requires an env/config change and a restart, and there is
+      no admin API. <code>platform_config</code> is for <em>business-tunable</em> values (tier gates, quotas,
+      thresholds) Ops can change live. A true environment-level on/off switch belongs in <code>AppFeature</code>; a
+      business rule an admin might tune without redeploying belongs in <code>platform_config</code>. Static settings
+      such as thread-pool sizes stay in <code>application.yaml</code> because they cannot change at runtime.
     </p>
 
     <h2>Key Flows</h2>
 
-    <h3>Admin updates a config value and it takes effect</h3>
+    <h3>Admin updates a config value</h3>
     <pre class="mermaid">
 sequenceDiagram
-  participant A as Admin
+  participant A as Admin (AdminConfigPage)
   participant CR as ConfigResource
   participant CS as ConfigService
-  participant DB as platform_config
-  participant Other as Any other module (e.g. BookingReminderScheduler)
+  participant DB as main.platform_config
+  participant Other as Any reader on this node
 
-  A->>CR: PUT /api/config/values/platform.reminder_interval_primary_hours {"value":"12"}
-  CR->>CS: updateConfig(key, "12")
+  A->>CR: PUT /api/config/values/disputes.submissionWindowDays {"value":"21"}
+  CR->>CS: updateConfig(key, "21")
   CS->>DB: findByKey(key)
-  alt key not found
-    CS-->>CR: throw ResourceNotFoundException (404)
+  alt absent and not in HAS_CODE_DEFAULT
+    CS-->>CR: ResourceNotFoundException (404)
   end
-  CS->>DB: entity.setValue("12"), setUpdatedAt(now), save
-  CS->>CS: invalidate() -- invalidationEpoch++ (this JVM only)
-  CS-->>CR: ConfigValueResponse
-  CR-->>A: 200 OK
-
-  Note over CS: next read on this instance forces refreshCache()
-  Other->>CS: getInt("platform.reminder_interval_primary_hours", 24)
-  CS->>CS: ensureFresh() sees stale flag, reloads all rows from DB
-  CS-->>Other: 12
+  CS->>CS: rejectOutOfRange (ConfigBounds, 400)
+  CS->>CS: rejectReviewEligibilityWindowOrdering (reads partner key from DB, 400)
+  alt row exists
+    CS->>DB: setValue, setUpdatedAt, save
+  else unseeded HAS_CODE_DEFAULT key
+    CS->>DB: insert LONG row (unique-key race: re-read winner, apply value)
+  end
+  CS->>CS: invalidate() bumps invalidationEpoch (after commit if a TX is active)
+  CS-->>A: 200 ConfigValueResponse
+  Other->>CS: getBoundedLong(...)
+  CS->>CS: must-be-fresh: wait for or run findAll() reload
+  CS-->>Other: 21
     </pre>
     <p>
-      <code>updateConfig</code> writes straight through to Postgres and then calls <code>invalidate()</code>, which
-      just bumps an in-memory <code>invalidationEpoch</code> on the JVM handling the request &mdash; it
-      does not proactively push the new value anywhere. Each load records the epoch it observed <em>before</em>
-      reading the DB, so an <code>invalidate()</code> that lands mid-load is not lost (skillars-deferred-161). The next call into <code>ConfigService</code> on that same
-      instance triggers a full <code>refreshCache()</code> (reloads every row, not just the changed key), so the
-      change is effectively immediate for that instance. Any other application instance in the cluster keeps serving
-      its old cached value until its own <code>@Scheduled</code> refresh fires (interval = <code>app.config.cache-ttl-seconds</code>,
-      default 300s), so a multi-instance deployment can see up to five minutes of skew between nodes.
+      <code>updateConfig</code> is not <code>@Transactional</code>; it writes through to Postgres and then calls
+      <code>invalidate()</code>, which only bumps an in-memory <code>invalidationEpoch</code> on the node that handled
+      the request. The next read on that node reloads every row. Every other node keeps serving its cached value until
+      its own TTL expires (<code>app.config.cache-ttl-seconds</code>, default 300s). A direct SQL edit or migration
+      invalidates nothing, on any node &mdash; see <code>docs/deployment/runbook.md</code>, "Config change appears to
+      have no effect".
     </p>
 
-    <h3>Startup and periodic cache refresh</h3>
+    <h3>Cache load and refresh</h3>
     <pre class="mermaid">
 sequenceDiagram
-  participant Boot as Spring context startup
+  participant Boot as Spring context
   participant CS as ConfigService
-  participant DB as platform_config
-  participant Sched as @Scheduled refresh
+  participant DB as main.platform_config
+  participant Sched as scheduledRefresh
+  participant R as Reader thread
 
-  Boot->>CS: @PostConstruct init()
+  Boot->>CS: @PostConstruct init(), refreshCache()
   CS->>DB: findAll()
-  CS->>CS: populate ConcurrentHashMap cache, lastRefreshed = now
-
-  loop every cacheTtlSeconds (default 300s)
+  CS->>CS: cache = Map.copyOf(rows), loadedEpoch = epoch seen before the read
+  loop fixedDelay = cacheTtlSeconds
     Sched->>CS: scheduledRefresh()
-    CS->>DB: findAll()
-    CS->>CS: cache.putAll(new); cache.keySet().retainAll(new.keySet())
+    CS->>CS: skip if not stale, or if refreshLock.tryLock() fails
+  end
+  R->>CS: any getter, ensureFresh()
+  alt stale by TTL only
+    CS->>CS: tryLock once, on failure serve cached snapshot
+  else invalidated or never loaded (must be fresh)
+    CS->>CS: tryLock(4s), rethrow a recent leader failure as ConfigRefreshException
   end
     </pre>
     <p>
-      The cache is populated once at startup and refreshed on a fixed delay driven by the same
-      <code>app.config.cache-ttl-seconds</code> property that governs staleness checks in <code>ensureFresh()</code>.
-      The refresh uses put-all-then-retain-all so a reader never sees an empty cache mid-refresh. Since
-      skillars-deferred-161, <code>refreshCache()</code> is a single-flight loader on a <code>ReentrantLock</code>
-      (<code>tryLock()</code>) rather than a <code>synchronized</code> method: only one thread runs
-      <code>findAll()</code>; a reader that is stale only because the TTL expired is served the cached snapshot
-      instead of waiting (and if a TTL-only load fails, the snapshot is served and a WARN logged); a reader after
-      <code>invalidate()</code>, or on a never-loaded cache, waits for the in-flight load and reloads if that load
-      began before the invalidation.
+      The cache is a single <code>volatile</code> reference to an immutable map swapped atomically by
+      <code>load()</code>, so a reader can never see a mix of old and new values (skillars-deferred-163). Refresh is
+      single-flight on a <code>ReentrantLock</code> (skillars-deferred-161): only one thread runs
+      <code>findAll()</code>. A reader that is stale only by TTL never waits &mdash; it serves the snapshot, and a
+      TTL-only load failure is logged at WARN and swallowed. A reader after <code>invalidate()</code> (or before the
+      first load) must see fresh data: it waits up to 4s for the lock; if the leader's load failed within the last
+      15s, waiters rethrow that failure as <code>ConfigRefreshException</code> (an <code>IllegalStateException</code>,
+      so HTTP 500) instead of each queueing their own <code>findAll()</code> behind Hikari's 30s connection timeout.
+      Each load stamps the epoch it observed <em>before</em> reading, so an <code>invalidate()</code> landing mid-load
+      is not lost.
+    </p>
+
+    <h3>Startup validation</h3>
+    <p>
+      On <code>ApplicationReadyEvent</code>, <code>ConfigStartupAssertion</code> validates every
+      <code>ConfigBounds.ALL</code> key against the raw stored value. Absent/blank is fine for a
+      <code>HAS_CODE_DEFAULT</code> key (DEBUG only); for any other key it is an ERROR, as is a non-numeric or
+      out-of-range value. If any <code>failFast</code> key (e.g. <code>pack.pause.maxDays</code>,
+      <code>disputes.submissionWindowDays</code>, <code>platform.moderation_sla_minutes</code>,
+      <code>gdpr.export.urlExpiryHours</code>, <code>platform.message_retention_months</code>,
+      <code>booking.batch.maxSize</code>), a cross-field pair or a <code>@SchedulerLock</code> ordering is violated,
+      boot fails with <code>AppSetupException</code> (non-<code>dev</code> only). Schedulers registered before
+      <code>ApplicationReadyEvent</code> can tick once against the clamped value before the refusal.
     </p>
 
     <h2>Conventions &amp; Gotchas</h2>
     <div class="callout warn">
-      <p><strong>Cache staleness is per-instance, not cluster-wide.</strong> An admin's <code>PUT</code> only
-      invalidates the cache on the instance that served the request. In a multi-instance deployment, other instances
-      keep the old value for up to <code>app.config.cache-ttl-seconds</code> (default 300s / 5 minutes). Don't assume
-      a config change is instantly visible everywhere &mdash; for anything latency-sensitive, lower the TTL or plan
-      around the skew window.</p>
+      <p><strong>Cache staleness is per-node, not cluster-wide.</strong> A <code>PUT</code> invalidates only the node
+      that served it, and there is no fleet-wide broadcast. Other nodes (and every node after a direct DB edit) lag by
+      up to <code>app.config.cache-ttl-seconds</code>. If every node must be correct now, wait out the TTL or restart.
+      The TTL is deliberately left at 300s &mdash; the table changes a few times a year.</p>
     </div>
     <div class="callout warn">
-      <p><strong>The API can only update, never create.</strong> <code>ConfigService.updateConfig</code> calls
-      <code>findByKey(...).orElseThrow(ResourceNotFoundException)</code> &mdash; there is no path to insert a brand-new
-      key through <code>ConfigResource</code>. Every key must first be seeded by a Flyway migration
-      (<code>V20__platform_config.sql</code> and several later migrations add more keys). If a feature needs a new
-      config key, that's a migration, not just an API call.</p>
+      <p><strong>A new bounded key touches three places.</strong> Seed it in a migration (unless it belongs in
+      <code>HAS_CODE_DEFAULT</code>), add a <code>BoundedKey</code> to <code>ConfigBounds</code> and to
+      <code>ALL</code> (and to <code>HAS_CODE_DEFAULT</code> if the call site has a default), and pass the same
+      <code>[min, max]</code> at the call site. Without the <code>ConfigBounds</code> entry the <code>PUT</code> path
+      accepts any string and the boot check never sees the key. Pick <code>failFast</code> only when a bad value loses
+      data or halts a core flow &mdash; it blocks production boot.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Cross-key checks must read the database, not the cache.</strong>
+      <code>rejectReviewEligibilityWindowOrdering</code> reads the partner key with
+      <code>configRepository.findByKey</code> (<code>readStoredBoundedInt</code>): with a cached read, two
+      <code>PUT</code>s landing on different nodes inside the TTL could each pass and together commit a pair that
+      <code>ConfigStartupAssertion</code> then refuses to boot with. The 7-day gap constant is duplicated in
+      <code>ConfigService</code> and <code>ConfigStartupAssertion</code>; keep them identical.</p>
     </div>
     <div class="callout">
-      <p><strong>Typed getters trust the caller, not <code>value_type</code>.</strong> <code>getLong</code>/<code>getBoolean</code>/etc.
-      parse the stored string directly based on which method you call; the <code>value_type</code> column is metadata
-      (and a DB CHECK constraint) rather than something <code>ConfigService</code> branches on at read time. Calling
-      <code>getLong</code> on a key whose value isn't numeric throws <code>IllegalStateException</code> (or, for the
-      defaulted variants, logs a warning and silently returns the default) &mdash; use <code>getLong(key, default)</code>
-      or <code>getBoundedLong(key, default, min, max)</code> for anything that drives scheduler timing or business
-      thresholds so a bad value degrades gracefully instead of throwing.</p>
+      <p><strong>Pick the getter by failure mode.</strong> 1-arg <code>getString</code>/<code>getLong</code> throw
+      <code>IllegalStateException</code> on a missing key (the "operator must set this" contract);
+      <code>getBoundedLong(key, min, max)</code> keeps that but clamps out-of-range values; the defaulted variants
+      never throw. Use a bounded getter for anything that drives scheduler timing or business thresholds.
+      <code>getBoolean(key)</code> returns <code>false</code> for a missing key, so a mistyped feature-gate key
+      silently disables the feature &mdash; watch the <code>config.value.misconfigured</code> metric.</p>
     </div>
     <div class="callout">
-      <p><strong>Don't confuse this with <code>infrastructure.feature</code>.</strong> Coarse platform on/off switches
-      (<code>AppFeature</code>: PAYMENTS, INVOICING, ARACHNID_ENABLED, VIDEOINTEL_ENABLED) are property-driven and need
-      a restart/redeploy. Per-tier gates, quotas, and business thresholds belong here in <code>platform_config</code>
-      and are admin-tunable at runtime. See the Boundary section above before adding a new toggle to either.</p>
+      <p><strong>Don't run must-be-fresh reads inside long transactions.</strong> The reload runs in the caller's
+      transaction (deliberately not <code>REQUIRES_NEW</code>, to avoid holding two connections). A failed load inside
+      a transaction has already marked it rollback-only, and <code>invalidate()</code> called inside a transaction is
+      deferred to <code>afterCommit</code>.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Don't confuse this with <code>infrastructure.feature</code>.</strong> Coarse platform switches
+      (<code>AppFeature</code>) are property-driven and need a restart. Per-tier gates, quotas and business thresholds
+      belong in <code>platform_config</code>. See the Boundary section above.</p>
     </div>
 
     <h2>Related Modules</h2>
     <ul>
-      <li><a href="../security/index.html">Security</a> &mdash; <code>AgePolicyService</code> reads the U10/young-teen/teen age cutoffs from here.</li>
-      <li><a href="../booking/index.html">Booking</a> &mdash; reminder intervals, reliability-strike thresholds/expiry, and session-pack timing are all config-driven.</li>
-      <li><a href="../video/index.html">Video</a> &mdash; storage/bandwidth quotas per tier, moderation SLA/lock-timeout/retry limits, signed-URL TTL, drill video size/duration caps.</li>
-      <li><a href="../payment/index.html">Payment</a> &mdash; <code>platform.commission_rate</code> and reliability-strike/cash-out related thresholds.</li>
-      <li><a href="../marketplace/index.html">Marketplace</a> &mdash; coach-tier capability gates (drill library, session builder, video upload access per tier).</li>
-      <li><a href="../development/index.html">Development</a>, <a href="../reviews/index.html">Reviews</a>, <a href="../messaging/index.html">Messaging</a>, <a href="../admin/index.html">Admin</a>, <a href="../notification/index.html">Notification</a> &mdash; each injects <code>ConfigService</code> directly for scheduler intervals, retention windows, and alert thresholds specific to that module.</li>
-      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; provides <code>BaseEntity</code>/persistence auditing and the adjacent (but distinct) <code>infrastructure.feature</code> toggle mechanism; see the Boundary section above.</li>
+      <li><a href="../security/index.html">Security</a> &mdash; age-policy cutoffs (<code>security.age-policy.*</code>).</li>
+      <li><a href="../booking/index.html">Booking</a> &mdash; reminder intervals, pack pause, batch size, quick-complete/stuck-completion timeouts, recap edit window, session duration.</li>
+      <li><a href="../video/index.html">Video</a> &mdash; per-tier quotas, per-type size/duration caps, moderation SLA/retries/lock timeout, lifecycle windows, playback URL TTL, coach access window.</li>
+      <li><a href="../payment/index.html">Payment</a> &mdash; <code>platform.commission_rate</code>, reliability-strike thresholds (<code>ReliabilityStrikeConfig</code>), subscription grace period.</li>
+      <li><a href="../marketplace/index.html">Marketplace</a> &mdash; coach-tier capability gates.</li>
+      <li><a href="../admin/index.html">Admin</a> &mdash; dispute window, GDPR export TTL and erase lock timeout; hosts the unrelated <code>admin.config.PlatformConfig</code>.</li>
+      <li><a href="../development/index.html">Development</a>, <a href="../reviews/index.html">Reviews</a>, <a href="../messaging/index.html">Messaging</a>, <a href="../notification/index.html">Notification</a> &mdash; roster/correlation/radar settings, review eligibility and auto-hold, message retention, alert thresholds.</li>
+      <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a> &mdash; <code>ConfigService.scheduledRefresh</code> (fixed delay, not ShedLock-guarded &mdash; per-node by design); <code>ConfigStartupAssertion</code> validates every <code>@SchedulerLock</code>.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; <code>BaseEntity</code>, <code>AppSetupException</code>, the rate-limit bucket TTL reader (<code>infrastructure.security</code>), and the distinct <code>infrastructure.feature</code> toggles.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
   </main>

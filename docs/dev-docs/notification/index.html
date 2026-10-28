@@ -22,6 +22,7 @@
         <li><a href="../messaging/index.html">Messaging</a></li>
         <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
@@ -33,62 +34,73 @@
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
         <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
         <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
       </ul>
     </nav>
   </aside>
   <main class="content">
     <div class="breadcrumb"><a href="../index.html">Home</a> / Notification</div>
     <h1>Notification</h1>
-    <p class="subtitle">The platform's outbound-email engine: it turns domain events from every other module into templated, retried, and auditable emails, plus a DB-configurable operational alerting system.</p>
+    <p class="subtitle">The platform's user-notification engine: it turns domain events from every other module into templated, retried, and auditable emails, mirrors user-facing ones into an in-app inbox, enforces per-category email opt-out with one-click unsubscribe, and runs a DB-configurable operational alerting system.</p>
 
     <h2>Business Overview</h2>
     <p>
       Skillars is a multi-sided marketplace (Players/Parents, Coaches, Admins), and almost every meaningful
       state change — a booking request, a declined reschedule, a session pack about to expire, a flagged
-      video — needs to reach a human by email. Rather than each module
-      formatting and sending its own mail, every other module publishes a plain domain event and the
+      video — needs to reach a human. Rather than each module formatting and sending its own mail, every
+      other module publishes a plain domain event (or enqueues onto this module's outbox) and the
       <code>notification</code> module owns the "last mile": mapping that event to a template, resolving the
-      recipient's language, rendering HTML, sending it, and durably retrying if it fails. This keeps email
-      formatting, SMTP plumbing, and delivery-retry logic in one place instead of scattered across booking,
-      payment, video, and security code.
+      recipient's language, checking the recipient's email preferences, rendering HTML, sending it, durably
+      retrying if it fails, and — for user-facing events — writing a row into that user's in-app inbox.
     </p>
     <p>
-      <span class="tag">Coach</span> and <span class="tag">Parent</span> are the main end recipients — booking
-      lifecycle emails, session pack warnings, reschedule/no-show notices.
-      <span class="tag">Admin</span> is a recipient for CSAM/video-moderation alerts, plus the operator of the
-      <code>/v1/admin/alerts</code> endpoints used to configure operational alerting.
-      <span class="tag">System/Ops</span> is the implicit recipient of alert emails when a configured metric
-      threshold is breached (e.g. a fraud-spike or callback-anomaly rule).
+      <span class="tag">Coach</span>, <span class="tag">Parent</span> and self-registered
+      <span class="tag">Player</span> users are the main end recipients — booking lifecycle emails, session
+      pack warnings, reschedule/no-show notices, shared performance reports. Every authenticated role has the
+      header bell + <code>/notifications</code> inbox and the email-preference section on the Profile page.
+      <span class="tag">Admin</span> is a recipient for CSAM/video-moderation alerts, the operator of the
+      <code>/v1/admin/alerts</code> endpoints used to configure operational alerting, and the caller of the SES
+      cutover preflight. <span class="tag">System/Ops</span> is the implicit recipient of alert emails when a
+      configured metric threshold is breached.
     </p>
     <p>Key business rules found in the code:</p>
     <ul>
+      <li><strong>Notification centre (#313, <code>V175</code>).</strong> Every <code>EmailTemplate</code> is
+        classified exactly once in <code>NotificationCatalog</code> into a <code>NotificationCategory</code>
+        (<code>BOOKING</code>, <code>REMINDER</code>, <code>SESSION_PACK</code>, <code>DEVELOPMENT</code>,
+        <code>MODERATION</code>, <code>ACCOUNT</code>, <code>SYSTEM</code>), plus whether it also produces an
+        in-app inbox row and which frontend route that row deep-links to.</li>
+      <li><strong>Only <code>REMINDER</code> and <code>DEVELOPMENT</code> are opt-out-able</strong>
+        (<code>NotificationCategory.optOutable()</code>) — today that is <code>BOOKING_REMINDER</code>,
+        <code>SESSION_PACK_EXPIRY_WARNING</code> and <code>PERFORMANCE_REPORT_SHARED</code>. Booking,
+        session-pack, moderation, account/security and system mail is transactional and always sent; a
+        <code>PUT</code> to turn one of those off is a 400.</li>
+      <li>Opt-out is enforced at <strong>send time</strong> (<code>MailService</code> →
+        <code>NotificationPreferenceService.emailDecision</code>), not at enqueue time, so an opt-out made while
+        a reminder is already sitting in the outbox or the retry queue still takes effect. The in-app inbox row
+        is written regardless of the email preference.</li>
+      <li>Opt-out-able emails carry a footer unsubscribe link and RFC 8058
+        <code>List-Unsubscribe</code>/<code>List-Unsubscribe-Post</code> headers; the token is an HMAC-signed
+        <code>(userId, category)</code> pair with no expiry.</li>
+      <li>Inbox rows are kept 90 days (<code>platform.notification.in-app-retention-days</code>, floor 7) and
+        deleted on GDPR erasure together with the user's email preferences.</li>
       <li>Registration/OTP mail — the six <code>COACH_</code>/<code>PARENT_</code>/<code>PLAYER_</code>
-        prefixed verification and OTP templates — is durable through this module's own outbox/retry
-        pipeline as of <code>ses-1.4</code>; it used to be a separate, fire-and-forget path that bypassed
-        this module entirely. (The unrelated login-2FA <code>SEND_OTP</code> template was never part of
-        that fire-and-forget path — it already published an <code>Envelope</code> through this module's
-        own pipeline before <code>ses-1.4</code>, and still does; see the producer census below.)</li>
-      <li>Every outbound email is modeled as an <code>Envelope</code> (recipients + template + arbitrary
-        template data + a deadline + an idempotent <code>sendId</code>) — a domain-agnostic mail request.
-        Producers reach this module's send pipeline through three different shapes, not one: most
-        booking/session-pack mail and all registration/OTP mail enqueues directly onto this module's own
-        durable outbox and never constructs an <code>Envelope</code> at all; several other producers —
-        two inside this module, several more in other modules entirely — still build an
-        <code>Envelope</code> and publish it as a Spring application event; and a couple of call sites
-        skip both the outbox and the event bus and call the send pipeline synchronously. See "Producer
-        census" below (after Key Services) for the full, per-class breakdown.</li>
+        verification and OTP templates — is durable through this module's outbox/retry pipeline (since
+        <code>ses-1.4</code>). These, and all other <code>ACCOUNT</code> templates, are email-only: no inbox row.</li>
+      <li>Every outbound email is modeled as an <code>Envelope</code> (recipients + template + template data + a
+        deadline + an idempotent <code>sendId</code>). Producers reach the send pipeline through three shapes
+        (outbox, direct <code>Envelope</code> publish, direct sync call) — see "Producer census" below.</li>
       <li>Alert rules (<code>metricName</code>, <code>threshold</code>, <code>windowSeconds</code>,
         <code>notificationChannel</code>) are admin-configurable at runtime via REST, hot-reloaded from the DB
-        every 60s (no restart needed), and support two channels: <code>LOG</code> (just a WARN log line) or
-        <code>EMAIL</code> (also sends to the address in the <code>platform.admin_alert_email</code> config row — the same one video
-        moderation alerts use; blank by default, in which case nothing is sent and an ERROR is logged).</li>
-      <li>Failed sends are never silently dropped: they're persisted with a retry flag and picked up by a
-        scheduled retry job, up to <code>MAX_RETRY_ATTEMPTS = 6</code> total attempts, after which the envelope
-        is marked <code>ATTEMPTS_EXHAUSTED</code>. An envelope past its <code>deadline</code> is marked
-        <code>DEADLINE_EXPIRED</code> and abandoned even if retries remain.</li>
+        every 60s, and support <code>LOG</code> or <code>EMAIL</code> (sent to the
+        <code>platform.admin_alert_email</code> config row; blank by default, in which case nothing is sent and
+        an ERROR is logged).</li>
+      <li>Failed sends are never silently dropped: they're persisted with a retry flag and picked up by
+        <code>EmailRetryScheduler</code>, up to <code>MAX_RETRY_ATTEMPTS = 6</code> total attempts, after which
+        the envelope is <code>ATTEMPTS_EXHAUSTED</code>. An envelope past its <code>deadline</code> is
+        <code>DEADLINE_EXPIRED</code> even if retries remain.</li>
       <li>Video moderation admin alerts are a startup-time safety gate: if the Arachnid (CSAM detection) feature
-        flag is enabled but <code>platform.admin_alert_email</code> is blank, the application refuses to start
-        rather than silently dropping abuse alerts.</li>
+        flag is enabled but <code>platform.admin_alert_email</code> is blank, the application refuses to start.</li>
     </ul>
 
     <h2>Technical Overview</h2>
@@ -96,12 +108,12 @@
     <table>
       <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
       <tbody>
-        <tr><td><code>api</code></td><td>Admin REST controller for CRUD on alert rules.</td></tr>
-        <tr><td><code>config</code></td><td>Thymeleaf email-template engine setup, async thread pools for sending mail, ShedLock/scheduling config, circuit-breaker &amp; retry-template beans.</td></tr>
-        <tr><td><code>contract</code></td><td>The module's public API surface: <code>Envelope</code>/<code>Recipient</code> DTOs, the <code>EmailTemplate</code> enum (one entry per email type, 40 templates) exposing <code>subjectKey()</code> plus, since <code>ses-1.4</code>, per-template <code>deliveryDeadline()</code> (consulted by exactly one caller, <code>NotificationOutboxSupport.enqueueEmail</code> — every direct-<code>Envelope</code> producer instead hardcodes its own deadline when it constructs one) and <code>circuitBreakerName()</code>, <code>EmailDeliveryStatus</code>, and <code>AlertFiredEvent</code>.</td></tr>
-        <tr><td><code>infrastructure</code></td><td>The scheduled retry job (<code>EmailRetryScheduler</code>) and <code>infrastructure.listener</code> — the event listeners that translate other modules' domain events into outbox entries (most) or <code>Envelope</code>s (two — see Key Flows).</td></tr>
-        <tr><td><code>repo</code></td><td>JPA entities/repositories: <code>AlertRule</code>, <code>EnvelopeEntity</code> (the durable, retryable record of a send attempt), <code>RecipientEntity</code> (embeddable).</td></tr>
-        <tr><td><code>service</code></td><td>The core send pipeline (<code>MailManager</code> → <code>MailService</code> → <code>EmailContentRenderer</code>), the outbox producer/consumer pair (<code>NotificationOutboxSupport</code>, <code>NotificationEmailOutboxHandler</code>), <code>MailMetrics</code> (transport-tagged send-outcome metric), the alert evaluation loop (<code>AlertEvaluationService</code>, <code>AlertRuleCache</code>, <code>AlertNotificationListener</code>), <code>EnvelopeMapper</code>, and <code>ResendEmailService</code> (manual re-send by <code>sendId</code>).</td></tr>
+        <tr><td><code>api</code></td><td><code>NotificationResource</code> (current user's inbox + email preferences), <code>UnsubscribeResource</code> (public one-click unsubscribe), <code>AlertRuleAdminResource</code> (alert-rule CRUD), <code>SesCutoverPreflightResource</code> (admin SES readiness probe, only when <code>app.email.transport=ses</code>).</td></tr>
+        <tr><td><code>config</code></td><td><code>ThymeleafConfiguration</code> (email template engine), <code>AsyncConfig</code> (<code>sendMailPool</code> and <code>moderationTaskExecutor</code> executors), <code>ComponentConfig</code> (<code>MailManager</code> bean, <code>RetryTemplate</code>, Resilience4j circuit-breaker customizer).</td></tr>
+        <tr><td><code>contract</code></td><td>Public API surface: <code>Envelope</code>/<code>Recipient</code>, the <code>EmailTemplate</code> enum (41 constants) exposing <code>subjectKey()</code>, <code>deliveryDeadline()</code> and <code>circuitBreakerName()</code>, <code>EmailDeliveryStatus</code>, <code>AlertFiredEvent</code>, <code>NotificationCategory</code>, and the notification-centre DTOs (<code>NotificationDto</code>, <code>UnreadCountDto</code>, <code>NotificationPreferenceDto</code>, <code>UpdateNotificationPreferenceRequest</code>, <code>UnsubscribeResultDto</code>).</td></tr>
+        <tr><td><code>infrastructure</code></td><td><code>EmailRetryScheduler</code> and <code>infrastructure.listener</code>: the four email listeners (<code>AccountChange</code>, <code>Booking</code>, <code>SessionPack</code>, <code>VideoModeration</code><code>EmailListener</code>), <code>InAppEnvelopeListener</code> (inbox rows for direct-<code>Envelope</code> producers) and <code>NotificationUserErasedListener</code> (GDPR cleanup).</td></tr>
+        <tr><td><code>repo</code></td><td>JPA: <code>AlertRule</code>, <code>EnvelopeEntity</code>/<code>RecipientEntity</code>, <code>UserNotification</code> (+ <code>UserNotificationRepository</code>). Plain JDBC: <code>UserNotificationWriter</code> (the one inbox INSERT), <code>NotificationEmailPreferenceRepository</code> (upsert/read of opt-outs), <code>NotificationRecipientLookup</code> (email address → <code>main."user"</code> id + coach flag).</td></tr>
+        <tr><td><code>service</code></td><td>Send pipeline (<code>MailManager</code> → <code>MailService</code> → <code>EmailContentRenderer</code>), outbox producer/consumer (<code>NotificationOutboxSupport</code>, <code>NotificationEmailOutboxHandler</code>), notification centre (<code>NotificationCatalog</code>, <code>InAppNotificationService</code>, <code>NotificationPreferenceService</code>, <code>UnsubscribeTokenService</code>, <code>JdbcSavepoints</code>, <code>InAppNotificationRetentionScheduler</code>), alerting (<code>AlertEvaluationService</code>, <code>AlertRuleCache</code>, <code>AlertNotificationListener</code>), <code>MailMetrics</code>, <code>EnvelopeMapper</code>, <code>ResendEmailService</code>.</td></tr>
       </tbody>
     </table>
 
@@ -110,167 +122,199 @@
       <thead><tr><th>Entity</th><th>Table</th><th>Purpose</th></tr></thead>
       <tbody>
         <tr><td><code>AlertRule</code></td><td><code>main.alert_rule</code></td><td>Admin-defined threshold rule: metric name, threshold ratio, window, channel (LOG/EMAIL), enabled flag, description. Audited (<code>main.alert_rule_aud</code>).</td></tr>
-        <tr><td><code>EnvelopeEntity</code></td><td><code>envelope_entity</code> (default schema — see gotcha below)</td><td>Durable record of one send attempt: recipients (element collection), template enum, JSON <code>data</code> map, deadline, attempts count, <code>EmailDeliveryStatus</code>, error text, retry flag, unique <code>sendId</code>. This is the row the retry scheduler polls.</td></tr>
-        <tr><td><code>RecipientEntity</code></td><td>embedded in <code>envelope_entity</code></td><td>Embeddable copy of <code>Recipient</code> (title, name, email, langKey, gender) for persistence.</td></tr>
+        <tr><td><code>EnvelopeEntity</code></td><td><code>main.envelope_entity</code></td><td>Durable record of one send: recipients (element collection <code>envelope_entity_recipients</code>, each with a <code>delivered</code> flag since <code>V140</code>), template, JSON <code>data</code>, deadline, attempts, <code>EmailDeliveryStatus</code>, error text, retry flag, unique <code>send_id</code>. Polled by <code>EmailRetryScheduler</code>. <code>email_template</code> has a CHECK constraint listing every enum value (last widened by <code>V168</code> for <code>SES_CUTOVER_PREFLIGHT</code>).</td></tr>
+        <tr><td><code>RecipientEntity</code></td><td>embedded</td><td>Persisted copy of <code>Recipient</code> (title, name, email, langKey, gender) + <code>delivered</code>, so a retry never re-sends to a recipient already reached.</td></tr>
+        <tr><td><code>UserNotification</code></td><td><code>main.user_notifications</code> (<code>V175</code>)</td><td>One inbox row: <code>recipient_user_id</code> (a <code>main."user"</code> id, FK <code>ON DELETE CASCADE</code>), <code>category</code>, <code>type</code> (= <code>EmailTemplate</code> name; the frontend renders <code>notifications.types.&lt;type&gt;</code>), <code>params</code> jsonb (whitelisted strings only), <code>deep_link</code>, <code>source_send_id</code>, <code>created_at</code>, <code>read_at</code>. Unique partial index <code>uq_un_recipient_send_id</code> on <code>(recipient_user_id, source_send_id)</code> dedupes a double hook; <code>idx_un_recipient_unread</code> serves the badge.</td></tr>
+        <tr><td>— (JDBC only)</td><td><code>main.notification_email_preferences</code> (<code>V175</code>)</td><td>Sparse opt-out rows, PK <code>(user_id, category)</code>, <code>email_enabled</code>. No row = email enabled. Written only by an atomic <code>INSERT ... ON CONFLICT DO UPDATE</code>.</td></tr>
       </tbody>
     </table>
+    <p>Neither V175 table has a CHECK on <code>category</code>/<code>type</code> — deliberately, so a new template does not need an enum-widening migration for the inbox (contrast <code>envelope_entity</code>, which does).</p>
 
     <h3>Key services</h3>
     <table>
       <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
       <tbody>
-        <tr><td><code>MailManager</code></td><td>The send pipeline entry point: <code>sendEmailFromTemplate</code> listens for <code>Envelope</code> events after transaction commit (async, on the <code>sendMailPool</code> executor) — every direct-publish producer lands here, not just this module's own two (see the producer census below); <code>sendEmailSync</code> is called directly by <code>NotificationEmailOutboxHandler</code>, <code>EmailRetryScheduler</code>, <code>AlertNotificationListener</code> (ops alerting), and <code>VideoModerationEmailListener</code>'s own synchronous admin-alert path. Either way it runs the send through a Resilience4j circuit breaker + Spring <code>RetryTemplate</code> (3 attempts, 1s backoff) and persists the outcome as an <code>EnvelopeEntity</code>. Since <code>ses-1.4</code> the breaker is resolved <em>per template</em> via <code>EmailTemplate.circuitBreakerName()</code> — the six <code>COACH_</code>/<code>PARENT_</code>/<code>PLAYER_</code> registration and OTP templates get their own isolated <code>registrationEmailService</code> breaker (the separate login-2FA <code>SEND_OTP</code> template is unaffected — it keeps the default <code>emailService</code> breaker like everything else), so a signup spike of bad addresses can't open the breaker that gates booking confirmations.</td></tr>
-        <tr><td><code>MailService</code></td><td>Renders via <code>EmailContentRenderer</code> (Thymeleaf HTML template, name = <code>EmailTemplate</code> enum constant converted to lowerCamelCase, e.g. <code>BOOKING_CONFIRMED</code> → <code>bookingConfirmed.html</code> under <code>src/main/resources/mails/</code>, plus the i18n subject via <code>MessageSource</code>; <code>EmailTemplate.NONE</code> is a raw-subject/body escape hatch used by alert emails), then dispatches through the <code>OutboundEmailSender</code> port (<code>infrastructure.email</code>) — SES, SMTP, or a log/file transport, selected by <code>app.email.transport</code>, is invisible to this class. See the <a href="../infrastructure/index.html">Infrastructure</a> dev-doc for the transport package itself (this class no longer picks a provider). Also records the <code>mail.send</code> transport-tagged outcome metric via <code>MailMetrics</code>.</td></tr>
-        <tr><td><code>NotificationOutboxSupport</code> / <code>NotificationEmailOutboxHandler</code></td><td>The outbox producer/consumer pair. <code>enqueueEmail</code> is the entry point every <code>BEFORE_COMMIT</code> listener calls (<code>MANDATORY</code> propagation — it joins the caller's own transaction, so the outbox row commits atomically with the business row it describes, never in a separate transaction that could fail independently). The generic outbox poller (<code>platform.outbox.service</code>) dispatches each row to <code>NotificationEmailOutboxHandler</code>, which calls <code>MailManager.sendEmailSync</code> — this is the pipeline the "Booking confirmed" diagram below depicts.</td></tr>
-        <tr><td><code>EmailRetryScheduler</code></td><td>Every 60s (configurable), <code>SELECT ... FOR UPDATE SKIP LOCKED</code>s up to 10 failed+retryable envelopes, expires/exhausts stale ones in-transaction, then dispatches the rest via <code>MailManager.sendEmailSync</code> only <em>after</em> the DB transaction commits (the transport call is deliberately kept off the DB connection).</td></tr>
-        <tr><td><code>AlertEvaluationService</code></td><td>Scheduled (30s) evaluator that reads enabled rules from <code>AlertRuleCache</code> and computes a metric value per rule, publishing <code>AlertFiredEvent</code> on breach. Metric computation is currently a stub (<code>computeMetricValue</code> always returns -1.0 — domain-specific metrics were removed during a template conversion and are a TODO).</td></tr>
-        <tr><td><code>AlertRuleCache</code></td><td>In-memory <code>AtomicReference</code> cache of enabled <code>AlertRule</code>s, refreshed from the DB every 60s and on startup — lets admins change rules via REST with no redeploy.</td></tr>
-        <tr><td><code>AlertNotificationListener</code></td><td>Reacts to <code>AlertFiredEvent</code>: always logs a WARN, and if the rule's channel is <code>EMAIL</code>, sends a plain-text ops alert (via <code>EmailTemplate.NONE</code>) to <code>platform.admin_alert_email</code> (skipped with an ERROR log when blank), swallowing any config-lookup or mail failure so the alerting loop itself never breaks.</td></tr>
-        <tr><td><code>ResendEmailService</code></td><td>Looks up a previously-persisted <code>EnvelopeEntity</code> by <code>sendId</code> and republishes it as a fresh <code>Envelope</code> event — a manual "resend" escape hatch (e.g. for support tooling).</td></tr>
-        <tr><td><code>infrastructure.listener.*</code></td><td>Four listener classes (<code>AccountChangeEmailListener</code>, <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code>, <code>VideoModerationEmailListener</code>) that each consume one family of cross-module domain events and translate them into a template send — this is where the module's actual "which event maps to which template" logic lives. Only <code>AccountChangeEmailListener</code> and <code>VideoModerationEmailListener</code> still publish an <code>Envelope</code>; <code>BookingEmailListener</code> and <code>SessionPackEmailListener</code> call <code>NotificationOutboxSupport.enqueueEmail</code> directly, <code>BEFORE_COMMIT</code> — the same shape three more listeners in <code>platform.security</code> use for registration/OTP mail (see Dependencies on other layers below). (A fifth, <code>TenantLifecycleEmailListener</code>, was deleted with the tenant module, along with its six <code>tenant*.html</code> templates and their <code>EmailTemplate</code> constants.)</td></tr>
+        <tr><td><code>MailManager</code></td><td>Send pipeline entry point. <code>sendEmailFromTemplate</code> is the <code>@Async("sendMailPool")</code> <code>AFTER_COMMIT</code> listener for <code>Envelope</code> events; <code>sendEmailSync</code> (<code>REQUIRES_NEW</code>) is called directly by <code>NotificationEmailOutboxHandler</code>, <code>EmailRetryScheduler</code>, <code>AlertNotificationListener</code>, <code>VideoModerationEmailListener.sendAdminAlertSync</code> and <code>SesCutoverPreflightResource</code>. It takes a Postgres advisory lock on <code>hashtext(sendId)</code> first (cluster-wide per-send serialization; a null <code>sendId</code> is rejected), skips recipients already marked delivered, runs each send through the per-template Resilience4j breaker (<code>EmailTemplate.circuitBreakerName()</code>: <code>emailService</code> by default, <code>registrationEmailService</code> for the six registration/OTP templates, <code>sesPreflightService</code> for the preflight) + <code>RetryTemplate</code>, and persists the outcome as an <code>EnvelopeEntity</code>. It <strong>never rethrows</strong> — callers that care read the persisted row back. A local SES rate-limit rejection does not count as an attempt.</td></tr>
+        <tr><td><code>MailService</code></td><td>Per-recipient send: asks <code>NotificationPreferenceService.emailDecision</code> (suppress / send plain / send with unsubscribe token), renders via <code>EmailContentRenderer</code> (Thymeleaf template named after the lowerCamelCase enum constant, e.g. <code>BOOKING_CONFIRMED</code> → <code>mails/bookingConfirmed.html</code>, subject via <code>MessageSource</code>; <code>EmailTemplate.NONE</code> is the raw subject/body escape hatch used by alerts), adds <code>unsubscribeUrl</code> + <code>List-Unsubscribe</code> headers when a token was minted, then dispatches through the <code>OutboundEmailSender</code> port. Records the <code>mail.send</code> metric (not for suppressed sends). A failed preference lookup is thrown as <code>EmailTransportTransientException</code> (retryable); a malformed payload as <code>EmailTransportPermanentException</code>.</td></tr>
+        <tr><td><code>NotificationOutboxSupport</code> / <code>NotificationEmailOutboxHandler</code></td><td>Outbox producer/consumer (aggregate type <code>NOTIFICATION_EMAIL</code>). <code>enqueueEmail</code> is <code>MANDATORY</code> — it joins the <code>BEFORE_COMMIT</code> listener's business transaction, stamps the deadline from <code>template.deliveryDeadline()</code>, writes the outbox row, requests a drain, and writes the in-app inbox row (<code>InAppNotificationService.recordForEmail</code>) in the same transaction. The handler re-checks the deadline (persists <code>DEADLINE_EXPIRED</code> and completes), calls <code>sendEmailSync</code>, reads the <code>EnvelopeEntity</code> back and throws on <code>FAILED</code>+<code>retry=true</code> so the outbox retries. See <a href="../outbox/index.html">Outbox</a>.</td></tr>
+        <tr><td><code>NotificationCatalog</code></td><td>Static, exhaustive <code>switch</code> (no <code>default</code>) mapping each <code>EmailTemplate</code> to <code>Entry(category, inApp, coachLink, otherLink, linkDataKey)</code>. Deep links are hash-router paths (<code>/coach/booking-requests</code>, <code>/parent/bookings</code>, <code>/dashboard</code>, <code>/player/videos</code>, …); <code>PERFORMANCE_REPORT_SHARED</code> derives its link from the email's <code>reportsPageUrl</code>. Also holds <code>PARAM_WHITELIST</code>, the only email-data keys copied into an inbox row.</td></tr>
+        <tr><td><code>InAppNotificationService</code></td><td><code>recordForEmail</code> resolves the recipient address to a user (<code>NotificationRecipientLookup</code>, exact email match; no account → skipped), picks the deep link (coach vs other), whitelists params (strings ≤ 200 chars), and inserts via <code>UserNotificationWriter</code> (<code>ON CONFLICT DO NOTHING</code>) — all inside a JDBC savepoint, catching every failure, so the inbox can never fail the business transaction. Also list (page size capped at 50), unread count, mark-read and mark-all-read, each a single recipient-scoped statement.</td></tr>
+        <tr><td><code>NotificationPreferenceService</code></td><td><code>getPreferences</code>/<code>setPreference</code> (opt-out-able categories only), <code>unsubscribe(token)</code> (<code>@RateLimited</code> 120/min per IP; invalid token and deleted user both return the same 400), and <code>emailDecision</code> — the send-time check, run in a savepoint because it executes inside <code>sendEmailSync</code>'s <code>REQUIRES_NEW</code> transaction.</td></tr>
+        <tr><td><code>UnsubscribeTokenService</code></td><td>Mints/verifies <code>v1.&lt;b64url(userId:CATEGORY)&gt;.&lt;b64url(HmacSHA256)&gt;</code>, constant-time compare, max 512 chars, opt-out-able categories only. Key derived from <code>skillars.platform.registration-verification-secret</code> with purpose label <code>skillars-email-unsubscribe-v1</code> (startup fails if the secret is blank).</td></tr>
+        <tr><td><code>JdbcSavepoints</code></td><td>Runs a supplier inside a raw JDBC savepoint on the transaction's connection (rolls back to it on <code>RuntimeException</code> and rethrows). Exists because <code>JpaTransactionManager</code> cannot do <code>Propagation.NESTED</code> with Hibernate.</td></tr>
+        <tr><td><code>InAppNotificationRetentionScheduler</code></td><td>Daily at 03:30 (<code>@SchedulerLock InAppNotificationRetentionScheduler_purge</code>, PT30M/PT1M): deletes rows older than the retention window in batches of 1000, each batch its own transaction, max 500 batches per run.</td></tr>
+        <tr><td><code>EmailRetryScheduler</code></td><td>Every 60s (<code>email.retry.interval-ms</code>; <code>@SchedulerLock EmailRetryScheduler_retryFailedEmails</code>, PT10M / <code>email.retry.lock-at-least</code>): <code>SELECT ... FOR UPDATE SKIP LOCKED</code> up to 10 failed+retryable envelopes, marks expired/exhausted ones terminal in-transaction, then calls <code>sendEmailSync</code> for the rest in an <code>afterCommit</code> hook (network I/O kept off the DB connection). The ShedLock is what prevents a second pod re-selecting a row between commit and send.</td></tr>
+        <tr><td><code>AlertEvaluationService</code> / <code>AlertRuleCache</code> / <code>AlertNotificationListener</code></td><td>Evaluator every 30s (<code>alert.evaluation-interval-ms</code>) over the cached enabled rules, publishing <code>AlertFiredEvent</code> on breach; cache refreshed every 60s (<code>alert.rule-cache.refresh-interval-ms</code>) and on every admin write; listener logs WARN and, for <code>EMAIL</code> rules, calls <code>sendEmailSync</code> with <code>EmailTemplate.NONE</code> to <code>platform.admin_alert_email</code>. Neither scheduled method is ShedLock-guarded (both are per-instance by nature). <code>computeMetricValue</code> is still a stub returning <code>-1.0</code>.</td></tr>
+        <tr><td><code>ResendEmailService</code></td><td>Looks up an <code>EnvelopeEntity</code> by <code>sendId</code> and republishes it as a fresh <code>Envelope</code> event — a manual resend hook.</td></tr>
       </tbody>
     </table>
 
     <h3>Producer census (all shapes, all modules)</h3>
-    <p>
-      This module's own four <code>infrastructure.listener.*</code> classes and the three registration
-      listeners in <code>platform.security.infrastructure.listener</code> are not the whole picture.
-      <code>EmailTemplate.deliveryDeadline()</code>'s own class-level javadoc documents that at least six
-      more call sites elsewhere build an <code>Envelope</code> directly and publish it, each with its own
-      hardcoded deadline, never reading <code>deliveryDeadline()</code>. Three shapes exist in total:
-    </p>
     <ul>
-      <li><strong>Outbox shape</strong> (<code>BEFORE_COMMIT</code> +
-        <code>NotificationOutboxSupport.enqueueEmail</code>): <code>BookingEmailListener</code>,
-        <code>SessionPackEmailListener</code>
-        (this module); <code>Coach</code>/<code>Parent</code>/<code>PlayerRegistrationEmailListener</code>
-        (<code>platform.security</code>).</li>
-      <li><strong>Direct-publish shape</strong> (<code>new Envelope(...)</code> +
-        <code>publisher.publishEvent(...)</code>, picked up by <code>MailManager</code>'s own
-        <code>AFTER_COMMIT</code> listener): <code>AccountChangeEmailListener</code>,
-        <code>VideoModerationEmailListener</code> (this module); <code>AccountManagementFacade</code>,
-        <code>EmailRegistrationStrategy</code>, <code>SendMailListener</code>
-        (<code>platform.security</code>); <code>ReportGenerationService</code>
-        (<code>platform.development</code>) — six of these seven call sites are the ones
-        <code>EmailTemplate.deliveryDeadline()</code>'s javadoc names explicitly.
-        <code>ResendEmailService</code> (this module) republishes an already-persisted
-        <code>Envelope</code> the same way, as a manual resend — not a new producer.</li>
-      <li><strong>Direct-sync shape</strong> (calls <code>MailManager.sendEmailSync</code> directly,
-        skipping both the outbox and the event bus): <code>AlertNotificationListener</code> (ops
-        alerting) and <code>VideoModerationEmailListener</code>'s own <code>sendAdminAlertSync</code> —
-        the same class as the direct-publish shape above also has this second, synchronous entry point,
-        used when a durable row's early deletion on the video-moderation outbox would otherwise race the
-        actual send (its own code comment explains why).</li>
+      <li><strong>Outbox shape</strong> (<code>@TransactionalEventListener(BEFORE_COMMIT)</code> +
+        <code>NotificationOutboxSupport.enqueueEmail</code>; inbox row written by <code>enqueueEmail</code>):
+        <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code> (this module);
+        <code>Coach</code>/<code>Parent</code>/<code>PlayerRegistrationEmailListener</code>
+        (<code>platform.security</code>). <code>SessionPackExpiryNotifier</code> (payment) publishes the event that
+        <code>SessionPackEmailListener</code> turns into an enqueue.</li>
+      <li><strong>Direct-publish shape</strong> (<code>new Envelope(...)</code> + <code>publishEvent</code>, sent by
+        <code>MailManager.sendEmailFromTemplate</code> <code>AFTER_COMMIT</code>; inbox row written by
+        <code>InAppEnvelopeListener</code> <code>BEFORE_COMMIT</code> on the same event):
+        <code>AccountChangeEmailListener</code>, <code>VideoModerationEmailListener</code> (this module);
+        <code>AccountManagementFacade</code>, <code>EmailRegistrationStrategy</code>, <code>SendMailListener</code>
+        (<code>platform.security</code>); <code>ReportGenerationService</code> (<code>platform.development</code>).
+        Each hardcodes its own deadline rather than reading <code>deliveryDeadline()</code>.
+        <code>ResendEmailService</code> republishes the same way. An <code>Envelope</code> published with no
+        active transaction reaches neither listener (<code>fallbackExecution = false</code>).</li>
+      <li><strong>Direct-sync shape</strong> (<code>MailManager.sendEmailSync</code>, no outbox, no event):
+        <code>AlertNotificationListener</code>, <code>VideoModerationEmailListener.sendAdminAlertSync</code>
+        (the <code>video.contract.ModerationAdminAlertSender</code> port, called by the video module's <code>ModerationAdminAlertOutboxHandler</code>), and
+        <code>SesCutoverPreflightResource</code>. These never produce inbox rows (all are <code>SYSTEM</code>).</li>
     </ul>
-    <p>
-      Whichever shape a producer uses, every path converges on <code>MailManager.sendEmailSync</code>
-      (the outbox handler and the retry scheduler call it directly; <code>sendEmailFromTemplate</code>,
-      the <code>Envelope</code>-event listener, just wraps it) — see Key services above and Key Flows
-      below.
-    </p>
+    <p>Every path converges on <code>MailManager.sendEmailSync</code> → <code>MailService</code> → <code>OutboundEmailSender</code>.</p>
 
     <h3>REST endpoints</h3>
     <table>
       <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth/Role</th></tr></thead>
       <tbody>
-        <tr><td>POST</td><td><code>/v1/admin/alerts</code></td><td>Create a new alert rule.</td><td>JWT, <code>ROLE_ADMIN</code> or <code>ROLE_LTD_ADMIN</code></td></tr>
-        <tr><td>GET</td><td><code>/v1/admin/alerts</code></td><td>List all currently enabled alert rules (served from the live in-memory cache, no DB round-trip).</td><td>JWT, <code>ROLE_ADMIN</code> or <code>ROLE_LTD_ADMIN</code></td></tr>
-        <tr><td>PUT</td><td><code>/v1/admin/alerts/{id}</code></td><td>Update an existing alert rule (implemented as delete-then-save since <code>AlertRule</code> has no setters) and refresh the cache.</td><td>JWT, <code>ROLE_ADMIN</code> or <code>ROLE_LTD_ADMIN</code></td></tr>
+        <tr><td>GET</td><td><code>/api/notifications?page&amp;size</code></td><td>Caller's inbox, newest first (size capped at 50).</td><td>Authenticated</td></tr>
+        <tr><td>GET</td><td><code>/api/notifications/unread-count</code></td><td>Badge count (<code>UnreadCountDto</code>).</td><td>Authenticated</td></tr>
+        <tr><td>POST</td><td><code>/api/notifications/{id}/read</code></td><td>Mark one read. Idempotent; someone else's id is a silent 204 no-op (no existence oracle).</td><td>Authenticated</td></tr>
+        <tr><td>POST</td><td><code>/api/notifications/read-all</code></td><td>Mark all read.</td><td>Authenticated</td></tr>
+        <tr><td>GET</td><td><code>/api/notifications/preferences</code></td><td>One entry per opt-out-able category (missing row → enabled).</td><td>Authenticated</td></tr>
+        <tr><td>PUT</td><td><code>/api/notifications/preferences/{category}</code></td><td>Body <code>{emailEnabled}</code>. 400 for a transactional category.</td><td>Authenticated</td></tr>
+        <tr><td>POST</td><td><code>/api/notifications/unsubscribe?token=</code></td><td>RFC 8058 one-click unsubscribe (token in query string or form body). POST only — no GET, so link scanners cannot unsubscribe anyone. Returns the category.</td><td>Public (exact path in <code>AppEndpoints.PUBLIC_ENDPOINTS</code>); rate-limited</td></tr>
+        <tr><td>POST</td><td><code>/v1/admin/alerts</code></td><td>Create an alert rule.</td><td><code>HAS_ADMIN_ROLE</code> (<code>ROLE_ADMIN</code> or <code>ROLE_LTD_ADMIN</code>)</td></tr>
+        <tr><td>GET</td><td><code>/v1/admin/alerts</code></td><td>List enabled rules (from the in-memory cache).</td><td><code>HAS_ADMIN_ROLE</code></td></tr>
+        <tr><td>PUT</td><td><code>/v1/admin/alerts/{id}</code></td><td>Update (delete-then-save) and refresh the cache.</td><td><code>HAS_ADMIN_ROLE</code></td></tr>
+        <tr><td>POST</td><td><code>/v1/admin/ses/preflight</code></td><td>Body <code>{recipientEmail}</code>. Live (uncached) SES <code>GetAccount</code> via <code>SesAccountChecker.checkLive()</code> plus a real test send of <code>SES_CUTOVER_PREFLIGHT</code> through <code>sendEmailSync</code> with a fresh <code>sendId</code>; returns <code>{accountCheck, testSend, ready}</code>. Bean only exists when <code>app.email.transport=ses</code>.</td><td><code>HAS_ADMIN_ROLE</code></td></tr>
       </tbody>
     </table>
-    <p>These endpoints sit under <code>/v1/admin/**</code> and are JWT-only. They used to be described as
-      "excluded from the tenant API-key filter chain"; that chain (<code>TenantSecurityConfig</code>,
-      <code>ApiKeyAuthenticationFilter</code>) no longer exists — there is only the JWT chain now.</p>
+    <p>Every <code>/api/notifications</code> endpoint except <code>unsubscribe</code> acts on <code>SecurityUtil.requireCurrentUserId()</code> only — no user id appears in any path or body.
+      Frontend: <code>src/frontend/src/components/notification/NotificationBell.vue</code> (header badge, all roles),
+      <code>src/frontend/src/pages/NotificationsPage.vue</code> (<code>#/notifications</code>),
+      <code>NotificationPreferencesSection.vue</code> on <code>ProfilePage.vue</code>, and the public
+      <code>src/frontend/src/pages/UnsubscribePage.vue</code> (<code>#/unsubscribe?token=</code>, click-to-confirm);
+      state in <code>stores/notification.store.js</code>, type texts in <code>utils/notificationText.js</code> + i18n.</p>
 
     <h3>Domain events consumed</h3>
-    <p>The notification module is almost entirely event-driven on the <em>consuming</em> side — it listens for
-      events published by many other platform modules and turns each into an <code>Envelope</code>:</p>
     <span class="tag">AccountChangeEvent</span> (security)
-    <span class="tag">BookingRequestedEvent</span> (booking)
-    <span class="tag">BookingConfirmedEvent</span> (booking)
-    <span class="tag">BookingDeclinedEvent</span> (booking)
-    <span class="tag">BookingExpiredEvent</span> (booking)
-    <span class="tag">BookingReminderEvent</span> (booking)
-    <span class="tag">QuickCompleteConfirmationRequiredEvent</span> (booking)
-    <span class="tag">RescheduleRequestedEvent</span> (booking)
-    <span class="tag">RescheduleAcceptedEvent</span> (booking)
-    <span class="tag">RescheduleDeclinedEvent</span> (booking)
-    <span class="tag">BatchBookingRequestedEvent</span> (booking)
-    <span class="tag">BatchBookingAcceptedEvent</span> (booking)
-    <span class="tag">DuplicateBookingProposedEvent</span> (booking)
-    <span class="tag">BookingCancelledDueToPauseEvent</span> (booking)
-    <span class="tag">BookingCancelledByParentEvent</span> (booking)
-    <span class="tag">BookingCancelledByCoachEvent</span> (booking)
-    <span class="tag">CoachNoShowEvent</span> (booking)
-    <span class="tag">PlayerNoShowEvent</span> (booking)
-    <span class="tag">SessionPackExpiryWarningEvent</span> (class in booking, published by payment)
-    <span class="tag">SessionPackExpiredEvent</span> (class in booking, published by payment)
-    <span class="tag">PackPausedEvent</span> (class in booking, published by payment)
-    <span class="tag">VideoModerationAdminAlertEvent</span> (video)
+    <span class="tag">UserErasedEvent</span> (security — GDPR cleanup)
+    <span class="tag">BookingRequestedEvent</span>
+    <span class="tag">BookingConfirmedEvent</span>
+    <span class="tag">BookingDeclinedEvent</span>
+    <span class="tag">BookingExpiredEvent</span>
+    <span class="tag">BookingReminderEvent</span>
+    <span class="tag">QuickCompleteConfirmationRequiredEvent</span>
+    <span class="tag">RescheduleRequestedEvent</span>
+    <span class="tag">RescheduleAcceptedEvent</span>
+    <span class="tag">RescheduleDeclinedEvent</span>
+    <span class="tag">BatchBookingRequestedEvent</span>
+    <span class="tag">BatchBookingAcceptedEvent</span>
+    <span class="tag">DuplicateBookingProposedEvent</span>
+    <span class="tag">BookingCancelledDueToPauseEvent</span>
+    <span class="tag">BookingCancelledByParentEvent</span>
+    <span class="tag">BookingCancelledByCoachEvent</span>
+    <span class="tag">CoachNoShowEvent</span>
+    <span class="tag">PlayerNoShowEvent</span> (all booking)
+    <span class="tag">SessionPackExpiryWarningEvent</span>
+    <span class="tag">SessionPackExpiredEvent</span>
+    <span class="tag">PackPausedEvent</span> (classes in booking, published by payment)
+    <span class="tag">VideoModerationAdminAlertEvent</span>
     <span class="tag">VideoModerationOwnerNotificationEvent</span> (video)
-    <p>Internally, the module also publishes and consumes its own events: an <code>Envelope</code> (published by
-      any direct-publish-shape producer — see the producer census above — and consumed by
-      <code>MailManager</code>) and <code>AlertFiredEvent</code> (published by
-      <code>AlertEvaluationService</code>, consumed by <code>AlertNotificationListener</code>).</p>
+    <p>Internally: <code>Envelope</code> (published by direct-publish producers; consumed <code>BEFORE_COMMIT</code> by
+      <code>InAppEnvelopeListener</code> and <code>AFTER_COMMIT</code> by <code>MailManager</code>) and
+      <code>AlertFiredEvent</code> (<code>AlertEvaluationService</code> → <code>AlertNotificationListener</code>).</p>
 
-    <h3>Dependencies on other layers</h3>
-    <p>This module does <strong>not</strong> construct a <code>SesV2Client</code> or <code>JavaMailSenderImpl</code>
-      itself — its own send path (<code>MailService</code> → <code>OutboundEmailSender</code>) dispatches through
-      the transport port in <code>infrastructure.email</code>, which resolves to whichever of
-      <code>infrastructure.ses</code>/<code>infrastructure.email.smtp</code>/<code>infrastructure.email.log</code>
-      is active for <code>app.email.transport</code> (see <a href="../infrastructure/index.html">Infrastructure</a>).
-      As of <code>ses-1.4</code>, the registration-flow path goes through the exact same pipeline: three listeners
-      in <code>platform.security.infrastructure.listener</code> (<code>CoachRegistrationEmailListener</code>,
-      <code>ParentRegistrationEmailListener</code>, <code>PlayerRegistrationEmailListener</code>) — exactly the
-      same shape as this module's own <code>BookingEmailListener</code>/<code>SessionPackEmailListener</code>
-      (<code>@TransactionalEventListener(BEFORE_COMMIT)</code> + an <code>enqueueEmail</code> call) — call this
-      module's <code>NotificationOutboxSupport.enqueueEmail</code> directly, which lands on the same
-      <code>NotificationEmailOutboxHandler</code> → <code>MailManager</code> → <code>MailService</code> →
-      <code>OutboundEmailSender</code> tail as every other outbox-routed email. There is no longer a module that
-      bypasses this one for outbound mail. Beyond that, this module depends on
-      <code>infrastructure.threadpool</code> (MDC-propagating task decorator for its executors),
-      <code>infrastructure.feature</code> (feature-flag gate for Arachnid/CSAM alerting), and
-      <code>platform.config.service.ConfigService</code> (runtime-configurable admin alert email address).</p>
+    <h3>How email actually leaves the building</h3>
+    <p>This module never constructs a <code>SesV2Client</code> or <code>JavaMailSender</code>. <code>MailService</code>
+      calls the <code>OutboundEmailSender</code> port in <code>infrastructure.email</code>; exactly one implementation is
+      active, chosen by <code>app.email.transport</code> through each bean's own <code>@ConditionalOnProperty</code>:</p>
+    <table>
+      <thead><tr><th>Value</th><th>Bean</th><th>Profiles</th></tr></thead>
+      <tbody>
+        <tr><td><code>log</code></td><td><code>infrastructure.email.log.LoggingEmailSender</code> (logs; optionally dumps to <code>app.email.log.dump-dir</code>)</td><td>base <code>application.yaml</code> (and the fallback when the property is absent), <code>dev</code> (dumps to <code>target/mails</code> since <code>ses-1.5</code>), test</td></tr>
+        <tr><td><code>smtp</code></td><td><code>infrastructure.email.smtp.SmtpEmailSender</code> (<code>app.email.smtp.provider-configs</code>)</td><td><code>uat</code></td></tr>
+        <tr><td><code>ses</code></td><td><code>infrastructure.ses.SesEmailSender</code> (AWS SES v2, <code>SesSendRateLimiter</code>, <code>SesHealthIndicator</code>)</td><td><code>prod</code></td></tr>
+      </tbody>
+    </table>
+    <p><code>OutboundEmailRequest</code> now carries a <code>headers</code> map (validated header names, no CR/LF in values)
+      which both <code>SmtpEmailSender</code> and <code>SesEmailSender</code> apply — that is how
+      <code>List-Unsubscribe</code> reaches the wire. <code>EmailTransportArchitectureTest</code> forbids any
+      <code>platform/**</code> class from touching the SES SDK; hence <code>SesAccountChecker</code> lives in
+      <code>infrastructure.ses</code>. See <a href="../infrastructure/index.html">Infrastructure</a>.
+      Other dependencies: <code>infrastructure.threadpool</code> (MDC decorator, graceful shutdown),
+      <code>infrastructure.feature</code> (Arachnid gate), <code>infrastructure.web.FrontendLinkBuilder</code>
+      (unsubscribe/deep-link URLs), <code>platform.config.service.ConfigService</code>
+      (<code>platform.admin_alert_email</code>), and <a href="../outbox/index.html">platform.outbox</a>.</p>
 
     <h2>Key Flows</h2>
 
-    <h3>Booking confirmed → templated email sent</h3>
+    <h3>Booking confirmed → inbox row + templated email</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Booking as booking module
   participant Listener as BookingEmailListener
   participant Outbox as NotificationOutboxSupport
-  participant Poller as outbox poller (platform.outbox.service)
+  participant InApp as InAppNotificationService
+  participant Drain as OutboxService drain
   participant Handler as NotificationEmailOutboxHandler
   participant Manager as MailManager
   participant Mail as MailService
   participant Sender as OutboundEmailSender
-  participant DB as envelope_entity
 
   Booking->>Listener: BookingConfirmedEvent (BEFORE_COMMIT)
-  Listener->>Listener: build Recipient + data map
-  Listener->>Outbox: enqueueEmail(BOOKING_CONFIRMED, ...) [MANDATORY — joins the booking transaction]
-  Note over Listener,Outbox: outbox row commits atomically with the booking row
-  loop outbox drain
-    Poller->>Handler: handle(payload)
-    Handler->>Manager: sendEmailSync(envelope)
-    Manager->>Mail: sendEmailFromTemplate(recipient, template, data) [circuit breaker + retry]
-    Mail->>Mail: render via EmailContentRenderer
-    Mail->>Sender: send(OutboundEmailRequest) [transport-neutral]
-    Manager->>DB: save EnvelopeEntity(status=SENT or FAILED)
-  end
+  Listener->>Outbox: enqueueEmail(BOOKING_CONFIRMED, ...) [MANDATORY]
+  Outbox->>Outbox: INSERT outbox_messages + requestDrainAfterCommit()
+  Outbox->>InApp: recordForEmail(...) [JDBC savepoint, never throws]
+  InApp->>InApp: INSERT user_notifications ON CONFLICT DO NOTHING
+  Note over Booking,InApp: booking row, outbox row, inbox row commit together
+  Drain->>Handler: handle(payload) [async, after commit]
+  Handler->>Manager: sendEmailSync(envelope) [REQUIRES_NEW, advisory lock on sendId]
+  Manager->>Mail: sendEmailFromTemplate(recipient, ...) [breaker + retry]
+  Mail->>Mail: emailDecision (transactional: SEND_PLAIN, no DB)
+  Mail->>Sender: send(OutboundEmailRequest)
+  Manager->>Manager: save EnvelopeEntity(SENT or FAILED)
+  Handler->>Handler: read back, FAILED+retry → throw → outbox backoff
     </pre>
     <p>
-      A coach accepting a booking request triggers <code>BookingConfirmedEvent</code> from the booking module.
-      <code>BookingEmailListener</code> is a <code>@TransactionalEventListener(phase = BEFORE_COMMIT)</code>, so
-      it runs inside the booking transaction itself and calls <code>NotificationOutboxSupport.enqueueEmail</code>
-      directly — no <code>Envelope</code> Spring event is published for this flow any more. The outbox row
-      commits atomically with the booking row it describes (skillars-deferred-91/-92); the generic outbox
-      poller then dispatches it to <code>NotificationEmailOutboxHandler</code>, which calls
-      <code>MailManager.sendEmailSync</code>. From there the pipeline is the same regardless of which producer
-      enqueued it: render via <code>EmailContentRenderer</code>, dispatch through the transport-neutral
-      <code>OutboundEmailSender</code> port, and persist the outcome either way so a failure is never silently
-      lost.
+      <code>BookingEmailListener</code> runs inside the booking transaction, so the outbox row and the inbox row
+      commit atomically with the booking. The outbox drain (see <a href="../outbox/index.html">Outbox</a>) calls the
+      handler after commit, off the request thread. Because <code>sendEmailSync</code> swallows exceptions, the
+      handler reads the persisted <code>EnvelopeEntity</code> to decide whether to let the outbox retry.
+    </p>
+
+    <h3>Opt-out-able email: preference check and one-click unsubscribe</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Mail as MailService
+  participant Pref as NotificationPreferenceService
+  participant Tok as UnsubscribeTokenService
+  participant Sender as OutboundEmailSender
+  participant Inbox as Mailbox provider
+  participant API as UnsubscribeResource
+
+  Mail->>Pref: emailDecision(BOOKING_REMINDER, to)
+  Pref->>Pref: savepoint: lookup user by email, read preference
+  alt REMINDER disabled
+    Pref-->>Mail: SUPPRESS
+    Mail-->>Mail: return normally (envelope recorded SENT, no metric)
+  else enabled
+    Pref->>Tok: mint(userId, REMINDER)
+    Pref-->>Mail: send + token
+    Mail->>Sender: send(body with unsubscribeUrl, List-Unsubscribe headers)
+  end
+  Inbox->>API: POST /api/notifications/unsubscribe?token=... (List-Unsubscribe=One-Click)
+  API->>Pref: unsubscribe(token) [rate-limited]
+  Pref->>Tok: verify(token)
+  Pref->>Pref: upsert (userId, REMINDER, false)
+    </pre>
+    <p>
+      The body link points at the frontend landing page (<code>#/unsubscribe?token=...</code>), which asks for a click
+      and then POSTs the same endpoint; the <code>List-Unsubscribe</code> header points straight at the API under
+      <code>FrontendLinkBuilder.base()</code>. A suppressed send counts as delivered for that recipient, so retries
+      never resend it. If the preference lookup itself fails, the send fails retryably — neither sending nor dropping
+      is safe on an unknown preference.
     </p>
 
     <h3>Admin configures an EMAIL alert rule, which later fires</h3>
@@ -287,25 +331,18 @@ sequenceDiagram
   Admin->>API: POST /v1/admin/alerts {metric, threshold, channel=EMAIL}
   API->>Repo: save(AlertRule)
   API->>Cache: refresh()
-  Cache->>Repo: findAllByEnabledTrue()
   loop every 30s
     Eval->>Cache: getCachedRules()
-    Eval->>Eval: computeMetricValue(metric)
+    Eval->>Eval: computeMetricValue(metric) [stub: -1.0]
     alt breach
       Eval->>Notif: publish AlertFiredEvent
-      Notif->>Notif: log WARN
-      Notif->>Manager: sendEmailSync(envelope) to platform.admin_alert_email
+      Notif->>Manager: sendEmailSync(NONE envelope) to platform.admin_alert_email
     end
   end
     </pre>
     <p>
-      An admin (JWT + <code>ROLE_ADMIN</code>) creates or updates a rule through
-      <code>AlertRuleAdminResource</code>; the rule is saved to <code>main.alert_rule</code> and the in-memory
-      cache is refreshed immediately so the new rule takes effect without waiting for the next scheduled reload.
-      <code>AlertEvaluationService</code> runs every 30s, evaluating each cached rule; today
-      <code>computeMetricValue</code> is a stub that always returns -1.0 (domain metrics were stripped out and are
-      a TODO), so in practice EMAIL/LOG alerts won't currently fire until that gap is closed — but the
-      configuration, caching, and notification plumbing around it is fully wired.
+      The configuration, caching and notification plumbing is wired end-to-end, but <code>computeMetricValue</code>
+      still always returns <code>-1.0</code> (skipped), so no rule fires today.
     </p>
 
     <h3>Failed send → durable retry</h3>
@@ -313,105 +350,114 @@ sequenceDiagram
 sequenceDiagram
   participant Manager as MailManager
   participant Sender as OutboundEmailSender
-  participant DB as envelope_entity
+  participant DB as main.envelope_entity
   participant Scheduler as EmailRetryScheduler
 
   Manager->>Sender: send(OutboundEmailRequest)
-  Sender-->>Manager: EmailTransportException
-  Manager->>DB: save EnvelopeEntity(status=FAILED, retry=true, attempts++)
-  loop every 60s
-    Scheduler->>DB: SELECT ... WHERE retry=true AND status=FAILED FOR UPDATE SKIP LOCKED
+  Sender-->>Manager: EmailTransportTransientException
+  Manager->>DB: save EnvelopeEntity(FAILED, retry=true, attempts++)
+  loop every 60s, ShedLock
+    Scheduler->>DB: SELECT ... retry AND FAILED FOR UPDATE SKIP LOCKED LIMIT 10
     alt deadline passed
-      Scheduler->>DB: status=DEADLINE_EXPIRED, retry=false
+      Scheduler->>DB: DEADLINE_EXPIRED, retry=false
     else attempts >= 6
-      Scheduler->>DB: status=ATTEMPTS_EXHAUSTED, retry=false
+      Scheduler->>DB: ATTEMPTS_EXHAUSTED, retry=false
     else
-      Scheduler->>Manager: sendEmailSync(envelope) [after commit]
+      Scheduler->>Manager: sendEmailSync(envelope) [afterCommit]
     end
   end
     </pre>
     <p>
-      When the transport call throws a retryable exception, <code>MailManager</code> persists the envelope as
-      <code>FAILED</code> with <code>retry=true</code> instead of propagating the error. <code>EmailRetryScheduler</code>
-      polls for such rows with <code>SELECT ... FOR UPDATE SKIP LOCKED</code> so multiple app instances never
-      double-send the same envelope. Rows past their deadline or at the 6-attempt cap are marked terminal and
-      never refetched; everything else is re-dispatched only after the polling transaction commits, keeping the
-      transport call's network I/O off the database connection pool.
+      Note there are two retry layers for outbox-routed mail: the outbox row is retried with exponential backoff by
+      <code>platform.outbox</code> while the handler keeps throwing, and <code>EmailRetryScheduler</code> independently
+      re-drives any <code>FAILED</code>/<code>retry=true</code> envelope. Both go through <code>sendEmailSync</code>'s
+      advisory lock and per-recipient delivered flags, which is what stops them double-sending.
     </p>
 
     <h2>Conventions &amp; Gotchas</h2>
     <div class="callout warn">
-      <p><strong>The whole module's mail — including registration/OTP — goes out over one transport switch.</strong>
-      <code>app.email.transport</code> (<code>ses</code>/<code>smtp</code>/<code>log</code>) selects which of
-      three beans implementing <code>OutboundEmailSender</code> is active; each is gated by its own
-      <code>@ConditionalOnProperty</code>, not a central selector. <code>EmailTransportPropertyValidator</code>
-      only validates the raw property string at startup — it aborts on a present-but-unrecognised value, but an
-      <strong>absent</strong> value is legal by design and falls through to the base <code>log</code> default; it
-      selects no bean itself. Since <code>ses-1.4</code>, registration/OTP mail uses this exact same switch as
-      booking/pack/alert mail — there is no separate suppression path to trip over any more. See
-      <a href="../infrastructure/index.html">Infrastructure</a> for the transport package layout.</p>
+      <p><strong>Adding a new email type touches six places.</strong> (1) an <code>EmailTemplate</code> constant
+      (subject key, optionally deadline + breaker name); (2) a <code>NotificationCatalog</code> case — the switch is
+      exhaustive, so forgetting it is a compile error; (3) <code>mails/&lt;lowerCamelCase&gt;.html</code>, and if the
+      category is opt-out-able, include <code>mails/fragments/unsubscribeFooter.html</code> (as
+      <code>bookingReminder.html</code>, <code>sessionPackExpiryWarning.html</code>, <code>performanceReportShared.html</code> do);
+      (4) the subject key in <code>i18n/messages*.properties</code>; (5) a Flyway migration widening
+      <code>main.envelope_entity.envelope_entity_email_template_check</code> (<code>EnvelopeEntitySchemaIT</code> pins
+      enum ↔ constraint parity — <code>SES_CUTOVER_PREFLIGHT</code> shipped without one and needed <code>V168</code>);
+      (6) if in-app, a <code>notifications.types.&lt;TYPE&gt;</code> text in the frontend en-US/de-DE/fr-FR i18n, and add
+      any new display params to <code>NotificationCatalog.PARAM_WHITELIST</code>.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Inbox writes must be JDBC-only.</strong> <code>InAppNotificationService</code> and
+      <code>NotificationPreferenceService.emailDecision</code> run inside someone else's transaction via
+      <code>JdbcSavepoints</code>. A JPA query there would auto-flush the business session first, and rolling back
+      to the savepoint would silently discard business SQL Hibernate thinks it flushed. Use <code>JdbcTemplate</code>
+      (that's why <code>UserNotificationWriter</code>, <code>NotificationRecipientLookup</code> and
+      <code>NotificationEmailPreferenceRepository</code> are plain JDBC). The price of best-effort inbox writes: an
+      inbox row can, rarely, be missing for an email that was sent.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Recipients are resolved by exact email match.</strong> Producers address mail by email only, so both
+      the inbox and the opt-out check look the address up in <code>main."user".email</code> (unique index, case-sensitive).
+      An address that matches no user (an admin alias) gets no inbox row and an email with no unsubscribe link. The
+      resolved user is the email owner — for a minor that is the parent, and <code>recipient_user_id</code> is always a <code>main."user"</code> id (never a <code>PlayerProfile</code> PK).</p>
+    </div>
+    <div class="callout">
+      <p><strong>Unsubscribe tokens never expire</strong> and are keyed off
+      <code>skillars.platform.registration-verification-secret</code> (env <code>PLATFORM_REGISTRATION_VERIFICATION_SECRET</code>).
+      Rotating that secret silently invalidates every unsubscribe link already in mailboxes (users can still opt out
+      from the Profile page). Never add a GET handler to the unsubscribe path — prefetchers would unsubscribe users.</p>
+    </div>
+    <div class="callout">
+      <p><strong>A preference-suppressed send is recorded as <code>SENT</code></strong> on the <code>EnvelopeEntity</code>
+      (the correct terminal state — a re-drive must not retry it) and logged as
+      <code>[EMAIL_SUPPRESSED_BY_PREFERENCE]</code>. Don't use <code>envelope_entity.status</code> to count actual
+      deliveries; use the <code>mail.send</code> metric, which skips suppressed sends.</p>
     </div>
     <div class="callout">
       <p><code>ComponentConfig</code> only defines the <code>MailManager</code> bean when
-      <code>enable.test.mail=false</code> (the default). If a profile sets <code>enable.test.mail=true</code>,
-      no <code>MailManager</code> bean is registered by this class — expect a different (test-only) bean to
-      supply it, or startup will fail with an unsatisfied dependency.</p>
-    </div>
-    <div class="callout">
-      <p>Adding a new email type means touching three places in lockstep: add a constant to the
-      <code>EmailTemplate</code> enum (with a <code>subjectKey</code> pointing at an i18n message), add an HTML
-      file under <code>src/main/resources/mails/</code> named after the lowerCamelCase form of the enum constant
-      (e.g. <code>BOOKING_REMINDER</code> → <code>bookingReminder.html</code>), and add the i18n key to
-      <code>messages_*.properties</code>. Miss any one of the three and the send will fail at render or
-      subject-lookup time.</p>
+      <code>enable.test.mail=false</code> (the default). With <code>enable.test.mail=true</code> another bean must supply it.
+      <code>SesCutoverPreflightResource</code> only exists under <code>app.email.transport=ses</code> — a 404 on
+      <code>/v1/admin/ses/preflight</code> in dev/uat is expected. <code>EmailTransportPropertyValidator</code> aborts
+      startup on an unrecognised transport value but accepts an absent one (falls back to <code>log</code>).</p>
     </div>
     <div class="callout warn">
-      <p><code>AlertRule</code> has no public setters and is built exclusively via its Lombok
-      <code>@SuperBuilder</code>. <code>AlertRuleAdminResource.update()</code> therefore implements "update" as
-      delete-then-recreate (same pattern as <code>FeeRuleAdminResource</code> elsewhere) rather than mutating the
-      existing row — don't expect the row's primary key or audit history to be preserved across an update.</p>
+      <p><code>AlertRule</code> has no setters (Lombok <code>@SuperBuilder</code> only), so
+      <code>AlertRuleAdminResource.update()</code> is delete-then-recreate — the row's id and audit history are not
+      preserved across an update.</p>
     </div>
     <div class="callout">
-      <p><code>EnvelopeEntity</code> still has no explicit <code>@Table(schema = ...)</code>, unlike
-      <code>AlertRule</code> which is pinned to <code>schema = "main"</code> — but this is no longer the "undocumented
-      provenance" gap an earlier revision of this callout described.
-      <code>V136__pin_envelope_entity_schema.sql</code> (shipped by <code>skillars-deferred-110</code>, later folded
-      into <code>V138__baseline_schema.sql</code> by <code>skillars-deferred-112</code>'s migration rebaseline) pinned
-      <code>envelope_entity</code>/<code>envelope_entity_recipients</code> as an explicit, version-controlled
-      migration, column-for-column matching what Hibernate's own auto-DDL had been silently creating and altering
-      via the <code>generate-ddl: true</code> + <code>ddl-auto: none</code> precedence quirk this codebase's own
-      <a href="../database/index.html">Database &amp; Migrations</a> page corrects at length. Since
-      <code>ses-1.4</code>, registration and OTP mail route through <code>EnvelopeEntity</code> for the first
-      time, so a schema issue here affects account verification, not just booking-email history. (The
-      <code>ses-1-7-documentation</code> ledger section this paragraph used to cross-reference was pruned once
-      closed, per <code>deferred-work.md</code>'s own delete-outright-when-closed convention — this paragraph is
-      now the only surviving record of that history.)</p>
+      <p><code>EnvelopeEntity</code> has no <code>@Table(schema=...)</code>, but Hibernate's <code>default_schema</code> is
+      <code>main</code> and the table is <code>main.envelope_entity</code> in <code>V138__baseline_schema.sql</code>; it is
+      never deleted from (terminal rows are kept). Registration/OTP mail goes through it too, so a schema problem here
+      breaks account verification, not just booking-email history.</p>
     </div>
     <div class="callout">
-      <p>Alert threshold evaluation is currently a no-op: <code>AlertEvaluationService.computeMetricValue()</code>
-      always returns <code>-1.0</code> (a marked TODO — domain-specific metrics like <code>FAILURE_RATE</code>
-      were removed during a refactor). Configuring alert rules via the admin API works end-to-end, but no rule
-      will actually breach and fire until real metric computation is added back.</p>
+      <p>Email template <code>data</code> is string-typed by contract: it is JSON round-tripped through the outbox, so
+      producers must format numbers/instants themselves. (<code>NotificationOutboxSupport</code>'s javadoc says <code>EmailDataStringContractTest</code> enforces this, but no such test exists in <code>src/test</code> today — it is convention only.) Some
+      producers still put ints in (<code>creditsRemaining</code>, <code>requestedCount</code>,
+      <code>acceptedCount</code>); the inbox param whitelister tolerates that.</p>
     </div>
 
     <h2>Related Modules</h2>
     <ul>
-      <li><a href="../booking/index.html">Booking</a> — the largest source of consumed events (booking
-        lifecycle, reschedules, no-shows, session-pack expiry/pause) that drive templated emails.</li>
-      <li><a href="../payment/index.html">Payment</a> — publishes the session-pack expiry-warning, expired, and
-        paused events consumed by <code>SessionPackEmailListener</code> (their classes still live in
-        <code>booking.contract</code>).</li>
-      <li><a href="../video/index.html">Video</a> — video moderation admin alerts and owner-flagged
-        notifications (including the CSAM/Arachnid startup safety gate).</li>
-      <li><a href="../security/index.html">Security</a> — publishes <code>AccountChangeEvent</code> consumed
-        here; separately, since <code>ses-1.4</code>, its own registration listeners call this module's
-        <code>NotificationOutboxSupport.enqueueEmail</code> directly, joining the same outbox/transport
-        pipeline as everything else here.</li>
-      <li><a href="../config/index.html">Config</a> — <code>ConfigService</code> supplies the runtime-configurable
-        <code>platform.admin_alert_email</code> used by video moderation alerts.</li>
-      <li><a href="../infrastructure/index.html">Infrastructure</a> — provides the <code>OutboundEmailSender</code>
-        transport port this module dispatches through (SES/SMTP/log, selected by
-        <code>app.email.transport</code>), the MDC-propagating thread-pool decorator, and feature-flag service.</li>
+      <li><a href="../outbox/index.html">Outbox</a> — the generic transactional outbox that carries
+        <code>NOTIFICATION_EMAIL</code> rows (and the video moderation admin alert) to this module.</li>
+      <li><a href="../booking/index.html">Booking</a> — the largest source of consumed events (booking lifecycle,
+        reschedules, no-shows, reminders).</li>
+      <li><a href="../payment/index.html">Payment</a> — publishes session-pack expiry-warning, expired and paused
+        events (classes in <code>booking.contract</code>).</li>
+      <li><a href="../development/index.html">Development</a> — <code>ReportGenerationService</code> sends
+        <code>PERFORMANCE_REPORT_SHARED</code> (opt-out-able <code>DEVELOPMENT</code> category, in-app).</li>
+      <li><a href="../video/index.html">Video</a> — moderation admin alerts and owner-flagged notices (Arachnid startup gate).</li>
+      <li><a href="../security/index.html">Security</a> — <code>AccountChangeEvent</code>, <code>UserErasedEvent</code>,
+        registration listeners calling <code>enqueueEmail</code>, <code>AppEndpoints.PUBLIC_ENDPOINTS</code>, and the
+        registration secret the unsubscribe key is derived from.</li>
+      <li><a href="../config/index.html">Config</a> — <code>ConfigService</code> supplies <code>platform.admin_alert_email</code>.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> — the <code>OutboundEmailSender</code> port and its
+        log/SMTP/SES transports, <code>FrontendLinkBuilder</code>, thread pools, feature flags.</li>
+      <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a> — <code>EmailRetryScheduler</code>,
+        <code>InAppNotificationRetentionScheduler</code>, <code>AlertEvaluationService</code>, <code>AlertRuleCache</code>.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
   </main>
