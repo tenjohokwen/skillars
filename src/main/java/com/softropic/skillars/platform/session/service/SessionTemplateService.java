@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.session.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.booking.contract.BookingSnapshot;
+import com.softropic.skillars.platform.booking.contract.PlannableBookingSummary;
 import com.softropic.skillars.platform.booking.service.BookingQueryService;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
@@ -27,12 +28,15 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -113,6 +117,30 @@ public class SessionTemplateService {
         sessionTemplateRepository.save(t);
     }
 
+    /** How far ahead the deploy picker looks for plannable bookings. */
+    static final Duration DEPLOYABLE_BOOKING_HORIZON = Duration.ofDays(60);
+
+    /**
+     * feat/coach-workflow-gaps A19: the bookings {@link #deployTemplate} would accept for this coach — upcoming
+     * (start after now, within {@link #DEPLOYABLE_BOOKING_HORIZON}), in a status {@link #isBookingPlannable}
+     * admits, and without a session plan yet. Replaces the raw booking-UUID text field in the template vault.
+     * Same gate as {@link #listTemplates}. A read-only hint: deploy re-checks every condition itself.
+     */
+    @Transactional(readOnly = true)
+    public List<PlannableBookingSummary> listDeployableBookings(Long coachUserId) {
+        drillLibraryService.checkSessionBuilderGate(coachUserId);
+        UUID coachId = resolveCoachId(coachUserId);
+        Instant now = Instant.now();
+        List<PlannableBookingSummary> candidates = bookingQueryService.findCoachBookings(
+            coachId, PLANNABLE_BOOKING_STATUSES, now, now.plus(DEPLOYABLE_BOOKING_HORIZON));
+        if (candidates.isEmpty()) return List.of();
+        Set<UUID> planned = new HashSet<>(sessionRepository.findBookingIdsWithPlan(
+            candidates.stream().map(PlannableBookingSummary::bookingId).toList()));
+        return candidates.stream()
+            .filter(b -> !planned.contains(b.bookingId()) && b.playerId() != null)
+            .toList();
+    }
+
     public SessionPlanResponse deployTemplate(UUID templateId, UUID bookingId, Long coachUserId) {
         drillLibraryService.checkSessionBuilderGate(coachUserId);
         UUID coachId = resolveCoachId(coachUserId);
@@ -175,6 +203,9 @@ public class SessionTemplateService {
 
         return buildResponse(saved);
     }
+
+    /** The statuses {@link #isBookingPlannable} returns true for — keep the two in step. */
+    static final List<String> PLANNABLE_BOOKING_STATUSES = List.of("CONFIRMED");
 
     private boolean isBookingPlannable(String status) {
         if ("CONFIRMED".equals(status)) {

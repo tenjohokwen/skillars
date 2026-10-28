@@ -6,6 +6,7 @@ import {
   createSessionPackTier,
   deactivateSessionPackTier,
   extendSessionPack,
+  fetchCoachSoldPacks,
   fetchMyStrikes,
   acknowledgeStrike,
   fetchCoachTiers,
@@ -35,6 +36,7 @@ const LOADING_KEYS = [
   'createSessionPackTier',
   'deactivateSessionPackTier',
   'extendSessionPack',
+  'soldPacks',
   'coachStrikes',
   'coachSubscription',
   'coachTiers',
@@ -60,6 +62,9 @@ export const usePaymentStore = defineStore('payment', {
     stripeStatus: null,
     creditBalance: null,
     sessionPackTiers: [],
+    // feat/coach-workflow-gaps A20: the coach's sold packs (one page) + the Spring Page envelope.
+    soldPacks: [],
+    soldPacksPage: null,
     coachStrikes: [],
     coachSubscription: null,
     coachTiers: [],
@@ -155,6 +160,19 @@ export const usePaymentStore = defineStore('payment', {
         throw err
       } finally {
         this.loading.extendSessionPack = false
+      }
+    },
+    async fetchSoldPacks(page = 0, size = 20) {
+      this.loading.soldPacks = true
+      this.error.soldPacks = null
+      try {
+        const res = await fetchCoachSoldPacks(page, size)
+        this.soldPacks = res?.content ?? []
+        this.soldPacksPage = res ?? null
+      } catch (err) {
+        this.error.soldPacks = err
+      } finally {
+        this.loading.soldPacks = false
       }
     },
     async fetchCoachStrikes() {

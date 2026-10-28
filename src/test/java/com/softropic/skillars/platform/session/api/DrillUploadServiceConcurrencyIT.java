@@ -303,7 +303,7 @@ class DrillUploadServiceConcurrencyIT extends BaseSessionIT {
      * committed its own clear.
      *
      * <p>The two clones are owned by two DIFFERENT coaches, not the same coach twice: a
-     * {@code idx_drills_clone_uniqueness} DB constraint on {@code (source_drill_id,
+     * {@code idx_drills_clone_uniqueness_active} DB constraint (V173: ACTIVE clones only) on {@code (source_drill_id,
      * owner_coach_id)} means one coach can only ever clone a given source drill once — two
      * distinct owners is the only way two clones of one source can coexist.
      */

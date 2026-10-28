@@ -138,11 +138,15 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * AdminUserService.lockAndLoad} (shared by suspendUser/reactivateUser), both read-only locked
      * loads -- now 48 after feat/user-self-service-safety added {@code
      * AppealService.reverseSuspension}/{@code .reverseReviewBlock}, both read-only locked loads taken
-     * before the appeal reversal re-locks the same row). Asserted explicitly so an
+     * before the appeal reversal re-locks the same row -- now 50 after feat/coach-workflow-gaps added
+     * {@code DrillLibraryService.lockOwnedPrivateDrill} (shared by updateDrill/deleteDrill: a
+     * findByIdForUpdate+orElseThrow plus entityManager.refresh, the DrillUploadService shape) and
+     * {@code CoachGalleryService.lockProfile} (shared by addImage/deleteItem: a findByIdForUpdate+
+     * orElseThrow read); every drill/gallery write runs after withBoundedRetry returns). Asserted explicitly so an
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 48;
+    private static final int EXPECTED_CALL_SITE_COUNT = 50;
 
     private record CallSite(String file, int line, String argument) {
     }

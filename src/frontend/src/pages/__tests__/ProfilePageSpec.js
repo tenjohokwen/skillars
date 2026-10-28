@@ -183,9 +183,9 @@ describe('ProfilePage.vue — role-gated sections (deferred-139 AC2/AC4/AC5/AC6)
     expect(coachSection.findAll('.edit-btn')).toHaveLength(0)
   })
 
-  // Review audit item 1 regression guard: an ACTIVE coach must keep all five edit buttons, so the
+  // Review audit item 1 regression guard: an ACTIVE coach must keep all six edit buttons (five + the D9 gallery row), so the
   // suspension gate above can never silently disable editing for everyone.
-  it('an active coach keeps all five Coach Profile edit buttons', async () => {
+  it('an active coach keeps all six Coach Profile edit buttons', async () => {
     const wrapper = mountPage('COACH')
     getOwnCoachProfile.mockResolvedValue({
       status: 'ACTIVE',
@@ -198,7 +198,8 @@ describe('ProfilePage.vue — role-gated sections (deferred-139 AC2/AC4/AC5/AC6)
       .findAll('.profile-section')
       .find((s) => s.text().includes('profile.sectionCoachProfile'))
     expect(coachSection.text()).not.toContain('profile.coachSuspendedNote')
-    expect(coachSection.findAll('.edit-btn')).toHaveLength(5)
+    // six since feat/coach-workflow-gaps D9 added the media-gallery row
+    expect(coachSection.findAll('.edit-btn')).toHaveLength(6)
   })
 
   // skillars-deferred-139 review D3

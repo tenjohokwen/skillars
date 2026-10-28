@@ -9,16 +9,21 @@ import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep3R
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep4Request;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep5Request;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStepResponse;
+import com.softropic.skillars.platform.marketplace.contract.CoachGalleryItemRequest;
+import com.softropic.skillars.platform.marketplace.contract.CoachMediaItemDto;
+import com.softropic.skillars.platform.marketplace.service.CoachGalleryService;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -26,6 +31,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.UUID;
 
 @Observed(name = "marketplace.profile_builder")
 @RestController
@@ -36,6 +42,7 @@ public class ProfileBuilderResource {
 
     private final CoachProfileService coachProfileService;
     private final SecurityUtil securityUtil;
+    private final CoachGalleryService coachGalleryService;
 
     @GetMapping("/status")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
@@ -64,6 +71,29 @@ public class ProfileBuilderResource {
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
     public ResponseEntity<Void> deletePhoto() {
         coachProfileService.deletePhoto(currentUserId(), securityUtil.getCurrentUserName());
+        return ResponseEntity.noContent().build();
+    }
+
+    // ─── feat/coach-workflow-gaps D9: own public-profile media gallery ───────────────────────────
+    // Upload flow: POST /api/storage/sign/upload (entity coach_gallery, entityId = own user id) → PUT →
+    // POST /api/storage/confirm/{key} → POST /gallery {key}. The service re-validates the confirmed key.
+
+    @GetMapping("/gallery")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<List<CoachMediaItemDto>> getGallery() {
+        return ResponseEntity.ok(coachGalleryService.listOwn(currentUserId()));
+    }
+
+    @PostMapping("/gallery")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<CoachMediaItemDto> addGalleryImage(@RequestBody @Valid CoachGalleryItemRequest req) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(coachGalleryService.addImage(currentUserId(), req.key()));
+    }
+
+    @DeleteMapping("/gallery/{mediaId}")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<Void> deleteGalleryItem(@PathVariable UUID mediaId) {
+        coachGalleryService.deleteItem(currentUserId(), mediaId, securityUtil.getCurrentUserName());
         return ResponseEntity.noContent().build();
     }
 

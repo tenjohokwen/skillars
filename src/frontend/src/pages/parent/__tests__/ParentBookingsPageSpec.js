@@ -468,3 +468,27 @@ describe('ParentBookingsPage.vue — coach no-show report (A13)', () => {
     expect(bookingStore.loadParentBookings).toHaveBeenCalled()
   })
 })
+
+// feat/coach-workflow-gaps A23: a Receipt link on rows whose payment was captured (backend-computed
+// receiptAvailable), for parents and self-booking players alike.
+describe('ParentBookingsPage.vue — receipt link (feat/coach-workflow-gaps A23)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.restoreAllMocks()
+  })
+
+  it('shows a Receipt link only on rows with receiptAvailable', async () => {
+    const { wrapper } = mountPage({
+      auth: { role: 'PLAYER' },
+      booking: {
+        parentBookings: [
+          { ...BOOKING_1H, id: 1, receiptAvailable: true },
+          { ...BOOKING_1H, id: 2, receiptAvailable: false },
+        ],
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-test="booking-receipt"]')).toHaveLength(1)
+  })
+})

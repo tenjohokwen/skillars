@@ -306,6 +306,204 @@ class DrillLibraryResourceIT extends BaseSessionIT {
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
     }
 
+    // ── feat/coach-workflow-gaps D1: POST / PUT / DELETE /api/session/drills ─────────────────
+
+    private static Map<String, Object> drillBody(String name) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("name", name);
+        body.put("description", "Tight rondo in a 10x10 grid");
+        body.put("primarySkills", List.of("passing"));
+        body.put("secondarySkills", List.of("first_touch"));
+        body.put("repDensity", 30);
+        body.put("intensity", 3);
+        body.put("pressureLevel", 2);
+        body.put("cognitiveLoad", 2);
+        body.put("matchRealism", 3);
+        body.put("weakFootBias", true);
+        body.put("difficultyTier", "U12");
+        body.put("equipmentRequired", List.of("ball", "cones"));
+        body.put("recommendedGroupSize", "5");
+        body.put("coachingPoints", List.of("Open body shape"));
+        return body;
+    }
+
+    private List<Map<String, Object>> privateDrills(String cookies) {
+        ResponseEntity<List> response = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "?library=PRIVATE",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), List.class
+        );
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> body = response.getBody();
+        return body;
+    }
+
+    @Test
+    void createDrill_returns201_andAppearsInPrivateLibrary() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Map> created = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE, HttpMethod.POST, drillBody("My Rondo"), authenticatedHeaders(cookies), Map.class
+        );
+
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(created.getBody()).containsEntry("libraryType", "PRIVATE").containsEntry("name", "My Rondo");
+        assertThat(privateDrills(cookies)).extracting(d -> d.get("name")).containsExactly("My Rondo");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> metadata = (Map<String, Object>) created.getBody().get("metadata");
+        assertThat(metadata.get("skillWeighting")).isEqualTo(Map.of("passing", 70, "first_touch", 30));
+    }
+
+    @Test
+    void createDrill_duplicateActiveName_returns409DrillNameTaken() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE, HttpMethod.POST, drillBody("Twin"), authenticatedHeaders(cookies), Map.class);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE, HttpMethod.POST, drillBody("Twin"), authenticatedHeaders(cookies), Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(ex.getResponseBodyAsString()).contains("session.drillNameTaken");
+            });
+    }
+
+    @Test
+    void createDrill_invalidDifficultyTier_returns400() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        Map<String, Object> body = drillBody("Bad tier");
+        body.put("difficultyTier", "U99");
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE, HttpMethod.POST, body, authenticatedHeaders(cookies), Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void createDrill_asParent_returns403() {
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE, HttpMethod.POST, drillBody("Nope"), authenticatedHeaders(cookies), Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void updateDrill_ownDrill_returns200AndBumpsVersion() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> created = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE, HttpMethod.POST, drillBody("Before"), authenticatedHeaders(cookies), Map.class);
+        String drillId = (String) created.getBody().get("id");
+
+        ResponseEntity<Map> updated = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + drillId, HttpMethod.PUT, drillBody("After"), authenticatedHeaders(cookies), Map.class);
+
+        assertThat(updated.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(updated.getBody()).containsEntry("name", "After");
+        Integer version = jdbcTemplate.queryForObject(
+            "SELECT version FROM session.drills WHERE id = ?", Integer.class, UUID.fromString(drillId));
+        assertThat(version).isEqualTo(1);
+    }
+
+    @Test
+    void updateDrill_otherCoachsDrill_returns404() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + anotherCoachDrillId, HttpMethod.PUT, drillBody("Hijack"),
+            authenticatedHeaders(cookies), Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
+        String name = jdbcTemplate.queryForObject(
+            "SELECT name FROM session.drills WHERE id = ?", String.class, anotherCoachDrillId);
+        assertThat(name).isEqualTo("Coach Drill");
+    }
+
+    @Test
+    void updateDrill_platformDrill_returns404() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + platformDrillId, HttpMethod.PUT, drillBody("Hijack"),
+            authenticatedHeaders(cookies), Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void deleteDrill_archivesRow_hidesFromLibrary_andFreesTheName() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> created = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE, HttpMethod.POST, drillBody("Recycled"), authenticatedHeaders(cookies), Map.class);
+        String drillId = (String) created.getBody().get("id");
+
+        ResponseEntity<Void> deleted = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + drillId, HttpMethod.DELETE, null, authenticatedHeaders(cookies), Void.class);
+
+        assertThat(deleted.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        String status = jdbcTemplate.queryForObject(
+            "SELECT status FROM session.drills WHERE id = ?", String.class, UUID.fromString(drillId));
+        assertThat(status).isEqualTo("ARCHIVED");
+        assertThat(privateDrills(cookies)).isEmpty();
+
+        // V173: an archived drill no longer reserves its name.
+        ResponseEntity<Map> recreated = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE, HttpMethod.POST, drillBody("Recycled"), authenticatedHeaders(cookies), Map.class);
+        assertThat(recreated.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        // Idempotent second delete of the archived row.
+        ResponseEntity<Void> again = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + drillId, HttpMethod.DELETE, null, authenticatedHeaders(cookies), Void.class);
+        assertThat(again.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+    }
+
+    @Test
+    void deleteClone_thenCloneSamePlatformDrillAgain_returns201() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> clone = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + platformDrillId + "/clone",
+            HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
+        String cloneId = (String) clone.getBody().get("id");
+
+        httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + cloneId, HttpMethod.DELETE, null, authenticatedHeaders(cookies), Void.class);
+
+        ResponseEntity<List> platform = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "?library=PLATFORM", HttpMethod.GET, null, authenticatedHeaders(cookies), List.class);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> platformDrills = platform.getBody();
+        assertThat(platformDrills).filteredOn(d -> platformDrillId.toString().equals(d.get("id")))
+            .singleElement().satisfies(d -> assertThat(d.get("isClonedByMe")).isEqualTo(false));
+
+        ResponseEntity<Map> reclone = httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + platformDrillId + "/clone",
+            HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
+        assertThat(reclone.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
+    @Test
+    void deleteDrill_otherCoachsDrill_returns404AndLeavesItActive() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + DRILLS_BASE + "/" + anotherCoachDrillId, HttpMethod.DELETE, null,
+            authenticatedHeaders(cookies), Void.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
+        String status = jdbcTemplate.queryForObject(
+            "SELECT status FROM session.drills WHERE id = ?", String.class, anotherCoachDrillId);
+        assertThat(status).isEqualTo("ACTIVE");
+    }
+
     // ── GET /api/session/drills as parent returns 403 ────────────────────────
 
     @Test

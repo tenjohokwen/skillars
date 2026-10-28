@@ -4,6 +4,9 @@ import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException
 import com.softropic.skillars.infrastructure.video.PlaybackTokenClaims;
 import com.softropic.skillars.infrastructure.video.SignedPlaybackUrl;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
+import jakarta.persistence.EntityManager;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
@@ -11,6 +14,8 @@ import com.softropic.skillars.platform.security.contract.exception.FeatureGatedE
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.session.contract.DrillMetadata;
 import com.softropic.skillars.platform.session.contract.DrillResponse;
+import com.softropic.skillars.platform.session.contract.DrillUpsertRequest;
+import com.softropic.skillars.platform.session.contract.InvalidParamException;
 import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
 import com.softropic.skillars.platform.session.repo.DrillTagRepository;
@@ -51,6 +56,8 @@ class DrillLibraryServiceTest {
     @Mock private CoachProfileService coachProfileService;
     @Mock private VideoRepository videoRepository;
     @Mock private VideoProviderAdapter videoProviderAdapter;
+    @Mock private PessimisticLockRetryer lockRetryer;
+    @Mock private EntityManager entityManager;
 
     private SimpleMeterRegistry meterRegistry;
     private DrillLibraryService service;
@@ -61,8 +68,10 @@ class DrillLibraryServiceTest {
     @BeforeEach
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
-        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService, videoRepository, videoProviderAdapter, meterRegistry);
-        when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_PROFILE_ID);
+        service = new DrillLibraryService(drillRepository, drillVideoRefRepository, drillTagRepository, configService, coachProfileService, videoRepository, videoProviderAdapter, meterRegistry,
+            new ContactDetailSanitizer(), lockRetryer, entityManager);
+        // lenient: the pure resolveWeighting tests never resolve a coach.
+        org.mockito.Mockito.lenient().when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_PROFILE_ID);
     }
 
     // ── cloneDrill ──────────────────────────────────────────────────────────────
@@ -268,6 +277,181 @@ class DrillLibraryServiceTest {
         assertThat(results).hasSize(1);
         assertThat(results.get(0).hasVideo()).isFalse();
         assertThat(results.get(0).videoUrl()).isNull();
+    }
+
+    // ── feat/coach-workflow-gaps D1: create / update / delete ──────────────────
+
+    private void stubLockRetryer() {
+        org.mockito.Mockito.lenient().when(lockRetryer.withBoundedRetry(org.mockito.ArgumentMatchers.anyString(), any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+    }
+
+    private DrillUpsertRequest upsert(String name, Map<String, Integer> weighting) {
+        return new DrillUpsertRequest(
+            name, "Call me on +44 7911 123456", List.of("passing", " passing "), List.of("first_touch"),
+            weighting, 30, 3, 2, 2, 3, true, "U12", List.of("ball", "cones"), "2-4",
+            List.of("Mail coach@example.com", "Open body shape"));
+    }
+
+    @Test
+    void createDrill_savesPrivateActiveOwnedDrill_sanitizedAndWeightingDerived() {
+        when(drillRepository.saveAndFlush(any(Drill.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        DrillResponse response = service.createDrill(upsert("  Rondo  ", null), COACH_USER_ID);
+
+        ArgumentCaptor<Drill> captor = ArgumentCaptor.forClass(Drill.class);
+        verify(drillRepository).saveAndFlush(captor.capture());
+        Drill saved = captor.getValue();
+        assertThat(saved.getLibraryType()).isEqualTo("PRIVATE");
+        assertThat(saved.getOwnerCoachId()).isEqualTo(COACH_PROFILE_ID);
+        assertThat(saved.getStatus()).isEqualTo("ACTIVE");
+        assertThat(saved.getName()).isEqualTo("Rondo");
+        assertThat(saved.getDescription()).doesNotContain("7911").contains("[contact details removed]");
+        assertThat(saved.getMetadata().primarySkills()).containsExactly("passing");
+        assertThat(saved.getMetadata().skillWeighting()).isEqualTo(Map.of("passing", 70, "first_touch", 30));
+        assertThat(saved.getMetadata().coachingPoints().get(0)).doesNotContain("coach@example.com");
+        assertThat(saved.getMetadata().setupDiagram()).isNull();
+        assertThat(saved.getSourceDrillId()).isNull();
+        assertThat(response.libraryType()).isEqualTo("PRIVATE");
+    }
+
+    @Test
+    void createDrill_explicitWeightingNotSummingTo100_throwsInvalidParam() {
+        assertThatThrownBy(() -> service.createDrill(
+            upsert("Rondo", Map.of("passing", 50, "first_touch", 10)), COACH_USER_ID))
+            .isInstanceOf(InvalidParamException.class);
+        verify(drillRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void resolveWeighting_threeWaySplit_remainderGoesToFirstSkill() {
+        Map<String, Integer> w = DrillLibraryService.resolveWeighting(
+            null, List.of("a", "b", "c"), List.of(), null);
+        assertThat(w).containsEntry("a", 34).containsEntry("b", 33).containsEntry("c", 33);
+        assertThat(w.values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(100);
+    }
+
+    @Test
+    void updateDrill_ownedActiveDrill_replacesFieldsKeepingSetupDiagramAndMatchingWeighting() {
+        stubLockRetryer();
+        UUID drillId = UUID.randomUUID();
+        Drill drill = buildDrill(drillId, "PRIVATE", "ACTIVE", COACH_PROFILE_ID);
+        drill.setMetadata(new DrillMetadata(
+            List.of("passing"), List.of("first_touch"), Map.of("passing", 60, "first_touch", 40),
+            10, 1, 1, 1, 1, false, "U10", List.of(), null, List.of(), "diagram.png"));
+        when(drillRepository.findById(drillId)).thenReturn(Optional.of(drill));
+        when(drillRepository.findByIdForUpdate(drillId)).thenReturn(Optional.of(drill));
+        when(drillRepository.saveAndFlush(drill)).thenReturn(drill);
+
+        service.updateDrill(drillId, upsert("Rondo v2", null), COACH_USER_ID);
+
+        assertThat(drill.getName()).isEqualTo("Rondo v2");
+        assertThat(drill.getMetadata().setupDiagram()).isEqualTo("diagram.png");
+        assertThat(drill.getMetadata().skillWeighting()).containsEntry("passing", 60).containsEntry("first_touch", 40);
+        assertThat(drill.getMetadata().difficultyTier()).isEqualTo("U12");
+        verify(entityManager).refresh(drill, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+    }
+
+    @Test
+    void updateDrill_platformDrill_throws404WithoutLocking() {
+        UUID drillId = UUID.randomUUID();
+        Drill drill = buildDrill(drillId, "PLATFORM", "ACTIVE", null);
+        when(drillRepository.findById(drillId)).thenReturn(Optional.of(drill));
+
+        // 404, not 403: never confirm another coach's private drill exists; and no row lock taken.
+        assertThatThrownBy(() -> service.updateDrill(drillId, upsert("X", null), COACH_USER_ID))
+            .isInstanceOf(ResourceNotFoundException.class);
+        verify(drillRepository, never()).findByIdForUpdate(any());
+        verify(drillRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void updateDrill_otherCoachsDrill_throws404WithoutLocking() {
+        UUID drillId = UUID.randomUUID();
+        Drill drill = buildDrill(drillId, "PRIVATE", "ACTIVE", UUID.randomUUID());
+        when(drillRepository.findById(drillId)).thenReturn(Optional.of(drill));
+
+        // 404, not 403: never confirm another coach's private drill exists; and no row lock taken.
+        assertThatThrownBy(() -> service.updateDrill(drillId, upsert("X", null), COACH_USER_ID))
+            .isInstanceOf(ResourceNotFoundException.class);
+        verify(drillRepository, never()).findByIdForUpdate(any());
+        verify(drillRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void updateDrill_archivedDrill_throws404() {
+        stubLockRetryer();
+        UUID drillId = UUID.randomUUID();
+        Drill drill = buildDrill(drillId, "PRIVATE", "ARCHIVED", COACH_PROFILE_ID);
+        when(drillRepository.findById(drillId)).thenReturn(Optional.of(drill));
+        when(drillRepository.findByIdForUpdate(drillId)).thenReturn(Optional.of(drill));
+
+        assertThatThrownBy(() -> service.updateDrill(drillId, upsert("X", null), COACH_USER_ID))
+            .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void deleteDrill_ownedDrill_archivesInsteadOfDeleting() {
+        stubLockRetryer();
+        UUID drillId = UUID.randomUUID();
+        Drill drill = buildDrill(drillId, "PRIVATE", "ACTIVE", COACH_PROFILE_ID);
+        when(drillRepository.findById(drillId)).thenReturn(Optional.of(drill));
+        when(drillRepository.findByIdForUpdate(drillId)).thenReturn(Optional.of(drill));
+
+        service.deleteDrill(drillId, COACH_USER_ID);
+
+        assertThat(drill.getStatus()).isEqualTo("ARCHIVED");
+        verify(drillRepository).save(drill);
+        verify(drillRepository, never()).delete(any());
+        verify(drillVideoRefRepository, never()).clearVideoId(any());
+    }
+
+    @Test
+    void deleteDrill_withLinkedVideo_isRefusedAndStaysActive() {
+        stubLockRetryer();
+        UUID drillId = UUID.randomUUID();
+        Drill drill = buildDrill(drillId, "PRIVATE", "ACTIVE", COACH_PROFILE_ID);
+        when(drillRepository.findById(drillId)).thenReturn(Optional.of(drill));
+        when(drillRepository.findByIdForUpdate(drillId)).thenReturn(Optional.of(drill));
+        when(drillVideoRefRepository.findByDrillId(drillId))
+            .thenReturn(Optional.of(buildVideoRef(drillId, UUID.randomUUID())));
+
+        assertThatThrownBy(() -> service.deleteDrill(drillId, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class);
+        assertThat(drill.getStatus()).isEqualTo("ACTIVE");
+        verify(drillRepository, never()).save(any());
+    }
+
+    @Test
+    void resolveWeighting_nullWeight_isRejected() {
+        java.util.Map<String, Integer> requested = new java.util.HashMap<>();
+        requested.put("passing", 100);
+        requested.put("dribbling", null);
+        assertThatThrownBy(() -> DrillLibraryService.resolveWeighting(
+            requested, List.of("passing", "dribbling"), List.of(), null))
+            .isInstanceOf(InvalidParamException.class);
+    }
+
+    @Test
+    void deleteDrill_alreadyArchived_isIdempotentNoOp() {
+        stubLockRetryer();
+        UUID drillId = UUID.randomUUID();
+        Drill drill = buildDrill(drillId, "PRIVATE", "ARCHIVED", COACH_PROFILE_ID);
+        when(drillRepository.findById(drillId)).thenReturn(Optional.of(drill));
+        when(drillRepository.findByIdForUpdate(drillId)).thenReturn(Optional.of(drill));
+
+        service.deleteDrill(drillId, COACH_USER_ID);
+
+        verify(drillRepository, never()).save(any());
+    }
+
+    @Test
+    void deleteDrill_unknownDrill_throws404() {
+        UUID drillId = UUID.randomUUID();
+        when(drillRepository.findById(drillId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.deleteDrill(drillId, COACH_USER_ID))
+            .isInstanceOf(ResourceNotFoundException.class);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────

@@ -584,6 +584,11 @@ describe('MainLayout.vue — role-scoped nav entries (navigation reachability)',
     expect(has(await mountAs('COACH'), '/parent/bookings')).toBe(false)
   })
 
+  // feat/coach-workflow-gaps A23: the credit statement (and its receipts) is dual-role now.
+  it.each(['PARENT', 'PLAYER'])('%s sees the credit statement entry', async (role) => {
+    expect(has(await mountAs(role), '/parent/credit-statement')).toBe(true)
+  })
+
   it.each(['COACH', 'PLAYER', 'ADMIN'])('%s sees none of the parent-only entries', async (role) => {
     const wrapper = await mountAs(role)
     for (const href of PARENT_ONLY) expect(has(wrapper, href)).toBe(false)

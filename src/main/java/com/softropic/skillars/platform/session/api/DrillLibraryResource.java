@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.session.contract.DrillResponse;
 import com.softropic.skillars.platform.session.contract.DrillTagRequest;
+import com.softropic.skillars.platform.session.contract.DrillUpsertRequest;
 import com.softropic.skillars.platform.session.contract.InvalidParamException;
 import com.softropic.skillars.platform.session.service.DrillLibraryService;
 import com.softropic.skillars.platform.session.service.DrillSuggestionService;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -64,6 +66,30 @@ public class DrillLibraryResource {
         return ResponseEntity.ok(drillLibraryService.listDrills(
             library, q, skill, difficultyTier, equipment, weakFootBias, currentCoachUserId()
         ));
+    }
+
+    // ─── feat/coach-workflow-gaps D1: coach-authored PRIVATE drills ──────────────────────────────
+    // Ownership (PRIVATE + owner = caller) is enforced in the service against the locked row; these
+    // endpoints only admit the COACH role, exactly like clone/tags.
+
+    @PostMapping
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<DrillResponse> createDrill(@RequestBody @Valid DrillUpsertRequest req) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(drillLibraryService.createDrill(req, currentCoachUserId()));
+    }
+
+    @PutMapping("/{drillId}")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<DrillResponse> updateDrill(@PathVariable UUID drillId,
+                                                     @RequestBody @Valid DrillUpsertRequest req) {
+        return ResponseEntity.ok(drillLibraryService.updateDrill(drillId, req, currentCoachUserId()));
+    }
+
+    @DeleteMapping("/{drillId}")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<Void> deleteDrill(@PathVariable UUID drillId) {
+        drillLibraryService.deleteDrill(drillId, currentCoachUserId());
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/{drillId}/clone")

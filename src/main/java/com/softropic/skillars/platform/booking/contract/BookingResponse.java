@@ -19,5 +19,9 @@ public record BookingResponse(
     RescheduleRequestResponse pendingReschedule,
     UUID batchId,
     Integer batchSize,
-    String playerRequest
+    String playerRequest,
+    // feat/coach-workflow-gaps A23: true when the booking has a CAPTURED payment, i.e. the payer's
+    // receipt endpoint will render it. Only computed for the payer's own list (getParentBookings);
+    // false everywhere else.
+    boolean receiptAvailable
 ) {}

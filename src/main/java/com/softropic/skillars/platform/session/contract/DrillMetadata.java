@@ -12,6 +12,9 @@ import java.util.Map;
 // drill), so nothing currently invokes @Valid on this record. Kept as documentation of the expected
 // range for whenever a real creation/update endpoint exists. The functionally-effective guard against
 // negative values today is in SluFormula.calculate.
+// feat/coach-workflow-gaps D1: the coach create/update endpoints (POST/PUT /api/session/drills) do NOT
+// bind this record — they take DrillUpsertRequest, which carries its own bounded @Min/@Max constraints,
+// and DrillLibraryService builds this record from it server-side.
 public record DrillMetadata(
     List<String> primarySkills,
     List<String> secondarySkills,

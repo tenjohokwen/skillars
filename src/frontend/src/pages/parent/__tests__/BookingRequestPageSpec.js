@@ -41,6 +41,12 @@ vi.mock('src/api/booking.api', async (importOriginal) => {
   return { ...actual, getBatchConfig: vi.fn(), getBookingRequestConfig: vi.fn() }
 })
 
+// feat/coach-workflow-gaps A22: the batch review dialog's backend cost quote.
+vi.mock('src/api/payment.api', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, fetchBatchQuote: vi.fn() }
+})
+
 const notifySpy = vi.fn()
 vi.mock('quasar', async (importOriginal) => {
   const actual = await importOriginal()
@@ -50,6 +56,7 @@ vi.mock('quasar', async (importOriginal) => {
 import BookingRequestPage from 'src/pages/parent/BookingRequestPage.vue'
 import { useBookingStore } from 'src/stores/booking.store'
 import { getBatchConfig, getBookingRequestConfig } from 'src/api/booking.api'
+import { fetchBatchQuote } from 'src/api/payment.api'
 
 const STUB = { template: '<div />' }
 
@@ -344,5 +351,71 @@ describe('BookingRequestPage.vue — shared slot preselect', () => {
       '5&slot=2026-03-10T15:00',
     )
     expect(wrapper.vm.selectedSlot).toBeNull()
+  })
+})
+
+describe('BookingRequestPage.vue — batch cost quote (feat/coach-workflow-gaps A22)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getBatchConfig.mockResolvedValue({ maxSize: 4 })
+    getBookingRequestConfig.mockResolvedValue({ activeSlotStatuses: ['REQUESTED', 'CONFIRMED'] })
+  })
+
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+  })
+
+  const SLOT_2 = { startDatetime: '2026-03-11T15:00:00Z', endDatetime: '2026-03-11T16:00:00Z' }
+  const QUOTE = {
+    perSessionPrice: 40,
+    sessionCount: 2,
+    total: 80,
+    walletBalance: 25,
+    creditApplied: 25,
+    cardCharge: 55,
+    currency: 'EUR',
+  }
+
+  it('opening the review dialog fetches a quote for the routed coach and basket size', async () => {
+    fetchBatchQuote.mockResolvedValue(QUOTE)
+    const { wrapper } = await mountPage({ batchBasket: [SLOT, SLOT_2] })
+
+    wrapper.vm.batchReviewOpen = true
+    await flushPromises()
+
+    expect(fetchBatchQuote).toHaveBeenCalledWith('77', 2)
+    expect(wrapper.vm.batchQuote).toEqual(QUOTE)
+    expect(wrapper.vm.hasWalletCredit).toBe(true)
+  })
+
+  it('does not fetch while the dialog is closed, and a failed quote degrades to no quote', async () => {
+    fetchBatchQuote.mockRejectedValue(new Error('boom'))
+    const { wrapper } = await mountPage({ batchBasket: [SLOT] })
+    await flushPromises()
+    expect(fetchBatchQuote).not.toHaveBeenCalled()
+
+    wrapper.vm.batchReviewOpen = true
+    await flushPromises()
+
+    expect(fetchBatchQuote).toHaveBeenCalledWith('77', 1)
+    expect(wrapper.vm.batchQuote).toBeNull()
+    expect(wrapper.vm.batchQuoteError).toBeTruthy()
+  })
+
+  it('a stale quote for a previous basket size never overwrites the newer one', async () => {
+    let resolveFirst
+    fetchBatchQuote
+      .mockImplementationOnce(() => new Promise((r) => (resolveFirst = r)))
+      .mockResolvedValueOnce({ ...QUOTE, sessionCount: 1, total: 40 })
+    const { wrapper, bookingStore } = await mountPage({ batchBasket: [SLOT, SLOT_2] })
+
+    wrapper.vm.batchReviewOpen = true
+    await flushPromises()
+    bookingStore.batchBasket = [SLOT]
+    await flushPromises()
+    resolveFirst(QUOTE)
+    await flushPromises()
+
+    expect(wrapper.vm.batchQuote.sessionCount).toBe(1)
   })
 })

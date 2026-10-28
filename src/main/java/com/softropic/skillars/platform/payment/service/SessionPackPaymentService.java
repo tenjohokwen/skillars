@@ -43,6 +43,9 @@ import java.util.stream.Collectors;
 @Slf4j
 public class SessionPackPaymentService {
 
+    /** How long before expiry a coach may extend a pack (once). Shared with CoachSoldPackQueryService. */
+    static final java.time.Duration EXTENSION_WINDOW = java.time.Duration.ofDays(14);
+
     private final SessionPackTierRepository sessionPackTierRepository;
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final StripeCustomerRepository stripeCustomerRepository;
@@ -165,7 +168,7 @@ public class SessionPackPaymentService {
         }
 
         Instant now = Instant.now();
-        Instant windowStart = purchase.getExpiresAt().minus(14, ChronoUnit.DAYS);
+        Instant windowStart = purchase.getExpiresAt().minus(EXTENSION_WINDOW);
         if (now.isBefore(windowStart) || now.isAfter(purchase.getExpiresAt())) {
             throw new PaymentGatewayException("payment.packExtensionNotEligible");
         }
@@ -300,7 +303,14 @@ public class SessionPackPaymentService {
     }
 
     private String computeStatus(SessionPackPurchase purchase) {
-        Instant now = Instant.now();
+        return computeStatus(purchase, Instant.now());
+    }
+
+    /**
+     * Status precedence shared with {@link CoachSoldPackQueryService} (feat/coach-workflow-gaps A20) so the
+     * coach's sold-pack list and the buyer's pack view can never disagree.
+     */
+    static String computeStatus(SessionPackPurchase purchase, Instant now) {
         if (purchase.getRemainingSessions() == 0) {
             return "EXHAUSTED";
         }

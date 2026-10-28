@@ -6,6 +6,11 @@ export const useSessionTemplateStore = defineStore('sessionTemplate', () => {
   const templates = ref([])
   const loading = ref(false)
   const error = ref(null)
+  // feat/coach-workflow-gaps A19: the coach's upcoming CONFIRMED bookings without a session plan —
+  // the targets "Use for this session" can deploy onto.
+  const deployableBookings = ref([])
+  const deployableBookingsLoading = ref(false)
+  const deployableBookingsError = ref(null)
 
   async function fetchTemplates() {
     loading.value = true
@@ -54,6 +59,8 @@ export const useSessionTemplateStore = defineStore('sessionTemplate', () => {
   async function deployTemplate(templateId, bookingId) {
     try {
       const res = await sessionApi.deployTemplate(templateId, bookingId)
+      // The booking now carries a plan — it is no longer a deploy target.
+      deployableBookings.value = deployableBookings.value.filter((b) => b.bookingId !== bookingId)
       const t = templates.value.find((t) => t.id === templateId)
       if (t) {
         t.deployCount = (t.deployCount ?? 0) + 1
@@ -66,10 +73,27 @@ export const useSessionTemplateStore = defineStore('sessionTemplate', () => {
     }
   }
 
+  async function fetchDeployableBookings() {
+    deployableBookingsLoading.value = true
+    deployableBookingsError.value = null
+    try {
+      deployableBookings.value = (await sessionApi.listDeployableBookings()) ?? []
+    } catch (e) {
+      deployableBookingsError.value = e
+      deployableBookings.value = []
+    } finally {
+      deployableBookingsLoading.value = false
+    }
+  }
+
   return {
     templates,
     loading,
     error,
+    deployableBookings,
+    deployableBookingsLoading,
+    deployableBookingsError,
+    fetchDeployableBookings,
     fetchTemplates,
     createTemplate,
     renameTemplate,

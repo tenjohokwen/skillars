@@ -67,15 +67,21 @@ public class RevenueResource {
         return ResponseEntity.ok(revenueReportingService.getCoachReceipt(coachId, bookingId));
     }
 
+    // feat/coach-workflow-gaps A23: widened to PLAYER. Ownership is the query itself —
+    // findByIdAndParentId(bookingId, callerUserId) — and a self-registered adult player's own bookings carry
+    // their own user id as parentId (UAT.5 opaque-payer model), so a player sees exactly their own receipts
+    // and nothing else, the same guarantee a parent gets.
     @GetMapping("/parents/bookings/{bookingId}/receipt")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<ParentReceiptDto> getParentReceipt(@PathVariable UUID bookingId) {
         Long parentId = resolveParentId();
         return ResponseEntity.ok(revenueReportingService.getParentReceipt(parentId, bookingId));
     }
 
+    // feat/coach-workflow-gaps A23: widened to PLAYER alongside GET /credits/balance (skillars-deferred-141).
+    // The ledger is keyed by the paying user id, i.e. the caller — a player's own credits only.
     @GetMapping("/credits/statement")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<Page<CreditStatementEntryDto>> getCreditStatement(
             @RequestParam(required = false) LocalDate from,
             @RequestParam(required = false) LocalDate to,
@@ -93,8 +99,9 @@ public class RevenueResource {
         return coach.getId();
     }
 
+    /** The calling payer's user id — a parent, or a self-booking player (role-agnostic accessor). */
     private Long resolveParentId() {
-        return securityUtil.getCurrentCoachUserId();
+        return securityUtil.requireCurrentUserId();
     }
 
     private Instant toStartInstant(LocalDate date) {

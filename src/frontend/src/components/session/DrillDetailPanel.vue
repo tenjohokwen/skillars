@@ -107,6 +107,29 @@
           </div>
         </div>
 
+        <!-- feat/coach-workflow-gaps D1: edit/delete the coach's own PRIVATE drill (library only) -->
+        <div v-if="canManage" class="row q-gutter-sm q-mt-md">
+          <q-btn
+            outline
+            dense
+            no-caps
+            icon="edit"
+            :label="t('session.drillEditor.edit')"
+            data-test="drill-edit"
+            @click="emit('edit', props.drill)"
+          />
+          <q-btn
+            flat
+            dense
+            no-caps
+            color="negative"
+            icon="delete"
+            :label="t('session.drillEditor.delete')"
+            data-test="drill-delete"
+            @click="confirmDeleteDrill"
+          />
+        </div>
+
         <!-- Add to session button (session-builder context only) -->
         <q-btn
           v-if="props.context === 'session-builder'"
@@ -291,6 +314,29 @@
               </div>
             </div>
 
+            <!-- feat/coach-workflow-gaps D1: edit/delete the coach's own PRIVATE drill (library only) -->
+            <div v-if="canManage" class="row q-gutter-sm q-mt-md">
+              <q-btn
+                outline
+                dense
+                no-caps
+                icon="edit"
+                :label="t('session.drillEditor.edit')"
+                data-test="drill-edit"
+                @click="emit('edit', props.drill)"
+              />
+              <q-btn
+                flat
+                dense
+                no-caps
+                color="negative"
+                icon="delete"
+                :label="t('session.drillEditor.delete')"
+                data-test="drill-delete"
+                @click="confirmDeleteDrill"
+              />
+            </div>
+
             <!-- Add to session button (session-builder context only) -->
             <q-btn
               v-if="props.context === 'session-builder'"
@@ -366,7 +412,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useI18n } from 'vue-i18n'
 import { videoApi } from 'src/api/video.api'
@@ -382,13 +428,26 @@ const props = defineProps({
   context: { type: String, default: null },
 })
 
-const emit = defineEmits(['close', 'add-to-session', 'video-error', 'video-load-failed'])
+const emit = defineEmits([
+  'close',
+  'add-to-session',
+  'video-error',
+  'video-load-failed',
+  'edit',
+  'deleted',
+])
 
 const $q = useQuasar()
 const { t } = useI18n()
 const sessionStore = useSessionStore()
 
 const isMobile = computed(() => $q.screen.lt.sm)
+
+// D1: the PRIVATE library lists only the caller's own drills, so a PRIVATE drill shown outside the
+// session builder is one the coach owns. The backend re-checks ownership on the locked row anyway.
+const canManage = computed(
+  () => props.drill?.libraryType === 'PRIVATE' && props.context !== 'session-builder',
+)
 
 // Local ref avoids Quasar's sheet snapping back while the parent processes the close event
 const open = ref(props.isOpen)
@@ -431,11 +490,16 @@ watch(
 const uploadPercent = ref(0)
 let tusUpload = null
 
-onMounted(async () => {
-  if (props.drill?.libraryType === 'PRIVATE') {
-    await sessionStore.fetchVideoUploadEligibility()
-  }
-})
+// Watched, not onMounted-only: the drill library mounts this panel once with drill = null and swaps
+// drills in later, so a mount-time check never saw a PRIVATE drill there and the demo-video upload
+// section (gated on canUploadVideo) never appeared. The store caches the answer after one success.
+watch(
+  () => props.drill?.libraryType,
+  (libraryType) => {
+    if (libraryType === 'PRIVATE') sessionStore.fetchVideoUploadEligibility()
+  },
+  { immediate: true },
+)
 
 onUnmounted(() => {
   tusUpload?.abort()
@@ -528,6 +592,30 @@ function runTusUpload(file, creds) {
       onError: reject,
     })
     tusUpload.start()
+  })
+}
+
+function confirmDeleteDrill() {
+  $q.dialog({
+    title: t('session.drillEditor.deleteConfirmTitle'),
+    message: t('session.drillEditor.deleteConfirmMsg'),
+    ok: { label: t('session.drillEditor.delete'), color: 'negative' },
+    cancel: true,
+  }).onOk(async () => {
+    const drillId = props.drill.id
+    try {
+      await sessionStore.deleteDrill(drillId)
+      $q.notify({ type: 'positive', message: t('session.drillEditor.deleted') })
+      emit('deleted', drillId)
+    } catch (e) {
+      const hasVideo = e?.response?.data?.errorMsg?.errorKey === 'DRILL_HAS_VIDEO'
+      $q.notify({
+        type: 'negative',
+        message: hasVideo
+          ? t('session.drillEditor.deleteHasVideo')
+          : t('session.drillEditor.deleteFailed'),
+      })
+    }
   })
 }
 

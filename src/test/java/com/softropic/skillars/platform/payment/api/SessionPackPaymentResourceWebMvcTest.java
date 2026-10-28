@@ -78,6 +78,44 @@ class SessionPackPaymentResourceWebMvcTest {
     @MockitoBean PaymentProperties paymentProperties;
     @MockitoBean JwtSecretService jwtSecretService;
     @MockitoBean VideoMetrics videoMetrics;
+    @MockitoBean com.softropic.skillars.platform.payment.service.CoachSoldPackQueryService coachSoldPackQueryService;
+
+    // ─── GET /api/payment/coaches/me/session-packs (feat/coach-workflow-gaps A20) ────────────
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void getMySoldPacks_coach_returnsCallersPacksWithClampedPageSize() throws Exception {
+        java.util.UUID coachId = java.util.UUID.randomUUID();
+        com.softropic.skillars.platform.marketplace.repo.CoachProfile coach =
+            new com.softropic.skillars.platform.marketplace.repo.CoachProfile();
+        coach.setId(coachId);
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        when(coachProfileRepository.findByUserId(PARENT_USER_ID)).thenReturn(java.util.Optional.of(coach));
+        com.softropic.skillars.platform.payment.contract.CoachSoldPackDto dto =
+            new com.softropic.skillars.platform.payment.contract.CoachSoldPackDto(
+                java.util.UUID.randomUUID(), "Pat Parent", 7L, "Kid", "5 pack", 5, 2,
+                java.time.Instant.parse("2026-11-01T00:00:00Z"), null, java.time.Instant.parse("2026-09-01T00:00:00Z"),
+                "ACTIVE", true, true);
+        when(coachSoldPackQueryService.getSoldPacks(org.mockito.ArgumentMatchers.eq(coachId), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(new org.springframework.data.domain.PageImpl<>(java.util.List.of(dto)));
+
+        mockMvc.perform(get("/api/payment/coaches/me/session-packs").param("size", "500"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content[0].buyerName").value("Pat Parent"))
+            .andExpect(jsonPath("$.content[0].extendable").value(true));
+
+        org.mockito.ArgumentCaptor<org.springframework.data.domain.Pageable> pageable =
+            org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        org.mockito.Mockito.verify(coachSoldPackQueryService).getSoldPacks(org.mockito.ArgumentMatchers.eq(coachId), pageable.capture());
+        org.assertj.core.api.Assertions.assertThat(pageable.getValue().getPageSize()).isEqualTo(100);
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void getMySoldPacks_parent_returns403() throws Exception {
+        mockMvc.perform(get("/api/payment/coaches/me/session-packs"))
+            .andExpect(status().isForbidden());
+    }
 
     // ─── GET /api/payment/stripe/config ────────────────────────────────────────
 

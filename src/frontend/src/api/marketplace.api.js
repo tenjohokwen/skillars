@@ -36,3 +36,16 @@ export const confirmUpload = (key, payload) => api.post(`/api/storage/confirm/${
 
 export const sanitizePreview = (text, signal) =>
   api.post('/api/util/sanitize-preview', { text }, { signal })
+
+// Coach's own public-profile media gallery (images; max 6 — enforced server-side).
+export const getCoachGallery = () => api.get('/api/marketplace/coaches/me/profile/gallery')
+
+export const addCoachGalleryImage = (key) =>
+  api.post('/api/marketplace/coaches/me/profile/gallery', { key })
+
+export const deleteCoachGalleryItem = (mediaId) =>
+  api.delete(`/api/marketplace/coaches/me/profile/gallery/${mediaId}`)
+
+// Best-effort cleanup of a confirmed upload the gallery then refused (type/size/full): the storage
+// DELETE is owner-checked server-side, so a coach can only remove their own object.
+export const deleteStorageObject = (key) => api.delete(`/api/storage/${key}`)

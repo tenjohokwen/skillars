@@ -17,6 +17,20 @@ vi.mock('src/boot/axios', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn() },
 }))
 
+const { notifyMock } = vi.hoisted(() => ({ notifyMock: vi.fn() }))
+vi.mock('quasar', async (importOriginal) => {
+  const actual = await importOriginal()
+  const real = actual.useQuasar
+  return {
+    ...actual,
+    useQuasar: () => {
+      const $q = real()
+      $q.notify = notifyMock
+      return $q
+    },
+  }
+})
+
 import SessionBuilderPage from 'src/pages/coach/SessionBuilderPage.vue'
 import { useSessionBuilderStore } from 'src/stores/sessionBuilder.store'
 import { useSessionStore } from 'src/stores/session.store'
@@ -164,5 +178,48 @@ describe('SessionBuilderPage.vue — Save as Template maxlength (skillars-deferr
 
     const input = wrapper.find('input[maxlength="200"]')
     expect(input.exists()).toBe(true)
+  })
+})
+
+// feat/coach-workflow-gaps A19: "Use template" deploys a saved template onto THIS booking, then loads
+// the plan the deploy created. Offered only while the booking has no plan yet.
+describe('SessionBuilderPage.vue — Use template (feat/coach-workflow-gaps A19)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  it('offers "Use template" only while the booking has no plan', async () => {
+    const { wrapper } = await mountPage({ shallow: false })
+    await flushPromises()
+    expect(wrapper.find('[data-test="use-template"]').exists()).toBe(true)
+
+    const { wrapper: planned } = await mountPage({
+      initialState: { sessionBuilder: { sessionId: 'session-1' } },
+      shallow: false,
+    })
+    await flushPromises()
+    expect(planned.find('[data-test="use-template"]').exists()).toBe(false)
+  })
+
+  it('deploys the chosen template onto the current booking and reloads the plan', async () => {
+    const { wrapper, builderStore } = await mountPage({
+      bookingId: 'b-42',
+      initialState: {
+        sessionTemplate: { templates: [{ id: 't-1', name: 'Rondo day', drillCount: 3 }] },
+      },
+      shallow: false,
+    })
+    await flushPromises()
+    const { useSessionTemplateStore } = await import('src/stores/sessionTemplate.store')
+    const templateStore = useSessionTemplateStore()
+    templateStore.deployTemplate.mockResolvedValue({})
+    builderStore.fetchExistingPlan.mockClear()
+
+    await wrapper.vm.useTemplate({ id: 't-1', name: 'Rondo day' })
+    await flushPromises()
+
+    expect(templateStore.deployTemplate).toHaveBeenCalledWith('t-1', 'b-42')
+    expect(builderStore.fetchExistingPlan).toHaveBeenCalledWith('b-42')
   })
 })

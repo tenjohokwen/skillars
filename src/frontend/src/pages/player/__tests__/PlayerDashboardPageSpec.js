@@ -164,3 +164,26 @@ describe('PlayerDashboardPage.vue — tiles (deferred-141 AC4)', () => {
     expect(wrapper.vm.upcomingSessionsCount).toBe(1) // booking tiles unaffected by the credit failure
   })
 })
+
+describe('PlayerDashboardPage.vue — wallet tile (feat/coach-workflow-gaps A23)', () => {
+  it('the credit-wallet tile links to the player’s own credit statement', async () => {
+    const pinia = createTestingPinia({ createSpy: vi.fn })
+    const wrapper = mount(PlayerDashboardPage, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :data-to="JSON.stringify(to)" v-bind="$attrs"><slot /></a>',
+          },
+        },
+      },
+    })
+    mounted.push(wrapper)
+    await flushPromises()
+
+    const tile = wrapper.find('[data-test="wallet-tile"]')
+    expect(tile.exists()).toBe(true)
+    expect(JSON.parse(tile.attributes('data-to'))).toEqual({ name: 'parent-credit-statement' })
+  })
+})

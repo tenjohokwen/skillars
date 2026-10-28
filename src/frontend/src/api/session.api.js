@@ -9,6 +9,18 @@ export const sessionApi = {
     return api.get('/api/session/drills', { params: { ...params, library } })
   },
 
+  createDrill(payload) {
+    return api.post('/api/session/drills', payload)
+  },
+
+  updateDrill(drillId, payload) {
+    return api.put(`/api/session/drills/${drillId}`, payload)
+  },
+
+  deleteDrill(drillId) {
+    return api.delete(`/api/session/drills/${drillId}`)
+  },
+
   cloneDrill(drillId) {
     return api.post(`/api/session/drills/${drillId}/clone`)
   },
@@ -71,6 +83,10 @@ export const sessionApi = {
 
   deleteTemplate(templateId) {
     return api.delete(`/api/session/templates/${templateId}`)
+  },
+
+  listDeployableBookings() {
+    return api.get('/api/session/templates/deployable-bookings')
   },
 
   deployTemplate(templateId, bookingId) {

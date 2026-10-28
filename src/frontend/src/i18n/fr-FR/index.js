@@ -536,6 +536,41 @@ export default {
     },
   },
   session: {
+    drillEditor: {
+      deleteHasVideo: 'Supprimez la vidéo de démonstration avant de supprimer cet exercice.',
+      scaleValue: '{label} : {value}/10',
+      newDrill: 'Nouvel exercice',
+      createTitle: 'Nouvel exercice',
+      editTitle: "Modifier l'exercice",
+      edit: "Modifier l'exercice",
+      delete: "Supprimer l'exercice",
+      name: "Nom de l'exercice",
+      description: 'Description',
+      primarySkills: 'Compétences principales',
+      secondarySkills: 'Compétences secondaires',
+      skillsHint: 'Choisissez dans la liste ou saisissez la vôtre puis appuyez sur Entrée (5 max.)',
+      repDensity: 'Répétitions par joueur',
+      repDensityHint: "Utilisé pour l'estimation SLU (0–200)",
+      intensity: 'Intensité',
+      pressureLevel: 'Pression',
+      cognitiveLoad: 'Charge cognitive',
+      matchRealism: 'Réalisme de match',
+      coachingPointsHint: 'Un point de coaching par ligne (8 max.)',
+      coachingPointsTooMany:
+        'Utilisez au plus {max} points de coaching de {length} caractères maximum chacun.',
+      videoAfterCreate:
+        "Vous pourrez ajouter une vidéo de démonstration depuis le panneau de l'exercice une fois enregistré.",
+      created: 'Exercice ajouté à votre bibliothèque',
+      updated: 'Exercice mis à jour',
+      nameTaken: 'Vous avez déjà un exercice portant ce nom',
+      notFound: "Cet exercice n'existe plus dans votre bibliothèque",
+      saveFailed: "Impossible d'enregistrer l'exercice. Veuillez réessayer.",
+      deleteConfirmTitle: "Supprimer l'exercice ?",
+      deleteConfirmMsg:
+        "L'exercice est retiré de votre bibliothèque. Les plans de séance, modèles et devoirs qui l'utilisent déjà continuent de fonctionner.",
+      deleted: 'Exercice supprimé',
+      deleteFailed: "Impossible de supprimer l'exercice. Veuillez réessayer.",
+    },
     expiring: 'Session expirant',
     expiringDesc: 'Votre session expirera dans {minutes} minute(s).',
     continueQuestion: 'Voulez-vous continuer votre session ?',
@@ -666,6 +701,19 @@ export default {
       empty: 'Aucune suggestion disponible pour le moment',
     },
     templates: {
+      useTemplateDiscardConfirm:
+        "Utiliser un modèle remplace les blocs et exercices que vous n'avez pas encore enregistrés. Continuer ?",
+      deployDialogSubtitle:
+        "Choisissez l'une de vos prochaines séances confirmées qui n'a pas encore de plan.",
+      deployBookingLabel: 'Séance à venir',
+      deployBookingRequired: 'Veuillez choisir une séance',
+      deployNoBookings: "Vous n'avez aucune séance confirmée à venir sans plan.",
+      deployBookingsLoadFailed: 'Impossible de charger vos prochaines séances.',
+      deployUnknownPlayer: 'Joueur',
+      openPlan: 'Ouvrir le plan',
+      useTemplate: 'Utiliser un modèle',
+      useTemplateSubtitle:
+        "Crée le plan de cette séance à partir d'un modèle enregistré. Les modifications non enregistrées sur cette page sont remplacées.",
       title: 'Modèles de séance',
       browseTemplates: 'Modèles',
       saveAsTemplate: 'Enregistrer comme modèle',
@@ -676,11 +724,6 @@ export default {
       useThisSession: 'Utiliser pour cette séance',
       templateIndicator: 'Basé sur le modèle : {name}',
       deployDialogTitle: 'Utiliser pour cette séance',
-      deployDialogSubtitle:
-        "Entrez l'ID de réservation pour la séance que vous souhaitez planifier.",
-      deployBookingIdLabel: 'ID de réservation',
-      deployBookingIdRequired: 'Veuillez entrer un ID de réservation',
-      deployBookingIdInvalidFormat: "L'ID de réservation doit être un UUID valide",
       deployAction: 'Créer le plan de séance',
       deployAlreadyExists: 'Un plan de séance existe déjà pour cette réservation',
       deployBookingInvalid: 'Réservation introuvable ou non confirmée',
@@ -820,6 +863,22 @@ export default {
   },
   profile: {
     sectionPrivacy: 'Confidentialité et données',
+    coachGalleryTitle: 'Galerie média',
+    coachGallerySummary: 'Photos affichées sur votre profil public',
+    coachGalleryHelp:
+      "Jusqu'à {max} images (JPEG, PNG ou WebP, 5 Mo max. chacune) affichées sur votre profil public.",
+    coachGalleryEmpty: 'Aucune image pour le moment.',
+    coachGalleryAdd: 'Choisir une image',
+    coachGalleryUpload: 'Téléverser',
+    coachGalleryRemove: "Retirer l'image",
+    coachGalleryFull:
+      'Votre galerie est pleine ({max} images). Retirez-en une pour en ajouter une autre.',
+    coachGalleryInvalidType: 'Seules les images JPEG, PNG ou WebP peuvent être ajoutées.',
+    coachGalleryTooLarge: "L'image dépasse 5 Mo.",
+    coachGalleryRejected: 'Choisissez une image JPEG, PNG ou WebP de 5 Mo maximum.',
+    coachGalleryFailed: 'Un problème est survenu avec votre galerie. Veuillez réessayer.',
+    coachGalleryAdded: 'Image ajoutée à votre galerie',
+    coachGalleryRemoved: 'Image retirée',
     subtitle: 'Gérez les informations et les préférences de votre compte.',
     sectionAccount: 'Compte',
     sectionPersonal: 'Informations personnelles',
@@ -1589,6 +1648,24 @@ export default {
     },
     sessionPackTiersTitle: 'Offre de pack de séances',
     myTiers: {
+      extendHelp:
+        'Un pack peut être prolongé de 30 jours une seule fois, dans les 14 jours précédant son expiration.',
+      soldPacksTitle: 'Packs de séances vendus',
+      soldPacksEmpty: "Vous n'avez encore vendu aucun pack de séances.",
+      soldPacksError: 'Impossible de charger vos packs vendus.',
+      unknownPlayer: 'Joueur inconnu',
+      expiringSoon: 'Expire bientôt',
+      boughtBy: 'Acheté par {name}',
+      sessionsRemaining: '{remaining} séances restantes sur {total}',
+      expiresOn: 'Expire le {date}',
+      alreadyExtended: 'Déjà prolongé',
+      extendSuccess: 'Pack prolongé de 30 jours',
+      packStatus: {
+        ACTIVE: 'Actif',
+        PAUSED: 'En pause',
+        EXPIRED: 'Expiré',
+        EXHAUSTED: 'Épuisé',
+      },
       pageTitle: 'Mon offre de pack de séances',
       currentOffer: 'Votre offre actuelle',
       noActiveOffer: "Vous n'avez aucune offre de pack de séances active",
@@ -1611,10 +1688,6 @@ export default {
       withdrawConfirmBody:
         'Cela empêche tout nouvel achat sous votre offre actuelle. Les parents ayant déjà acheté conservent leurs séances.',
       withdrawFailed: 'Impossible de retirer votre offre. Veuillez réessayer.',
-      extendTitle: 'Prolonger un pack de séances',
-      extendHelp:
-        "Saisissez l'identifiant d'achat du pack de séances à prolonger. Cette action n'est possible qu'une fois par pack, et uniquement dans les 14 jours précédant son expiration.",
-      extendPurchaseId: "Identifiant d'achat",
       extendCta: 'Prolonger',
       extendFailed:
         "Impossible de prolonger ce pack — vérifiez qu'il est dans sa fenêtre d'éligibilité et qu'il n'a pas déjà été prolongé.",
@@ -2002,6 +2075,15 @@ export default {
       failed: "Impossible d'annuler cette séance. Veuillez réessayer.",
     },
     batch: {
+      perSessionPrice: 'Prix par séance',
+      total: 'Total ({count} séances)',
+      creditSplit:
+        '{credit} de votre crédit seront utilisés — {card} seront débités de votre carte',
+      cardOnly: '{card} seront débités de votre carte',
+      quoteNote:
+        'Les crédits de packs de séances ne sont pas utilisés pour les demandes multiples. Le paiement a lieu lorsque le coach accepte.',
+      quoteUnavailable:
+        "{count} séance(s) — le prix n'a pas pu être chargé ; le paiement a lieu lorsque le coach accepte",
       enterBatchMode: 'Sélection multiple',
       exitBatchMode: 'Sélection simple',
       added: 'Ajouté',

@@ -974,6 +974,36 @@ class GdprErasureIT extends AbstractIntegrationTest {
      * leaves a second, real coach's block untouched. coach_id carries no FK, so nothing but this
      * fixture ties the block to the erased coach's real coach_profiles.id.
      */
+    /**
+     * feat/coach-workflow-gaps D9: the coach's own gallery rows are deleted and their coach_gallery/*
+     * blobs enqueued for deletion in the erasure transaction (proved via the drained S3 delete); a legacy
+     * absolute-URL row is deleted without any blob delete (no blob of ours behind it).
+     */
+    @Test
+    void erase_coachUser_deletesOwnGalleryAndEnqueuesItsBlobs() {
+        String galleryKey = "coach_gallery/" + COACH_USER_ID + "/2026/10/" + UUID.randomUUID() + ".jpg";
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_media (coach_id, file_url, media_type, display_order) VALUES (?, ?, 'IMAGE', 0)",
+                coachProfileId, galleryKey);
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_media (coach_id, file_url, media_type, display_order) VALUES (?, ?, 'IMAGE', 1)",
+                coachProfileId, "https://cdn.example.com/legacy.jpg");
+            return null;
+        });
+
+        erase(COACH_USER_ID);
+
+        Integer remaining = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_media WHERE coach_id = ?", Integer.class, coachProfileId);
+        assertThat(remaining).isZero();
+        // erase() already requests a post-commit drain (see the note on the gallery-free report test
+        // above); drain again explicitly and assert on the S3 delete itself, exactly once, for our key.
+        outboxService.drain();
+        verify(fileStorageService).deleteRawBytes(galleryKey);
+        verify(fileStorageService, never()).deleteRawBytes("https://cdn.example.com/legacy.jpg");
+    }
+
     @Test
     void erase_coachUser_scrubsOwnAvailabilityBlockReasonsButNotAnotherCoachs() {
         UUID ownBlockId = UUID.randomUUID();

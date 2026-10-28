@@ -29,6 +29,8 @@ import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
 import com.softropic.skillars.platform.filestorage.service.BlobDeletionOutboxSupport;
+import com.softropic.skillars.platform.marketplace.repo.CoachMediaItem;
+import com.softropic.skillars.platform.marketplace.repo.CoachMediaItemRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
@@ -114,6 +116,8 @@ public class GdprErasureService {
     private final PlatformTransactionManager txManager;
     private final ConfigService configService;
     private final DataSource dataSource;
+    // feat/coach-workflow-gaps D9: the coach's own public-profile gallery images (personal data).
+    private final CoachMediaItemRepository coachMediaItemRepository;
 
     /**
      * Self-reference so {@link #erase}'s pre-transaction connection-pool check (skillars-deferred-132
@@ -411,6 +415,21 @@ public class GdprErasureService {
             cp.setCity(null);
             cp.setDistrict(null);
             coachProfileRepository.save(cp);
+
+            // feat/coach-workflow-gaps D9: gallery images are photos the coach uploaded of themselves /
+            // their sessions — delete the rows and enqueue their coach_gallery/* blobs in THIS
+            // transaction (BlobDeletionOutboxSupport's contract), so an erased coach's images are
+            // neither listed nor left behind in object storage. Legacy rows holding absolute URLs
+            // have no blob of ours to delete.
+            List<CoachMediaItem> media = coachMediaItemRepository.findByCoachIdOrderByDisplayOrderAsc(cp.getId());
+            if (!media.isEmpty()) {
+                List<String> galleryKeys = media.stream()
+                    .map(CoachMediaItem::getFileUrl)
+                    .filter(k -> k != null && k.startsWith("coach_gallery/"))
+                    .toList();
+                coachMediaItemRepository.deleteAll(media);
+                blobDeletionOutboxSupport.enqueue(galleryKeys);
+            }
 
             // skillars-deferred-154 AC2: booking.session_completion_data.{what_we_did, whats_next}
             // are coach-authored free text, but anonymizeByPlayerId (used by the PLAYER branch

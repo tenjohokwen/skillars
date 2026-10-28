@@ -570,6 +570,32 @@ class BookingServiceTest {
         verify(playerProfileRepository, never()).findById(any());
     }
 
+    /**
+     * feat/coach-workflow-gaps A23: receiptAvailable is true exactly for the rows the batched
+     * CAPTURED-payment lookup returns — one query for the whole list, never a per-row findById.
+     */
+    @Test
+    void getParentBookings_flagsReceiptAvailableFromOneBatchedCapturedLookup() {
+        Booking paid = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "COMPLETED");
+        Booking unpaid = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+
+        when(bookingRepository.findAllByParentIdOrderByRequestedStartTimeAsc(PARENT_ID))
+            .thenReturn(List.of(paid, unpaid));
+        when(coachProfileRepository.findAllById(any())).thenReturn(List.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(playerProfileRepository.findAllById(any())).thenReturn(List.of());
+        when(rescheduleRequestRepository.findPendingByBookingIdIn(any())).thenReturn(List.of());
+        when(bookingPaymentRepository.findCapturedBookingIds(any())).thenReturn(List.of(paid.getId()));
+
+        List<BookingResponse> responses = bookingService.getParentBookings(PARENT_ID);
+
+        assertThat(responses).extracting(BookingResponse::id, BookingResponse::receiptAvailable)
+            .containsExactly(
+                org.assertj.core.groups.Tuple.tuple(paid.getId(), true),
+                org.assertj.core.groups.Tuple.tuple(unpaid.getId(), false));
+        verify(bookingPaymentRepository, org.mockito.Mockito.times(1)).findCapturedBookingIds(any());
+        verify(bookingPaymentRepository, never()).findById(any());
+    }
+
     /** A player deleted after booking creation must still fall back to "Unknown Player", not throw. */
     @Test
     void getParentBookings_playerMissingFromBatchResult_fallsBackToUnknownPlayer() {

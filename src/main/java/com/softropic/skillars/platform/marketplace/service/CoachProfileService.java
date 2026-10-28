@@ -619,7 +619,11 @@ public class CoachProfileService {
         List<CoachMediaItemDto> mediaGallery = coachMediaItemRepository
             .findByCoachIdOrderByDisplayOrderAsc(profile.getId())
             .stream().limit(6)
-            .map(m -> new CoachMediaItemDto(m.getId(), m.getFileUrl(), m.getMediaType(), m.getDisplayOrder()))
+            // feat/coach-workflow-gaps D9: gallery uploads store the private-bucket object key; sign it
+            // for the browser (legacy absolute URLs pass through unchanged).
+            .map(m -> new CoachMediaItemDto(m.getId(),
+                CoachGalleryService.resolveUrl(fileStorageService, m.getFileUrl()),
+                m.getMediaType(), m.getDisplayOrder()))
             .toList();
 
         List<String> capabilityBadges = coachCapabilityService.getActiveBadges(profile.getId());

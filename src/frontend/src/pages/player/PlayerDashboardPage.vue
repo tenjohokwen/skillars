@@ -21,7 +21,13 @@
           </div>
         </router-link>
 
-        <div class="glass-card player-dashboard__tile">
+        <!-- feat/coach-workflow-gaps A23: opens the player's own credit statement (and from there
+             their receipts). Cash-out stays a parent capability (UAT.5 scope). -->
+        <router-link
+          :to="{ name: 'parent-credit-statement' }"
+          class="glass-card soft-hover player-dashboard__tile"
+          data-test="wallet-tile"
+        >
           <q-icon name="account_balance_wallet" size="24px" style="color: var(--accent-primary)" />
           <div class="text-card-title q-mt-sm">{{ t('player.dashboard.creditWalletTitle') }}</div>
           <div class="text-meta q-mt-xs">
@@ -31,7 +37,7 @@
             }}</template>
             <template v-else>{{ formattedBalance }}</template>
           </div>
-        </div>
+        </router-link>
 
         <router-link to="/parent/bookings" class="glass-card soft-hover player-dashboard__tile">
           <q-icon name="task_alt" size="24px" style="color: var(--accent-primary)" />
