@@ -1,8 +1,8 @@
 package com.softropic.skillars.platform.payment.contract;
 
 /**
- * The four values permitted by {@code chk_bp_status} on {@code payment.booking_payments}
- * (V62, widened by V94). Kept here rather than beside the writing service because
+ * The values permitted by {@code chk_bp_status} on {@code payment.booking_payments}
+ * (V62, widened by V94, V124 and V192). Kept here rather than beside the writing service because
  * {@code platform.booking} reads the reservation status too — {@code BookingService}'s cancel
  * interlock — and four independent copies of a string literal guarding money-safety logic is one
  * typo away from a silent hole.
@@ -42,6 +42,14 @@ public final class BookingPaymentStatus {
      * {@code docs/deployment/runbook.md} § CAPTURE_ABANDONED.
      */
     public static final String CAPTURE_ABANDONED = "CAPTURE_ABANDONED";
+
+    /**
+     * fix/payment-agreed-price-lock (V192): a batch booking charged by the batch payment whose confirm
+     * then failed — declined, and its full share credited back to the parent's wallet as a
+     * {@code BOOKING_REFUND}. Terminal. {@code credit_debited}/{@code stripe_charged} keep the amounts
+     * actually taken (unlike {@link #CHARGE_FAILED}); not counted as revenue (only {@link #CAPTURED} is).
+     */
+    public static final String REFUNDED_TO_CREDIT = "REFUNDED_TO_CREDIT";
 
     private BookingPaymentStatus() {
     }

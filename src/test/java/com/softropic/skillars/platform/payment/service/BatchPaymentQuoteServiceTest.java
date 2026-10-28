@@ -47,6 +47,18 @@ class BatchPaymentQuoteServiceTest {
         assertThat(q.perSessionPrice()).isEqualByComparingTo("40.00");
     }
 
+    /** fix/payment-agreed-price-lock: a negative balance never inflates the card charge. */
+    @Test
+    void negativeBalance_noCreditApplied_cardChargedExactlyTheTotal() {
+        price("40.00");
+        when(creditWalletService.getBalance(PAYER)).thenReturn(new BigDecimal("-25.00"));
+
+        BatchPaymentQuoteDto q = service.quote(PAYER, COACH, 2);
+
+        assertThat(q.creditApplied()).isEqualByComparingTo("0");
+        assertThat(q.cardCharge()).isEqualByComparingTo("80.00");
+    }
+
     @Test
     void walletCoversEverything_nothingChargedToCard() {
         price("40.00");

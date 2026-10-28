@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.platform.booking.contract.BatchBookingAcceptedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.payment.BasePaymentIT;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
@@ -13,11 +14,17 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 
 /**
  * Integration tests for batch booking payment handling.
@@ -164,7 +171,75 @@ class BatchPaymentIT extends BasePaymentIT {
             .isEqualByComparingTo("80.00");
     }
 
+    /**
+     * fix/payment-agreed-price-lock: the batch settles each booking at its agreed_price (30, locked at
+     * request) and not the coach's current price (40); a booking whose confirm fails AFTER the batch
+     * charge is declined with its real amounts recorded and its full share credited back to the wallet.
+     */
+    @Test
+    void batchBooking_confirmFailsAfterCharge_shareRefundedToWallet_andAgreedPriceCharged() {
+        // €20 credit: booking 1 takes it all (20 credit + 10 card), booking 2 is all card (30).
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO payment.parent_credit_ledger (parent_id, amount, type, description) " +
+                "VALUES (?, 20.00, 'CASH_OUT_REVERSAL', 'Test credit')",
+                PARENT_ID
+            );
+            return null;
+        });
+        UUID ok = UUID.randomUUID();
+        UUID failing = UUID.randomUUID();
+        insertBooking(ok, coachId, null, new BigDecimal("30.00"));
+        insertBooking(failing, coachId, null, new BigDecimal("30.00"));
+        doThrow(new IllegalStateException("simulated confirm failure"))
+            .when(bookingService).transition(eq(failing), eq(BookingEvent.PAYMENT_CAPTURED), any());
+
+        paymentLifecycleService.onBatchBookingAccepted(batchEvent(List.of(ok, failing)));
+
+        Map<String, Object> okRow = paymentRow(ok);
+        assertThat(okRow.get("status")).isEqualTo("CAPTURED");
+        assertThat((BigDecimal) okRow.get("credit_debited")).isEqualByComparingTo("20.00");
+        assertThat((BigDecimal) okRow.get("stripe_charged")).isEqualByComparingTo("10.00");
+
+        Map<String, Object> failedRow = paymentRow(failing);
+        assertThat(failedRow.get("status")).isEqualTo("REFUNDED_TO_CREDIT");
+        assertThat((BigDecimal) failedRow.get("credit_debited")).isEqualByComparingTo("0.00");
+        assertThat((BigDecimal) failedRow.get("stripe_charged"))
+            .as("the card share actually taken is recorded, not zeroed")
+            .isEqualByComparingTo("30.00");
+
+        // The refund goes through the durable outbox (committed with the decline) and is drained
+        // asynchronously after commit: accept it either still queued or already credited.
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+            BigDecimal refunded = jdbcTemplate.queryForObject(
+                "SELECT COALESCE(SUM(amount), 0) FROM payment.parent_credit_ledger " +
+                "WHERE parent_id = ? AND type = 'BOOKING_REFUND' AND reference_id = ?",
+                BigDecimal.class, PARENT_ID, failing);
+            List<BigDecimal> queued = jdbcTemplate.queryForList(
+                "SELECT (payload->>'amount')::numeric FROM main.outbox_messages " +
+                "WHERE aggregate_type = 'CREDIT_WALLET_REFUND' AND payload->>'bookingId' = ?",
+                BigDecimal.class, failing.toString());
+            BigDecimal total = queued.stream().reduce(refunded, BigDecimal::add);
+            assertThat(total).isEqualByComparingTo("30.00");
+        });
+
+        BigDecimal deducted = jdbcTemplate.queryForObject(
+            "SELECT ABS(SUM(amount)) FROM payment.parent_credit_ledger WHERE parent_id = ? AND type = 'BOOKING_DEDUCTION'",
+            BigDecimal.class, PARENT_ID);
+        assertThat(deducted).as("credit split on the agreed 2 x 30, not 2 x 40").isEqualByComparingTo("20.00");
+    }
+
+    private Map<String, Object> paymentRow(UUID bookingId) {
+        return jdbcTemplate.queryForMap(
+            "SELECT status, credit_debited, stripe_charged FROM payment.booking_payments WHERE booking_id = ?",
+            bookingId);
+    }
+
     private void insertBooking(UUID bookingId, UUID forCoachId, UUID packPurchaseId) {
+        insertBooking(bookingId, forCoachId, packPurchaseId, null);
+    }
+
+    private void insertBooking(UUID bookingId, UUID forCoachId, UUID packPurchaseId, BigDecimal agreedPrice) {
         Instant start = Instant.now().plus(2, ChronoUnit.DAYS)
             .plus(slotOffset.getAndIncrement() * 2L, ChronoUnit.HOURS);
         Instant end = start.plusSeconds(3600);
@@ -183,10 +258,10 @@ class BatchPaymentIT extends BasePaymentIT {
                 jdbcTemplate.update(
                     "INSERT INTO booking.bookings " +
                     "(id, parent_id, player_id, coach_id, status, requested_start_time, requested_end_time, " +
-                    "canonical_timezone, version, created_at, updated_at) " +
-                    "VALUES (?, ?, ?, ?, 'PAYMENT_PENDING', ?, ?, 'UTC', 0, now(), now())",
+                    "canonical_timezone, agreed_price, version, created_at, updated_at) " +
+                    "VALUES (?, ?, ?, ?, 'PAYMENT_PENDING', ?, ?, 'UTC', ?, 0, now(), now())",
                     bookingId, PARENT_ID, PLAYER_ID, forCoachId,
-                    Timestamp.from(start), Timestamp.from(end)
+                    Timestamp.from(start), Timestamp.from(end), agreedPrice
                 );
             }
             return null;

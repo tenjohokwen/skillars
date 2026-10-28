@@ -245,9 +245,13 @@ public class BookingBatchService {
         // PaymentLifecycleService.onBatchBookingAccepted settles with and BatchPaymentQuoteService
         // previews: coach_pricing.per_session_price (zero when the coach has no pricing row) times
         // the number of sessions. Batch bookings never carry a session pack, so no pack pricing.
-        batch.setTotalAmount(coachPricingRepository.findByCoachId(req.coachId())
+        // fix/payment-agreed-price-lock: the same per-session price is locked onto each booking below
+        // (agreed_price) and is what settlement charges; null (no pricing row) is stored as NULL and the
+        // accept then fails unless the coach has priced by then — never a free confirmation.
+        BigDecimal agreedPrice = coachPricingRepository.findByCoachId(req.coachId())
             .map(CoachPricing::getPerSessionPrice)
-            .orElse(BigDecimal.ZERO)
+            .orElse(null);
+        batch.setTotalAmount((agreedPrice == null ? BigDecimal.ZERO : agreedPrice)
             .multiply(BigDecimal.valueOf(req.slots().size())));
         batchRepository.save(batch);
 
@@ -264,6 +268,7 @@ public class BookingBatchService {
             booking.setRequestedEndTime(slot.requestedEndTime());
             booking.setCanonicalTimezone(canonicalTimezone);
             booking.setBatchId(batch.getId());
+            booking.setAgreedPrice(agreedPrice);
             bookingRepository.save(booking);
             sessionDates.add(slot.requestedStartTime());
         }
@@ -507,6 +512,10 @@ public class BookingBatchService {
                     "requested end time", booking.getRequestedEndTime()),
                 BookingError.SLOT_UNAVAILABLE);
         }
+
+        // fix/payment-agreed-price-lock: fail this booking's accept (rolled back, reported in the
+        // per-booking results) when it has no price at all — settlement used to confirm it for free.
+        bookingService.resolveSessionPrice(booking);
 
         // Must be the accept-then-initiate pair, not a bare ACCEPT: PaymentLifecycleService
         // settles these bookings with PAYMENT_CAPTURED/PAYMENT_FAILED, which the state

@@ -450,6 +450,11 @@ class BookingBatchServiceTest {
         org.mockito.ArgumentCaptor<BookingBatch> saved = org.mockito.ArgumentCaptor.forClass(BookingBatch.class);
         verify(batchRepository).save(saved.capture());
         assertThat(saved.getValue().getTotalAmount()).isEqualByComparingTo("150.00");
+        // fix/payment-agreed-price-lock: the same price is locked onto every booking for settlement.
+        org.mockito.ArgumentCaptor<Booking> bookings = org.mockito.ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepository, org.mockito.Mockito.times(3)).save(bookings.capture());
+        assertThat(bookings.getAllValues()).allSatisfy(b ->
+            assertThat(b.getAgreedPrice()).isEqualByComparingTo("50.00"));
     }
 
     @Test
@@ -465,6 +470,10 @@ class BookingBatchServiceTest {
         org.mockito.ArgumentCaptor<BookingBatch> saved = org.mockito.ArgumentCaptor.forClass(BookingBatch.class);
         verify(batchRepository).save(saved.capture());
         assertThat(saved.getValue().getTotalAmount()).isEqualByComparingTo("0");
+        // fix/payment-agreed-price-lock: no price to lock — NULL, never ZERO (accept then fails loudly).
+        org.mockito.ArgumentCaptor<Booking> bookings = org.mockito.ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepository, org.mockito.Mockito.times(2)).save(bookings.capture());
+        assertThat(bookings.getAllValues()).allSatisfy(b -> assertThat(b.getAgreedPrice()).isNull());
     }
 
     @Test
