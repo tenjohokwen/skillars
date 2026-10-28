@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.admin.coach_warning.title}">You Have Received a Formal Warning</title>
+</head>
+<body>
+    <h2 th:text="#{email.admin.coach_warning.title}">You Have Received a Formal Warning</h2>
+    <p>A Skillars administrator reviewed a dispute about one of your sessions and issued you a formal warning.</p>
+    <p th:switch="${map.disputeReason}">Dispute reason:
+        <span th:case="'COACH_NO_SHOW'">you did not attend the session</span>
+        <span th:case="'SESSION_QUALITY'">the quality of the session</span>
+        <span th:case="'SAFETY_CONCERN'">a safety concern</span>
+        <span th:case="'UNAUTHORISED_CHARGE'">an unauthorised charge</span>
+        <span th:case="*">other</span>
+    </p>
+    <p>Repeated warnings can lead to reduced marketplace visibility or suspension. You can review your reliability record here: <a th:href="${map.reliabilityUrl}" th:text="${map.reliabilityUrl}">reliability</a></p>
+</body>
+</html>

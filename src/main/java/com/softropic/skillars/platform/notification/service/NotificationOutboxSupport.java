@@ -88,11 +88,15 @@ import java.util.Map;
  * {@link NotificationEmailOutboxHandler}, so a value's Java type does not survive the round trip: an
  * {@code Instant} returns as a {@code String}, a {@code BigDecimal} as a {@code Double}
  * ({@code 40.00} → {@code 40.0}). <strong>Format numbers and instants at the producer, never in the
- * template.</strong> Every value put into an email {@code data} map must be a {@code String} or a
- * {@code List<String>}; {@code EmailDataStringContractTest} fails the build otherwise.
+ * template.</strong> Put a {@code String} (or a {@code List<String>}) into an email {@code data} map.
+ * {@code EmailDataRoundTripContractTest} pins the property that actually matters — a value's type is the
+ * same after the JSON round trip as before — for the shapes the listeners use; it does not scan every
+ * producer, so a new producer's values are still the producer's responsibility. (A few legacy producers
+ * put boxed {@code Integer}s, which round-trip unchanged.)
  *
- * @see RefundOutboxSupport for the same pattern on the money path (already correct — it is called
- *     inside its listener's own {@code REQUIRES_NEW}; do not "fix" it)
+ * @see com.softropic.skillars.platform.payment.service.RefundOutboxSupport for the same pattern on the
+ *     money path: also {@code MANDATORY}, enqueued from a {@code BEFORE_COMMIT} listener
+ *     ({@code RefundEnqueueListener}) inside the cancellation's own transaction
  */
 @Slf4j
 @Component
@@ -120,7 +124,10 @@ public class NotificationOutboxSupport {
      * {@code SessionPackEmailListener} when that audit was done; story ses-1.4 added three more
      * ({@code Coach}/{@code Parent}/{@code PlayerRegistrationEmailListener}) — all five are
      * {@code BEFORE_COMMIT}, and the audit's conclusion (every publish site already has an ambient
-     * business transaction to join) holds for all five, not just the original two.
+     * business transaction to join) holds for all five, not just the original two. B6 added a sixth,
+     * {@code AdminOutcomeEmailListener} (admin decisions: suspension, reinstatement, warning, dispute
+     * outcome, GDPR export, review moderation) — also {@code BEFORE_COMMIT}, every publisher
+     * {@code @Transactional}.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void enqueueEmail(EmailTemplate template, Recipient recipient, Map<String, Object> data, String sendId) {

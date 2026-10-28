@@ -62,6 +62,7 @@ public class GdprExportService {
     private final ConfigService configService;
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
+    private final AdminNotificationRecipientResolver recipientResolver;
 
     /**
      * Runs from GdprEventListener's AFTER_COMMIT callback, where the request's own transaction has
@@ -172,7 +173,11 @@ public class GdprExportService {
         request.setCompletedAt(Instant.now());
         gdprRequestRepository.save(request);
 
-        eventPublisher.publishEvent(new GdprExportReadyEvent(this, requestId, userId));
+        // B6: the requester is told the export is ready (AdminOutcomeEmailListener, AFTER_COMMIT in its own
+        // transaction, so a failed notice can never roll the export back). Addressed to the account holder directly: the download is on their own
+        // profile page, and a child export's requester is already the parent.
+        eventPublisher.publishEvent(new GdprExportReadyEvent(this, requestId, userId, expiresAt,
+            recipientResolver.forAccountHolder(userId).orElse(null)));
         log.info("[GDPR_EXPORT_COMPLETED] requestId={} userId={} bytes={}", requestId, userId, zipBytes.length);
     }
 

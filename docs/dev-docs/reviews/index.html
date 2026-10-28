@@ -185,8 +185,11 @@
         <code>admin.AdminAlertEventListener.onReviewFlagged</code>, which raises a <code>REVIEW_FLAG</code> alert, deduplicated so a
         review only ever has one OPEN flag alert.</li>
       <li><strong><code>ReviewModerationResolvedEvent</code></strong> <code>(reviewId, coachId, previousStatus, newStatus)</code>:
-        published by <code>admin.AdminReviewService</code> on approve and block. <strong>Nothing listens to it</strong>, not even the
-        new notification centre, so neither the author nor the coach is told about a moderation outcome.</li>
+        published by <code>admin.AdminReviewService</code> on approve and block, now also carrying the author's resolved
+        address (a minor player author's parent instead) and the coach's display name.
+        <code>notification.AdminOutcomeEmailListener</code> sends the author <code>REVIEW_APPROVED</code> /
+        <code>REVIEW_BLOCKED</code> (email + inbox row deep-linking to the coach's public profile, where a blocked review
+        can be appealed). The coach is not notified.</li>
     </ul>
     <p>
       Outbound dependencies: <strong>booking</strong> (<code>BookingRepository.findQualifyingCompletedBookings</code>),
@@ -291,7 +294,7 @@ sequenceDiagram
   AS->>DB: resolveAllOpenFlags (WARN if any were open)
   AS->>DB: recompute (always on approve, on block only if it was APPROVED)
   AS->>DB: save ReviewModerationLog
-  AS->>AS: publish ReviewModerationResolvedEvent (no listener)
+  AS->>AS: publish ReviewModerationResolvedEvent - author emailed BEFORE_COMMIT
     </pre>
     <p>
       A single flag never hides anything on its own. Only crossing the threshold on a currently <code>APPROVED</code> review

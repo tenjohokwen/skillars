@@ -25,7 +25,8 @@ import java.util.stream.Collectors;
  * of 25 rows and dispatched all of them inside one {@code REQUIRES_NEW} transaction, recording
  * {@code attempts++} / {@code last_error} through that same transaction. That was safe for
  * skillars-deferred-90's {@code PendingBlobDeletionChunkProcessor}, whose work unit was a pure S3
- * call touching no JDBC connection — but two of this outbox's three handlers call a plain
+ * call touching no JDBC connection — but two of the outbox's handlers at the time (there are eight
+ * {@code OutboxMessageHandler}s now, listed by the "[OUTBOX] registered" startup log) call a plain
  * {@code @Transactional} (REQUIRED) collaborator ({@code CreditWalletService.writeLedgerEntry},
  * {@code SnapshotBatchWriter.writeAllDeltas}) which <em>joins</em> the chunk transaction. Any
  * {@code DataIntegrityViolationException} — including the {@code uq_pcl_booking_refund} violation

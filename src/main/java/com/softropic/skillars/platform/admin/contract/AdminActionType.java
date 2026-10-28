@@ -9,5 +9,9 @@ public enum AdminActionType {
     BOOKING_FORCE_COMPLETE,
     // V171: admin console account enforcement + coach verification tier.
     COACH_TIER_CHANGE,
-    USER_SUSPEND, USER_REACTIVATE, USER_LOGIN_UNLOCK
+    USER_SUSPEND, USER_REACTIVATE, USER_LOGIN_UNLOCK,
+    // V183 (B6): a dismissal is no longer audited as DISPUTE_RESOLVE; appeal decisions are audited.
+    DISPUTE_DISMISS, APPEAL_UPHOLD, APPEAL_OVERTURN,
+    // V183 (B6): a system child-safety suspension of a coach profile (CSAM match), admin_id = AdminActionLog.SYSTEM_ACTOR_ID.
+    COACH_SAFETY_HOLD
 }

@@ -79,7 +79,25 @@ public enum EmailTemplate {
      * cutover window this tool exists to protect. Mirrors the six registration/OTP templates' own
      * isolated {@code "registrationEmailService"} breaker, above.
      */
-    SES_CUTOVER_PREFLIGHT("email.ses.cutover_preflight.title", Duration.ofMinutes(10), "sesPreflightService");
+    SES_CUTOVER_PREFLIGHT("email.ses.cutover_preflight.title", Duration.ofMinutes(10), "sesPreflightService"),
+    // B6 (V183): admin-outcome notices, sent by AdminOutcomeEmailListener. All transactional (never
+    // opt-out-able): enforcement, dispute, GDPR and moderation outcomes are things the user must hear.
+    /** An admin suspended the coach's marketplace profile and chose to notify them. */
+    COACH_SUSPENDED("email.admin.coach_suspended.title"),
+    /** An admin lifted the coach's suspension (directly, or by overturning an appeal). */
+    COACH_REINSTATED("email.admin.coach_reinstated.title"),
+    /** A dispute against the coach was resolved with a formal warning. */
+    COACH_WARNING_ISSUED("email.admin.coach_warning.title"),
+    /** The raiser's dispute was resolved. */
+    DISPUTE_RESOLVED("email.admin.dispute_resolved.title"),
+    /** The raiser's dispute was dismissed. */
+    DISPUTE_DISMISSED("email.admin.dispute_dismissed.title"),
+    /** The requester's GDPR data export is ready to download. */
+    GDPR_EXPORT_READY("email.admin.gdpr_export_ready.title"),
+    /** The author's review was approved and is now public. */
+    REVIEW_APPROVED("email.admin.review_approved.title"),
+    /** The author's review was blocked by a moderator. */
+    REVIEW_BLOCKED("email.admin.review_blocked.title");
 
     private final String subjectKey;
     private final Duration deliveryDeadline;

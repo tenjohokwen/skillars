@@ -63,6 +63,7 @@ class DisputeServiceTest {
     @Mock private com.softropic.skillars.platform.payment.service.CoachPayoutOutboxSupport coachPayoutOutboxSupport;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private PlayerProfileRepository playerProfileRepository;
+    @Mock private AdminNotificationRecipientResolver recipientResolver;
 
     private DisputeService service;
 
@@ -75,7 +76,7 @@ class DisputeServiceTest {
             disputeRepository, bookingRepository, bookingPaymentRepository, coachProfileRepository,
             coachCancellationHistoryRepository, adminAlertRepository, adminActionLogRepository,
             configService, creditWalletService, coachPayoutRepository, coachPayoutOutboxSupport, eventPublisher,
-            playerProfileRepository
+            playerProfileRepository, recipientResolver
         );
     }
 
@@ -363,5 +364,66 @@ class DisputeServiceTest {
                     .contains(bookingId.toString());
             });
         verifyNoInteractions(creditWalletService);
+    }
+
+    // ── B6: dismissal audit type and outcome notifications ─────────────────
+
+    @Test
+    void dismissDispute_auditsAsDisputeDismiss_andPublishesOutcomeForTheRaiser() {
+        Dispute dispute = buildDispute();
+        Booking booking = buildBooking();
+        when(disputeRepository.findById(disputeId)).thenReturn(Optional.of(dispute));
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(any(), any(), any()))
+            .thenReturn(Optional.empty());
+        com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient raiser =
+            new com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient("p@x.test", "en");
+        when(recipientResolver.forUser(1L)).thenReturn(Optional.of(raiser));
+
+        service.dismissDispute(disputeId, "not substantiated", 99L);
+
+        var logged = org.mockito.ArgumentCaptor.forClass(com.softropic.skillars.platform.admin.repo.AdminActionLog.class);
+        verify(adminActionLogRepository).save(logged.capture());
+        assertThat(logged.getValue().getActionType())
+            .isEqualTo(com.softropic.skillars.platform.admin.contract.AdminActionType.DISPUTE_DISMISS);
+
+        var published = org.mockito.ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher).publishEvent(published.capture());
+        assertThat(published.getValue()).isInstanceOfSatisfying(
+            com.softropic.skillars.platform.admin.contract.DisputeDismissedEvent.class, e -> {
+                assertThat(e.disputeId()).isEqualTo(disputeId);
+                assertThat(e.reason()).isEqualTo("not substantiated");
+                assertThat(e.recipient()).isEqualTo(raiser);
+            });
+    }
+
+    @Test
+    void resolveDispute_publishesOutcomeWithCreditAndRaiserAddress_auditsAsDisputeResolve() {
+        Dispute dispute = buildDispute();
+        Booking booking = buildBooking();
+        when(disputeRepository.findById(disputeId)).thenReturn(Optional.of(dispute));
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(buildPayment("CAPTURED")));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(any(), any(), any()))
+            .thenReturn(Optional.empty());
+        com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient raiser =
+            new com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient("p@x.test", "fr");
+        when(recipientResolver.forUser(1L)).thenReturn(Optional.of(raiser));
+
+        service.resolveDispute(disputeId, "PARTIAL_CREDIT", new BigDecimal("5.00"), "half", 99L);
+
+        var logged = org.mockito.ArgumentCaptor.forClass(com.softropic.skillars.platform.admin.repo.AdminActionLog.class);
+        verify(adminActionLogRepository).save(logged.capture());
+        assertThat(logged.getValue().getActionType())
+            .isEqualTo(com.softropic.skillars.platform.admin.contract.AdminActionType.DISPUTE_RESOLVE);
+        var published = org.mockito.ArgumentCaptor.forClass(org.springframework.context.ApplicationEvent.class);
+        verify(eventPublisher).publishEvent(published.capture());
+        assertThat(published.getValue()).isInstanceOfSatisfying(
+            com.softropic.skillars.platform.admin.contract.DisputeResolvedEvent.class, e -> {
+                assertThat(e.getResolution()).isEqualTo("PARTIAL_CREDIT");
+                assertThat(e.getCreditAmount()).isEqualByComparingTo("5.00");
+                assertThat(e.getResolutionNote()).isEqualTo("half");
+                assertThat(e.getRecipient()).isEqualTo(raiser);
+            });
     }
 }

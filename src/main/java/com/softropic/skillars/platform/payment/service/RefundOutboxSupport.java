@@ -18,10 +18,10 @@ import java.util.UUID;
  * refund back with only a log line and no retry — now goes onto the durable outbox
  * (skillars-deferred-91 AC1) and is re-driven off the request path.
  *
- * <p>No {@code @Transactional} here: this is called from inside the listener's
- * {@code @Transactional(REQUIRES_NEW)}, so the outbox row and the drain marker commit atomically
- * with the listener's other work (strike issuance, cancellation history). Only the notification /
- * re-drive is deferred, not the decision.
+ * <p>{@link #enqueueBookingRefund} is {@code @Transactional(MANDATORY)}: it joins the caller's
+ * transaction (the {@code BEFORE_COMMIT} {@code RefundEnqueueListener}, inside the cancellation's own
+ * transaction) and fails loudly if there is none, so the outbox row and the drain marker commit
+ * atomically with the cancellation. Only the notification / re-drive is deferred, not the decision.
  *
  * <p>Scope: only the {@code writeLedgerEntry("BOOKING_REFUND", …)} calls are routed here. Pack
  * session restores ({@code packSessionService.restoreSession}) stay inline — a different

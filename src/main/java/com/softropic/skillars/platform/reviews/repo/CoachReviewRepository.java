@@ -51,8 +51,9 @@ public interface CoachReviewRepository extends JpaRepository<CoachReview, UUID> 
     // contended for the duration of an admin's approveReview/blockReview transaction. A dedicated
     // GdprErasureServiceConcurrencyIT-style concurrency test (ReviewModerationServiceConcurrencyIT)
     // empirically confirmed NOWAIT+bounded-retry resolves correctly under realistic contention — see
-    // that test's own Javadoc for the full reasoning (in short: ReviewModerationResolvedEvent has no
-    // listener today so approveReview/blockReview's own transaction hold time is a handful of local DB
+    // that test's own Javadoc for the full reasoning (in short: ReviewModerationResolvedEvent's only
+    // listener — B6's AdminOutcomeEmailListener — is a BEFORE_COMMIT outbox + inbox insert, so
+    // approveReview/blockReview's own transaction hold time is still a handful of local DB
     // round-trips, well inside the default ~3.2s worst-case retry budget; and a retry-exhaustion failure
     // was already a safely-handled outcome on this path before this AC — handleReviewSubmitted's own
     // surrounding try/catch already swallowed a lock-acquisition failure, leaving the review PENDING for

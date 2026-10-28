@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.admin.coach_suspended.title}">Your Coach Profile Has Been Suspended</title>
+</head>
+<body>
+    <h2 th:text="#{email.admin.coach_suspended.title}">Your Coach Profile Has Been Suspended</h2>
+    <p>A Skillars administrator has suspended your coach profile <strong th:text="${map.coachDisplayName}">Coach</strong>. While it is suspended your profile is hidden from the marketplace and cannot receive new bookings, and any pending booking requests have been cancelled.</p>
+    <p th:if="${map.reason != null and map.reason != ''}">Reason given: <span th:text="${map.reason}">reason</span></p>
+    <p>If you believe this is a mistake, you can submit an appeal within 14 days from your profile page: <a th:href="${map.profileUrl}" th:text="${map.profileUrl}">profile</a></p>
+</body>
+</html>

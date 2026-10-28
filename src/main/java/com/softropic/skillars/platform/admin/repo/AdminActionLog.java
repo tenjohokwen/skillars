@@ -28,6 +28,12 @@ public class AdminActionLog {
     @Column(name = "log_id")
     private UUID logId;
 
+    /**
+     * admin_id for an action the system took, not an admin (V183: COACH_SAFETY_HOLD). admin_id is NOT NULL
+     * and has no FK; no main."user" row has id 0.
+     */
+    public static final long SYSTEM_ACTOR_ID = 0L;
+
     @Column(name = "admin_id", nullable = false)
     private Long adminId;
 

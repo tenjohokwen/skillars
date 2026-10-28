@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.admin.dispute_dismissed.title}">Your Dispute Has Been Dismissed</title>
+</head>
+<body>
+    <h2 th:text="#{email.admin.dispute_dismissed.title}">Your Dispute Has Been Dismissed</h2>
+    <p>A Skillars administrator reviewed the dispute you raised about the session with <strong th:text="${map.coachDisplayName}">Coach</strong> on <strong th:text="${map.requestedStartTime}">date</strong> and dismissed it. No credit or other action follows from it.</p>
+    <p th:if="${map.reason != null and map.reason != ''}">Reason: <span th:text="${map.reason}">reason</span></p>
+    <p>If you disagree with this decision you can appeal it within 14 days from your bookings page.</p>
+</body>
+</html>

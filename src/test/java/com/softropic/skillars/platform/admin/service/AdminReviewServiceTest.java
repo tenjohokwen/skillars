@@ -48,6 +48,8 @@ class AdminReviewServiceTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private PessimisticLockRetryer lockRetryer;
 
+    @Mock private AdminNotificationRecipientResolver recipientResolver;
+
     @InjectMocks
     private AdminReviewService service;
 
@@ -148,5 +150,32 @@ class AdminReviewServiceTest {
                     .contains(REVIEW_ID.toString())
                     .contains("2 flag(s)");
             });
+    }
+
+    /**
+     * B6: the published outcome event carries the author's resolved address (a minor's parent, via the
+     * resolver) and the coach's display name, so the email listener needs no repository.
+     */
+    @Test
+    void blockReview_publishesOutcomeEventAddressedToTheResolvedAuthor() {
+        stubLockRetryerPassthrough();
+        CoachReview review = review(ReviewModerationStatus.PENDING);
+        when(reviewRepository.findByIdForUpdateNoWait(REVIEW_ID)).thenReturn(Optional.of(review));
+        when(recipientResolver.forUser(review.getAuthorId())).thenReturn(Optional.of(
+            new com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient("parent@x.test", "de")));
+        com.softropic.skillars.platform.marketplace.repo.CoachProfile coach =
+            new com.softropic.skillars.platform.marketplace.repo.CoachProfile();
+        coach.setDisplayName("Coach Kim");
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+
+        service.blockReview(REVIEW_ID, "policy violation", ADMIN_ID);
+
+        var published = org.mockito.ArgumentCaptor.forClass(
+            com.softropic.skillars.platform.reviews.contract.ReviewModerationResolvedEvent.class);
+        org.mockito.Mockito.verify(eventPublisher).publishEvent(published.capture());
+        assertThat(published.getValue().newStatus()).isEqualTo(ReviewModerationStatus.BLOCKED);
+        assertThat(published.getValue().authorEmail()).isEqualTo("parent@x.test");
+        assertThat(published.getValue().authorLangKey()).isEqualTo("de");
+        assertThat(published.getValue().coachDisplayName()).isEqualTo("Coach Kim");
     }
 }

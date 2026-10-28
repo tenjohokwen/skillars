@@ -23,6 +23,8 @@ public final class NotificationCatalog {
     private static final String COACH_BOOKINGS = "/coach/booking-requests";
     private static final String PARENT_BOOKINGS = "/parent/bookings";
     private static final String DASHBOARD = "/dashboard";
+    private static final String PROFILE = "/profile";
+    private static final String COACH_RELIABILITY = "/coach/reliability";
 
     /**
      * Email {@code data} keys that may be copied into an inbox row's {@code params}. A whitelist, not
@@ -104,6 +106,19 @@ public final class NotificationCatalog {
             // Recipient is the player whose video the parent decided on.
             case VIDEO_APPROVAL_APPROVED, VIDEO_APPROVAL_REJECTED ->
                 inApp(NotificationCategory.MODERATION, null, "/player/videos");
+
+            // ── Admin outcomes (B6): transactional, in-app ──
+            // Enforcement notices to a coach. The suspension links to the profile page, where the appeal is.
+            case COACH_SUSPENDED -> inApp(NotificationCategory.MODERATION, PROFILE, PROFILE);
+            case COACH_REINSTATED -> inApp(NotificationCategory.MODERATION, DASHBOARD, DASHBOARD);
+            case COACH_WARNING_ISSUED -> inApp(NotificationCategory.MODERATION, COACH_RELIABILITY, DASHBOARD);
+            // Dispute outcome to whoever raised it: a coach, a parent, or a self-registered player.
+            case DISPUTE_RESOLVED, DISPUTE_DISMISSED -> inApp(NotificationCategory.BOOKING, COACH_BOOKINGS, PARENT_BOOKINGS);
+            // The download sits in the Privacy section of the requester's own profile page.
+            case GDPR_EXPORT_READY -> inApp(NotificationCategory.ACCOUNT, PROFILE, PROFILE);
+            // Review author: deep link to the reviewed coach's public profile (coachProfileUrl embeds the id).
+            case REVIEW_APPROVED, REVIEW_BLOCKED ->
+                new Entry(NotificationCategory.MODERATION, true, null, DASHBOARD, "coachProfileUrl");
 
             // No producer sends this template today; classified so it is never accidentally opt-out-able.
             case COACH_VISIBILITY_REDUCED -> inApp(NotificationCategory.BOOKING, "/coach/reliability", DASHBOARD);
