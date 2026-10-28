@@ -60,14 +60,15 @@
     <p>
       <code>master</code> is protected by the <code>NoDirectPush</code> ruleset, versioned in
       <code>.github/rulesets/no-direct-push.json</code> (re-applied by the manual <code>apply-branch-ruleset.yml</code> workflow): no
-      direct push, no force-push, a PR is required, and the <strong>required status checks are <code>build</code> and
-      <code>docker-image</code></strong> (both from <code>pr-build.yml</code>).
+      direct push, no force-push, a PR is required, and the <strong>required status checks are <code>build</code>,
+      <code>docker-image</code> and <code>frontend-quality</code></strong> (all from <code>pr-build.yml</code>).
     </p>
     <div class="callout warn">
-      <p><strong><code>frontend-quality</code> (Prettier + ESLint) is not a required check on a PR, but it gates the image.</strong>
-      On the push to <code>master</code>, <code>ci.yml</code>'s <code>build-and-push</code> has
-      <code>needs: [test, frontend-quality]</code>, so a formatting miss that you merge anyway means <em>no image is published</em> for
-      that commit. Treat it as required. The Vitest suite (<code>frontend-unit-tests.yml</code>) is opt-in and never required — a red
+      <p><strong><code>frontend-quality</code> (Prettier + ESLint) is a required check.</strong>
+      It runs on every PR (backend-only ones too), and on <code>master</code> <code>ci.yml</code>'s <code>build-and-push</code> has
+      <code>needs: [test, frontend-quality]</code>, so it also gates the image publish. Its log names every unformatted file
+      (fix: <code>npx prettier --write &lt;files&gt;</code> from <code>src/frontend</code>) and every ESLint finding as
+      <code>file:line rule</code> (most fix with <code>npx eslint --fix &lt;files&gt;</code>). The Vitest suite (<code>frontend-unit-tests.yml</code>) is opt-in and never required — a red
       i18n spec does not block a merge, which is exactly why it is easy to merge one.</p>
     </div>
 
@@ -78,7 +79,7 @@
       <tbody>
         <tr><td><code>pr-build.yml</code> → <code>build</code></td><td>PR to <code>master</code></td><td>JDK 17, <code>mvn -B verify</code> (frontend build via <code>frontend-maven-plugin</code>, surefire unit tests incl. every <code>*Test</code> guard below, failsafe <code>*IT</code>s against Testcontainers). In the same shell: <code>.github/scripts/assert-context-count.sh build.log 17</code>. Around it: <code>container-sampler.sh</code> start/assert (at most one Postgres / Redis / SeaweedFS container alive at once). Uploads surefire/failsafe reports. 35-min timeout.</td><td>Merge (required)</td></tr>
         <tr><td><code>pr-build.yml</code> → <code>docker-image</code></td><td>PR to <code>master</code></td><td><code>.github/actions/docker-build</code> (no push, <code>load: true</code>), <code>.github/scripts/assert-git-provenance.sh</code>, Trivy scan <code>CRITICAL,HIGH</code>, <code>exit-code: 1</code>, ignores from <code>.trivyignore</code>. Runs in parallel with <code>build</code>.</td><td>Merge (required)</td></tr>
-        <tr><td><code>pr-build.yml</code> → <code>frontend-quality</code></td><td>PR to <code>master</code></td><td><code>.github/actions/frontend-quality</code>: Node 22.16.0, <code>npm ci</code>, <code>npx prettier --check "**/*.{js,vue,scss,json}" --ignore-path ../../.gitignore</code>, then <code>NODE_ENV=production npx eslint .</code> (both run even if the first fails).</td><td>Nothing on the PR (not required)</td></tr>
+        <tr><td><code>pr-build.yml</code> → <code>frontend-quality</code></td><td>PR to <code>master</code></td><td><code>.github/actions/frontend-quality</code>: Node 22.16.0, <code>npm ci</code>, <code>npx prettier --check "**/*.{js,vue,scss,json}" --ignore-path ../../.gitignore</code>, then <code>NODE_ENV=production npx eslint .</code> (both run even if the first fails).</td><td><strong>Merge</strong> (required check)</td></tr>
         <tr><td><code>ci.yml</code> → <code>test</code></td><td>push to <code>master</code>, manual</td><td><code>mvn -B verify</code> (no context-count gate, no container sampler — those live only in <code>pr-build</code>).</td><td>Image publish</td></tr>
         <tr><td><code>ci.yml</code> → <code>frontend-quality</code></td><td>push to <code>master</code></td><td>Same composite action as the PR copy.</td><td>Image publish</td></tr>
         <tr><td><code>ci.yml</code> → <code>build-and-push</code></td><td>after <code>test</code> + <code>frontend-quality</code></td><td>":latest ordering guard", build + push <code>ghcr.io/…:sha-&lt;short&gt;</code> (and <code>:latest</code> if newer), then pulls the pushed image and runs <code>assert-git-provenance.sh</code> (a post-push detector, not a gate).</td><td>—</td></tr>
