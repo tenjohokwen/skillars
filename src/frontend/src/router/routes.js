@@ -315,11 +315,11 @@ const routes = [
         meta: { requiresAuth: true, role: 'PLAYER' },
       },
       {
-        // Canonical path — do not change without updating Story 7.x notification deep-link
+        // The parental video-approval page is gone (ADR "Minors never upload", 2026-10-28): minors
+        // can no longer upload. Kept as a redirect only so links in already-sent approval emails and
+        // stored inbox rows land on the parent dashboard instead of the not-found page.
         path: 'parent/approvals',
-        name: 'parent-approvals',
-        component: () => import('pages/parent/ParentApprovalPage.vue'),
-        meta: { requiresAuth: true, role: 'PARENT' },
+        redirect: '/parent/dashboard',
       },
       {
         path: 'parent/credit-wallet',

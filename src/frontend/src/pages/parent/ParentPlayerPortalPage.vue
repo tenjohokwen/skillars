@@ -42,12 +42,6 @@
           :label="t('video.parent.hubLink')"
           data-testid="child-videos-link"
         />
-        <q-btn
-          v-bind="hubLinkProps"
-          icon="task_alt"
-          to="/parent/approvals"
-          :label="t('parent.hub.approvals')"
-        />
       </div>
     </div>
 

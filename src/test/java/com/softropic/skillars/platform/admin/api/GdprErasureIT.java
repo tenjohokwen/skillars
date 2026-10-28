@@ -544,10 +544,10 @@ class GdprErasureIT extends AbstractIntegrationTest {
     // cascade. Seeding owner_id = PLAYER_ID (a main.user id) matched the old, buggy event payload, not
     // anything production writes — a real player's videos were never purged.
     @Test
-    void erase_playerUser_videoCascade_purgesVideos_resetsQuota_cancelsPendingApprovals() {
+    void erase_playerUser_videoCascade_purgesVideos_resetsQuota_purgesCoachVideosAboutThePlayer() {
         String ownerId = String.valueOf(SELF_PLAYER_PROFILE_ID);
         UUID videoId = UUID.randomUUID();
-        UUID approvalId = UUID.randomUUID();
+        UUID coachVideoId = UUID.randomUUID();
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
                 "INSERT INTO main.video_quotas (user_id, storage_used_bytes, bandwidth_used_bytes) VALUES (?, 5000, 0)",
@@ -558,10 +558,16 @@ class GdprErasureIT extends AbstractIntegrationTest {
                     + "VALUES (?, ?, 'bunny', ?, 'READY', 'ACTIVE', 'GDPR Video', 5000, 'PRIVATE', ?, ?)",
                 videoId, ownerId, "asset-" + videoId,
                 Timestamp.from(Instant.now()), Timestamp.from(Instant.now()));
+            // V184: a coach review whose SUBJECT is this player — owned by the coach, purged with the player.
             jdbcTemplate.update(
-                "INSERT INTO main.video_approval_requests (id, video_id, player_id, parent_id, status, created_at) "
-                    + "VALUES (?, ?, ?, ?, 'PENDING', ?)",
-                approvalId, videoId, SELF_PLAYER_PROFILE_ID, PARENT_ID, Timestamp.from(Instant.now()));
+                "INSERT INTO main.videos (id, owner_id, provider, provider_asset_id, operational_state, "
+                    + "access_state, title, storage_bytes, visibility, created_at, updated_at, video_type, "
+                    + "subject_booking_id, subject_player_id) "
+                    + "VALUES (?, ?, 'bunny', ?, 'READY', 'ACTIVE', 'Coach review', 7000, 'PRIVATE', ?, ?, "
+                    + "'COACH_REVIEW', ?, ?)",
+                coachVideoId, UUID.randomUUID().toString(), "asset-" + coachVideoId,
+                Timestamp.from(Instant.now()), Timestamp.from(Instant.now()), UUID.randomUUID(),
+                SELF_PLAYER_PROFILE_ID);
             return null;
         });
 
@@ -581,9 +587,9 @@ class GdprErasureIT extends AbstractIntegrationTest {
             "SELECT storage_used_bytes FROM main.video_quotas WHERE user_id = ?", Long.class, ownerId);
         assertThat(quotaUsed).isZero();
 
-        String approvalStatus = jdbcTemplate.queryForObject(
-            "SELECT status FROM main.video_approval_requests WHERE id = ?", String.class, approvalId);
-        assertThat(approvalStatus).isEqualTo("CANCELLED");
+        String coachVideoState = jdbcTemplate.queryForObject(
+            "SELECT operational_state FROM main.videos WHERE id = ?", String.class, coachVideoId);
+        assertThat(coachVideoState).isEqualTo("PURGED");
     }
 
     // ── skillars-deferred-127 AC1: shared player_profiles lock + PLAYER-branch id-resolution fix ──

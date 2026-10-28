@@ -101,11 +101,11 @@ public final class NotificationCatalog {
 
             // ── Moderation: safety notice about the user's own upload ──
             case VIDEO_MODERATION_OWNER_FLAGGED -> inApp(NotificationCategory.MODERATION, DASHBOARD, "/player/videos");
-            // Minor-safety approval gate: the parent must act, so never opt-out-able (MODERATION).
-            case VIDEO_APPROVAL_REQUESTED -> inApp(NotificationCategory.MODERATION, null, "/parent/approvals");
-            // Recipient is the player whose video the parent decided on.
-            case VIDEO_APPROVAL_APPROVED, VIDEO_APPROVAL_REJECTED ->
-                inApp(NotificationCategory.MODERATION, null, "/player/videos");
+            // RETIRED (ADR "Minors never upload", 2026-10-28): no producer. Still classified because the
+            // switch is exhaustive; email-only so a stray send could never create a new inbox row
+            // deep-linking to the removed /parent/approvals page.
+            case VIDEO_APPROVAL_REQUESTED, VIDEO_APPROVAL_APPROVED, VIDEO_APPROVAL_REJECTED ->
+                emailOnly(NotificationCategory.MODERATION);
 
             // ── Admin outcomes (B6): transactional, in-app ──
             // Enforcement notices to a coach. The suspension links to the profile page, where the appeal is.

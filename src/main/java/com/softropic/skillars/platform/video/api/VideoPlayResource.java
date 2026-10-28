@@ -41,13 +41,11 @@ public class VideoPlayResource {
         String currentUser = securityUtil.getCurrentUserName();
         Video video = videoAccessCache.getVideo(id).orElseGet(() -> videoService.findById(id));
 
-        // Determine parent access for HIDDEN bypass (AC 2 — parental approval path)
-        boolean skipHiddenCheck = videoAccessGuard.isParentOf(currentUser, video.getOwnerId(), id);
         // Download URLs are owner-only; ownership is resolved from the caller's user id, not the username.
         boolean viewerIsOwner = videoAccessGuard.isCurrentUserOwner(video);
 
         PlaybackAuthorizationResponse auth = playbackService.authorizePlayback(
-            id, currentUser, extractClientIp(request), skipHiddenCheck, viewerIsOwner);
+            id, currentUser, extractClientIp(request), viewerIsOwner);
 
         return ResponseEntity.ok(new PlaybackResponse(auth.playbackUrl(), auth.expiresAt(), auth.downloadUrl()));
     }

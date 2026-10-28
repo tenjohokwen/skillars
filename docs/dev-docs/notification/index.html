@@ -87,9 +87,10 @@
         (<code>NotificationCategory.optOutable()</code>) — today that is <code>BOOKING_REMINDER</code>,
         <code>SESSION_PACK_EXPIRY_WARNING</code> and <code>PERFORMANCE_REPORT_SHARED</code>. Booking,
         session-pack, moderation, account/security and system mail is transactional and always sent; a
-        <code>PUT</code> to turn one of those off is a 400. The video minor-safety approval notices
-        (<code>VIDEO_APPROVAL_REQUESTED</code> to the parent, <code>VIDEO_APPROVAL_APPROVED</code>/<code>_REJECTED</code>
-        to the player) are <code>MODERATION</code>: a parent can never opt out of being asked to approve a child's video.</li>
+        <code>PUT</code> to turn one of those off is a 400. The three <code>VIDEO_APPROVAL_*</code> templates are
+        <strong>retired</strong> (ADR 18, "Minors never upload"): no producer, Thymeleaf files deleted, catalogued
+        email-only. The enum constants and their <code>envelope_entity</code> CHECK values stay, <code>@Deprecated</code>,
+        only so already-stored rows still load.</li>
       <li>Opt-out is enforced at <strong>send time</strong> (<code>MailService</code> →
         <code>NotificationPreferenceService.emailDecision</code>), not at enqueue time, so an opt-out made while
         a reminder is already sitting in the outbox or the retry queue still takes effect. The in-app inbox row
@@ -239,8 +240,7 @@
     <span class="tag">PackPausedEvent</span> (classes in booking, published by payment)
     <span class="tag">VideoModerationAdminAlertEvent</span>
     <span class="tag">VideoModerationOwnerNotificationEvent</span>
-    <span class="tag">VideoApprovalParentNotificationEvent</span>
-    <span class="tag">VideoApprovalOwnerNotificationEvent</span> (video — recipient email resolved by the publisher)
+    (video — recipient email resolved by the publisher)
     <span class="tag">CoachSuspensionNotificationEvent</span>
     <span class="tag">CoachReinstatedEvent</span>
     <span class="tag">CoachWarningIssuedEvent</span>

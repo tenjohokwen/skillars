@@ -54,6 +54,7 @@ class VideoServiceTest {
     @Mock VideoTypeConstraints videoTypeConstraints;
     @Mock PendingProviderAssetTracker pendingProviderAssetTracker;
     @Mock com.softropic.skillars.platform.video.repo.PendingProviderAssetRepository pendingProviderAssetRepository;
+    @Mock com.softropic.skillars.platform.security.repo.PlayerProfileRepository playerProfileRepository;
 
     VideoService service;
 
@@ -68,7 +69,63 @@ class VideoServiceTest {
         service = new VideoService(validationChain, quotaProvider, videoProviderAdapter, videoRepository,
             uploadSessionRepository, new VideoProperties(), txTemplate, rateLimitingService, videoMetrics,
             videoLifecycleService, publisher, videoTypeConstraints,
-            pendingProviderAssetTracker, pendingProviderAssetRepository);
+            pendingProviderAssetTracker, pendingProviderAssetRepository, playerProfileRepository);
+    }
+
+    // ── V184: subject-linked coach upload ──
+
+    private com.softropic.skillars.platform.video.contract.InitializeUploadRequest coachReviewAbout(
+            UUID bookingId, Long playerId) {
+        return new com.softropic.skillars.platform.video.contract.InitializeUploadRequest(
+            UUID.randomUUID().toString(), "review.mp4", 1024L, "video/mp4",
+            com.softropic.skillars.platform.video.contract.VideoType.COACH_REVIEW, bookingId, playerId);
+    }
+
+    @Test
+    void initializeUpload_subjectPlayerErased_refusedBeforeAnyVideoOrProviderAsset_quotaReleased() {
+        when(rateLimitingService.tryConsume(anyString(), anyString(), anyLong(), anyLong(), any())).thenReturn(true);
+        when(quotaProvider.check(anyString(), anyLong())).thenReturn(true);
+        when(quotaProvider.reserve(anyString(), anyLong(), any())).thenReturn("handle-s");
+        when(playerProfileRepository.lockLiveProfileForShare(77L)).thenReturn(Optional.empty());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                service.initializeUpload(coachReviewAbout(UUID.randomUUID(), 77L)))
+            .isInstanceOf(com.softropic.skillars.platform.video.contract.exception.VideoSubjectInvalidException.class);
+
+        verify(videoRepository, never()).save(any());
+        verify(videoProviderAdapter, never()).initializeUpload(anyString(), anyLong());
+        verify(quotaProvider).release("handle-s");
+    }
+
+    @Test
+    void initializeUpload_liveSubject_persistsBookingAndPlayerOnTheVideo() {
+        UUID bookingId = UUID.randomUUID();
+        when(rateLimitingService.tryConsume(anyString(), anyString(), anyLong(), anyLong(), any())).thenReturn(true);
+        when(quotaProvider.check(anyString(), anyLong())).thenReturn(true);
+        when(quotaProvider.reserve(anyString(), anyLong(), any())).thenReturn("handle-s");
+        when(playerProfileRepository.lockLiveProfileForShare(77L)).thenReturn(Optional.of(77L));
+        org.mockito.ArgumentCaptor<Video> saved = org.mockito.ArgumentCaptor.forClass(Video.class);
+        when(videoRepository.save(saved.capture())).thenAnswer(inv -> {
+            Video v = inv.getArgument(0);
+            if (v.getId() == null) v.setId(UUID.randomUUID());
+            return v;
+        });
+        when(uploadSessionRepository.save(any(UploadSession.class))).thenAnswer(inv -> {
+            UploadSession s = inv.getArgument(0);
+            s.setId(UUID.randomUUID());
+            return s;
+        });
+        when(videoRepository.findById(any())).thenAnswer(inv -> Optional.of(saved.getAllValues().get(0)));
+        when(uploadSessionRepository.findById(any())).thenReturn(Optional.of(new UploadSession()));
+        when(videoProviderAdapter.initializeUpload(anyString(), anyLong())).thenReturn(
+            new UploadCredentials("provider-upload-id", "https://signed", "sig",
+                Instant.now().plusSeconds(3600).getEpochSecond(), 123L));
+
+        service.initializeUpload(coachReviewAbout(bookingId, 77L));
+
+        Video first = saved.getAllValues().get(0);
+        org.assertj.core.api.Assertions.assertThat(first.getSubjectBookingId()).isEqualTo(bookingId);
+        org.assertj.core.api.Assertions.assertThat(first.getSubjectPlayerId()).isEqualTo(77L);
     }
 
     @Test

@@ -37,7 +37,6 @@ vi.mock('src/pages/coach/CoachSubscriptionPage.vue', () => ({ default: { render:
 vi.mock('src/pages/coach/CoachCommandCenterPage.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/pages/parent/ParentBookingsPage.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/pages/parent/ParentCreditWalletPage.vue', () => ({ default: { render: () => null } }))
-vi.mock('src/pages/parent/ParentApprovalPage.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/pages/parent/ParentPlayerPortalPage.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/pages/parent/ParentDevelopmentPortalPage.vue', () => ({
   default: { render: () => null },
@@ -259,7 +258,6 @@ describe('router/index.js — nav destinations admit their own role (navigation 
   it.each([
     '/parent/bookings',
     '/parent/credit-wallet',
-    '/parent/approvals',
     `/parent/players/${PID}/sessions`,
     `/parent/players/${PID}/development`,
     // Verified for the parent role specifically: MainLayout only builds this link for a PLAYER's
@@ -271,6 +269,12 @@ describe('router/index.js — nav destinations admit their own role (navigation 
     const router = await buildRouter({ auth: { userId: '1', role: 'PARENT' } })
     await router.push(path)
     expect(router.currentRoute.value.path).toBe(path)
+  })
+
+  it('redirects the retired /parent/approvals link (old emails, inbox rows) to the parent dashboard', async () => {
+    const router = await buildRouter({ auth: { userId: '1', role: 'PARENT' } })
+    await router.push('/parent/approvals')
+    expect(router.currentRoute.value.path).toBe('/parent/dashboard')
   })
 
   it('names the child hub route parent-player-hub (ParentChildSwitcher navigates by name)', async () => {

@@ -93,7 +93,6 @@ async function mountLayout(
         '/coach/subscription',
         '/coach/reviews',
         '/coach/reliability',
-        '/parent/approvals',
         '/parent/credit-wallet',
         '/player/videos',
       ].map((path) => ({ path, component: STUB })),
@@ -546,7 +545,7 @@ describe('MainLayout.vue — role-scoped nav entries (navigation reachability)',
     '/coach/reliability',
     '/coach/subscription',
   ]
-  const PARENT_ONLY = ['/parent/approvals', '/parent/credit-wallet']
+  const PARENT_ONLY = ['/parent/credit-wallet']
   const PLAYER_ONLY = ['/player/videos', '/player/locker-room/42']
 
   async function mountAs(role, { players = [] } = {}) {

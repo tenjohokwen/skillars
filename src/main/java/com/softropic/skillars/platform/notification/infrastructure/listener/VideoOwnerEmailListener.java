@@ -1,18 +1,13 @@
 package com.softropic.skillars.platform.notification.infrastructure.listener;
 
-import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.notification.service.NotificationOutboxSupport;
-import com.softropic.skillars.platform.video.contract.event.VideoApprovalOwnerNotificationEvent;
-import com.softropic.skillars.platform.video.contract.event.VideoApprovalParentNotificationEvent;
 import com.softropic.skillars.platform.video.contract.event.VideoModerationOwnerNotificationEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.event.TransactionPhase;
-import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.HashMap;
@@ -22,10 +17,11 @@ import java.util.UUID;
 import static net.logstash.logback.argument.StructuredArguments.kv;
 
 /**
- * User-facing video notices: the minor-safety approval gate (parent asked to approve; player told the
- * outcome) and the owner's "your video was flagged" notice. All three go through the durable
+ * User-facing video notice: the owner's "your video was flagged" notice. It goes through the durable
  * notification outbox ({@link NotificationOutboxSupport#enqueueEmail}), which also writes the in-app
- * inbox row. All are {@code MODERATION} category — transactional, never opt-out-able.
+ * inbox row. {@code MODERATION} category — transactional, never opt-out-able. (The three
+ * VIDEO_APPROVAL_* notices went with the parental-approval flow — ADR "Minors never upload",
+ * 2026-10-28.)
  *
  * <p>Recipients are resolved by the video module and carried on the event: a video's
  * {@code ownerId} is a coach-profile UUID or PlayerProfile id, never an address, and producing
@@ -37,67 +33,8 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
 @RequiredArgsConstructor
 public class VideoOwnerEmailListener {
 
-    static final String PARENT_APPROVALS_ROUTE = "parent/approvals";
-    static final String PLAYER_VIDEOS_ROUTE = "player/videos";
-
     private final NotificationOutboxSupport notificationOutboxSupport;
-    private final FrontendLinkBuilder frontendLinkBuilder;
     private final TransactionTemplate transactionTemplate;
-
-    /**
-     * Published by {@code VideoApprovalService.createApprovalRequest} inside the transaction that
-     * creates the PENDING approval row, so the email/inbox row commit atomically with it.
-     */
-    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
-    public void onApprovalRequested(VideoApprovalParentNotificationEvent event) {
-        if (isBlank(event.parentEmail())) {
-            log.warn("[VIDEO_APPROVAL_NOTICE_NO_RECIPIENT] parent has no email — approval request not emailed",
-                kv("videoId", event.videoId()), kv("playerId", event.playerId()), kv("parentId", event.parentId()));
-            return;
-        }
-        try {
-            Map<String, Object> data = new HashMap<>();
-            data.put("playerName", event.playerName() != null ? event.playerName() : "");
-            data.put("videoType", event.videoType() != null ? event.videoType() : "");
-            data.put("approvalsUrl", frontendLinkBuilder.route(PARENT_APPROVALS_ROUTE));
-            notificationOutboxSupport.enqueueEmail(EmailTemplate.VIDEO_APPROVAL_REQUESTED,
-                recipient(event.parentEmail(), event.parentLangKey()), data, UUID.randomUUID().toString());
-        } catch (Exception e) {
-            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.VIDEO_APPROVAL_REQUESTED),
-                kv("videoId", event.videoId()), e);
-        }
-    }
-
-    /**
-     * Published by {@code VideoApprovalService.approveVideo}/{@code rejectVideo} inside the decision's
-     * transaction (approve used to publish after its transaction had committed, where a
-     * BEFORE_COMMIT listener never fires).
-     */
-    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
-    public void onApprovalDecided(VideoApprovalOwnerNotificationEvent event) {
-        EmailTemplate template = "approved".equals(event.decision())
-            ? EmailTemplate.VIDEO_APPROVAL_APPROVED
-            : "rejected".equals(event.decision()) ? EmailTemplate.VIDEO_APPROVAL_REJECTED : null;
-        if (template == null) {
-            log.error("[VIDEO_APPROVAL_NOTICE_UNKNOWN_DECISION] not emailed",
-                kv("videoId", event.videoId()), kv("decision", event.decision()));
-            return;
-        }
-        if (isBlank(event.recipientEmail())) {
-            log.info("[VIDEO_APPROVAL_NOTICE_NO_RECIPIENT] player account has no email — decision not emailed",
-                kv("videoId", event.videoId()), kv("playerId", event.playerId()), kv("decision", event.decision()));
-            return;
-        }
-        try {
-            Map<String, Object> data = new HashMap<>();
-            data.put("videosUrl", frontendLinkBuilder.route(PLAYER_VIDEOS_ROUTE));
-            notificationOutboxSupport.enqueueEmail(template,
-                recipient(event.recipientEmail(), event.recipientLangKey()), data, UUID.randomUUID().toString());
-        } catch (Exception e) {
-            log.error("Failed to prepare/publish notification", kv("template", template),
-                kv("videoId", event.videoId()), e);
-        }
-    }
 
     /**
      * Owner "your video was flagged" notice. The moderation pipeline publishes this from an

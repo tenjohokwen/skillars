@@ -14,10 +14,10 @@
       :loading="quotaLoading"
     />
 
-    <!-- Upload — players upload HOMEWORK (shown regardless of age; the minor safety gate, moderation
-         Layer 3, enforces parental approval after content moderation). Coaches choose one of the two
-         types POST /api/video/uploads/initiate accepts for them (DRILL_DEMO, COACH_REVIEW); that
-         contract carries no player/booking context, so none is asked for here. -->
+    <!-- Upload — players upload HOMEWORK (only self-registered adults reach this page; the server
+         refuses a minor's upload at initiation: ADR "Minors never upload"). Coaches choose one of the
+         two types POST /api/video/uploads/initiate accepts for them (DRILL_DEMO, COACH_REVIEW); a
+         COACH_REVIEW first asks which held session (and so which child) it is about (V184 subject). -->
     <div class="q-mb-md">
       <q-btn-dropdown
         v-if="isCoach"
@@ -93,6 +93,84 @@
       />
     </div>
 
+    <!-- Player: session videos the coach recorded of them (V184 subject link) — play only. -->
+    <div v-if="!isCoach" class="q-mt-xl" data-testid="coach-videos-section">
+      <div class="text-h6">{{ t('video.coachVideos.title') }}</div>
+      <div class="text-body2 text-secondary q-mb-md">
+        {{ t('video.coachVideos.playerSubtitle') }}
+      </div>
+      <div v-if="coachVideosLoading" class="q-gutter-md">
+        <q-skeleton type="QCard" height="80px" />
+      </div>
+      <div v-else-if="coachVideosError" class="text-negative" data-testid="coach-videos-error">
+        {{ t('video.coachVideos.loadError') }}
+      </div>
+      <div
+        v-else-if="coachVideos.length === 0"
+        class="text-secondary"
+        data-testid="coach-videos-empty"
+      >
+        {{ t('video.coachVideos.empty') }}
+      </div>
+      <div v-else class="q-gutter-md">
+        <VideoListItem
+          v-for="video in coachVideos"
+          :key="video.id"
+          :video="video"
+          :can-delete="false"
+          :live="false"
+          @play="openPlayer"
+        />
+      </div>
+    </div>
+
+    <!-- Coach: which session is this COACH_REVIEW about? -->
+    <q-dialog v-model="subjectDialog">
+      <q-card style="min-width: 320px; max-width: 480px">
+        <q-card-section>
+          <div class="text-subtitle1">{{ t('video.subject.pickerTitle') }}</div>
+          <div class="text-caption text-secondary q-mt-xs">{{ t('video.subject.pickerHint') }}</div>
+        </q-card-section>
+        <q-card-section>
+          <div v-if="subjectLoading" class="flex flex-center q-pa-md">
+            <q-spinner-dots size="28px" color="primary" />
+          </div>
+          <div v-else-if="subjectLoadError" class="text-negative text-body2">
+            {{ t('video.subject.loadError') }}
+            <q-btn flat dense no-caps :label="t('common.retry')" @click="loadSubjectBookings" />
+          </div>
+          <div
+            v-else-if="!subjectBookings.length"
+            class="text-body2 text-secondary"
+            data-testid="no-subject-bookings"
+          >
+            {{ t('video.subject.noSessions') }}
+          </div>
+          <q-select
+            v-else
+            v-model="subjectBookingId"
+            :options="subjectOptions"
+            emit-value
+            map-options
+            outlined
+            dense
+            :label="t('video.subject.label')"
+            data-testid="subject-booking-select"
+          />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn v-close-popup flat :label="t('common.cancel')" />
+          <q-btn
+            color="primary"
+            :label="t('video.subject.confirm')"
+            :disable="!subjectBookingId"
+            data-testid="subject-confirm-btn"
+            @click="confirmSubject"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <VideoPlayDialog
       v-model="playerOpen"
       :video-id="playingVideo?.id ?? null"
@@ -112,7 +190,7 @@ import VideoListItem from 'src/components/video/VideoListItem.vue'
 import VideoPlayDialog from 'src/components/video/VideoPlayDialog.vue'
 import QuotaUsageBar from 'src/components/video/QuotaUsageBar.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const $q = useQuasar()
 const router = useRouter()
 const authStore = useAuthStore()
@@ -144,6 +222,43 @@ const retryingVideoId = ref(null)
 
 const playerOpen = ref(false)
 const playingVideo = ref(null)
+
+// Player only: coach videos about them (V184).
+const coachVideos = ref([])
+const coachVideosLoading = ref(false)
+const coachVideosError = ref(false)
+
+// Coach only: the COACH_REVIEW subject picker.
+const subjectDialog = ref(false)
+const subjectBookings = ref([])
+const subjectLoading = ref(false)
+const subjectLoadError = ref(false)
+const subjectBookingId = ref(null)
+
+function formatSessionSlot(iso, timezone) {
+  try {
+    return new Date(iso).toLocaleString(locale.value, {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: timezone || undefined,
+    })
+  } catch {
+    // An unknown IANA zone throws a RangeError — fall back to the viewer's own zone.
+    return new Date(iso).toLocaleString(locale.value)
+  }
+}
+
+const subjectOptions = computed(() =>
+  subjectBookings.value.map((b) => ({
+    value: b.bookingId,
+    label: `${formatSessionSlot(b.requestedStartTime, b.canonicalTimezone)} · ${
+      b.playerName || t('video.subject.unknownPlayer')
+    }`,
+  })),
+)
 
 function homeRoute() {
   return isCoach.value ? '/coach/command-center' : '/player/dashboard'
@@ -189,9 +304,49 @@ function onStatusChanged(videoId, newState) {
   if (video) video.operationalState = newState
 }
 
+async function fetchCoachVideos() {
+  coachVideosLoading.value = true
+  coachVideosError.value = false
+  try {
+    coachVideos.value = (await videoApi.getMyCoachVideos()) ?? []
+  } catch {
+    coachVideos.value = []
+    coachVideosError.value = true
+  } finally {
+    coachVideosLoading.value = false
+  }
+}
+
+async function loadSubjectBookings() {
+  subjectLoading.value = true
+  subjectLoadError.value = false
+  try {
+    subjectBookings.value = (await videoApi.listSubjectBookings()) ?? []
+  } catch {
+    subjectBookings.value = []
+    subjectLoadError.value = true
+  } finally {
+    subjectLoading.value = false
+  }
+}
+
 function openUpload(videoType) {
   if (uploadBusy.value) return
+  if (isCoach.value && videoType === 'COACH_REVIEW') {
+    // A session review must name the session it reviews (server-enforced); ask before the file.
+    subjectBookingId.value = null
+    subjectDialog.value = true
+    loadSubjectBookings()
+    return
+  }
   pendingSelection = { videoType }
+  fileInputRef.value?.click()
+}
+
+function confirmSubject() {
+  if (!subjectBookingId.value) return
+  pendingSelection = { videoType: 'COACH_REVIEW', subjectBookingId: subjectBookingId.value }
+  subjectDialog.value = false
   fileInputRef.value?.click()
 }
 
@@ -209,6 +364,9 @@ function openPlayer(video) {
 
 function uploadErrorMessage(err) {
   const status = err?.response?.status
+  const code = err?.response?.data?.errorMsg?.errorKey
+  if (code === 'VIDEO_MINOR_UPLOAD_REFUSED') return t('video.management.minorUploadRefused')
+  if (code === 'VIDEO_SUBJECT_INVALID') return t('video.management.subjectInvalid')
   if (status === 429) return t('video.management.quotaOrRateLimited')
   if (status === 409) return t('video.management.retryConflict')
   if (status === 422 || status === 400) return t('video.management.uploadRejected')
@@ -251,6 +409,7 @@ async function onFileSelected(event) {
         mimeType: file.type,
         videoType: selection.videoType,
       }
+      if (selection.subjectBookingId) payload.subjectBookingId = selection.subjectBookingId
       data = isCoach.value
         ? await videoApi.initiateUpload(payload)
         : await videoApi.initiatePlayerUpload(payload)
@@ -324,6 +483,8 @@ async function confirmDelete(videoId) {
 }
 
 onMounted(async () => {
-  await Promise.all([fetchVideos(), fetchQuota()])
+  const loads = [fetchVideos(), fetchQuota()]
+  if (!isCoach.value) loads.push(fetchCoachVideos())
+  await Promise.all(loads)
 })
 </script>

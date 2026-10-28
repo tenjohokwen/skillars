@@ -61,10 +61,18 @@ const { t } = useI18n()
 // SUBSCRIPTION_LOCKED and ARCHIVED are reversible — do NOT add to TERMINAL_STATES.
 // A subscription-locked video can return to ACTIVE on renewal; polling must continue.
 // ARCHIVED is defensive — SSE is inactive after READY so this state will not arrive via SSE.
-// HIDDEN is NOT terminal: a video awaiting parental approval transitions to TRANSCODING (approved)
-// or REJECTED (rejected) — removing HIDDEN keeps the SSE connection open for the follow-up push.
-// REJECTED is terminal: parental approval is final; no further state changes are expected.
-const TERMINAL_STATES = new Set(['READY', 'LOCKED', 'REJECTED', 'FAILED', 'DELETED', 'ARCHIVED'])
+// HIDDEN is terminal since the parental-approval flow was removed (ADR "Minors never upload"):
+// a video held by the fail-closed minor-safety gate is never released, so nothing follows it.
+// REJECTED is terminal (legacy approval-flow rejections); no further state changes are expected.
+const TERMINAL_STATES = new Set([
+  'READY',
+  'LOCKED',
+  'HIDDEN',
+  'REJECTED',
+  'FAILED',
+  'DELETED',
+  'ARCHIVED',
+])
 
 const currentStatus = ref(props.initialStatus)
 

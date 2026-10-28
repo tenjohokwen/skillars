@@ -1,12 +1,12 @@
 // UI-gap chunk C7 / D3 — a parent views, plays and deletes a linked child's videos.
 
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createTestingPinia } from '@pinia/testing'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
 vi.mock('src/api/video.api', () => ({
-  videoApi: { getPlayerVideos: vi.fn(), deleteVideo: vi.fn() },
+  videoApi: { getPlayerVideos: vi.fn(), getPlayerCoachVideos: vi.fn(), deleteVideo: vi.fn() },
 }))
 
 const notifySpy = vi.fn()
@@ -68,6 +68,10 @@ async function mountPage(playerId = LARGE_PLAYER_ID) {
   await flushPromises()
   return { wrapper, router }
 }
+
+beforeEach(() => {
+  videoApi.getPlayerCoachVideos.mockResolvedValue([])
+})
 
 afterEach(() => {
   while (mounted.length) mounted.pop().unmount()
@@ -131,5 +135,29 @@ describe('ParentChildVideosPage.vue', () => {
 
     expect(videoApi.deleteVideo).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="video-list-item"]').exists()).toBe(true)
+  })
+
+  // V184: coach videos ABOUT the child — listed for the parent, play only (the coach owns them).
+  it("lists the coach's session videos about the child, playable but never deletable", async () => {
+    videoApi.getPlayerVideos.mockResolvedValue([])
+    videoApi.getPlayerCoachVideos.mockResolvedValue([
+      { id: 'c1', operationalState: 'READY', videoType: 'COACH_REVIEW' },
+    ])
+    const { wrapper } = await mountPage()
+
+    expect(videoApi.getPlayerCoachVideos).toHaveBeenCalledWith(LARGE_PLAYER_ID)
+    const section = wrapper.find('[data-testid="child-coach-videos-section"]')
+    expect(section.findAll('[data-testid="video-list-item"]')).toHaveLength(1)
+    expect(section.find('[data-testid="video-play-btn"]').exists()).toBe(true)
+    expect(section.find('[data-testid="video-delete-btn"]').exists()).toBe(false)
+  })
+
+  it('shows the coach-videos error independently of the own-videos list', async () => {
+    videoApi.getPlayerVideos.mockResolvedValue([{ id: 'v1', operationalState: 'READY' }])
+    videoApi.getPlayerCoachVideos.mockRejectedValue({ response: { status: 500 } })
+    const { wrapper } = await mountPage()
+
+    expect(wrapper.find('[data-testid="child-coach-videos-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="child-videos-error"]').exists()).toBe(false)
   })
 })

@@ -191,9 +191,6 @@ export default {
       browseCoachesTitle: 'Trainer durchsuchen',
       browseCoachesBody: 'Finden Sie einen Trainer für Ihr Kind',
       creditWalletTitle: 'Guthabenkonto',
-      approvalsTitle: 'Ausstehende Freigaben',
-      approvalsPending: '{count} warten auf Ihre Prüfung',
-      approvalsNone: 'Alles erledigt',
       tileUnavailable: 'Nicht verfügbar',
     },
     player: {
@@ -740,7 +737,7 @@ export default {
       LOCKED: 'Wird überprüft',
       // Note: HIDDEN maps to 'Awaiting approval' for the minor gate case. This is also used if
       // an admin hides a video for a ToS violation — the UX is ambiguous; tracked as debt item.
-      HIDDEN: 'Wartet auf Freigabe',
+      HIDDEN: 'Zur Prüfung zurückgehalten',
       REJECTED: 'Nicht genehmigt',
       FAILED: 'Hochladen fehlgeschlagen',
       DELETED: 'Gelöscht',
@@ -748,20 +745,30 @@ export default {
       ARCHIVED: 'Archiviert',
       unknown: 'Unbekannt',
     },
+    subject: {
+      pickerTitle: 'Um welche Einheit geht es in diesem Video?',
+      pickerHint:
+        'Einheitsanalysen werden mit der Einheit und ihrem Spieler verknüpft, damit die Eltern des Spielers (und der Spieler, falls er ein eigenes Konto hat) sie ansehen können.',
+      label: 'Einheit',
+      loadError: 'Deine Einheiten konnten nicht geladen werden.',
+      noSessions:
+        'Keine durchgeführten Einheiten in den letzten 90 Tagen. Eine Einheitsanalyse braucht eine Einheit.',
+      required: 'Wähle die Einheit, die dieses Video analysiert.',
+      confirm: 'Videodatei auswählen',
+      unknownPlayer: 'Unbekannter Spieler',
+    },
+    coachVideos: {
+      title: 'Vom Trainer',
+      parentSubtitle:
+        'Trainingsvideos, die der Trainer von Ihrem Kind aufgenommen hat. Sie können sie ansehen.',
+      playerSubtitle:
+        'Trainingsvideos, die dein Trainer von dir aufgenommen hat. Du kannst sie ansehen.',
+      empty: 'Noch keine Trainingsvideos von einem Trainer',
+      loadError: 'Die Trainingsvideos konnten nicht geladen werden.',
+    },
     statusCard: {
       title: 'Videostatus',
       reconnecting: 'Verbindung wird wiederhergestellt…',
-    },
-    approval: {
-      awaitingParentTitle: 'Warten auf elterliche Genehmigung',
-      pendingApprovals: 'Videos, die auf Ihre Genehmigung warten',
-      noPendingApprovals: 'Alles erledigt — keine Videos warten auf Genehmigung',
-      approveButton: 'Genehmigen',
-      rejectButton: 'Ablehnen',
-      approvedNotice: 'Ihr Video wurde genehmigt und wird jetzt verarbeitet',
-      rejectedNotice: 'Ihr Video wurde nicht genehmigt',
-      confirmApprove: 'Dieses Video zur Veröffentlichung genehmigen?',
-      confirmReject: 'Dieses Video ablehnen? Der Spieler wird benachrichtigt.',
     },
     quota: {
       storage: 'Speicher',
@@ -791,9 +798,11 @@ export default {
       deleteSuccess: 'Video gelöscht.',
       deleteError: 'Video konnte nicht gelöscht werden. Bitte erneut versuchen.',
       deleteAriaLabel: 'Video löschen',
+      minorUploadRefused:
+        'Video-Uploads sind für dieses Konto nicht verfügbar. Dein Trainer kann stattdessen Trainingsvideos mit dir teilen.',
+      subjectInvalid:
+        'Diese Einheit kann nicht mit dem Video verknüpft werden. Wähle eine deiner eigenen durchgeführten Einheiten.',
     },
-    approvalNotFound: 'Genehmigungsanfrage nicht gefunden oder das Video wurde gelöscht.',
-    approvalAlreadyResolved: 'Diese Genehmigungsanfrage wurde bereits bearbeitet.',
     deletionNotAuthorised: 'Sie sind nicht berechtigt, dieses Video zu löschen',
     deletionFailed: 'Video konnte nicht gelöscht werden. Bitte erneut versuchen.',
   },
@@ -1974,7 +1983,7 @@ export default {
         TRANSCODING: 'Wird umgewandelt',
         READY: 'Bereit',
         LOCKED: 'Gesperrt',
-        HIDDEN: 'Wartet auf Elternfreigabe',
+        HIDDEN: 'Verborgen (Jugendschutz-Sperre)',
         REJECTED: 'Abgelehnt',
         FAILED: 'Fehlgeschlagen',
         DELETED: 'Gelöscht',
@@ -2216,7 +2225,6 @@ export default {
       packs: 'Trainingspakete',
       subscription: 'Abonnement',
       lockerRoom: 'Umkleide',
-      approvals: 'Video-Freigaben',
       openHub: 'Übersicht von {name} öffnen',
     },
   },
@@ -2526,9 +2534,6 @@ export default {
       PACK_PAUSED: 'Ihr Paket bei {coachDisplayName} wurde pausiert.',
       PERFORMANCE_REPORT_SHARED: '{coachName} hat einen Leistungsbericht für {playerName} geteilt.',
       VIDEO_MODERATION_OWNER_FLAGGED: 'Eines Ihrer Videos wurde zur Überprüfung markiert.',
-      VIDEO_APPROVAL_REQUESTED: 'Ein Video von {playerName} wartet auf Ihre Freigabe.',
-      VIDEO_APPROVAL_APPROVED: 'Ihr Elternteil hat Ihr Video freigegeben.',
-      VIDEO_APPROVAL_REJECTED: 'Ihr Elternteil hat Ihr Video nicht freigegeben.',
       COACH_VISIBILITY_REDUCED: 'Ihre Sichtbarkeit im Marktplatz wurde reduziert.',
       COACH_SUSPENDED:
         'Ihr Coach-Profil wurde gesperrt. Sie können auf Ihrer Profilseite Einspruch einlegen.',
@@ -2713,7 +2718,6 @@ export default {
     myPlayers: 'Meine Spieler',
     bookings: 'Buchungen',
     creditWallet: 'Guthaben',
-    approvals: 'Freigaben',
     lockerRoom: 'Umkleide',
     videos: 'Meine Videos',
     moderation: 'Moderation',

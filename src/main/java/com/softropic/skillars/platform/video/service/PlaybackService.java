@@ -55,24 +55,19 @@ public class PlaybackService {
         return authorizePlayback(videoId, viewerId, clientIp, false);
     }
 
-    /** Never issues a download URL (no ownership decision) — owner-facing callers use the 5-arg form. */
-    @Observed(name = "video.playback.authorize")
-    @Transactional
-    public PlaybackAuthorizationResponse authorizePlayback(UUID videoId, String viewerId, @Nullable String clientIp, boolean skipHiddenCheck) {
-        return authorizePlayback(videoId, viewerId, clientIp, skipHiddenCheck, false);
-    }
-
     /**
      * @param viewerIsOwner whether the caller owns the video, as decided by
      *     {@link VideoAccessGuard#isCurrentUserOwner} — the only thing that unlocks a download URL.
      *     {@code viewerId} is the caller's username (an email) and can never equal
      *     {@code video.ownerId} (a coach-profile UUID or a PlayerProfile id), so ownership cannot be
      *     derived from it here.
+     *     <p>There is no HIDDEN bypass any more: the parental-approval preview went with the approval
+     *     flow (ADR "Minors never upload", 2026-10-28), so HIDDEN is unplayable for every caller.
      */
     @Observed(name = "video.playback.authorize")
     @Transactional
     public PlaybackAuthorizationResponse authorizePlayback(UUID videoId, String viewerId, @Nullable String clientIp,
-                                                           boolean skipHiddenCheck, boolean viewerIsOwner) {
+                                                           boolean viewerIsOwner) {
         long start = System.nanoTime();
         boolean success = false;
         MDC.put("videoId", videoId.toString());
@@ -82,26 +77,15 @@ public class PlaybackService {
             Video video = videoRepository.findById(videoId)
                 .orElseThrow(() -> new VideoNotFoundException(videoId));
 
-            boolean isHidden = video.getOperationalState() == OperationalState.HIDDEN;
-
-            boolean ineligible;
-            if (skipHiddenCheck && isHidden) {
-                // Parent approval path: bypass HIDDEN block but still block terminal operational states
-                ineligible = video.getOperationalState() == OperationalState.DELETED
-                    || video.getOperationalState() == OperationalState.PURGED
-                    || video.getAccessState() == AccessState.BLOCKED
-                    || video.getAccessState() == AccessState.ARCHIVED;
-            } else {
-                ineligible =
-                    video.getOperationalState() == OperationalState.LOCKED
-                    || isHidden
-                    || video.getOperationalState() == OperationalState.DELETED
-                    || video.getOperationalState() == OperationalState.PURGED
-                    || video.getAccessState() == AccessState.BLOCKED
-                    || video.getAccessState() == AccessState.ARCHIVED
-                    || !(video.getOperationalState() == OperationalState.READY
-                         && video.getAccessState() == AccessState.ACTIVE);
-            }
+            boolean ineligible =
+                video.getOperationalState() == OperationalState.LOCKED
+                || video.getOperationalState() == OperationalState.HIDDEN
+                || video.getOperationalState() == OperationalState.DELETED
+                || video.getOperationalState() == OperationalState.PURGED
+                || video.getAccessState() == AccessState.BLOCKED
+                || video.getAccessState() == AccessState.ARCHIVED
+                || !(video.getOperationalState() == OperationalState.READY
+                     && video.getAccessState() == AccessState.ACTIVE);
 
             if (ineligible) {
                 throw new PlaybackDeniedException(videoId, viewerId,

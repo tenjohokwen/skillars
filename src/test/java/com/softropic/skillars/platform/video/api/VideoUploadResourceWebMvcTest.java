@@ -99,6 +99,12 @@ class VideoUploadResourceWebMvcTest {
     @MockitoBean
     private QuotaConfigService quotaConfigService;
 
+    @MockitoBean
+    private com.softropic.skillars.platform.video.service.MinorUploadPolicy minorUploadPolicy;
+
+    @MockitoBean
+    private com.softropic.skillars.platform.video.service.VideoSubjectService videoSubjectService;
+
     private static final InitializeUploadResponse STUB_RESPONSE = new InitializeUploadResponse(
         UUID.fromString("11111111-1111-1111-1111-111111111111"),
         UUID.fromString("22222222-2222-2222-2222-222222222222"),
@@ -109,6 +115,13 @@ class VideoUploadResourceWebMvcTest {
         9_999_999_999L,
         12345L
     );
+
+    @org.junit.jupiter.api.BeforeEach
+    void noSubjectByDefault() {
+        // Mockito answers 0L (not null) for a boxed Long — make "no subject" explicit.
+        when(videoSubjectService.resolveSubjectPlayer(any(), any(), org.mockito.ArgumentMatchers.isNull()))
+            .thenReturn(null);
+    }
 
     @Test
     @WithMockUser(roles = "COACH")
@@ -311,5 +324,84 @@ class VideoUploadResourceWebMvcTest {
                 .content(body))
             .andExpect(status().isForbidden())
             .andExpect(jsonPath("$.errorMsg.errorKey").value("QUOTA_EXCEEDED"));
+    }
+
+    // ── V184: the subject (booking + child) of a coach video ──
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void initiateUpload_coachReviewWithSubjectBooking_passesTheValidatedBookingAndItsPlayer() throws Exception {
+        UUID bookingId = UUID.randomUUID();
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(1001L);
+        when(coachProfileService.getCoachIdByUserId(1001L)).thenReturn(COACH_ID);
+        when(videoSubjectService.resolveSubjectPlayer(COACH_ID,
+            com.softropic.skillars.platform.video.contract.VideoType.COACH_REVIEW, bookingId)).thenReturn(77L);
+        when(videoService.initializeUpload(any())).thenReturn(STUB_RESPONSE);
+
+        String body = objectMapper.writeValueAsString(Map.of(
+            "fileName", "clip.mp4",
+            "fileSizeBytes", 10_485_760,
+            "mimeType", "video/mp4",
+            "videoType", "COACH_REVIEW",
+            "subjectBookingId", bookingId.toString()
+        ));
+
+        mockMvc.perform(post(INITIATE_URL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isCreated());
+
+        org.mockito.Mockito.verify(videoService).initializeUpload(org.mockito.ArgumentMatchers.argThat(r ->
+            bookingId.equals(r.subjectBookingId()) && Long.valueOf(77L).equals(r.subjectPlayerId())));
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void initiateUpload_invalidSubject_returns422WithSubjectInvalidKey_andNothingIsUploaded() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(1001L);
+        when(coachProfileService.getCoachIdByUserId(1001L)).thenReturn(COACH_ID);
+        when(videoSubjectService.resolveSubjectPlayer(any(), any(), any()))
+            .thenThrow(new com.softropic.skillars.platform.video.contract.exception.VideoSubjectInvalidException(
+                "booking not found for this coach"));
+
+        String body = objectMapper.writeValueAsString(Map.of(
+            "fileName", "clip.mp4",
+            "fileSizeBytes", 10_485_760,
+            "mimeType", "video/mp4",
+            "videoType", "COACH_REVIEW",
+            "subjectBookingId", UUID.randomUUID().toString()
+        ));
+
+        mockMvc.perform(post(INITIATE_URL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+            .andExpect(status().isUnprocessableEntity())
+            .andExpect(jsonPath("$.errorMsg.errorKey").value("VIDEO_SUBJECT_INVALID"));
+        org.mockito.Mockito.verify(videoService, org.mockito.Mockito.never()).initializeUpload(any());
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void listSubjectBookings_returnsTheCoachsHeldSessions() throws Exception {
+        UUID bookingId = UUID.randomUUID();
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(1001L);
+        when(coachProfileService.getCoachIdByUserId(1001L)).thenReturn(COACH_ID);
+        when(videoSubjectService.listSubjectBookings(COACH_ID)).thenReturn(java.util.List.of(
+            new com.softropic.skillars.platform.booking.contract.PlannableBookingSummary(
+                bookingId, 77L, "Mia", Instant.now(), Instant.now().plusSeconds(3600), "Europe/Berlin")));
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .get("/api/video/coach/subject-bookings"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].bookingId").value(bookingId.toString()))
+            .andExpect(jsonPath("$[0].playerName").value("Mia"));
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void listSubjectBookings_nonCoach_returns403() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .get("/api/video/coach/subject-bookings"))
+            .andExpect(status().isForbidden());
     }
 }

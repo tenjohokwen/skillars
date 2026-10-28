@@ -72,6 +72,7 @@ class GdprChildScopeIT extends AbstractIntegrationTest {
 
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private com.softropic.skillars.platform.security.repo.PlayerProfileRepository playerProfileRepository;
 
     @BeforeEach
     void setUp() {
@@ -215,6 +216,7 @@ class GdprChildScopeIT extends AbstractIntegrationTest {
     @Test
     void childErasure_scrubsProfile_hidesItFromParentList_andLeavesParentAccountIntact() {
         UUID bookingId = UUID.randomUUID();
+        UUID coachVideoId = UUID.randomUUID();
         transactionTemplate.execute(status -> {
             Instant start = Instant.now().minusSeconds(7 * 86400);
             jdbcTemplate.update("INSERT INTO booking.bookings (id, coach_id, parent_id, player_id, status, "
@@ -222,13 +224,28 @@ class GdprChildScopeIT extends AbstractIntegrationTest {
                     + "notes) VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin', 'Allergic to nuts')",
                 bookingId, UUID.randomUUID(), PARENT_ID, CHILD_ID, Timestamp.from(start),
                 Timestamp.from(start.plusSeconds(3600)), Timestamp.from(start), Timestamp.from(start));
+            // V184: a coach review of that session — its subject is the child being erased.
+            jdbcTemplate.update("INSERT INTO main.videos (id, owner_id, provider, provider_asset_id, "
+                    + "operational_state, access_state, title, storage_bytes, visibility, created_at, updated_at, "
+                    + "video_type, subject_booking_id, subject_player_id) VALUES (?, ?, 'bunny', ?, 'READY', "
+                    + "'ACTIVE', 'Coach review', 1000, 'PRIVATE', ?, ?, 'COACH_REVIEW', ?, ?)",
+                coachVideoId, UUID.randomUUID().toString(), "asset-" + coachVideoId,
+                Timestamp.from(start), Timestamp.from(start), bookingId, CHILD_ID);
             return null;
         });
+
+        // V184: the subject-link guard (VideoService.initializeUpload) sees a live child before erasure...
+        assertThat(transactionTemplate.<java.util.Optional<Long>>execute(status -> playerProfileRepository.lockLiveProfileForShare(CHILD_ID)))
+            .contains(CHILD_ID);
 
         String cookies = login(PARENT_EMAIL);
         ResponseEntity<Map> resp = post("/api/gdpr/players/" + CHILD_ID + "/erasure", cookies);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         UUID requestId = UUID.fromString((String) resp.getBody().get("requestId"));
+
+        // ...and none after it, so no new coach video can be linked to the erased child.
+        assertThat(transactionTemplate.<java.util.Optional<Long>>execute(status -> playerProfileRepository.lockLiveProfileForShare(CHILD_ID)))
+            .isEmpty();
 
         assertThat(jdbcTemplate.queryForObject("SELECT status FROM admin.gdpr_requests WHERE id = ?",
             String.class, requestId)).isEqualTo("COMPLETED");
@@ -240,6 +257,10 @@ class GdprChildScopeIT extends AbstractIntegrationTest {
         assertThat(((Date) profile.get("date_of_birth")).toLocalDate()).isEqualTo(LocalDate.of(2015, 12, 31));
         assertThat(profile.get("development_data_erased_at")).isNotNull();
         assertThat(((Number) profile.get("parent_id")).longValue()).isEqualTo(PARENT_ID);
+
+        // V184: the coach video about the erased child is purged (conservative: delete, not unlink).
+        assertThat(jdbcTemplate.queryForObject("SELECT operational_state FROM main.videos WHERE id = ?",
+            String.class, coachVideoId)).isEqualTo("PURGED");
 
         // Booking row kept (financial history), its free text anonymised.
         assertThat(jdbcTemplate.queryForObject("SELECT notes FROM booking.bookings WHERE id = ?",

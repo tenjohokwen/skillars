@@ -69,12 +69,18 @@ public enum EmailTemplate {
     PLAYER_NO_SHOW("email.booking.player_no_show.title"),
     COACH_VISIBILITY_REDUCED("email.reliability.visibility_reduced.title"),
     /**
-     * Minor-safety gate: a child's video is held until the parent approves it. A 7-day deadline (not
-     * the 1-day default) because a notice that expires in the outbox during an outage leaves the
-     * video HIDDEN with nobody told — the parent is the only person who can release it.
+     * RETIRED — no producer since the parental-approval flow was removed (ADR "Minors never upload",
+     * 2026-10-28). Kept ONLY so envelope / outbox / inbox rows already stored with these values still
+     * load (Hibernate {@code EnumType.STRING}) and still satisfy {@code envelope_entity_email_template_check},
+     * which keeps them too (V184 header). Their Thymeleaf templates are deleted, so a stale retry of one
+     * fails to render and is marked FAILED rather than sending an obsolete "approve this video" call to
+     * action. Remove in a later release together with a CHECK rebuild once no stored row carries them.
      */
+    @Deprecated
     VIDEO_APPROVAL_REQUESTED("email.video.approval.requested.title", Duration.ofDays(7), "emailService"),
+    @Deprecated
     VIDEO_APPROVAL_APPROVED("email.video.approval.approved.title"),
+    @Deprecated
     VIDEO_APPROVAL_REJECTED("email.video.approval.rejected.title"),
     /**
      * skillars-deferred-114 AC5: the SES cutover preflight endpoint's probe email — a one-line

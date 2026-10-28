@@ -7,15 +7,16 @@ const SSE_BACKOFF_DELAYS = [1000, 2000, 4000, 8000]
 // DELETED: markPurged() fires VideoStatusChangedEvent(DELETED) which reaches SSE subscribers.
 //   Without DELETED here, the SSE connection stays open indefinitely after purge.
 // SUBSCRIPTION_LOCKED is intentionally excluded — it is reversible (player may renew within 30 days).
-// HIDDEN is NOT terminal: a video awaiting parental approval will transition to TRANSCODING or REJECTED;
-//   the SSE connection must stay open so the VideoStatusCard receives the follow-up state push.
-// REJECTED is terminal: parental approval is final.
+// HIDDEN is terminal: since the parental-approval flow was removed (ADR "Minors never upload"), a video
+//   held by the fail-closed minor-safety gate is never released, so no follow-up push will come.
+// REJECTED is terminal (legacy approval-flow rejections).
 // PURGED: defensive backstop — the server translates PURGED to DELETED before it ever reaches the
 //   client (VideoSseService.onVideoPurged for SSE, VideoEventResource.computeDisplayState for this
 //   polling fallback), but if that translation is ever bypassed, PURGED must still stop polling.
 const TERMINAL_SSE_STATES = new Set([
   'READY',
   'LOCKED',
+  'HIDDEN',
   'REJECTED',
   'FAILED',
   'DELETED',

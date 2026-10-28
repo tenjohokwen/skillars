@@ -108,19 +108,6 @@
             <template v-else>{{ formattedBalance }}</template>
           </div>
         </router-link>
-
-        <router-link to="/parent/approvals" class="glass-card soft-hover parent-dashboard__tile">
-          <q-icon name="task_alt" size="24px" style="color: var(--accent-primary)" />
-          <div class="text-card-title q-mt-sm">{{ t('auth.parent.approvalsTitle') }}</div>
-          <div class="text-meta q-mt-xs">
-            <q-spinner-dots v-if="approvalsLoading" size="18px" />
-            <template v-else-if="approvalsError">{{ t('auth.parent.tileUnavailable') }}</template>
-            <template v-else-if="approvalsCount > 0">
-              {{ t('auth.parent.approvalsPending', { count: approvalsCount }) }}
-            </template>
-            <template v-else>{{ t('auth.parent.approvalsNone') }}</template>
-          </div>
-        </router-link>
       </div>
     </div>
   </q-page>
@@ -132,7 +119,6 @@ import { useI18n } from 'vue-i18n'
 import { usePlayerStore } from 'src/stores/playerStore'
 import { useBookingStore } from 'src/stores/booking.store'
 import { usePaymentStore } from 'src/stores/payment.store'
-import { videoApi } from 'src/api/video.api'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
 import { parentChildLinks as childLinks } from 'src/utils/parentChildLinks'
 
@@ -168,11 +154,6 @@ const formattedBalance = computed(() => {
   return balance != null ? `€${Number(balance).toFixed(2)}` : t('auth.parent.tileUnavailable')
 })
 
-const approvals = ref([])
-const approvalsLoading = ref(true)
-const approvalsError = ref(false)
-const approvalsCount = computed(() => approvals.value.length)
-
 onMounted(async () => {
   try {
     await playerStore.fetchPlayers()
@@ -191,18 +172,6 @@ onMounted(async () => {
     })
     .finally(() => {
       creditLoading.value = false
-    })
-
-  videoApi
-    .getMyApprovals()
-    .then((data) => {
-      approvals.value = data
-    })
-    .catch(() => {
-      approvalsError.value = true
-    })
-    .finally(() => {
-      approvalsLoading.value = false
     })
 })
 </script>

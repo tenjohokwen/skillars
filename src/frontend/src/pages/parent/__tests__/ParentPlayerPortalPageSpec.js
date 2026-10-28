@@ -45,7 +45,6 @@ async function mountPage(playerId = LARGE_PLAYER_ID, initialState = {}, { shallo
       { path: '/parent/players/:playerId/development', component: STUB },
       { path: '/parent/players/:playerId/packs', component: STUB },
       { path: '/parent/player/:playerId/subscription', component: STUB },
-      { path: '/parent/approvals', component: STUB },
     ],
   })
   router.push(`/parent/players/${playerId}/sessions`)
@@ -92,10 +91,11 @@ describe('ParentPlayerPortalPage.vue — child hub', () => {
       `/parent/player/${LARGE_PLAYER_ID}/subscription`,
       `/player/locker-room/${LARGE_PLAYER_ID}`,
       `/parent/players/${LARGE_PLAYER_ID}/videos`,
-      '/parent/approvals',
     ]) {
       expect(wrapper.find(`[href="${href}"]`).exists()).toBe(true)
     }
+    // The parental video-approval page is gone (ADR "Minors never upload").
+    expect(wrapper.find('[href="/parent/approvals"]').exists()).toBe(false)
   })
 
   it("shows the child's name from the parent's linked players", async () => {

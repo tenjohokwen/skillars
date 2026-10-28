@@ -10,8 +10,8 @@ import com.softropic.skillars.platform.video.contract.exception.QuotaExceededExc
 import com.softropic.skillars.platform.video.contract.exception.RateLimitExceededException;
 import com.softropic.skillars.platform.video.contract.exception.TerminalStateViolationException;
 import com.softropic.skillars.platform.video.contract.exception.VideoDeletionNotAuthorisedException;
-import com.softropic.skillars.platform.video.contract.exception.VideoApprovalNotFoundException;
-import com.softropic.skillars.platform.video.contract.exception.VideoAlreadyResolvedException;
+import com.softropic.skillars.platform.video.contract.exception.MinorUploadRefusedException;
+import com.softropic.skillars.platform.video.contract.exception.VideoSubjectInvalidException;
 import com.softropic.skillars.platform.video.contract.exception.VideoStateConflictException;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -135,19 +135,20 @@ public class VideoApiAdvice {
         return logErrorAndReturnDTO(ex, "video.deletionNotAuthorised", "video.deletionNotAuthorised");
     }
 
-    @ExceptionHandler(VideoApprovalNotFoundException.class)
-    @ResponseStatus(HttpStatus.NOT_FOUND)
-    public ErrorDto videoApprovalNotFoundHandler(final VideoApprovalNotFoundException ex) {
-        ErrorDto dto = logErrorAndReturnDTO(ex, "video.approvalNotFound", VideoErrorCode.VIDEO_APPROVAL_NOT_FOUND.getErrorCode());
-        videoMetrics.recordError(operationFromMdc(), VideoErrorCode.VIDEO_APPROVAL_NOT_FOUND.getErrorCode());
+    /** Minors never upload (ADR 2026-10-28) — a refusal by policy, not a malformed request: 403. */
+    @ExceptionHandler(MinorUploadRefusedException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public ErrorDto minorUploadRefusedHandler(final MinorUploadRefusedException ex) {
+        ErrorDto dto = logErrorAndReturnDTO(ex, "video.minorUploadRefused", VideoErrorCode.VIDEO_MINOR_UPLOAD_REFUSED.getErrorCode());
+        videoMetrics.recordError(operationFromMdc(), VideoErrorCode.VIDEO_MINOR_UPLOAD_REFUSED.getErrorCode());
         return dto;
     }
 
-    @ExceptionHandler(VideoAlreadyResolvedException.class)
-    @ResponseStatus(HttpStatus.CONFLICT)
-    public ErrorDto videoAlreadyResolvedHandler(final VideoAlreadyResolvedException ex) {
-        ErrorDto dto = logErrorAndReturnDTO(ex, "video.approvalAlreadyResolved", VideoErrorCode.VIDEO_APPROVAL_ALREADY_RESOLVED.getErrorCode());
-        videoMetrics.recordError(operationFromMdc(), VideoErrorCode.VIDEO_APPROVAL_ALREADY_RESOLVED.getErrorCode());
+    @ExceptionHandler(VideoSubjectInvalidException.class)
+    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+    public ErrorDto videoSubjectInvalidHandler(final VideoSubjectInvalidException ex) {
+        ErrorDto dto = logErrorAndReturnDTO(ex, "video.subjectInvalid", VideoErrorCode.VIDEO_SUBJECT_INVALID.getErrorCode());
+        videoMetrics.recordError(operationFromMdc(), VideoErrorCode.VIDEO_SUBJECT_INVALID.getErrorCode());
         return dto;
     }
 

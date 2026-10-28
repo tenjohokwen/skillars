@@ -1,6 +1,5 @@
 package com.softropic.skillars.platform.video.service;
 
-import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.LifecycleTrigger;
 import com.softropic.skillars.platform.video.contract.UploadSessionStatus;
@@ -9,7 +8,6 @@ import com.softropic.skillars.platform.video.repo.UploadSessionRepository;
 import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoDeletionLog;
 import com.softropic.skillars.platform.video.repo.VideoDeletionOutbox;
-import com.softropic.skillars.platform.video.repo.VideoApprovalRequestRepository;
 import com.softropic.skillars.platform.video.repo.VideoDeletionLogRepository;
 import com.softropic.skillars.platform.video.repo.VideoDeletionOutboxRepository;
 import com.softropic.skillars.platform.video.repo.VideoQuotaRepository;
@@ -29,7 +27,6 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -43,10 +40,8 @@ class VideoDeletionServiceTest {
     @Mock private VideoRepository videoRepository;
     @Mock private VideoDeletionOutboxRepository outboxRepository;
     @Mock private VideoDeletionLogRepository deletionLogRepository;
-    @Mock private VideoApprovalRequestRepository approvalRequestRepository;
     @Mock private VideoQuotaRepository videoQuotaRepository;
     @Mock private QuotaService quotaService;
-    @Mock private ConfigService configService;
     @Mock private ApplicationEventPublisher publisher;
     @Mock private VideoAccessGuard videoAccessGuard;
     @Mock private UploadSessionRepository uploadSessionRepository;
@@ -58,7 +53,7 @@ class VideoDeletionServiceTest {
     @BeforeEach
     void setUp() {
         service = new VideoDeletionService(videoRepository, outboxRepository, deletionLogRepository,
-            approvalRequestRepository, videoQuotaRepository, quotaService, configService, publisher, videoAccessGuard,
+            videoQuotaRepository, quotaService, publisher, videoAccessGuard,
             uploadSessionRepository);
         // cascadeDeleteForAccount routes its per-video call through self.deleteVideo(...) so each
         // iteration gets its own transaction via the Spring proxy — wire self back to the same
@@ -112,6 +107,42 @@ class VideoDeletionServiceTest {
         verify(videoQuotaRepository).resetBytesForOwner(OWNER_ID);
     }
 
+    // ── V184: GDPR erasure of a player purges the coach videos about them ──
+
+    @Test
+    void purgeVideosAboutPlayer_purgesEachSubjectVideo_decrementingTheCoachOwnersQuota() {
+        UUID videoId = UUID.randomUUID();
+        Video v = video(videoId);
+        v.setSubjectPlayerId(77L);
+        when(videoRepository.findUnpurgedIdsBySubjectPlayerId(77L)).thenReturn(List.of(videoId));
+        when(videoRepository.findById(videoId)).thenReturn(java.util.Optional.of(v));
+        when(outboxRepository.existsByVideoIdAndStatus(videoId, "PENDING")).thenReturn(false);
+
+        assertThat(service.purgeVideosAboutPlayer(77L)).isZero();
+
+        assertThat(v.getOperationalState()).isEqualTo(OperationalState.PURGED);
+        // The owner (coach) survives the child's erasure: their quota is decremented, never reset.
+        verify(quotaService).decrementStorageBytes(OWNER_ID, 1000L);
+        verify(videoQuotaRepository, never()).resetBytesForOwner(any());
+        ArgumentCaptor<VideoDeletionLog> logRow = ArgumentCaptor.forClass(VideoDeletionLog.class);
+        verify(deletionLogRepository).save(logRow.capture());
+        assertThat(logRow.getValue().getTriggeredBy()).isEqualTo(LifecycleTrigger.ACCOUNT_DELETION);
+    }
+
+    @Test
+    void purgeVideosAboutPlayer_oneFailure_continuesAndReportsIt() {
+        UUID bad = UUID.randomUUID();
+        UUID good = UUID.randomUUID();
+        Video v = video(good);
+        when(videoRepository.findUnpurgedIdsBySubjectPlayerId(77L)).thenReturn(List.of(bad, good));
+        when(videoRepository.findById(bad)).thenThrow(new RuntimeException("db error"));
+        when(videoRepository.findById(good)).thenReturn(java.util.Optional.of(v));
+
+        assertThat(service.purgeVideosAboutPlayer(77L)).isEqualTo(1);
+
+        assertThat(v.getOperationalState()).isEqualTo(OperationalState.PURGED);
+    }
+
     // ── B5: admin delete goes through the same bookkeeping as every other delete ──
 
     @Test
@@ -120,7 +151,6 @@ class VideoDeletionServiceTest {
         Video v = video(videoId);
         v.setProviderAssetId("bunny-1");
         when(videoRepository.findById(videoId)).thenReturn(java.util.Optional.of(v));
-        when(configService.getBoolean(anyString(), anyBoolean())).thenReturn(true);
         when(uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)).thenReturn(java.util.Optional.empty());
         when(outboxRepository.existsByVideoIdAndStatus(videoId, "PENDING")).thenReturn(false);
 
@@ -128,7 +158,6 @@ class VideoDeletionServiceTest {
 
         assertThat(v.getOperationalState()).isEqualTo(OperationalState.PURGED);
         verify(quotaService).decrementStorageBytes(OWNER_ID, 1000L);
-        verify(approvalRequestRepository).cancelAllPendingForVideo(videoId);
         ArgumentCaptor<VideoDeletionLog> logRow = ArgumentCaptor.forClass(VideoDeletionLog.class);
         verify(deletionLogRepository).save(logRow.capture());
         assertThat(logRow.getValue().getTriggeredBy()).isEqualTo(LifecycleTrigger.ADMIN_DELETION);
@@ -149,7 +178,6 @@ class VideoDeletionServiceTest {
         UploadSession session = new UploadSession();
         session.setStatus(UploadSessionStatus.PENDING);
         when(videoRepository.findById(videoId)).thenReturn(java.util.Optional.of(v));
-        when(configService.getBoolean(anyString(), anyBoolean())).thenReturn(true);
         when(uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)).thenReturn(java.util.Optional.of(session));
 
         service.deleteByAdmin(videoId);

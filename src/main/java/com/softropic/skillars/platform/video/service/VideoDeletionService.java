@@ -1,13 +1,11 @@
 package com.softropic.skillars.platform.video.service;
 
-import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.video.contract.LifecycleTrigger;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.event.VideoPurgedEvent;
 import com.softropic.skillars.platform.video.contract.exception.VideoDeletionNotAuthorisedException;
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
 import com.softropic.skillars.platform.video.repo.Video;
-import com.softropic.skillars.platform.video.repo.VideoApprovalRequestRepository;
 import com.softropic.skillars.platform.video.repo.VideoDeletionLog;
 import com.softropic.skillars.platform.video.repo.VideoDeletionLogRepository;
 import com.softropic.skillars.platform.video.repo.VideoDeletionOutbox;
@@ -42,10 +40,8 @@ public class VideoDeletionService {
     private final VideoRepository videoRepository;
     private final VideoDeletionOutboxRepository outboxRepository;
     private final VideoDeletionLogRepository deletionLogRepository;
-    private final VideoApprovalRequestRepository approvalRequestRepository;
     private final VideoQuotaRepository videoQuotaRepository;
     private final QuotaService quotaService;
-    private final ConfigService configService;
     private final ApplicationEventPublisher publisher;
     private final VideoAccessGuard videoAccessGuard;
     private final UploadSessionRepository uploadSessionRepository;
@@ -112,8 +108,8 @@ public class VideoDeletionService {
     }
 
     /**
-     * User-initiated deletion. Validates ownership (belt-and-suspenders behind @PreAuthorize),
-     * cancels pending approval requests, and delegates to deleteVideo().
+     * User-initiated deletion. Validates ownership (belt-and-suspenders behind @PreAuthorize) and
+     * delegates to deleteVideo().
      */
     @Transactional
     public void deleteByUser(UUID videoId, String currentUser) {
@@ -140,10 +136,6 @@ public class VideoDeletionService {
         } catch (Exception e) {
             // No security context (internal call) — trust the @PreAuthorize guard was already invoked
             log.warn("[DELETION_GUARD_SKIPPED videoId={} caller={}] Could not re-verify: {}", videoId, currentUser, e.getMessage());
-        }
-
-        if (configService.getBoolean("platform.video.approvalCancellation.enabled", true)) {
-            approvalRequestRepository.cancelAllPendingForVideo(videoId);
         }
 
         try {
@@ -177,15 +169,7 @@ public class VideoDeletionService {
             log.info("[DELETION_IDEMPOTENT videoId={}] Admin delete of an already-PURGED video — no-op", videoId);
             return false;
         }
-        if (configService.getBoolean("platform.video.approvalCancellation.enabled", true)) {
-            approvalRequestRepository.cancelAllPendingForVideo(videoId);
-        }
-        uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)
-            .filter(s -> s.getStatus() == UploadSessionStatus.PENDING)
-            .ifPresent(s -> {
-                s.setStatus(UploadSessionStatus.EXPIRED);
-                uploadSessionRepository.save(s);
-            });
+        expirePendingUploadSession(videoId);
         deleteVideo(videoId, LifecycleTrigger.ADMIN_DELETION, false);
         return true;
     }
@@ -202,7 +186,7 @@ public class VideoDeletionService {
      * transaction — a direct {@code @Modifying} repository call threw
      * {@code TransactionRequiredException} (caught + logged upstream, so the quota row was silently
      * never reset), and an inner REQUIRED tx that never committed cleanly blocked the follow-up
-     * approval-cancel query on its own row locks. Every write here therefore goes through a
+     * follow-up query on its own row locks. Every write here therefore goes through a
      * {@code REQUIRES_NEW} boundary, the same shape {@code PendingBlobDeletionChunkProcessor} uses.
      */
     public void cascadeDeleteForAccount(String ownerId) {
@@ -249,8 +233,8 @@ public class VideoDeletionService {
      * {@link #self} from {@link #cascadeDeleteForAccount}. {@code REQUIRES_NEW} (not the plain
      * {@code @Transactional} REQUIRED on {@link #deleteVideo}) so it commits even when the cascade
      * runs inside the erasure tx's {@code afterCommit} callback — otherwise the row stays
-     * write-locked by an uncommitted inner tx and the follow-up approval-cancel query deadlocks on
-     * it. Preserves the existing per-video isolation the direct-call path already relied on.
+     * write-locked by an uncommitted inner tx and a follow-up query deadlocks on it. Preserves the
+     * existing per-video isolation the direct-call path already relied on.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void purgeVideoForCascade(UUID videoId) {
@@ -269,13 +253,51 @@ public class VideoDeletionService {
     }
 
     /**
-     * skillars-deferred-91 AC13: the {@code @Modifying} pending-approval cancellation issued by
-     * {@code AccountDeletionCascadeListener.onAccountDeleted} (also an AFTER_COMMIT, non-transactional
-     * path), in its own committed transaction. Same {@code TransactionRequiredException} class.
+     * V184 / ADR "Minors never upload": GDPR erasure of a player also purges the coach videos whose
+     * SUBJECT is that player (a coach review of the child's session). Not owner-scoped like
+     * {@link #cascadeDeleteForAccount}: the owner is the coach, whose account survives, so the coach's
+     * storage quota IS decremented per video (skipQuotaDecrement=false) instead of being reset.
+     * Same per-video REQUIRES_NEW isolation as the account cascade — it runs from an AFTER_COMMIT
+     * listener with no usable ambient transaction.
+     *
+     * @return the number of videos that failed to purge (0 = all done)
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void cancelPendingApprovalsForOwners(java.util.List<String> ownerIds) {
-        approvalRequestRepository.cancelAllPendingForOwners(ownerIds);
+    public int purgeVideosAboutPlayer(Long playerId) {
+        int failed = 0;
+        int purged = 0;
+        for (UUID videoId : videoRepository.findUnpurgedIdsBySubjectPlayerId(playerId)) {
+            try {
+                self.purgeSubjectVideoForErasure(videoId);
+                purged++;
+            } catch (Exception e) {
+                failed++;
+                log.error("[VIDEO_SUBJECT_ERASURE_FAILURE videoId={} playerId={}] Failed to purge coach video "
+                    + "about an erased player, continuing", videoId, playerId, e);
+            }
+        }
+        log.info("[VIDEO_SUBJECT_ERASURE_COMPLETE playerId={} purged={} failed={}]", playerId, purged, failed);
+        return failed;
     }
 
+    /** One subject-linked video's purge in its own committed transaction (see {@link #purgeVideosAboutPlayer}). */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void purgeSubjectVideoForErasure(UUID videoId) {
+        try {
+            // A coach may still be mid-upload of the erased child's footage: expire the PENDING session
+            // (as the admin delete does) so it is not completed against a PURGED video.
+            expirePendingUploadSession(videoId);
+            deleteVideo(videoId, LifecycleTrigger.ACCOUNT_DELETION, false);
+        } catch (VideoNotFoundException e) {
+            log.debug("[VIDEO_SUBJECT_ERASURE videoId={}] vanished before purge — nothing to do", videoId);
+        }
+    }
+
+    private void expirePendingUploadSession(UUID videoId) {
+        uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)
+            .filter(s -> s.getStatus() == UploadSessionStatus.PENDING)
+            .ifPresent(s -> {
+                s.setStatus(UploadSessionStatus.EXPIRED);
+                uploadSessionRepository.save(s);
+            });
+    }
 }

@@ -22,6 +22,8 @@ import com.softropic.skillars.platform.video.contract.exception.RateLimitExceede
 import com.softropic.skillars.platform.video.contract.exception.VideoNotFoundException;
 import com.softropic.skillars.platform.video.contract.exception.VideoSessionExpiredException;
 import com.softropic.skillars.platform.video.contract.exception.VideoStateConflictException;
+import com.softropic.skillars.platform.video.contract.exception.VideoSubjectInvalidException;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
 import io.micrometer.observation.annotation.Observed;
 import org.springframework.context.ApplicationEventPublisher;
@@ -61,6 +63,7 @@ public class VideoService {
     private final VideoTypeConstraints videoTypeConstraints;
     private final PendingProviderAssetTracker pendingProviderAssetTracker;
     private final com.softropic.skillars.platform.video.repo.PendingProviderAssetRepository pendingProviderAssetRepository;
+    private final PlayerProfileRepository playerProfileRepository;
 
     @Transactional(readOnly = true)
     public Video findById(UUID videoId) {
@@ -298,6 +301,15 @@ public class VideoService {
 
             // 6. Commit Video + UploadSession to DB before calling provider
             UUID[] ids = Objects.requireNonNull(transactionTemplate.execute(status -> {
+                // V184: a subject-linked coach video is inserted only while its child's data is live.
+                // FOR SHARE (held until this transaction commits) orders this insert against a
+                // concurrent GDPR erasure of the child: either the erasure committed first (empty →
+                // refused here) or its NOWAIT lock fails until this commits — it retries, or is marked
+                // FAILED and re-driven — so its AFTER_COMMIT purge sees the row (see the repository).
+                if (request.subjectPlayerId() != null
+                        && playerProfileRepository.lockLiveProfileForShare(request.subjectPlayerId()).isEmpty()) {
+                    throw new VideoSubjectInvalidException("the session's player no longer exists or was erased");
+                }
                 Video video = new Video();
                 video.setOwnerId(request.ownerId());
                 video.setProvider(properties.getProvider());
@@ -306,6 +318,8 @@ public class VideoService {
                 video.setAccessState(AccessState.ACTIVE);
                 video.setVisibility(Visibility.PRIVATE);
                 video.setVideoType(request.videoType());
+                video.setSubjectBookingId(request.subjectBookingId());
+                video.setSubjectPlayerId(request.subjectPlayerId());
                 Video savedVideo = videoRepository.save(video);
 
                 UploadSession session = new UploadSession();
