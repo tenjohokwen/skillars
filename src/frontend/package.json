@@ -1,14 +1,14 @@
 {
   "name": "frontend",
   "version": "0.0.1",
-  "description": "Marketing platform",
+  "description": "Skillars — football coaching marketplace web app",
   "productName": "skillars",
-  "author": "mokwen <mokwen@groupon.com>",
+  "author": "Skillars",
   "type": "module",
   "private": true,
   "scripts": {
     "lint": "eslint -c ./eslint.config.js \"./src*/**/*.{js,cjs,mjs,vue}\"",
-    "format": "prettier --write \"**/*.{js,vue,scss,html,md,json}\" --ignore-path .gitignore",
+    "format": "prettier --write \"**/*.{js,vue,scss,json}\" --ignore-path ../../.gitignore",
     "test": "echo \"No test specified\" && exit 0",
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",

@@ -244,6 +244,18 @@ public final class ConfigBounds {
             "0/neg → every batch booking rejected as booking.batchSizeExceeded", 0L);
 
     /**
+     * skillars-deferred-149 AC5: the review-eligibility cross-field invariant —
+     * {@code reviews.updateCooldownDays - reviews.minSessionAgeDays} must be at least this many days.
+     * The single definition read by both guards that enforce it ({@code ConfigService}'s PUT-time
+     * check and {@code ConfigStartupAssertion}'s boot check), which previously each declared their
+     * own copy "kept in sync" by comment.
+     */
+    public static final long MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS = 7L;
+
+    /** Upper bound of {@link #REVIEWS_UPDATE_COOLDOWN_DAYS}; also derives the other key's max. */
+    private static final long REVIEWS_UPDATE_COOLDOWN_MAX_DAYS = 365L;
+
+    /**
      * {@code ReviewSubmissionService} — direction of harm is inverted from the key this replaces
      * (REVIEWS_SUBMISSION_WINDOW_DAYS, an upper-bound window whose bad value made submission
      * IMPOSSIBLE). This is a lower-bound floor: an out-of-range value (0 or neg) falls back to the
@@ -252,19 +264,23 @@ public final class ConfigBounds {
      * Notes, F6) instead of being read as a legitimate "no cooling-off period" value.
      */
     // skillars-deferred-149 AC3 code review (2026-10-08): max narrowed from 365 to 358
-    // (365 - the cross-field guard's own minimum-7-day-gap). updateCooldownDays caps at 365, so any
-    // minSessionAgeDays above 358 can never satisfy updateCooldownDays - minSessionAgeDays >= 7
-    // regardless of the partner's value -- rejectOutOfRange must catch it here, with a message
-    // naming THIS key, rather than letting the cross-field guard reject it later with a confusing
-    // error pointing at updateCooldownDays, a key the operator never touched.
+    // (REVIEWS_UPDATE_COOLDOWN_MAX_DAYS - MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS). updateCooldownDays
+    // caps at 365, so any minSessionAgeDays above 358 can never satisfy updateCooldownDays -
+    // minSessionAgeDays >= 7 regardless of the partner's value -- rejectOutOfRange must catch it
+    // here, with a message naming THIS key, rather than letting the cross-field guard reject it later
+    // with a confusing error pointing at updateCooldownDays, a key the operator never touched.
     public static final BoundedKey REVIEWS_MIN_SESSION_AGE_DAYS =
-        new BoundedKey("reviews.minSessionAgeDays", 1L, 358L, false,
-            "out-of-range (incl. 0, or above 358 -- unreachable under the minimum-7-day cross-field "
-                + "gap since updateCooldownDays caps at 365) falls back to the coded default (7)", 7L);
+        new BoundedKey("reviews.minSessionAgeDays", 1L,
+            REVIEWS_UPDATE_COOLDOWN_MAX_DAYS - MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS, false,
+            "out-of-range (incl. 0, or above "
+                + (REVIEWS_UPDATE_COOLDOWN_MAX_DAYS - MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS)
+                + " -- unreachable under the minimum-" + MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS
+                + "-day cross-field gap since updateCooldownDays caps at " + REVIEWS_UPDATE_COOLDOWN_MAX_DAYS
+                + ") falls back to the coded default (7)", 7L);
 
     /** {@code ReviewSubmissionService} — same reasoning as REVIEWS_MIN_SESSION_AGE_DAYS above. */
     public static final BoundedKey REVIEWS_UPDATE_COOLDOWN_DAYS =
-        new BoundedKey("reviews.updateCooldownDays", 1L, 365L, false,
+        new BoundedKey("reviews.updateCooldownDays", 1L, REVIEWS_UPDATE_COOLDOWN_MAX_DAYS, false,
             "out-of-range (incl. 0) falls back to the coded default (30), never to an unbounded cooldown", 30L);
 
     /** {@code ReviewFlagService} — 0 → every review auto-held. */

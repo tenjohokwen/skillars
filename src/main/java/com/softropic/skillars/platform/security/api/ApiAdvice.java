@@ -654,10 +654,11 @@ public class ApiAdvice {
     }
 
     /**
-     * Handles concurrent rotation races (AKEY-09). When two threads both attempt to
-     * rotate the same TenantApiKey, Hibernate's version-conditional UPDATE matches
-     * zero rows on the loser, and Spring Data wraps the JPA OptimisticLockException
-     * in ObjectOptimisticLockingFailureException. Map it to 409 Conflict.
+     * Handles lost optimistic-lock races on any {@code @Version} entity. When two requests both
+     * modify the same row, Hibernate's version-conditional UPDATE matches zero rows on the loser,
+     * and Spring Data wraps the JPA OptimisticLockException in
+     * ObjectOptimisticLockingFailureException. Map it to 409 Conflict so the client can re-read
+     * and retry.
      */
     @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
     @ResponseStatus(HttpStatus.CONFLICT)

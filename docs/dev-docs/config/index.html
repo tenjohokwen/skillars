@@ -100,7 +100,7 @@
       <tr><td><code>api</code></td><td><code>ConfigResource</code> &mdash; the only HTTP entry point, three admin-only endpoints under <code>/api/config</code>.</td></tr>
       <tr><td><code>contract</code></td><td><code>ConfigValueType</code> enum, <code>ConfigValueResponse</code>, <code>UpdateConfigRequest</code> (<code>@NotBlank value</code>), and <code>AdminConfigEntryDto</code> (editor row: value plus <code>min</code>/<code>max</code>/<code>note</code>/<code>failFast</code>/<code>stored</code>/<code>codeDefault</code>).</td></tr>
       <tr><td><code>config</code></td><td><code>ConfigProperties</code> (<code>@ConfigurationProperties(prefix = "app.config")</code>, just <code>cacheTtlSeconds</code>, default 300; <code>application.yaml</code> sets <code>app.config.cache-ttl-seconds: 300</code>) and <code>ConfigModuleConfig</code> which registers it.</td></tr>
-      <tr><td><code>service</code></td><td><code>ConfigService</code> (the real public API, injected directly by ~60 classes across the codebase), <code>ConfigBounds</code> (range registry), <code>ConfigStartupAssertion</code> (boot-time validation), <code>ConfigRefreshException</code>, <code>ConfigMapper</code> (MapStruct entity&rarr;DTO).</td></tr>
+      <tr><td><code>service</code></td><td><code>ConfigService</code> (the real public API, injected directly by ~60 classes across the codebase), <code>ConfigBounds</code> (range registry), <code>ConfigStartupAssertion</code> (boot-time validation), <code>ConfigRefreshException</code>, <code>ConfigMapper</code> (MapStruct entity&rarr;DTO), <code>ConfigRateLimitBucketTtlSource</code> (implements <code>infrastructure.security.RateLimitBucketTtlSource</code>).</td></tr>
       <tr><td><code>repo</code></td><td><code>PlatformConfig</code> JPA entity and <code>PlatformConfigRepository</code> (one derived finder: <code>findByKey</code>).</td></tr>
     </table>
 
@@ -121,7 +121,8 @@
         <code>getString</code>/<code>getLong(key)</code> (throw <code>IllegalStateException</code> if missing or
         non-numeric), <code>getLong(key, default)</code>/<code>getInt(key, default)</code> (WARN + default),
         <code>getBoundedLong(key, default, min, max)</code>/<code>getBoundedInt(...)</code> (out-of-range &rarr; WARN +
-        default), <code>getBoundedLong(key, min, max)</code> (missing still throws; out-of-range is <em>clamped</em> to
+        default), <code>getBoundedInt(BoundedKey)</code> (same, with key, default and range all taken from the
+        <code>ConfigBounds</code> entry; <code>HAS_CODE_DEFAULT</code> keys only), <code>getBoundedLong(key, min, max)</code> (missing still throws; out-of-range is <em>clamped</em> to
         the nearest bound), <code>getBoolean(key)</code> (missing or non-boolean &rarr; <code>false</code> + WARN +
         <code>config.value.misconfigured</code> metric), <code>getBoolean(key, default)</code>, <code>find(key)</code>.
         Write/admin side: <code>updateConfig</code>, <code>findResponse</code>, <code>listForAdmin</code>,
@@ -131,8 +132,10 @@
         TTL, timeline/roster windows, GDPR export TTL and erase lock timeout, message retention, batch sizes, review
         eligibility and moderation-orphan grace, DLQ/outbox attempts, rate-limit TTL, stuck-completion and recap-edit windows) plus generated
         <code>video.quota.&lt;tier&gt;.*</code> and <code>video.&lt;type&gt;.*</code> keys. <code>ALL</code> is the full list;
-        <code>HAS_CODE_DEFAULT</code> (24 keys) marks keys whose call site has a code default. Call sites still pass
-        their <code>[min, max]</code> literally &mdash; change a bound in both places.</td></tr>
+        <code>HAS_CODE_DEFAULT</code> (24 keys) marks keys whose call site has a code default. Also holds
+        <code>MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS</code> (7), the one definition of the review-window gap.
+        The review keys and the rate-limit TTL are read straight from their <code>BoundedKey</code>; most other call
+        sites still pass their <code>[min, max]</code> literally &mdash; for those, change a bound in both places.</td></tr>
       <tr><td><code>ConfigStartupAssertion</code></td><td><code>ApplicationListener&lt;ApplicationReadyEvent&gt;</code>.
         For every <code>ConfigBounds.ALL</code> key reads the raw stored value and logs ERROR + increments
         <code>config.value.misconfigured{key,reason}</code> for missing / non-numeric / out-of-range values; also
@@ -166,7 +169,7 @@
     <p>
       Skillars has a second, unrelated toggle mechanism: <code>infrastructure.feature.FeatureToggleService</code>
       (implemented by <code>PropertiesFeatureToggleService</code>), gating a small fixed enum of coarse,
-      whole-platform switches (<code>AppFeature.PAYMENTS</code>, <code>INVOICING</code>, <code>ARACHNID_ENABLED</code>,
+      whole-platform switches (<code>AppFeature.ARACHNID_ENABLED</code>,
       <code>VIDEOINTEL_ENABLED</code>). Those are Spring <code>@ConfigurationProperties</code>
       (<code>FeatureProperties</code>) &mdash; changing one requires an env/config change and a restart, and there is
       no admin API. <code>platform_config</code> is for <em>business-tunable</em> values (tier gates, quotas,
@@ -273,8 +276,9 @@ sequenceDiagram
     <div class="callout warn">
       <p><strong>A new bounded key touches three places.</strong> Seed it in a migration (unless it belongs in
       <code>HAS_CODE_DEFAULT</code>), add a <code>BoundedKey</code> to <code>ConfigBounds</code> and to
-      <code>ALL</code> (and to <code>HAS_CODE_DEFAULT</code> if the call site has a default), and pass the same
-      <code>[min, max]</code> at the call site. Without the <code>ConfigBounds</code> entry the <code>PUT</code> path
+      <code>ALL</code> (and to <code>HAS_CODE_DEFAULT</code> if the call site has a default), and read it with
+      <code>getBoundedInt(BoundedKey)</code> (or pass the entry's own <code>key()/defaultValue()/min()/max()</code>)
+      rather than retyping the range. Without the <code>ConfigBounds</code> entry the <code>PUT</code> path
       accepts any string and the boot check never sees the key. Pick <code>failFast</code> only when a bad value loses
       data or halts a core flow &mdash; it blocks production boot.</p>
     </div>
@@ -283,8 +287,9 @@ sequenceDiagram
       <code>rejectReviewEligibilityWindowOrdering</code> reads the partner key with
       <code>configRepository.findByKey</code> (<code>readStoredBoundedInt</code>): with a cached read, two
       <code>PUT</code>s landing on different nodes inside the TTL could each pass and together commit a pair that
-      <code>ConfigStartupAssertion</code> then refuses to boot with. The 7-day gap constant is duplicated in
-      <code>ConfigService</code> and <code>ConfigStartupAssertion</code>; keep them identical.</p>
+      <code>ConfigStartupAssertion</code> then refuses to boot with. Both guards read the 7-day gap from
+      <code>ConfigBounds.MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS</code>, and <code>reviews.minSessionAgeDays</code>'s
+      max (358) is derived from it.</p>
     </div>
     <div class="callout">
       <p><strong>Pick the getter by failure mode.</strong> 1-arg <code>getString</code>/<code>getLong</code> throw
@@ -316,11 +321,11 @@ sequenceDiagram
       <li><a href="../admin/index.html">Admin</a> &mdash; dispute window, GDPR export TTL and erase lock timeout; hosts the unrelated <code>admin.config.PlatformConfig</code>.</li>
       <li><a href="../development/index.html">Development</a>, <a href="../reviews/index.html">Reviews</a>, <a href="../messaging/index.html">Messaging</a>, <a href="../notification/index.html">Notification</a> &mdash; roster/correlation/radar settings, review eligibility and auto-hold, message retention, alert thresholds.</li>
       <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a> &mdash; <code>ConfigService.scheduledRefresh</code> (fixed delay, not ShedLock-guarded &mdash; per-node by design); <code>ConfigStartupAssertion</code> validates every <code>@SchedulerLock</code>.</li>
-      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; <code>BaseEntity</code>, <code>AppSetupException</code>, the rate-limit bucket TTL reader (<code>infrastructure.security</code>), and the distinct <code>infrastructure.feature</code> toggles.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; <code>BaseEntity</code>, <code>AppSetupException</code>, <code>RateLimitingService</code>, whose bucket TTL this module supplies through the <code>RateLimitBucketTtlSource</code> port (<code>ConfigRateLimitBucketTtlSource</code>), and the distinct <code>infrastructure.feature</code> toggles.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>be46d7bb</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

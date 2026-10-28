@@ -1,6 +1,6 @@
 # skillars (frontend)
 
-Marketing platform
+Skillars — football coaching marketplace web app (Vue 3 + Quasar).
 
 ## Install the dependencies
 

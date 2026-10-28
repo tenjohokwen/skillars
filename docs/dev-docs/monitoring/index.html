@@ -54,51 +54,38 @@
   <main class="content">
     <div class="breadcrumb"><a href="../index.html">Home</a> / Monitoring</div>
     <h1>Monitoring</h1>
-    <p class="subtitle">A single fail-fast startup guard plus the operational logging/observability surface every other module relies on to be debuggable in production.</p>
+    <p class="subtitle">The operational logging/observability surface every module relies on to be debuggable in production. There is no <code>platform.monitoring</code> code package any more.</p>
 
     <h2 id="business-overview">Business Overview</h2>
     <p>
       Skillars coaches, parents, and players book live, time-boxed activity: a session slot, a video review window, a
       payment that has to clear before a booking is confirmed. None of that tolerates silent failure. A payment
       provider call that fails without anyone noticing turns into a missed session or an unresolved charge with no
-      paper trail. The <code>monitoring</code> package itself is intentionally tiny (one class,
-      <code>TlsStartupAssertion</code>). This page also covers the wider operability setup that every module depends
-      on when something goes wrong in production: structured logs, access logs, the actuator/metrics surface, and the
-      LGTM stack. Almost all of that is configured in <code>infrastructure</code> and resource files, not in this package.
+      paper trail. This page covers the operability setup that every module depends on when something goes wrong in
+      production: structured logs, access logs, the actuator/metrics surface, and the LGTM stack. All of it is
+      configured in <code>infrastructure</code> and resource files.
     </p>
 
     <h2 id="technical-overview">Technical Overview</h2>
-    <h3 id="tlsstartupassertion"><code>TlsStartupAssertion</code></h3>
+    <h3 id="tls-startup-assertion-removed">TLS startup assertion (removed)</h3>
     <p>
-      <code>TlsStartupAssertion</code> (<code>platform.monitoring</code>) is a Spring
-      <code>ApplicationListener&lt;ApplicationReadyEvent&gt;</code>. It hooks <code>ApplicationReadyEvent</code>
-      rather than <code>@PostConstruct</code> because that event fires only after every bean is wired, which is the
-      right moment for an "is this deployment configured correctly" check. <code>ConfigStartupAssertion</code> in the
-      <a href="../config/index.html">Config</a> module uses the same pattern for required platform config keys.
+      The <code>platform.monitoring</code> package used to hold one class, <code>TlsStartupAssertion</code>, an
+      <code>ApplicationReadyEvent</code> check that failed startup outside <code>dev</code> if
+      <code>client.momo.tcp-config.check-certificate</code> was <code>false</code>. It was written for Orange Money /
+      MTN MoMo clients that no longer exist (payments go through Stripe), nothing set that property, and the
+      default was <code>true</code>, so it could never fail. It was removed together with the unused
+      <code>defaultTcpConfig: &amp;DEFAULT_TCP</code> YAML anchor and the dead <code>infrastructure.client</code>
+      RestTemplate wrapper it was meant to guard. Nothing in <code>src/main</code> customizes TLS trust (no custom
+      <code>SSLContext</code>, <code>TrustManager</code> or hostname verifier), so every outbound client uses its
+      library's default certificate verification.
     </p>
-    <p>On firing, the assertion does two things in order:</p>
-    <ul>
-      <li><strong>Dev-profile guard.</strong> If the active Spring profiles include <code>dev</code>, it logs a
-        debug line and returns.</li>
-      <li><strong>Certificate-check assertion.</strong> Otherwise it reads
-        <code>client.momo.tcp-config.check-certificate</code>, defaulting to <code>true</code> when the property is
-        absent. If that resolves to <code>false</code> it throws <code>AppSetupException</code>; if not, it logs
-        <code>TLS assertion passed</code> at INFO.</li>
-    </ul>
-    <div class="callout warn">
-      <p><strong>The property it checks is not set anywhere, so today the assertion always passes.</strong> The class
-      was written for Orange Money / MTN MoMo mobile-money clients that no longer exist in the codebase. Payments go
-      through Stripe (<code>app.payment.stripe.*</code>). No YAML file sets <code>client.momo.*</code>. The
-      <code>defaultTcpConfig: &amp;DEFAULT_TCP</code> anchor in <code>application.yaml</code> (which does contain
-      <code>checkCertificate: false</code>) is still defined, but nothing references it with <code>*DEFAULT_TCP</code>.
-      The safe-by-default <code>true</code> therefore wins in every profile. The guard only bites again if someone
-      re-introduces <code>client.momo.tcp-config.check-certificate: false</code> outside <code>dev</code>. Don't read
-      the INFO line as proof that any real HTTP client verifies certificates.</p>
-    </div>
     <p>
-      An exception thrown from an <code>ApplicationReadyEvent</code> listener happens after the context has been
-      refreshed. <code>SpringApplication.run</code> treats it as a run failure: it closes the context and rethrows,
-      so the JVM exits non-zero instead of carrying on to serve traffic.
+      If you add an outbound client with a "skip certificate check" option, add a startup guard that reads
+      <em>that</em> client's real property. <code>ConfigStartupAssertion</code> in the
+      <a href="../config/index.html">Config</a> module shows the pattern: listen for <code>ApplicationReadyEvent</code>
+      (after full wiring, not <code>@PostConstruct</code>) and throw <code>AppSetupException</code>. An exception from
+      that listener makes <code>SpringApplication.run</code> close the context and rethrow, so the JVM exits non-zero
+      instead of serving traffic.
     </p>
 
     <h3 id="structured-logging">Structured logging</h3>
@@ -163,23 +150,11 @@
     </ul>
 
     <h2 id="key-flows">Key Flows</h2>
-    <pre class="mermaid">
-flowchart TD
-  A[ApplicationReadyEvent fires] --> B{dev profile active?}
-  B -- yes --> C[log.debug: assertion skipped]
-  C --> Z[App continues serving traffic]
-  B -- no --> D[Read client.momo.tcp-config.check-certificate<br/>default = true, currently unset everywhere]
-  D --> E{checkCertificate == true?}
-  E -- yes --> F[log.info: TLS assertion passed]
-  F --> Z
-  E -- no --> G[throw AppSetupException]
-  G --> H[SpringApplication.run fails: context closed]
-  H --> I[JVM exits non-zero, app never serves traffic]
-    </pre>
     <p>
-      The assertion runs once per boot, after the full application context is up. Because no profile sets the property,
-      the non-dev branch currently always takes the <code>true</code> path. The failure branch exists only as a
-      tripwire for a future provider config that disables certificate checks outside <code>dev</code>.
+      A log line's path: application code logs through SLF4J, the <code>JSON</code> console appender always writes it,
+      and the <code>LOKI</code> appender ships it to Loki only when <code>loki.enabled</code> is true. Access-log lines
+      take the same path through <code>Slf4jAccessLogValve</code>. Prometheus scrapes <code>/manage/prometheus</code> on
+      the management port, and traces go to Tempo over OTLP.
     </p>
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
@@ -206,26 +181,20 @@ flowchart TD
       syntax.</p>
     </div>
     <div class="callout">
-      <p><strong>The dev-profile skip in <code>TlsStartupAssertion</code> is deliberate.</strong> It keeps
-      local/sandbox setups able to point at endpoints without valid certificates. If a provider client is ever wired to
-      a <code>check-certificate</code> flag again, re-check that this assertion reads <em>that</em> property. It is
-      hard-coded to <code>client.momo.tcp-config.check-certificate</code>, which nothing currently sets.</p>
-    </div>
-    <div class="callout">
       <p><strong>Prometheus scrapes the management port, not 9990.</strong> <code>/manage/prometheus</code> is served
       on 8367 and is unauthenticated (<code>PUBLIC_MGMT_ENDPOINTS</code>). Keep port 8367 off the public ingress.</p>
     </div>
 
     <h2 id="related-modules">Related Modules</h2>
     <ul>
-      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; supplies <code>AppSetupException</code> (thrown by <code>TlsStartupAssertion</code>), <code>ObservabilityConfig</code>, the access-log valve/configs, and the SES/SMTP health indicators.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; supplies <code>AppSetupException</code> (for startup guards), <code>ObservabilityConfig</code>, the access-log valve/configs, and the SES/SMTP health indicators.</li>
       <li><a href="../config/index.html">Config</a> &mdash; <code>ConfigStartupAssertion</code>, the sibling fail-fast <code>ApplicationReadyEvent</code> check for required platform config.</li>
       <li><a href="../notification/index.html">Notification</a> &mdash; <code>AlertEvaluationService</code> / <code>MailMetrics</code>: in-app alerting on Micrometer counters.</li>
       <li><a href="../security/index.html">Security</a> &mdash; <code>AppEndpoints.PUBLIC_MGMT_ENDPOINTS</code> decides which actuator endpoints are unauthenticated.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>be46d7bb</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

@@ -244,9 +244,66 @@ class PessimisticLockRetryerCallSiteAuditTest {
     }
 
     /**
+     * Platform cleanup (B8): the map below is hand-maintained, and it silently missed
+     * {@code UserRepository} — the scan above then simply never looked at its call sites. This derives
+     * the NOWAIT set from the repositories themselves (every method annotated with
+     * {@code jakarta.persistence.lock.timeout = "0"}) and fails if the map does not cover it.
+     */
+    @Test
+    @DisplayName("every NOWAIT repository lock method is registered for the unwrapped-call scan")
+    void everyNoWaitRepositoryMethod_isRegisteredInTheScanMap() throws IOException {
+        // Any @QueryHint whose attributes (in either order, any spacing) name the lock-timeout hint
+        // with value "0" — then the first method name declared after the enclosing annotations.
+        Pattern hint = Pattern.compile("@QueryHint\\s*\\(([^)]*)\\)");
+        Pattern isNoWait = Pattern.compile(
+            "(?=.*name\\s*=\\s*\"jakarta\\.persistence\\.lock\\.timeout\")(?=.*value\\s*=\\s*\"0\")",
+            Pattern.DOTALL);
+        Pattern nextMethod = Pattern.compile("\\b(\\w+)\\s*\\(\\s*@Param|\\b(\\w+)\\s*\\([^)@]*\\)\\s*;");
+        List<String> missing = new ArrayList<>();
+        int found = 0;
+        int rawNoWaitHints = 0;
+        try (Stream<Path> files = Files.walk(SRC_MAIN)) {
+            List<Path> javaFiles = files.filter(Files::isRegularFile)
+                .filter(p -> p.getFileName().toString().endsWith(".java"))
+                .sorted()
+                .toList();
+            for (Path file : javaFiles) {
+                String source = blankCommentsOnly(Files.readString(file, StandardCharsets.UTF_8));
+                String repoType = file.getFileName().toString().replace(".java", "");
+                Matcher h = hint.matcher(source);
+                while (h.find()) {
+                    if (!isNoWait.matcher(h.group(1)).find()) {
+                        continue;
+                    }
+                    rawNoWaitHints++;
+                    Matcher m = nextMethod.matcher(source);
+                    if (!m.find(h.end())) {
+                        missing.add(repoType + ": NOWAIT hint with no method after it");
+                        continue;
+                    }
+                    found++;
+                    String method = m.group(1) != null ? m.group(1) : m.group(2);
+                    if (!method.equals(NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE.get(repoType))) {
+                        missing.add(repoType + "." + method);
+                    }
+                }
+            }
+        }
+        assertThat(found).as("every NOWAIT hint must resolve to a method").isEqualTo(rawNoWaitHints);
+        assertThat(found).as("sanity: the NOWAIT-method scan must find the known repositories")
+            .isGreaterThanOrEqualTo(NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE.size());
+        assertThat(missing)
+            .as("NOWAIT lock methods missing from NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE — an unretried "
+                + "call to them would go undetected")
+            .isEmpty();
+    }
+
+    /**
      * Repository type → its NOWAIT-only lock method name. Only repositories confirmed today (per this
      * test's own javadoc) to declare {@code @QueryHints(jakarta.persistence.lock.timeout = "0")} on
-     * that method belong here.
+     * that method belong here. {@code UserRepository} was missing until the platform cleanup (B8)
+     * even though its {@code findByIdForUpdate} is NOWAIT (admin suspend/reactivate in
+     * {@code AdminUserService}); {@code Map.ofEntries} because {@code Map.of} stops at ten pairs.
      */
     private static final Map<String, String> NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE = Map.ofEntries(
         Map.entry("VideoRepository", "findByIdForUpdate"),
@@ -259,7 +316,8 @@ class PessimisticLockRetryerCallSiteAuditTest {
         Map.entry("DrillRepository", "findByIdForUpdate"),
         Map.entry("CoachReviewRepository", "findByIdForUpdateNoWait"),
         Map.entry("StripeCustomerRepository", "findByIdForUpdate"),
-        Map.entry("SessionRepository", "findByIdForUpdate")
+        Map.entry("SessionRepository", "findByIdForUpdate"),
+        Map.entry("UserRepository", "findByIdForUpdate")
     );
 
     private static List<String> findUnwrappedNoWaitLockCallsInFile(Path file) throws IOException {
@@ -411,6 +469,11 @@ class PessimisticLockRetryerCallSiteAuditTest {
             }
         }
         return out.toString();
+    }
+
+    /** Like {@link #blankCommentsAndLiterals} but keeps string literals (annotation values live there). */
+    private static String blankCommentsOnly(String source) {
+        return source.replaceAll("(?s)/\\*.*?\\*/", " ").replaceAll("//[^\\n]*", " ");
     }
 
     private static String oneLine(String s) {

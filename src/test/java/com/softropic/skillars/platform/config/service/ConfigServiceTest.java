@@ -529,6 +529,52 @@ class ConfigServiceTest {
         assertThat(configService.getBoundedInt("no.such.key", 24, 1, 600)).isEqualTo(24);
     }
 
+    /**
+     * Platform cleanup (B8): {@code ReviewSubmissionService} used to read reviews.minSessionAgeDays
+     * with a hand-copied max of 365 while ConfigBounds, the PUT guard and ConfigStartupAssertion
+     * all cap it at 358. The registry-driven overload reads the bound from the BoundedKey itself, so
+     * a stored 360 falls back to the code default instead of being honoured.
+     */
+    @Test
+    void getBoundedInt_boundedKey_usesRegistryRange() {
+        when(configRepository.findAll()).thenReturn(List.of(
+            entry(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), "360", ConfigValueType.LONG),
+            entry(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), "45", ConfigValueType.LONG)));
+        configService.init();
+
+        assertThat(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.max()).isEqualTo(358L);
+        assertThat(configService.getBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS))
+            .isEqualTo((int) ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.defaultValue());
+        assertThat(configService.getBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS)).isEqualTo(45);
+    }
+
+    @Test
+    void getBoundedInt_boundedKeyWithoutCodeDefault_isRejected() {
+        assertThat(ConfigBounds.HAS_CODE_DEFAULT).doesNotContain(ConfigBounds.BOOKING_BATCH_MAX_SIZE.key());
+
+        assertThatThrownBy(() -> configService.getBoundedInt(ConfigBounds.BOOKING_BATCH_MAX_SIZE))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining(ConfigBounds.BOOKING_BATCH_MAX_SIZE.key());
+    }
+
+    @Test
+    void getBoundedLong_boundedKey_usesRegistryRangeAndGuard() {
+        when(configRepository.findAll()).thenReturn(List.of(
+            entry(ConfigBounds.RATE_LIMIT_BUCKET_TTL_HOURS.key(), "99999", ConfigValueType.LONG)));
+        configService.init();
+
+        assertThat(configService.getBoundedLong(ConfigBounds.RATE_LIMIT_BUCKET_TTL_HOURS)).isEqualTo(24L);
+        assertThatThrownBy(() -> configService.getBoundedLong(ConfigBounds.BOOKING_BATCH_MAX_SIZE))
+            .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void reviewEligibilityBounds_derivedFromTheSingleGapConstant() {
+        assertThat(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.max())
+            .isEqualTo(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.max()
+                - ConfigBounds.MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS);
+    }
+
     @Test
     void invalidate_forcesRefreshOnNextGet() {
         when(configRepository.findAll())

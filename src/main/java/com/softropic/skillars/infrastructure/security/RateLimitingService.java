@@ -1,7 +1,5 @@
 package com.softropic.skillars.infrastructure.security;
 
-import com.softropic.skillars.platform.config.service.ConfigService;
-
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import io.github.bucket4j.Refill;
@@ -41,7 +39,7 @@ import java.util.concurrent.atomic.AtomicLong;
 @Service
 public class RateLimitingService {
 
-    private final ConfigService configService;
+    private final RateLimitBucketTtlSource bucketTtlSource;
 
     /**
      * Package-private (not final) so {@code RateLimitingServiceTest} can inject a fixed/advancing
@@ -55,8 +53,8 @@ public class RateLimitingService {
 
     private final Map<String, BucketEntry> buckets = new ConcurrentHashMap<>();
 
-    public RateLimitingService(ConfigService configService) {
-        this.configService = configService;
+    public RateLimitingService(RateLimitBucketTtlSource bucketTtlSource) {
+        this.bucketTtlSource = bucketTtlSource;
     }
 
     /**
@@ -119,8 +117,7 @@ public class RateLimitingService {
      * cadence or sleeping real wall-clock time.
      */
     void sweepIdleBuckets() {
-        long ttlHours = configService.getBoundedLong(
-            "security.rate_limiting.bucket_ttl_hours", 24L, 1L, 8760L);
+        long ttlHours = bucketTtlSource.bucketTtlHours();
         long cutoff = clock.millis() - Duration.ofHours(ttlHours).toMillis();
         // Code review: a plain `entrySet().removeIf(e -> e.getValue().lastAccessMillis.get() < cutoff)`
         // reads lastAccessMillis once to decide, then unconditionally removes the entry — a concurrent

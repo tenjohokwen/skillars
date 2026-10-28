@@ -40,11 +40,6 @@ public class ConfigService {
 
     private static final String MISCONFIGURED_COUNTER = "config.value.misconfigured";
 
-    // skillars-deferred-149 AC5: kept in sync with
-    // ConfigStartupAssertion.MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS — both guards read the same
-    // stored config independently and must agree on the rule they fail-fast/reject on.
-    private static final long MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS = 7;
-
     private final PlatformConfigRepository configRepository;
     private final ConfigProperties configProperties;
     private final ConfigMapper configMapper;
@@ -204,6 +199,35 @@ public class ConfigService {
      */
     public int getBoundedInt(String key, int defaultValue, int min, int max) {
         return (int) getBoundedLong(key, defaultValue, min, max);
+    }
+
+    /**
+     * Bounded read whose key, code default and {@code [min, max]} all come from the
+     * {@link ConfigBounds} registry entry, so a call site cannot drift from the range that
+     * {@link #updateConfig} and {@code ConfigStartupAssertion} enforce (a hand-copied {@code max}
+     * literal did drift once: 365 at a call site vs 358 in the registry). Only valid for a
+     * {@link ConfigBounds#HAS_CODE_DEFAULT} key — every other key's {@code defaultValue} is the
+     * {@code 0L} not-applicable sentinel, not a real fallback.
+     *
+     * @throws IllegalArgumentException if the key has no code default, or a bound does not fit an int
+     */
+    public int getBoundedInt(ConfigBounds.BoundedKey boundedKey) {
+        requireCodeDefault(boundedKey);
+        return getBoundedInt(boundedKey.key(), Math.toIntExact(boundedKey.defaultValue()),
+            Math.toIntExact(boundedKey.min()), Math.toIntExact(boundedKey.max()));
+    }
+
+    /** {@code long} counterpart of {@link #getBoundedInt(ConfigBounds.BoundedKey)}, same guard. */
+    public long getBoundedLong(ConfigBounds.BoundedKey boundedKey) {
+        requireCodeDefault(boundedKey);
+        return getBoundedLong(boundedKey.key(), boundedKey.defaultValue(), boundedKey.min(), boundedKey.max());
+    }
+
+    private static void requireCodeDefault(ConfigBounds.BoundedKey boundedKey) {
+        if (!ConfigBounds.HAS_CODE_DEFAULT.contains(boundedKey.key())) {
+            throw new IllegalArgumentException("Config key '" + boundedKey.key()
+                + "' has no code default in ConfigBounds.HAS_CODE_DEFAULT; use a 4-arg bounded read");
+        }
     }
 
     public boolean getBoolean(String key) {
@@ -402,7 +426,7 @@ public class ConfigService {
      * guard — {@code ConfigStartupAssertion} only catches a bad combination at the next restart, and
      * {@link #rejectOutOfRange} above only ever sees the single key being written, never the pair's
      * relationship. Mirrors the boot check's own invariant exactly (reviews.updateCooldownDays must
-     * be at least {@link #MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS} days greater than
+     * be at least {@link ConfigBounds#MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS} days greater than
      * reviews.minSessionAgeDays, or the maturity floor silently supersedes the cooldown), reading the
      * OTHER key's current effective value the same way every call site does.
      *
@@ -426,10 +450,10 @@ public class ConfigService {
             : readStoredBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS);
         long updateCooldownDays = isCooldown ? newValueParsed
             : readStoredBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS);
-        if (updateCooldownDays - minSessionAgeDays < MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS) {
+        if (updateCooldownDays - minSessionAgeDays < ConfigBounds.MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "reviews.minSessionAgeDays (" + minSessionAgeDays + ") must be at least "
-                    + MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS + " days less than reviews.updateCooldownDays ("
+                    + ConfigBounds.MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS + " days less than reviews.updateCooldownDays ("
                     + updateCooldownDays + ") — the cooldown would be silently superseded by the "
                     + "maturity floor");
         }

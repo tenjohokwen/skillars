@@ -145,9 +145,8 @@ npx vitest run src/i18n/__tests__
         <code>eslint.config.js</code>, and locale files. Not <code>.html</code>/<code>.md</code>.</li>
       <li><strong>Looks like:</strong> <code>[warn] src/pages/Foo.vue</code> lines, then
         <code>[warn] Code style issues found in N files. Run Prettier with --write to fix.</code></li>
-      <li><strong>Fix:</strong> <code>cd src/frontend &amp;&amp; npx prettier --write "**/*.{js,vue,scss,json}" --ignore-path ../../.gitignore</code>.
-        Note <code>npm run format</code> uses <code>--ignore-path .gitignore</code> (no such file in <code>src/frontend</code>) and also
-        formats <code>.html/.md</code> — prefer the CI command.</li>
+      <li><strong>Fix:</strong> <code>cd src/frontend &amp;&amp; npm run format</code>, which runs the CI glob with
+        <code>--write</code>: <code>prettier --write "**/*.{js,vue,scss,json}" --ignore-path ../../.gitignore</code>.</li>
       <li><strong>Run alone:</strong> the same command with <code>--check</code>.</li>
     </ul>
 
@@ -249,15 +248,17 @@ npx vitest run src/i18n/__tests__
       <li><strong>Protects:</strong> <code>PessimisticLockRetryer.withBoundedRetry</code> re-runs its supplier after rolling back to a savepoint, so a write
         inside it can execute twice (skillars-deferred-117; the scan's first run found <code>DrillUploadService.initiateUpload/deleteVideo</code>
         writing and publishing inside the lambda). Also: a NOWAIT lock with no retry wrapper turns ordinary contention into errors.</li>
-      <li><strong>Checks:</strong> exactly <code>EXPECTED_CALL_SITE_COUNT = 50</code> <code>.withBoundedRetry(</code> sites (line 149); no
+      <li><strong>Checks:</strong> exactly <code>EXPECTED_CALL_SITE_COUNT</code> (53 at the time of writing) <code>.withBoundedRetry(</code> sites; no
         <code>.save(</code>, <code>.saveAndFlush(</code>, <code>.delete(</code>, <code>.deleteAll</code>, <code>publishEvent(</code>,
         <code>new …Event(</code>, <code>.send(</code>, <code>RestTemplate</code>, <code>.enqueue(</code> inside a retried lambda; every file calling a
-        lock method listed in <code>NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE</code> (line 243) also contains a <code>.withBoundedRetry(</code>.</li>
+        lock method listed in <code>NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE</code> also contains a <code>.withBoundedRetry(</code>; and every
+        repository method annotated <code>jakarta.persistence.lock.timeout = "0"</code> is in that map (it once missed
+        <code>UserRepository</code>, so its call sites were never scanned).</li>
       <li><strong>Trips it:</strong> adding or removing a call site (every new lock site does); writing inside the lambda.</li>
-      <li><strong>Looks like:</strong> <code>[expected exactly 50 real .withBoundedRetry( call sites under src/main/java. If this count changed … Found: [CallSite[file=…, line=…, argument=…], …]]</code>,
+      <li><strong>Looks like:</strong> <code>[expected exactly 53 real .withBoundedRetry( call sites under src/main/java. If this count changed … Found: [CallSite[file=…, line=…, argument=…], …]]</code>,
         or <code>Foo.java:123 — matched '\.save\(' inside the retried lambda: …</code>.</li>
       <li><strong>Fix:</strong> move writes after <code>withBoundedRetry</code> returns (the row lock lasts until commit). For a new site, bump the
-        count <em>and</em> append a sentence to the Javadoc history naming the method. New NOWAIT repository → add it to the map.</li>
+        count <em>and</em> append a sentence to the Javadoc history naming the method. New NOWAIT repository → add it to the map (the completeness check fails until you do).</li>
       <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest=PessimisticLockRetryerCallSiteAuditTest</code></li>
     </ul>
 
@@ -545,7 +546,7 @@ npx vitest run src/i18n/__tests__
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>be46d7bb</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

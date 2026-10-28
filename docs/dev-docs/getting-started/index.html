@@ -76,7 +76,7 @@
       <thead><tr><th>Tool</th><th>Version</th><th>Where it is pinned</th></tr></thead>
       <tbody>
         <tr><td>JDK</td><td>17 (Temurin in CI)</td><td><code>&lt;java.version&gt;17</code> in <code>pom.xml</code>; <code>actions/setup-java</code> <code>java-version: '17'</code> in <code>.github/workflows/pr-build.yml</code>. The runtime image is <code>eclipse-temurin:17-jre-alpine</code>. Do not take dependency bumps whose bytecode needs Java 21.</td></tr>
-        <tr><td>Maven</td><td>3.9</td><td>The <code>Dockerfile</code> builder stage is <code>maven:3.9-eclipse-temurin-17</code>. Use a system <code>mvn</code>: <code>mvnw</code> is checked in but <code>.mvn/wrapper/</code> is not, so <code>./mvnw</code> does not work.</td></tr>
+        <tr><td>Maven</td><td>3.9</td><td>The <code>Dockerfile</code> builder stage is <code>maven:3.9-eclipse-temurin-17</code>. A system <code>mvn</code> works, or use the checked-in wrapper: <code>./mvnw</code> downloads the pinned Maven 3.9.9 (<code>.mvn/wrapper/maven-wrapper.properties</code>) on first use.</td></tr>
         <tr><td>Docker</td><td>Engine + <code>docker compose</code> plugin</td><td>Needed both for the local stack and for every <code>*IT</code> test (Testcontainers: <code>postgres:17-alpine</code>, <code>redis:7-alpine</code>, <code>chrislusf/seaweedfs:3.97</code>, see <code>SharedContainers</code>).</td></tr>
         <tr><td>Node / npm</td><td>Node <code>v22.16.0</code>, npm <code>11.4.2</code></td><td><code>&lt;node.version&gt;</code> / <code>&lt;npmVersion&gt;</code> in <code>pom.xml</code> (the Maven build downloads its own copy); CI's <code>setup-node</code> uses <code>22.16.0</code>. <code>src/frontend/package.json</code> <code>engines</code> accepts 20–28, but match 22 so Prettier/ESLint behave as in CI. There is no <code>.nvmrc</code>.</td></tr>
         <tr><td>Hosts entry</td><td><code>127.0.0.1 storage</code></td><td>Browser uploads use presigned URLs pointing at <code>http://storage:9500</code> (SeaweedFS). <code>setup.sh</code> tells you the exact <code>sudo tee</code> command.</td></tr>
@@ -235,7 +235,7 @@ gh pr create --base master --title "fix(booking): reject reschedule into a block
       <li>Then whichever of <a href="../marketplace/index.html">Marketplace</a>, <a href="../video/index.html">Video</a>, <a href="../messaging/index.html">Messaging</a>, <a href="../reviews/index.html">Reviews</a>, <a href="../notification/index.html">Notification</a>, <a href="../admin/index.html">Admin</a>, <a href="../filestorage/index.html">Filestorage</a>, <a href="../config/index.html">Config</a>, <a href="../infrastructure/index.html">Infrastructure</a> your first ticket touches.</li>
     </ol>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>be46d7bb</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

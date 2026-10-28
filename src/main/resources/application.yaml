@@ -37,21 +37,6 @@ server:
       protocol-header: x-forwarded-proto
   forward-headers-strategy: native
 
-quartz:
-  job-store-type: jdbc
-  jdbc:
-    initialize-schema: never
-  properties:
-    org.quartz.scheduler.instanceName: mobile-pay-scheduler
-    org.quartz.scheduler.instanceId: AUTO
-    org.quartz.threadPool.threadCount: 3
-    org.quartz.jobStore.class: org.quartz.impl.jdbcjobstore.JobStoreTX
-    org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.PostgreSQLDelegate
-    org.quartz.jobStore.tablePrefix: QRTZ_
-    org.quartz.jobStore.isClustered: true
-    org.quartz.jobStore.clusterCheckinInterval: 20000
-    org.quartz.jobStore.misfireThreshold: 60000
-
 spring:
   # skillars-deferred-92 AC3.2. Bounds the SmartLifecycle stop phases, of which the only meaningful
   # one here is server.shutdown=graceful's in-flight HTTP drain. Pinned rather than left at Spring's
@@ -87,9 +72,8 @@ spring:
   # (60s) -- so this 8-thread pool can genuinely be saturated with DB-touching work at once; `8` is
   # not an arbitrary headroom number.
   #
-  # WHAT THAT LEAVES of the 25-connection pool: worst case, 8 for this scheduler pool, 3 for the
-  # clustered Quartz job store (org.quartz.threadPool.threadCount above), and the remainder shared
-  # by Tomcat request-handling threads and this project's seven application-managed thread pools
+  # WHAT THAT LEAVES of the 25-connection pool: worst case, 8 for this scheduler pool, and the
+  # remainder shared by Tomcat request-handling threads and this project's seven application-managed thread pools
   # (not all @Async -- see infrastructure.threadpool.ExecutorShutdown's own authoritative inventory:
   # outboxDrainPool, sluRetryExecutor, storageUploadExecutor [a raw java.util.concurrent
   # .ThreadPoolExecutor passed directly to the AWS SDK, never an @Async target], sendMailPool,
@@ -237,7 +221,6 @@ logging:
   level:
     com.softropic.skillars: INFO
     io.github.resilience4j: WARN
-    org.quartz: WARN
 ##logback.access.config: classpath:config/logback-access-spring.xml ##using custom LoggingFilter for access logging because it logs payload
 loki:
   url: ${LOKI_URL:http://localhost:3100}
@@ -532,14 +515,6 @@ management:
   observations:
     key-values:
       application: ${spring.application.name}
-defaultTcpConfig: &DEFAULT_TCP
-  readTimeout: 15000
-  connectionTimeout: 15000
-  connectionRequestTimeout: 2000
-  maxConnections: 50
-  maxConnectionsPerRoute: 25
-  checkCertificate: false
-
 skillars:
   platform:
     notification-email: ${PLATFORM_NOTIFICATION_EMAIL:tenjoh_okwen@yahoo.com}

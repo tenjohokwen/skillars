@@ -66,6 +66,7 @@ Dockerfile
 # ── Maven wrapper: the builder stage uses the maven base image's own `mvn` ───
 mvnw
 mvnw.cmd
+.mvn
 
 # ── Editor / OS / VCS noise ──────────────────────────────────────────────────
 .idea/

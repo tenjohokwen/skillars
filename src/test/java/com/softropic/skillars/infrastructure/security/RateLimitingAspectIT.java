@@ -6,7 +6,6 @@ import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
 import com.softropic.skillars.infrastructure.security.RateLimited;
 import com.softropic.skillars.infrastructure.security.RateLimitingAspect;
 import com.softropic.skillars.infrastructure.security.RateLimitingService;
-import com.softropic.skillars.platform.config.service.ConfigService;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
@@ -38,10 +37,9 @@ public class RateLimitingAspectIT {
     static class AspectConfig {
         @Bean
         public RateLimitingService rateLimitingService() {
-            // skillars-deferred-117 AC4: RateLimitingService now needs a ConfigService for its
-            // eviction-sweep TTL. Nothing in this test triggers the sweep, so an unstubbed mock is
-            // sufficient here.
-            return new RateLimitingService(mock(ConfigService.class));
+            // skillars-deferred-117 AC4: RateLimitingService needs a TTL source for its eviction
+            // sweep. Nothing in this test triggers the sweep, so a fixed 24h is sufficient here.
+            return new RateLimitingService(() -> 24L);
         }
 
         @Bean

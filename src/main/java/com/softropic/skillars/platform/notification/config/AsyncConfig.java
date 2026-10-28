@@ -26,7 +26,7 @@ import io.micrometer.core.instrument.Tag;
 // @EnableScheduling moved to infrastructure.config.SchedulingConfig so it can be switched off
 // under the test profile. @EnableSchedulerLock deliberately stays here and stays unconditional:
 // tests invoke scheduled methods directly through the Spring proxy, so the lock advisor must
-// still apply (see BasePaymentIT.releaseSchedulerLock).
+// still apply (see AbstractIntegrationTest.releaseSchedulerLock).
 // order: ShedLock's default InterceptMode.PROXY_METHOD wraps @SchedulerLock methods with a genuine
 // AOP advisor on the same proxy chain as @Transactional (see DataSourceConfig's @EnableTransactionManagement,
 // also un-ordered). Both default to Ordered.LOWEST_PRECEDENCE, so without an explicit order their relative

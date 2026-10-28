@@ -132,8 +132,7 @@ public class ReviewSubmissionService {
                 "Review cannot be edited in its current moderation status",
                 ReviewErrorCode.EDIT_NOT_PERMITTED);
         }
-        int cooldownDays = configService.getBoundedInt(
-            ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), 30, 1, 365);
+        int cooldownDays = configService.getBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS);
         if (review.getLastModifiedAt().isAfter(Instant.now().minus(cooldownDays, ChronoUnit.DAYS))) {
             throw new OperationNotAllowedException(
                 "Review was modified within the cooldown window",
@@ -185,8 +184,7 @@ public class ReviewSubmissionService {
                 "Review cannot be edited in its current moderation status",
                 ReviewErrorCode.EDIT_NOT_PERMITTED);
         }
-        int lockedCooldownDays = configService.getBoundedInt(
-            ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), 30, 1, 365);
+        int lockedCooldownDays = configService.getBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS);
         if (locked.getLastModifiedAt().isAfter(Instant.now().minus(lockedCooldownDays, ChronoUnit.DAYS))) {
             throw new OperationNotAllowedException(
                 "Review was modified within the cooldown window",
@@ -331,8 +329,9 @@ public class ReviewSubmissionService {
             return new Eligibility(
                 new ReviewEligibilityDto(false, ReviewErrorCode.AUTHOR_ROLE_NOT_ALLOWED.getErrorCode()), null);
         }
-        int minAgeDays = configService.getBoundedInt(
-            ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), 7, 1, 365);
+        // Range from the registry: the old hand-copied max of 365 here let a stored 359-365 through
+        // that ConfigBounds (358), the PUT guard and ConfigStartupAssertion all treat as out of range.
+        int minAgeDays = configService.getBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS);
         Instant maturedBefore = Instant.now().minus(minAgeDays, ChronoUnit.DAYS);
 
         List<BookingReviewEligibilityProjection> qualifying =
