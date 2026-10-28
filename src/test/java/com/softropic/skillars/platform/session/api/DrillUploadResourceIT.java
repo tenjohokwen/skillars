@@ -385,7 +385,9 @@ class DrillUploadResourceIT extends BaseSessionIT {
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
             String oldState = jdbcTemplate.queryForObject(
                 "SELECT operational_state FROM main.videos WHERE id = ?", String.class, oldVideoId);
-            assertThat(oldState).isEqualTo("DELETED");
+            // B5: AdminVideoService.deleteVideo now goes through VideoDeletionService → PURGED (the
+            // Bunny asset is removed by the DrillVideoRef-aware deletion outbox, not inline).
+            assertThat(oldState).isEqualTo("PURGED");
 
             String sessionStatus = jdbcTemplate.queryForObject(
                 "SELECT status FROM main.upload_sessions WHERE video_id = ? AND reservation_handle = ?",

@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.video.approval.approved.title}">Your Video Was Approved</title>
+</head>
+<body>
+    <h2 th:text="#{email.video.approval.approved.title}">Your Video Was Approved</h2>
+    <p>Your parent approved your video. It is now being processed and will be available shortly.</p>
+    <p><a th:href="${map.videosUrl}" href="#">Go to my videos</a></p>
+</body>
+</html>

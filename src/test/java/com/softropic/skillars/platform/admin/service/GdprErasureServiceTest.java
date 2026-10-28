@@ -229,6 +229,16 @@ class GdprErasureServiceTest {
         assertThat(playerProfile.getDevelopmentDataErasedAt()).isNotNull();
         assertThat(request.getStatus()).isEqualTo("COMPLETED");
         verify(adminAlertRepository, never()).saveAndFlush(any(AdminAlert.class));
+
+        // B5: the video cascade matches videos.owner_id, which for a player is the PlayerProfile id —
+        // publishing the user id (as before) purged none of the player's videos.
+        ArgumentCaptor<Object> events = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher, org.mockito.Mockito.atLeastOnce()).publishEvent(events.capture());
+        assertThat(events.getAllValues())
+            .filteredOn(com.softropic.skillars.platform.security.contract.event.AccountDeletionRequestedEvent.class::isInstance)
+            .singleElement()
+            .extracting(e -> ((com.softropic.skillars.platform.security.contract.event.AccountDeletionRequestedEvent) e).userId())
+            .isEqualTo(String.valueOf(PLAYER_PROFILE_ID));
     }
 
     /**

@@ -2488,6 +2488,9 @@ export default {
       PERFORMANCE_REPORT_SHARED:
         '{coachName} a partagé un rapport de performance pour {playerName}.',
       VIDEO_MODERATION_OWNER_FLAGGED: 'Une de vos vidéos a été signalée pour vérification.',
+      VIDEO_APPROVAL_REQUESTED: 'Une vidéo de {playerName} attend votre approbation.',
+      VIDEO_APPROVAL_APPROVED: 'Votre parent a approuvé votre vidéo.',
+      VIDEO_APPROVAL_REJECTED: "Votre parent n'a pas approuvé votre vidéo.",
       COACH_VISIBILITY_REDUCED: 'Votre visibilité sur la place de marché a été réduite.',
     },
     preferences: {

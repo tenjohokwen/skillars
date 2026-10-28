@@ -41,6 +41,7 @@ public class VideoApprovalService {
     private final ApplicationEventPublisher publisher;
     private final ConfigService configService;
     private final TransactionTemplate transactionTemplate;
+    private final VideoOwnerAccountResolver videoOwnerAccountResolver;
 
     /**
      * Called by ModerationOrchestrationService after the minor safety gate fires.
@@ -108,8 +109,11 @@ public class VideoApprovalService {
             // Only primary parent (profile.parentId) is notified — secondary linked parents can
             // still approve/reject via RBAC but are not sent a notification here.
             log.info("[VIDEO_APPROVAL_CREATED videoId={} playerId={} parentId={}]", videoId, playerId, parentId);
+            VideoOwnerAccountResolver.OwnerAccount parent =
+                videoOwnerAccountResolver.accountForUser(parentId).orElse(null);
             publisher.publishEvent(new VideoApprovalParentNotificationEvent(
-                videoId, playerId, parentId, playerName, videoType, request.getCreatedAt()));
+                videoId, playerId, parentId, playerName, videoType, request.getCreatedAt(),
+                parent != null ? parent.email() : null, parent != null ? parent.langKey() : null));
         } else {
             log.info("[VIDEO_APPROVAL_CREATED videoId={} playerId={} parentId={}]", videoId, playerId, parentId);
         }
@@ -127,7 +131,6 @@ public class VideoApprovalService {
      */
     public void approveVideo(UUID approvalId, Long parentId) {
         final UUID[] videoIdRef = {null};
-        final Long[] playerIdRef = {null};
         final String[] providerAssetIdRef = {null};
         final boolean[] encodingDoneRef = {false};
         final boolean[] idempotentRef = {false};
@@ -168,16 +171,19 @@ public class VideoApprovalService {
             videoLifecycleService.transitionOperationalState(approval.getVideoId(), OperationalState.TRANSCODING);
 
             videoIdRef[0] = approval.getVideoId();
-            playerIdRef[0] = approval.getPlayerId();
             providerAssetIdRef[0] = video.getProviderAssetId();
             encodingDoneRef[0] = video.getEncodingCompletedAt() != null;
+
+            // Published INSIDE the approval transaction so the BEFORE_COMMIT email listener enqueues
+            // the owner notice atomically with the APPROVED row. Published after this block (as it
+            // was), no transaction was active and the event could never reach the outbox.
+            publishOwnerDecision(approval.getVideoId(), approval.getPlayerId(), "approved");
             return null;
         });
 
         if (idempotentRef[0]) return;
 
         UUID videoId = videoIdRef[0];
-        Long playerId = playerIdRef[0];
         String providerAssetId = providerAssetIdRef[0];
 
         // Trigger actual Bunny encoding after the transaction commits.
@@ -199,7 +205,6 @@ public class VideoApprovalService {
                       approvalId, videoId);
         }
 
-        publisher.publishEvent(new VideoApprovalOwnerNotificationEvent(videoId, playerId, "approved"));
         log.info("[VIDEO_APPROVAL_APPROVED approvalId={} videoId={} parentId={}]", approvalId, videoId, parentId);
     }
 
@@ -243,9 +248,15 @@ public class VideoApprovalService {
 
         videoLifecycleService.transitionOperationalState(approval.getVideoId(), OperationalState.REJECTED);
 
-        publisher.publishEvent(new VideoApprovalOwnerNotificationEvent(
-            approval.getVideoId(), approval.getPlayerId(), "rejected"));
+        publishOwnerDecision(approval.getVideoId(), approval.getPlayerId(), "rejected");
         log.info("[VIDEO_APPROVAL_REJECTED approvalId={} videoId={} parentId={}]", approvalId, approval.getVideoId(), parentId);
+    }
+
+    private void publishOwnerDecision(UUID videoId, Long playerId, String decision) {
+        VideoOwnerAccountResolver.OwnerAccount player =
+            videoOwnerAccountResolver.accountForPlayer(playerId).orElse(null);
+        publisher.publishEvent(new VideoApprovalOwnerNotificationEvent(videoId, playerId, decision,
+            player != null ? player.email() : null, player != null ? player.langKey() : null));
     }
 
     /**

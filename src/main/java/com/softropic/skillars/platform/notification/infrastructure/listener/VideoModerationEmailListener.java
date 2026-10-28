@@ -14,7 +14,6 @@ import com.softropic.skillars.platform.notification.service.MailMetrics;
 import com.softropic.skillars.platform.security.contract.util.ShortCode;
 import com.softropic.skillars.platform.video.contract.ModerationAdminAlertSender;
 import com.softropic.skillars.platform.video.contract.event.VideoModerationAdminAlertEvent;
-import com.softropic.skillars.platform.video.contract.event.VideoModerationOwnerNotificationEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import jakarta.annotation.PostConstruct;
@@ -30,10 +29,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-// Uses @EventListener (NOT @TransactionalEventListener) because alertAdmin() and notifyOwner()
-// are called OUTSIDE any active transaction. @TransactionalEventListener with fallbackExecution=false
-// (the default) silently discards events published outside a transaction — every admin alert and
-// owner notification would be lost. @EventListener fires regardless of TX context.
+// Uses @EventListener (NOT @TransactionalEventListener) because alertAdmin()
+// is called OUTSIDE any active transaction. @TransactionalEventListener with fallbackExecution=false
+// (the default) silently discards events published outside a transaction — every admin alert
+// would be lost. @EventListener fires regardless of TX context.
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -195,28 +194,5 @@ public class VideoModerationEmailListener implements ModerationAdminAlertSender 
         );
     }
 
-    @EventListener
-    public void onOwnerNotification(VideoModerationOwnerNotificationEvent event) {
-        // ownerId is the user's login/email in this project
-        if (event.ownerId() == null || event.ownerId().isBlank()) {
-            log.warn("VideoModerationOwnerNotificationEvent has null ownerId — notification not sent");
-            return;
-        }
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("message", event.message());
-        data.put("videoId", event.videoId() != null ? event.videoId().toString() : "N/A");
-
-        Recipient recipient = new Recipient();
-        recipient.setEmail(event.ownerId());
-        recipient.setLangKey("en");
-
-        publisher.publishEvent(new Envelope(
-            List.of(recipient),
-            EmailTemplate.VIDEO_MODERATION_OWNER_FLAGGED,
-            Instant.now().plus(Duration.ofDays(1)),
-            data,
-            ShortCode.shortenInt(UUID.randomUUID().hashCode())
-        ));
-    }
+    // The owner-facing VideoModerationOwnerNotificationEvent is handled by VideoOwnerEmailListener.
 }

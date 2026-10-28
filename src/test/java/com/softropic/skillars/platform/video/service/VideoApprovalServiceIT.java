@@ -53,6 +53,7 @@ class VideoApprovalServiceIT extends BaseVideoIT {
 
     private static final long PARENT_ID       = 99_000_001L;
     private static final long OTHER_PARENT_ID = 99_000_002L;
+    private static final long PLAYER_USER_ID  = 99_000_003L;
 
     @BeforeEach
     void setUp() {
@@ -60,12 +61,15 @@ class VideoApprovalServiceIT extends BaseVideoIT {
             // FK-safe order: approval requests cascade from videos; clear test fixtures
             jdbcTemplate.update("DELETE FROM main.video_approval_requests");
             jdbcTemplate.update("DELETE FROM main.videos");
-            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE parent_id IN (?, ?)",
-                PARENT_ID, OTHER_PARENT_ID);
-            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?)",
-                PARENT_ID, OTHER_PARENT_ID);
+            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE parent_id IN (?, ?) OR user_id = ?",
+                PARENT_ID, OTHER_PARENT_ID, PLAYER_USER_ID);
+            jdbcTemplate.update("DELETE FROM main.user_notifications WHERE recipient_user_id IN (?, ?, ?)",
+                PARENT_ID, OTHER_PARENT_ID, PLAYER_USER_ID);
+            jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id IN (?, ?, ?)",
+                PARENT_ID, OTHER_PARENT_ID, PLAYER_USER_ID);
             insertTestUser(PARENT_ID,       "parent1-approval-it@test.com");
             insertTestUser(OTHER_PARENT_ID, "parent2-approval-it@test.com");
+            insertTestUser(PLAYER_USER_ID,  "player-approval-it@test.com");
             return null;
         });
     }
@@ -107,6 +111,29 @@ class VideoApprovalServiceIT extends BaseVideoIT {
         assertThat(approval.get().getParentId()).isEqualTo(PARENT_ID);
         assertThat(approval.get().getStatus()).isEqualTo("PENDING");
         assertThat(approval.get().getCreatedAt()).isNotNull();
+    }
+
+    /**
+     * B5 regression: the approval gate used to publish VideoApprovalParentNotificationEvent with no
+     * listener, so a parent was never told a child's video was waiting. The parent now gets an
+     * outbox-routed email plus an inbox row deep-linking to the approvals page — written in the same
+     * transaction as the approval row (enqueueEmail is MANDATORY and writes the inbox row).
+     */
+    @Test
+    void createApprovalRequest_notifiesParent_inboxRowLinksToApprovals() {
+        PlayerProfile profile = seedMinorPlayer(15, PARENT_ID);
+        Video video = seedVideo(String.valueOf(profile.getId()), OperationalState.HIDDEN, "asset-gate-notify");
+
+        videoApprovalService.createApprovalRequest(video.getId(), profile.getId());
+
+        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(
+            "SELECT type, category, deep_link, params::text AS params FROM main.user_notifications "
+                + "WHERE recipient_user_id = ?", PARENT_ID);
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).get("type")).isEqualTo("VIDEO_APPROVAL_REQUESTED");
+        assertThat(rows.get(0).get("category")).isEqualTo("MODERATION");
+        assertThat(rows.get(0).get("deep_link")).isEqualTo("/parent/approvals");
+        assertThat((String) rows.get(0).get("params")).contains(profile.getName());
     }
 
     @Test
@@ -166,6 +193,40 @@ class VideoApprovalServiceIT extends BaseVideoIT {
         assertThat(updatedApproval.getResolvedAt()).isNotNull();
 
         verify(videoProviderAdapter).triggerTranscoding("asset-approve-1");
+    }
+
+    /**
+     * B5 regression: approve published the owner event AFTER its transaction committed, where no
+     * BEFORE_COMMIT listener can fire. It is now published inside the approval transaction, so the
+     * player is told (outbox email + inbox row) atomically with the APPROVED row.
+     */
+    @Test
+    void approveVideo_notifiesPlayerAccount() {
+        PlayerProfile profile = seedPlayerWithAccount(16, PLAYER_USER_ID);
+        Video video = seedVideo(String.valueOf(profile.getId()), OperationalState.HIDDEN, "asset-approve-notify");
+        VideoApprovalRequest approval = seedApprovalRequest(video, profile.getId(), PARENT_ID);
+        doNothing().when(videoProviderAdapter).triggerTranscoding("asset-approve-notify");
+
+        videoApprovalService.approveVideo(approval.getId(), PARENT_ID);
+
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT type || ' ' || deep_link FROM main.user_notifications WHERE recipient_user_id = ?",
+            String.class, PLAYER_USER_ID))
+            .containsExactly("VIDEO_APPROVAL_APPROVED /player/videos");
+    }
+
+    @Test
+    void rejectVideo_notifiesPlayerAccount() {
+        PlayerProfile profile = seedPlayerWithAccount(16, PLAYER_USER_ID);
+        Video video = seedVideo(String.valueOf(profile.getId()), OperationalState.HIDDEN, "asset-reject-notify");
+        VideoApprovalRequest approval = seedApprovalRequest(video, profile.getId(), PARENT_ID);
+
+        videoApprovalService.rejectVideo(approval.getId(), PARENT_ID);
+
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT type || ' ' || deep_link FROM main.user_notifications WHERE recipient_user_id = ?",
+            String.class, PLAYER_USER_ID))
+            .containsExactly("VIDEO_APPROVAL_REJECTED /player/videos");
     }
 
     @Test
@@ -265,14 +326,29 @@ class VideoApprovalServiceIT extends BaseVideoIT {
 
     // ─── helpers ─────────────────────────────────────────────────────────────
 
+    /**
+     * A player profile with its own login. chk_pp_owner allows parent_id XOR user_id, so this profile
+     * has no parent_id; the approval row carries the parent separately (seedApprovalRequest).
+     */
+    private PlayerProfile seedPlayerWithAccount(int ageYears, long userId) {
+        PlayerProfile profile = seedMinorPlayerUnsaved(ageYears, PARENT_ID);
+        profile.setParentId(null);
+        profile.setUserId(userId);
+        return playerProfileRepository.save(profile);
+    }
+
     private PlayerProfile seedMinorPlayer(int ageYears, long parentId) {
+        return playerProfileRepository.save(seedMinorPlayerUnsaved(ageYears, parentId));
+    }
+
+    private PlayerProfile seedMinorPlayerUnsaved(int ageYears, long parentId) {
         PlayerProfile profile = new PlayerProfile();
         profile.setName("Test Player " + ageYears);
         profile.setDateOfBirth(LocalDate.now().minusYears(ageYears));
         profile.setPosition(PlayerPosition.GOALKEEPER);
         profile.setAgeTier(ageYears >= 18 ? AgeTier.ADULT : AgeTier.AGE_13_17);
         profile.setParentId(parentId);
-        return playerProfileRepository.save(profile);
+        return profile;
     }
 
     private Video seedVideo(String ownerId, OperationalState state, String providerAssetId) {

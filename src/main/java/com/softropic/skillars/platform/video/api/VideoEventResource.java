@@ -2,13 +2,11 @@ package com.softropic.skillars.platform.video.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.infrastructure.security.SecurityError;
-import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
-import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
-import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.repo.Video;
+import com.softropic.skillars.platform.video.service.VideoAccessGuard;
 import com.softropic.skillars.platform.video.service.VideoService;
 import com.softropic.skillars.platform.video.service.VideoSseService;
 import io.micrometer.observation.annotation.Observed;
@@ -32,8 +30,7 @@ public class VideoEventResource {
 
     private final VideoService videoService;
     private final VideoSseService videoSseService;
-    private final SecurityUtil securityUtil;
-    private final PlayerProfileRepository playerProfileRepository;
+    private final VideoAccessGuard videoAccessGuard;
 
     @GetMapping("/{id}/events")
     @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
@@ -65,30 +62,14 @@ public class VideoEventResource {
 
     private Video findAndVerifyOwnership(UUID videoId) {
         Video video = videoService.findById(videoId);
-        if (!isCurrentUserOwner(video.getOwnerId())) {
+        // VideoAccessGuard owns the one owner check (coach-profile UUID or PlayerProfile id resolved
+        // from the caller's user id). The old local copy compared a coach video's UUID ownerId to the
+        // username (an email), so a coach got 403 on /events and /status for their own upload.
+        if (!videoAccessGuard.isCurrentUserOwner(video)) {
             throw new OperationNotAllowedException(
                 "Not the owner of this video", SecurityError.MISSING_RIGHTS);
         }
         return video;
-    }
-
-    private boolean isCurrentUserOwner(String ownerId) {
-        try {
-            long playerProfileId = Long.parseLong(ownerId);
-            // Player video: ownerId is the PlayerProfile id (Long TSID string), NOT a user id — the
-            // caller owns it when that profile is their own (PlayerProfile.userId == businessId).
-            // Comparing businessId to ownerId directly never matched, so a player could not follow
-            // their own upload's processing status (SSE + polling fallback both 403'd).
-            org.springframework.security.core.userdetails.User user = securityUtil.getCurrentUser();
-            if (user instanceof Principal principal && principal.getBusinessId() != null) {
-                return playerProfileRepository.existsByIdAndUserId(
-                    playerProfileId, Long.parseLong(principal.getBusinessId()));
-            }
-            return false;
-        } catch (NumberFormatException e) {
-            // Coach video: ownerId is a UUID string — fall back to username
-            return ownerId.equals(securityUtil.getCurrentUserName());
-        }
     }
 
     public record VideoStatusResponse(UUID videoId, String operationalState, String displayState) {}

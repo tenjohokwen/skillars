@@ -64,6 +64,7 @@ public class ModerationOrchestrationService {
     private final AgePolicyService agePolicyService;
     private final PlayerProfileRepository playerProfileRepository;
     private final VideoApprovalService videoApprovalService;
+    private final VideoOwnerAccountResolver videoOwnerAccountResolver;
 
     @Async("moderationTaskExecutor")
     @Observed(name = "video.moderation.pipeline")
@@ -418,6 +419,8 @@ public class ModerationOrchestrationService {
     }
 
     private void suspendAccount(String ownerId, UUID videoId) {
+        // AccountSuspensionEventListener (synchronous @EventListener) resolves ownerId to the account
+        // and throws when nothing resolves — the caller turns that into a "suspension FAILED" alert.
         publisher.publishEvent(new AccountSuspensionRequestedEvent(ownerId, videoId));
         log.warn("AccountSuspensionRequestedEvent published for ownerId={} triggeredByVideoId={}", ownerId, videoId);
     }
@@ -428,7 +431,18 @@ public class ModerationOrchestrationService {
     }
 
     private void notifyOwner(String ownerId, UUID videoId, String message) {
-        publisher.publishEvent(new VideoModerationOwnerNotificationEvent(videoId, ownerId, message));
+        // ownerId is not an email address — resolve the owner's account email.
+        // A lookup failure must not escape the @Async pipeline (the video is already LOCKED); the
+        // listener logs and skips a null recipient.
+        VideoOwnerAccountResolver.OwnerAccount recipient;
+        try {
+            recipient = videoOwnerAccountResolver.resolveNotificationRecipient(ownerId).orElse(null);
+        } catch (RuntimeException e) {
+            log.error("[VIDEO_MODERATION_OWNER_NOTICE_RESOLVE_FAILED videoId={} ownerId={}]", videoId, ownerId, e);
+            recipient = null;
+        }
+        publisher.publishEvent(new VideoModerationOwnerNotificationEvent(videoId, ownerId, message,
+            recipient != null ? recipient.email() : null, recipient != null ? recipient.langKey() : null));
         log.info("VideoModerationOwnerNotificationEvent published for ownerId={}: {}", ownerId, message);
     }
 }

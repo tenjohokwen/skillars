@@ -55,9 +55,24 @@ public class PlaybackService {
         return authorizePlayback(videoId, viewerId, clientIp, false);
     }
 
+    /** Never issues a download URL (no ownership decision) — owner-facing callers use the 5-arg form. */
     @Observed(name = "video.playback.authorize")
     @Transactional
     public PlaybackAuthorizationResponse authorizePlayback(UUID videoId, String viewerId, @Nullable String clientIp, boolean skipHiddenCheck) {
+        return authorizePlayback(videoId, viewerId, clientIp, skipHiddenCheck, false);
+    }
+
+    /**
+     * @param viewerIsOwner whether the caller owns the video, as decided by
+     *     {@link VideoAccessGuard#isCurrentUserOwner} — the only thing that unlocks a download URL.
+     *     {@code viewerId} is the caller's username (an email) and can never equal
+     *     {@code video.ownerId} (a coach-profile UUID or a PlayerProfile id), so ownership cannot be
+     *     derived from it here.
+     */
+    @Observed(name = "video.playback.authorize")
+    @Transactional
+    public PlaybackAuthorizationResponse authorizePlayback(UUID videoId, String viewerId, @Nullable String clientIp,
+                                                           boolean skipHiddenCheck, boolean viewerIsOwner) {
         long start = System.nanoTime();
         boolean success = false;
         MDC.put("videoId", videoId.toString());
@@ -155,9 +170,10 @@ public class PlaybackService {
 
             // Generate download URL for owner of downloadable video types (HOMEWORK, DRILL_DEMO).
             // COACH_REVIEW: no download URL per FR-VID-009 — only signedHlsUrl is returned.
-            // See AC 4 note: confirm DRILL_DEMO ownership model with platform.session before enabling.
+            // Ownership comes from the caller (VideoAccessGuard.isCurrentUserOwner): comparing viewerId
+            // (a username) to ownerId (a UUID / PlayerProfile id) never matched, so no owner ever got one.
             String downloadUrl = null;
-            if (video.getVideoType() != VideoType.COACH_REVIEW && viewerId.equals(video.getOwnerId())) {
+            if (video.getVideoType() != VideoType.COACH_REVIEW && viewerIsOwner) {
                 downloadUrl = videoProviderAdapter
                     .generateDownloadUrl(video.getProviderAssetId(), new PlaybackTokenClaims(viewerId, expiresAt, boundIp))
                     .orElse(null);

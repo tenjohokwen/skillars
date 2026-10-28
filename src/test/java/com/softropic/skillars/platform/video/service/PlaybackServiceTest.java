@@ -230,4 +230,53 @@ class PlaybackServiceTest {
 
         verify(quotaService).incrementBandwidthUsedBytes(ownerId, storageBytes);
     }
+
+    // ── B5: download URL is gated on the caller-supplied ownership decision, not viewerId == ownerId ──
+
+    private Video readyHomework(UUID videoId, String ownerId) {
+        Video video = new Video();
+        video.setId(videoId);
+        video.setOwnerId(ownerId);
+        video.setOperationalState(OperationalState.READY);
+        video.setAccessState(AccessState.ACTIVE);
+        video.setProviderAssetId("bunny-asset-dl");
+        video.setVideoType(com.softropic.skillars.platform.video.contract.VideoType.HOMEWORK);
+        return video;
+    }
+
+    private void stubIssue(UUID videoId, Video video) {
+        PlaybackToken savedToken = new PlaybackToken();
+        savedToken.setId(UUID.randomUUID());
+        when(configService.getBoundedLong("platform.video.playback.signed_url_ttl_minutes", 120L, 1L, 1440L)).thenReturn(120L);
+        when(configService.getBoolean("platform.video.playback.ip_binding_enabled", false)).thenReturn(false);
+        when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+        when(videoRepository.findByIdForUpdate(videoId)).thenReturn(Optional.of(video));
+        when(videoProviderAdapter.generatePlaybackUrl(anyString(), any(PlaybackTokenClaims.class)))
+            .thenReturn(new SignedPlaybackUrl("https://cdn/playlist.m3u8?token=test", Instant.now().plusSeconds(900)));
+        when(playbackTokenRepository.save(any(PlaybackToken.class))).thenReturn(savedToken);
+    }
+
+    @Test
+    void authorizePlayback_ownerPerGuard_getsDownloadUrl() {
+        UUID videoId = UUID.randomUUID();
+        // A player video: ownerId is the PlayerProfile id, viewerId the username — they never match.
+        stubIssue(videoId, readyHomework(videoId, "555000001"));
+        when(videoProviderAdapter.generateDownloadUrl(anyString(), any(PlaybackTokenClaims.class)))
+            .thenReturn(Optional.of("https://cdn/original?token=dl"));
+
+        var response = playbackService.authorizePlayback(videoId, "player@example.com", null, false, true);
+
+        assertThat(response.downloadUrl()).isEqualTo("https://cdn/original?token=dl");
+    }
+
+    @Test
+    void authorizePlayback_notOwner_noDownloadUrl_evenIfViewerIdEqualsOwnerId() {
+        UUID videoId = UUID.randomUUID();
+        stubIssue(videoId, readyHomework(videoId, "same-string"));
+
+        var response = playbackService.authorizePlayback(videoId, "same-string", null, false, false);
+
+        assertThat(response.downloadUrl()).isNull();
+        verify(videoProviderAdapter, never()).generateDownloadUrl(anyString(), any());
+    }
 }

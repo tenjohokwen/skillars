@@ -19,6 +19,7 @@ import java.util.UUID;
 public class VideoAccessCache {
 
     private final Map<UUID, Boolean> parentDecisions = new HashMap<>();
+    private final Map<UUID, Boolean> ownerDecisions = new HashMap<>();
     private final Map<UUID, Video> videoCache = new HashMap<>();
 
     public void setParentDecision(UUID videoId, boolean isParent) {
@@ -27,6 +28,14 @@ public class VideoAccessCache {
 
     public Optional<Boolean> getParentDecision(UUID videoId) {
         return Optional.ofNullable(parentDecisions.get(videoId));
+    }
+
+    public void setOwnerDecision(UUID videoId, boolean isOwner) {
+        ownerDecisions.put(videoId, isOwner);
+    }
+
+    public Optional<Boolean> getOwnerDecision(UUID videoId) {
+        return Optional.ofNullable(ownerDecisions.get(videoId));
     }
 
     public void setVideo(UUID videoId, Video video) {

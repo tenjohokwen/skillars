@@ -2,7 +2,13 @@ package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.video.contract.OperationalState;
+import com.softropic.skillars.platform.video.contract.LifecycleTrigger;
+import com.softropic.skillars.platform.video.contract.UploadSessionStatus;
+import com.softropic.skillars.platform.video.repo.UploadSession;
+import com.softropic.skillars.platform.video.repo.UploadSessionRepository;
 import com.softropic.skillars.platform.video.repo.Video;
+import com.softropic.skillars.platform.video.repo.VideoDeletionLog;
+import com.softropic.skillars.platform.video.repo.VideoDeletionOutbox;
 import com.softropic.skillars.platform.video.repo.VideoApprovalRequestRepository;
 import com.softropic.skillars.platform.video.repo.VideoDeletionLogRepository;
 import com.softropic.skillars.platform.video.repo.VideoDeletionOutboxRepository;
@@ -13,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -20,7 +27,10 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.List;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -39,6 +49,7 @@ class VideoDeletionServiceTest {
     @Mock private ConfigService configService;
     @Mock private ApplicationEventPublisher publisher;
     @Mock private VideoAccessGuard videoAccessGuard;
+    @Mock private UploadSessionRepository uploadSessionRepository;
 
     private VideoDeletionService service;
 
@@ -47,7 +58,8 @@ class VideoDeletionServiceTest {
     @BeforeEach
     void setUp() {
         service = new VideoDeletionService(videoRepository, outboxRepository, deletionLogRepository,
-            approvalRequestRepository, videoQuotaRepository, quotaService, configService, publisher, videoAccessGuard);
+            approvalRequestRepository, videoQuotaRepository, quotaService, configService, publisher, videoAccessGuard,
+            uploadSessionRepository);
         // cascadeDeleteForAccount routes its per-video call through self.deleteVideo(...) so each
         // iteration gets its own transaction via the Spring proxy — wire self back to the same
         // test-constructed instance, since there's no real proxy here.
@@ -98,5 +110,66 @@ class VideoDeletionServiceTest {
         service.cascadeDeleteForAccount(OWNER_ID);
 
         verify(videoQuotaRepository).resetBytesForOwner(OWNER_ID);
+    }
+
+    // ── B5: admin delete goes through the same bookkeeping as every other delete ──
+
+    @Test
+    void deleteByAdmin_readyVideo_purgesDecrementsQuotaWritesLogAndOutbox() {
+        UUID videoId = UUID.randomUUID();
+        Video v = video(videoId);
+        v.setProviderAssetId("bunny-1");
+        when(videoRepository.findById(videoId)).thenReturn(java.util.Optional.of(v));
+        when(configService.getBoolean(anyString(), anyBoolean())).thenReturn(true);
+        when(uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)).thenReturn(java.util.Optional.empty());
+        when(outboxRepository.existsByVideoIdAndStatus(videoId, "PENDING")).thenReturn(false);
+
+        assertThat(service.deleteByAdmin(videoId)).isTrue();
+
+        assertThat(v.getOperationalState()).isEqualTo(OperationalState.PURGED);
+        verify(quotaService).decrementStorageBytes(OWNER_ID, 1000L);
+        verify(approvalRequestRepository).cancelAllPendingForVideo(videoId);
+        ArgumentCaptor<VideoDeletionLog> logRow = ArgumentCaptor.forClass(VideoDeletionLog.class);
+        verify(deletionLogRepository).save(logRow.capture());
+        assertThat(logRow.getValue().getTriggeredBy()).isEqualTo(LifecycleTrigger.ADMIN_DELETION);
+        // The Bunny asset is deleted by VideoDeletionOutboxProcessor (DrillVideoRef ref-count aware),
+        // never inline by the admin path.
+        ArgumentCaptor<VideoDeletionOutbox> outbox = ArgumentCaptor.forClass(VideoDeletionOutbox.class);
+        verify(outboxRepository).save(outbox.capture());
+        assertThat(outbox.getValue().getBunnyVideoId()).isEqualTo("bunny-1");
+        assertThat(outbox.getValue().getTriggeredBy()).isEqualTo(LifecycleTrigger.ADMIN_DELETION);
+    }
+
+    @Test
+    void deleteByAdmin_pendingUploadSession_isExpired() {
+        UUID videoId = UUID.randomUUID();
+        Video v = video(videoId);
+        v.setOperationalState(OperationalState.UPLOADING);
+        v.setStorageBytes(null);
+        UploadSession session = new UploadSession();
+        session.setStatus(UploadSessionStatus.PENDING);
+        when(videoRepository.findById(videoId)).thenReturn(java.util.Optional.of(v));
+        when(configService.getBoolean(anyString(), anyBoolean())).thenReturn(true);
+        when(uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)).thenReturn(java.util.Optional.of(session));
+
+        service.deleteByAdmin(videoId);
+
+        assertThat(session.getStatus()).isEqualTo(UploadSessionStatus.EXPIRED);
+        verify(uploadSessionRepository).save(session);
+        verify(quotaService, never()).decrementStorageBytes(anyString(), org.mockito.ArgumentMatchers.longThat(b -> b > 0));
+    }
+
+    @Test
+    void deleteByAdmin_alreadyPurged_isNoOp() {
+        UUID videoId = UUID.randomUUID();
+        Video v = video(videoId);
+        v.setOperationalState(OperationalState.PURGED);
+        when(videoRepository.findById(videoId)).thenReturn(java.util.Optional.of(v));
+
+        assertThat(service.deleteByAdmin(videoId)).isFalse();
+
+        verify(quotaService, never()).decrementStorageBytes(any(), org.mockito.ArgumentMatchers.anyLong());
+        verify(deletionLogRepository, never()).save(any());
+        verify(outboxRepository, never()).save(any());
     }
 }

@@ -2474,6 +2474,9 @@ export default {
       PACK_PAUSED: 'Your session pack with {coachDisplayName} was paused.',
       PERFORMANCE_REPORT_SHARED: '{coachName} shared a performance report for {playerName}.',
       VIDEO_MODERATION_OWNER_FLAGGED: 'One of your videos was flagged for review.',
+      VIDEO_APPROVAL_REQUESTED: 'A video from {playerName} is waiting for your approval.',
+      VIDEO_APPROVAL_APPROVED: 'Your parent approved your video.',
+      VIDEO_APPROVAL_REJECTED: 'Your parent did not approve your video.',
       COACH_VISIBILITY_REDUCED: 'Your marketplace visibility was reduced.',
     },
     preferences: {

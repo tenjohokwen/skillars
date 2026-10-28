@@ -57,6 +57,7 @@ class AdminVideoServiceTest {
     @Mock QuotaProvider quotaProvider;
     @Mock TransactionTemplate transactionTemplate;
     @Mock VideoModerationScanRepository moderationScanRepository;
+    @Mock VideoDeletionService videoDeletionService;
 
     @InjectMocks
     AdminVideoService service;
@@ -69,37 +70,36 @@ class AdminVideoServiceTest {
         });
     }
 
+    /**
+     * B5: the admin delete delegates the purge (state, quota decrement, deletion log, drill-ref-aware
+     * outbox) to VideoDeletionService, and never deletes the Bunny asset inline.
+     */
     @Test
-    void deleteVideo_pendingSession_releasesQuotaAfterTransactionCommits() {
+    void deleteVideo_purgesThroughDeletionService_thenReleasesReservation_neverCallsProviderInline() {
         UUID videoId = UUID.randomUUID();
-        Video video = new Video();
-        when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
-
         UploadSession session = new UploadSession();
-        session.setStatus(UploadSessionStatus.PENDING);
+        session.setStatus(UploadSessionStatus.EXPIRED);
         session.setReservationHandle("handle-1");
         when(uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)).thenReturn(Optional.of(session));
 
         service.deleteVideo(videoId);
 
-        InOrder inOrder = inOrder(videoRepository, quotaProvider);
-        inOrder.verify(videoRepository).save(video);
+        InOrder inOrder = inOrder(videoDeletionService, quotaProvider);
+        inOrder.verify(videoDeletionService).deleteByAdmin(videoId);
         inOrder.verify(quotaProvider).release("handle-1");
-        assertThat(video.getOperationalState()).isEqualTo(OperationalState.DELETED);
-        assertThat(session.getStatus()).isEqualTo(UploadSessionStatus.EXPIRED);
+        assertThat(session.getQuotaReleasedAt()).isNotNull();
+        verify(videoProviderAdapter, never()).deleteAsset(any());
     }
 
     @Test
-    void deleteVideo_noPendingSession_neverReleasesQuota() {
+    void deleteVideo_noSession_neverReleasesQuota() {
         UUID videoId = UUID.randomUUID();
-        Video video = new Video();
-        when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
         when(uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)).thenReturn(Optional.empty());
 
         service.deleteVideo(videoId);
 
+        verify(videoDeletionService).deleteByAdmin(videoId);
         verify(quotaProvider, never()).release(any());
-        assertThat(video.getOperationalState()).isEqualTo(OperationalState.DELETED);
     }
 
     /**
@@ -109,11 +109,8 @@ class AdminVideoServiceTest {
     @Test
     void deleteVideo_releaseFails_propagatesAndDoesNotMarkReleased() {
         UUID videoId = UUID.randomUUID();
-        Video video = new Video();
-        when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
-
         UploadSession session = new UploadSession();
-        session.setStatus(UploadSessionStatus.PENDING);
+        session.setStatus(UploadSessionStatus.EXPIRED);
         session.setReservationHandle("handle-1");
         when(uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)).thenReturn(Optional.of(session));
 
@@ -123,60 +120,55 @@ class AdminVideoServiceTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.deleteVideo(videoId))
             .isSameAs(releaseFailure);
 
-        assertThat(video.getOperationalState())
-            .as("Phase 1's DELETED write already committed in its own transaction and must not be undone")
-            .isEqualTo(OperationalState.DELETED);
         assertThat(session.getQuotaReleasedAt())
             .as("a failed release must not be marked released, so a retry re-attempts it")
             .isNull();
     }
 
     /**
-     * Deferred-64 AC5 / Task 5.3: retry-safety. Phase 1's PENDING filter means a session already
-     * flipped to EXPIRED by an earlier deleteVideo call is invisible to Phase 1 on a repeat call —
-     * but Phase 2 must still find it (via the same repository method, without that filter) and
-     * retry the release that previously failed.
+     * Deferred-64 AC5: a repeat call (video already purged — deleteByAdmin is then a no-op) still
+     * retries a release that previously failed, and never repeats one that succeeded.
      */
     @Test
-    void deleteVideo_repeatCallAfterPriorReleaseFailure_retriesAndSucceeds() {
+    void deleteVideo_repeatCall_retriesUnreleasedReservationOnly() {
         UUID videoId = UUID.randomUUID();
-        Video video = new Video();
-        video.setOperationalState(OperationalState.DELETED);
-        when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
-
-        // Already EXPIRED from an earlier call — Phase 1's PENDING filter no longer matches it,
-        // but it still carries a reservation handle and no quotaReleasedAt yet.
+        when(videoDeletionService.deleteByAdmin(videoId)).thenReturn(false);
         UploadSession session = new UploadSession();
         session.setStatus(UploadSessionStatus.EXPIRED);
         session.setReservationHandle("handle-1");
         when(uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)).thenReturn(Optional.of(session));
 
         service.deleteVideo(videoId);
-
         verify(quotaProvider).release("handle-1");
-        assertThat(session.getQuotaReleasedAt()).isNotNull();
+
+        service.deleteVideo(videoId);
+        verify(quotaProvider, org.mockito.Mockito.times(1)).release("handle-1");
     }
 
-    /**
-     * Deferred-64 AC5 / Task 5.3: a successful release must not be repeated on a further call for
-     * the same, already-released session.
-     */
     @Test
-    void deleteVideo_sessionAlreadyReleased_doesNotReleaseAgain() {
+    void deleteVideo_lostRaceToAnotherDelete_isIdempotent() {
         UUID videoId = UUID.randomUUID();
-        Video video = new Video();
-        video.setOperationalState(OperationalState.DELETED);
-        when(videoRepository.findById(videoId)).thenReturn(Optional.of(video));
+        org.mockito.Mockito.doThrow(new org.springframework.orm.ObjectOptimisticLockingFailureException(Video.class, videoId))
+            .when(videoDeletionService).deleteByAdmin(videoId);
+        Video purged = new Video();
+        purged.setOperationalState(OperationalState.PURGED);
+        when(videoRepository.findById(videoId)).thenReturn(Optional.of(purged));
+        when(uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)).thenReturn(Optional.empty());
 
-        UploadSession session = new UploadSession();
-        session.setStatus(UploadSessionStatus.EXPIRED);
-        session.setReservationHandle("handle-1");
-        session.setQuotaReleasedAt(java.time.Instant.now().minusSeconds(60));
-        when(uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)).thenReturn(Optional.of(session));
+        org.assertj.core.api.Assertions.assertThatCode(() -> service.deleteVideo(videoId)).doesNotThrowAnyException();
+    }
 
-        service.deleteVideo(videoId);
+    @Test
+    void deleteVideo_lostRaceToNonDeleteChange_propagatesConflict() {
+        UUID videoId = UUID.randomUUID();
+        org.mockito.Mockito.doThrow(new org.springframework.orm.ObjectOptimisticLockingFailureException(Video.class, videoId))
+            .when(videoDeletionService).deleteByAdmin(videoId);
+        Video ready = new Video();
+        ready.setOperationalState(OperationalState.READY);
+        when(videoRepository.findById(videoId)).thenReturn(Optional.of(ready));
 
-        verify(quotaProvider, never()).release(any());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.deleteVideo(videoId))
+            .isInstanceOf(org.springframework.orm.ObjectOptimisticLockingFailureException.class);
     }
 
     // ---- admin video review queue (story 6.3 / FR-ADM-002) ----

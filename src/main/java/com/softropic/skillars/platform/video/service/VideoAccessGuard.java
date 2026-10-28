@@ -68,8 +68,10 @@ public class VideoAccessGuard {
             return true;
         }
 
-        // Step 2: Owner check
-        if (isOwner(video)) {
+        // Step 2: Owner check (cached so VideoPlayResource's download-URL decision reuses it)
+        boolean owner = isCurrentUserOwner(video);
+        videoAccessCache.setOwnerDecision(videoId, owner);
+        if (owner) {
             return true;
         }
 
@@ -152,7 +154,7 @@ public class VideoAccessGuard {
             return true;
         }
 
-        if (isOwner(video)) {
+        if (isCurrentUserOwner(video)) {
             return true;
         }
 
@@ -171,7 +173,20 @@ public class VideoAccessGuard {
         throw new VideoDeletionNotAuthorisedException(videoId, requesterId != null ? requesterId : "unknown");
     }
 
-    private boolean isOwner(Video video) {
+    /**
+     * Whether the authenticated caller owns {@code video}'s storage space — the single owner check for
+     * the whole video module. {@code video.ownerId} is a coach-profile UUID or a PlayerProfile id,
+     * never a username/email, so callers must not compare it to {@code getCurrentUserName()} (that
+     * comparison never matched: owner downloads were never issued and coaches 403'd on their own
+     * upload's /events and /status).
+     */
+    public boolean isCurrentUserOwner(Video video) {
+        if (video.getId() != null) {
+            Optional<Boolean> cached = videoAccessCache.getOwnerDecision(video.getId());
+            if (cached.isPresent()) {
+                return cached.get();
+            }
+        }
         if (isPlayerOwnedVideo(video)) {
             // Player video: ownerId = PlayerProfile.id string; the caller owns it when that profile is
             // their own (PlayerProfile.userId == caller's user id). Comparing the user id directly to

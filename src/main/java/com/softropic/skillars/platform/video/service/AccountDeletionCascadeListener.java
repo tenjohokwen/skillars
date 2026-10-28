@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.video.service;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.contract.AccountRole;
 import com.softropic.skillars.platform.security.contract.event.AccountDeletionRequestedEvent;
-import com.softropic.skillars.platform.security.repo.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -19,7 +18,6 @@ import java.util.List;
 public class AccountDeletionCascadeListener {
 
     private final VideoDeletionService videoDeletionService;
-    private final UserRepository userRepository;
     private final ConfigService configService;
 
     /**
@@ -46,15 +44,13 @@ public class AccountDeletionCascadeListener {
         if (event.userRole() == AccountRole.PARENT
                 && event.linkedPlayerIds() != null
                 && !event.linkedPlayerIds().isEmpty()) {
+            // linkedPlayerIds are PlayerProfile ids, which ARE the player-video ownerId space (Story 6.6).
+            // This used to look each one up as a main."user" id and cascade on that user's id instead —
+            // a different id space, so a parent's erasure never purged the children's videos.
             for (Long playerId : event.linkedPlayerIds()) {
-                userRepository.findOneById(playerId).ifPresentOrElse(
-                    user -> {
-                        String playerOwnerId = String.valueOf(user.getId());
-                        affectedOwnerIds.add(playerOwnerId);
-                        videoDeletionService.cascadeDeleteForAccount(playerOwnerId);
-                    },
-                    () -> log.warn("[ACCOUNT_DELETION_NO_OWNER playerId={}] Player not found, skipping", playerId)
-                );
+                String playerOwnerId = String.valueOf(playerId);
+                affectedOwnerIds.add(playerOwnerId);
+                videoDeletionService.cascadeDeleteForAccount(playerOwnerId);
             }
         }
 
