@@ -165,7 +165,8 @@ public class DisputeService {
 
         return new DisputeResponse(
             dispute.getId(), dispute.getBookingId(), dispute.getReason(), dispute.getDetails(),
-            dispute.getStatus(), dispute.getResolution(), dispute.getResolutionNote(), dispute.getCreatedAt());
+            dispute.getStatus(), dispute.getResolution(), dispute.getResolutionNote(), dispute.getCreatedAt(),
+            dispute.getResolvedAt());
     }
 
     // skillars-deferred-165 AC1: a paged admin worklist of open disputes, mirroring

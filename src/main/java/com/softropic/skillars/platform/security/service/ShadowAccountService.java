@@ -114,6 +114,11 @@ public class ShadowAccountService {
     public List<PlayerProfileResponse> listPlayerProfiles(Long parentId) {
         return playerProfileRepository.findByParentIdOrderByIdAsc(parentId)
             .stream()
+            // A child the parent has had erased (GDPR, V172) keeps its row — bookings still reference
+            // it — but must disappear from every "my children" surface. developmentDataErasedAt is the
+            // one-way erasure tombstone; it is only ever set on a parent-owned profile by an erasure
+            // of that child or of the parent account itself.
+            .filter(pp -> pp.getDevelopmentDataErasedAt() == null)
             .map(playerProfileMapper::toResponse)
             .toList();
     }

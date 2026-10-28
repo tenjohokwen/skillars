@@ -20,9 +20,14 @@ public class GdprEventListener {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onExportRequested(GdprExportRequestedEvent event) {
-        log.info("[GDPR_EXPORT] Processing export requestId={} userId={}", event.getRequestId(), event.getUserId());
+        log.info("[GDPR_EXPORT] Processing export requestId={} userId={} playerId={}",
+            event.getRequestId(), event.getUserId(), event.getPlayerId());
         try {
-            gdprExportService.buildExport(event.getRequestId(), event.getUserId());
+            if (event.getPlayerId() != null) {
+                gdprExportService.buildChildExport(event.getRequestId(), event.getUserId(), event.getPlayerId());
+            } else {
+                gdprExportService.buildExport(event.getRequestId(), event.getUserId());
+            }
         } catch (Exception e) {
             log.error("[GDPR_EXPORT_FAILED] requestId={} userId={}", event.getRequestId(), event.getUserId(), e);
         }
@@ -30,9 +35,16 @@ public class GdprEventListener {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onErasureRequested(GdprErasureRequestedEvent event) {
-        log.info("[GDPR_ERASURE] Processing erasure requestId={} userId={}", event.getRequestId(), event.getUserId());
+        log.info("[GDPR_ERASURE] Processing erasure requestId={} userId={} playerId={}",
+            event.getRequestId(), event.getUserId(), event.getPlayerId());
         try {
-            gdprErasureService.erase(event.getRequestId(), event.getUserId());
+            // V172: a child-scoped request carries the PARENT as userId — routing it to erase() would
+            // anonymise the parent's own account.
+            if (event.getPlayerId() != null) {
+                gdprErasureService.eraseChild(event.getRequestId(), event.getUserId(), event.getPlayerId());
+            } else {
+                gdprErasureService.erase(event.getRequestId(), event.getUserId());
+            }
         } catch (Exception e) {
             // CRITICAL: erase() TX has rolled back — calling markFailed() opens a fresh REQUIRES_NEW TX
             // so the FAILED status commits independently of the rolled-back erasure transaction.

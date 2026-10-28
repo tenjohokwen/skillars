@@ -10,6 +10,12 @@ vi.mock('src/boot/axios', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn() },
 }))
 
+// Notify is not registered under test — stub useQuasar so $q.notify is callable on error paths.
+vi.mock('quasar', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, useQuasar: () => ({ ...actual.useQuasar?.(), notify: vi.fn() }) }
+})
+
 vi.mock('src/api/marketplace.api', () => ({
   getCoachProfile: vi.fn(),
   getProfileBuilderStatus: vi.fn(),
@@ -25,10 +31,11 @@ vi.mock('src/api/reviews.api', () => ({
 }))
 
 import { getCoachProfile, getProfileBuilderStatus } from 'src/api/marketplace.api'
-import { getMyReviewForCoach } from 'src/api/reviews.api'
+import { getMyReviewForCoach, listCoachReviews } from 'src/api/reviews.api'
 import CoachPublicProfilePage from 'src/pages/marketplace/CoachPublicProfilePage.vue'
 import ReviewFlagAction from 'src/components/marketplace/ReviewFlagAction.vue'
 import ReliabilityIndicator from 'src/components/marketplace/ReliabilityIndicator.vue'
+import AppealAction from 'src/components/common/AppealAction.vue'
 
 const mounted = []
 
@@ -298,5 +305,112 @@ describe('CoachPublicProfilePage.vue — Message coach entry point (feat/messagi
     )
 
     expect(wrapper.find('[data-testid="message-coach-btn"]').exists()).toBe(false)
+  })
+})
+
+// A12: review sort — resets to page 0 with the chosen sort and discards stale responses.
+describe('CoachPublicProfilePage.vue — review sort (A12)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  const page = (reviewId, n) => ({
+    reviews: [{ reviewId, authorRole: 'PARENT', rating: n, body: '', createdAt: null }],
+    totalElements: 2,
+    hasNext: true,
+    page: 0,
+  })
+
+  it('changing the sort refetches page 0 with that sort and replaces the list', async () => {
+    getCoachProfile.mockResolvedValue(PROFILE)
+    getMyReviewForCoach.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'reviews.reviewNotFound' } } },
+    })
+    listCoachReviews.mockResolvedValue(page('low', 1))
+    const wrapper = await mountPage()
+
+    await wrapper.vm.changeReviewSort('lowest')
+
+    expect(listCoachReviews).toHaveBeenCalledWith('coach-1', 0, 'lowest')
+    expect(wrapper.vm.reviews.map((r) => r.reviewId)).toEqual(['low'])
+    expect(wrapper.vm.reviewsSorting).toBe(false)
+  })
+
+  it('"load more" keeps the selected sort', async () => {
+    getCoachProfile.mockResolvedValue(PROFILE)
+    getMyReviewForCoach.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'reviews.reviewNotFound' } } },
+    })
+    listCoachReviews.mockResolvedValue(page('x', 5))
+    const wrapper = await mountPage()
+    await wrapper.vm.changeReviewSort('highest')
+    await wrapper.vm.loadMoreReviews()
+    expect(listCoachReviews).toHaveBeenLastCalledWith('coach-1', 1, 'highest')
+  })
+
+  it('a failed re-sort restores the previous sort so "load more" stays consistent', async () => {
+    getCoachProfile.mockResolvedValue(PROFILE)
+    getMyReviewForCoach.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'reviews.reviewNotFound' } } },
+    })
+    listCoachReviews.mockRejectedValueOnce(new Error('boom'))
+    const wrapper = await mountPage()
+
+    await wrapper.vm.changeReviewSort('lowest')
+
+    expect(wrapper.vm.reviewSort).toBe('newest')
+  })
+
+  it('a slower response for an earlier sort does not overwrite the newer one', async () => {
+    getCoachProfile.mockResolvedValue(PROFILE)
+    getMyReviewForCoach.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'reviews.reviewNotFound' } } },
+    })
+    let resolveSlow
+    listCoachReviews
+      .mockReturnValueOnce(new Promise((r) => (resolveSlow = r)))
+      .mockResolvedValueOnce(page('newer', 1))
+    const wrapper = await mountPage()
+
+    const first = wrapper.vm.changeReviewSort('highest')
+    await wrapper.vm.changeReviewSort('lowest')
+    resolveSlow(page('stale', 5))
+    await first
+    await flushPromises()
+
+    expect(wrapper.vm.reviews.map((r) => r.reviewId)).toEqual(['newer'])
+  })
+})
+
+// FR-ADM-004: the author of a moderation-blocked review gets an appeal action next to the notice.
+describe('CoachPublicProfilePage.vue — blocked-review appeal', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  it.each([
+    ['BLOCKED', 1],
+    ['APPROVED', 0],
+  ])('own review %s renders %i appeal action(s)', async (moderationStatus, count) => {
+    getCoachProfile.mockResolvedValue(PROFILE)
+    getMyReviewForCoach.mockResolvedValue({
+      reviewId: MY_REVIEW_ID,
+      rating: 1,
+      body: 'x',
+      moderationStatus,
+      lastModifiedAt: '2026-10-20T10:00:00Z',
+    })
+    const wrapper = await mountPage()
+    const actions = wrapper.findAllComponents(AppealAction)
+    expect(actions).toHaveLength(count)
+    if (count) {
+      expect(actions[0].props()).toMatchObject({
+        subjectType: 'REVIEW_BLOCK',
+        subjectId: MY_REVIEW_ID,
+        enforcedAt: '2026-10-20T10:00:00Z',
+      })
+    }
   })
 })

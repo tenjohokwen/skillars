@@ -261,7 +261,7 @@ class DisputeSubmissionIT extends AbstractIntegrationTest {
         assertThat(body.get("reason")).isEqualTo("UNAUTHORISED_CHARGE");
         assertThat(body.get("status")).isEqualTo("OPEN");
         assertThat(body.keySet()).containsExactlyInAnyOrder(
-            "disputeId", "bookingId", "reason", "details", "status", "resolution", "resolutionNote", "createdAt");
+            "disputeId", "bookingId", "reason", "details", "status", "resolution", "resolutionNote", "createdAt", "resolvedAt");
     }
 
     @Test

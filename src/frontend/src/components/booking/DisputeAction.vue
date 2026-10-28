@@ -96,6 +96,19 @@
             {{ t(`disputes.resolutionValue.${disputeStatus.resolution}`) }}
           </div>
           <div v-if="disputeStatus.resolutionNote">{{ disputeStatus.resolutionNote }}</div>
+          <!-- FR-ADM-004 / UX Journey 5: the raiser (this link is only ever stored for them) may
+               appeal a resolved or dismissed dispute once, within 14 days of the resolution. -->
+          <div
+            v-if="['RESOLVED', 'DISMISSED'].includes(disputeStatus.status)"
+            class="q-mt-sm"
+            data-testid="dispute-appeal"
+          >
+            <AppealAction
+              subject-type="DISPUTE_RESOLUTION"
+              :subject-id="disputeStatus.disputeId || disputeId"
+              :enforced-at="disputeStatus.resolvedAt || null"
+            />
+          </div>
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.close')" v-close-popup />
@@ -111,6 +124,7 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { raiseDispute, getDispute } from 'src/api/disputes.api'
 import { useAuthStore } from 'src/stores/auth.store'
+import AppealAction from 'src/components/common/AppealAction.vue'
 
 const props = defineProps({
   bookingId: { type: String, required: true },

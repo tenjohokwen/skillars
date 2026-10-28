@@ -19,6 +19,7 @@ vi.mock('src/boot/axios', () => ({
 }))
 
 import ParentPlayerPortalPage from 'src/pages/parent/ParentPlayerPortalPage.vue'
+import PrivacyDataSection from 'src/components/profile/PrivacyDataSection.vue'
 
 const STUB = { template: '<div />' }
 const mounted = []
@@ -161,5 +162,23 @@ describe('ParentPlayerPortalPage.vue — child hub', () => {
     await flushPromises()
     expect(bookingStore.loadParentSchedule.mock.calls.map((c) => c[0])).toEqual(['111', '222'])
     // Mutation check: replace the loadChain with a direct await → both start at once, RED above.
+  })
+})
+
+// D11: the child hub carries the parent's export/erasure controls for THIS child.
+describe('ParentPlayerPortalPage.vue — child privacy & data (D11)', () => {
+  it('renders the privacy section scoped to the exact route-param child id', async () => {
+    const { wrapper } = await mountPage(LARGE_PLAYER_ID, {}, { shallow: false })
+    const section = wrapper.findComponent(PrivacyDataSection)
+    expect(section.exists()).toBe(true)
+    expect(section.props('playerId')).toBe(LARGE_PLAYER_ID)
+  })
+
+  it('an erased child sends the parent back to the dashboard', async () => {
+    const { wrapper, router } = await mountPage(LARGE_PLAYER_ID, {}, { shallow: false })
+    router.addRoute({ path: '/parent/dashboard', component: STUB })
+    wrapper.findComponent(PrivacyDataSection).vm.$emit('erased', LARGE_PLAYER_ID)
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/parent/dashboard')
   })
 })

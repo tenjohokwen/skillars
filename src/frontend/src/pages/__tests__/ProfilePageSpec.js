@@ -63,6 +63,8 @@ function mountPage(role, initialState = {}) {
         EditCoachPhotoDialog: true,
         EditCoachBrandingDialog: true,
         EditPlayerPositionDialog: true,
+        PrivacyDataSection: true,
+        AppealAction: true,
       },
     },
   })
@@ -316,5 +318,65 @@ describe('ProfilePage.vue — role-gated sections (deferred-139 AC2/AC4/AC5/AC6)
 
     expect(wrapper.text()).not.toContain('profile.sectionCoachBranding')
     expect(getCoachBranding).not.toHaveBeenCalled()
+  })
+
+  // C6 A5: every role gets the self-scoped Privacy & data card.
+  it.each(['COACH', 'PLAYER', 'PARENT', 'ADMIN'])(
+    'A5 — a %s sees the Privacy & data section in self scope',
+    async (role) => {
+      const wrapper = mountPage(role)
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('profile.sectionPrivacy')
+      const sections = wrapper.findAllComponents({ name: 'PrivacyDataSection' })
+      expect(sections).toHaveLength(1)
+      expect(sections[0].props('playerId')).toBeNull()
+    },
+  )
+
+  // C6 D11: per-child privacy dialog carries THAT child's id and name.
+  it("D11 — a child's privacy button opens the child-scoped privacy section", async () => {
+    const wrapper = mountPage('PARENT', {
+      player: {
+        players: [
+          { id: 5, name: 'Kid A', position: 'FORWARD' },
+          { id: 9, name: 'Kid B', position: 'DEFENDER' },
+        ],
+      },
+    })
+    await flushPromises()
+
+    const kidBRow = wrapper.findAll('.profile-row').find((r) => r.text().includes('Kid B'))
+    await kidBRow.find('[data-testid="child-privacy-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.vm.showChildPrivacyDialog).toBe(true)
+    expect(wrapper.vm.privacyChild).toEqual({ id: 9, name: 'Kid B' })
+  })
+
+  // C6 D8: a suspended coach can appeal the suspension.
+  it('D8 — a suspended coach gets an appeal action for the suspension', async () => {
+    const wrapper = mountPage('COACH')
+    getOwnCoachProfile.mockResolvedValue({
+      coachId: 'coach-uuid',
+      status: 'SUSPENDED',
+      statusChangedAt: '2026-10-20T10:00:00Z',
+      displayName: 'Coach Name',
+      specialties: [],
+    })
+    await flushPromises()
+
+    const appeal = wrapper.findComponent({ name: 'AppealAction' })
+    expect(appeal.exists()).toBe(true)
+    expect(appeal.props('subjectType')).toBe('COACH_SUSPENSION')
+    expect(appeal.props('subjectId')).toBe('coach-uuid')
+    expect(appeal.props('enforcedAt')).toBe('2026-10-20T10:00:00Z')
+  })
+
+  it('D8 — an active coach has no suspension appeal action', async () => {
+    const wrapper = mountPage('COACH')
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'AppealAction' }).exists()).toBe(false)
   })
 })

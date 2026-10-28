@@ -35,6 +35,7 @@ import {
   acceptAllBatch,
   coachCancelBooking,
   recordNoShowPlayer,
+  recordNoShowCoach,
   setPlayerRequest,
 } from 'src/api/booking.api'
 import { purchaseSessionPack, getMySessionPacks, pauseSessionPack } from 'src/api/payment.api'
@@ -566,6 +567,13 @@ export const useBookingStore = defineStore('booking', () => {
     await recordNoShowPlayer(bookingId)
   }
 
+  // Parent/self-booking-player side of a no-show: refetch so the row shows NO_SHOW_COACH (and the
+  // refund the backend triggers) — same refetch-after-mutate pattern as handleCancelBooking.
+  async function handleRecordNoShowCoach(bookingId) {
+    await recordNoShowCoach(bookingId)
+    await loadParentBookings()
+  }
+
   async function handleRequestRescheduleAsCoach(bookingId, data) {
     await requestRescheduleAsCoach(bookingId, data)
   }
@@ -773,6 +781,7 @@ export const useBookingStore = defineStore('booking', () => {
     handleDeclineReschedule,
     handleCoachCancelBooking,
     handleRecordNoShowPlayer,
+    handleRecordNoShowCoach,
     handleRequestRescheduleAsCoach,
     handleAcceptRescheduleAsParent,
     handleDeclineRescheduleAsParent,

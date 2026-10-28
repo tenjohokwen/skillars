@@ -185,7 +185,10 @@ public class AdminUserService {
         if (!user.isLocked()) {
             return false;
         }
-        if (gdprRequestRepository.existsByUserIdAndRequestTypeAndStatusIn(userId, "ERASURE", ERASURE_STATUSES)) {
+        // Self-scoped only (player_id IS NULL, V172): a parent's erasure of one of their CHILD profiles
+        // does not erase the parent's own account and must not block reactivating it.
+        if (gdprRequestRepository.existsByUserIdAndPlayerIdIsNullAndRequestTypeAndStatusIn(
+                userId, "ERASURE", ERASURE_STATUSES)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "admin.users.erased");
         }
 

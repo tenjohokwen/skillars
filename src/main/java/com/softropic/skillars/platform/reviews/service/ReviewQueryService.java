@@ -91,9 +91,17 @@ public class ReviewQueryService {
 
     private Sort resolvePublicSort(String sort) {
         return switch (sort == null ? "newest" : sort) {
-            case "highest" -> Sort.by(Sort.Direction.DESC, "rating");
-            case "lowest"  -> Sort.by(Sort.Direction.ASC, "rating");
-            default        -> Sort.by(Sort.Direction.DESC, "lastModifiedAt");
+            // Rating alone is not a total order (ties are the norm on a 1-5 scale), so OFFSET paging
+            // over it could repeat or skip reviews between "load more" pages. Newest-first, then the
+            // PK, break ties deterministically.
+            case "highest" -> Sort.by(Sort.Direction.DESC, "rating")
+                .and(Sort.by(Sort.Direction.DESC, "lastModifiedAt"))
+                .and(Sort.by(Sort.Direction.ASC, "reviewId"));
+            case "lowest"  -> Sort.by(Sort.Direction.ASC, "rating")
+                .and(Sort.by(Sort.Direction.DESC, "lastModifiedAt"))
+                .and(Sort.by(Sort.Direction.ASC, "reviewId"));
+            default        -> Sort.by(Sort.Direction.DESC, "lastModifiedAt")
+                .and(Sort.by(Sort.Direction.ASC, "reviewId"));
         };
     }
 }

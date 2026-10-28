@@ -144,6 +144,13 @@
                    with a bare note, which hid the coach's own data from them. -->
               <div v-if="isCoachSuspended" class="profile-row">
                 <div class="text-meta">{{ t('profile.coachSuspendedNote') }}</div>
+                <!-- FR-ADM-004: a suspension is an appealable enforcement action. -->
+                <AppealAction
+                  v-if="coachProfile.coachId"
+                  subject-type="COACH_SUSPENSION"
+                  :subject-id="coachProfile.coachId"
+                  :enforced-at="coachProfile.statusChangedAt || null"
+                />
               </div>
 
               <div class="profile-row">
@@ -420,7 +427,24 @@
               >
                 <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
               </q-btn>
+              <q-btn
+                flat
+                dense
+                icon="privacy_tip"
+                round
+                class="privacy-btn"
+                data-testid="child-privacy-btn"
+                @click="openChildPrivacyDialog(child)"
+              >
+                <q-tooltip>{{ t('privacy.childButtonTooltip') }}</q-tooltip>
+              </q-btn>
             </div>
+          </div>
+
+          <!-- FR-TSC-007: data export and account deletion, every role -->
+          <div class="glass-card profile-section">
+            <div class="text-label q-mb-lg">{{ t('profile.sectionPrivacy') }}</div>
+            <PrivacyDataSection />
           </div>
         </div>
       </template>
@@ -495,6 +519,29 @@
       :current-position="activeChildPosition"
       @updated="loadProfile"
     />
+
+    <!-- D11: a parent's export/erasure for one child profile -->
+    <q-dialog v-model="showChildPrivacyDialog">
+      <q-card
+        data-testid="child-privacy-dialog"
+        style="min-width: 320px; max-width: 560px; width: 100%"
+      >
+        <q-card-section class="row items-center">
+          <div class="text-h6">
+            {{ t('privacy.childDialogTitle', { name: privacyChild?.name || '' }) }}
+          </div>
+          <q-space />
+          <q-btn flat round dense icon="close" v-close-popup />
+        </q-card-section>
+        <q-card-section v-if="privacyChild">
+          <PrivacyDataSection
+            :player-id="privacyChild.id"
+            :player-name="privacyChild.name"
+            @erased="showChildPrivacyDialog = false"
+          />
+        </q-card-section>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -522,6 +569,8 @@ import EditCoachPhotoDialog from 'src/components/profile/EditCoachPhotoDialog.vu
 import EditCoachBrandingDialog from 'src/components/profile/EditCoachBrandingDialog.vue'
 import EditPlayerPositionDialog from 'src/components/profile/EditPlayerPositionDialog.vue'
 import FeatureGateOverlay from 'src/components/common/FeatureGateOverlay.vue'
+import PrivacyDataSection from 'src/components/profile/PrivacyDataSection.vue'
+import AppealAction from 'src/components/common/AppealAction.vue'
 
 const { t } = useI18n()
 const { setError, clearError, hasError, errorMessage, helpCode } = useErrorHandler()
@@ -576,6 +625,14 @@ function childPositionLabel(position) {
 function openChildPositionDialog(playerId) {
   activeChildId.value = playerId
   showChildPositionDialog.value = true
+}
+
+const showChildPrivacyDialog = ref(false)
+const privacyChild = ref(null)
+
+function openChildPrivacyDialog(child) {
+  privacyChild.value = { id: child.id, name: child.name }
+  showChildPrivacyDialog.value = true
 }
 
 // skillars-deferred-139 review Patch 1: a separate, retry-able loader rather than an inline
@@ -738,7 +795,8 @@ const currentInfo = computed(() => {
   border: 1px solid var(--border-soft);
 }
 
-.edit-btn {
+.edit-btn,
+.privacy-btn {
   color: var(--text-muted) !important;
   flex-shrink: 0;
   margin-left: 12px;

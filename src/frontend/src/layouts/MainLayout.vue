@@ -491,6 +491,16 @@
               <q-item-label class="nav-label">{{ $t('nav.adminUsers') }}</q-item-label>
             </q-item-section>
           </q-item>
+
+          <!-- FR-ADM-004 appeals queue -->
+          <q-item clickable to="/admin/appeals" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="balance" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.appeals') }}</q-item-label>
+            </q-item-section>
+          </q-item>
         </template>
       </q-list>
 

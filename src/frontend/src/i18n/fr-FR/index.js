@@ -446,6 +446,10 @@ export default {
     },
   },
   reviews: {
+    sortLabel: 'Trier les avis',
+    sortNewest: 'Plus récents',
+    sortHighest: 'Mieux notés',
+    sortLowest: 'Moins bien notés',
     writeReview: 'Écrire un avis',
     editReview: 'Modifier votre avis',
     yourReview: 'Votre avis',
@@ -815,6 +819,7 @@ export default {
     close: 'Fermer',
   },
   profile: {
+    sectionPrivacy: 'Confidentialité et données',
     subtitle: 'Gérez les informations et les préférences de votre compte.',
     sectionAccount: 'Compte',
     sectionPersonal: 'Informations personnelles',
@@ -1056,6 +1061,51 @@ export default {
     },
   },
   admin: {
+    appeals: {
+      title: 'Appels',
+      subtitle: 'Utilisateurs contestant une mesure. Les décisions sont définitives.',
+      loadError: 'Impossible de charger la file des appels.',
+      emptyState: 'Aucun appel dans cet état.',
+      colSubject: 'Objet',
+      colAppellant: 'Demandeur',
+      colEnforcedAt: 'Appliquée le',
+      colCreatedAt: 'Envoyé le',
+      colStatus: 'Statut',
+      colActions: 'Actions',
+      view: 'Voir',
+      detailTitle: 'Appel',
+      detailLoadError: 'Impossible de charger cet appel.',
+      reasonLabel: 'Motif du demandeur',
+      subjectLabel: 'Élément contesté',
+      subjectGone: 'L’élément contesté n’existe plus.',
+      decisionLabel: 'Décision',
+      decisionNoteLabel: 'Motif de la décision (visible par le demandeur)',
+      overturnHint:
+        'Accepter l’appel annule la mesure lorsque c’est possible : avertissement supprimé, suspension levée, avis publié. Une décision de litige n’est pas annulée automatiquement — appliquez toute correction manuellement.',
+      uphold: 'Rejeter',
+      overturn: 'Accepter',
+      upholdSuccess: 'Appel rejeté — la mesure est maintenue.',
+      overturnSuccess: 'Appel accepté.',
+      alreadyDecided: 'Un autre administrateur a déjà statué sur cet appel.',
+      decideFailed: 'Impossible d’enregistrer la décision. Veuillez réessayer.',
+      reversalApplied: 'La mesure a été annulée.',
+      reversalNotApplied:
+        'Rien n’a été annulé automatiquement (mesure plus en vigueur ou décision de litige).',
+      subjectField: {
+        strikeReason: 'Motif de l’avertissement',
+        bookingId: 'Réservation',
+        coachId: 'ID du coach',
+        coachName: 'Coach',
+        coachStatus: 'Statut du coach',
+        reviewRating: 'Note',
+        reviewBody: 'Avis',
+        reviewStatus: 'Statut de l’avis',
+        disputeReason: 'Motif du litige',
+        disputeStatus: 'Statut du litige',
+        disputeResolution: 'Résolution',
+        disputeResolutionNote: 'Note de résolution',
+      },
+    },
     health: {
       title: 'État du système',
       subtitle: "État de l'infrastructure en temps réel",
@@ -1730,6 +1780,11 @@ export default {
     receipt: 'Reçu',
   },
   cancellation: {
+    noShowCoachAction: 'Coach absent',
+    noShowCoachConfirmTitle: 'Signaler l’absence du coach',
+    noShowCoachConfirmBody:
+      'Confirmez que le coach ne s’est pas présenté à cette séance. La séance est remboursée et le coach reçoit un avertissement de fiabilité. Cette action est irréversible.',
+    noShowCoachFailed: 'Impossible de signaler l’absence. Veuillez réessayer.',
     title: 'Annuler la séance',
     selectReason: "Sélectionner un motif d'annulation",
     confirmCancel: "Confirmer l'annulation",
@@ -2074,8 +2129,104 @@ export default {
     metricLast30Days: '30 derniers jours',
     metricAverageMs: 'Moyenne en ms',
   },
+  privacy: {
+    exportTitle: 'Exporter mes données',
+    exportHint:
+      'Téléchargez une copie des données personnelles que nous détenons sur vous (profil, réservations, messages, avis, paiements). L’archive est préparée en arrière-plan.',
+    exportHintChild:
+      'Téléchargez une copie des données que nous détenons sur {name} : profil, réservations et suivi de progression.',
+    requestExport: 'Demander un export',
+    exportRequested: 'Export demandé. Nous préparons l’archive.',
+    exportProcessing: 'Préparation de l’archive…',
+    exportStillProcessing:
+      'Cela prend plus de temps que d’habitude. Revenez dans quelques minutes et cliquez sur Actualiser.',
+    exportReady: 'L’archive est prête. Le lien de téléchargement expire le {date}.',
+    download: 'Télécharger l’archive',
+    exportExpired:
+      'Le dernier lien de téléchargement a expiré. Demandez un nouvel export pour télécharger à nouveau les données.',
+    exportFailed: 'Le dernier export n’a pas pu être préparé. Veuillez le demander à nouveau.',
+    loadError: 'Impossible de charger vos demandes de données.',
+    refresh: 'Actualiser',
+    erasureTitle: 'Supprimer mon compte',
+    erasureTitleChild: 'Supprimer les données de cet enfant',
+    erasureHint: 'Supprimer définitivement votre compte et vos données personnelles.',
+    erasureHintChild:
+      'Supprimer définitivement le profil et les données de progression de {name}. Votre propre compte n’est pas concerné.',
+    erasureAction: 'Supprimer mon compte',
+    erasureActionChild: 'Supprimer les données de l’enfant',
+    erasureDialogTitle: 'Supprimer votre compte ?',
+    erasureDialogTitleChild: 'Supprimer les données de {name} ?',
+    erasureConsequencesIntro: 'Voici ce qui va se passer :',
+    consequenceAccount:
+      'Votre compte est anonymisé et verrouillé, et vous êtes déconnecté sur tous vos appareils.',
+    consequenceMessages: 'Vos messages et avis sont supprimés ou anonymisés.',
+    consequenceDevelopment:
+      'Les données de progression (historique, évaluations, rapports) vous concernant, vous et les enfants que vous gérez, sont supprimées.',
+    consequenceCredits:
+      'Les crédits et forfaits restants ne pourront plus être utilisés. Les justificatifs de paiement que la loi nous oblige à conserver sont conservés.',
+    consequenceBlocked:
+      'Un coach ne peut pas supprimer son compte tant que des demandes de réservation sont en attente ou acceptées.',
+    consequenceChildProfile:
+      'Le nom de l’enfant est supprimé et le profil disparaît de votre compte.',
+    consequenceChildDevelopment:
+      'Son historique, ses évaluations, ses rapports de performance et ses devoirs sont supprimés.',
+    consequenceChildBookings:
+      'Les réservations passées restent dans votre historique de paiements, sans les notes de séance de l’enfant.',
+    consequenceChildBlocked:
+      'Impossible tant que l’enfant a une réservation à venir, en cours ou contestée.',
+    consequenceIrreversible: 'Cette action est irréversible.',
+    confirmWord: 'SUPPRIMER',
+    confirmPrompt: 'Saisissez {word} pour confirmer.',
+    confirmLabel: 'Confirmation',
+    erasureConfirm: 'Supprimer définitivement',
+    erasureDone: 'Votre compte a été supprimé. Vous allez être déconnecté.',
+    erasureChildDone: 'Les données de l’enfant ont été supprimées.',
+    childButtonTooltip: 'Confidentialité et données',
+    childDialogTitle: 'Confidentialité et données — {name}',
+    childSectionTitle: 'Confidentialité et données',
+    errors: {
+      alreadyPending: 'Une demande de ce type est déjà en cours de traitement.',
+      exportInProgress:
+        'Un export est encore en préparation. Attendez qu’il soit terminé avant de supprimer.',
+      activeBookings:
+        'Vous avez encore des demandes de réservation en attente ou acceptées. Réglez-les avant de supprimer votre compte.',
+      activeBookingsChild:
+        'Cet enfant a encore une réservation active. Annulez-la ou terminez-la d’abord.',
+      playerAlreadyErased: 'Les données de cet enfant ont déjà été supprimées.',
+      notAllowed: 'Vous n’êtes pas autorisé à effectuer cette action.',
+      generic: 'Une erreur est survenue. Veuillez réessayer.',
+    },
+  },
+  appeals: {
+    action: 'Faire appel',
+    dialogTitle: 'Faire appel de cette décision',
+    dialogExplanation:
+      'Vous pouvez faire appel une seule fois, dans un délai de 14 jours. Un administrateur examine votre appel ; sa décision est définitive.',
+    reasonLabel: 'Pourquoi cette décision devrait-elle être annulée ?',
+    submit: 'Envoyer l’appel',
+    submitSuccess: 'Appel envoyé. Nous vous informerons de la décision.',
+    errors: {
+      alreadyAppealed: 'Cette décision a déjà fait l’objet d’un appel.',
+      windowExpired: 'Le délai d’appel de 14 jours est écoulé.',
+      notEnforced: 'Cette décision n’est plus en vigueur ; il n’y a rien à contester.',
+      subjectNotFound: 'Cet élément est introuvable.',
+      generic: 'Impossible d’envoyer l’appel. Veuillez réessayer.',
+    },
+    status: {
+      OPEN: 'Appel en cours',
+      UPHELD: 'Appel rejeté',
+      OVERTURNED: 'Appel accepté',
+    },
+    subject: {
+      RELIABILITY_STRIKE: 'Avertissement de fiabilité',
+      COACH_SUSPENSION: 'Suspension du compte',
+      REVIEW_BLOCK: 'Avis bloqué',
+      DISPUTE_RESOLUTION: 'Décision de litige',
+    },
+  },
   nav: {
     coachVideos: 'Mes vidéos',
+    appeals: 'Appels',
     sectionMain: 'Général',
     menu: 'Menu',
     tagline: "Plateforme d'analyse",

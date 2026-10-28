@@ -136,11 +136,13 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * for the timeline and homework listeners -- now 46 after feat/admin-moderation-and-enforcement
      * added {@code AdminCoachEnforcementService.setVerificationTier} and {@code
      * AdminUserService.lockAndLoad} (shared by suspendUser/reactivateUser), both read-only locked
-     * loads). Asserted explicitly so an
+     * loads -- now 48 after feat/user-self-service-safety added {@code
+     * AppealService.reverseSuspension}/{@code .reverseReviewBlock}, both read-only locked loads taken
+     * before the appeal reversal re-locks the same row). Asserted explicitly so an
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 46;
+    private static final int EXPECTED_CALL_SITE_COUNT = 48;
 
     private record CallSite(String file, int line, String argument) {
     }

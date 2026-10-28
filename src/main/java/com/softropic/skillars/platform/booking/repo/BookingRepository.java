@@ -223,6 +223,9 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         @Param("playerId") Long playerId,
         @Param("statuses") List<String> statuses);
 
+    // Parent-requested child erasure (V172): refused while the child still has a live booking.
+    boolean existsByPlayerIdAndStatusIn(Long playerId, List<String> statuses);
+
     // skillars-12-10 AC2: the READ-clock for the coach-access window — the latest booking END for the pair
     // over the given statuses (null = no relationship). A future end is returned as-is, which is what keeps
     // an in-progress session and the wrap-up-to-completion gap inside the window.
