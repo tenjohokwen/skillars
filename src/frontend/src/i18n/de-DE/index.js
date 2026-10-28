@@ -272,6 +272,14 @@ export default {
   coach: {
     stripeBannerAction: 'Zahlungen einrichten',
     bookingRequestsCta: 'Buchungsanfragen',
+    playerDetailHomeworkTitle: 'Hausaufgaben',
+    playerDetailHomeworkHint:
+      'Hausaufgaben, die du diesem Spieler gegeben hast, und ob sie erledigt wurden.',
+    playerDetailNoHomework: 'Du hast diesem Spieler noch keine Hausaufgaben gegeben.',
+    playerDetailHomeworkUnknownDrill: 'Übung nicht mehr verfügbar',
+    playerDetailHomeworkAssigned: 'Zugewiesen am {date}',
+    playerDetailHomeworkCompletedOn: 'Erledigt am {date}',
+    playerDetailHomeworkOpen: 'Noch nicht erledigt',
     commandCenterTitle: 'Trainer-Kommandozentrale',
     commandCenterSidebar: 'Aktive Klienten',
     commandCenterNoClients: 'Diese Woche keine aktiven Klienten',
@@ -692,6 +700,35 @@ export default {
     },
   },
   video: {
+    player: {
+      title: 'Video',
+      playAriaLabel: 'Video abspielen',
+      closeAriaLabel: 'Player schließen',
+      download: 'Herunterladen',
+      notAllowed: 'Du hast keinen Zugriff auf dieses Video.',
+      notFound: 'Dieses Video existiert nicht mehr.',
+      notPlayable: 'Dieses Video kann derzeit nicht abgespielt werden.',
+      loadError: 'Das Video konnte nicht geladen werden.',
+    },
+    type: {
+      COACH_REVIEW: 'Trainingsanalyse',
+      DRILL_DEMO: 'Übungsdemo',
+      HOMEWORK: 'Hausaufgabe',
+    },
+    typeHint: {
+      COACH_REVIEW: 'Ein Analyse- oder Review-Video für deine Spieler',
+      DRILL_DEMO: 'Eine Vorführung einer Übung',
+    },
+    parent: {
+      title: 'Videos',
+      subtitle: 'Videos, die dein Kind hochgeladen hat. Du kannst sie ansehen oder löschen.',
+      hubLink: 'Videos',
+      backToChild: 'Zurück zu den Einheiten',
+      emptyState: 'Noch keine Videos hochgeladen',
+      loadError: 'Die Videos konnten nicht geladen werden.',
+      deleteConfirm:
+        'Dieses Video aus dem Konto deines Kindes löschen? Dies kann nicht rückgängig gemacht werden.',
+    },
     status: {
       UPLOADING: 'Wird hochgeladen',
       PROCESSING: 'Wird verarbeitet',
@@ -731,6 +768,14 @@ export default {
       loading: 'Kontingent wird geladen…',
     },
     management: {
+      coachUploadButton: 'Video hochladen',
+      retryAriaLabel: 'Upload erneut versuchen',
+      retryConflict:
+        'Dieser Upload wird bereits erneut versucht. Aktualisiere die Seite, um den Status zu sehen.',
+      quotaOrRateLimited:
+        'Upload-Limit erreicht — gib Speicherplatz frei oder versuche es in einer Minute erneut.',
+      uploadRejected:
+        'Diese Datei kann nicht hochgeladen werden (Typ, Größe oder Videostatus). Bitte prüfen und erneut versuchen.',
       title: 'Meine Videos',
       uploadButton: 'Hausaufgaben-Video hochladen',
       deleteConfirm: 'Dieses Video löschen? Dies kann nicht rückgängig gemacht werden.',
@@ -1266,6 +1311,7 @@ export default {
       generateSuccess: 'Bericht erstellt und mit dem Elternteil geteilt.',
     },
     timeline: {
+      viewDetails: 'Details anzeigen',
       title: 'Spieler-Zeitstrahl',
       noEvents: 'Noch keine Zeitstrahl-Ereignisse.',
       loadError: 'Zeitstrahl konnte nicht geladen werden',
@@ -1647,6 +1693,11 @@ export default {
     },
   },
   featureGate: {
+    sampleRow: 'Beispieleintrag',
+    tier: {
+      INSTRUCTOR: 'Instructor',
+      ACADEMY: 'Academy',
+    },
     requiredTier: 'Erfordert {tier}-Plan',
     description:
       'Upgraden Sie auf {tier}, um diese Funktion freizuschalten und Ihr Coaching zu beschleunigen.',
@@ -2039,6 +2090,7 @@ export default {
     metricAverageMs: 'Durchschnitt (ms)',
   },
   nav: {
+    coachVideos: 'Meine Videos',
     sectionMain: 'Allgemein',
     menu: 'Menü',
     tagline: 'Analyseplattform',

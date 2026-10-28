@@ -15,5 +15,6 @@ export function parentChildLinks(playerId) {
     packs: `/parent/players/${playerId}/packs`,
     subscription: `/parent/player/${playerId}/subscription`,
     lockerRoom: `/player/locker-room/${playerId}`,
+    videos: `/parent/players/${playerId}/videos`,
   }
 }

@@ -246,7 +246,10 @@ describe('ProfilePage.vue — role-gated sections (deferred-139 AC2/AC4/AC5/AC6)
     const brandingSection = wrapper
       .findAll('.profile-section')
       .find((s) => s.text().includes('profile.sectionCoachBranding'))
-    expect(brandingSection.text()).toContain('security.featureGated')
+    // UX-DR22: the locked state is now the FeatureGateOverlay soft teaser (blurred sample + upgrade CTA
+    // to the coach subscription page) rather than a bare security.featureGated line.
+    expect(brandingSection.find('[data-testid="feature-gate-overlay"]').exists()).toBe(true)
+    expect(brandingSection.text()).toContain('featureGate.upgradeCTA')
     expect(brandingSection.text()).not.toContain('profile.brandColourLabel')
     expect(getCoachBranding).not.toHaveBeenCalled()
   })
@@ -268,7 +271,7 @@ describe('ProfilePage.vue — role-gated sections (deferred-139 AC2/AC4/AC5/AC6)
       .find((s) => s.text().includes('profile.sectionCoachBranding'))
     expect(brandingSection.text()).toContain('profile.brandColourLabel')
     expect(brandingSection.text()).toContain('#3B82F6')
-    expect(brandingSection.text()).not.toContain('security.featureGated')
+    expect(brandingSection.find('[data-testid="feature-gate-overlay"]').exists()).toBe(false)
     expect(getCoachBranding).toHaveBeenCalledTimes(1)
   })
 

@@ -134,4 +134,20 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
     @Query("UPDATE Video v SET v.lifecycleLockedAt = CURRENT_TIMESTAMP, v.version = v.version + 1 "
         + "WHERE v.ownerId = :ownerId AND v.accessState = com.softropic.skillars.platform.video.contract.AccessState.BLOCKED")
     void resetLifecycleLockedAt(@Param("ownerId") String ownerId);
+
+    /**
+     * Atomic FAILED→UPLOADING claim for a retry. The state predicate in the WHERE clause is what makes
+     * concurrent retries of the same video race-safe: exactly one caller sees {@code 1}, every other gets
+     * {@code 0} — the plain {@code transitionOperationalState} path treats UPLOADING→UPLOADING as an
+     * idempotent no-op, so two double-clicked retries would each reserve quota and open a provider asset.
+     * Bulk update on a {@code @Version} entity: the version bump is explicit so a concurrent managed-entity
+     * writer of the same row fails loudly instead of silently re-persisting FAILED.
+     *
+     * @return 1 if this call moved the video out of FAILED, 0 if it was no longer FAILED
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE Video v SET v.operationalState = com.softropic.skillars.platform.video.contract.OperationalState.UPLOADING, "
+        + "v.version = v.version + 1, v.updatedAt = CURRENT_TIMESTAMP "
+        + "WHERE v.id = :id AND v.operationalState = com.softropic.skillars.platform.video.contract.OperationalState.FAILED")
+    int claimFailedForRetry(@Param("id") UUID id);
 }

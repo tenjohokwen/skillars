@@ -122,7 +122,20 @@
           v-if="props.drill.libraryType === 'PRIVATE' && sessionStore.canUploadVideo === true"
           class="detail-panel__upload q-mt-md"
         >
-          <template v-if="!props.drill.hasVideo">
+          <!-- UX-DR22: the server refused the upload as tier-gated (the tier changed since the
+               page loaded) — show the soft teaser with an upgrade CTA instead of a toast. -->
+          <FeatureGateOverlay
+            v-if="uploadGated"
+            :required-tier="t('featureGate.tier.INSTRUCTOR')"
+            :feature-label="t('session.drillLibrary.upload.startUpload')"
+            upgrade-to="/coach/subscription"
+            data-testid="drill-upload-gate"
+          >
+            <div class="q-pa-md" style="min-height: 240px">
+              <q-icon name="videocam" size="32px" />
+            </div>
+          </FeatureGateOverlay>
+          <template v-else-if="!props.drill.hasVideo">
             <q-file
               v-model="selectedVideoFile"
               accept="video/*"
@@ -293,7 +306,20 @@
               v-if="props.drill.libraryType === 'PRIVATE' && sessionStore.canUploadVideo === true"
               class="detail-panel__upload q-mt-md"
             >
-              <template v-if="!props.drill.hasVideo">
+              <!-- UX-DR22: the server refused the upload as tier-gated (the tier changed since the
+                   page loaded) — show the soft teaser with an upgrade CTA instead of a toast. -->
+              <FeatureGateOverlay
+                v-if="uploadGated"
+                :required-tier="t('featureGate.tier.INSTRUCTOR')"
+                :feature-label="t('session.drillLibrary.upload.startUpload')"
+                upgrade-to="/coach/subscription"
+                data-testid="drill-upload-gate"
+              >
+                <div class="q-pa-md" style="min-height: 240px">
+                  <q-icon name="videocam" size="32px" />
+                </div>
+              </FeatureGateOverlay>
+              <template v-else-if="!props.drill.hasVideo">
                 <q-file
                   v-model="selectedVideoFile"
                   accept="video/*"
@@ -346,6 +372,7 @@ import { useI18n } from 'vue-i18n'
 import { videoApi } from 'src/api/video.api'
 import { useSessionStore } from 'src/stores/session.store'
 import { useDrillVideoPlayback } from 'src/composables/useDrillVideoPlayback'
+import FeatureGateOverlay from 'src/components/common/FeatureGateOverlay.vue'
 
 defineOptions({ name: 'DrillDetailPanel' })
 
@@ -393,6 +420,14 @@ const sluBreakdown = computed(() => {
 const selectedVideoFile = ref(null)
 const selectedVideoFileDuration = ref(0)
 const isUploading = ref(false)
+// Set when the server rejects an upload as tier-gated; reset when another drill is shown.
+const uploadGated = ref(false)
+watch(
+  () => props.drill?.id,
+  () => {
+    uploadGated.value = false
+  },
+)
 const uploadPercent = ref(0)
 let tusUpload = null
 
@@ -463,7 +498,7 @@ async function startUpload() {
     } else if (errorKey === 'DRILL_NOT_OWNED') {
       $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.notOwned') })
     } else if (errorKey === 'security.featureGated') {
-      $q.notify({ type: 'negative', message: t('security.featureGated') })
+      uploadGated.value = true
     } else {
       $q.notify({ type: 'negative', message: t('session.drillLibrary.upload.uploadFailed') })
     }

@@ -99,6 +99,52 @@
               <dd class="text-body2 recap-text">{{ event.metadata.whatWentWell }}</dd>
             </div>
           </dl>
+
+          <!-- Story 5.6: each event links to its detail where the viewing role has one. -->
+          <template v-if="eventLink(event)">
+            <q-btn
+              v-if="eventLink(event).to"
+              flat
+              dense
+              no-caps
+              size="sm"
+              color="primary"
+              icon-right="chevron_right"
+              class="q-mt-xs"
+              :to="eventLink(event).to"
+              :label="$t('development.timeline.viewDetails')"
+              data-testid="timeline-event-link"
+            />
+            <q-btn
+              v-else-if="eventLink(event).href"
+              flat
+              dense
+              no-caps
+              size="sm"
+              color="primary"
+              icon-right="open_in_new"
+              class="q-mt-xs"
+              type="a"
+              target="_blank"
+              rel="noopener"
+              :href="eventLink(event).href"
+              :label="$t('development.timeline.viewDetails')"
+              data-testid="timeline-event-link"
+            />
+            <q-btn
+              v-else
+              flat
+              dense
+              no-caps
+              size="sm"
+              color="primary"
+              icon-right="arrow_upward"
+              class="q-mt-xs"
+              :label="$t('development.timeline.viewDetails')"
+              data-testid="timeline-event-link"
+              @click="scrollToSection(eventLink(event).anchor)"
+            />
+          </template>
         </q-timeline-entry>
       </q-timeline>
 
@@ -138,15 +184,45 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { date } from 'quasar'
 import { useDevelopmentStore } from 'src/stores/development.store'
+import { resolveTimelineLink } from 'src/utils/timelineLinks'
 
 const props = defineProps({
   playerId: { type: [Number, String], required: true },
+  // Who is viewing ('COACH' | 'PARENT' | 'PLAYER'). Without it no detail links are rendered.
+  viewer: { type: String, default: null },
+  // Ids of the sections on the hosting page an event may scroll to (see TIMELINE_ANCHORS).
+  linkAnchors: { type: Array, default: () => [] },
 })
 
 const store = useDevelopmentStore()
+
+// Resolved once per (events, reports, viewer) change, not on every render of every entry.
+const linksByEvent = computed(() => {
+  const map = new Map()
+  for (const event of store.timeline?.events ?? []) {
+    map.set(
+      event,
+      resolveTimelineLink(event, {
+        viewer: props.viewer,
+        playerId: props.playerId,
+        anchors: props.linkAnchors,
+        reports: store.reports ?? [],
+      }),
+    )
+  }
+  return map
+})
+
+function eventLink(event) {
+  return linksByEvent.value.get(event) ?? null
+}
+
+function scrollToSection(id) {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 const ICON_MAP = {
   SESSION_COMPLETED: 'sports',

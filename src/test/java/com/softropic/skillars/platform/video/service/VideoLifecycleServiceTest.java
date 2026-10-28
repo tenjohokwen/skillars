@@ -55,6 +55,29 @@ class VideoLifecycleServiceTest {
         return v;
     }
 
+    // --- claimFailedForRetry ---
+
+    @Test
+    void claimFailedForRetry_winningClaim_publishesUploadingEvent() {
+        UUID id = UUID.randomUUID();
+        when(videoRepository.claimFailedForRetry(id)).thenReturn(1);
+
+        assertThat(service.claimFailedForRetry(id)).isTrue();
+
+        ArgumentCaptor<VideoStatusChangedEvent> event = ArgumentCaptor.forClass(VideoStatusChangedEvent.class);
+        verify(publisher).publishEvent(event.capture());
+        assertThat(event.getValue().newState()).isEqualTo(OperationalState.UPLOADING);
+    }
+
+    @Test
+    void claimFailedForRetry_lostOrNotFailed_returnsFalseAndPublishesNothing() {
+        UUID id = UUID.randomUUID();
+        when(videoRepository.claimFailedForRetry(id)).thenReturn(0);
+
+        assertThat(service.claimFailedForRetry(id)).isFalse();
+        verify(publisher, never()).publishEvent(any());
+    }
+
     // --- transitionOperationalState ---
 
     @Test

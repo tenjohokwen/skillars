@@ -141,6 +141,13 @@ const routes = [
         meta: { requiresAuth: true, role: 'PARENT' },
       },
       {
+        // A parent's view of one linked child's videos — play and delete (D3).
+        path: 'parent/players/:playerId(\\d+)/videos',
+        name: 'parent-child-videos',
+        component: () => import('pages/parent/ParentChildVideosPage.vue'),
+        meta: { requiresAuth: true, role: 'PARENT' },
+      },
+      {
         path: 'parent/players/:playerId(\\d+)/development',
         name: 'parent-development',
         component: () => import('pages/parent/ParentDevelopmentPortalPage.vue'),
@@ -209,6 +216,14 @@ const routes = [
         path: 'coach/reliability',
         name: 'coach-reliability',
         component: () => import('pages/coach/CoachReliabilityPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
+      {
+        // Coach video management — the same page as player/videos, role-aware (upload type choice,
+        // coach initiate endpoint). GET /api/video/my and /quotas/me already admit ROLE_COACH.
+        path: 'coach/videos',
+        name: 'coach-video-management',
+        component: () => import('pages/VideoManagementPage.vue'),
         meta: { requiresAuth: true, requiresCoach: true },
       },
       {

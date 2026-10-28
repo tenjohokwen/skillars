@@ -301,4 +301,69 @@ class HomeworkResourceIT extends BaseSessionIT {
         )).isInstanceOf(HttpClientErrorException.class)
           .satisfies(ex -> assertThat(((HttpClientErrorException) ex).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
     }
+
+    // ─── Coach homework completion view (GET /api/session/coach/players/{playerId}/homework) ─────────
+
+    private static final String COACH_EMAIL = "coach.homework@skillars-test.com";
+
+    /** A COMPLETED booking between the coach and the player that ended an hour ago — inside the access window. */
+    private void insertRecentCompletedBooking() {
+        Instant start = Instant.now().minus(2, ChronoUnit.HOURS);
+        Instant end = start.plus(1, ChronoUnit.HOURS);
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "INSERT INTO booking.bookings (id, parent_id, player_id, coach_id, "
+                + "requested_start_time, requested_end_time, status, canonical_timezone, "
+                + "version, created_at, updated_at) "
+                + "VALUES (?, ?, ?, ?, ?, ?, 'COMPLETED', 'Europe/London', 0, ?, ?)",
+            UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId,
+            Timestamp.from(start), Timestamp.from(end), Timestamp.from(start), Timestamp.from(end)));
+    }
+
+    @Test
+    void coachHomework_coachWithRelationship_seesAssignmentAndCompletion() {
+        insertRecentCompletedBooking();
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        String url = baseUrl() + "/api/session/coach/players/" + PLAYER_ID + "/homework";
+
+        ResponseEntity<List> open = httpTestClient.makeHttpRequest(
+            url, HttpMethod.GET, null, authenticatedHeaders(cookies), List.class);
+        assertThat(open.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(open.getBody()).hasSize(1);
+        Map<?, ?> row = (Map<?, ?>) open.getBody().get(0);
+        assertThat(row.get("assignmentId")).isEqualTo(assignmentId.toString());
+        assertThat(row.get("drillName")).isEqualTo("Homework Drill");
+        assertThat(row.get("completed")).isEqualTo(false);
+        assertThat(row.get("completedAt")).isNull();
+
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "INSERT INTO session.homework_completions (id, assignment_id, player_id, completed_at) VALUES (?, ?, ?, now())",
+            UUID.randomUUID(), assignmentId, PLAYER_ID));
+
+        ResponseEntity<List> done = httpTestClient.makeHttpRequest(
+            url, HttpMethod.GET, null, authenticatedHeaders(cookies), List.class);
+        Map<?, ?> doneRow = (Map<?, ?>) done.getBody().get(0);
+        assertThat(doneRow.get("completed")).isEqualTo(true);
+        assertThat(doneRow.get("completedAt")).isNotNull();
+    }
+
+    @Test
+    void coachHomework_coachWithoutRelationship_returns403() {
+        // Same coach who assigned the homework, but no booking: the shared access window is closed.
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/session/coach/players/" + PLAYER_ID + "/homework",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), List.class
+        )).isInstanceOf(HttpClientErrorException.class)
+          .satisfies(ex -> assertThat(((HttpClientErrorException) ex).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    @Test
+    void coachHomework_parentCaller_returns403() {
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/session/coach/players/" + PLAYER_ID + "/homework",
+            HttpMethod.GET, null, authenticatedHeaders(cookies), List.class
+        )).isInstanceOf(HttpClientErrorException.class)
+          .satisfies(ex -> assertThat(((HttpClientErrorException) ex).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
 }

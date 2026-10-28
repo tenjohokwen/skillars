@@ -120,7 +120,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'option label keyed by the focus-area enum value being iterated',
   },
   {
-    at: 'src/components/video/VideoStatusCard.vue:87',
+    at: 'src/components/video/VideoStatusCard.vue:91',
     reason: 'status label keyed by the video processing status enum',
   },
   // ---- string concatenation ('literal.prefix.' + variable) ----
@@ -218,8 +218,20 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: "label keyed by the review-eligibility response's own reasonCode enum",
   },
   {
-    at: 'src/pages/parent/ParentDevelopmentPortalPage.vue:82',
+    at: 'src/pages/parent/ParentDevelopmentPortalPage.vue:90',
     reason: '$t on noContributionsKey, the Parent-portal twin of the Coach-side computed above',
+  },
+  {
+    at: 'src/pages/VideoManagementPage.vue:41',
+    reason: 'coach upload-type label keyed by each COACH_VIDEO_TYPES entry (video.type.*)',
+  },
+  {
+    at: 'src/pages/VideoManagementPage.vue:42',
+    reason: 'coach upload-type hint keyed by each COACH_VIDEO_TYPES entry (video.typeHint.*)',
+  },
+  {
+    at: 'src/components/video/VideoPlayDialog.vue:28',
+    reason: 't() on errorKey, set only from the fixed video.player.* keys in errorKeyFor()',
   },
 ]
 

@@ -14,15 +14,44 @@
       :loading="quotaLoading"
     />
 
-    <!-- Upload button — shown to all authenticated players regardless of age;
-         the minor safety gate (moderation Layer 3) enforces parental approval after content moderation -->
+    <!-- Upload — players upload HOMEWORK (shown regardless of age; the minor safety gate, moderation
+         Layer 3, enforces parental approval after content moderation). Coaches choose one of the two
+         types POST /api/video/uploads/initiate accepts for them (DRILL_DEMO, COACH_REVIEW); that
+         contract carries no player/booking context, so none is asked for here. -->
     <div class="q-mb-md">
+      <q-btn-dropdown
+        v-if="isCoach"
+        color="primary"
+        icon="upload"
+        :label="t('video.management.coachUploadButton')"
+        :loading="uploadBusy"
+        :disable="uploadBusy"
+        data-testid="coach-upload-dropdown"
+      >
+        <q-list>
+          <q-item
+            v-for="type in COACH_VIDEO_TYPES"
+            :key="type"
+            v-close-popup
+            clickable
+            :data-testid="`coach-upload-${type}`"
+            @click="openUpload(type)"
+          >
+            <q-item-section>
+              <q-item-label>{{ t(`video.type.${type}`) }}</q-item-label>
+              <q-item-label caption>{{ t(`video.typeHint.${type}`) }}</q-item-label>
+            </q-item-section>
+          </q-item>
+        </q-list>
+      </q-btn-dropdown>
       <q-btn
+        v-else
         color="primary"
         icon="upload"
         :label="t('video.management.uploadButton')"
-        :loading="uploadState === 'initiating' || uploadState === 'uploading'"
-        @click="openUpload"
+        :loading="uploadBusy"
+        data-testid="player-upload-btn"
+        @click="openUpload('HOMEWORK')"
       />
       <q-linear-progress
         v-if="uploadState === 'uploading'"
@@ -37,6 +66,7 @@
       type="file"
       accept="video/*"
       style="display: none"
+      data-testid="video-file-input"
       @change="onFileSelected"
     />
 
@@ -50,39 +80,49 @@
     </div>
 
     <div v-else class="q-gutter-md">
-      <div v-for="video in videos" :key="video.id" class="row items-start no-wrap">
-        <VideoStatusCard
-          class="col"
-          :video-id="video.id"
-          :initial-status="video.operationalState"
-          @status-changed="onStatusChanged(video.id, $event)"
-        />
-        <q-btn
-          flat
-          round
-          icon="delete"
-          color="negative"
-          class="q-ml-sm q-mt-xs"
-          :aria-label="t('video.management.deleteAriaLabel')"
-          @click="confirmDelete(video.id)"
-        />
-      </div>
+      <VideoListItem
+        v-for="video in videos"
+        :key="video.id"
+        :video="video"
+        can-retry
+        :retrying="retryingVideoId === video.id"
+        @status-changed="onStatusChanged(video.id, $event)"
+        @play="openPlayer"
+        @retry="startRetry"
+        @delete="confirmDelete(video.id)"
+      />
     </div>
+
+    <VideoPlayDialog
+      v-model="playerOpen"
+      :video-id="playingVideo?.id ?? null"
+      :title="playingVideo?.title ?? ''"
+    />
   </q-page>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useRouter } from 'vue-router'
 import { videoApi } from 'src/api/video.api'
-import VideoStatusCard from 'src/components/video/VideoStatusCard.vue'
+import { useAuthStore } from 'src/stores/auth.store'
+import VideoListItem from 'src/components/video/VideoListItem.vue'
+import VideoPlayDialog from 'src/components/video/VideoPlayDialog.vue'
 import QuotaUsageBar from 'src/components/video/QuotaUsageBar.vue'
 
 const { t } = useI18n()
 const $q = useQuasar()
 const router = useRouter()
+const authStore = useAuthStore()
+
+// Shared by the PLAYER route (player/videos) and the COACH route (coach/videos).
+const isCoach = computed(() => authStore.isCoach)
+const COACH_VIDEO_TYPES = ['COACH_REVIEW', 'DRILL_DEMO']
+// Client-side pre-check for player HOMEWORK only; coach types have their own (larger, config-driven)
+// server limits, which the initiate call reports as a validation error.
+const HOMEWORK_MAX_BYTES = 500 * 1024 * 1024
 
 const videos = ref([])
 const videosLoading = ref(true)
@@ -95,8 +135,19 @@ const quota = ref({
 const quotaLoading = ref(true)
 
 const fileInputRef = ref(null)
-const uploadState = ref('idle') // idle | initiating | uploading | processing | error
+const uploadState = ref('idle') // idle | initiating | uploading
 const uploadProgress = ref(0)
+const uploadBusy = computed(() => uploadState.value !== 'idle')
+// What the next file selection is for: a new upload of `videoType`, or a retry of `retryVideo`.
+let pendingSelection = null
+const retryingVideoId = ref(null)
+
+const playerOpen = ref(false)
+const playingVideo = ref(null)
+
+function homeRoute() {
+  return isCoach.value ? '/coach/command-center' : '/player/dashboard'
+}
 
 async function fetchVideos() {
   videosLoading.value = true
@@ -105,7 +156,7 @@ async function fetchVideos() {
   } catch (err) {
     if (err?.response?.status === 403) {
       $q.notify({ type: 'negative', message: t('video.management.accessDenied') })
-      router.replace('/player/dashboard')
+      router.replace(homeRoute())
     } else {
       $q.notify({ type: 'negative', message: t('video.management.loadError') })
     }
@@ -138,33 +189,72 @@ function onStatusChanged(videoId, newState) {
   if (video) video.operationalState = newState
 }
 
-function openUpload() {
-  if (uploadState.value !== 'idle') return
+function openUpload(videoType) {
+  if (uploadBusy.value) return
+  pendingSelection = { videoType }
   fileInputRef.value?.click()
+}
+
+function startRetry(video) {
+  if (uploadBusy.value) return
+  // The retry re-uploads the file: the browser cannot re-read the original, so the owner re-picks it.
+  pendingSelection = { retryVideo: video }
+  fileInputRef.value?.click()
+}
+
+function openPlayer(video) {
+  playingVideo.value = video
+  playerOpen.value = true
+}
+
+function uploadErrorMessage(err) {
+  const status = err?.response?.status
+  if (status === 429) return t('video.management.quotaOrRateLimited')
+  if (status === 409) return t('video.management.retryConflict')
+  if (status === 422 || status === 400) return t('video.management.uploadRejected')
+  return t('video.management.uploadError')
 }
 
 async function onFileSelected(event) {
   const file = event.target.files?.[0]
   // Reset the input so the same file can be re-selected after an error
   if (fileInputRef.value) fileInputRef.value.value = ''
-  if (!file) return
+  const selection = pendingSelection
+  pendingSelection = null
+  if (!file || !selection) return
 
-  const MAX_BYTES = 500 * 1024 * 1024
-  if (file.size > MAX_BYTES) {
+  const isHomework = selection.retryVideo
+    ? selection.retryVideo.videoType === 'HOMEWORK'
+    : selection.videoType === 'HOMEWORK'
+  if (isHomework && file.size > HOMEWORK_MAX_BYTES) {
     $q.notify({ type: 'negative', message: t('video.management.fileTooLarge') })
     return
   }
 
   uploadState.value = 'initiating'
   uploadProgress.value = 0
+  const retryVideo = selection.retryVideo ?? null
+  if (retryVideo) retryingVideoId.value = retryVideo.id
 
   try {
-    const data = await videoApi.initiatePlayerUpload({
-      fileName: file.name,
-      fileSizeBytes: file.size,
-      mimeType: file.type,
-      videoType: 'HOMEWORK',
-    })
+    let data
+    if (retryVideo) {
+      data = await videoApi.retryUpload(retryVideo.id, file.size)
+      // The server moved the video FAILED→UPLOADING; reflect it so its card resumes live status.
+      // Look the row up again: the list may have been reloaded while the request was in flight.
+      const row = videos.value.find((v) => v.id === retryVideo.id)
+      if (row) row.operationalState = 'UPLOADING'
+    } else {
+      const payload = {
+        fileName: file.name,
+        fileSizeBytes: file.size,
+        mimeType: file.type,
+        videoType: selection.videoType,
+      }
+      data = isCoach.value
+        ? await videoApi.initiateUpload(payload)
+        : await videoApi.initiatePlayerUpload(payload)
+    }
 
     if (uploadState.value === 'idle') return
 
@@ -182,20 +272,27 @@ async function onFileSelected(event) {
       },
       onSuccess() {
         uploadState.value = 'idle'
+        retryingVideoId.value = null
         $q.notify({ type: 'positive', message: t('video.management.uploadSuccess') })
         fetchVideos()
         fetchQuota()
       },
       onError() {
         uploadState.value = 'idle'
+        retryingVideoId.value = null
         $q.notify({ type: 'negative', message: t('video.management.uploadError') })
+        // A failed transfer leaves the video for the server to mark FAILED again (session expiry);
+        // re-read the list so the row shows whatever state it is really in.
+        fetchVideos()
       },
     })
 
     upload.start()
-  } catch {
+  } catch (err) {
     uploadState.value = 'idle'
-    $q.notify({ type: 'negative', message: t('video.management.uploadError') })
+    retryingVideoId.value = null
+    $q.notify({ type: 'negative', message: uploadErrorMessage(err) })
+    if (retryVideo) fetchVideos()
   }
 }
 
@@ -228,9 +325,5 @@ async function confirmDelete(videoId) {
 
 onMounted(async () => {
   await Promise.all([fetchVideos(), fetchQuota()])
-})
-
-onUnmounted(() => {
-  // VideoStatusCard components clean up their own SSE connections via onUnmounted in the card
 })
 </script>

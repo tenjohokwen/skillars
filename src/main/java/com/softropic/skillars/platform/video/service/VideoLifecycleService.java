@@ -142,6 +142,23 @@ public class VideoLifecycleService {
         return true; // state was actually written PROCESSING→READY
     }
 
+    /**
+     * Race-safe FAILED→UPLOADING claim for {@code VideoService.retryUpload}: a conditional UPDATE, so of
+     * two concurrent retries exactly one wins. Publishes the same {@link VideoStatusChangedEvent} the
+     * plain transition would, only when this call actually moved the row.
+     *
+     * @return true if this call claimed the video; false if it was not (or no longer) FAILED
+     */
+    @Observed(name = "video.lifecycle.claimFailedForRetry")
+    @Transactional
+    public boolean claimFailedForRetry(UUID videoId) {
+        if (videoRepository.claimFailedForRetry(videoId) != 1) {
+            return false;
+        }
+        publisher.publishEvent(new VideoStatusChangedEvent(videoId, OperationalState.UPLOADING));
+        return true;
+    }
+
     @Observed(name = "video.lifecycle.setAccessState")
     @Transactional
     public Video setAccessState(UUID videoId, AccessState newAccessState) {

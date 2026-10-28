@@ -5,9 +5,12 @@ import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.infrastructure.jwt.JwtSecretService;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.PlayerOwnershipGuard;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.video.contract.AccessState;
+import com.softropic.skillars.platform.video.contract.InitializeUploadResponse;
 import com.softropic.skillars.platform.video.contract.OperationalState;
+import com.softropic.skillars.platform.video.contract.RetryUploadRequest;
 import com.softropic.skillars.platform.video.contract.VideoType;
 import com.softropic.skillars.platform.video.contract.Visibility;
 import com.softropic.skillars.platform.video.repo.Video;
@@ -34,22 +37,29 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import jakarta.servlet.http.HttpServletResponse;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(VideoResource.class)
-@Import(VideoListQuotaResourceWebMvcTest.TestSecurityConfig.class)
+@Import({VideoListQuotaResourceWebMvcTest.TestSecurityConfig.class, PlayerOwnershipGuard.class})
 class VideoListQuotaResourceWebMvcTest {
 
     @TestConfiguration
@@ -205,7 +215,106 @@ class VideoListQuotaResourceWebMvcTest {
             .andExpect(status().isForbidden());
     }
 
+    // ─── FAILED videos are listed (so the owner can retry them) ───────────────
+
+    @Test
+    @WithMockUser(roles = "USER")
+    @SuppressWarnings("unchecked")
+    void getMyVideos_includesFailed_excludesOnlyDeletedAndPurged() throws Exception {
+        stubPlayerPrincipal(PLAYER_PROFILE_ID);
+        when(videoRepository.findByOwnerIdAndOperationalStateNotInOrderByCreatedAtDesc(anyString(), any()))
+            .thenReturn(List.of(stubVideo("asset-failed", OperationalState.FAILED)));
+
+        mockMvc.perform(get("/api/video/my"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].operationalState").value("FAILED"));
+
+        org.mockito.ArgumentCaptor<Collection<OperationalState>> excluded =
+            org.mockito.ArgumentCaptor.forClass(Collection.class);
+        verify(videoRepository).findByOwnerIdAndOperationalStateNotInOrderByCreatedAtDesc(anyString(), excluded.capture());
+        org.assertj.core.api.Assertions.assertThat(excluded.getValue())
+            .containsExactlyInAnyOrder(OperationalState.DELETED, OperationalState.PURGED);
+    }
+
+    // ─── GET /api/video/players/{playerId}/videos (parent view of a linked child) ─
+
+    private static final long PARENT_USER_ID = 66_000_001L;
+
+    @Test
+    void getPlayerVideos_parentOfPlayer_returns200WithChildVideos() throws Exception {
+        when(playerProfileRepository.existsByIdAndParentId(PLAYER_PROFILE_ID, PARENT_USER_ID)).thenReturn(true);
+        when(videoRepository.findByOwnerIdAndOperationalStateNotInOrderByCreatedAtDesc(eq(PLAYER_OWNER_ID), any()))
+            .thenReturn(List.of(stubVideo("asset-child", OperationalState.READY)));
+
+        mockMvc.perform(get("/api/video/players/" + PLAYER_PROFILE_ID + "/videos")
+                .with(authentication(skillarsAuth(PARENT_USER_ID, "ROLE_PARENT"))))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].ownerId").value(PLAYER_OWNER_ID))
+            .andExpect(jsonPath("$[0].operationalState").value("READY"));
+    }
+
+    @Test
+    void getPlayerVideos_unrelatedParent_returns403() throws Exception {
+        when(playerProfileRepository.existsByIdAndParentId(PLAYER_PROFILE_ID, PARENT_USER_ID)).thenReturn(false);
+        when(playerProfileRepository.existsByIdAndUserId(PLAYER_PROFILE_ID, PARENT_USER_ID)).thenReturn(false);
+
+        mockMvc.perform(get("/api/video/players/" + PLAYER_PROFILE_ID + "/videos")
+                .with(authentication(skillarsAuth(PARENT_USER_ID, "ROLE_PARENT"))))
+            .andExpect(status().isForbidden());
+        verify(videoRepository, never()).findByOwnerIdAndOperationalStateNotInOrderByCreatedAtDesc(anyString(), any());
+    }
+
+    // ─── POST /api/video/{id}/retry ──────────────────────────────────────────
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void retryUpload_coachOwner_delegatesWithResolvedOwnerAndReturnsCredentials() throws Exception {
+        UUID videoId = UUID.randomUUID();
+        UUID coachId = UUID.randomUUID();
+        when(securityUtil.isCurrentUserInRole("ROLE_COACH")).thenReturn(true);
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(77L);
+        when(coachProfileService.getCoachIdByUserId(77L)).thenReturn(coachId);
+        when(videoService.retryUpload(new RetryUploadRequest(videoId, coachId.toString(), 2048L)))
+            .thenReturn(new InitializeUploadResponse(videoId, UUID.randomUUID(), "bunny-guid",
+                "https://tus", Instant.now().plusSeconds(600), "sig", 9_999_999_999L, 1L));
+
+        mockMvc.perform(post("/api/video/" + videoId + "/retry")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"fileSizeBytes\":2048}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.videoId").value(videoId.toString()))
+            .andExpect(jsonPath("$.providerUploadId").value("bunny-guid"));
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void retryUpload_nonPositiveSize_returns400() throws Exception {
+        mockMvc.perform(post("/api/video/" + UUID.randomUUID() + "/retry")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"fileSizeBytes\":0}"))
+            .andExpect(status().isBadRequest());
+        verify(videoService, never()).retryUpload(any());
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void retryUpload_parentRole_returns403() throws Exception {
+        mockMvc.perform(post("/api/video/" + UUID.randomUUID() + "/retry")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"fileSizeBytes\":2048}"))
+            .andExpect(status().isForbidden());
+    }
+
     // ─── helpers ─────────────────────────────────────────────────────────────
+
+    /** An authentication whose principal is a Skillars {@link Principal} — what PlayerOwnershipGuard reads. */
+    private static org.springframework.security.core.Authentication skillarsAuth(long userId, String role) {
+        Principal principal = mock(Principal.class);
+        when(principal.getBusinessId()).thenReturn(String.valueOf(userId));
+        return new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+            principal, null,
+            List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority(role)));
+    }
 
     // businessId is the caller's USER id — deliberately different from the PlayerProfile id so a
     // regression back to "userId as ownerId" queries the wrong owner and fails the assertions.

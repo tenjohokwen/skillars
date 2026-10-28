@@ -9,12 +9,13 @@ import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.video.contract.InitializeUploadRequest;
 import com.softropic.skillars.platform.video.contract.InitializeUploadResponse;
 import com.softropic.skillars.platform.video.contract.OperationalState;
+import com.softropic.skillars.platform.video.contract.RetryUploadRequest;
 import com.softropic.skillars.platform.video.contract.VideoQuotaResponse;
 import com.softropic.skillars.platform.video.contract.VideoSummaryResponse;
 import com.softropic.skillars.platform.video.contract.VideoType;
+import com.softropic.skillars.platform.video.contract.VideoRetryUploadRequest;
 import com.softropic.skillars.platform.video.contract.VideoUploadInitiateRequest;
 import com.softropic.skillars.platform.video.contract.exception.VideoValidationException;
-import com.softropic.skillars.platform.video.repo.Video;
 import com.softropic.skillars.platform.video.repo.VideoQuota;
 import com.softropic.skillars.platform.video.repo.VideoQuotaRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
@@ -60,9 +61,10 @@ public class VideoResource {
     private static final Set<VideoType> COACH_ALLOWED_VIDEO_TYPES =
         Set.of(VideoType.DRILL_DEMO, VideoType.COACH_REVIEW);
 
-    // States that should not appear in a player's video list
+    // States that should not appear in a video list. FAILED is deliberately listed: the owner needs to
+    // see a failed upload to retry it (POST /{id}/retry), and a parent to see/delete it.
     private static final Set<OperationalState> EXCLUDED_STATES =
-        Set.of(OperationalState.DELETED, OperationalState.PURGED, OperationalState.FAILED);
+        Set.of(OperationalState.DELETED, OperationalState.PURGED);
 
     @PostMapping("/uploads/initiate")
     @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
@@ -129,9 +131,42 @@ public class VideoResource {
     @Observed(name = "video.list.my")
     public ResponseEntity<List<VideoSummaryResponse>> getMyVideos() {
         String ownerId = resolveCurrentOwnerId();
-        List<Video> videos = videoRepository
-            .findByOwnerIdAndOperationalStateNotInOrderByCreatedAtDesc(ownerId, EXCLUDED_STATES);
-        List<VideoSummaryResponse> responses = videos.stream()
+        return ResponseEntity.ok(listByOwner(ownerId));
+    }
+
+    /**
+     * A linked player's videos, for their parent (or the self-registered player themselves) — the
+     * ownership guard admits exactly those two. Player video ownerIds are PlayerProfile ids (Story 6.6),
+     * which is the id space of {@code playerId} here. Deletion goes through {@code DELETE /{id}}, whose
+     * {@code videoAccessGuard.canDelete} already admits the parent via ParentPlayerLink.
+     */
+    @GetMapping("/players/{playerId}/videos")
+    @PreAuthorize("@playerOwnershipGuard.check(authentication, #playerId)")
+    @Observed(name = "video.list.player")
+    public ResponseEntity<List<VideoSummaryResponse>> getPlayerVideos(@PathVariable Long playerId) {
+        return ResponseEntity.ok(listByOwner(String.valueOf(playerId)));
+    }
+
+    /**
+     * Restarts a FAILED upload on the same video record (video-module Story 3.1 / FR-12): new upload
+     * session + fresh TUS credentials, same videoId. Owner-only — {@code VideoService.retryUpload} 404s
+     * a video the caller does not own and claims FAILED→UPLOADING atomically (409 for a concurrent loser,
+     * 422 when the video is not FAILED).
+     */
+    @PostMapping("/{id}/retry")
+    @PreAuthorize("hasAnyRole('ROLE_USER', 'ROLE_PLAYER', 'ROLE_COACH')")
+    @Observed(name = "video.upload.retry.request")
+    public ResponseEntity<InitializeUploadResponse> retryUpload(
+            @PathVariable UUID id, @Valid @RequestBody VideoRetryUploadRequest req) {
+        String ownerId = resolveCurrentOwnerId();
+        return ResponseEntity.ok(videoService.retryUpload(
+            new RetryUploadRequest(id, ownerId, req.fileSizeBytes())));
+    }
+
+    private List<VideoSummaryResponse> listByOwner(String ownerId) {
+        return videoRepository
+            .findByOwnerIdAndOperationalStateNotInOrderByCreatedAtDesc(ownerId, EXCLUDED_STATES)
+            .stream()
             .map(v -> new VideoSummaryResponse(
                 v.getId(),
                 v.getTitle(),
@@ -143,7 +178,6 @@ public class VideoResource {
                 v.getCreatedAt(),
                 v.getUpdatedAt()))
             .toList();
-        return ResponseEntity.ok(responses);
     }
 
     @DeleteMapping("/{id}")
