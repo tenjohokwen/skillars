@@ -46,18 +46,19 @@ public interface CoachProfileRepository
     @Query("SELECT c FROM CoachProfile c WHERE c.id = :id")
     Optional<CoachProfile> findByIdForUpdate(@Param("id") UUID id);
 
-    // Language filter via native query — PostgreSQL array ANY() is not portable in JPA Criteria API
-    // City constraint added to avoid a global scan of all active coaches (P1)
+    /**
+     * Language filter via native query — PostgreSQL array ANY() is not expressible through the JPA
+     * Criteria API for the hypersistence {@code ListArrayType} column. {@code CoachSearchService} feeds
+     * these ids into the paged Specification query as an {@code id IN (...)} predicate, so pagination
+     * and totals come from the DB. City-scoped and restricted to the searchable statuses so the bind
+     * list stays bounded by the city's live coaches (not every historical DRAFT/DEACTIVATED profile).
+     * The status list MUST mirror {@code CoachSearchSpecification.isActive()} (ACTIVE and REDUCED); a
+     * hard-coded {@code status = 'ACTIVE'} here used to drop REDUCED coaches whenever a language was given.
+     */
     @Query(value = "SELECT id FROM marketplace.coach_profiles " +
-                   "WHERE status = 'ACTIVE' AND lower(city) = lower(:city) AND lower(:lang) = ANY(languages)",
+                   "WHERE status IN ('ACTIVE', 'REDUCED') AND lower(city) = lower(:city) AND lower(:lang) = ANY(languages)",
            nativeQuery = true)
     List<UUID> findIdsByLanguage(@Param("lang") String lang, @Param("city") String city);
-
-    // Accurate totalElements for language-filtered responses (P8)
-    @Query(value = "SELECT COUNT(*) FROM marketplace.coach_profiles " +
-                   "WHERE status = 'ACTIVE' AND lower(city) = lower(:city) AND lower(:lang) = ANY(languages)",
-           nativeQuery = true)
-    long countByLanguageAndCity(@Param("lang") String lang, @Param("city") String city);
 
     @Query("SELECT p FROM CoachProfile p WHERE p.status IN :statuses ORDER BY p.statusChangedAt ASC NULLS LAST")
     Page<CoachProfile> findByStatusInOrderByStatusChangedAtAsc(
@@ -71,6 +72,22 @@ public interface CoachProfileRepository
     @Modifying(flushAutomatically = true)
     @Query("UPDATE CoachProfile p SET p.verificationTier = :tier WHERE p.id = :coachId")
     int updateVerificationTier(@Param("coachId") UUID coachId, @Param("tier") String tier);
+
+    /**
+     * fix/content-consistency-and-lost-updates: targeted single-column write for the two photo-key
+     * writers ({@code CoachProfileService.saveStep5} and {@code CoachProfilePhotoEventListener}).
+     * {@code CoachProfile} has no {@code @Version}/{@code @DynamicUpdate}, so their former
+     * load-then-{@code save()} rewrote every column from a possibly stale snapshot and could silently
+     * revert a concurrent status write (e.g. {@code suspendCoach}). This UPDATE touches only
+     * {@code photo_url}, so it cannot. Not {@code clearAutomatically}: the listener runs inside the
+     * file-storage confirm transaction and must not detach that caller's entities; callers do not read
+     * {@code photoUrl} back from a managed instance after calling this.
+     *
+     * @return rows updated (0 when the user has no coach profile)
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE CoachProfile p SET p.photoUrl = :photoUrl WHERE p.userId = :userId")
+    int updatePhotoUrlByUserId(@Param("userId") Long userId, @Param("photoUrl") String photoUrl);
 
     @Modifying(clearAutomatically = true)
     @Query("UPDATE CoachProfile p SET p.averageRating = :avgRating, p.reviewCount = :reviewCount WHERE p.id = :coachId")

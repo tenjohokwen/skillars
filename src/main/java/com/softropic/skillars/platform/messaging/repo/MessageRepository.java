@@ -49,6 +49,17 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
                      @Param("userId") Long userId,
                      @Param("since") Instant since);
 
+    /**
+     * Oldest still-PENDING, undeleted message in the conversation that {@code viewerUserId} did not
+     * send. {@code MessagingService.getMessages} caps the viewer's last-read mark just below it: the
+     * viewer cannot see that message's content yet, so marking it read would hide it from the unread
+     * count once it is approved.
+     */
+    @Query("SELECT MIN(m.createdAt) FROM Message m WHERE m.conversationId = :conversationId "
+           + "AND m.moderationStatus = 'PENDING' AND m.deletedAt IS NULL AND m.senderId <> :viewerUserId")
+    Instant findOldestPendingCreatedAtFromOthers(@Param("conversationId") Long conversationId,
+                                                 @Param("viewerUserId") Long viewerUserId);
+
     @Query("SELECT m FROM Message m WHERE m.conversationId = :conversationId AND m.moderationStatus = 'APPROVED' AND m.deletedAt IS NULL ORDER BY m.createdAt DESC, m.id DESC")
     Page<Message> findLastApproved(@Param("conversationId") Long conversationId, Pageable pageable);
 

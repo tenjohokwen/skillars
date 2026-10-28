@@ -169,7 +169,9 @@ public class ReviewModerationService {
             });
         } catch (Exception e) {
             // Swallow to prevent AFTER_COMMIT exception propagating as HTTP 500.
-            // The review was committed; status update will be resolved via admin queue (Epic 10).
+            // The review was committed and stays PENDING; ReviewModerationSweeper holds it as
+            // UNDER_REVIEW/MODERATION_TIMEOUT once the grace window passes, which puts it in the
+            // admin queue for a human decision.
             // Note this also swallows a lock-acquisition failure on the read above, which leaves the
             // review PENDING rather than mis-resolved — the safe direction.
             log.error("ReviewModerationService: status write failed for reviewId={}, coachId={}: {}",

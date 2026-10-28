@@ -133,7 +133,7 @@
     <h3 id="key-services">Key services</h3>
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
-      <tr><td><code>CoachSearchService</code></td><td>Builds the <code>Specification</code>, paginates in the DB, applies the language filter post-fetch (native <code>ANY(languages)</code> query), batch-loads specialties/prices/90-day strike counts/badges for the page only, signs photo keys, and sorts by price within the page.</td></tr>
+      <tr><td><code>CoachSearchService</code></td><td>Builds the <code>Specification</code> and paginates in the DB. A <code>language</code> is resolved to the city's matching ids by a native <code>ANY(languages)</code> query and ANDed into the paged query as <code>id IN (…)</code>. Batch-loads specialties/prices/90-day strike counts/badges for the page only, signs photo keys, and sorts by price within the page.</td></tr>
       <tr><td><code>CoachSearchSpecification</code></td><td>Composable predicates: status ACTIVE/REDUCED, city, district, skill, age group, min/max price (<code>EXISTS</code> subqueries on <code>coach_pricing</code>), and <code>averageRating &gt;= minRating</code> when <code>minRating &gt; 0</code>.</td></tr>
       <tr><td><code>CoachProfileService</code></td><td>Wizard steps 1–5 + publish, <code>getOwnProfile</code> (DRAFT-safe full profile), <code>deletePhoto</code>, <code>getPublicProfile</code> (4 queries, guarded by <code>CoachPublicProfileQueryCountIT</code>), <code>getSupportedTimezones</code>, and lookups used across the platform (<code>getCoachIdByUserId</code>, <code>getCoachSubscriptionTier</code>, <code>getDisplayNamesByIds</code>, <code>validateReadyForActivation</code> for admin reinstatement).</td></tr>
       <tr><td><code>CoachGalleryService</code></td><td>The coach's own gallery (#312): list, add an uploaded image, delete. Re-validates the confirmed storage object server-side and serialises adds/deletes on the profile row lock.</td></tr>
@@ -203,9 +203,12 @@ sequenceDiagram
   Resource->>Search: searchCoaches(params, page, size)
   Search->>Spec: build(params)
   Spec-->>Search: Specification (status, city, district, skill, ageGroup, price, minRating)
+  opt language given
+    Search->>DB: findIdsByLanguage(lang, city) native ANY(languages)
+    Search->>Spec: and(idIn(ids))
+  end
   Search->>DB: findAll(spec, pageable sorted status ASC then name or rating)
   DB-->>Search: Page of CoachProfile
-  Search->>Search: applyLanguageFilter() via native query (post-fetch)
   Search->>Enrich: batch load specialties/prices/strikes/badges for page IDs only
   Enrich-->>Search: maps keyed by coachId
   Search->>Search: CoachCardDto (signed photo URL), sortPage() if sortBy=price
@@ -216,9 +219,8 @@ sequenceDiagram
       The DB sort is <code>status ASC</code> first (ACTIVE sorts before REDUCED alphabetically — the enum is stored as
       a string), then <code>displayName</code> or <code>averageRating DESC NULLS LAST</code>. Enrichment is
       batch-loaded only for the current page. Price sort happens in Java after enrichment because the price lives in
-      <code>coach_pricing</code>, so it is only correct <em>within</em> a page. With a <code>language</code> filter,
-      <code>totalElements</code> comes from a separate <code>countByLanguageAndCity</code> query; see the gotcha below
-      on why language-filtered paging is approximate.
+      <code>coach_pricing</code>, so it is only correct <em>within</em> a page. Pagination metadata always comes from the
+      paged query itself, language filter included.
     </p>
 
     <h3 id="viewing-a-single-coach-s-public-profile">Viewing a single coach's public profile</h3>
@@ -279,7 +281,9 @@ sequenceDiagram
       <code>flush()</code> in between, because Hibernate otherwise orders INSERTs before DELETEs and trips
       <code>uq_coach_specialty</code>/<code>uq_coach_age_group</code>/<code>uq_session_pack</code>. The photo is
       uploaded through <code>filestorage</code> (sign &rarr; PUT &rarr; confirm); step 5 records the key, and
-      <code>CoachProfilePhotoEventListener</code> also sets it when the upload is confirmed.
+      <code>CoachProfilePhotoEventListener</code> also sets it when the upload is confirmed. Both write it with the
+      targeted <code>updatePhotoUrlByUserId</code> UPDATE, never a full-row <code>save()</code> (see the
+      <code>@Version</code> gotcha below).
     </p>
 
     <h3 id="coach-adds-a-gallery-image">Coach adds a gallery image</h3>
@@ -323,7 +327,9 @@ sequenceDiagram
       status change (e.g. <code>suspendCoach</code>). That is why the status-sensitive writers lock first, and why
       <code>verification_tier</code> is <code>updatable = false</code> (only the admin bulk UPDATE writes it). Any new
       writer of this entity should either lock-and-refresh or use a targeted <code>@Modifying</code> UPDATE (as
-      <code>updateRatingAggregate</code>/<code>markRecapDataErased</code> do).</p>
+      <code>updateRatingAggregate</code>/<code>markRecapDataErased</code>/<code>updatePhotoUrlByUserId</code> do). The
+      two photo writers (<code>saveStep5</code>, <code>CoachProfilePhotoEventListener</code>) were unlocked full-row saves
+      until <code>fix/content-consistency-and-lost-updates</code>.</p>
     </div>
     <div class="callout">
       <p><strong>Timezones are validated as real IANA region ids, and the picker comes from the server.</strong>
@@ -340,11 +346,15 @@ sequenceDiagram
       <code>validateAvailabilityWindows</code> as a 500. Repeat this element-level pattern for new collection fields.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Search always needs a city, and the language filter is a post-fetch step.</strong> Keep new filters
-      city-scoped. The language filter runs <em>after</em> the DB page is fetched, so a language-filtered page can
-      contain fewer than <code>size</code> results (or none) while later pages hold matches, and its native query only
-      matches <code>ACTIVE</code> coaches — REDUCED coaches disappear when a language is given. Moving language into
-      the <code>Specification</code> (e.g. a native-function predicate) would fix both.</p>
+      <p><strong>Search always needs a city, and language goes through an id list.</strong> Keep new filters
+      city-scoped. <code>findIdsByLanguage</code> (native, because <code>ANY(languages)</code> on the
+      <code>ListArrayType</code> column is not expressible in Criteria) returns the city's matching ids, restricted to the
+      searchable statuses (ACTIVE, REDUCED) so the bind list stays bounded; that list must mirror
+      <code>CoachSearchSpecification.isActive()</code>. The paged <code>Specification</code> ANDs the ids in with
+      <code>idIn</code>, so pagination and totals come from the DB. Until
+      <code>fix/content-consistency-and-lost-updates</code> the filter ran in memory after the page was fetched (short or
+      empty pages while later pages held matches) and the native query was <code>status = 'ACTIVE'</code>, so REDUCED
+      coaches vanished when a language was given.</p>
     </div>
     <div class="callout">
       <p><strong>Storage keys, not URLs.</strong> <code>photo_url</code> and gallery <code>file_url</code> hold
@@ -356,8 +366,8 @@ sequenceDiagram
     <div class="callout">
       <p><strong>Rating and review count are denormalized onto <code>CoachProfile</code></strong> by
       <code>reviews.service.CoachRatingService.recompute()</code> via <code>updateRatingAggregate</code>. If ratings or
-      the <code>minRating</code> filter look wrong, look in <code>reviews</code>. (The "stub until Epic 9" comment on
-      <code>CoachSearchParams.minRating</code> is stale — the filter is live.)</p>
+      the <code>minRating</code> filter look wrong, look in <code>reviews</code>. The filter is live
+      (<code>averageRating &gt;= minRating</code> when <code>minRating &gt; 0</code>).</p>
     </div>
     <div class="callout">
       <p><strong><code>CoachSubscriptionTier</code> declaration order is load-bearing.</strong>
@@ -378,7 +388,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

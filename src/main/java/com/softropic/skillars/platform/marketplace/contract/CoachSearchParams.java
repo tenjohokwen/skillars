@@ -12,6 +12,6 @@ public record CoachSearchParams(
     BigDecimal maxPrice,
     AgeTier ageGroup,               // null = no filter; typed as AgeTier to avoid bad-enum 400
     String skill,
-    Double minRating,               // null = no filter; stub: > 0 returns 0 results until Epic 9
+    Double minRating,               // null or <= 0 = no filter; else averageRating >= minRating
     String sortBy                   // "price" | "rating" | "displayName" (default)
 ) {}

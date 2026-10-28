@@ -272,6 +272,15 @@ public final class ConfigBounds {
         new BoundedKey("reviews.autoHoldFlagThreshold", 1L, 1000L, false,
             "0 → the first flag on any review auto-holds it", 3L);
 
+    /**
+     * {@code ReviewModerationSweeper} — minutes a review may sit in PENDING before it is held for a
+     * human. Too small would hold reviews whose Gemini verdict is merely slow; out-of-range falls back
+     * to the coded default (30). Mirrors messaging's moderation_orphan_grace_minutes bounds.
+     */
+    public static final BoundedKey REVIEWS_MODERATION_ORPHAN_GRACE_MINUTES =
+        new BoundedKey("reviews.moderationOrphanGraceMinutes", 5L, 1440L, false,
+            "out-of-range falls back to the coded default (30); too small would hold slow-but-live verdicts", 30L);
+
     /** {@code VideoLifecycleScheduler} + {@code VideoSubscriptionLifecycleListener} — 0 → no progress. */
     public static final BoundedKey VIDEO_LIFECYCLE_BATCH_SIZE =
         new BoundedKey("platform.video.lifecycle.batch_size", 1L, 10000L, false,
@@ -445,6 +454,7 @@ public final class ConfigBounds {
         REVIEWS_MIN_SESSION_AGE_DAYS.key(),
         REVIEWS_UPDATE_COOLDOWN_DAYS.key(),
         REVIEWS_AUTO_HOLD_FLAG_THRESHOLD.key(),
+        REVIEWS_MODERATION_ORPHAN_GRACE_MINUTES.key(),
         TIMELINE_COACH_ACCESS_EXPIRY_DAYS.key(),
         DEVELOPMENT_ROSTER_DORMANT_AFTER_DAYS.key(),
         RATE_LIMIT_BUCKET_TTL_HOURS.key(),
@@ -481,6 +491,7 @@ public final class ConfigBounds {
             REVIEWS_MIN_SESSION_AGE_DAYS,
             REVIEWS_UPDATE_COOLDOWN_DAYS,
             REVIEWS_AUTO_HOLD_FLAG_THRESHOLD,
+            REVIEWS_MODERATION_ORPHAN_GRACE_MINUTES,
             VIDEO_LIFECYCLE_BATCH_SIZE,
             MODERATION_SLA_BATCH_SIZE,
             VIDEO_LIFECYCLE_OUTBOX_MAX_ATTEMPTS,

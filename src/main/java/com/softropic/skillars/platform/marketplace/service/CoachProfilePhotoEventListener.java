@@ -41,10 +41,11 @@ public class CoachProfilePhotoEventListener {
             return;
         }
 
-        coachProfileRepository.findByUserId(userId).ifPresent(profile -> {
-            profile.setPhotoUrl(fso.getKey());
-            coachProfileRepository.save(profile);
+        // Targeted single-column UPDATE, not findByUserId + save(): CoachProfile has no @Version, so a
+        // full-row save from this (unlocked) snapshot could revert a concurrent status change such as
+        // suspendCoach. See CoachProfileRepository.updatePhotoUrlByUserId.
+        if (coachProfileRepository.updatePhotoUrlByUserId(userId, fso.getKey()) > 0) {
             log.info("Updated coach profile photo: userId={}", userId);
-        });
+        }
     }
 }

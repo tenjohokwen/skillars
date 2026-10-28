@@ -208,4 +208,79 @@ class SessionPlanCancellationLifecycleIT extends AbstractIntegrationTest {
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(SessionErrorCode.SESSION_PLAN_LOCKED));
     }
+
+    /**
+     * fix/content-consistency-and-lost-updates: Session has no @Version and updateSession used to
+     * read unlocked, pass its COMPLETED/CANCELLED guard on that stale read, then full-row save over a
+     * completion that committed in between — flipping COMPLETED back to SAVED. An external
+     * transaction plays handleBookingCompleted: it locks the row, writes COMPLETED, and commits only
+     * after the coach's edit has started. The edit must end SESSION_PLAN_LOCKED and the plan COMPLETED.
+     */
+    @Test
+    @Timeout(30)
+    void coachEditRacingCompletion_doesNotRevertCompletedToSaved() throws Exception {
+        SessionBlockRequest block = new SessionBlockRequest("WARMUP", "Warmup", 10, List.of());
+        SessionPlanResponse created = sessionPlanService.createSession(
+            new CreateSessionPlanRequest(bookingId, List.of(block), List.of("PASSING")), COACH_USER_ID);
+
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.CountDownLatch completionLocked = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch editStarted = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.Future<?> completer = executor.submit(() -> transactionTemplate.execute(tx -> {
+                jdbcTemplate.queryForObject("SELECT id FROM session.sessions WHERE id = ? FOR UPDATE",
+                    UUID.class, created.id());
+                jdbcTemplate.update("UPDATE session.sessions SET status = 'COMPLETED' WHERE id = ?", created.id());
+                completionLocked.countDown();
+                try {
+                    editStarted.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                    // Long enough for the edit's unlocked read and first NOWAIT attempts; well inside
+                    // PessimisticLockRetryer's ~3.2s budget.
+                    Thread.sleep(600);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            }));
+            assertThat(completionLocked.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+            java.util.concurrent.Future<Throwable> editor = executor.submit(() -> {
+                editStarted.countDown();
+                try {
+                    sessionPlanService.updateSession(created.id(),
+                        new UpdateSessionPlanRequest(List.of(block), List.of("PASSING"), "SAVED"), COACH_USER_ID);
+                    return null;
+                } catch (Throwable t) {
+                    return t;
+                }
+            });
+
+            completer.get(20, java.util.concurrent.TimeUnit.SECONDS);
+            Throwable editResult = editor.get(20, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(editResult).isInstanceOf(OperationNotAllowedException.class);
+            assertThat(((OperationNotAllowedException) editResult).getErrorCode())
+                .isEqualTo(SessionErrorCode.SESSION_PLAN_LOCKED);
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM session.sessions WHERE id = ?", String.class, created.id()))
+            .isEqualTo("COMPLETED");
+    }
+
+    /** The atomic completion UPDATE leaves an already-COMPLETED plan alone and completes an open one. */
+    @Test
+    void markCompletedByBookingId_completesOpenPlanOnce() {
+        SessionBlockRequest block = new SessionBlockRequest("WARMUP", "Warmup", 10, List.of());
+        SessionPlanResponse created = sessionPlanService.createSession(
+            new CreateSessionPlanRequest(bookingId, List.of(block), List.of("PASSING")), COACH_USER_ID);
+
+        Integer first = transactionTemplate.execute(tx -> sessionRepository.markCompletedByBookingId(bookingId, Instant.now()));
+        Integer second = transactionTemplate.execute(tx -> sessionRepository.markCompletedByBookingId(bookingId, Instant.now()));
+
+        assertThat(first).isEqualTo(1);
+        assertThat(second).isZero();
+        assertThat(sessionRepository.findById(created.id()).orElseThrow().getStatus()).isEqualTo("COMPLETED");
+    }
 }

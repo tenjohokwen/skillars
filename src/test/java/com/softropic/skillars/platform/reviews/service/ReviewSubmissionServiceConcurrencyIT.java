@@ -145,7 +145,7 @@ class ReviewSubmissionServiceConcurrencyIT extends AbstractIntegrationTest {
                 assertThat(rowHeld.await(10, TimeUnit.SECONDS)).isTrue();
                 try {
                     reviewSubmissionService.submitReview(
-                        coachProfileId, AUTHOR_ID, "PARENT", 4, "Also great!");
+                        coachProfileId, AUTHOR_ID, 4, "Also great!");
                     return null;
                 } catch (Throwable t) {
                     return t;
@@ -221,7 +221,7 @@ class ReviewSubmissionServiceConcurrencyIT extends AbstractIntegrationTest {
                             "UPDATE main.\"user\" SET last_modified_date = now() WHERE id = ?", AUTHOR_ID);
                         try {
                             reviewSubmissionService.submitReview(
-                                coachProfileId, AUTHOR_ID, "PARENT", 4, "Also great!");
+                                coachProfileId, AUTHOR_ID, 4, "Also great!");
                         } catch (OperationNotAllowedException e) {
                             // Deliberately caught HERE, inside the outer transaction, and NOT
                             // rethrown — mirroring how a future transactional caller would actually

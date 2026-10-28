@@ -666,6 +666,77 @@ class ReviewSubmissionIT extends AbstractIntegrationTest {
     }
 
     /**
+     * fix/content-consistency-and-lost-updates: a user who holds BOTH ROLE_COACH and ROLE_PARENT
+     * passes the PARENT_OR_PLAYER guard; ReviewResource used to resolve the author role COACH-first
+     * from the token and the service then refused it with AUTHOR_ROLE_NOT_ALLOWED. The role now
+     * comes from the booking relation (this user is the trained player's parent), so it is PARENT.
+     */
+    @Test
+    void submitReview_coachWhoIsAlsoTheParent_isAcceptedAsParent() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.user_authority (user_id, authority_id) "
+                    + "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_COACH')) ON CONFLICT DO NOTHING",
+                PARENT_ID);
+            return null;
+        });
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 5, "body", "Great with my kid"),
+            authenticatedHeaders(cookies),
+            Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        String authorRole = jdbcTemplate.queryForObject(
+            "SELECT author_role FROM reviews.coach_reviews WHERE review_id = ?::uuid",
+            String.class, (String) response.getBody().get("reviewId"));
+        assertThat(authorRole).isEqualTo("PARENT");
+    }
+
+    /**
+     * Code review of fix/content-consistency-and-lost-updates: with the role derived from the
+     * booking relation, a coach who is also the parent of a child they trained must still not be
+     * able to review their OWN coach profile.
+     */
+    @Test
+    void submitReview_coachReviewingOwnProfileAsParentOfTrainee_returns403() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.user_authority (user_id, authority_id) "
+                    + "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PARENT')) ON CONFLICT DO NOTHING",
+                COACH_USER_ID);
+            // The coach's own child, trained by the coach.
+            jdbcTemplate.update(
+                "INSERT INTO main.player_profiles "
+                    + "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) "
+                    + "VALUES (8000000099, 'Coach Kid', ?, 'MIDFIELDER', 'AGE_13_17', ?, true, ?, 'system')",
+                Date.valueOf(LocalDate.now().minusYears(14)), COACH_USER_ID, Timestamp.from(Instant.now()));
+            return null;
+        });
+        transactionTemplate.execute(status -> {
+            insertCompletedBookingFor(COACH_USER_ID, 8000000099L,
+                Instant.now().minusSeconds(DEFAULT_BOOKING_AGE_DAYS * 86400L));
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            reviewsUrl("/coaches/" + coachProfileId),
+            HttpMethod.POST,
+            Map.of("rating", 5, "body", "I am great"),
+            authenticatedHeaders(cookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.FORBIDDEN));
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM reviews.coach_reviews WHERE coach_id = ?", Integer.class, coachProfileId))
+            .isZero();
+    }
+
+    /**
      * AC1 (skillars-deferred-88): the moderation-epoch bump in {@code updateReview} must be applied
      * to the row's <em>fresh</em> state read under the {@code findByIdForUpdate} lock, not to the
      * stale instance already managed from the unlocked pre-check load. This is the same Hibernate

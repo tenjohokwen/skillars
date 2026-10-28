@@ -70,8 +70,13 @@
     <ul>
       <li><strong>Only Players and Parents can author reviews.</strong> <code>POST /api/reviews/coaches/{coachId}</code>
         and the eligibility pre-check are gated by <code>HAS_PARENT_OR_PLAYER_ROLE</code> at the API boundary.
-        <code>ReviewSubmissionService</code> also runs <code>AuthorRole.valueOf(...)</code> (only <code>PARENT</code>/<code>PLAYER</code>)
-        as defense in depth, which rejects anything else with <code>AUTHOR_ROLE_NOT_ALLOWED</code>.</li>
+        The stored <code>author_role</code> is <em>not</em> read from the caller's authorities: <code>ReviewSubmissionService</code>
+        derives it from the booking relation that made the author eligible (their own session gives <code>PLAYER</code>, their
+        linked player's gives <code>PARENT</code>, and <code>PLAYER</code> wins if both exist). A user holding both
+        <code>ROLE_COACH</code> and <code>ROLE_PARENT</code> can therefore review a coach who trained their child. Before
+        <code>fix/content-consistency-and-lost-updates</code>, <code>ReviewResource</code> picked COACH first from the token
+        and such a user got <code>AUTHOR_ROLE_NOT_ALLOWED</code> after passing the guard. That code is now returned only for
+        self-review: <code>evaluateEligibility</code> refuses an author who is the reviewed coach's own user.</li>
       <li><strong>You need a completed session with the coach that has had time to settle.</strong>
         <code>evaluateEligibility</code> calls <code>BookingRepository.findQualifyingCompletedBookings</code>, which
         returns <code>COMPLETED</code> bookings that became <code>COMPLETED</code> at least <code>reviews.minSessionAgeDays</code>
@@ -128,7 +133,7 @@
     <p>Schema <code>reviews</code>, baseline <code>V138__baseline_schema.sql</code>. Later migrations: <code>V156__reviews_eligibility_config_rework.sql</code> (drops <code>reviews.submissionWindowDays</code>, seeds <code>reviews.minSessionAgeDays</code>=7 and <code>reviews.updateCooldownDays</code>=30) and <code>V157__coach_reviews_author_last_edited_at.sql</code> (adds and backfills <code>author_last_edited_at</code>). <code>reviews.autoHoldFlagThreshold</code> is seeded in <code>V139</code>.</p>
     <table>
       <tr><th>Entity</th><th>Table</th><th>Notes</th></tr>
-      <tr><td><code>CoachReview</code></td><td><code>reviews.coach_reviews</code></td><td>UUID PK <code>review_id</code>, one row per author/coach. Fields: <code>author_id</code> (user id; <code>0</code> after GDPR anonymisation), <code>author_role</code>, <code>rating</code>, optional <code>body</code> (≤1000), <code>moderation_status</code> (PENDING/APPROVED/BLOCKED/UNDER_REVIEW), and <code>held_reason</code> (GEMINI_UNCERTAIN/GEMINI_FAILURE/FLAG_THRESHOLD/MANUAL; set only while held, cleared by admin; nothing writes MANUAL today). Also a single <code>coach_response_body</code> (≤500) and <code>coach_response_at</code> pair, <code>last_modified_at</code> (written by the author <em>and</em> by moderation), <code>author_last_edited_at</code> (author writes only), and <code>moderation_epoch</code> (bumped on every edit; see gotchas).</td></tr>
+      <tr><td><code>CoachReview</code></td><td><code>reviews.coach_reviews</code></td><td>UUID PK <code>review_id</code>, one row per author/coach. Fields: <code>author_id</code> (user id; <code>0</code> after GDPR anonymisation), <code>author_role</code>, <code>rating</code>, optional <code>body</code> (≤1000), <code>moderation_status</code> (PENDING/APPROVED/BLOCKED/UNDER_REVIEW), and <code>held_reason</code> (GEMINI_UNCERTAIN/GEMINI_FAILURE/FLAG_THRESHOLD/MODERATION_TIMEOUT; set only while held, cleared by admin; varchar(20) with no CHECK, so a new reason needs no migration. The never-written <code>MANUAL</code> was removed). Also a single <code>coach_response_body</code> (≤500) and <code>coach_response_at</code> pair, <code>last_modified_at</code> (written by the author <em>and</em> by moderation), <code>author_last_edited_at</code> (author writes only), and <code>moderation_epoch</code> (bumped on every edit; see gotchas).</td></tr>
       <tr><td><code>ReviewFlag</code></td><td><code>reviews.review_flags</code></td><td>One row per (review, flagger), enforced by the unique <em>index</em> <code>review_flags_unique_flagger</code>. <code>reason</code> is a <code>ReviewFlagReason</code> (FAKE_REVIEW, OFFENSIVE_CONTENT, CONFLICT_OF_INTEREST, OTHER), with <code>details</code> (≤500) and a nullable <code>resolved_at</code>. Open flags (<code>resolved_at IS NULL</code>) drive the auto-hold threshold.</td></tr>
       <tr><td><em>(admin)</em> <code>ReviewModerationLog</code></td><td><code>reviews.review_moderation_log</code></td><td>The entity lives in <code>admin.repo</code> even though the table is in this schema. It records one row per admin approve/block (<code>action</code> CHECK APPROVED/BLOCKED, plus an optional <code>reason</code>).</td></tr>
     </table>
@@ -138,6 +143,7 @@
       <tr><th>Service</th><th>Orchestrates</th></tr>
       <tr><td><code>ReviewSubmissionService</code></td><td>Checks the coach exists and runs eligibility (maturity floor, parent/self ownership, active-dispute gate). Enforces one review per pair and the edit cooldown, saves <code>PENDING</code> reviews and edits, and publishes <code>ReviewSubmittedEvent</code> carrying the <code>moderationEpoch</code>. Also handles the one-time coach response. <code>submitReview</code> runs <code>REQUIRES_NEW</code> so that a caught duplicate-key violation can never surface as <code>UnexpectedRollbackException</code>. <code>checkWriteEligibility</code> backs the read-only pre-check endpoint.</td></tr>
       <tr><td><code>ReviewModerationService</code></td><td>Listens for <code>ReviewSubmittedEvent</code> <em>after commit</em> and calls <code>GeminiClient</code> outside any transaction. The body is truncated to <code>platform.reviews.moderation.gemini.max-input-chars</code> (2000) and delimiter-fenced, and the prompt is <code>platform.reviews.moderation.gemini.prompt-template</code>. The verdict is written in a new <code>REQUIRES_NEW</code> transaction, guarded by epoch and status. It calls <code>CoachRatingService.recompute</code> on <code>APPROVED</code>/<code>BLOCKED</code>.</td></tr>
+      <tr><td><code>ReviewModerationSweeper</code></td><td>Every 10 minutes (ShedLock <code>ReviewModerationSweeper_sweep</code>, PT20M/PT2M). Moves reviews stuck in <code>PENDING</code> for longer than <code>reviews.moderationOrphanGraceMinutes</code> (bounded 5&ndash;1440, code default 30, no seed row) since <code>lastModifiedAt</code> to <code>UNDER_REVIEW</code> with <code>heldReason=MODERATION_TIMEOUT</code>, up to 500 per run, so they reach the admin queue. Each row is an atomic conditional UPDATE (<code>holdIfStillPending</code>) that re-checks PENDING and the age under the row lock; <code>lastModifiedAt</code> is left alone. Fail-closed like <code>MessageModerationSweeper</code>: never approves, never re-calls Gemini. Counter <code>reviews.moderation.swept</code>.</td></tr>
       <tr><td><code>ReviewFlagService</code></td><td>Runs <code>REQUIRES_NEW</code>. Rejects self-flags (author or reviewed coach) and duplicates (unique index as backstop), all before taking the row lock. It then locks the review, inserts the flag, auto-holds an <code>APPROVED</code> review at the threshold (recomputing the aggregate), and publishes <code>ReviewFlaggedEvent</code>.</td></tr>
       <tr><td><code>ReviewQueryService</code></td><td>Read-only, page size 10. Public list of <code>APPROVED</code> reviews (<code>sort=newest|highest|lowest</code>), the coach's own reviews in any status (newest <code>lastModifiedAt</code> first), the author's own review for one coach, and <code>getFirstPageForCoach</code>, which <code>marketplace.CoachMarketplaceResource</code> embeds in <code>CoachProfileDto.reviews</code>.</td></tr>
       <tr><td><code>CoachRatingService</code></td><td>The only writer of a coach's rating aggregate. One <code>COUNT+AVG</code> query over <code>APPROVED</code> rows, average rounded to one decimal, then <code>CoachProfileRepository.updateRatingAggregate</code>. Called by this module and by <code>admin.AdminReviewService</code>.</td></tr>
@@ -348,12 +354,14 @@ sequenceDiagram
       <code>recompute</code> sits inside the guarded branch, so a skipped write never recomputes.</p>
     </div>
     <div class="callout warn">
-      <p><strong>A failed moderation write leaves the review stuck in <code>PENDING</code>, and the admin queue will not show it.</strong>
+      <p><strong>A failed moderation write leaves the review in <code>PENDING</code> until the sweeper holds it.</strong>
       <code>handleReviewSubmitted</code> catches every exception from its <code>REQUIRES_NEW</code> block, including
-      lock-retry exhaustion. Unlike messaging, there is no sweeper, and <code>GET /api/admin/reviews/queue</code> rejects any
-      status other than <code>UNDER_REVIEW</code>. The review is invisible to the public and to the queue until someone
-      calls <code>POST /api/admin/reviews/{id}/approve</code> or <code>/block</code> by id (both accept PENDING) or fixes the
-      DB. Separately, a Gemini <em>failure</em> is not stuck: it becomes <code>UNDER_REVIEW/GEMINI_FAILURE</code> and does reach the queue.</p>
+      lock-retry exhaustion. <code>ReviewModerationSweeper</code> moves such a review to <code>UNDER_REVIEW/MODERATION_TIMEOUT</code>
+      once <code>reviews.moderationOrphanGraceMinutes</code> (default 30) has passed since <code>lastModifiedAt</code>, which puts it
+      in <code>GET /api/admin/reviews/queue</code> (still <code>UNDER_REVIEW</code>-only). A verdict that arrives after the hold sees
+      a non-PENDING row and is discarded. Separately, a Gemini <em>failure</em> never strands a review: it becomes
+      <code>UNDER_REVIEW/GEMINI_FAILURE</code> directly. (Before <code>fix/content-consistency-and-lost-updates</code> there was no
+      sweeper and such reviews were invisible to the queue.)</p>
     </div>
     <div class="callout warn">
       <p><strong>The update cooldown and the "new session" bound use two different timestamps, on purpose.</strong>
@@ -424,7 +432,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

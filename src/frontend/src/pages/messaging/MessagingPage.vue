@@ -476,10 +476,14 @@ async function submitMessage() {
 }
 
 // ── Moderation indicators (story 8.3) ──
-// The API nulls content for UNDER_REVIEW and BLOCKED for both parties; the SENDER is told the
-// message is pending review / was not delivered, the recipient that it was held / removed.
+// The API nulls content for UNDER_REVIEW and BLOCKED for both parties, and for PENDING for
+// everyone but the sender (nothing has moderated it yet); the SENDER is told the message is
+// pending review / was not delivered, the recipient that it was held / removed.
 function moderationNotice(msg) {
   const mine = isMine(msg)
+  if (msg.moderationStatus === 'PENDING' && !mine) {
+    return 'messaging.moderation.underReview'
+  }
   if (msg.moderationStatus === 'BLOCKED') {
     return mine ? 'messaging.moderation.blockedOwn' : 'messaging.moderation.blocked'
   }

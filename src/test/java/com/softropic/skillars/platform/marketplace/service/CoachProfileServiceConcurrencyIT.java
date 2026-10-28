@@ -53,6 +53,7 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private MeterRegistry meterRegistry;
+    @Autowired private CoachProfilePhotoEventListener photoEventListener;
 
     private static final long COACH_USER_ID = 8070_000_001L;
     private static final long ADMIN_ID = 8070_000_099L;
@@ -380,6 +381,71 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
         assertThat(statusChangedAt.toInstant())
             .as("statusChangedAt must be a fresh timestamp, not the row's creation time")
             .isAfter(before);
+    }
+
+    /**
+     * fix/content-consistency-and-lost-updates: saveStep5 used to set photoUrl on requireProfile's
+     * UNLOCKED snapshot and full-row save() it, so a suspendCoach committed in between was silently
+     * reverted (CoachProfile has no @Version). Deterministic interleave: the inherited
+     * coachProfileRepository spy returns the stale snapshot from findByUserId and, before handing it
+     * back, commits a SUSPENDED status from another thread/transaction.
+     */
+    @Test
+    void saveStep5_photoWrite_doesNotRevertAConcurrentStatusChange() throws Exception {
+        coachProfileService.publishProfile(COACH_USER_ID);
+        // Detached pre-suspension snapshot: the old code's save() merged every column of it back.
+        // (A Spring Data spy cannot callRealMethod on the interface, so the snapshot is read first.)
+        var stale = coachProfileRepository.findByUserId(COACH_USER_ID).orElseThrow();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            org.mockito.Mockito.doAnswer(inv -> {
+                executor.submit(() -> transactionTemplate.execute(tx -> jdbcTemplate.update(
+                    "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED' WHERE id = ?", profileId)))
+                    .get(10, TimeUnit.SECONDS);
+                return java.util.Optional.of(stale);
+            }).when(coachProfileRepository).findByUserId(COACH_USER_ID);
+
+            coachProfileService.saveStep5(COACH_USER_ID, new com.softropic.skillars.platform.marketplace.contract
+                .ProfileBuilderStep5Request("coach_profile/" + COACH_USER_ID + "/2026/10/photo.jpg"));
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, profileId))
+            .as("the concurrent suspension must survive the photo write")
+            .isEqualTo("SUSPENDED");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT photo_url FROM marketplace.coach_profiles WHERE id = ?", String.class, profileId))
+            .isEqualTo("coach_profile/" + COACH_USER_ID + "/2026/10/photo.jpg");
+    }
+
+    /**
+     * fix/content-consistency-and-lost-updates: the storage-confirmed listener writes photo_url via a
+     * targeted UPDATE and never full-row saves the profile, so it cannot revert a status either.
+     */
+    @Test
+    void photoConfirmedListener_writesOnlyPhotoUrl() {
+        coachProfileService.publishProfile(COACH_USER_ID);
+        transactionTemplate.execute(tx -> jdbcTemplate.update(
+            "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED' WHERE id = ?", profileId));
+
+        org.mockito.Mockito.clearInvocations(coachProfileRepository); // setUp/publish saves are not under test
+        com.softropic.skillars.platform.filestorage.repo.FileStorageObject fso =
+            com.softropic.skillars.platform.filestorage.repo.FileStorageObject.builder()
+                .key("coach_profile/" + COACH_USER_ID + "/2026/10/confirmed.jpg").build();
+        transactionTemplate.execute(tx -> {
+            photoEventListener.onStorageConfirmed(
+                new com.softropic.skillars.platform.filestorage.event.StorageObjectConfirmedEvent(this, fso));
+            return null;
+        });
+
+        org.mockito.Mockito.verify(coachProfileRepository, org.mockito.Mockito.never())
+            .save(org.mockito.ArgumentMatchers.any(com.softropic.skillars.platform.marketplace.repo.CoachProfile.class));
+        assertThat(jdbcTemplate.queryForMap(
+            "SELECT status, photo_url FROM marketplace.coach_profiles WHERE id = ?", profileId))
+            .containsEntry("status", "SUSPENDED")
+            .containsEntry("photo_url", "coach_profile/" + COACH_USER_ID + "/2026/10/confirmed.jpg");
     }
 
     /** The existing non-concurrent already-published pre-check must remain unaffected by AC1 Fix 3's new lock. */

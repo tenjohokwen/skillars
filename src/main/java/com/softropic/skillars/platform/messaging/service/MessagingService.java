@@ -242,7 +242,7 @@ public class MessagingService {
         moderationService.moderate(messageId, content);
         Message finalMessage = messageRepository.findById(messageId)
             .orElseThrow(() -> new ResourceNotFoundException("Message not found", "message"));
-        return toMessageDto(finalMessage);
+        return toMessageDto(finalMessage, senderUserId);
     }
 
     public Page<MessageDto> getMessages(Long conversationId, Long callerUserId, String role, Pageable pageable) {
@@ -253,11 +253,18 @@ public class MessagingService {
 
         Page<Message> page = messageRepository.findByConversationIdAndNotDeleted(conversationId, pageable);
 
-        // Mark read: update role's lastReadAt timestamp
-        updateLastRead(conv, role);
+        // Mark read: update role's lastReadAt timestamp — but never past a message from someone else
+        // that is still PENDING. Its content is hidden from this caller (toMessageDto), so it has not
+        // been read; once approved it must still count as unread (countUnread: createdAt > lastReadAt).
+        Instant readUpTo = Instant.now();
+        Instant oldestHiddenPending = messageRepository.findOldestPendingCreatedAtFromOthers(conversationId, callerUserId);
+        if (oldestHiddenPending != null && oldestHiddenPending.minusNanos(1_000).isBefore(readUpTo)) {
+            readUpTo = oldestHiddenPending.minusNanos(1_000); // 1 µs: Postgres timestamp precision
+        }
+        updateLastRead(conv, role, readUpTo);
         conversationRepository.save(conv);
 
-        return page.map(this::toMessageDto);
+        return page.map(m -> toMessageDto(m, callerUserId));
     }
 
     @Transactional(readOnly = true)
@@ -313,7 +320,7 @@ public class MessagingService {
 
         // 4. Return messages — do NOT update lastReadAt (AC6: oversight view is read-only for tracking)
         Page<Message> page = messageRepository.findByConversationIdAndNotDeleted(conversationId, pageable);
-        return page.map(this::toMessageDto);
+        return page.map(m -> toMessageDto(m, parentUserId));
     }
 
     @Transactional
@@ -580,8 +587,7 @@ public class MessagingService {
         };
     }
 
-    private void updateLastRead(Conversation conv, String role) {
-        Instant now = Instant.now();
+    private void updateLastRead(Conversation conv, String role, Instant now) {
         switch (role) {
             case "COACH" -> conv.setCoachLastReadAt(now);
             case "PARENT" -> conv.setParentLastReadAt(now);
@@ -594,9 +600,20 @@ public class MessagingService {
         }
     }
 
-    private MessageDto toMessageDto(Message msg) {
-        boolean contentHidden = msg.getModerationStatus() == MessageModerationStatus.BLOCKED
-            || msg.getModerationStatus() == MessageModerationStatus.UNDER_REVIEW;
+    /**
+     * Content visibility by moderation status and viewer. BLOCKED and UNDER_REVIEW are hidden from
+     * everyone. PENDING (moderation verdict not landed yet, and up to
+     * {@code MessageModerationSweeper}'s grace window if it never does) is shown ONLY to its own
+     * sender: no moderation pass has seen it, and a recipient may be a minor. The recipient still
+     * gets the row, with null content and status PENDING, so the thread order is stable and the
+     * client can render a "held for review" placeholder. The SSE path needs no equivalent: it only
+     * ever pushes ids, and NEW_MESSAGE fires only after an APPROVED verdict commits.
+     */
+    static MessageDto toMessageDto(Message msg, Long viewerUserId) {
+        MessageModerationStatus status = msg.getModerationStatus();
+        boolean contentHidden = status == MessageModerationStatus.BLOCKED
+            || status == MessageModerationStatus.UNDER_REVIEW
+            || (status == MessageModerationStatus.PENDING && !Objects.equals(msg.getSenderId(), viewerUserId));
         String content = contentHidden ? null : msg.getContent();
         return new MessageDto(
             msg.getId(),

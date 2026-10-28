@@ -1,5 +1,8 @@
 package com.softropic.skillars.platform.session.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import jakarta.persistence.EntityManager;
+
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingSnapshot;
@@ -21,10 +24,11 @@ import com.softropic.skillars.platform.session.repo.Session;
 import com.softropic.skillars.platform.session.repo.SessionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -32,13 +36,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doThrow;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -60,6 +66,8 @@ class SessionPlanServiceTest {
     @Mock private DrillLibraryService drillLibraryService;
     @Mock private SessionDnaCalculator dnaCalculator;
     @Mock private EquipmentListService equipmentListService;
+    @Mock private PessimisticLockRetryer lockRetryer;
+    @Mock private EntityManager entityManager;
     private final BookingStateMachine bookingStateMachine = new BookingStateMachine();
 
     private SessionPlanService service;
@@ -73,7 +81,14 @@ class SessionPlanServiceTest {
     @BeforeEach
     void setUp() {
         service = new SessionPlanService(sessionRepository, drillRepository, bookingQueryService,
-            coachProfileService, drillLibraryService, dnaCalculator, equipmentListService, bookingStateMachine);
+            coachProfileService, drillLibraryService, dnaCalculator, equipmentListService, bookingStateMachine,
+            lockRetryer, entityManager);
+        // Run the locked read inline, as the real retryer does on an uncontended row.
+        lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
+            .thenAnswer(inv -> ((Supplier<?>) inv.getArgument(1)).get());
+        // The locked re-read returns the same managed row the unlocked findById did.
+        lenient().when(sessionRepository.findByIdForUpdate(any()))
+            .thenAnswer(inv -> sessionRepository.findById(inv.getArgument(0)));
     }
 
     private DrillMetadata metadata() {
@@ -241,6 +256,7 @@ class SessionPlanServiceTest {
         SessionPlanResponse response = service.updateSession(sessionId, req, COACH_USER_ID);
 
         assertThat(response.status()).isEqualTo("SAVED");
+        verify(entityManager).refresh(existing, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
         assertBothDrillsPresent(response);
         verify(drillRepository, times(1)).findAllById(any());
     }
@@ -307,117 +323,40 @@ class SessionPlanServiceTest {
         verify(drillRepository, times(0)).findAllById(any());
     }
 
-    // ── handleBookingCompleted ─────────────────────────────────────────────
+    // ── handleBookingCompleted (atomic conditional UPDATE since fix/content-consistency) ─────
 
     @Test
-    void handleBookingCompleted_draftSessionFound_transitionsToCompletedAndSaves() {
-        Session existing = new Session();
-        existing.setId(UUID.randomUUID());
-        existing.setBookingId(BOOKING_ID);
-        existing.setStatus("DRAFT");
-        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+    void handleBookingCompleted_issuesTheAtomicCompletionUpdate_neverALoadThenSave() {
+        when(sessionRepository.markCompletedByBookingId(eq(BOOKING_ID), any())).thenReturn(1);
 
-        BookingCompletedEvent event = new BookingCompletedEvent(this, BOOKING_ID, COACH_ID, 500L,
-            null, true, 3, 3, 3, List.of());
+        service.handleBookingCompleted(new BookingCompletedEvent(this, BOOKING_ID, COACH_ID, 500L,
+            null, true, 3, 3, 3, List.of()));
 
-        service.handleBookingCompleted(event);
-
-        assertThat(existing.getStatus()).isEqualTo("COMPLETED");
-        verify(sessionRepository, times(1)).save(existing);
-    }
-
-    @Test
-    void handleBookingCompleted_noSessionForBooking_noOp() {
-        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.empty());
-
-        BookingCompletedEvent event = new BookingCompletedEvent(this, BOOKING_ID, COACH_ID, 500L,
-            null, true, 3, 3, 3, List.of());
-
-        service.handleBookingCompleted(event);
-
+        verify(sessionRepository).markCompletedByBookingId(eq(BOOKING_ID), any());
+        verify(sessionRepository, never()).findByBookingId(any());
         verify(sessionRepository, never()).save(any(Session.class));
     }
 
     @Test
-    void handleBookingCompleted_alreadyCompleted_noRedundantSave() {
-        Session existing = new Session();
-        existing.setId(UUID.randomUUID());
-        existing.setBookingId(BOOKING_ID);
-        existing.setStatus("COMPLETED");
-        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
+    void handleBookingCompleted_noOpenPlan_isANoOp() {
+        when(sessionRepository.markCompletedByBookingId(eq(BOOKING_ID), any())).thenReturn(0);
 
-        BookingCompletedEvent event = new BookingCompletedEvent(this, BOOKING_ID, COACH_ID, 500L,
-            null, true, 3, 3, 3, List.of());
+        service.handleBookingCompleted(new BookingCompletedEvent(this, BOOKING_ID, COACH_ID, 500L,
+            null, true, 3, 3, 3, List.of()));
 
-        service.handleBookingCompleted(event);
-
-        assertThat(existing.getStatus()).isEqualTo("COMPLETED");
         verify(sessionRepository, never()).save(any(Session.class));
-    }
-
-    @Test
-    void handleBookingCompleted_saveThrowsDataIntegrityViolation_isCaughtAndDoesNotPropagate() {
-        Session existing = new Session();
-        existing.setId(UUID.randomUUID());
-        existing.setBookingId(BOOKING_ID);
-        existing.setStatus("DRAFT");
-        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
-        doThrow(new DataIntegrityViolationException("constraint violation"))
-            .when(sessionRepository).save(existing);
-
-        BookingCompletedEvent event = new BookingCompletedEvent(this, BOOKING_ID, COACH_ID, 500L,
-            null, true, 3, 3, 3, List.of());
-
-        service.handleBookingCompleted(event);
-
-        verify(sessionRepository, times(1)).save(existing);
     }
 
     // ── handleBookingTerminalNonCompletion (Deferred-78 AC8) ──────────────────
 
-    @Test
-    void handleBookingTerminalNonCompletion_cancelledBookingWithDraftSession_transitionsToCancelled() {
-        Session existing = new Session();
-        existing.setId(UUID.randomUUID());
-        existing.setBookingId(BOOKING_ID);
-        existing.setStatus("DRAFT");
-        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
-
+    @ParameterizedTest
+    @ValueSource(strings = {"CANCELLED_PARENT", "DECLINED", "NO_SHOW_PLAYER", "CANCELLED_COACH"})
+    void handleBookingTerminalNonCompletion_terminalStatus_cancelsOpenPlanAtomically(String bookingStatus) {
         service.handleBookingTerminalNonCompletion(
-            new BookingStatusChangedEvent(this, BOOKING_ID, "CANCELLED_PARENT"));
+            new BookingStatusChangedEvent(this, BOOKING_ID, bookingStatus));
 
-        assertThat(existing.getStatus()).isEqualTo("CANCELLED");
-        verify(sessionRepository, times(1)).save(existing);
-    }
-
-    @Test
-    void handleBookingTerminalNonCompletion_declinedBookingWithSavedSession_transitionsToCancelled() {
-        Session existing = new Session();
-        existing.setId(UUID.randomUUID());
-        existing.setBookingId(BOOKING_ID);
-        existing.setStatus("SAVED");
-        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
-
-        service.handleBookingTerminalNonCompletion(
-            new BookingStatusChangedEvent(this, BOOKING_ID, "DECLINED"));
-
-        assertThat(existing.getStatus()).isEqualTo("CANCELLED");
-        verify(sessionRepository, times(1)).save(existing);
-    }
-
-    @Test
-    void handleBookingTerminalNonCompletion_noShowBookingWithDraftSession_transitionsToCancelled() {
-        Session existing = new Session();
-        existing.setId(UUID.randomUUID());
-        existing.setBookingId(BOOKING_ID);
-        existing.setStatus("DRAFT");
-        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
-
-        service.handleBookingTerminalNonCompletion(
-            new BookingStatusChangedEvent(this, BOOKING_ID, "NO_SHOW_PLAYER"));
-
-        assertThat(existing.getStatus()).isEqualTo("CANCELLED");
-        verify(sessionRepository, times(1)).save(existing);
+        verify(sessionRepository).markCancelledIfOpenByBookingId(eq(BOOKING_ID), any());
+        verify(sessionRepository, never()).save(any(Session.class));
     }
 
     /**
@@ -426,17 +365,11 @@ class SessionPlanServiceTest {
      */
     @Test
     void handleBookingTerminalNonCompletion_completedStatus_doesNotInterfereWithCompletedPath() {
-        Session existing = new Session();
-        existing.setId(UUID.randomUUID());
-        existing.setBookingId(BOOKING_ID);
-        existing.setStatus("DRAFT");
-
         service.handleBookingTerminalNonCompletion(
             new BookingStatusChangedEvent(this, BOOKING_ID, "COMPLETED"));
 
-        assertThat(existing.getStatus()).isEqualTo("DRAFT");
-        verify(sessionRepository, never()).findByBookingId(any());
-        verify(sessionRepository, never()).save(any(Session.class));
+        verify(sessionRepository, never()).markCancelledIfOpenByBookingId(any(), any());
+        verify(sessionRepository, never()).markCompletedByBookingId(any(), any());
     }
 
     @Test
@@ -444,39 +377,38 @@ class SessionPlanServiceTest {
         service.handleBookingTerminalNonCompletion(
             new BookingStatusChangedEvent(this, BOOKING_ID, "CONFIRMED"));
 
-        verify(sessionRepository, never()).findByBookingId(any());
-        verify(sessionRepository, never()).save(any(Session.class));
+        verify(sessionRepository, never()).markCancelledIfOpenByBookingId(any(), any());
     }
 
+    /**
+     * fix/content-consistency-and-lost-updates: the unlocked read passes (DRAFT) but a completion
+     * committed before the lock was granted; the post-lock refresh sees COMPLETED and the edit must
+     * be refused without saving — the old code saved and flipped COMPLETED back to SAVED.
+     */
     @Test
-    void handleBookingTerminalNonCompletion_completedSession_isNotOverwritten() {
+    void updateSession_completedWhileWaitingForTheLock_isRefusedAfterRefresh() {
+        when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        UUID sessionId = UUID.randomUUID();
         Session existing = new Session();
-        existing.setId(UUID.randomUUID());
-        existing.setBookingId(BOOKING_ID);
-        existing.setStatus("COMPLETED");
-        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
-
-        service.handleBookingTerminalNonCompletion(
-            new BookingStatusChangedEvent(this, BOOKING_ID, "CANCELLED_COACH"));
-
-        assertThat(existing.getStatus()).isEqualTo("COMPLETED");
-        verify(sessionRepository, never()).save(any(Session.class));
-    }
-
-    @Test
-    void handleBookingTerminalNonCompletion_saveThrowsDataIntegrityViolation_isCaughtAndDoesNotPropagate() {
-        Session existing = new Session();
-        existing.setId(UUID.randomUUID());
+        existing.setId(sessionId);
+        existing.setCoachId(COACH_ID);
         existing.setBookingId(BOOKING_ID);
         existing.setStatus("DRAFT");
-        when(sessionRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(existing));
-        doThrow(new DataIntegrityViolationException("constraint violation"))
-            .when(sessionRepository).save(existing);
+        when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(existing));
+        org.mockito.Mockito.doAnswer(inv -> {
+            existing.setStatus("COMPLETED"); // what the DB holds once the lock is granted
+            return null;
+        }).when(entityManager).refresh(existing, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
 
-        service.handleBookingTerminalNonCompletion(
-            new BookingStatusChangedEvent(this, BOOKING_ID, "CANCELLED_PARENT"));
+        UpdateSessionPlanRequest req = new UpdateSessionPlanRequest(
+            List.of(blockRequest(DRILL_ID_1)), List.of("PASSING"), "SAVED");
 
-        verify(sessionRepository, times(1)).save(existing);
+        assertThatThrownBy(() -> service.updateSession(sessionId, req, COACH_USER_ID))
+            .isInstanceOf(com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(
+                ((com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(com.softropic.skillars.platform.session.contract.SessionErrorCode.SESSION_PLAN_LOCKED));
+        verify(sessionRepository, never()).save(any(Session.class));
     }
 
     // ── updateSession terminal-lock guard extended to CANCELLED (Deferred-78 AC8) ──

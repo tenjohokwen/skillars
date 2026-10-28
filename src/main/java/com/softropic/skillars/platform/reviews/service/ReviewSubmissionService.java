@@ -66,24 +66,20 @@ public class ReviewSubmissionService {
      * rollback; a self-deadlock risk this method's own regression test is built to avoid).
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public SubmitReviewResponse submitReview(UUID coachId, Long authorId, String authorRoleStr,
-                                             Integer rating, String body) {
+    public SubmitReviewResponse submitReview(UUID coachId, Long authorId, Integer rating, String body) {
         if (!coachProfileRepository.existsById(coachId)) {
             throw new ResourceNotFoundException("Coach", coachId.toString());
         }
-        checkEligibility(coachId, authorId, Instant.EPOCH);
+        // fix/content-consistency-and-lost-updates: the author role is derived from the booking
+        // relation that made the author eligible (their own session -> PLAYER, their linked player's
+        // -> PARENT), not from the caller's authorities. ReviewResource used to pick COACH first from
+        // the token, so a user holding both ROLE_COACH and ROLE_PARENT passed the endpoint's
+        // PARENT_OR_PLAYER guard and was then refused with AUTHOR_ROLE_NOT_ALLOWED.
+        AuthorRole authorRole = checkEligibility(coachId, authorId, Instant.EPOCH);
         if (coachReviewRepository.existsByAuthorIdAndCoachId(authorId, coachId)) {
             throw new OperationNotAllowedException(
                 "Review already submitted for this coach",
                 ReviewErrorCode.ALREADY_SUBMITTED);
-        }
-        AuthorRole authorRole;
-        try {
-            authorRole = AuthorRole.valueOf(authorRoleStr);
-        } catch (IllegalArgumentException e) {
-            throw new OperationNotAllowedException(
-                "Role '" + authorRoleStr + "' is not permitted to submit reviews",
-                ReviewErrorCode.AUTHOR_ROLE_NOT_ALLOWED);
         }
         CoachReview review = new CoachReview();
         review.setCoachId(coachId);
@@ -277,13 +273,20 @@ public class ReviewSubmissionService {
         if (!coachProfileRepository.existsById(coachId)) {
             throw new ResourceNotFoundException("Coach", coachId.toString());
         }
-        return evaluateEligibility(coachId, authorId, Instant.EPOCH);
+        return evaluateEligibility(coachId, authorId, Instant.EPOCH).dto();
     }
 
-    private void checkEligibility(UUID coachId, Long authorId, Instant sinceAfter) {
-        ReviewEligibilityDto result = evaluateEligibility(coachId, authorId, sinceAfter);
+    /** @return the author's role in the qualifying booking relation (never null when it returns). */
+    private AuthorRole checkEligibility(UUID coachId, Long authorId, Instant sinceAfter) {
+        Eligibility outcome = evaluateEligibility(coachId, authorId, sinceAfter);
+        ReviewEligibilityDto result = outcome.dto();
         if (result.eligible()) {
-            return;
+            return outcome.authorRole();
+        }
+        if (ReviewErrorCode.AUTHOR_ROLE_NOT_ALLOWED.getErrorCode().equals(result.reasonCode())) {
+            throw new OperationNotAllowedException(
+                "A coach cannot review their own coach profile",
+                ReviewErrorCode.AUTHOR_ROLE_NOT_ALLOWED);
         }
         if (ReviewErrorCode.ACTIVE_DISPUTE.getErrorCode().equals(result.reasonCode())) {
             throw new OperationNotAllowedException(
@@ -313,7 +316,21 @@ public class ReviewSubmissionService {
     // fires at exactly 50 too, which is in fact the only value it can ever observe.)
     private static final int QUALIFYING_BOOKINGS_CAP = 50;
 
-    private ReviewEligibilityDto evaluateEligibility(UUID coachId, Long authorId, Instant sinceAfter) {
+    /** {@code authorRole} is null exactly when {@code dto.eligible()} is false. */
+    private record Eligibility(ReviewEligibilityDto dto, AuthorRole authorRole) {}
+
+    private Eligibility evaluateEligibility(UUID coachId, Long authorId, Instant sinceAfter) {
+        // No self-review. The role is derived from the booking relation (not the token), so a coach
+        // who is also the parent of a child they trained would otherwise qualify as PARENT for their
+        // OWN coach profile. Before the relation-derived role, ReviewResource's COACH-first token
+        // check refused such a user outright (for every coach, which was the bug); this keeps the
+        // refusal for exactly the self-review case.
+        if (coachProfileRepository.findById(coachId)
+                .map(cp -> authorId.equals(cp.getUserId()))
+                .orElse(false)) {
+            return new Eligibility(
+                new ReviewEligibilityDto(false, ReviewErrorCode.AUTHOR_ROLE_NOT_ALLOWED.getErrorCode()), null);
+        }
         int minAgeDays = configService.getBoundedInt(
             ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), 7, 1, 365);
         Instant maturedBefore = Instant.now().minus(minAgeDays, ChronoUnit.DAYS);
@@ -326,7 +343,7 @@ public class ReviewSubmissionService {
                 QUALIFYING_BOOKINGS_CAP, coachId, authorId, QUALIFYING_BOOKINGS_CAP);
         }
 
-        boolean eligible = false;
+        AuthorRole role = null;
         for (BookingReviewEligibilityProjection booking : qualifying) {
             PlayerProfile player = playerProfileRepository.findById(booking.getPlayerId()).orElse(null);
             if (player == null) {
@@ -339,20 +356,29 @@ public class ReviewSubmissionService {
             // parent_id/user_id for life; ShadowAccountService.createSelfOwnedPlayerProfile only ever
             // creates a brand-new self-owned profile), so an age check here made a parent-linked
             // player's session permanently unreviewable by anyone the moment that player turned 18.
-            if (authorId.equals(player.getUserId()) || authorId.equals(player.getParentId())) {
-                eligible = true; // the author is reviewing their own session, or their linked player's
+            //
+            // The match also decides the author's role. A user can be both (a self-owned adult
+            // player who is also a parent of a child training with the same coach): their own
+            // session wins, so PLAYER short-circuits and PARENT keeps looking.
+            if (authorId.equals(player.getUserId())) {
+                role = AuthorRole.PLAYER; // the author is reviewing their own session
                 break;
+            }
+            if (authorId.equals(player.getParentId())) {
+                role = AuthorRole.PARENT; // ...or their linked player's
             }
         }
 
-        if (!eligible) {
-            return new ReviewEligibilityDto(false, ReviewErrorCode.NO_QUALIFYING_SESSION.getErrorCode());
+        if (role == null) {
+            return new Eligibility(
+                new ReviewEligibilityDto(false, ReviewErrorCode.NO_QUALIFYING_SESSION.getErrorCode()), null);
         }
 
         if (disputeRepository.existsActiveDisputeByAuthor(coachId, authorId)) {
-            return new ReviewEligibilityDto(false, ReviewErrorCode.ACTIVE_DISPUTE.getErrorCode());
+            return new Eligibility(
+                new ReviewEligibilityDto(false, ReviewErrorCode.ACTIVE_DISPUTE.getErrorCode()), null);
         }
 
-        return new ReviewEligibilityDto(true, null);
+        return new Eligibility(new ReviewEligibilityDto(true, null), role);
     }
 }

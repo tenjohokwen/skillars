@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.reviews.repo;
 
+import com.softropic.skillars.platform.reviews.contract.HeldReason;
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
@@ -12,6 +13,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -89,6 +91,35 @@ public interface CoachReviewRepository extends JpaRepository<CoachReview, UUID> 
     Page<CoachReview> findByCoachId(UUID coachId, Pageable pageable);
 
     Optional<CoachReview> findByAuthorIdAndCoachId(Long authorId, UUID coachId);
+
+    /**
+     * {@code ReviewModerationSweeper}: ids of reviews stuck in PENDING since before {@code threshold}.
+     * Anchored on {@code lastModifiedAt}, not {@code createdAt}: {@code updateReview} re-PENDs a review
+     * and bumps lastModifiedAt in the same write, so an edit restarts the grace window.
+     */
+    @Query("SELECT r.reviewId FROM CoachReview r WHERE r.moderationStatus = :pending "
+           + "AND r.lastModifiedAt < :threshold ORDER BY r.lastModifiedAt ASC")
+    List<UUID> findPendingIdsOlderThan(@Param("pending") ReviewModerationStatus pending,
+                                       @Param("threshold") Instant threshold,
+                                       Pageable pageable);
+
+    /**
+     * {@code ReviewModerationSweeper}: atomic PENDING -> UNDER_REVIEW hold. The predicate is
+     * re-evaluated by Postgres after it takes the row lock, so a verdict, an admin decision or an
+     * author edit that committed after {@link #findPendingIdsOlderThan} selected this row makes this
+     * a 0-row no-op instead of overwriting it. Deliberately does not touch {@code lastModifiedAt}
+     * (that column is the author's edit-cooldown anchor and the admin queue's FIFO key).
+     *
+     * @return 1 if this call held the review, 0 if it was no longer a stale PENDING review
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE CoachReview r SET r.moderationStatus = :underReview, r.heldReason = :reason "
+           + "WHERE r.reviewId = :reviewId AND r.moderationStatus = :pending AND r.lastModifiedAt < :threshold")
+    int holdIfStillPending(@Param("reviewId") UUID reviewId,
+                           @Param("pending") ReviewModerationStatus pending,
+                           @Param("underReview") ReviewModerationStatus underReview,
+                           @Param("reason") HeldReason reason,
+                           @Param("threshold") Instant threshold);
 
     Page<CoachReview> findByModerationStatusOrderByLastModifiedAtAsc(
         ReviewModerationStatus status, Pageable pageable);

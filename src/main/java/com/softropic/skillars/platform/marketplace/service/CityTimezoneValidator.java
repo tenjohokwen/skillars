@@ -54,8 +54,8 @@ final class CityTimezoneValidator {
      * {@code getAvailableZoneIds()} on {@code getRules().isFixedOffset()} with a zero offset, so the
      * set is complete rather than hand-recalled; {@code GMT0} was missing from the first pass.
      *
-     * <p>New coach profiles default to {@code UTC} ({@code CoachProfileService.getOrCreateDraft}) and
-     * the picker offers {@code Etc/UTC} for UTC-zoned browsers, so none of these may ever be treated
+     * <p>Older coach profiles may carry {@code UTC} (the default of the since-removed, never-called
+     * {@code CoachProfileService.getOrCreateDraft}) and the picker offers {@code Etc/UTC} for UTC-zoned browsers, so none of these may ever be treated
      * as a mismatch against a real city.
      *
      * <p>Deliberately NOT a blanket {@code Etc/} prefix match — {@code Etc/GMT+5}/{@code Etc/GMT-10}
