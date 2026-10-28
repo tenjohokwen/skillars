@@ -133,11 +133,14 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * {@code CoachProfileService.deletePhoto} -- now 43 after {@code skillars-deferred-140} AC1.2
      * added {@code CoachProfileService.saveStep1}'s zone-change lock site -- now 44 after {@code
      * skillars-deferred-162} AC5 added {@code DevelopmentDataErasureGuard.isErasedUnderLock}, one shared site
-     * for the timeline and homework listeners). Asserted explicitly so an
+     * for the timeline and homework listeners -- now 46 after feat/admin-moderation-and-enforcement
+     * added {@code AdminCoachEnforcementService.setVerificationTier} and {@code
+     * AdminUserService.lockAndLoad} (shared by suspendUser/reactivateUser), both read-only locked
+     * loads). Asserted explicitly so an
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 44;
+    private static final int EXPECTED_CALL_SITE_COUNT = 46;
 
     private record CallSite(String file, int line, String argument) {
     }

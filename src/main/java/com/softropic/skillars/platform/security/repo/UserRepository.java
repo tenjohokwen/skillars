@@ -5,14 +5,20 @@ package com.softropic.skillars.platform.security.repo;
 import com.softropic.skillars.platform.security.contract.Consumer;
 import com.softropic.skillars.platform.security.repo.User;
 
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
 
 import java.time.Instant;
 import java.util.List;
@@ -136,4 +142,53 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Modifying
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     void invalidateSessionsForUser(@Param("userId") Long userId, @Param("invalidatedAt") Instant invalidatedAt);
+
+    /**
+     * Admin console user search (feat/admin-moderation-and-enforcement D7). {@code pattern} is an
+     * already lower-cased, LIKE-escaped ({@code !} escape char) {@code %term%} pattern — or plain
+     * {@code "%"} to list everyone — matched against email, login and "first last" name. Newest first
+     * (ids are time-ordered TSIDs).
+     */
+    @Query(value = "select u.id as id, u.login as login, u.email as email, u.firstName as firstName, "
+        + "u.lastName as lastName, u.skillarsRole as skillarsRole, u.activated as activated, "
+        + "u.locked as locked, u.verificationStatus as verificationStatus, u.createdDate as createdDate "
+        + "from User u where lower(u.email) like :pattern escape '!' "
+        + "or lower(u.login) like :pattern escape '!' "
+        + "or lower(concat(u.firstName, ' ', u.lastName)) like :pattern escape '!' "
+        + "order by u.id desc",
+        countQuery = "select count(u) from User u where lower(u.email) like :pattern escape '!' "
+        + "or lower(u.login) like :pattern escape '!' "
+        + "or lower(concat(u.firstName, ' ', u.lastName)) like :pattern escape '!'")
+    Page<UserAdminSummaryView> searchForAdmin(@Param("pattern") String pattern, Pageable pageable);
+
+    /**
+     * Locked load for the admin suspend/reactivate paths (D7), mirroring
+     * {@code CoachProfileRepository.findByIdForUpdate}: PESSIMISTIC_WRITE with
+     * {@code lock.timeout = 0} (NO_WAIT on Postgres), so contention fails fast with a
+     * {@code PessimisticLockingFailureException} that callers wrap in {@code PessimisticLockRetryer}.
+     * That JPQL + lock-timeout-hint shape matters: Hibernate reports the NO_WAIT failure as a lock
+     * timeout, which does not mark the caller's transaction rollback-only, so the retryer can roll
+     * back to its savepoint and try again (a native {@code FOR UPDATE NOWAIT} query failure does mark
+     * it, turning every contended call into an {@code UnexpectedRollbackException} at commit). The
+     * entity's EAGER {@code addresses} collection is loaded by a separate, unlocked select, not joined
+     * into the locking statement. Must run inside the caller's transaction.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0"))
+    @Query("SELECT u FROM User u WHERE u.id = :id")
+    Optional<User> findByIdForUpdate(@Param("id") Long id);
+
+    /**
+     * Same write as {@link #invalidateSessionsForUser} but joining the caller's transaction
+     * ({@code MANDATORY}) instead of opening a {@code REQUIRES_NEW} one. For the admin suspend path,
+     * which already holds this user's row lock: a {@code REQUIRES_NEW} UPDATE of the same row would
+     * wait on its own suspended outer transaction (self-deadlock). The value is a monotonic epoch and
+     * {@code securitySessionInvalidatedAt} is {@code updatable = false} on the entity, so no stale
+     * managed {@code save()} can undo it.
+     */
+    @Query("update User set securitySessionInvalidatedAt = :invalidatedAt where id = :userId")
+    @Modifying(flushAutomatically = true)
+    @Transactional(propagation = Propagation.MANDATORY)
+    int invalidateSessionsForUserInCurrentTransaction(@Param("userId") Long userId,
+                                                      @Param("invalidatedAt") Instant invalidatedAt);
 }

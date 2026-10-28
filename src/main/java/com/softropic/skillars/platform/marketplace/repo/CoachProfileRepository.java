@@ -23,6 +23,15 @@ public interface CoachProfileRepository
 
     Optional<CoachProfile> findByUserId(Long userId);
 
+    /**
+     * Scalar ID lookup that does not put a CoachProfile into the persistence context. A caller
+     * that will then take findByIdForUpdate needs this, because Hibernate returns an already
+     * managed instance as-is (it is not refreshed), so an earlier unlocked entity load would
+     * leave the locked caller working on a pre-lock snapshot.
+     */
+    @Query("SELECT p.id FROM CoachProfile p WHERE p.userId = :userId")
+    Optional<UUID> findIdByUserId(@Param("userId") Long userId);
+
     boolean existsByUserId(Long userId);
 
     // skillars-deferred-62: jakarta.persistence.lock.timeout has no effect on Postgres for any finite
@@ -53,6 +62,15 @@ public interface CoachProfileRepository
     @Query("SELECT p FROM CoachProfile p WHERE p.status IN :statuses ORDER BY p.statusChangedAt ASC NULLS LAST")
     Page<CoachProfile> findByStatusInOrderByStatusChangedAtAsc(
         @Param("statuses") List<CoachProfileStatus> statuses, Pageable pageable);
+
+    /**
+     * Admin console D6: the sole post-insert writer of {@code verification_tier} (the column is
+     * {@code updatable = false} on the entity — see {@code CoachProfile.verificationTier}). Callers
+     * take {@link #findByIdForUpdate} first so concurrent tier changes serialise.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE CoachProfile p SET p.verificationTier = :tier WHERE p.id = :coachId")
+    int updateVerificationTier(@Param("coachId") UUID coachId, @Param("tier") String tier);
 
     @Modifying(clearAutomatically = true)
     @Query("UPDATE CoachProfile p SET p.averageRating = :avgRating, p.reviewCount = :reviewCount WHERE p.id = :coachId")

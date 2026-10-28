@@ -66,6 +66,7 @@ import java.util.stream.Collectors;
 public class AdminCoachEnforcementService {
 
     private static final Set<String> VALID_STRIKE_REASONS = Set.of("COACH_CANCELLATION_UNEXCUSED", "COACH_NO_SHOW");
+    private static final Set<String> VALID_VERIFICATION_TIERS = Set.of("BASIC", "TRUSTED", "FEATURED");
 
     private final CoachProfileRepository coachProfileRepository;
     private final CoachReliabilityStrikeRepository strikeRepository;
@@ -129,7 +130,7 @@ public class AdminCoachEnforcementService {
         long openAlerts = adminAlertRepository.countOpenByReferenceId(coachId.toString());
 
         return new CoachEnforcementProfileDto(
-            coach.getId(), coach.getDisplayName(), coach.getStatus().name(),
+            coach.getId(), coach.getDisplayName(), coach.getStatus().name(), coach.getVerificationTier(),
             activeStrikes, strikeHistory, cancellationHistory, openAlerts);
     }
 
@@ -572,9 +573,54 @@ public class AdminCoachEnforcementService {
         return coaches.map(coach -> {
             long activeStrikes = strikeCounts.getOrDefault(coach.getId(), 0L);
             return new CoachEnforcementListItemDto(
-                coach.getId(), coach.getDisplayName(), coach.getStatus().name(),
+                coach.getId(), coach.getDisplayName(), coach.getStatus().name(), coach.getVerificationTier(),
                 activeStrikes, coach.getStatusChangedAt());
         });
+    }
+
+    /**
+     * D6: sets a coach's marketplace verification tier (BASIC / TRUSTED / FEATURED — the
+     * {@code chk_verification_tier} CHECK's domain, validated on the request DTO and again here).
+     * Audited as {@code COACH_TIER_CHANGE} with "OLD -> NEW" in the reason (admin_action_log carries
+     * who and when). Taken under the same {@code findByIdForUpdate} row lock every other coach-status
+     * writer here uses, so two concurrent tier changes serialise and the loser's no-op check sees the
+     * winner's value; written by a bulk UPDATE because the entity column is {@code updatable = false}. Idempotent: setting the current tier writes nothing and logs no audit row.
+     *
+     * <p>No cache to evict: coach profiles / search results are read straight from the database on
+     * every request ({@code CoachSearchService}, {@code CoachProfileService}) — there is no Spring
+     * cache or in-process coach cache in the marketplace module, so the new tier is visible on the next
+     * read.
+     *
+     * @return {@code true} if the tier changed
+     */
+    @Transactional
+    public boolean setVerificationTier(UUID coachId, String tier, String reason, Long adminId) {
+        if (tier == null || !VALID_VERIFICATION_TIERS.contains(tier)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid verification tier");
+        }
+        CoachProfile coach = lockRetryer.withBoundedRetry("AdminCoachEnforcementService.setVerificationTier",
+            () -> coachProfileRepository.findByIdForUpdate(coachId)
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
+
+        String previous = coach.getVerificationTier();
+        if (tier.equals(previous)) {
+            return false;
+        }
+        // Bulk UPDATE, not setVerificationTier + save: the column is updatable = false on the entity so
+        // that unlocked coach-side saves can never write a stale tier back (see CoachProfile).
+        coachProfileRepository.updateVerificationTier(coachId, tier);
+
+        AdminActionLog actionLog = new AdminActionLog();
+        actionLog.setAdminId(adminId);
+        actionLog.setActionType(AdminActionType.COACH_TIER_CHANGE);
+        actionLog.setReferenceId(coachId.toString());
+        String transition = previous + " -> " + tier;
+        actionLog.setReason(reason == null || reason.isBlank() ? transition : transition + ": " + reason.trim());
+        adminActionLogRepository.save(actionLog);
+
+        log.info("Coach verification tier changed by admin: coachId={} {} -> {} adminId={}",
+            coachId, previous, tier, adminId);
+        return true;
     }
 
     private BigDecimal resolveAdminBookingPrice(Booking booking) {

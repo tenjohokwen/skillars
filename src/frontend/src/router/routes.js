@@ -387,6 +387,21 @@ const routes = [
             component: () => import('pages/admin/AdminDisputesPage.vue'),
             meta: { requiresAuth: true, roles: ['ADMIN'] },
           },
+          {
+            path: 'moderation',
+            component: () => import('pages/admin/AdminModerationPage.vue'),
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
+          },
+          {
+            path: 'coaches',
+            component: () => import('pages/admin/AdminCoachEnforcementPage.vue'),
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
+          },
+          {
+            path: 'users',
+            component: () => import('pages/admin/AdminUsersPage.vue'),
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
+          },
         ],
       },
     ],

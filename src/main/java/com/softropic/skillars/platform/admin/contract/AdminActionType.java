@@ -6,5 +6,8 @@ public enum AdminActionType {
     COACH_SUSPEND, COACH_REINSTATE,
     COACH_STRIKE_ISSUED, COACH_STRIKE_DELETED,
     DISPUTE_RESOLVE,
-    BOOKING_FORCE_COMPLETE
+    BOOKING_FORCE_COMPLETE,
+    // V171: admin console account enforcement + coach verification tier.
+    COACH_TIER_CHANGE,
+    USER_SUSPEND, USER_REACTIVATE, USER_LOGIN_UNLOCK
 }

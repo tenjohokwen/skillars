@@ -455,6 +455,33 @@
               <q-item-label class="nav-label">{{ $t('nav.disputes') }}</q-item-label>
             </q-item-section>
           </q-item>
+
+          <q-item clickable to="/admin/moderation" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="shield" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.moderation') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/admin/coaches" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="sports" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.coachEnforcement') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/admin/users" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="manage_accounts" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.adminUsers') }}</q-item-label>
+            </q-item-section>
+          </q-item>
         </template>
       </q-list>
 
