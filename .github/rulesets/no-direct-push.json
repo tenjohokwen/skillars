@@ -45,6 +45,9 @@
           },
           {
             "context": "docker-image"
+          },
+          {
+            "context": "frontend-quality"
           }
         ]
       }
