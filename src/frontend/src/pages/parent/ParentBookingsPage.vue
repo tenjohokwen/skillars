@@ -157,6 +157,20 @@
             @click="openPlayerRequestDialog(booking)"
           />
 
+          <!-- Story 8.1 entry point: message this booking's coach about this booking's player. -->
+          <q-btn
+            v-if="(authStore.isParent || authStore.isPlayer) && canMessageCoach(booking)"
+            flat
+            dense
+            size="sm"
+            icon="chat"
+            class="self-start q-mt-xs"
+            :data-testid="`message-coach-${booking.id}`"
+            :label="t('messaging.messageCoach')"
+            :loading="isStarting(booking.coachId, booking.playerId)"
+            @click="startConversation(booking.coachId, booking.playerId)"
+          />
+
           <!-- skillars-deferred-165 AC2: raise/view a dispute, parent-or-self-booking-player. -->
           <DisputeAction
             v-if="(authStore.isParent || authStore.isPlayer) && isDisputeEligible(booking.status)"
@@ -285,9 +299,14 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
 import { useAuthStore } from 'src/stores/auth.store'
+import { usePlayerStore } from 'src/stores/playerStore'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
 import DisputeAction from 'src/components/booking/DisputeAction.vue'
+import {
+  useStartConversation,
+  establishesMessagingRelationship,
+} from 'src/composables/useStartConversation'
 
 // skillars-deferred-165 AC2: mirrors DisputeService.ELIGIBLE_STATUSES client-side, purely for UX —
 // the server is the real gate.
@@ -307,6 +326,19 @@ const { t, locale } = useI18n()
 const $q = useQuasar()
 const bookingStore = useBookingStore()
 const authStore = useAuthStore()
+const playerStore = usePlayerStore()
+const { isStarting, startConversation } = useStartConversation()
+
+// Story 8.1/8.2: a relationship-establishing booking is required, and a parent cannot open a
+// conversation for an 18+ child (backend: messaging.parentalOversightNotApplicable).
+function canMessageCoach(booking) {
+  if (!establishesMessagingRelationship(booking)) return false
+  if (authStore.isParent) {
+    const child = playerStore.players.find((p) => String(p.id) === String(booking.playerId))
+    if (child?.ageTier === 'ADULT') return false
+  }
+  return true
+}
 
 const showInMyTime = ref({})
 const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone

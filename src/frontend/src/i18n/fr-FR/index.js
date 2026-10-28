@@ -1388,6 +1388,49 @@ export default {
     reportSuccess: 'Merci — ceci a été signalé pour examen.',
     reportFailed: 'Impossible de soumettre ce signalement. Veuillez réessayer.',
     alreadyReported: 'Vous avez déjà signalé ceci.',
+    loadOlder: 'Charger les messages précédents',
+    messageCoach: "Contacter l'entraîneur",
+    messageCoachAbout: "Contacter l'entraîneur au sujet de {name}",
+    messagePlayer: 'Envoyer un message',
+    blockedChip: 'Bloquée',
+    blockedBanner:
+      "Cette conversation est bloquée. Vous pouvez encore lire l'historique, mais plus envoyer de nouveaux messages.",
+    cannotSend:
+      "Vous ne pouvez pas envoyer de messages dans cette conversation en raison des paramètres d'âge du joueur.",
+    reportConversationBlocksHint:
+      "Signaler une conversation la bloque également : aucune des deux parties ne peut envoyer de nouveaux messages pendant l'examen.",
+    moderation: {
+      pending: 'En cours de vérification',
+      pendingReviewOwn: 'En attente de vérification — votre message sera remis une fois vérifié.',
+      underReview: 'Message retenu pour vérification',
+      blockedOwn: 'Non remis — supprimé par la modération',
+      blocked: 'Message supprimé par la modération',
+    },
+    oversight: {
+      viewLabel: 'Affichage',
+      myConversations: 'Mes conversations',
+      banner:
+        'Vous consultez les conversations de {name}. Cet aperçu est en lecture seule et ne marque pas les messages comme lus.',
+      observerChip: 'Observateur',
+      primaryChip: 'Vous participez',
+      readOnly: 'Aperçu en lecture seule.',
+      replyInMyConversations: 'Répondre dans mes conversations',
+    },
+    errors: {
+      generic: "Une erreur s'est produite. Veuillez réessayer.",
+      noBookingRelationship:
+        "Vous pourrez envoyer des messages dès qu'une réservation confirmée existe entre l'entraîneur et le joueur.",
+      invalidContent: 'Les messages doivent contenir entre 1 et 2000 caractères.',
+      notAParty: "Vous n'avez pas accès à cette conversation.",
+      playerDirectMessagingRestricted:
+        'Les joueurs de moins de 13 ans ne peuvent pas écrire directement aux entraîneurs — un parent gère ces conversations.',
+      parentalOversightNotApplicable:
+        'Les conversations des joueurs majeurs ne sont pas visibles par les parents.',
+      parentMessagingRestrictedForAdult:
+        "Les parents ne peuvent pas envoyer de messages dans la conversation d'un joueur majeur.",
+      conversationBlocked:
+        "Cette conversation est bloquée — il n'est plus possible d'envoyer de nouveaux messages.",
+    },
     reportReason: {
       HARASSMENT: 'Harcèlement',
       INAPPROPRIATE_CONTENT: 'Contenu inapproprié',

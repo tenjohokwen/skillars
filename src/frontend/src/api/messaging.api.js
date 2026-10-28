@@ -1,7 +1,11 @@
 import { api } from 'src/boot/axios'
 
+// Idempotent on the backend (unique (coach_id, player_id) + re-query on conflict): calling it for an
+// existing pair returns that conversation. `coachId` may be omitted by a COACH caller — the backend
+// then defaults it to the caller's own coach profile (roster / player-detail entry points know only
+// the player). `playerId` is always a player-PROFILE id.
 export const initiateConversation = (coachId, playerId) =>
-  api.post('/api/messaging/conversations', { coachId, playerId })
+  api.post('/api/messaging/conversations', coachId ? { coachId, playerId } : { playerId })
 
 export const fetchConversations = () => api.get('/api/messaging/conversations')
 

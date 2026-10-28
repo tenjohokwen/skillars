@@ -1769,6 +1769,47 @@ export default {
     reportSuccess: 'Thanks — this has been reported for review.',
     reportFailed: 'Could not submit this report. Please try again.',
     alreadyReported: "You've already reported this.",
+    loadOlder: 'Load older messages',
+    messageCoach: 'Message coach',
+    messageCoachAbout: 'Message coach about {name}',
+    messagePlayer: 'Send message',
+    blockedChip: 'Blocked',
+    blockedBanner:
+      'This conversation is blocked. You can still read the history, but no new messages can be sent.',
+    cannotSend:
+      "You can't send messages in this conversation because of the player's age settings.",
+    reportConversationBlocksHint:
+      'Reporting a conversation also blocks it: neither side can send new messages while it is reviewed.',
+    moderation: {
+      pending: 'Being checked',
+      pendingReviewOwn: 'Pending review — your message will be delivered once it has been checked.',
+      underReview: 'Message held for review',
+      blockedOwn: 'Not delivered — removed by moderation',
+      blocked: 'Message removed by moderation',
+    },
+    oversight: {
+      viewLabel: 'View',
+      myConversations: 'My conversations',
+      banner:
+        "You are viewing {name}'s conversations. This overview is read-only and does not mark messages as read.",
+      observerChip: 'Observer',
+      primaryChip: 'You take part',
+      readOnly: 'Read-only overview.',
+      replyInMyConversations: 'Reply in my conversations',
+    },
+    errors: {
+      generic: 'Something went wrong. Please try again.',
+      noBookingRelationship:
+        'You can message once there is a confirmed booking between coach and player.',
+      invalidContent: 'Messages must be between 1 and 2000 characters.',
+      notAParty: "You don't have access to this conversation.",
+      playerDirectMessagingRestricted:
+        "Players under 13 can't message coaches directly — a parent manages these conversations.",
+      parentalOversightNotApplicable: "Conversations of adult players aren't visible to parents.",
+      parentMessagingRestrictedForAdult:
+        "Parents can't send messages in an adult player's conversation.",
+      conversationBlocked: 'This conversation is blocked — new messages can no longer be sent.',
+    },
     reportReason: {
       HARASSMENT: 'Harassment',
       INAPPROPRIATE_CONTENT: 'Inappropriate content',

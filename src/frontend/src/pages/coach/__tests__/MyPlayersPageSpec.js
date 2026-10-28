@@ -4,12 +4,24 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
+import { createTestingPinia } from '@pinia/testing'
 
 vi.mock('src/api/development.api', () => ({
   getCoachRoster: vi.fn(),
 }))
 
+vi.mock('src/api/messaging.api', () => ({
+  initiateConversation: vi.fn(),
+  fetchConversations: vi.fn(),
+  fetchMessages: vi.fn(),
+  fetchPlayerConversations: vi.fn(),
+  fetchPlayerConversationMessages: vi.fn(),
+  sendMessage: vi.fn(),
+  subscribeToEvents: vi.fn(),
+}))
+
 import { getCoachRoster } from 'src/api/development.api'
+import { initiateConversation } from 'src/api/messaging.api'
 import MyPlayersPage from 'src/pages/coach/MyPlayersPage.vue'
 
 // A realistic 18-19 digit Tsid, reused from ParentDevelopmentPortalPageSpec.js's own fixture —
@@ -40,6 +52,7 @@ function createTestRouter() {
         name: 'coach-player-detail',
         component: { template: '<div />' },
       },
+      { path: '/messaging', name: 'messaging', component: { template: '<div />' } },
     ],
   })
 }
@@ -47,7 +60,9 @@ function createTestRouter() {
 const mounted = []
 function mountPage() {
   const router = createTestRouter()
-  const wrapper = mount(MyPlayersPage, { global: { plugins: [router] } })
+  // Real (non-stubbed) messaging store actions so the "Message" entry point reaches the mocked API.
+  const pinia = createTestingPinia({ createSpy: vi.fn, stubActions: false })
+  const wrapper = mount(MyPlayersPage, { global: { plugins: [router, pinia] } })
   mounted.push(wrapper)
   return { wrapper, router }
 }
@@ -301,5 +316,34 @@ describe('MyPlayersPage.vue (skillars-12-1 AC8)', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="lapsed-heading"]').exists()).toBe(false)
+  })
+
+  it('Message button opens the conversation for that player (coachId omitted) and navigates to it, without opening the detail page', async () => {
+    getCoachRoster.mockResolvedValue({ players: [PLAYER({ playerId: LARGE_PLAYER_ID })] })
+    initiateConversation.mockResolvedValue({
+      conversationId: '555',
+      status: 'ACTIVE',
+      canSend: true,
+    })
+    const { wrapper, router } = mountPage()
+    const push = vi.spyOn(router, 'push')
+    await flushPromises()
+
+    await wrapper.find(`[data-testid="roster-message-${LARGE_PLAYER_ID}"]`).trigger('click')
+    await flushPromises()
+
+    expect(initiateConversation).toHaveBeenCalledWith(null, LARGE_PLAYER_ID)
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(push).toHaveBeenCalledWith({ name: 'messaging', query: { conversation: '555' } })
+  })
+
+  it('lapsed players get no Message button', async () => {
+    getCoachRoster.mockResolvedValue({
+      players: [PLAYER({ playerId: 2, playerName: 'Lapsed Lou', accessExpired: true })],
+    })
+    const { wrapper } = mountPage()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="roster-message-2"]').exists()).toBe(false)
   })
 })

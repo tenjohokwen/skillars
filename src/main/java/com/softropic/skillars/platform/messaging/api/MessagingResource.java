@@ -40,6 +40,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/messaging")
@@ -56,15 +57,23 @@ public class MessagingResource {
     @PostMapping("/conversations")
     @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
     public ResponseEntity<ConversationSummaryDto> initiateConversation(
-            @RequestBody ConversationRequest request,
+            @Valid @RequestBody ConversationRequest request,
             @RequestParam(name = "role", required = false) String roleHint,
             Authentication auth) {
         Long userId = resolveUserId();
+        // coachId may be omitted by a COACH caller (the roster / player-detail "Message" entry points
+        // know only the player): it then defaults to the caller's own coach profile. Any other caller
+        // must name the coach — without one there is no conversation to be a party to.
+        UUID ownCoachId = coachProfileRepository.findByUserId(userId).map(c -> c.getId()).orElse(null);
+        UUID coachId = request.coachId() != null ? request.coachId() : ownCoachId;
+        if (coachId == null) {
+            throw new OperationNotAllowedException(
+                "coachId is required unless the caller is a coach",
+                MessagingErrorCode.COACH_ID_REQUIRED);
+        }
         // Verify caller is the coach, the parent who owns the player, or the self-registered
         // player being messaged (UAT.5 AC3).
-        boolean isCoach = coachProfileRepository.findByUserId(userId)
-            .map(c -> Objects.equals(c.getId(), request.coachId()))
-            .orElse(false);
+        boolean isCoach = Objects.equals(ownCoachId, coachId);
         boolean isParent = !isCoach &&
             playerProfileRepository.findByIdAndParentId(request.playerId(), userId).isPresent();
         boolean isSelf = !isCoach && !isParent &&
@@ -78,7 +87,7 @@ public class MessagingResource {
         }
         String role = resolveRole(auth, roleHint);
         ConversationSummaryDto result = messagingService.initiateConversation(
-            request.coachId(), request.playerId(), userId, role);
+            coachId, request.playerId(), userId, role);
         return ResponseEntity.ok(result);
     }
 

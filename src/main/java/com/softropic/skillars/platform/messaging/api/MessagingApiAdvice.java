@@ -24,7 +24,8 @@ public class MessagingApiAdvice {
             : "messaging.error";
         ErrorDto body = new ErrorDto(code, new ErrorMsg(code, ex.getMessage()));
         HttpStatus status;
-        if (MessagingErrorCode.INVALID_CONTENT.getErrorCode().equals(code)) {
+        if (MessagingErrorCode.INVALID_CONTENT.getErrorCode().equals(code)
+                || MessagingErrorCode.COACH_ID_REQUIRED.getErrorCode().equals(code)) {
             status = HttpStatus.BAD_REQUEST;
         } else if (MessagingErrorCode.ALREADY_REPORTED.getErrorCode().equals(code)
                 || MessagingErrorCode.ALREADY_DELETED.getErrorCode().equals(code)) {

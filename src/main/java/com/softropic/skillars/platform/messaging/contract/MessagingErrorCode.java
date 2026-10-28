@@ -5,6 +5,7 @@ import com.softropic.skillars.infrastructure.exception.ErrorCode;
 public enum MessagingErrorCode implements ErrorCode {
     NO_BOOKING_RELATIONSHIP("messaging.noBookingRelationship"),
     INVALID_CONTENT("messaging.invalidContent"),
+    COACH_ID_REQUIRED("messaging.coachIdRequired"),
     NOT_A_PARTY("messaging.notAParty"),
     CONVERSATION_NOT_FOUND("messaging.conversationNotFound"),
     PLAYER_DIRECT_MESSAGING_RESTRICTED("messaging.playerDirectMessagingRestricted"),

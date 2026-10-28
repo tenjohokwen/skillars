@@ -13,7 +13,21 @@
       :to="{ name: 'coach-players' }"
     />
 
-    <div class="text-h5 q-mb-md">{{ $t('coach.playerDetailTitle', { playerName }) }}</div>
+    <div class="row items-center q-mb-md q-gutter-sm">
+      <div class="text-h5 col">{{ $t('coach.playerDetailTitle', { playerName }) }}</div>
+      <!-- Story 8.1 entry point. coachId is omitted: the backend defaults it to the caller's own
+           coach profile. For an under-13 player the thread is with the parent (story 8.2). -->
+      <q-btn
+        outline
+        no-caps
+        color="primary"
+        icon="chat"
+        data-testid="coach-message-player"
+        :label="$t('messaging.messagePlayer')"
+        :loading="isStarting(null, playerId)"
+        @click="startConversation(null, playerId)"
+      />
+    </div>
 
     <q-banner v-if="pageError" class="bg-negative text-white q-mb-md" rounded>
       {{ pageError }}
@@ -288,6 +302,7 @@ import SkillsRadarAssessmentPanel from 'src/components/development/SkillsRadarAs
 import RadarAssessmentHistoryList from 'src/components/development/RadarAssessmentHistoryList.vue'
 import DevelopmentCorrelationPanel from 'src/components/development/DevelopmentCorrelationPanel.vue'
 import PerformanceReportsPanel from 'src/components/development/PerformanceReportsPanel.vue'
+import { useStartConversation } from 'src/composables/useStartConversation'
 
 const route = useRoute()
 const store = useDevelopmentStore()
@@ -299,6 +314,7 @@ const { t, locale } = useI18n()
 // Number.MAX_SAFE_INTEGER, and Number(route.params.playerId) has already shipped and been
 // fixed twice on this page's own model pages (skillars-deferred-147/-148).
 const playerId = computed(() => route.params.playerId)
+const { isStarting, startConversation } = useStartConversation()
 
 // skillars-deferred-156 AC5: playerName now comes from the exposure fetch response, not the
 // route's own query string (which put a minor's name in browser history/bookmarks/referrers).
