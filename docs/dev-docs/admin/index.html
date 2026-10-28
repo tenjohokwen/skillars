@@ -116,7 +116,18 @@
       <strong>6. Stuck-booking force-complete</strong> (<code>AdminBookingCompletionService</code>). Support can look
       up a booking by id and force-complete one abandoned at wrap-up with placeholder completion data, sharing
       <code>BookingCompletionService.forceCompleteWithPlaceholderData</code> with the automatic
-      <code>StuckCompletionSweeperService</code>.
+      <code>StuckCompletionSweeperService</code>. The same page can <strong>cancel one booking</strong>
+      (<code>AdminBookingCancellationService</code>, C6) with the suspension sweep's semantics: it calls
+      <code>BookingService.cancelBookingAsAdmin</code> (reason <code>ADMIN_SUPPORT</code>), so captured money is refunded
+      in full, the coach gets no strike, the parent gets a neutral "cancelled by the Skillars team" notice and the coach
+      gets <code>BOOKING_CANCELLED_BY_SKILLARS</code> so they do not turn up (a suspension sweep sends the coach nothing
+      per booking; they get <code>COACH_SUSPENDED</code>). The refund's credit-statement line reads "Cancelled by
+      Skillars", not "Coach unavailable". Live
+      (<code>IN_PROGRESS</code>/<code>PAUSED</code>) and in-flight-capture bookings are refused with the outcome as the
+      reason (always a 200, like force-complete). Every attempt is audited as <code>BOOKING_ADMIN_CANCEL</code> (V189, which also widens the envelope template CHECK) with the
+      outcome appended, and a cancellation resolves the booking's open <code>SAFETY_HOLD_BOOKING</code> alert in the same
+      transaction. That alert's row in the moderation queue links to the booking page, which is how an admin follows up
+      on a safety hold that could not cancel a booking at hold time.
     </p>
     <div class="callout warn">
       <p><strong>GDPR is a legal deadline, not a nice-to-have.</strong> Any authenticated user can request an export
@@ -167,6 +178,7 @@
         <tr><td><code>DisputeService</code></td><td>Raise (reason, owner, status and window checks), owner/admin views, OPEN queue, resolve (credit-wallet ledger entries + coach payout reconciliation) and dismiss.</td></tr>
         <tr><td><code>AppealService</code></td><td>Submit (ownership, still-enforced, 14-day window), list mine, admin queue/detail, decide (atomic <code>AppealRepository.decideIfOpen</code> conditional UPDATE + reversal in the same transaction).</td></tr>
         <tr><td><code>AdminBookingCompletionService</code></td><td>Read-only booking lookup for the force-complete page and <code>forceComplete</code>, which audits <code>BOOKING_FORCE_COMPLETE</code> with the <code>ForceCompleteOutcome</code> in the reason (so a no-op is not recorded as a completion).</td></tr>
+        <tr><td><code>AdminBookingCancellationService</code></td><td>C6: cancels one booking through <code>BookingService.cancelBookingAsAdmin</code> (reason <code>ADMIN_SUPPORT</code>), resolves its open <code>SAFETY_HOLD_BOOKING</code> alert on success, and audits every attempt as <code>BOOKING_ADMIN_CANCEL</code> with the outcome.</td></tr>
         <tr><td><code>GdprRequestService</code></td><td>Intake for self and child export/erasure; status polling (302 to the signed URL, 410 once expired); own/child request lists; admin listing with type/status filters.</td></tr>
         <tr><td><code>GdprExportService</code></td><td><code>buildExport</code> (profile, bookings, payments, messages, reviews, disputes) and <code>buildChildExport</code> (child profile, bookings, timeline, assessments, …) as Jackson-serialised ZIPs stored through <code>FileStorageService</code> at <code>gdpr/exports/{requestId}.zip</code>; failures are written FAILED in the same <code>REQUIRES_NEW</code> transaction.</td></tr>
         <tr><td><code>GdprErasureService</code></td><td><code>erase</code> / <code>eraseChild</code> (pool pre-check + routing to the dedicated GDPR datasource, then <code>REQUIRES_NEW</code> <code>eraseTransactional</code> / <code>eraseChildTransactional</code>), <code>markFailed</code>, <code>retryFailedErasures</code>. Publishes <code>UserErasedEvent</code> and <code>AccountDeletionRequestedEvent</code>; raises <code>GDPR_ERASURE_DEADLINE</code> alerts for skipped/contended scrubs.</td></tr>
@@ -209,8 +221,9 @@
         <tr><td>GET</td><td><code>/api/admin/appeals/queue</code></td><td>Appeals by status (default OPEN), oldest first</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/appeals/{appealId}</code></td><td>Appeal detail with a subject summary</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/admin/appeals/{appealId}/decide</code></td><td>Decide UPHELD / OVERTURNED (final)</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/bookings/{bookingId}</code></td><td>Booking lookup for force-complete (status, completion recorded, pending confirmation)</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/bookings/{bookingId}</code></td><td>Booking lookup for force-complete and cancel (status, completion recorded, pending confirmation, <code>adminCancellable</code>, <code>liveSession</code>)</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/admin/bookings/{bookingId}/force-complete</code></td><td>Force-complete a stuck booking with placeholder data</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/bookings/{bookingId}/cancel</code></td><td>Cancel one booking (full refund of captured money, no strike, neutral notice); body <code>{note}</code>, returns the <code>AdminBookingCancellationOutcome</code></td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/gdpr/requests</code></td><td>List GDPR requests (<code>type</code>, <code>status</code>, pageable; rows carry <code>playerId</code>)</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/disputes</code></td><td>Raise a dispute</td><td>Authenticated (parent, player or coach of the booking)</td></tr>
         <tr><td>GET</td><td><code>/api/disputes/{disputeId}</code></td><td>View a dispute you raised</td><td>Authenticated, owner-only</td></tr>
@@ -608,7 +621,7 @@ sequenceDiagram
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>7a950883</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

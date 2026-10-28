@@ -69,6 +69,12 @@ public enum EmailTemplate {
      * credit refunded, or nothing was charged).
      */
     BOOKING_CANCELLED_COACH_UNAVAILABLE("email.booking.cancelled_coach_unavailable.title"),
+    /**
+     * C6 (V189): the coach's notice that an admin cancelled one of their bookings from the admin bookings
+     * page (cancel reason ADMIN_SUPPORT). Not sent for a suspension sweep — the coach is told by
+     * COACH_SUSPENDED there.
+     */
+    BOOKING_CANCELLED_BY_SKILLARS("email.booking.cancelled_by_skillars.title"),
     COACH_NO_SHOW("email.booking.coach_no_show.title"),
     PLAYER_NO_SHOW("email.booking.player_no_show.title"),
     COACH_VISIBILITY_REDUCED("email.reliability.visibility_reduced.title"),

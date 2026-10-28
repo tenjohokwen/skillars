@@ -2,8 +2,11 @@ package com.softropic.skillars.platform.admin.api;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.admin.contract.AdminBookingLookupDto;
+import com.softropic.skillars.platform.admin.contract.AdminCancelBookingRequest;
+import com.softropic.skillars.platform.admin.contract.AdminCancelBookingResponse;
 import com.softropic.skillars.platform.admin.contract.AdminForceCompleteBookingRequest;
 import com.softropic.skillars.platform.admin.contract.AdminForceCompleteBookingResponse;
+import com.softropic.skillars.platform.admin.service.AdminBookingCancellationService;
 import com.softropic.skillars.platform.admin.service.AdminBookingCompletionService;
 import com.softropic.skillars.platform.booking.contract.ForceCompleteOutcome;
 import com.softropic.skillars.platform.security.contract.Principal;
@@ -30,6 +33,7 @@ import java.util.UUID;
 public class AdminBookingResource {
 
     private final AdminBookingCompletionService adminBookingCompletionService;
+    private final AdminBookingCancellationService adminBookingCancellationService;
     private final SecurityUtil securityUtil;
 
     @GetMapping("/{bookingId}")
@@ -51,6 +55,21 @@ public class AdminBookingResource {
         ForceCompleteOutcome outcome =
             adminBookingCompletionService.forceComplete(bookingId, resolveAdminId(), request.note());
         return ResponseEntity.ok(new AdminForceCompleteBookingResponse(outcome));
+    }
+
+    /**
+     * C6: cancel one booking with the suspension-sweep semantics (full refund of captured money, no coach
+     * strike, neutral parent notice). Always 200 with the outcome: CANCELLED, or the refusal reason
+     * (LIVE_SESSION / PAYMENT_IN_PROGRESS / NOT_CANCELLABLE) — the force-complete endpoint's contract.
+     */
+    @PostMapping("/{bookingId}/cancel")
+    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @Observed(name = "admin.bookings.cancel")
+    public ResponseEntity<AdminCancelBookingResponse> cancel(
+            @PathVariable UUID bookingId,
+            @Valid @RequestBody AdminCancelBookingRequest request) {
+        return ResponseEntity.ok(new AdminCancelBookingResponse(
+            adminBookingCancellationService.cancel(bookingId, resolveAdminId(), request.note())));
     }
 
     private Long resolveAdminId() {

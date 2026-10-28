@@ -19,6 +19,7 @@ import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.admin.contract.AdminAlertStatus;
 import com.softropic.skillars.platform.admin.contract.AdminAlertType;
 import com.softropic.skillars.platform.booking.contract.AdminBookingCancellationOutcome;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.service.BookingService;
@@ -139,7 +140,7 @@ public class AdminCoachEnforcementService {
      * Deliberately neutral: the booking row reaches the parent (the GDPR export serialises it), and the
      * parent must never learn why — the reason lives on the coach's admin_action_log row instead.
      */
-    static final String CANCEL_REASON_COACH_UNAVAILABLE = "COACH_UNAVAILABLE";
+    static final String CANCEL_REASON_COACH_UNAVAILABLE = BookingCancelledByAdminEvent.REASON_COACH_UNAVAILABLE;
 
     /**
      * Admin suspension. REQUESTED bookings are always cancelled; with {@code cancelUpcomingBookings}

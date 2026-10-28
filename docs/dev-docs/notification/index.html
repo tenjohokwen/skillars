@@ -126,7 +126,7 @@
       <tbody>
         <tr><td><code>api</code></td><td><code>NotificationResource</code> (current user's inbox + email preferences), <code>UnsubscribeResource</code> (public one-click unsubscribe), <code>AlertRuleAdminResource</code> (alert-rule CRUD), <code>SesCutoverPreflightResource</code> (admin SES readiness probe, only when <code>app.email.transport=ses</code>).</td></tr>
         <tr><td><code>config</code></td><td><code>ThymeleafConfiguration</code> (email template engine), <code>AsyncConfig</code> (<code>sendMailPool</code> and <code>moderationTaskExecutor</code> executors), <code>ComponentConfig</code> (<code>MailManager</code> bean, <code>RetryTemplate</code>, Resilience4j circuit-breaker customizer).</td></tr>
-        <tr><td><code>contract</code></td><td>Public API surface: <code>Envelope</code>/<code>Recipient</code>, the <code>EmailTemplate</code> enum (52 constants) exposing <code>subjectKey()</code>, <code>deliveryDeadline()</code> and <code>circuitBreakerName()</code>, <code>EmailDeliveryStatus</code>, <code>AlertFiredEvent</code>, <code>NotificationCategory</code>, and the notification-centre DTOs (<code>NotificationDto</code>, <code>UnreadCountDto</code>, <code>NotificationPreferenceDto</code>, <code>UpdateNotificationPreferenceRequest</code>, <code>UnsubscribeResultDto</code>).</td></tr>
+        <tr><td><code>contract</code></td><td>Public API surface: <code>Envelope</code>/<code>Recipient</code>, the <code>EmailTemplate</code> enum (54 constants) exposing <code>subjectKey()</code>, <code>deliveryDeadline()</code> and <code>circuitBreakerName()</code>, <code>EmailDeliveryStatus</code>, <code>AlertFiredEvent</code>, <code>NotificationCategory</code>, and the notification-centre DTOs (<code>NotificationDto</code>, <code>UnreadCountDto</code>, <code>NotificationPreferenceDto</code>, <code>UpdateNotificationPreferenceRequest</code>, <code>UnsubscribeResultDto</code>).</td></tr>
         <tr><td><code>infrastructure</code></td><td><code>EmailRetryScheduler</code> and <code>infrastructure.listener</code>: the six email listeners (<code>AccountChange</code>, <code>Booking</code>, <code>SessionPack</code>, <code>VideoModeration</code>, <code>VideoOwner</code>, <code>AdminOutcome</code><code>EmailListener</code>), <code>InAppEnvelopeListener</code> (inbox rows for direct-<code>Envelope</code> producers) and <code>NotificationUserErasedListener</code> (GDPR cleanup).</td></tr>
         <tr><td><code>repo</code></td><td>JPA: <code>AlertRule</code>, <code>EnvelopeEntity</code>/<code>RecipientEntity</code>, <code>UserNotification</code> (+ <code>UserNotificationRepository</code>). Plain JDBC: <code>UserNotificationWriter</code> (the one inbox INSERT), <code>NotificationEmailPreferenceRepository</code> (upsert/read of opt-outs), <code>NotificationRecipientLookup</code> (email address → <code>main."user"</code> id + coach flag).</td></tr>
         <tr><td><code>service</code></td><td>Send pipeline (<code>MailManager</code> → <code>MailService</code> → <code>EmailContentRenderer</code>), outbox producer/consumer (<code>NotificationOutboxSupport</code>, <code>NotificationEmailOutboxHandler</code>), notification centre (<code>NotificationCatalog</code>, <code>InAppNotificationService</code>, <code>NotificationPreferenceService</code>, <code>UnsubscribeTokenService</code>, <code>JdbcSavepoints</code>, <code>InAppNotificationRetentionScheduler</code>), alerting (<code>AlertEvaluationService</code>, <code>AlertRuleCache</code>, <code>AlertNotificationListener</code>), <code>MailMetrics</code>, <code>EnvelopeMapper</code>, <code>ResendEmailService</code>.</td></tr>
@@ -412,6 +412,16 @@ sequenceDiagram
       enum ↔ constraint parity — <code>SES_CUTOVER_PREFLIGHT</code> shipped without one and needed <code>V168</code>);
       (6) if in-app, a <code>notifications.types.&lt;TYPE&gt;</code> text in the frontend en-US/de-DE/fr-FR i18n, and add
       any new display params to <code>NotificationCatalog.PARAM_WHITELIST</code>.</p>
+      <p>Step (3) is now enforced: <code>EmailTemplateFileParityTest</code> fails when a constant has no
+      <code>mails/&lt;lowerCamelCase&gt;.html</code> (exemptions: <code>NONE</code>, and <code>COACH_VISIBILITY_REDUCED</code> /
+      <code>EMAIL_CHANGE</code>, which nothing sends, and the three <code>@Deprecated</code> <code>VIDEO_APPROVAL_*</code>
+      constants whose bodies V184 removed). Before C6, <code>BOOKING_CANCELLED_BY_PARENT</code>,
+      <code>BOOKING_CANCELLED_BY_COACH</code>, <code>COACH_NO_SHOW</code> and <code>PLAYER_NO_SHOW</code> had no body and
+      <code>PACK_PAUSED</code>'s was misnamed <code>sessionPackPaused.html</code>: Thymeleaf's
+      <code>TemplateInputException</code> is not an <code>EmailTransportPermanentException</code>, so
+      <code>MailManager</code> marked each envelope FAILED + retryable, <code>EmailRetryScheduler</code> retried it every
+      minute until its delivery deadline, and it then expired. Nobody was told. A render failure looks like a transient
+      failure; only a build-time check catches a missing template.</p>
     </div>
     <div class="callout warn">
       <p><strong>Inbox writes must be JDBC-only.</strong> <code>InAppNotificationService</code> and
@@ -492,7 +502,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>993c6f57</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>fa9928ce</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

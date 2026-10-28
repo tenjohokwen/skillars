@@ -107,6 +107,23 @@
               : t('admin.bookings.notStuckHint')
           }}
         </q-card-section>
+
+        <!-- C6: cancel one booking (full refund of anything paid, no coach strike) -->
+        <q-card-section v-if="booking.adminCancellable" data-testid="booking-cancel-section">
+          <div class="text-meta q-mb-sm">{{ t('admin.bookings.cancelHint') }}</div>
+          <q-btn
+            outline
+            color="negative"
+            :label="t('admin.bookings.cancelAction')"
+            data-testid="booking-cancel-open-btn"
+            @click="openCancelConfirm"
+          />
+        </q-card-section>
+        <q-card-section v-else-if="booking.liveSession">
+          <q-banner class="bg-warning text-dark" rounded data-testid="booking-live-session-hint">
+            {{ t('admin.bookings.liveSessionHint') }}
+          </q-banner>
+        </q-card-section>
       </q-card>
     </div>
 
@@ -155,6 +172,55 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <!-- Cancel confirmation -->
+    <q-dialog v-model="cancelConfirmOpen">
+      <q-card
+        data-testid="booking-cancel-dialog"
+        style="min-width: 320px; max-width: 560px; width: 100%"
+      >
+        <q-card-section>
+          <div class="text-h6">{{ t('admin.bookings.cancelConfirmTitle') }}</div>
+        </q-card-section>
+        <q-card-section>
+          <div class="text-body2 q-mb-sm">{{ t('admin.bookings.cancelConsequencesIntro') }}</div>
+          <ul class="q-my-none q-pl-md">
+            <li>{{ t('admin.bookings.cancelConsequenceStatus') }}</li>
+            <li>{{ t('admin.bookings.cancelConsequenceRefund') }}</li>
+            <li>{{ t('admin.bookings.cancelConsequenceNoStrike') }}</li>
+            <li>{{ t('admin.bookings.cancelConsequenceNotice') }}</li>
+            <li>{{ t('admin.bookings.cancelConsequenceCoachNotice') }}</li>
+            <li>{{ t('admin.bookings.cancelConsequenceAlert') }}</li>
+            <li>{{ t('admin.bookings.consequenceIrreversible') }}</li>
+            <li>{{ t('admin.bookings.consequenceAudit') }}</li>
+          </ul>
+        </q-card-section>
+        <q-card-section>
+          <q-input
+            v-model="cancelNote"
+            type="textarea"
+            outlined
+            autogrow
+            maxlength="450"
+            counter
+            :label="t('admin.bookings.noteLabel')"
+            data-testid="booking-cancel-note-input"
+          />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn
+            unelevated
+            color="negative"
+            :label="t('admin.bookings.cancelAction')"
+            :loading="cancelling"
+            :disable="cancelNote.trim().length === 0"
+            data-testid="booking-cancel-submit-btn"
+            @click="submitCancel"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -179,6 +245,10 @@ const confirmOpen = ref(false)
 const note = ref('')
 const submitting = ref(false)
 
+const cancelConfirmOpen = ref(false)
+const cancelNote = ref('')
+const cancelling = ref(false)
+
 const bookingIdValid = computed(() => isUuid(bookingIdInput.value.trim()))
 
 const statusLabels = computed(() => ({
@@ -191,6 +261,12 @@ const statusLabels = computed(() => ({
   CANCELLED: t('booking.requests.statusCancelled'),
   DISPUTED: t('booking.requests.statusDisputed'),
   PAYMENT_PENDING: t('booking.requests.statusPaymentPending'),
+  IN_PROGRESS: t('booking.requests.statusInProgress'),
+  PAUSED: t('booking.requests.statusPaused'),
+  CANCELLED_PARENT: t('booking.requests.statusCancelledParent'),
+  CANCELLED_COACH: t('booking.requests.statusCancelledCoach'),
+  NO_SHOW_PLAYER: t('booking.requests.statusNoShowPlayer'),
+  NO_SHOW_COACH: t('booking.requests.statusNoShowCoach'),
   COMPLETED_PENDING_CONFIRMATION: t('admin.bookings.statusPendingConfirmation'),
 }))
 
@@ -260,6 +336,46 @@ async function submitForceComplete() {
     })
   } finally {
     submitting.value = false
+  }
+}
+
+function openCancelConfirm() {
+  cancelNote.value = ''
+  cancelConfirmOpen.value = true
+}
+
+// C6: always a 200 with the outcome — only CANCELLED changed anything; the rest are refusals.
+function cancelOutcomeNotice(outcome) {
+  switch (outcome) {
+    case 'CANCELLED':
+      return { message: t('admin.bookings.cancelOutcomeCancelled'), type: 'positive' }
+    case 'LIVE_SESSION':
+      return { message: t('admin.bookings.cancelOutcomeLiveSession'), type: 'warning' }
+    case 'PAYMENT_IN_PROGRESS':
+      return { message: t('admin.bookings.cancelOutcomePaymentInProgress'), type: 'warning' }
+    default:
+      return { message: t('admin.bookings.cancelOutcomeNotCancellable'), type: 'info' }
+  }
+}
+
+async function submitCancel() {
+  const bookingId = booking.value.bookingId
+  cancelling.value = true
+  try {
+    const resp = await adminApi.cancelBookingAsAdmin(bookingId, cancelNote.value.trim())
+    cancelConfirmOpen.value = false
+    $q.notify(cancelOutcomeNotice(resp?.outcome))
+    await lookup()
+  } catch (err) {
+    $q.notify({
+      message:
+        err?.response?.status === 409
+          ? t('admin.bookings.cancelConflict')
+          : t('admin.bookings.cancelFailed'),
+      type: 'negative',
+    })
+  } finally {
+    cancelling.value = false
   }
 }
 

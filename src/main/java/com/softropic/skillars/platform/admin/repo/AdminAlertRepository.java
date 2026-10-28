@@ -109,4 +109,20 @@ public interface AdminAlertRepository extends JpaRepository<AdminAlert, UUID> {
         """, nativeQuery = true)
     int resolveOpenAlert(@Param("alertId") java.util.UUID alertId, @Param("type") String type,
                          @Param("adminId") Long adminId);
+
+    /**
+     * C6: resolves every OPEN alert of {@code type} on one reference — used when an admin cancels a
+     * booking that a child-safety hold could not, so its SAFETY_HOLD_BOOKING alert is closed with it. One
+     * atomic conditional UPDATE (no load-check-write); a no-op (0) when none is open.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+        UPDATE admin.admin_alerts
+        SET status = 'RESOLVED', resolved_at = NOW(), resolved_by = :adminId
+        WHERE reference_id = :referenceId
+          AND type = :type
+          AND status = 'OPEN'
+        """, nativeQuery = true)
+    int resolveOpenAlertsForReference(@Param("referenceId") String referenceId, @Param("type") String type,
+                                      @Param("adminId") Long adminId);
 }

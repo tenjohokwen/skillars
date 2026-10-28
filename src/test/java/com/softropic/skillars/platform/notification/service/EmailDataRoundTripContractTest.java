@@ -162,6 +162,12 @@ class EmailDataRoundTripContractTest {
                 if (declaresField(eventType, "canonicalTimezone")) {
                     spec = spec.set(Select.field("canonicalTimezone"), ZONE);
                 }
+                // C6: the coach's cancelled-by-Skillars notice is only sent for an ADMIN_SUPPORT cancel —
+                // a random reason would make that handler return before producing a payload.
+                if (eventType == com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent.class) {
+                    spec = spec.set(Select.field("cancelReason"),
+                        com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent.REASON_ADMIN_SUPPORT);
+                }
                 Object event = spec.create();
                 m.setAccessible(true);
                 m.invoke(listener, event);
@@ -170,8 +176,8 @@ class EmailDataRoundTripContractTest {
         }
 
         assertThat(invoked)
-            .as("all 24 on*(Event) handlers across both listeners must have been driven")
-            .hasSize(24);
+            .as("all 25 on*(Event) handlers across both listeners must have been driven")
+            .hasSize(25);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);

@@ -42,29 +42,26 @@ public class RefundEnqueueListener {
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCancelledByCoach(BookingCancelledByCoachEvent event) {
-        // Replicate the two enqueue sites from CancellationRefundService.onBookingCancelledByCoach
-        if (event.getSessionPackPurchaseId() != null && event.isPackExpiredAtCancellation()) {
+        // C6: only money actually taken is refunded. isWalletRefund() is false for an ACCEPTED booking
+        // (nothing charged yet) and for an unexpired pack booking (its session is restored by
+        // CancellationRefundService instead) — the same rule as onBookingCancelledByAdmin.
+        if (event.isWalletRefund()) {
             refundOutboxSupport.enqueueBookingRefund(
                 event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Coach cancellation — expired pack refund");
-        } else if (event.getSessionPackPurchaseId() == null) {
-            refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Coach cancellation — full refund");
+                event.getSessionPackPurchaseId() != null
+                    ? "Coach cancellation — expired pack refund"
+                    : "Coach cancellation — full refund");
         }
     }
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onCoachNoShow(CoachNoShowEvent event) {
-        // Replicate the two enqueue sites from CancellationRefundService.onCoachNoShow
-        if (event.getSessionPackPurchaseId() != null && event.isPackExpiredAtCancellation()) {
+        if (event.isWalletRefund()) {
             refundOutboxSupport.enqueueBookingRefund(
                 event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Coach no-show — expired pack refund");
-        } else if (event.getSessionPackPurchaseId() == null) {
-            refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Coach no-show — full refund");
+                event.getSessionPackPurchaseId() != null
+                    ? "Coach no-show — expired pack refund"
+                    : "Coach no-show — full refund");
         }
     }
 
@@ -77,9 +74,19 @@ public class RefundEnqueueListener {
         if (event.isWalletRefund()) {
             refundOutboxSupport.enqueueBookingRefund(
                 event.getParentId(), event.getRefundAmount(), event.getBookingId(),
-                event.getSessionPackPurchaseId() != null
-                    ? "Coach unavailable — expired pack refund"
-                    : "Coach unavailable — full refund");
+                refundDescription(event));
         }
+    }
+
+    /**
+     * The parent sees this text on their credit statement, so it matches the notice they were sent: a
+     * single admin cancellation (C6, ADMIN_SUPPORT) is a Skillars cancellation, never "coach unavailable".
+     */
+    private static String refundDescription(BookingCancelledByAdminEvent event) {
+        String cause = BookingCancelledByAdminEvent.REASON_ADMIN_SUPPORT.equals(event.getCancelReason())
+            ? "Cancelled by Skillars" : "Coach unavailable";
+        return event.getSessionPackPurchaseId() != null
+            ? cause + " — expired pack refund"
+            : cause + " — full refund";
     }
 }

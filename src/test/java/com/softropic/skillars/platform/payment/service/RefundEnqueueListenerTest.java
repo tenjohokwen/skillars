@@ -108,6 +108,15 @@ class RefundEnqueueListenerTest {
         verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
     }
 
+    /** C6: an ACCEPTED booking took no money — a coach cancelling it must not mint wallet credit. */
+    @Test
+    void onBookingCancelledByCoach_notCaptured_neverEnqueues() {
+        listener.onBookingCancelledByCoach(coachCancelEvent(null, false, false));
+        listener.onBookingCancelledByCoach(coachCancelEvent(UUID.randomUUID(), true, false));
+
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
+    }
+
     // ========== Coach no-show events ==========
 
     @Test
@@ -190,9 +199,13 @@ class RefundEnqueueListenerTest {
     }
 
     private BookingCancelledByCoachEvent coachCancelEvent(UUID packId, boolean packExpired) {
+        return coachCancelEvent(packId, packExpired, true);
+    }
+
+    private BookingCancelledByCoachEvent coachCancelEvent(UUID packId, boolean packExpired, boolean captured) {
         return new BookingCancelledByCoachEvent(
             this, BOOKING_ID, PARENT_ID, COACH_ID,
-            "MUTUAL_AGREEMENT", packId, SESSION_PRICE, packExpired,
+            "MUTUAL_AGREEMENT", packId, SESSION_PRICE, packExpired, captured,
             "parent@test.com", Instant.now(), "UTC"
         );
     }
@@ -208,7 +221,7 @@ class RefundEnqueueListenerTest {
     private BookingCancelledByAdminEvent adminCancelEvent(UUID packId, boolean captured, boolean packExpired) {
         return new BookingCancelledByAdminEvent(
             this, BOOKING_ID, PARENT_ID, COACH_ID, packId, SESSION_PRICE, captured, packExpired,
-            "parent@test.com", "Coach", Instant.now(), "UTC"
+            "parent@test.com", "coach@test.com", "Coach", BookingCancelledByAdminEvent.REASON_COACH_UNAVAILABLE, Instant.now(), "UTC"
         );
     }
 }

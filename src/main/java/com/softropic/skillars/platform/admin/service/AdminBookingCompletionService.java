@@ -12,6 +12,7 @@ import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
 import com.softropic.skillars.platform.booking.service.BookingCompletionService;
+import com.softropic.skillars.platform.booking.service.BookingService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -50,7 +51,9 @@ public class AdminBookingCompletionService {
         return new AdminBookingLookupDto(
             booking.getId(), booking.getStatus(), booking.getCoachId(), booking.getPlayerId(),
             booking.getParentId(), booking.getRequestedStartTime(), booking.getRequestedEndTime(),
-            booking.getUpdatedAt(), completionRecorded, pendingConfirmation && !completionRecorded);
+            booking.getUpdatedAt(), completionRecorded, pendingConfirmation && !completionRecorded,
+            BookingService.ADMIN_CANCELLABLE_STATUSES.contains(booking.getStatus()),
+            BookingService.LIVE_SESSION_STATUSES.contains(booking.getStatus()));
     }
 
     @Transactional

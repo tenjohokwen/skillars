@@ -275,6 +275,8 @@ class AdminBookingResourceIT extends AbstractIntegrationTest {
         assertThat(resp.getBody().get("coachId")).isEqualTo(coachProfileId.toString());
         assertThat(resp.getBody().get("completionRecorded")).isEqualTo(false);
         assertThat(resp.getBody().get("forceCompletable")).isEqualTo(true);
+        assertThat(resp.getBody().get("adminCancellable")).isEqualTo(false);
+        assertThat(resp.getBody().get("liveSession")).isEqualTo(false);
         // Read-only: nothing written.
         assertThat(jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM admin.admin_action_log WHERE reference_id = ?",
@@ -303,6 +305,54 @@ class AdminBookingResourceIT extends AbstractIntegrationTest {
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
                 .isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
+    // ── C6: admin single-booking cancellation ──
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void cancel_postSessionBooking_isRefusedAsNotCancellable_andAudited() {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + ADMIN_BOOKING_BASE + "/" + bookingId + "/cancel", HttpMethod.POST,
+            Map.of("note", "ticket #77"), authenticatedHeaders(adminCookies), Map.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().get("outcome")).isEqualTo("NOT_CANCELLABLE");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId))
+            .isEqualTo("COMPLETED_PENDING_CONFIRMATION");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT reason FROM admin.admin_action_log WHERE reference_id = ? AND action_type = 'BOOKING_ADMIN_CANCEL'",
+            String.class, bookingId.toString())).isEqualTo("ticket #77 [outcome: NOT_CANCELLABLE]");
+    }
+
+    @Test
+    void cancel_nonAdminCaller_returns403() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + ADMIN_BOOKING_BASE + "/" + bookingId + "/cancel", HttpMethod.POST,
+            Map.of("note", "not allowed"), authenticatedHeaders(coachCookies), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.FORBIDDEN));
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId))
+            .isEqualTo("COMPLETED_PENDING_CONFIRMATION");
+    }
+
+    @Test
+    void cancel_blankNote_returns400() {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + ADMIN_BOOKING_BASE + "/" + bookingId + "/cancel", HttpMethod.POST,
+            Map.of("note", " "), authenticatedHeaders(adminCookies), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
     // ── helpers ──

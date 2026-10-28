@@ -1646,6 +1646,7 @@ export default {
       reviewConversation: 'Unterhaltung prüfen',
       openReviewQueue: 'Bewertungen öffnen',
       openCoach: 'Trainer öffnen',
+      openBooking: 'Buchung öffnen',
       openDisputes: 'Streitfälle öffnen',
       markHandled: 'Als erledigt markieren',
       markHandledSuccess: 'Meldung als erledigt markiert.',
@@ -1912,9 +1913,9 @@ export default {
       coachStrikes: 'Zuverlässigkeitsverwarnungen (30 Tage)',
     },
     bookings: {
-      title: 'Hängende Buchungen',
+      title: 'Buchungssuche',
       subtitle:
-        'Eine Buchung nachschlagen und zwangsweise abschließen, wenn der Coach den Einheitsabschluss nie eingereicht hat',
+        'Eine Buchung nachschlagen, um eine hängende Buchung zwangsweise abzuschließen oder sie mit voller Erstattung zu stornieren',
       bookingIdLabel: 'Buchungs-ID',
       bookingIdInvalid: 'Gib eine gültige Buchungs-ID ein',
       lookupAction: 'Nachschlagen',
@@ -1953,6 +1954,32 @@ export default {
         'Die Buchung wurde in der Zwischenzeit geändert. Schlage sie erneut nach.',
       forceCompleteFailed:
         'Der zwangsweise Abschluss ist fehlgeschlagen. Bitte versuche es erneut.',
+      cancelAction: 'Buchung stornieren',
+      cancelHint:
+        'Storniert die Buchung und erstattet den Eltern alles bereits Gezahlte vollständig. Der Coach erhält keine Verwarnung.',
+      liveSessionHint:
+        'Diese Einheit läuft gerade oder ist pausiert und kann hier nicht storniert werden. Kontaktiere die Eltern direkt.',
+      cancelConfirmTitle: 'Diese Buchung stornieren?',
+      cancelConsequencesIntro: 'Die Stornierung wird:',
+      cancelConsequenceStatus: 'die Buchung auf Storniert setzen;',
+      cancelConsequenceRefund:
+        'den Eltern alles bereits Gezahlte vollständig erstatten (eine Paket-Einheit geht zurück ins Paket, eine Karten- oder Guthabenzahlung wird ihrem Skillars-Guthaben gutgeschrieben);',
+      cancelConsequenceNoStrike: 'nicht gegen den Coach zählen (keine Zuverlässigkeitsverwarnung);',
+      cancelConsequenceNotice:
+        'den Eltern per E-Mail mitteilen, dass das Skillars-Team die Einheit storniert hat, ohne einen Grund zu nennen;',
+      cancelConsequenceCoachNotice:
+        'den Coach per E-Mail informieren, dass das Skillars-Team die Einheit storniert hat, damit er nicht erscheint;',
+      cancelConsequenceAlert:
+        'die offene Sicherheitssperre-Meldung zu dieser Buchung schließen, falls es eine gibt;',
+      cancelOutcomeCancelled:
+        'Buchung storniert. Die Eltern wurden benachrichtigt; alles bereits Gezahlte wird vollständig erstattet.',
+      cancelOutcomeLiveSession: 'Nicht storniert: Die Einheit läuft gerade oder ist pausiert.',
+      cancelOutcomePaymentInProgress:
+        'Nicht storniert: Eine Kartenzahlung für diese Buchung wird gerade verarbeitet. Versuche es in einer Minute erneut.',
+      cancelOutcomeNotCancellable:
+        'Nicht storniert: Die Buchung ist bereits beendet oder storniert.',
+      cancelConflict: 'Die Buchung wurde in der Zwischenzeit geändert. Schlage sie erneut nach.',
+      cancelFailed: 'Die Stornierung ist fehlgeschlagen. Bitte versuche es erneut.',
     },
     videos: {
       title: 'Videoprüfung',
@@ -2519,10 +2546,12 @@ export default {
       BOOKING_BATCH_ACCEPTED: '{coachDisplayName} hat {acceptedCount} Ihrer Anfragen angenommen.',
       BOOKING_CANCELLED_DUE_TO_PAUSE:
         'Die Trainingseinheit am {requestedStartTime} wurde storniert, weil das Paket pausiert wurde.',
+      BOOKING_CANCELLED_BY_SKILLARS:
+        'Die Trainingseinheit am {requestedStartTime} wurde vom Skillars-Team storniert.',
       BOOKING_CANCELLED_BY_PARENT:
         'Die Trainingseinheit am {requestedStartTime} wurde von den Eltern storniert.',
       BOOKING_CANCELLED_COACH_UNAVAILABLE:
-        'Ihre Sitzung mit {coachDisplayName} am {requestedStartTime} wurde abgesagt, weil der Trainer nicht verfügbar ist. Bereits gezahlte Beträge wurden vollständig erstattet.',
+        'Ihre Sitzung mit {coachDisplayName} am {requestedStartTime} wurde abgesagt. Bereits gezahlte Beträge wurden vollständig erstattet.',
       BOOKING_CANCELLED_BY_COACH:
         'Ihr Coach hat die Trainingseinheit am {requestedStartTime} storniert.',
       COACH_NO_SHOW:
@@ -2728,7 +2757,7 @@ export default {
     adminUsers: 'Benutzer',
     groupAdminOperations: 'Betrieb',
     adminVideos: 'Videoprüfung',
-    adminBookings: 'Hängende Buchungen',
+    adminBookings: 'Buchungssuche',
     adminFinance: 'Finanzen',
     adminGdpr: 'DSGVO-Anfragen',
     adminConfig: 'Konfiguration',

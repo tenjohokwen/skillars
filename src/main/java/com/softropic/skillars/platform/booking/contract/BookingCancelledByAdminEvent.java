@@ -22,9 +22,16 @@ import java.util.UUID;
  * a coach cancellation ({@code CANCELLED_COACH}) follows.
  *
  * <p>The notice data ({@code parentEmail}, {@code coachDisplayName}, start time, timezone) never
- * carries the reason: the parent is told only that the coach is unavailable.
+ * carries the safety/suspension reason: for a suspension sweep the parent is told only that the coach
+ * is unavailable; for a single admin cancellation (C6, {@code cancelReason} {@code ADMIN_SUPPORT}) only
+ * that the Skillars team cancelled it.
  */
 public class BookingCancelledByAdminEvent extends ApplicationEvent {
+
+    /** {@code bookings.cancel_reason} of a coach suspension / child-safety-hold sweep cancellation. */
+    public static final String REASON_COACH_UNAVAILABLE = "COACH_UNAVAILABLE";
+    /** C6: {@code bookings.cancel_reason} of a single booking an admin cancelled from the admin bookings page. */
+    public static final String REASON_ADMIN_SUPPORT = "ADMIN_SUPPORT";
 
     private final UUID bookingId;
     private final Long parentId;
@@ -34,14 +41,16 @@ public class BookingCancelledByAdminEvent extends ApplicationEvent {
     private final boolean refundEligible;
     private final boolean packExpiredAtCancellation;
     private final String parentEmail;
+    private final String coachEmail;
     private final String coachDisplayName;
+    private final String cancelReason;
     private final Instant requestedStartTime;
     private final String canonicalTimezone;
 
     public BookingCancelledByAdminEvent(Object source, UUID bookingId, Long parentId, UUID coachId,
             UUID sessionPackPurchaseId, BigDecimal refundAmount, boolean refundEligible,
-            boolean packExpiredAtCancellation, String parentEmail, String coachDisplayName,
-            Instant requestedStartTime, String canonicalTimezone) {
+            boolean packExpiredAtCancellation, String parentEmail, String coachEmail, String coachDisplayName,
+            String cancelReason, Instant requestedStartTime, String canonicalTimezone) {
         super(source);
         this.bookingId = bookingId;
         this.parentId = parentId;
@@ -51,7 +60,9 @@ public class BookingCancelledByAdminEvent extends ApplicationEvent {
         this.refundEligible = refundEligible;
         this.packExpiredAtCancellation = packExpiredAtCancellation;
         this.parentEmail = parentEmail;
+        this.coachEmail = coachEmail;
         this.coachDisplayName = coachDisplayName;
+        this.cancelReason = cancelReason;
         this.requestedStartTime = requestedStartTime;
         this.canonicalTimezone = canonicalTimezone;
     }
@@ -66,7 +77,18 @@ public class BookingCancelledByAdminEvent extends ApplicationEvent {
     public boolean isRefundEligible() { return refundEligible; }
     public boolean isPackExpiredAtCancellation() { return packExpiredAtCancellation; }
     public String getParentEmail() { return parentEmail; }
+    /**
+     * C6: the coach's address, for the coach's own notice of a single admin cancellation
+     * ({@code ADMIN_SUPPORT}). Unused for a suspension sweep — the coach gets COACH_SUSPENDED instead.
+     */
+    public String getCoachEmail() { return coachEmail; }
     public String getCoachDisplayName() { return coachDisplayName; }
+    /**
+     * {@code COACH_UNAVAILABLE} (a coach suspension / safety-hold sweep) or {@code ADMIN_SUPPORT} (C6: an
+     * admin cancelled this one booking from the admin bookings page). Decides only the wording of the
+     * payer's neutral notice — never the refund.
+     */
+    public String getCancelReason() { return cancelReason; }
     public Instant getRequestedStartTime() { return requestedStartTime; }
     public String getCanonicalTimezone() { return canonicalTimezone; }
 
