@@ -26,6 +26,8 @@ import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
 import com.softropic.skillars.platform.booking.contract.PlayerNoShowEvent;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleItem;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.booking.contract.ParentScheduleResponse;
 import com.softropic.skillars.platform.booking.contract.PlayerRequestResponse;
 import com.softropic.skillars.platform.booking.contract.RescheduleRequestResponse;
@@ -146,6 +148,8 @@ public class BookingService {
     private final PessimisticLockRetryer lockRetryer;
     private final ContactDetailSanitizer contactDetailSanitizer;
     private final DevelopmentDataErasureGuard developmentDataErasureGuard;
+    // fix/booking-cancel-policy-loopholes: late-cancel grace window (cancelBookingAsParent only).
+    private final ConfigService configService;
 
     // skillars-deferred-155 AC5: the two statuses representing "this session is genuinely still
     // going to happen" — the only window in which a player/parent's session-prep request can be
@@ -1098,9 +1102,11 @@ public class BookingService {
         // Deferred-64 AC4: a parent cancellation arriving after the booking's own start time has
         // already passed is refund-eligible too — refund-only, no coach reliability strike, no
         // BookingStateMachine/event-type change. Stays entirely on the ordinary CANCEL_PARENT path.
-        boolean refundEligible = paymentWasCaptured
-            && (booking.getRequestedStartTime().isAfter(Instant.now().plus(24, ChronoUnit.HOURS))
-                || Instant.now().isAfter(booking.getRequestedStartTime()));
+        // fix/booking-cancel-policy-loopholes: narrowed by a grace window and a reschedule anchor —
+        // see isParentCancelRefundEligible.
+        boolean refundEligible = paymentWasCaptured && isParentCancelRefundEligible(
+            booking.getRequestedStartTime(), booking.getOriginalStartTime(), Instant.now(),
+            Duration.ofMinutes(configService.getBoundedLong(ConfigBounds.BOOKING_LATE_CANCEL_GRACE_MINUTES)));
         // C6: the refund is what the payer actually paid (resolveAmountPaid), not the coach's current
         // price; nothing is owed — and no price lookup can fail the cancel — before capture.
         BigDecimal sessionPrice = paymentWasCaptured ? resolveAmountPaid(booking) : BigDecimal.ZERO;
@@ -1115,6 +1121,28 @@ public class BookingService {
             sessionPrice, parentEmail, coachEmail,
             booking.getRequestedStartTime(), booking.getCanonicalTimezone()
         ));
+    }
+
+    /**
+     * fix/booking-cancel-policy-loopholes — the timing half of a captured booking's parent-cancel
+     * refund rule (the caller checks capture):
+     * <ul>
+     *   <li><b>&gt;24h notice</b>, measured from the EARLIER of the original (first confirmed) start
+     *       and the current one. Otherwise a parent inside 24h reschedules further out (coach
+     *       accepts) and then cancels &gt;24h before the new time for a full refund.</li>
+     *   <li><b>Coach never started</b>: still CONFIRMED/UPCOMING once {@code start + grace} has
+     *       passed (Deferred-64 AC4). Without the grace, start+1s qualified — the coach cannot
+     *       press Start before the start time — so every &lt;24h forfeit could be dodged by waiting
+     *       a second. Between start and start+grace it is an ordinary &lt;24h forfeit.</li>
+     * </ul>
+     */
+    static boolean isParentCancelRefundEligible(Instant currentStart, Instant originalStart, Instant now,
+                                                Duration lateCancelGrace) {
+        Instant noticeAnchor = originalStart != null && originalStart.isBefore(currentStart)
+            ? originalStart : currentStart;
+        boolean enoughNotice = noticeAnchor.isAfter(now.plus(24, ChronoUnit.HOURS));
+        boolean coachNeverStarted = now.isAfter(currentStart.plus(lateCancelGrace));
+        return enoughNotice || coachNeverStarted;
     }
 
     private static final Set<String> VALID_CANCEL_REASONS = Set.of(

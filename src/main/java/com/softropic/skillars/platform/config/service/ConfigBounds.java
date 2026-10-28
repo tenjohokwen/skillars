@@ -133,6 +133,31 @@ public final class ConfigBounds {
         new BoundedKey("booking.recap.editWindowDays", 7L, 365L, false,
             "below the stuck-completion timeout → swept sessions are born un-editable; absurd → recaps editable forever", 30L);
 
+    /**
+     * fix/booking-cancel-policy-loopholes: {@code BookingService.cancelBookingAsParent} — how long
+     * after a booking's start a still-unstarted (CONFIRMED/UPCOMING) session must sit before a
+     * parent cancel becomes refund-eligible. Before this, start+1s was enough, so any parent inside
+     * the 24h forfeit window could wait out the start time and cancel for 100% back. The floor is 5,
+     * not 0: 0 reopens exactly that loophole.
+     */
+    public static final BoundedKey BOOKING_LATE_CANCEL_GRACE_MINUTES =
+        new BoundedKey("booking.lateCancel.graceMinutes", 5L, 1440L, false,
+            "out-of-range falls back to the coded default (30); tiny → parents cancel at start for a full refund", 30L);
+
+    /**
+     * fix/booking-cancel-policy-loopholes: {@code CancellationRefundService.onBookingCancelledByCoach}
+     * — excused (self-declared) coach cancellations allowed per rolling window before an excused one
+     * also issues a {@code COACH_CANCELLATION_EXCUSED_LIMIT} strike. 0 = every excused cancel strikes.
+     */
+    public static final BoundedKey COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW =
+        new BoundedKey("coach.excusedCancellations.maxPerWindow", 0L, 100L, false,
+            "out-of-range falls back to the coded default (3); huge → excused reasons never strike", 3L);
+
+    /** fix/booking-cancel-policy-loopholes: the rolling window (days) for the key above. */
+    public static final BoundedKey COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS =
+        new BoundedKey("coach.excusedCancellations.windowDays", 1L, 3650L, false,
+            "out-of-range falls back to the coded default (90); tiny → the excused-cancel cap never bites", 90L);
+
     /** {@code ModerationSlaMonitorService} — 0/neg → everything instantly SLA-breached. */
     public static final BoundedKey MODERATION_SLA_MINUTES =
         new BoundedKey("platform.moderation_sla_minutes", 1L, 10080L, true,
@@ -475,7 +500,10 @@ public final class ConfigBounds {
         GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(),
         BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS.key(),
         DEVELOPMENT_ROSTER_MAX_PLAYERS.key(),
-        BOOKING_RECAP_EDIT_WINDOW_DAYS.key());
+        BOOKING_RECAP_EDIT_WINDOW_DAYS.key(),
+        BOOKING_LATE_CANCEL_GRACE_MINUTES.key(),
+        COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW.key(),
+        COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -515,7 +543,10 @@ public final class ConfigBounds {
             GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS,
             BOOKING_STUCK_COMPLETION_TIMEOUT_HOURS,
             DEVELOPMENT_ROSTER_MAX_PLAYERS,
-            BOOKING_RECAP_EDIT_WINDOW_DAYS));
+            BOOKING_RECAP_EDIT_WINDOW_DAYS,
+            BOOKING_LATE_CANCEL_GRACE_MINUTES,
+            COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW,
+            COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

@@ -1336,6 +1336,7 @@ export default {
       strikeReasons: {
         COACH_NO_SHOW: "Absence de l'entraîneur",
         COACH_CANCELLATION_UNEXCUSED: 'Annulation injustifiée',
+        COACH_CANCELLATION_EXCUSED_LIMIT: 'Trop d’annulations justifiées',
       },
     },
     users: {
@@ -2187,6 +2188,7 @@ export default {
     statusReduced: "Votre visibilité a été réduite en raison d'annulations ou d'absences récentes.",
     statusPendingReview: 'Votre compte est en cours de révision. Veuillez contacter le support.',
     reasonCoachCancellationUnexcused: 'Annulation non justifiée',
+    reasonCoachCancellationExcusedLimit: 'Trop d’annulations justifiées',
     reasonCoachNoShow: 'Absence',
   },
   booking: {
@@ -2362,7 +2364,7 @@ export default {
       cta: 'Annuler',
       dialogTitle: 'Annuler cette séance ?',
       dialogBody:
-        "Cela annulera la séance. Selon la proximité de l'horaire prévu, elle pourrait ne pas être éligible à un remboursement.",
+        "Une annulation plus de 24 heures avant l'heure de début initialement réservée est remboursée. Les annulations plus tardives, y compris après un report, ne sont pas remboursées, sauf si l'entraîneur n'a toujours pas démarré la séance bien après son heure de début prévue.",
       confirm: 'Annuler la séance',
       success: 'Séance annulée',
       paymentInProgress:

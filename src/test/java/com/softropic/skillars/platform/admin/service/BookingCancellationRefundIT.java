@@ -279,6 +279,75 @@ class BookingCancellationRefundIT extends AbstractIntegrationTest {
         assertThat(refundRows(inFlight)).isZero();
     }
 
+    // ── fix/booking-cancel-policy-loopholes ──
+
+    @Test
+    void parentCancelInsideTheLateCancelGrace_isAForfeit() {
+        UUID started = booking("CONFIRMED", null, Instant.now().minus(10, ChronoUnit.MINUTES).truncatedTo(ChronoUnit.SECONDS));
+        capturedPayment(started, "0.00", "40.00");
+
+        bookingService.cancelBookingAsParent(started, PARENT_ID);
+
+        assertThat(statusOf(started)).isEqualTo("CANCELLED_PARENT");
+        assertThat(refundRows(started)).as("start+10m is inside the default 30-minute grace").isZero();
+    }
+
+    @Test
+    void parentCancelAfterTheGraceWithTheSessionNeverStarted_isRefunded() {
+        UUID neverStarted = booking("UPCOMING", null, Instant.now().minus(45, ChronoUnit.MINUTES).truncatedTo(ChronoUnit.SECONDS));
+        capturedPayment(neverStarted, "0.00", "40.00");
+
+        bookingService.cancelBookingAsParent(neverStarted, PARENT_ID);
+
+        assertThat(refundRows(neverStarted)).isEqualTo(1);
+        assertThat(count("SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ?"))
+            .as("refund-only: still no coach strike on the parent-cancel path").isZero();
+    }
+
+    @Test
+    void parentCancelAfterReschedulingOutOfThe24hWindow_isAForfeit() {
+        // Confirmed for +2h, rescheduled to +5 days: >24h before the new time, 2h before the original.
+        Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        UUID rescheduled = booking("CONFIRMED", null, now.plus(5, ChronoUnit.DAYS));
+        transactionTemplate.execute(s -> jdbcTemplate.update(
+            "UPDATE booking.bookings SET original_start_time = ? WHERE id = ?",
+            Timestamp.from(now.plus(2, ChronoUnit.HOURS)), rescheduled));
+        capturedPayment(rescheduled, "0.00", "40.00");
+
+        bookingService.cancelBookingAsParent(rescheduled, PARENT_ID);
+
+        assertThat(statusOf(rescheduled)).isEqualTo("CANCELLED_PARENT");
+        assertThat(refundRows(rescheduled)).isZero();
+    }
+
+    @Test
+    void coachsFourthExcusedCancellationInTheWindow_strikes_thirdDoesNot() {
+        transactionTemplate.execute(s -> {
+            for (String reason : List.of("WEATHER", "MUTUAL_AGREEMENT")) {
+                jdbcTemplate.update("INSERT INTO payment.coach_cancellation_history (id, coach_id, booking_id, "
+                    + "cancel_reason, created_at) VALUES (?, ?, ?, ?, now() - interval '10 days')",
+                    UUID.randomUUID(), coachId, UUID.randomUUID(), reason);
+            }
+            // Outside the 90-day window — must not count.
+            jdbcTemplate.update("INSERT INTO payment.coach_cancellation_history (id, coach_id, booking_id, "
+                + "cancel_reason, created_at) VALUES (?, ?, ?, 'HEALTH_MEDICAL', now() - interval '120 days')",
+                UUID.randomUUID(), coachId, UUID.randomUUID());
+            return null;
+        });
+
+        UUID third = booking("ACCEPTED", null, base());
+        bookingService.cancelBookingAsCoach(third, COACH_USER_ID, "FAMILY_EMERGENCY");
+        assertThat(count("SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ?"))
+            .as("3 excused in the window is within the cap").isZero();
+
+        UUID fourth = booking("ACCEPTED", null, base());
+        bookingService.cancelBookingAsCoach(fourth, COACH_USER_ID, "WEATHER");
+        Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+            assertThat(jdbcTemplate.queryForList(
+                "SELECT reason FROM marketplace.coach_reliability_strikes WHERE coach_id = ? AND booking_id = ?",
+                String.class, coachId, fourth)).containsExactly("COACH_CANCELLATION_EXCUSED_LIMIT"));
+    }
+
     // ── helpers ──
 
     private Instant base() {

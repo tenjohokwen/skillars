@@ -440,6 +440,12 @@ public class RescheduleService {
                 "Proposed start time is no longer in the future", BookingError.START_TIME_IN_PAST);
         }
 
+        // fix/booking-cancel-policy-loopholes: keep the FIRST confirmed start for the parent-cancel
+        // refund window (see Booking.originalStartTime). Shared by coach- and parent-proposed
+        // reschedules alike: the parent agreed to the new time either way, so one rule for both.
+        if (booking.getOriginalStartTime() == null) {
+            booking.setOriginalStartTime(booking.getRequestedStartTime());
+        }
         booking.setRequestedStartTime(lockedReq.getProposedStartTime());
         booking.setRequestedEndTime(lockedReq.getProposedEndTime());
         try {

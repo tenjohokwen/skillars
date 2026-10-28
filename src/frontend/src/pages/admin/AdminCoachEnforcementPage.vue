@@ -430,6 +430,10 @@ function statusLabel(status) {
 }
 
 function strikeReasonLabel(reason) {
+  // fix/booking-cancel-policy-loopholes: system-issued only, so not in the manual options above.
+  if (reason === 'COACH_CANCELLATION_EXCUSED_LIMIT') {
+    return t('admin.coaches.strikeReasons.COACH_CANCELLATION_EXCUSED_LIMIT')
+  }
   return strikeReasonOptions.value.find((o) => o.value === reason)?.label ?? reason
 }
 
