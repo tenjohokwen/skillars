@@ -44,6 +44,13 @@ public class Booking {
     @Column(name = "requested_end_time", nullable = false)
     private Instant requestedEndTime;
 
+    // fix/booking-cancel-policy-loopholes: the start time the booking was confirmed with, captured
+    // the first time a reschedule is accepted (null = never rescheduled; requestedStartTime is it).
+    // The parent-cancel 24h refund test is anchored on the earlier of this and requestedStartTime, so
+    // rescheduling a <24h booking further out cannot launder it into a full-refund cancel.
+    @Column(name = "original_start_time")
+    private Instant originalStartTime;
+
     @Column(nullable = false, length = 30)
     private String status;
 

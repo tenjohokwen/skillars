@@ -3,6 +3,8 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -12,13 +14,22 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Collection;
+import java.util.Set;
 import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class CancellationRefundMatrixTest {
@@ -27,6 +38,7 @@ class CancellationRefundMatrixTest {
     @Mock PackSessionService packSessionService;
     @Mock CoachCancellationHistoryRepository cancellationHistoryRepository;
     @Mock ReliabilityStrikeService reliabilityStrikeService;
+    @Mock ConfigService configService;
 
     @InjectMocks CancellationRefundService service;
 
@@ -91,6 +103,64 @@ class CancellationRefundMatrixTest {
         // Refund enqueue is now a BEFORE_COMMIT listener (RefundEnqueueListener); this test verifies history/strike
         verify(cancellationHistoryRepository).save(any());
         verify(reliabilityStrikeService, never()).issue(any(), any(), anyString());
+    }
+
+    // --- fix/booking-cancel-policy-loopholes: excused-cancellation cap (default 3 per 90 days) ---
+    @Test
+    void coachCancel_thirdExcusedInWindow_noStrike() {
+        stubExcusedCap(3L);
+        service.onBookingCancelledByCoach(coachEvent(null, "WEATHER", false));
+
+        verify(cancellationHistoryRepository).save(any());
+        verify(reliabilityStrikeService, never()).issue(any(), any(), anyString());
+    }
+
+    @Test
+    void coachCancel_fourthExcusedInWindow_issuesExcusedLimitStrike_afterHistorySaved() {
+        stubExcusedCap(4L);
+        service.onBookingCancelledByCoach(coachEvent(null, "HEALTH_MEDICAL", false));
+
+        var order = inOrder(cancellationHistoryRepository, reliabilityStrikeService);
+        order.verify(cancellationHistoryRepository).save(any());
+        order.verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_CANCELLATION_EXCUSED_LIMIT");
+    }
+
+    @Test
+    void coachCancel_excusedCap_countsOnlyExcusedReasonsInsideTheRollingWindow() {
+        stubExcusedCap(0L);
+        Instant before = Instant.now();
+        service.onBookingCancelledByCoach(coachEvent(null, "FAMILY_EMERGENCY", false));
+
+        verify(cancellationHistoryRepository).countByCoachIdAndCancelReasonInAndCreatedAtAfter(
+            eq(COACH_ID),
+            argThat((Collection<String> reasons) -> Set.copyOf(reasons).equals(
+                Set.of("MUTUAL_AGREEMENT", "HEALTH_MEDICAL", "FAMILY_EMERGENCY", "WEATHER"))),
+            argThat(after -> {
+                Instant expected = before.minus(90, ChronoUnit.DAYS);
+                return !after.isBefore(expected) && after.isBefore(expected.plusSeconds(5));
+            }));
+    }
+
+    @Test
+    void coachCancel_unexcused_doesNotConsultTheExcusedCap() {
+        service.onBookingCancelledByCoach(coachEvent(null, "SCHEDULING_PREFERENCE", false));
+
+        verify(cancellationHistoryRepository, never())
+            .countByCoachIdAndCancelReasonInAndCreatedAtAfter(any(), anyCollection(), any());
+        verify(reliabilityStrikeService, never()).issue(any(), any(), eq("COACH_CANCELLATION_EXCUSED_LIMIT"));
+    }
+
+    @Test
+    void excusedCapConfigDefaults() {
+        assertThat(ConfigBounds.COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW.defaultValue()).isEqualTo(3L);
+        assertThat(ConfigBounds.COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS.defaultValue()).isEqualTo(90L);
+    }
+
+    private void stubExcusedCap(long excusedInWindow) {
+        when(configService.getBoundedLong(ConfigBounds.COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW)).thenReturn(3L);
+        when(configService.getBoundedLong(ConfigBounds.COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS)).thenReturn(90L);
+        when(cancellationHistoryRepository.countByCoachIdAndCancelReasonInAndCreatedAtAfter(
+            eq(COACH_ID), anyCollection(), any())).thenReturn(excusedInWindow);
     }
 
     // --- Coach cancel unexcused (SCHEDULING_PREFERENCE), credit-based ---

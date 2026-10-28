@@ -1436,6 +1436,7 @@ export default {
       strikeReasons: {
         COACH_NO_SHOW: 'Coach no-show',
         COACH_CANCELLATION_UNEXCUSED: 'Unexcused cancellation',
+        COACH_CANCELLATION_EXCUSED_LIMIT: 'Too many excused cancellations',
       },
     },
     users: {
@@ -1945,7 +1946,7 @@ export default {
       cta: 'Cancel',
       dialogTitle: 'Cancel this session?',
       dialogBody:
-        'This will cancel the session. Depending on how close it is to the scheduled time, it may not be eligible for a refund.',
+        'Cancelling more than 24 hours before the originally booked start time is refunded. Later cancellations, including after a reschedule, are not refunded, unless the coach has still not started the session well after its scheduled start time.',
       confirm: 'Cancel session',
       success: 'Session cancelled',
       paymentInProgress:
@@ -2362,6 +2363,7 @@ export default {
     statusReduced: 'Your visibility has been reduced due to recent cancellations or no-shows.',
     statusPendingReview: 'Your account is under review. Please contact support.',
     reasonCoachCancellationUnexcused: 'Unexcused Cancellation',
+    reasonCoachCancellationExcusedLimit: 'Too Many Excused Cancellations',
     reasonCoachNoShow: 'No-Show',
   },
   subscription: {

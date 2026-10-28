@@ -615,7 +615,7 @@ export default {
       cta: 'Stornieren',
       dialogTitle: 'Diese Sitzung stornieren?',
       dialogBody:
-        'Dadurch wird die Sitzung storniert. Je nachdem, wie nah der geplante Termin ist, besteht eventuell kein Anspruch auf Rückerstattung.',
+        'Bei einer Stornierung mehr als 24 Stunden vor dem ursprünglich gebuchten Beginn wird erstattet. Spätere Stornierungen, auch nach einer Terminverschiebung, werden nicht erstattet, es sei denn, der Trainer hat die Sitzung auch deutlich nach dem geplanten Beginn noch nicht gestartet.',
       confirm: 'Sitzung stornieren',
       success: 'Sitzung storniert',
       paymentInProgress:
@@ -1777,6 +1777,7 @@ export default {
       strikeReasons: {
         COACH_NO_SHOW: 'Trainer nicht erschienen',
         COACH_CANCELLATION_UNEXCUSED: 'Unentschuldigte Absage',
+        COACH_CANCELLATION_EXCUSED_LIMIT: 'Zu viele entschuldigte Absagen',
       },
     },
     users: {
@@ -2208,6 +2209,7 @@ export default {
     statusReduced: 'Ihre Sichtbarkeit wurde aufgrund von Stornierungen reduziert.',
     statusPendingReview: 'Ihr Konto wird überprüft. Bitte wenden Sie sich an den Support.',
     reasonCoachCancellationUnexcused: 'Unentschuldigte Stornierung',
+    reasonCoachCancellationExcusedLimit: 'Zu viele entschuldigte Stornierungen',
     reasonCoachNoShow: 'Nichterscheinen',
   },
   subscription: {

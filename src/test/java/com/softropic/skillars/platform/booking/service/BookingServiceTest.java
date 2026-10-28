@@ -113,6 +113,8 @@ class BookingServiceTest {
     @Mock private com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer contactDetailSanitizer;
     // B2: createBookingRequest re-checks the erasure tombstone under the player row lock.
     @Mock private com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard developmentDataErasureGuard;
+    // fix/booking-cancel-policy-loopholes: late-cancel grace window.
+    @Mock private com.softropic.skillars.platform.config.service.ConfigService configService;
 
     @Spy
     private BookingStateMachine bookingStateMachine = new BookingStateMachine();
@@ -138,6 +140,9 @@ class BookingServiceTest {
         lenient().when(contactDetailSanitizer.sanitize(anyString())).thenAnswer(
             inv -> new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer.SanitizerResult(
                 inv.getArgument(0), false));
+        lenient().when(configService.getBoundedLong(
+                com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_LATE_CANCEL_GRACE_MINUTES))
+            .thenReturn(30L);
     }
 
     // ---- createBookingRequest tests ----
@@ -1678,6 +1683,81 @@ class BookingServiceTest {
 
         assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
         assertThat(capturedParentCancellation().isRefundEligible()).isFalse();
+    }
+
+    // ---- fix/booking-cancel-policy-loopholes: grace window + reschedule anchor ----
+
+    @Test
+    void cancelBookingAsParent_29MinutesAfterStart_isAnOrdinaryForfeit() {
+        Instant now = Instant.now();
+        assertThat(cancelConfirmedAsParent(now.minus(29, java.time.temporal.ChronoUnit.MINUTES), null))
+            .as("inside the 30-minute grace the coach may still start; cancelling now is a <24h forfeit")
+            .isFalse();
+    }
+
+    @Test
+    void cancelBookingAsParent_31MinutesAfterStartStillUnstarted_isRefundEligible() {
+        Instant now = Instant.now();
+        assertThat(cancelConfirmedAsParent(now.minus(31, java.time.temporal.ChronoUnit.MINUTES), null)).isTrue();
+    }
+
+    @Test
+    void cancelBookingAsParent_rescheduledOutOfThe24hWindow_staysForfeitedFromTheOriginalStart() {
+        // Confirmed for +2h, rescheduled (coach accepted) to +5 days, cancelled now: >24h before the
+        // new time, but only 2h before the original — no refund.
+        Instant now = Instant.now();
+        assertThat(cancelConfirmedAsParent(now.plus(5, java.time.temporal.ChronoUnit.DAYS),
+            now.plus(2, java.time.temporal.ChronoUnit.HOURS))).isFalse();
+    }
+
+    @Test
+    void cancelBookingAsParent_rescheduledWithAmpleNoticeOnBothTimes_staysRefundEligible() {
+        Instant now = Instant.now();
+        assertThat(cancelConfirmedAsParent(now.plus(5, java.time.temporal.ChronoUnit.DAYS),
+            now.plus(3, java.time.temporal.ChronoUnit.DAYS))).isTrue();
+    }
+
+    @Test
+    void parentCancelRefundRule_boundaries() {
+        Instant now = Instant.parse("2026-10-28T12:00:00Z");
+        Duration grace = Duration.ofMinutes(30);
+        java.time.temporal.ChronoUnit min = java.time.temporal.ChronoUnit.MINUTES;
+        java.time.temporal.ChronoUnit hrs = java.time.temporal.ChronoUnit.HOURS;
+        // Grace window: exactly start+grace is still a forfeit; strictly after it is a refund.
+        assertThat(BookingService.isParentCancelRefundEligible(now.minus(30, min), null, now, grace)).isFalse();
+        assertThat(BookingService.isParentCancelRefundEligible(now.minus(31, min), null, now, grace)).isTrue();
+        assertThat(BookingService.isParentCancelRefundEligible(now.minusSeconds(1), null, now, grace)).isFalse();
+        // 24h notice: strictly more than 24h.
+        assertThat(BookingService.isParentCancelRefundEligible(now.plus(24, hrs), null, now, grace)).isFalse();
+        assertThat(BookingService.isParentCancelRefundEligible(now.plus(25, hrs), null, now, grace)).isTrue();
+        // Anchor = earlier of original and current: an earlier-rescheduled booking uses the new time.
+        assertThat(BookingService.isParentCancelRefundEligible(now.plus(2, hrs), now.plus(48, hrs), now, grace))
+            .isFalse();
+        assertThat(BookingService.isParentCancelRefundEligible(now.plus(48, hrs), now.plus(2, hrs), now, grace))
+            .isFalse();
+        // A rescheduled booking whose CURRENT time is long past and never started is still refundable.
+        assertThat(BookingService.isParentCancelRefundEligible(now.minus(2, hrs), now.minus(50, hrs), now, grace))
+            .isTrue();
+    }
+
+    private boolean cancelConfirmedAsParent(Instant start, Instant originalStart) {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        booking.setRequestedStartTime(start);
+        booking.setRequestedEndTime(start.plus(1, java.time.temporal.ChronoUnit.HOURS));
+        booking.setOriginalStartTime(originalStart);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
+        return capturedParentCancellation().isRefundEligible();
     }
 
     private BookingCancelledByParentEvent capturedParentCancellation() {

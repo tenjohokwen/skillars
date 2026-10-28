@@ -5,6 +5,8 @@ import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachE
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
 import com.softropic.skillars.platform.booking.contract.PlayerNoShowEvent;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistory;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
 import lombok.RequiredArgsConstructor;
@@ -16,6 +18,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Set;
 import java.util.UUID;
 
@@ -30,6 +34,7 @@ public class CancellationRefundService {
     private final PackSessionService packSessionService;
     private final CoachCancellationHistoryRepository cancellationHistoryRepository;
     private final ReliabilityStrikeService reliabilityStrikeService;
+    private final ConfigService configService;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -60,9 +65,25 @@ public class CancellationRefundService {
 
         if (!EXCUSED_REASONS.contains(reason)) {
             issueStrikeSafely(event.getCoachId(), event.getBookingId(), "COACH_CANCELLATION_UNEXCUSED");
+        } else if (exceedsExcusedCancellationCap(event.getCoachId())) {
+            issueStrikeSafely(event.getCoachId(), event.getBookingId(), "COACH_CANCELLATION_EXCUSED_LIMIT");
         }
 
         log.info("Coach cancellation processed: bookingId={} reason={}", event.getBookingId(), reason);
+    }
+
+    /**
+     * fix/booking-cancel-policy-loopholes: excused reasons are self-declared, so without a cap a coach
+     * could avoid strikes forever by always picking one. More than {@code maxPerWindow} excused
+     * cancellations in the rolling window — counting the one just saved above (same transaction; the
+     * derived count query auto-flushes it) — and this one strikes too. Admins can dismiss it.
+     */
+    private boolean exceedsExcusedCancellationCap(UUID coachId) {
+        long maxPerWindow = configService.getBoundedLong(ConfigBounds.COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW);
+        long windowDays = configService.getBoundedLong(ConfigBounds.COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS);
+        long excusedInWindow = cancellationHistoryRepository.countByCoachIdAndCancelReasonInAndCreatedAtAfter(
+            coachId, EXCUSED_REASONS, Instant.now().minus(windowDays, ChronoUnit.DAYS));
+        return excusedInWindow > maxPerWindow;
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)

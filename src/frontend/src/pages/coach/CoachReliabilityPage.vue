@@ -121,6 +121,7 @@ async function handleAcknowledge(strikeId) {
 function formatReason(reason) {
   const map = {
     COACH_CANCELLATION_UNEXCUSED: t('reliability.reasonCoachCancellationUnexcused'),
+    COACH_CANCELLATION_EXCUSED_LIMIT: t('reliability.reasonCoachCancellationExcusedLimit'),
     COACH_NO_SHOW: t('reliability.reasonCoachNoShow'),
   }
   return map[reason] ?? reason
