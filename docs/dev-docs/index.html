@@ -175,7 +175,7 @@ flowchart LR
         <tr><td><a href="config/index.html">config</a></td><td>DB-backed <code>platform_config</code> store with a per-node cache, an admin list/edit API with range validation (<code>ConfigBounds</code>), and a fail-fast startup check.</td></tr>
         <tr><td><a href="monitoring/index.html">monitoring</a></td><td><em>Cross-cutting.</em> No code package any more (its only class, a vestigial TLS startup assertion, was removed); the logging, access-log, actuator/metrics/tracing and LGTM story.</td></tr>
         <tr><td><a href="infrastructure/index.html">infrastructure</a></td><td><em>Cross-cutting.</em> Blob storage, email transport port, provider clients, routing DataSource with isolated pools, NOWAIT lock retry, executor shutdown budgets, rate limiting, frontend link builder, exceptions/validation.</td></tr>
-        <tr><td><a href="scheduled-jobs/index.html">scheduled jobs</a></td><td><em>Cross-cutting.</em> All 41 <code>@Scheduled</code> methods (32 ShedLock-guarded) — what each recovers, schedule/config keys, multi-instance rules.</td></tr>
+        <tr><td><a href="scheduled-jobs/index.html">scheduled jobs</a></td><td><em>Cross-cutting.</em> All 43 <code>@Scheduled</code> methods (33 ShedLock-guarded) — what each recovers, schedule/config keys, multi-instance rules.</td></tr>
         <tr><td><a href="database/index.html">database</a></td><td><em>Cross-cutting.</em> Postgres schemas, Flyway from the V138 squashed baseline to V175, migration lint rules, locking conventions, test-database behaviour.</td></tr>
         <tr><td><a href="frontend/index.html">frontend</a></td><td><em>Cross-cutting.</em> The Vue 3 + Quasar hash-routed SPA serving all four personas: router and role guards, Pinia stores, axios/session layer, SSE, i18n, design system, Vitest.</td></tr>
       </tbody>
@@ -220,13 +220,13 @@ flowchart LR
       <p><strong>Migrations were rebaselined.</strong> V02–V137 were squashed into <code>V138</code> (schema) and <code>V139</code> (seed data); new migrations continue from there (currently up to V175). Old migration numbers cited in commits or comments exist only in git history. See <a href="database/index.html">Database</a>.</p>
     </div>
     <div class="callout">
-      <p><strong>Background work is centrally catalogued.</strong> 41 <code>@Scheduled</code> methods run across 12 platform modules plus infrastructure; 32 are ShedLock-guarded and the other 9 are safe per instance by design (per-node state or <code>SKIP LOCKED</code> claims). Start at <a href="scheduled-jobs/index.html">Scheduled Jobs</a>.</p>
+      <p><strong>Background work is centrally catalogued.</strong> 43 <code>@Scheduled</code> methods run across 12 platform modules plus infrastructure; 33 are ShedLock-guarded and the other 9 are safe per instance by design (per-node state or <code>SKIP LOCKED</code> claims). Start at <a href="scheduled-jobs/index.html">Scheduled Jobs</a>.</p>
     </div>
     <div class="callout">
       <p><strong>Email links are hash-routed.</strong> The frontend uses hash-mode routing, so backend links into the app must be built with <code>FrontendLinkBuilder</code> (<code>&lt;frontendUrl&gt;/#/...</code>), never by string concatenation.</p>
     </div>
 
-    <footer class="page-footer">Skillars developer documentation. Last verified against master <code>fa9928ce</code> (2026-10-28).</footer>
+    <footer class="page-footer">Skillars developer documentation. Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="assets/mermaid.min.js"></script>

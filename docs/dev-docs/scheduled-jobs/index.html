@@ -62,9 +62,9 @@
       actions expire on a timer; a booking stranded mid-payment is swept back out; a coach who abandons the
       wrap-up wizard has the session force-completed; a message or review whose moderation verdict never landed is
       escalated to a human; packs forfeit at expiry; outboxes drain; failed GDPR erasures are retried; local
-      subscriptions are reconciled against Stripe. There are <strong>42 <code>@Scheduled</code> methods in
+      subscriptions are reconciled against Stripe. There are <strong>43 <code>@Scheduled</code> methods in
       41 classes across 12 platform modules plus <code>infrastructure</code></strong>, and
-      <strong>32 of them are ShedLock-guarded</strong>. Several are the <em>only</em> thing standing between a
+      <strong>33 of them are ShedLock-guarded</strong>. Several are the <em>only</em> thing standing between a
       crashed transaction and a permanently stuck row, so knowing they exist is a prerequisite for debugging
       "why is this record stuck".
     </p>
@@ -93,7 +93,7 @@
       long-lived Spring contexts: a job with a 5-minute delay never fires in a context that lives 90 seconds,
       and that accidental protection disappeared. Worse, the per-test reset backdates every ShedLock row,
       making every guarded job eligible on every test method.</p>
-      <p>Overriding each job's delay in test config <em>cannot</em> substitute for the switch: 23 of the 42
+      <p>Overriding each job's delay in test config <em>cannot</em> substitute for the switch: 24 of the 43
       <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder. Meanwhile
       <code>@EnableSchedulerLock</code> stays unconditional because tests invoke scheduled methods directly
       through the Spring proxy, so the lock advisor must still apply — that is the behaviour
@@ -203,7 +203,7 @@
       <thead><tr><th>Module</th><th><code>@Scheduled</code></th><th>🔒</th></tr></thead>
       <tbody>
         <tr><td>video</td><td>10</td><td>6</td></tr>
-        <tr><td>payment</td><td>7</td><td>7</td></tr>
+        <tr><td>payment</td><td>8</td><td>8</td></tr>
         <tr><td>booking</td><td>4</td><td>4</td></tr>
         <tr><td>notification</td><td>4</td><td>2</td></tr>
         <tr><td>security</td><td>3</td><td>3</td></tr>
@@ -215,14 +215,14 @@
         <tr><td>outbox</td><td>1</td><td>1</td></tr>
         <tr><td>config</td><td>1</td><td>0</td></tr>
         <tr><td><code>infrastructure</code></td><td>2</td><td>0</td></tr>
-        <tr><td><strong>Total</strong></td><td><strong>42</strong></td><td><strong>32</strong></td></tr>
+        <tr><td><strong>Total</strong></td><td><strong>43</strong></td><td><strong>33</strong></td></tr>
       </tbody>
     </table>
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
 
     <div class="callout warn">
-      <p><strong>10 of the 42 jobs are unguarded, and each has a reason.</strong> Six are per-instance by
+      <p><strong>10 of the 43 jobs are unguarded, and each has a reason.</strong> Six are per-instance by
       design (<code>ConfigService</code>, <code>AlertRuleCache</code>, <code>AlertEvaluationService</code>,
       <code>MessagingEmitterRegistry</code>, <code>RateLimitingService</code>, <code>InstanceHeartbeatMonitor</code>) — they
       touch only in-memory state, this instance's metrics/connections, or (the heartbeat) this instance's own row. The other four (<code>UploadSessionExpiryScheduler</code>,
@@ -315,7 +315,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>fa9928ce</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

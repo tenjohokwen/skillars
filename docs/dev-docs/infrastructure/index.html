@@ -514,7 +514,7 @@ sequenceDiagram
       <code>false</code>. This exists because consolidating the integration suite onto a few long-lived Spring
       contexts removed the accidental protection short-lived contexts used to give (a job with a 5-minute delay never
       fires in a context that lives 90 seconds). Overriding each job's delay in test config <em>cannot</em> substitute:
-      23 of the 41 <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder.
+      24 of the 43 <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder.
       <code>@EnableSchedulerLock</code> deliberately stays on <code>AsyncConfig</code> and is <em>not</em> gated —
       tests invoke scheduled methods directly through the Spring proxy, so the lock advisor must still apply.
       See <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>.</p>
@@ -556,7 +556,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>fa9928ce</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
