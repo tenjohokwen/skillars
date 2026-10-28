@@ -55,6 +55,7 @@ import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import org.apache.commons.lang3.StringUtils;
@@ -115,7 +116,8 @@ public class BookingService {
         Map.entry(BookingEvent.SETTLE_REFUND,    EnumSet.of(ActorRole.SYSTEM)),
         Map.entry(BookingEvent.SETTLE_COMPLETE,      EnumSet.of(ActorRole.SYSTEM)),
         Map.entry(BookingEvent.REFUND_PROCESSED,     EnumSet.of(ActorRole.SYSTEM)),
-        Map.entry(BookingEvent.CANCEL_DUE_TO_PAUSE,  EnumSet.of(ActorRole.SYSTEM))
+        Map.entry(BookingEvent.CANCEL_DUE_TO_PAUSE,  EnumSet.of(ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.CANCEL_ADMIN,         EnumSet.of(ActorRole.ADMIN))
     );
 
     private final BookingRepository bookingRepository;
@@ -141,6 +143,7 @@ public class BookingService {
     private final EntityManager entityManager;
     private final PessimisticLockRetryer lockRetryer;
     private final ContactDetailSanitizer contactDetailSanitizer;
+    private final DevelopmentDataErasureGuard developmentDataErasureGuard;
 
     // skillars-deferred-155 AC5: the two statuses representing "this session is genuinely still
     // going to happen" — the only window in which a player/parent's session-prep request can be
@@ -178,10 +181,7 @@ public class BookingService {
         // every call site) — this lock is a UX improvement, trading fail-fast-and-retry for
         // blocking, not a correctness fix. Re-acquiring the same row lock across
         // acceptAndInitiatePayment's two same-transaction calls is a no-op, not a deadlock risk.
-        Booking booking = lockRetryer.withBoundedRetry("BookingService.transitionInternal",
-            () -> bookingRepository.findByIdForUpdate(bookingId)
-                .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking")));
-        entityManager.refresh(booking, LockModeType.PESSIMISTIC_WRITE);
+        Booking booking = lockBookingForUpdate(bookingId);
         BookingStatus currentStatus = readStatusOrThrow(booking);
         bookingStateMachine.validate(currentStatus, event);
         BookingStatus newStatus = bookingStateMachine.targetStatus(currentStatus, event);
@@ -191,6 +191,50 @@ public class BookingService {
         if (publishEvent) {
             eventPublisher.publishEvent(new BookingStatusChangedEvent(this, bookingId, newStatus.name()));
         }
+    }
+
+    /**
+     * Locked, refreshed read of one booking row. The refresh matters when the row is already managed
+     * in this persistence context: the JPQL locked read would otherwise hand back the stale instance.
+     */
+    private Booking lockBookingForUpdate(UUID bookingId) {
+        Booking booking = lockRetryer.withBoundedRetry("BookingService.lockBookingForUpdate",
+            () -> bookingRepository.findByIdForUpdate(bookingId)
+                .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking")));
+        entityManager.refresh(booking, LockModeType.PESSIMISTIC_WRITE);
+        return booking;
+    }
+
+    /**
+     * B2: admin-side cancellation of a still-{@code REQUESTED} booking (coach suspension). Goes
+     * through the state machine ({@code CANCEL_ADMIN}: REQUESTED to CANCELLED, ADMIN actor) so a
+     * {@link BookingStatusChangedEvent} is published — batch roll-up, SSE and the session-plan
+     * listeners all key off it. {@code AdminCoachEnforcementService.suspendCoach} used to write
+     * {@code CANCELLED} straight onto the entity and none of them ever heard about it.
+     *
+     * <p>The status is re-read under the booking row lock. A booking that already left
+     * {@code REQUESTED} (a concurrent decline or expiry) is skipped and {@code false} returned rather
+     * than thrown: this method joins the caller's transaction, so a throw would mark the whole
+     * suspension rollback-only.
+     *
+     * @return {@code true} if the booking was cancelled by this call
+     */
+    @Transactional
+    public boolean cancelRequestedBookingAsAdmin(UUID bookingId, Long adminId, String cancelReason) {
+        TransitionContext ctx = new TransitionContext(ActorRole.ADMIN, adminId);
+        validateActorAuthorization(BookingEvent.CANCEL_ADMIN, ctx);
+        Booking booking = lockBookingForUpdate(bookingId);
+        if (!BookingStatus.REQUESTED.name().equals(booking.getStatus())) {
+            log.info("Booking {} is no longer REQUESTED (status={}) -- not cancelled by admin",
+                bookingId, booking.getStatus());
+            return false;
+        }
+        transitionInternal(bookingId, BookingEvent.CANCEL_ADMIN, ctx, true);
+        // After the transition, never before: transitionInternal refreshes this same managed instance,
+        // which would discard an unflushed cancelReason.
+        booking.setCancelReason(cancelReason);
+        bookingRepository.save(booking);
+        return true;
     }
 
     @Transactional
@@ -206,22 +250,16 @@ public class BookingService {
                 throw new OperationNotAllowedException("Player does not own this profile", Map.of("submitted caller id", parentId), SecurityError.MISSING_RIGHTS);
             }
         }
+        // B2: unlocked fast-fail only — the authoritative re-check runs under the player row lock
+        // below (requirePlayerBookableUnderLock).
+        requireNotErased(player);
 
         CoachProfile coach = coachProfileRepository.findById(req.coachId())
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
         final Map<String, Object> metaData = Map.of("submitted coach id", req.coachId());
-        if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {
-            throw new OperationNotAllowedException("Coach is suspended", metaData, BookingError.COACH_UNAVAILABLE);
-        }
-        if (coach.getStatus() != CoachProfileStatus.ACTIVE
-                && coach.getStatus() != CoachProfileStatus.REDUCED
-                && coach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
-            throw new OperationNotAllowedException("Coach profile is not active", metaData, BookingError.COACH_UNAVAILABLE);
-        }
+        requireBookableCoachStatus(coach, metaData);
 
-        if (!paymentGateway.isCoachPaymentReady(coach.getId())) {
-            throw new PaymentGatewayException("payment.coachStripeNotConfigured");
-        }
+        requireCoachPaymentReady(coach.getId());
 
         if (!req.requestedStartTime().isAfter(Instant.now())) {
             throw new OperationNotAllowedException("Requested start time must be in the future",
@@ -270,14 +308,8 @@ public class BookingService {
             entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);
             return c;
         });
-        if (lockedCoach.getStatus() == CoachProfileStatus.SUSPENDED) {
-            throw new OperationNotAllowedException("Coach is suspended", metaData, BookingError.COACH_UNAVAILABLE);
-        }
-        if (lockedCoach.getStatus() != CoachProfileStatus.ACTIVE
-                && lockedCoach.getStatus() != CoachProfileStatus.REDUCED
-                && lockedCoach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
-            throw new OperationNotAllowedException("Coach profile is not active", metaData, BookingError.COACH_UNAVAILABLE);
-        }
+        requireBookableCoachStatus(lockedCoach, metaData);
+        requirePlayerBookableUnderLock(req.playerId(), "BookingService.createBookingRequest");
 
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(req.coachId());
         if (req.availabilitySignature() != null) {
@@ -302,15 +334,7 @@ public class BookingService {
                 BookingError.SLOT_BLOCKED_BY_COACH);
         }
 
-        List<Booking> overlapping = bookingRepository.findOverlappingBookings(
-            req.coachId(), req.requestedStartTime(), req.requestedEndTime(), ACTIVE_SLOT_STATUSES, null);
-        if (!overlapping.isEmpty()) {
-            throw new OperationNotAllowedException(
-                "Requested slot overlaps an existing booking for this coach",
-                Map.of("submitted coach id", req.coachId(), "requested start time", req.requestedStartTime(),
-                    "requested end time", req.requestedEndTime()),
-                BookingError.SLOT_UNAVAILABLE);
-        }
+        requireNoOverlappingBooking(req.coachId(), req.requestedStartTime(), req.requestedEndTime());
 
         // Validate session pack purchase if provided (AC 8)
         if (req.sessionPackPurchaseId() != null) {
@@ -366,6 +390,76 @@ public class BookingService {
         ));
 
         return toResponse(booking, coach.getDisplayName(), player.getName(), null, null, null, null);
+    }
+
+    /**
+     * Coach-status gate shared by single and batch creation (B2: the batch path used to accept
+     * {@code ACTIVE} only, while this path also admits {@code REDUCED}/{@code PENDING_REVIEW}).
+     * Called on both the unlocked read and the locked re-read.
+     */
+    static void requireBookableCoachStatus(CoachProfile coach, Map<String, Object> metaData) {
+        if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {
+            throw new OperationNotAllowedException("Coach is suspended", metaData, BookingError.COACH_UNAVAILABLE);
+        }
+        if (coach.getStatus() != CoachProfileStatus.ACTIVE
+                && coach.getStatus() != CoachProfileStatus.REDUCED
+                && coach.getStatus() != CoachProfileStatus.PENDING_REVIEW) {
+            throw new OperationNotAllowedException("Coach profile is not active", metaData, BookingError.COACH_UNAVAILABLE);
+        }
+    }
+
+    /** Stripe-readiness gate shared by single and batch creation (B2). */
+    void requireCoachPaymentReady(UUID coachId) {
+        if (!paymentGateway.isCoachPaymentReady(coachId)) {
+            throw new PaymentGatewayException("payment.coachStripeNotConfigured");
+        }
+    }
+
+    /**
+     * Request-time overlap check against every active booking of the coach, REQUESTED included —
+     * shared by single and batch creation (B2). Must run under the coach row lock: that is what
+     * serialises two concurrent creates for the same slot (REQUESTED rows are outside the V87
+     * exclusion constraint, so nothing else would).
+     */
+    void requireNoOverlappingBooking(UUID coachId, Instant start, Instant end) {
+        List<Booking> overlapping = bookingRepository.findOverlappingBookings(
+            coachId, start, end, ACTIVE_SLOT_STATUSES, null);
+        if (!overlapping.isEmpty()) {
+            throw new OperationNotAllowedException(
+                "Requested slot overlaps an existing booking for this coach",
+                Map.of("submitted coach id", coachId, "requested start time", start, "requested end time", end),
+                BookingError.SLOT_UNAVAILABLE);
+        }
+    }
+
+    /** Unlocked fast-fail on the erasure tombstone; {@link #requirePlayerBookableUnderLock} is authoritative. */
+    static void requireNotErased(PlayerProfile player) {
+        if (player.getDevelopmentDataErasedAt() != null) {
+            throw new OperationNotAllowedException("Player can no longer be booked",
+                Map.of("player id", String.valueOf(player.getId())), BookingError.PLAYER_NOT_BOOKABLE);
+        }
+    }
+
+    /**
+     * B2: no booking may be created for a player whose data has been erased or whose child-erasure
+     * request is in flight. Takes the {@code player_profiles} row lock (via
+     * {@link DevelopmentDataErasureGuard}) and must run inside the creating transaction, so the lock is
+     * held until the booking row commits. Both sides of the race take that same lock:
+     * <ul>
+     *   <li>{@code GdprRequestService.requestChildErasure} locks it before its live-booking check and
+     *       the request insert, so either this transaction sees the request row, or the erasure request
+     *       sees this booking and is refused with {@code gdpr.activeBookingsExist};</li>
+     *   <li>{@code GdprErasureService} locks it before stamping {@code developmentDataErasedAt}.</li>
+     * </ul>
+     * Lock order on the create paths is coach row, then player row; the erasure side never takes the
+     * coach row, so no cycle.
+     */
+    void requirePlayerBookableUnderLock(Long playerId, String caller) {
+        if (developmentDataErasureGuard.isErasedUnderLock(playerId, caller)
+                || bookingRepository.existsInFlightChildErasureRequest(playerId)) {
+            throw new OperationNotAllowedException("Player can no longer be booked",
+                Map.of("player id", String.valueOf(playerId)), BookingError.PLAYER_NOT_BOOKABLE);
+        }
     }
 
     @Transactional

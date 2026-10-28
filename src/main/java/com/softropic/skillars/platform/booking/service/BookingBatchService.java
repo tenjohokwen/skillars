@@ -25,6 +25,8 @@ import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
+import com.softropic.skillars.platform.marketplace.repo.CoachPricing;
+import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
@@ -74,6 +76,7 @@ public class BookingBatchService {
     private final PlatformTransactionManager transactionManager;
     private final PessimisticLockRetryer lockRetryer;
     private final EntityManager entityManager;
+    private final CoachPricingRepository coachPricingRepository;
 
     /**
      * REQUIRES_NEW per booking, mirroring {@code PaymentLifecycleService.perBookingTx}. A failure in
@@ -125,12 +128,18 @@ public class BookingBatchService {
                 throw new OperationNotAllowedException("Player does not own this profile", SecurityError.MISSING_RIGHTS);
             }
         }
+        // B2: the batch path never checked the erasure tombstone (unlocked fast-fail here; the
+        // authoritative check runs under the player row lock below, as on the single path).
+        BookingService.requireNotErased(player);
 
         CoachProfile coach = coachProfileRepository.findById(req.coachId())
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
-        if (coach.getStatus() != CoachProfileStatus.ACTIVE) {
-            throw new OperationNotAllowedException("Coach profile is not active", BookingError.COACH_UNAVAILABLE);
-        }
+        // B2: same status gate and Stripe-readiness gate as BookingService.createBookingRequest. This
+        // path used to admit ACTIVE coaches only and never checked Stripe readiness, so a batch could be
+        // requested from a coach the single path refuses, and could never be paid for once accepted.
+        final Map<String, Object> coachMeta = Map.of("submitted coach id", req.coachId());
+        BookingService.requireBookableCoachStatus(coach, coachMeta);
+        bookingService.requireCoachPaymentReady(coach.getId());
 
         // UAT.2 AC4: both resolved ONCE for the whole batch, not per slot — @Size(max = 10) on
         // CreateBatchRequest would otherwise multiply a per-slot lookup by ten.
@@ -206,9 +215,8 @@ public class BookingBatchService {
             entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);
             return c;
         });
-        if (lockedCoach.getStatus() != CoachProfileStatus.ACTIVE) {
-            throw new OperationNotAllowedException("Coach profile is not active", BookingError.COACH_UNAVAILABLE);
-        }
+        BookingService.requireBookableCoachStatus(lockedCoach, coachMeta);
+        bookingService.requirePlayerBookableUnderLock(req.playerId(), "BookingBatchService.createBatch");
 
         // skillars-deferred-69 AC7: narrows (does not eliminate) the read-then-write staleness
         // window between the initial resolve above and this persist point — a coach edit landing in
@@ -222,13 +230,25 @@ public class BookingBatchService {
         for (BatchSlot slot : req.slots()) {
             validateSlotDurationAndAvailability(slot, freshRequiredDuration, freshWindows, req.coachId(),
                 lockedCoach.getCanonicalTimezone());
+            // B2: the batch path never ran the request-time overlap check the single path runs, so a
+            // batch could be requested on top of the coach's existing bookings (REQUESTED rows are
+            // outside the V87 exclusion constraint). Under the coach lock, like the single path.
+            bookingService.requireNoOverlappingBooking(req.coachId(), slot.requestedStartTime(),
+                slot.requestedEndTime());
         }
 
         BookingBatch batch = new BookingBatch();
         batch.setParentId(parentId);
         batch.setCoachId(req.coachId());
         batch.setRequestedCount(req.slots().size());
-        batch.setTotalAmount(req.totalAmount() != null ? req.totalAmount() : BigDecimal.ZERO);
+        // B2: computed server-side; the client-supplied req.totalAmount() is ignored. Same formula
+        // PaymentLifecycleService.onBatchBookingAccepted settles with and BatchPaymentQuoteService
+        // previews: coach_pricing.per_session_price (zero when the coach has no pricing row) times
+        // the number of sessions. Batch bookings never carry a session pack, so no pack pricing.
+        batch.setTotalAmount(coachPricingRepository.findByCoachId(req.coachId())
+            .map(CoachPricing::getPerSessionPrice)
+            .orElse(BigDecimal.ZERO)
+            .multiply(BigDecimal.valueOf(req.slots().size())));
         batchRepository.save(batch);
 
         String canonicalTimezone = coach.getCanonicalTimezone();

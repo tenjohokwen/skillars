@@ -161,6 +161,11 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // is a single author genuinely exceeding 50 distinct, currently-owned children with the same
     // coach. See ReviewSubmissionService.evaluateEligibility's own QUALIFYING_BOOKINGS_CAP log
     // line and its own comment block for the matching update there.
+    //
+    // fix/booking-integrity (B2): maturity is measured from when the booking became COMPLETED
+    // (statusChangedAt, V178), not updatedAt -- any later write (a recap edit, GDPR note
+    // anonymisation) bumped updatedAt and reset maturity. COALESCE keeps pre-V178 rows on updatedAt;
+    // same rule as Booking.getStatusAnchor.
     @Query("""
         SELECT DISTINCT b.playerId AS playerId
         FROM Booking b
@@ -168,8 +173,8 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         WHERE b.coachId = :coachId
           AND (pp.userId = :authorId OR pp.parentId = :authorId)
           AND b.status = 'COMPLETED'
-          AND b.updatedAt <= :maturedBefore
-          AND b.updatedAt > :sinceAfter
+          AND COALESCE(b.statusChangedAt, b.updatedAt) <= :maturedBefore
+          AND COALESCE(b.statusChangedAt, b.updatedAt) > :sinceAfter
         ORDER BY b.playerId
         limit 50
         """)
@@ -225,6 +230,21 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
 
     // Parent-requested child erasure (V172): refused while the child still has a live booking.
     boolean existsByPlayerIdAndStatusIn(Long playerId, List<String> statuses);
+
+    // fix/booking-integrity (B2): the booking-side half of the child-erasure race. A child with a
+    // child-scoped ERASURE request that is still in flight must not be booked: PENDING/PROCESSING
+    // are about to erase it, and FAILED is re-driven by GdprErasureService.retryFailedErasures.
+    // Native SQL rather than a dependency on platform.admin (which already depends on this module) --
+    // read only by BookingService.requirePlayerBookableUnderLock, under the player_profiles row lock
+    // GdprRequestService.requestChildErasure also takes before it inserts the request row.
+    @Query(value = """
+        SELECT EXISTS (
+            SELECT 1 FROM admin.gdpr_requests g
+            WHERE g.player_id = :playerId
+              AND g.request_type = 'ERASURE'
+              AND g.status IN ('PENDING', 'PROCESSING', 'FAILED'))
+        """, nativeQuery = true)
+    boolean existsInFlightChildErasureRequest(@Param("playerId") Long playerId);
 
     // skillars-12-10 AC2: the READ-clock for the coach-access window — the latest booking END for the pair
     // over the given statuses (null = no relationship). A future end is returned as-is, which is what keeps

@@ -609,6 +609,8 @@ async function submit() {
       await bookingStore.loadAvailability(coachId, bookingStore.weekStart)
     } else if (errorKey === 'booking.sessionCrossesMidnight') {
       $q.notify({ type: 'negative', message: t('booking.errors.sessionCrossesMidnight') })
+    } else if (errorKey === 'booking.playerNotBookable') {
+      $q.notify({ type: 'negative', message: t('booking.errors.playerNotBookable') })
     } else if (errorKey === 'MISSING_RIGHTS') {
       // Post-split, MISSING_RIGHTS carries exactly one user-facing meaning on this path: the caller
       // does not own the player profile or the session pack they submitted. The four validation
@@ -634,8 +636,8 @@ async function submitBatchRequest() {
   }
   let succeeded = false
   try {
-    // totalAmount is currently a display-only stub for the acceptance email preview, not used
-    // for settlement (see BookingBatchService.java:233,255) — do not compute a real total here.
+    // totalAmount is ignored by the server, which computes the batch total from the coach's
+    // pricing (fix/booking-integrity, B2) — do not compute a real total here.
     await bookingStore.submitBatch(coachId, playerId.value, 0)
     batchReviewOpen.value = false
     $q.notify({ message: t('booking.batch.submitted'), type: 'positive' })
@@ -695,6 +697,14 @@ async function submitBatchRequest() {
       await bookingStore.loadAvailability(coachId, bookingStore.weekStart)
     } else if (errorKey === 'booking.sessionCrossesMidnight') {
       $q.notify({ message: t('booking.errors.sessionCrossesMidnight'), type: 'negative' })
+    } else if (errorKey === 'booking.slotUnavailable') {
+      // fix/booking-integrity (B2): createBatch now runs the same request-time overlap check and
+      // Stripe-readiness check as the single-booking path, so these two codes are reachable here too.
+      $q.notify({ message: t('booking.errors.slotUnavailable'), type: 'negative' })
+    } else if (errorKey === 'payment.coachStripeNotConfigured') {
+      $q.notify({ message: t('payment.error.coachStripeNotConfigured'), type: 'negative' })
+    } else if (errorKey === 'booking.playerNotBookable') {
+      $q.notify({ message: t('booking.errors.playerNotBookable'), type: 'negative' })
     } else if (errorKey === 'MISSING_RIGHTS') {
       $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
     } else {

@@ -14,6 +14,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -55,6 +56,7 @@ public class GdprRequestService {
     private final CoachProfileRepository coachProfileRepository;
     private final PlayerProfileRepository playerProfileRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final DevelopmentDataErasureGuard developmentDataErasureGuard;
 
     @Transactional
     public UUID requestExport(Long userId) {
@@ -137,12 +139,21 @@ public class GdprRequestService {
      * Parent-requested erasure of a parent-owned (shadow) child profile — Article 17 for a data subject
      * with no account of their own. Refused while the child has a live booking (see
      * {@link #CHILD_ERASURE_BLOCKING_BOOKING_STATUSES}) or while an export for the same child is still
-     * being built. Known residual, same as {@link #requestErasure}'s coach check: a booking created
-     * between this check and the (synchronous, after-commit) erasure is not caught.
+     * being built.
+     *
+     * <p>fix/booking-integrity (B2): the live-booking check and the request insert run under the
+     * child's {@code player_profiles} row lock, which every booking-creation path also takes
+     * ({@code BookingService.requirePlayerBookableUnderLock}) and which refuses to book a child with an
+     * in-flight erasure request. So either a concurrent booking commits first and is seen by the check
+     * below, or this request commits first and the booking is refused. Before this, a booking created
+     * between the check and the (synchronous, after-commit) erasure was not caught.
      */
     @Transactional
     public UUID requestChildErasure(Long parentUserId, Long playerId) {
         requireOwnedLiveChild(parentUserId, playerId);
+        if (developmentDataErasureGuard.isErasedUnderLock(playerId, "GdprRequestService.requestChildErasure")) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.playerAlreadyErased");
+        }
         if (gdprRequestRepository.existsByPlayerIdAndRequestTypeAndStatusIn(playerId, "ERASURE", ACTIVE_STATUSES)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.requestAlreadyPending");
         }

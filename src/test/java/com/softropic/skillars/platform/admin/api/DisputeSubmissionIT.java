@@ -197,6 +197,35 @@ class DisputeSubmissionIT extends AbstractIntegrationTest {
             });
     }
 
+    /**
+     * fix/booking-integrity (B2): the window is anchored on when the booking reached its terminal
+     * status (status_changed_at), not updated_at — a later unrelated write (here: updated_at = now,
+     * as a recap edit or GDPR anonymisation would leave it) must not reopen an expired window.
+     */
+    @Test
+    void raiseDispute_completedLongAgoButRecentlyTouched_windowStaysExpired() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "UPDATE booking.bookings SET status_changed_at = ?, updated_at = now() WHERE id = ?",
+                Timestamp.from(Instant.now().minusSeconds(15 * 86400L)), bookingId);
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + DISPUTES_BASE,
+            HttpMethod.POST,
+            Map.of("bookingId", bookingId.toString(), "reason", "COACH_NO_SHOW", "details", "Late dispute"),
+            authenticatedHeaders(cookies),
+            Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString()).contains("disputes.windowExpired");
+            });
+    }
+
     @Test
     void raiseDispute_duplicateOpenDispute_returns409() {
         String cookies = loginAndGetCookies(PARENT_EMAIL);

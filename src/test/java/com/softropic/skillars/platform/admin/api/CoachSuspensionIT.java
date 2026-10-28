@@ -271,6 +271,52 @@ class CoachSuspensionIT extends AbstractIntegrationTest {
         assertThat(logCount).isEqualTo(1L);
     }
 
+    /**
+     * fix/booking-integrity (B2): suspendCoach used to write CANCELLED straight onto REQUESTED
+     * bookings, bypassing the state machine, so no BookingStatusChangedEvent was published and the
+     * AFTER_COMMIT listeners never ran. The batch roll-up (BookingBatchStatusListener) is the
+     * observable one: a batch whose only booking was cancelled stayed PENDING forever.
+     */
+    @Test
+    void suspendCoach_cancelledBatchBooking_rollsTheBatchUpViaBookingStatusChangedEvent() {
+        UUID batchId = UUID.randomUUID();
+        UUID batchBookingId = UUID.randomUUID();
+        Instant start = Instant.now().plus(5, java.time.temporal.ChronoUnit.DAYS);
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.booking_batches (id, parent_id, coach_id, requested_count, total_amount, status, created_at) " +
+                "VALUES (?, ?, ?, 1, 0.00, 'PENDING', now())", batchId, PARENT_ID, coachProfileId);
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings (id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, status, canonical_timezone, batch_id, version, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, 'REQUESTED', 'Europe/Berlin', ?, 0, now(), now())",
+                batchBookingId, PARENT_ID, PLAYER_ID, coachProfileId,
+                Timestamp.from(start), Timestamp.from(start.plusSeconds(3600)), batchId);
+            return null;
+        });
+        try {
+            String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+            httpTestClient.makeHttpRequest(
+                baseUrl() + "/api/admin/coaches/" + coachProfileId + "/suspend",
+                HttpMethod.POST, Map.of("reason", "Repeated misconduct", "notifyCoach", false),
+                authenticatedHeaders(adminCookies), Void.class);
+
+            assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM booking.bookings WHERE id = ?", String.class, batchBookingId))
+                .isEqualTo("CANCELLED");
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(10)).untilAsserted(() ->
+                assertThat(jdbcTemplate.queryForObject(
+                    "SELECT status FROM booking.booking_batches WHERE id = ?", String.class, batchId))
+                    .as("the batch roll-up only runs on BookingStatusChangedEvent")
+                    .isEqualTo("DECLINED"));
+        } finally {
+            transactionTemplate.execute(status -> {
+                jdbcTemplate.update("DELETE FROM booking.bookings WHERE id = ?", batchBookingId);
+                jdbcTemplate.update("DELETE FROM booking.booking_batches WHERE id = ?", batchId);
+                return null;
+            });
+        }
+    }
+
     @Test
     void suspendedCoachPublicProfile_returns404() {
         transactionTemplate.execute(status ->

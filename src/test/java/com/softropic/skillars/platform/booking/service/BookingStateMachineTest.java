@@ -59,6 +59,8 @@ class BookingStateMachineTest {
         return Stream.of(
             Arguments.of(REQUESTED, ACCEPT, ACCEPTED),
             Arguments.of(REQUESTED, DECLINE, DECLINED),
+            // B2: coach suspension cancels REQUESTED bookings through the state machine.
+            Arguments.of(REQUESTED, BookingEvent.CANCEL_ADMIN, BookingStatus.CANCELLED),
             Arguments.of(ACCEPTED, INITIATE_PAYMENT, PAYMENT_PENDING),
             Arguments.of(ACCEPTED, CANCEL_COACH, CANCELLED_COACH),
             Arguments.of(ACCEPTED, CANCEL_PARENT, CANCELLED_PARENT),

@@ -98,11 +98,46 @@ public class Booking {
     @Column(name = "live_started_at")
     private Instant liveStartedAt;
 
+    /**
+     * fix/booking-integrity (B2, V178): when the booking entered its CURRENT status. Unlike
+     * {@code updatedAt}, later writes that do not change the status (a recap edit, a reminder stamp,
+     * GDPR note anonymisation, a plan note) leave it alone — so for a terminal status it is the moment
+     * the booking settled, which is what the dispute window and review maturity are measured from.
+     * Maintained by {@link #setStatus} only (no setter of its own); NULL on rows written before V178,
+     * which is why readers use {@link #getStatusAnchor()}.
+     */
+    @Setter(lombok.AccessLevel.NONE)
+    @Column(name = "status_changed_at")
+    private Instant statusChangedAt;
+
+    /**
+     * Assigning a different status stamps {@link #statusChangedAt}; re-assigning the same value does
+     * not. Hibernate uses field access here, so loading or refreshing a row never goes through this.
+     */
+    public void setStatus(String status) {
+        if (!java.util.Objects.equals(this.status, status)) {
+            this.statusChangedAt = Instant.now();
+        }
+        this.status = status;
+    }
+
+    /**
+     * The instant the booking reached its current status — {@code statusChangedAt}, or
+     * {@code updatedAt} for a row last transitioned before V178 added the column (the best available
+     * approximation; the pre-V178 behaviour). {@code BookingRepository.findQualifyingCompletedBookings}
+     * applies the same COALESCE in JPQL.
+     */
+    @JsonIgnore
+    public Instant getStatusAnchor() {
+        return statusChangedAt != null ? statusChangedAt : updatedAt;
+    }
+
     @PrePersist
     void onCreate() {
         if (createdAt == null) createdAt = Instant.now();
         updatedAt = Instant.now();
         if (status == null) status = "REQUESTED";
+        if (statusChangedAt == null) statusChangedAt = updatedAt;
     }
 
     @PreUpdate

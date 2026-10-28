@@ -657,6 +657,7 @@ export default {
     },
     errors: {
       coachUnavailable: 'Dieser Coach ist derzeit nicht verfügbar.',
+      playerNotBookable: 'Für diesen Spieler können keine Termine mehr gebucht werden.',
       slotUnavailable: 'Dieses Zeitfenster ist nicht mehr verfügbar.',
       startTimeInPast:
         'Dieser Zeitpunkt liegt bereits in der Vergangenheit. Bitte wählen Sie einen späteren Termin.',

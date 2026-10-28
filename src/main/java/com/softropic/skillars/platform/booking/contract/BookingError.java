@@ -150,7 +150,15 @@ public enum BookingError implements ErrorCode {
      * sweeper is the exclusive cause. {@code PUT /recap} ({@code updateRecap}) can still save the
      * recap text, so the old message was also substantively wrong, not just imprecise.
      */
-    RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE;
+    RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE,
+    /**
+     * fix/booking-integrity (B2): the player profile a booking is being created for has been erased
+     * ({@code developmentDataErasedAt} set) or has a child-erasure request in flight
+     * ({@code PENDING}/{@code PROCESSING}/{@code FAILED}, the last being re-driven by
+     * {@code GdprErasureService.retryFailedErasures}). Checked under the {@code player_profiles} row
+     * lock by {@code BookingService.requirePlayerBookableUnderLock}, the same lock the erasure takes.
+     */
+    PLAYER_NOT_BOOKABLE;
 
     @Override
     public String getErrorCode() {
@@ -182,6 +190,7 @@ public enum BookingError implements ErrorCode {
             case RECAP_NOT_EDITABLE_ERASED -> "booking.recapNotEditableErased";
             case RECAP_NOT_EDITABLE_DISPUTED -> "booking.recapNotEditableDisputed";
             case RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE -> "booking.recapStillEditableAfterForceComplete";
+            case PLAYER_NOT_BOOKABLE       -> "booking.playerNotBookable";
         };
     }
 

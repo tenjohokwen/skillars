@@ -19,6 +19,7 @@ import com.softropic.skillars.platform.admin.contract.AdminAlertType;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
@@ -82,6 +83,7 @@ public class AdminCoachEnforcementService {
     private final PessimisticLockRetryer lockRetryer;
     private final CoachSubscriptionRepository coachSubscriptionRepository;
     private final CoachProfileService coachProfileService;
+    private final BookingService bookingService;
 
     /**
      * skillars-deferred-124 AC5: self-reference so {@link #recordManualStrikeAudit}'s
@@ -155,11 +157,16 @@ public class AdminCoachEnforcementService {
         List<Booking> requestedBookings = bookingRepository
             .findByCoachIdAndStatusOrderByRequestedStartTimeAsc(coachId, "REQUESTED");
 
+        // B2: through the booking state machine (CANCEL_ADMIN), not a raw setStatus, so each
+        // cancellation publishes BookingStatusChangedEvent (batch roll-up, SSE, session-plan
+        // listeners). Lock order is coach row (above) then booking row, the same order the accept
+        // paths take. A booking that left REQUESTED since the list was read is skipped.
+        int cancelled = 0;
         for (Booking booking : requestedBookings) {
-            booking.setStatus("CANCELLED");
-            booking.setCancelReason("COACH_SUSPENDED_BY_ADMIN");
-            bookingRepository.save(booking);
-
+            if (!bookingService.cancelRequestedBookingAsAdmin(booking.getId(), adminId, "COACH_SUSPENDED_BY_ADMIN")) {
+                continue;
+            }
+            cancelled++;
             BigDecimal sessionPrice = resolveAdminBookingPrice(booking);
             eventPublisher.publishEvent(new BookingCancelledByAdminEvent(
                 this, booking.getId(), booking.getParentId(), coachId,
@@ -180,7 +187,7 @@ public class AdminCoachEnforcementService {
         adminActionLogRepository.save(actionLog);
 
         log.info("Coach suspended by admin: coachId={} adminId={} cancelledBookings={}",
-            coachId, adminId, requestedBookings.size());
+            coachId, adminId, cancelled);
     }
 
     @Transactional

@@ -419,3 +419,44 @@ describe('BookingRequestPage.vue — batch cost quote (feat/coach-workflow-gaps 
     expect(wrapper.vm.batchQuote.sessionCount).toBe(1)
   })
 })
+
+describe('BookingRequestPage.vue — submit error toasts (fix/booking-integrity B2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getBatchConfig.mockResolvedValue({ maxSize: 4 })
+    getBookingRequestConfig.mockResolvedValue({ activeSlotStatuses: ['REQUESTED', 'CONFIRMED'] })
+  })
+
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+  })
+
+  const rejectWith = (errorKey) => ({ response: { data: { errorMsg: { errorKey } } } })
+
+  it('single submit: booking.playerNotBookable gets its own toast', async () => {
+    const { wrapper, bookingStore } = await mountPage({ computedSlots: [SLOT] })
+    bookingStore.submitBookingRequest.mockRejectedValue(rejectWith('booking.playerNotBookable'))
+    wrapper.vm.selectSlot(wrapper.vm.slotRows[0].slot)
+    await wrapper.vm.$nextTick()
+
+    await wrapper.vm.submit()
+
+    expect(notifySpy).toHaveBeenCalledWith({
+      type: 'negative',
+      message: 'booking.errors.playerNotBookable',
+    })
+  })
+
+  it.each([
+    ['booking.playerNotBookable', 'booking.errors.playerNotBookable'],
+    ['booking.slotUnavailable', 'booking.errors.slotUnavailable'],
+    ['payment.coachStripeNotConfigured', 'payment.error.coachStripeNotConfigured'],
+  ])('batch submit: %s maps to %s (codes now reachable from createBatch)', async (code, key) => {
+    const { wrapper, bookingStore } = await mountPage({ batchBasket: [SLOT] })
+    bookingStore.submitBatch.mockRejectedValue(rejectWith(code))
+
+    await wrapper.vm.submitBatchRequest()
+
+    expect(notifySpy).toHaveBeenCalledWith({ message: key, type: 'negative' })
+  })
+})

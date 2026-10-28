@@ -310,8 +310,11 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
         // here as everywhere else (Hikari autocommit=false) -- wrap it.
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
-                "UPDATE booking.bookings SET updated_at = ? WHERE id = ?",
-                java.sql.Timestamp.from(now.plusSeconds(7200)), tooRecent.getId());
+                // B2 (V178): maturity reads COALESCE(status_changed_at, updated_at), and save()
+                // stamps status_changed_at -- move both so the row is genuinely too recent.
+                "UPDATE booking.bookings SET updated_at = ?, status_changed_at = ? WHERE id = ?",
+                java.sql.Timestamp.from(now.plusSeconds(7200)), java.sql.Timestamp.from(now.plusSeconds(7200)),
+                tooRecent.getId());
             return null;
         });
 
@@ -326,7 +329,8 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
         bookingRepository.save(tooOld);
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
-                "UPDATE booking.bookings SET updated_at = ? WHERE id = ?",
+                "UPDATE booking.bookings SET updated_at = ?, status_changed_at = ? WHERE id = ?",
+                java.sql.Timestamp.from(sinceAfter.minusSeconds(3600)),
                 java.sql.Timestamp.from(sinceAfter.minusSeconds(3600)), tooOld.getId());
             return null;
         });
@@ -374,6 +378,45 @@ class BookingRepositoryIT extends AbstractIntegrationTest {
         List<Long> expected = matchingPlayerIds.stream().sorted().limit(50).toList();
         assertThat(playerIds).isEqualTo(expected);
         assertThat(playerIds).doesNotContain(authorId);
+    }
+
+    /**
+     * fix/booking-integrity (B2): maturity is measured from when the booking became COMPLETED
+     * (status_changed_at), not updated_at, which any later write bumps.
+     */
+    @Test
+    void findQualifyingCompletedBookings_anchorsMaturityOnStatusChangedAtNotUpdatedAt() {
+        coachId = UUID.randomUUID();
+        Long authorId = 2L;
+        insertAuthorUser(authorId);
+        Instant now = Instant.now();
+        Instant maturedBefore = now.minusSeconds(7 * 86_400L);
+        Long maturedButTouched = createPlayerProfile(authorId);
+        Long freshButOldUpdatedAt = createPlayerProfile(authorId);
+
+        transactionTemplate.execute(status -> {
+            String insert = "INSERT INTO booking.bookings "
+                + "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, "
+                + "version, created_at, updated_at, status_changed_at, canonical_timezone) "
+                + "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, ?, 'Europe/Berlin')";
+            Instant start = now.minusSeconds(20 * 86_400L);
+            // Completed 10 days ago, then touched just now (recap edit / anonymisation): mature.
+            jdbcTemplate.update(insert, UUID.randomUUID(), coachId, authorId, maturedButTouched,
+                java.sql.Timestamp.from(start), java.sql.Timestamp.from(start.plusSeconds(3600)),
+                java.sql.Timestamp.from(start), java.sql.Timestamp.from(now),
+                java.sql.Timestamp.from(now.minusSeconds(10 * 86_400L)));
+            // Completed just now, but an old updated_at: NOT mature.
+            jdbcTemplate.update(insert, UUID.randomUUID(), coachId, authorId, freshButOldUpdatedAt,
+                java.sql.Timestamp.from(start), java.sql.Timestamp.from(start.plusSeconds(3600)),
+                java.sql.Timestamp.from(start), java.sql.Timestamp.from(now.minusSeconds(10 * 86_400L)),
+                java.sql.Timestamp.from(now));
+            return null;
+        });
+
+        List<Long> playerIds = bookingRepository
+            .findQualifyingCompletedBookings(coachId, authorId, maturedBefore, Instant.EPOCH)
+            .stream().map(BookingReviewEligibilityProjection::getPlayerId).toList();
+        assertThat(playerIds).containsExactly(maturedButTouched);
     }
 
     private void insertAuthorUser(long userId) {
